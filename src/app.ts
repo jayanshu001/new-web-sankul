@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import morgan from "morgan";
+import  requestLogger from "./utils/requestLogger";
 
 const app = express();
 app.use(
@@ -11,6 +12,8 @@ app.use(
 );
 app.use(morgan("dev"));
 app.use(express.json());
+app.use(requestLogger);
+
 
 app.get("/index.php", async (req, res) => {
   res.json({ Project: "Finance" });
