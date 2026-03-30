@@ -1,0 +1,43 @@
+version: "3.8"
+
+services:
+  ws-redis:
+    image: redis:alpine
+    container_name: ws-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis_data:/data
+      - ./redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    restart: always
+    networks:
+      - socket-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: socket-rabbitmq
+    ports:
+      - "5673:5672"
+      - "15673:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=S3cretPass
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    restart: always
+    networks:
+      - socket-network
+
+networks:
+  socket-network:
+    driver: bridge
+
+volumes:
+  redis_data:
+  rabbitmq_data:

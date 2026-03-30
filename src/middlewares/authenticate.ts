@@ -2,35 +2,76 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { failure } from "../utils/httpResponse";
+import { redisClient } from "../config/redis";
 
-// augment Request to carry the decoded user
+// Augment Request to carry the decoded token payload
 declare module "express-serve-static-core" {
   interface Request {
-    user?: { id: string; email: string; role?: string; [k: string]: any };
+    user?: {
+      id: string;
+      phone?: string;
+      email?: string;
+      role: "customer" | "admin" | "super_admin" | "editor";
+      [k: string]: any;
+    };
   }
 }
 
-const JWT_ACCESS_SECRET = process.env.JWT_ACCESS_SECRET as string;
+const JWT_SECRET = process.env.JWT_ACCESS_SECRET as string;
 
+/**
+ * Verifies the Bearer JWT and attaches decoded payload to req.user.
+ * Works for both customer tokens (role: "customer") and admin tokens
+ * (role: "admin" | "super_admin" | "editor").
+ */
 const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   // Let CORS preflight through
   if (req.method === "OPTIONS") return next();
 
-  // Expect "Authorization: Bearer <token>"
   const auth = req.headers.authorization || "";
   const token = auth.startsWith("Bearer ") ? auth.slice(7) : undefined;
 
   if (!token) {
-    return failure(res, "Authentication token is required", 401);
+    return failure(res, "Authentication token is required.", 401);
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_ACCESS_SECRET) as any;
-    req.user = decoded; // { id, email, ... } per your signTokens payload
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const role = decoded.role ?? "customer";
+
+    // Enforce 1 active device rule for customers
+    if (role === "customer") {
+      const activeToken = await redisClient.get(`customer_session:${decoded.id}`);
+      if (!activeToken || activeToken !== token) {
+        return failure(res, "Session expired or logged in on another device.", 401);
+      }
+    }
+
+    req.user = {
+      id: decoded.id,
+      phone: decoded.phone,
+      email: decoded.email,
+      role: role,
+      ...decoded,
+    };
     return next();
   } catch {
-    return failure(res, "Invalid or expired token", 401);
+    return failure(res, "Invalid or expired token.", 401);
   }
 };
 
+/**
+ * Middleware factory — restrict access to specific roles.
+ * Usage: router.get("/admin-only", authenticate, requireRole("admin", "super_admin"), handler)
+ */
+export const requireRole = (...roles: string[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    if (!req.user || !roles.includes(req.user.role)) {
+      return failure(res, "Access denied. Insufficient permissions.", 403);
+    }
+    return next();
+  };
+};
+
 export default authenticate;
+

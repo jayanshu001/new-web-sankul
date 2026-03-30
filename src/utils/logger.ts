@@ -48,7 +48,7 @@ const consoleFormat = winston.format.combine(
 const baseLogger = winston.createLogger({
   level: 'debug',
   format: customFormat,
-  defaultMeta: { service: 'LootLearn' },
+  defaultMeta: { service: 'Web-sankul' },
   transports: [
     fileTransport,
     new winston.transports.Console({ format: consoleFormat })

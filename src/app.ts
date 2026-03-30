@@ -1,18 +1,30 @@
 // app.ts
 import express, { NextFunction, Request, Response } from "express";
 import cors from "cors";
+import helmet from "helmet";
+import compression from "compression";
 import morgan from "morgan";
 import path from "path";
 
 import requestLogger from "./utils/requestLogger";
 import notFoundMiddleware from "./middlewares/notFound";
 import errorHandler from "./middlewares/errorHandler";
+import { globalLimiter } from "./config/rateLimiter";
 import {
   initCrashReporter,
   captureCrashContextMiddleware,
 } from "./utils/crashReporter";
 
+// ─── Route modules ──────────────────────────────────────────────────────────
+import customerAuthRoutes from "./modules/auth/customer/auth.routes";
+import adminAuthRoutes from "./modules/auth/admin/admin.auth.routes";
+import customerRoutes from "./modules/customer/customer.routes";
+
 const app = express();
+
+// --- Security & Performance -------------------------------------------------
+app.use(helmet());
+app.use(compression());
 
 // --- Crash Reporter ---------------------------------------------------------
 initCrashReporter({
@@ -113,6 +125,14 @@ app.get("/index.php", async (_req, res) => res.json({ Project: "AppNameUpdateHer
 app.get("/api", (_req, res) => res.json({ Project: "AppNameUpdateHere" }));
 
 // --- Routes ----------------------------------------------------------------
+// Customer auth  →  /api/v1/auth/otp/generate  |  /api/v1/auth/otp/validate
+app.use("/api/v1/auth", customerAuthRoutes);
+
+// Admin auth     →  /api/v1/admin/auth/login  |  /api/v1/admin/auth/register
+app.use("/api/v1/admin/auth", adminAuthRoutes);
+
+// Customer general → /api/v1/customer/profile
+app.use("/api/v1/customer", customerRoutes);
 
 
 // --- 400 on bad JSON (syntax) ----------------------------------------------
