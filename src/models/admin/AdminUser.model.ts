@@ -1,3 +1,4 @@
+
 import { Schema, model, Document } from "mongoose";
 import { AdminRole } from "../enums";
 
@@ -12,6 +13,11 @@ export interface IAdminUser extends Document {
   isDark: boolean;
   emailVerifiedAt?: Date;
   rememberToken?: string;
+  lastLoginDate?: Date;
+  lastLoginIp?: string;
+  lastSeenAt?: Date;
+  roles: Schema.Types.ObjectId[];
+  permissions: Schema.Types.ObjectId[];
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -32,6 +38,11 @@ const AdminUserSchema = new Schema<IAdminUser>(
     isDark: { type: Boolean, default: false },
     emailVerifiedAt: { type: Date },
     rememberToken: { type: String, select: false },
+    lastLoginDate: { type: Date },
+    lastLoginIp: { type: String, maxlength: 255 },
+    lastSeenAt: { type: Date },
+    roles: [{ type: Schema.Types.ObjectId, ref: "Role" }],
+    permissions: [{ type: Schema.Types.ObjectId, ref: "Permission" }],
   },
   { collection: "ws_users", timestamps: true }
 );

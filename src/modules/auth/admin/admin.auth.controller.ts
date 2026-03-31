@@ -3,6 +3,9 @@ import {
   adminLogin,
   createAdminUser,
   changeAdminPassword,
+  refreshAdminToken,
+  logoutAdmin,
+  updateAdminProfile,
 } from "./admin.auth.service";
 import { success, failure, getErrorMessage } from "../../../utils/httpResponse";
 
@@ -18,7 +21,7 @@ export const adminLoginHandler = async (req: Request, res: Response) => {
       return failure(res, "Email and password are required.", 422);
     }
 
-    const result = await adminLogin(String(email), String(password));
+    const result = await adminLogin(String(email), String(password), req.headers["x-forwarded-for"] as string || req.ip);
 
     if (!result.ok) {
       return failure(res, result.message, 401);
@@ -26,7 +29,7 @@ export const adminLoginHandler = async (req: Request, res: Response) => {
 
     return success(
       res,
-      { admin: result.admin, accessToken: result.token },
+      { admin: result.admin, accessToken: result.token, refreshToken: result.refreshToken },
       result.message,
       200
     );
@@ -89,6 +92,87 @@ export const adminChangePasswordHandler = async (req: Request, res: Response) =>
     return success(res, {}, result.message, 200);
   } catch (err) {
     console.error("[adminChangePasswordHandler]", err);
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+/**
+ * POST /api/v1/admin/auth/refresh
+ * Body: { refreshToken: string }
+ */
+export const adminRefreshHandler = async (req: Request, res: Response) => {
+  try {
+    const { refreshToken } = req.body;
+
+    if (!refreshToken) {
+      return failure(res, "Refresh token is required.", 422);
+    }
+
+    const result = await refreshAdminToken(String(refreshToken));
+
+    if (!result.ok) {
+      return failure(res, result.message, 401);
+    }
+
+    return success(
+      res,
+      { admin: result.admin, accessToken: result.token, refreshToken: result.refreshToken },
+      result.message,
+      200
+    );
+  } catch (err) {
+    console.error("[adminRefreshHandler]", err);
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+/**
+ * DELETE /api/v1/admin/auth/logout
+ * Protected: requires admin JWT
+ */
+export const adminLogoutHandler = async (req: Request, res: Response) => {
+  try {
+    const adminId = req.user?.id;
+    if (!adminId) return failure(res, "Unauthorized request.", 401);
+
+    const result = await logoutAdmin(adminId);
+
+    if (!result.ok) {
+      return failure(res, result.message, 400);
+    }
+
+    return success(res, {}, result.message, 200);
+  } catch (err) {
+    console.error("[adminLogoutHandler]", err);
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+/**
+ * PUT /api/v1/admin/auth/profile
+ * Body: multipart/form-data { firstName?, lastName?, image? (file) }
+ * Protected: requires admin JWT
+ */
+export const adminUpdateProfileHandler = async (req: Request, res: Response) => {
+  try {
+    const adminId = req.user?.id;
+    if (!adminId) return failure(res, "Unauthorized request.", 401);
+
+    const { firstName, lastName } = req.body;
+    
+    // `multer-s3` attaches the S3 URL exactly to `req.file.location`
+    const file = req.file as any;
+    const image = file?.location; 
+
+    const result = await updateAdminProfile(adminId, { firstName, lastName, image });
+
+    if (!result.ok) {
+      return failure(res, result.message, 400);
+    }
+
+    return success(res, { admin: result.admin }, result.message, 200);
+  } catch (err) {
+    console.error("[adminUpdateProfileHandler]", err);
     return failure(res, getErrorMessage(err), 500);
   }
 };

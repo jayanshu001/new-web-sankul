@@ -65,7 +65,7 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
   // Fire-and-forget email for 5xx only (don’t slow down the response)
   if (statusCode >= 500) {
     const emailTo = "ranavinit6834@gmail.com";
-    const subject = `Xcelyst API Error: ${statusCode}`;
+    const subject = `Web Sankul API Error: ${statusCode}`;
     const emailBody = `
       <html>
         <body>
