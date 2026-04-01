@@ -1,8 +1,8 @@
 import jwt from "jsonwebtoken";
-import { Customer } from "../../../models/customer/Customer.model";
-import { CustomerOtp } from "../../../models/customer/CustomerOtp.model";
-import { CustomerAccessToken } from "../../../models/customer/CustomerAccessToken.model";
-import { redisClient } from "../../../config/redis";
+import { Customer } from "../../models/customer/Customer.model";
+import { CustomerOtp } from "../../models/customer/CustomerOtp.model";
+import { CustomerAccessToken } from "../../models/customer/CustomerAccessToken.model";
+import { redisClient } from "../../config/redis";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const OTP_TTL_MINUTES = 5;

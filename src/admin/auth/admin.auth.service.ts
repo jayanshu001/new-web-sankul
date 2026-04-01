@@ -1,9 +1,9 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { AdminUser } from "../../../models/admin/AdminUser.model";
-import { AdminAccessToken } from "../../../models/admin/AdminAccessToken.model";
-import { redisClient } from "../../../config/redis";
-import { deleteFromS3FileUrl } from "../../../middlewares/upload";
+import { AdminUser } from "../../models/admin/AdminUser.model";
+import { AdminAccessToken } from "../../models/admin/AdminAccessToken.model";
+import { redisClient } from "../../config/redis";
+import { deleteFromS3FileUrl } from "../../middlewares/upload";
 
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET as string;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET as string;

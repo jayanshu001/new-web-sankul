@@ -7,8 +7,8 @@ import {
   adminLogoutHandler,
   adminUpdateProfileHandler,
 } from "./admin.auth.controller";
-import authenticate from "../../../middlewares/authenticate";
-import { uploadS3 } from "../../../middlewares/upload";
+import authenticate from "../../middlewares/authenticate";
+import { uploadS3 } from "../../middlewares/upload";
 
 const router = Router();
 

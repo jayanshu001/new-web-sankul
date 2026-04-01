@@ -7,7 +7,7 @@ import {
   logoutAdmin,
   updateAdminProfile,
 } from "./admin.auth.service";
-import { success, failure, getErrorMessage } from "../../../utils/httpResponse";
+import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 
 /**
  * POST /api/v1/admin/auth/login
@@ -159,10 +159,10 @@ export const adminUpdateProfileHandler = async (req: Request, res: Response) => 
     if (!adminId) return failure(res, "Unauthorized request.", 401);
 
     const { firstName, lastName } = req.body;
-    
+
     // `multer-s3` attaches the S3 URL exactly to `req.file.location`
     const file = req.file as any;
-    const image = file?.location; 
+    const image = file?.location;
 
     const result = await updateAdminProfile(adminId, { firstName, lastName, image });
 
@@ -170,7 +170,7 @@ export const adminUpdateProfileHandler = async (req: Request, res: Response) => 
       return failure(res, result.message, 400);
     }
 
-    return success(res, { admin: result.admin }, result.message, 200);
+    return success(res, result.admin, result.message, 200);
   } catch (err) {
     console.error("[adminUpdateProfileHandler]", err);
     return failure(res, getErrorMessage(err), 500);

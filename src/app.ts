@@ -16,9 +16,8 @@ import {
 } from "./utils/crashReporter";
 
 // ─── Route modules ──────────────────────────────────────────────────────────
-import customerAuthRoutes from "./modules/auth/customer/auth.routes";
-import adminAuthRoutes from "./modules/auth/admin/admin.auth.routes";
-import customerRoutes from "./modules/customer/customer.routes";
+import clientRoutes from "./client/client.routes";
+import adminRoutes from "./admin/admin.routes";
 
 const app = express();
 
@@ -125,14 +124,11 @@ app.get("/index.php", async (_req, res) => res.json({ Project: "AppNameUpdateHer
 app.get("/api", (_req, res) => res.json({ Project: "AppNameUpdateHere" }));
 
 // --- Routes ----------------------------------------------------------------
-// Customer auth  →  /api/v1/auth/otp/generate  |  /api/v1/auth/otp/validate
-app.use("/api/v1/auth", customerAuthRoutes);
+// Master Client Routes (Mobile App / Web Portal)
+app.use("/api/v1/client", clientRoutes);
 
-// Admin auth     →  /api/v1/admin/auth/login  |  /api/v1/admin/auth/register
-app.use("/api/v1/admin/auth", adminAuthRoutes);
-
-// Customer general → /api/v1/customer/profile
-app.use("/api/v1/customer", customerRoutes);
+// Master Admin Routes (Dashboard)
+app.use("/api/v1/admin", adminRoutes);
 
 
 // --- 400 on bad JSON (syntax) ----------------------------------------------

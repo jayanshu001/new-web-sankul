@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { generateOtp, validateOtp, refreshCustomerToken, resendOtp } from "./auth.service";
-import { success, failure, getErrorMessage } from "../../../utils/httpResponse";
+import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 
 /**
  * POST /api/v1/auth/otp/generate

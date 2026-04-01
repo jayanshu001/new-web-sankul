@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpHandler } from "./auth.controller";
-import { otpLimiter } from "../../../config/rateLimiter";
+import { otpLimiter } from "../../config/rateLimiter";
 
 const router = Router();
 
