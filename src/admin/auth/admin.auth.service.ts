@@ -1,3 +1,4 @@
+import logger from "../../utils/logger";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { AdminUser } from "../../models/admin/AdminUser.model";
@@ -19,19 +20,24 @@ function addDays(days: number): Date {
 export async function adminLogin(
   email: string,
   password: string,
-  ip?: string
+  ip?: string,
+  traceId?: string
 ): Promise<{ ok: boolean; message: string; token?: string; refreshToken?: string; admin?: Record<string, unknown> }> {
+  logger.info("adminLogin service invoked", { traceId, email, ip });
+
   const admin = await AdminUser.findOne({
     email: email.toLowerCase().trim(),
     status: true,
   }).select("+password");
 
   if (!admin) {
+    logger.warn("adminLogin service invalid credentials", { traceId, email });
     return { ok: false, message: "Invalid email or password." };
   }
 
   const isMatch = await bcrypt.compare(password, admin.password);
   if (!isMatch) {
+    logger.warn("adminLogin service invalid credentials", { traceId, email });
     return { ok: false, message: "Invalid email or password." };
   }
 
@@ -75,6 +81,7 @@ export async function adminLogin(
     JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
   );
 
+  logger.info("adminLogin service success", { traceId, adminId: admin._id });
   return {
     ok: true,
     message: "Login successful.",
@@ -101,12 +108,19 @@ export async function createAdminUser(data: {
   email: string;
   password: string;
   role?: string;
-}): Promise<{ ok: boolean; message: string }> {
+}, traceId?: string): Promise<{ ok: boolean; message: string }> {
+  logger.info("createAdminUser service invoked", { traceId, email: data.email });
+
   const exists = await AdminUser.findOne({ email: data.email.toLowerCase() });
-  if (exists) return { ok: false, message: "Admin with this email already exists." };
+  if (exists) {
+    logger.warn("createAdminUser service conflict", { traceId, email: data.email });
+    return { ok: false, message: "Admin with this email already exists." };
+  }
 
   const hashed = await bcrypt.hash(data.password, SALT_ROUNDS);
-  await AdminUser.create({ ...data, password: hashed, email: data.email.toLowerCase() });
+  const created = await AdminUser.create({ ...data, password: hashed, email: data.email.toLowerCase() });
+
+  logger.info("createAdminUser service success", { traceId, adminId: created._id });
   return { ok: true, message: "Admin user created successfully." };
 }
 
@@ -114,22 +128,36 @@ export async function createAdminUser(data: {
 export async function changeAdminPassword(
   adminId: string,
   currentPassword: string,
-  newPassword: string
+  newPassword: string,
+  traceId?: string
 ): Promise<{ ok: boolean; message: string }> {
+  logger.info("changeAdminPassword service invoked", { traceId, adminId });
+
   const admin = await AdminUser.findById(adminId).select("+password");
-  if (!admin) return { ok: false, message: "Admin not found." };
+  if (!admin) {
+    logger.warn("changeAdminPassword service admin not found", { traceId, adminId });
+    return { ok: false, message: "Admin not found." };
+  }
 
   const isMatch = await bcrypt.compare(currentPassword, admin.password);
-  if (!isMatch) return { ok: false, message: "Current password is incorrect." };
+  if (!isMatch) {
+    logger.warn("changeAdminPassword service wrong current password", { traceId, adminId });
+    return { ok: false, message: "Current password is incorrect." };
+  }
 
   admin.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
   await admin.save();
+
+  logger.info("changeAdminPassword service success", { traceId, adminId });
   return { ok: true, message: "Password updated successfully." };
 }
 
 // ─── Validation & Refresh ─────────────────────────────────────────────────────
-export async function refreshAdminToken(refreshToken: string) {
+export async function refreshAdminToken(refreshToken: string, traceId?: string) {
+  logger.info("refreshAdminToken service invoked", { traceId });
+
   if (!refreshToken) {
+    logger.warn("refreshAdminToken missing token", { traceId });
     return { ok: false, message: "Refresh token is required." };
   }
 
@@ -145,11 +173,13 @@ export async function refreshAdminToken(refreshToken: string) {
     });
 
     if (!dbToken) {
+      logger.warn("refreshAdminToken invalid token", { traceId, refreshToken });
       return { ok: false, message: "Invalid or revoked refresh token." };
     }
 
     const admin = await AdminUser.findOne({ _id: adminUserId, status: true });
     if (!admin) {
+      logger.warn("refreshAdminToken admin missing or disabled", { traceId, adminUserId });
       return { ok: false, message: "Admin not found or disabled." };
     }
 
@@ -184,6 +214,7 @@ export async function refreshAdminToken(refreshToken: string) {
       JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
     );
 
+    logger.info("refreshAdminToken service success", { traceId, adminUserId });
     return { 
       ok: true, 
       message: "Token refreshed successfully.", 
@@ -206,16 +237,20 @@ export async function refreshAdminToken(refreshToken: string) {
   }
 }
 
-export async function logoutAdmin(adminId: string) {
+export async function logoutAdmin(adminId: string, traceId?: string) {
+  logger.info("logoutAdmin service invoked", { traceId, adminId });
+
   try {
     await AdminAccessToken.updateMany(
       { adminUserId: adminId },
       { active: false, deleted: true }
     );
     await redisClient.del(`admin_session:${adminId}`);
+
+    logger.info("logoutAdmin service success", { traceId, adminId });
     return { ok: true, message: "Successfully logged out." };
   } catch (error) {
-    console.error("[logoutAdmin error]", error);
+    logger.error("logoutAdmin service error", { traceId, adminId, error: (error as Error).message, stack: (error as Error).stack });
     return { ok: false, message: "Failed to logout securely." };
   }
 }
@@ -223,10 +258,14 @@ export async function logoutAdmin(adminId: string) {
 // ─── Profile Update ────────────────────────────────────────────────────────
 export async function updateAdminProfile(
   adminId: string,
-  data: { firstName?: string; lastName?: string; image?: string }
+  data: { firstName?: string; lastName?: string; image?: string },
+  traceId?: string
 ): Promise<{ ok: boolean; message: string; admin?: Record<string, unknown> }> {
+  logger.info("updateAdminProfile service invoked", { traceId, adminId, data });
+
   const admin = await AdminUser.findById(adminId);
   if (!admin) {
+    logger.warn("updateAdminProfile service admin not found", { traceId, adminId });
     return { ok: false, message: "Admin not found." };
   }
 
@@ -245,6 +284,7 @@ export async function updateAdminProfile(
 
   await admin.save();
 
+  logger.info("updateAdminProfile service success", { traceId, adminId });
   return {
     ok: true,
     message: "Admin profile updated successfully.",

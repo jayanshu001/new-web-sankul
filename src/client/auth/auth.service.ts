@@ -1,3 +1,4 @@
+import logger from "../../utils/logger";
 import jwt from "jsonwebtoken";
 import { Customer } from "../../models/customer/Customer.model";
 import { CustomerOtp } from "../../models/customer/CustomerOtp.model";
@@ -64,11 +65,12 @@ async function sendOtpSms(phone: string, otp: string): Promise<boolean> {
  * Step 1 — Generate & send OTP.
  * Creates the customer record if it doesn't exist yet.
  */
-export async function generateOtp(rawPhone: string): Promise<{
+export async function generateOtp(rawPhone: string, traceId?: string): Promise<{
   ok: boolean;
   message: string;
   isNewUser?: boolean;
 }> {
+  logger.info("generateOtp service invoked", { traceId, rawPhone });
   const phone = formatPhone(rawPhone);
   const isStatic = TESTING_ACCOUNTS.includes(phone);
 
@@ -81,9 +83,11 @@ export async function generateOtp(rawPhone: string): Promise<{
   // Account checks for existing users
   if (existing) {
     if ((existing.loginCount ?? 0) > LOGIN_MAX_ATTEMPTS) {
+      logger.warn("generateOtp service login attempts exceeded", { traceId, phone });
       return { ok: false, message: "Account suspended due to login policy violations." };
     }
     if (!existing.status) {
+      logger.warn("generateOtp service account blocked", { traceId, phone });
       return { ok: false, message: "Your account has been blocked. Please contact support." };
     }
     // OTP cooldown — still within TTL
@@ -119,10 +123,11 @@ export async function generateOtp(rawPhone: string): Promise<{
         loginCount: (existing.loginCount ?? 0) + 1,
       }
     );
+    logger.info("generateOtp service existing user OTP updated", { traceId, phone, customerId: existing._id });
   } else {
     // Create new stub customer
     isNewUser = true;
-    await Customer.create({
+    const created = await Customer.create({
       phoneNumber: phone,
       isPhoneVerified: false,
       verified: false,
@@ -133,14 +138,17 @@ export async function generateOtp(rawPhone: string): Promise<{
       isAccountDeleted: false,
       status: true,
     });
+    logger.info("generateOtp service new user created", { traceId, phone, customerId: created._id });
   }
 
   // Log OTP in history
   const customer = await Customer.findOne({ phoneNumber: phone }).select("_id");
   if (customer) {
     await CustomerOtp.create({ customerId: customer._id, otp });
+    logger.info("generateOtp service otp recorded", { traceId, customerId: customer._id });
   }
 
+  logger.info("generateOtp service completed", { traceId, phone, isNewUser });
   return { ok: true, message: "OTP sent successfully.", isNewUser };
 }
 
@@ -149,10 +157,11 @@ export async function generateOtp(rawPhone: string): Promise<{
  * Generates a new OTP for an existing customer, bypassing the standard 5-minute
  * cooldown but enforcing a strict 60-second limit to prevent spam.
  */
-export async function resendOtp(rawPhone: string): Promise<{
+export async function resendOtp(rawPhone: string, traceId?: string): Promise<{
   ok: boolean;
   message: string;
 }> {
+  logger.info("resendOtp service invoked", { traceId, rawPhone });
   const phone = formatPhone(rawPhone);
   const isStatic = TESTING_ACCOUNTS.includes(phone);
 
@@ -162,6 +171,7 @@ export async function resendOtp(rawPhone: string): Promise<{
   }).select("+otp otpExpiresAt triedOtp loginCount status");
 
   if (!existing) {
+    logger.warn("resendOtp service user not found", { traceId, phone });
     return { ok: false, message: "User not found. Please register first." };
   }
 
@@ -186,7 +196,7 @@ export async function resendOtp(rawPhone: string): Promise<{
 
   // Generate & Send
   const otp = isStatic ? STATIC_OTP : String(Math.floor(1000 + Math.random() * 8999));
-  console.log(`\x1b[1m\x1b[38;5;50m[OTP]\x1b[0m \x1b[38;5;208mResent\x1b[0m → \x1b[1m\x1b[38;5;226m${otp}\x1b[0m`);
+  logger.info("resendOtp service otp generated", { traceId, phone, otpType: isStatic ? "static" : "dynamic" });
 
   const sent = isStatic || (await sendOtpSms(phone, otp));
   if (!sent) {
@@ -206,6 +216,7 @@ export async function resendOtp(rawPhone: string): Promise<{
   );
 
   await CustomerOtp.create({ customerId: existing._id, otp });
+  logger.info("resendOtp service completed", { traceId, customerId: existing._id });
 
   return { ok: true, message: "A new OTP has been sent." };
 }
@@ -216,7 +227,8 @@ export async function resendOtp(rawPhone: string): Promise<{
 export async function validateOtp(
   rawPhone: string,
   otp: string,
-  osType?: string
+  osType?: string,
+  traceId?: string
 ): Promise<{
   ok: boolean;
   message: string;
@@ -225,6 +237,7 @@ export async function validateOtp(
   customer?: Record<string, unknown>;
   isNewUser?: boolean;
 }> {
+  logger.info("validateOtp service invoked", { traceId, rawPhone, otp });
   const phone = formatPhone(rawPhone);
 
   const customer = await Customer.findOne({
@@ -236,6 +249,7 @@ export async function validateOtp(
   );
 
   if (!customer) {
+    logger.warn("validateOtp service invalid user", { traceId, phone });
     return { ok: false, message: "Invalid user." };
   }
 
@@ -247,6 +261,7 @@ export async function validateOtp(
       { _id: customer._id },
       { triedOtp, otpBlockedAt: new Date(), status: false }
     );
+    logger.warn("validateOtp service otp attempts exceeded", { traceId, customerId: customer._id });
     return {
       ok: false,
       message: `Too many wrong attempts. Account blocked for 24 hours.`,
@@ -257,6 +272,7 @@ export async function validateOtp(
   if (customer.otp !== otp) {
     await Customer.updateOne({ _id: customer._id }, { triedOtp, ...(osType ? { osType } : {}) });
     const remaining = OTP_MAX_ATTEMPTS - triedOtp;
+    logger.warn("validateOtp service wrong otp", { traceId, customerId: customer._id, remaining });
     return {
       ok: false,
       message: `Invalid OTP. ${remaining} attempt(s) remaining.`,
@@ -265,6 +281,7 @@ export async function validateOtp(
 
   // Expired
   if (!customer.otpExpiresAt || customer.otpExpiresAt < new Date()) {
+    logger.warn("validateOtp service otp expired", { traceId, customerId: customer._id });
     return { ok: false, message: "OTP has expired. Please request a new one." };
   }
 
@@ -350,8 +367,10 @@ export async function validateOtp(
 /**
  * Step 3 — Refresh Token Logic.
  */
-export async function refreshCustomerToken(refreshToken: string) {
+export async function refreshCustomerToken(refreshToken: string, traceId?: string) {
+  logger.info("refreshCustomerToken service invoked", { traceId });
   if (!refreshToken) {
+    logger.warn("refreshCustomerToken service missing token", { traceId });
     return { ok: false, message: "Refresh token is required." };
   }
   
@@ -367,6 +386,7 @@ export async function refreshCustomerToken(refreshToken: string) {
     });
 
     if (!dbToken) {
+      logger.warn("refreshCustomerToken service invalid token", { traceId, customerId });
       return { ok: false, message: "Invalid or revoked refresh token." };
     }
 
@@ -375,6 +395,7 @@ export async function refreshCustomerToken(refreshToken: string) {
     );
 
     if (!customer) {
+      logger.warn("refreshCustomerToken service user not found", { traceId, customerId });
       return { ok: false, message: "User not found or disabled." };
     }
 
@@ -435,8 +456,10 @@ export async function refreshCustomerToken(refreshToken: string) {
       isNewUser: !customer.verified,
     };
 
+    logger.info("refreshCustomerToken service success", { traceId, customerId });
     return { ok: true, message: "Token refreshed successfully.", token: newToken, refreshToken: newRefreshToken, customer: profile };
   } catch (err) {
+    logger.error("refreshCustomerToken service error", { traceId, error: (err as Error).message, stack: (err as Error).stack });
     return { ok: false, message: "Invalid or expired refresh token." };
   }
 }

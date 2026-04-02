@@ -1,3 +1,4 @@
+import logger from "../../utils/logger";
 import { Goal } from "../../models/Goal.model";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 
@@ -26,7 +27,9 @@ const parseLabels = (rawLabels: any): { _id?: string, name: string }[] => {
   return [];
 };
 
-export const createGoal = async (data: { title: string; labels: any; image?: string; isActive?: boolean | string }) => {
+export const createGoal = async (data: { title: string; labels: any; image?: string; isActive?: boolean | string }, traceId?: string) => {
+  logger.info("createGoal service invoked", { traceId, data });
+
   const goal = new Goal({
     title: data.title,
     labels: parseLabels(data.labels),
@@ -34,7 +37,9 @@ export const createGoal = async (data: { title: string; labels: any; image?: str
     isActive: data.isActive === "false" || data.isActive === false ? false : true,
   });
 
-  return await goal.save();
+  const saved = await goal.save();
+  logger.info("createGoal service completed", { traceId, goalId: saved._id });
+  return saved;
 };
 
 export const getGoals = async (query: {
@@ -44,7 +49,8 @@ export const getGoals = async (query: {
   limit?: number;
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
-} = {}) => {
+} = {}, traceId?: string) => {
+  logger.info("getGoals service invoked", { traceId, query });
   const { search, isActive, page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc' } = query;
   
   const filter: any = {};
@@ -72,7 +78,7 @@ export const getGoals = async (query: {
 
   const total = await Goal.countDocuments(filter);
 
-  return {
+  const result = {
     data: goals,
     meta: {
       total,
@@ -81,14 +87,23 @@ export const getGoals = async (query: {
       totalPages: Math.ceil(total / limit)
     }
   };
+
+  logger.info("getGoals service completed", { traceId, total, resultCount: goals.length });
+  return result;
 };
 
 export const updateGoal = async (
   id: string,
-  data: { title?: string; labels?: any; image?: string; isActive?: boolean | string }
+  data: { title?: string; labels?: any; image?: string; isActive?: boolean | string },
+  traceId?: string
 ) => {
+  logger.info("updateGoal service invoked", { traceId, id, data });
+
   const goal = await Goal.findById(id);
-  if (!goal) return { ok: false, message: "Goal not found!" };
+  if (!goal) {
+    logger.warn("updateGoal service missing goal", { traceId, id });
+    return { ok: false, message: "Goal not found!" };
+  }
 
   if (data.title !== undefined) goal.title = data.title;
   if (data.labels !== undefined) goal.labels = parseLabels(data.labels) as any;
@@ -108,19 +123,26 @@ export const updateGoal = async (
   }
 
   await goal.save();
+  logger.info("updateGoal service completed", { traceId, id, goalId: goal._id });
   return { ok: true, goal };
 };
 
-export const deleteGoal = async (id: string) => {
+export const deleteGoal = async (id: string, traceId?: string) => {
+  logger.info("deleteGoal service invoked", { traceId, id });
+
   const goal = await Goal.findById(id);
-  if (!goal) return { ok: false, message: "Goal not found!" };
+  if (!goal) {
+    logger.warn("deleteGoal service goal not found", { traceId, id });
+    return { ok: false, message: "Goal not found!" };
+  }
 
   if (goal.image) {
     deleteFromS3FileUrl(goal.image).catch((err) =>
-      console.error("[deleteGoal] Failed to delete goal icon:", err)
+      logger.error("deleteGoal service failed deleting image", { traceId, goalId: id, error: (err as Error).message })
     );
   }
 
   await goal.deleteOne();
+  logger.info("deleteGoal service completed", { traceId, id });
   return { ok: true, message: "Goal permanently deleted." };
 };

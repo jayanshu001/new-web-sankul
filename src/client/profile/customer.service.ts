@@ -1,3 +1,4 @@
+import logger from "../../utils/logger";
 import { Types } from "mongoose";
 import { Customer } from "../../models/customer/Customer.model";
 import { Goal } from "../../models/Goal.model";
@@ -10,7 +11,9 @@ interface IProfileUpdateData {
   goals?: string[]; // Array of ObjectIds as strings
 }
 
-export async function updateCustomerProfile(customerId: string, data: IProfileUpdateData) {
+export async function updateCustomerProfile(customerId: string, data: IProfileUpdateData, traceId?: string) {
+  logger.info("updateCustomerProfile service invoked", { traceId, customerId, data });
+
   try {
     const updatePayload: any = {};
 
@@ -38,6 +41,7 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
       });
 
       if (emailExists) {
+        logger.warn("updateCustomerProfile service email conflict", { traceId, customerId, email: data.email });
         return { ok: false, message: "Email address is already in use by another account." };
       }
 
@@ -54,6 +58,7 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
     );
 
     if (!updatedCustomer) {
+      logger.warn("updateCustomerProfile service customer not found", { traceId, customerId });
       return { ok: false, message: "Customer not found." };
     }
 
@@ -92,20 +97,24 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
       profile.goals = matchedLabels;
     }
 
+    logger.info("updateCustomerProfile service success", { traceId, customerId, updatedFields: Object.keys(updatePayload) });
     return { ok: true, message: "Profile updated successfully.", data: profile };
   } catch (error) {
-    console.error("[updateCustomerProfile service error]", error);
+    logger.error("updateCustomerProfile service error", { traceId, customerId, error: (error as Error).message, stack: (error as Error).stack });
     return { ok: false, message: "An error occurred while updating profile." };
   }
 }
 
-export async function getCustomerProfile(customerId: string) {
+export async function getCustomerProfile(customerId: string, traceId?: string) {
+  logger.info("getCustomerProfile service invoked", { traceId, customerId });
+
   try {
     const customer = await Customer.findById(customerId).select(
       "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseToken osType loginCount isLoggedIn"
     );
 
     if (!customer) {
+      logger.warn("getCustomerProfile service customer not found", { traceId, customerId });
       return { ok: false, message: "Customer not found." };
     }
 
@@ -143,9 +152,10 @@ export async function getCustomerProfile(customerId: string) {
       profile.goals = matchedLabels;
     }
 
+    logger.info("getCustomerProfile service success", { traceId, customerId });
     return { ok: true, message: "Profile fetched successfully.", data: profile };
   } catch (error) {
-    console.error("[getCustomerProfile service error]", error);
+    logger.error("getCustomerProfile service error", { traceId, customerId, error: (error as Error).message, stack: (error as Error).stack });
     return { ok: false, message: "An error occurred while fetching profile." };
   }
 }

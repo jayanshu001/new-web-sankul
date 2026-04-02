@@ -1,12 +1,16 @@
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { updateCustomerProfile, getCustomerProfile } from "./customer.service";
+import logger from "../../utils/logger";
 
 export const updateProfileHandler = async (req: Request, res: Response) => {
-  try {
-    const userId = req.user?.id;
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("updateProfileHandler invoked", { traceId, path: req.originalUrl, userId });
 
+  try {
     if (!userId) {
+      logger.warn("updateProfileHandler unauthorized", { traceId });
       return failure(res, "Unauthorized request.", 401);
     }
 
@@ -17,31 +21,51 @@ export const updateProfileHandler = async (req: Request, res: Response) => {
       middleName,
       lastName,
       email,
-      goals
-    });
+      goals,
+    }, traceId);
 
     if (!result.ok) {
+      logger.warn("updateProfileHandler validation failed", { traceId, userId, data: req.body });
       return failure(res, result.message, 400);
     }
 
+    logger.info("updateProfileHandler success", { traceId, userId });
     return success(res, result?.data, result.message, 200);
   } catch (err) {
-    console.error("[updateProfileHandler]", err);
+    logger.error("updateProfileHandler failed", {
+      traceId,
+      error: getErrorMessage(err),
+      stack: (err as Error).stack,
+    });
     return failure(res, getErrorMessage(err), 500);
   }
 };
 
 export const getProfileHandler = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("getProfileHandler invoked", { traceId, path: req.originalUrl, userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return failure(res, "Unauthorized request.", 401);
+    if (!userId) {
+      logger.warn("getProfileHandler unauthorized", { traceId });
+      return failure(res, "Unauthorized request.", 401);
+    }
 
-    const result = await getCustomerProfile(userId);
-    if (!result.ok) return failure(res, result.message, 404);
+    const result = await getCustomerProfile(userId, traceId);
+    if (!result.ok) {
+      logger.warn("getProfileHandler not found", { traceId, userId });
+      return failure(res, result.message, 404);
+    }
 
+    logger.info("getProfileHandler success", { traceId, userId });
     return success(res, result.data, result.message, 200);
   } catch (err) {
-    console.error("[getProfileHandler]", err);
+    logger.error("getProfileHandler failed", {
+      traceId,
+      error: getErrorMessage(err),
+      stack: (err as Error).stack,
+    });
     return failure(res, getErrorMessage(err), 500);
   }
 };

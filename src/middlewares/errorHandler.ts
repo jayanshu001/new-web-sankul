@@ -39,6 +39,7 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
   // Structured error logging
   try {
     logger.error("API Error", {
+      traceId: (req as any).traceId,
       message,
       statusCode,
       method: req.method,
