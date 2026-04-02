@@ -1,6 +1,10 @@
 import logger from "../../utils/logger";
 import { Goal } from "../../models/Goal.model";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
+import { redisClient } from "../../config/redis";
+
+const ADMIN_GOALS_CACHE_KEY = "cache:admin:goals:list";
+const ACTIVE_GOALS_CACHE_KEY = "cache:client:goals:active";
 
 /**
  * Normalizes 'labels' input into structured objects { _id?, name }
@@ -38,6 +42,14 @@ export const createGoal = async (data: { title: string; labels: any; image?: str
   });
 
   const saved = await goal.save();
+
+  try {
+    await redisClient.del(ADMIN_GOALS_CACHE_KEY, ACTIVE_GOALS_CACHE_KEY);
+    logger.info("createGoal cache invalidated", { traceId });
+  } catch (err) {
+    logger.warn("createGoal cache invalidation failed", { traceId, error: (err as Error).message });
+  }
+
   logger.info("createGoal service completed", { traceId, goalId: saved._id });
   return saved;
 };
@@ -71,6 +83,17 @@ export const getGoals = async (query: {
   const skip = (page - 1) * limit;
   const sortDirection = sortOrder === 'asc' ? 1 : -1;
 
+  try {
+    const cached = await redisClient.get(ADMIN_GOALS_CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      logger.info("getGoals service cache hit", { traceId, total: parsed.total, count: parsed.data.length });
+      return parsed;
+    }
+  } catch (err) {
+    logger.warn("getGoals service cache read failed", { traceId, error: (err as Error).message });
+  }
+
   const goals = await Goal.find(filter)
     .sort({ [sortBy]: sortDirection })
     .skip(skip)
@@ -87,6 +110,13 @@ export const getGoals = async (query: {
       totalPages: Math.ceil(total / limit)
     }
   };
+
+  try {
+    await redisClient.set(ADMIN_GOALS_CACHE_KEY, JSON.stringify(result), "EX", 60 * 10); // 10m TTL
+    logger.info("getGoals service cache written", { traceId });
+  } catch (err) {
+    logger.warn("getGoals service cache write failed", { traceId, error: (err as Error).message });
+  }
 
   logger.info("getGoals service completed", { traceId, total, resultCount: goals.length });
   return result;
@@ -123,6 +153,14 @@ export const updateGoal = async (
   }
 
   await goal.save();
+
+  try {
+    await redisClient.del(ADMIN_GOALS_CACHE_KEY, ACTIVE_GOALS_CACHE_KEY);
+    logger.info("updateGoal cache invalidated", { traceId, id });
+  } catch (err) {
+    logger.warn("updateGoal cache invalidation failed", { traceId, id, error: (err as Error).message });
+  }
+
   logger.info("updateGoal service completed", { traceId, id, goalId: goal._id });
   return { ok: true, goal };
 };
@@ -143,6 +181,14 @@ export const deleteGoal = async (id: string, traceId?: string) => {
   }
 
   await goal.deleteOne();
+
+  try {
+    await redisClient.del(ADMIN_GOALS_CACHE_KEY, ACTIVE_GOALS_CACHE_KEY);
+    logger.info("deleteGoal cache invalidated", { traceId, id });
+  } catch (err) {
+    logger.warn("deleteGoal cache invalidation failed", { traceId, id, error: (err as Error).message });
+  }
+
   logger.info("deleteGoal service completed", { traceId, id });
   return { ok: true, message: "Goal permanently deleted." };
 };

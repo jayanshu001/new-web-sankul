@@ -2,6 +2,9 @@ import logger from "../../utils/logger";
 import { Types } from "mongoose";
 import { Customer } from "../../models/customer/Customer.model";
 import { Goal } from "../../models/Goal.model";
+import { redisClient } from "../../config/redis";
+
+const MY_SELECTED_GOALS_CACHE_PREFIX = "cache:client:goals:selected:";
 
 interface IProfileUpdateData {
   firstName?: string;
@@ -95,6 +98,14 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
         { $project: { _id: "$labels._id", name: "$labels.name" } }
       ]);
       profile.goals = matchedLabels;
+    }
+
+    const cacheKey = `${MY_SELECTED_GOALS_CACHE_PREFIX}${customerId}`;
+    try {
+      await redisClient.del(cacheKey);
+      logger.info("updateCustomerProfile cache invalidated", { traceId, customerId, cacheKey });
+    } catch (err) {
+      logger.warn("updateCustomerProfile cache invalidation failed", { traceId, customerId, error: (err as Error).message });
     }
 
     logger.info("updateCustomerProfile service success", { traceId, customerId, updatedFields: Object.keys(updatePayload) });

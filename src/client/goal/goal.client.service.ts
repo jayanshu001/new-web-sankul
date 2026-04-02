@@ -1,13 +1,35 @@
 import logger from "../../utils/logger";
 import { Goal } from "../../models/Goal.model";
 import { Customer } from "../../models/customer/Customer.model";
+import { redisClient } from "../../config/redis";
+
+const ACTIVE_GOALS_CACHE_KEY = "cache:client:goals:active";
+const MY_SELECTED_GOALS_CACHE_PREFIX = "cache:client:goals:selected:";
 
 export const getActiveGoals = async (traceId?: string) => {
   logger.info("getActiveGoals service invoked", { traceId });
 
+  try {
+    const cached = await redisClient.get(ACTIVE_GOALS_CACHE_KEY);
+    if (cached) {
+      const parsed = JSON.parse(cached);
+      logger.info("getActiveGoals cache hit", { traceId, count: parsed.length });
+      return parsed;
+    }
+  } catch (err) {
+    logger.warn("getActiveGoals cache read failed", { traceId, error: (err as Error).message });
+  }
+
   const goals = await Goal.find({ isActive: true })
     .select("title image labels")
     .sort({ createdAt: 1 });
+
+  try {
+    await redisClient.set(ACTIVE_GOALS_CACHE_KEY, JSON.stringify(goals), "EX", 60 * 60); // 1h TTL
+    logger.info("getActiveGoals cache written", { traceId });
+  } catch (err) {
+    logger.warn("getActiveGoals cache write failed", { traceId, error: (err as Error).message });
+  }
 
   logger.info("getActiveGoals service completed", { traceId, count: goals.length });
   return goals;
@@ -33,6 +55,18 @@ export const getMySelectedGoals = async (customerId: string, traceId?: string) =
       return { ok: true, data: [] };
     }
 
+    const cacheKey = `${MY_SELECTED_GOALS_CACHE_PREFIX}${customerId}`;
+    try {
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        logger.info("getMySelectedGoals cache hit", { traceId, customerId, count: parsed.length });
+        return { ok: true, data: parsed };
+      }
+    } catch (err) {
+      logger.warn("getMySelectedGoals cache read failed", { traceId, customerId, error: (err as Error).message });
+    }
+
     // Pass 1: Find goal groups that contain ANY selected label
     const rawGoals = await Goal.find({
       "labels._id": { $in: goalIds },
@@ -51,6 +85,13 @@ export const getMySelectedGoals = async (customerId: string, traceId?: string) =
         labels: doc.labels
       };
     });
+
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(filteredGoals), "EX", 60 * 5); // 5m TTL
+      logger.info("getMySelectedGoals cache written", { traceId, customerId });
+    } catch (err) {
+      logger.warn("getMySelectedGoals cache write failed", { traceId, customerId, error: (err as Error).message });
+    }
 
     logger.info("getMySelectedGoals service completed", { traceId, customerId, count: filteredGoals.length });
     return { ok: true, data: filteredGoals };
