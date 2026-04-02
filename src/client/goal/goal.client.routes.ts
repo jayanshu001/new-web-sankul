@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { fetchActiveGoalsHandler } from "./goal.client.controller";
+import { fetchActiveGoalsHandler, fetchMySelectedGoalsHandler } from "./goal.client.controller";
 import authenticate from "../../middlewares/authenticate";
 
 const router = Router();
@@ -12,6 +12,9 @@ const router = Router();
 // Native UI endpoint
 // Some apps allow fetching goals pre-login, but we can bind authenticate if needed.
 // Passing authenticate ensures only logged in customers see it, but we can leave it open for onboarding.
-router.get("/",authenticate, fetchActiveGoalsHandler);
+router.get("/", authenticate, fetchActiveGoalsHandler);
+
+// Specifically fetches only the selected labels chosen by the authenticated user
+router.get("/my-goals", authenticate, fetchMySelectedGoalsHandler);
 
 export default router;

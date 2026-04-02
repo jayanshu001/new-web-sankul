@@ -30,6 +30,6 @@ router.post("/otp/validate", validateOtpHandler);
  * @desc   Refresh an expired access token using a valid refresh token.
  * @access Public
  */
-router.post("/otp/refresh", refreshTokenHandler);
+router.post("/token/refresh", refreshTokenHandler);
 
 export default router;

@@ -35,7 +35,7 @@ function formatPhone(raw: string): string {
 }
 
 async function sendOtpSms(phone: string, otp: string): Promise<boolean> {
-  const url = process.env.SMS_API_URL;
+  const url = `${process.env.TWO_FACTOR_BASE_URL}${process.env.TWO_FACTOR_API_KEY}/SMS/${phone}/${otp}/${process.env.TWO_FACTOR_WEBSANKUL_OTP_TEMPLATE}?var1=${process.env.TWO_FACTOR_OTP_HASH_CODE}`;
   if (!url) {
     console.warn("[SMS] SMS_API_URL not set — skipping send, OTP:", otp);
     return true; // dev fallback

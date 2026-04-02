@@ -1,6 +1,6 @@
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
-import { updateProfileHandler } from "./customer.controller";
+import { updateProfileHandler, getProfileHandler } from "./customer.controller";
 
 const router = Router();
 
@@ -9,6 +9,11 @@ const router = Router();
  * @desc   Update customer profile details
  * @access Private (Customer)
  */
-router.put("/profile", authenticate, updateProfileHandler);
+router.put("/update", authenticate, updateProfileHandler);
 
+/**
+ * @route  GET /api/v1/client/profile/me
+ * @desc   Get full customer profile data natively mapped to UI state
+ */
+router.get("/", authenticate, getProfileHandler);
 export default router;
