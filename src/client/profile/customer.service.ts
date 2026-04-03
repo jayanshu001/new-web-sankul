@@ -3,8 +3,11 @@ import { Types } from "mongoose";
 import { Customer } from "../../models/customer/Customer.model";
 import { Goal } from "../../models/Goal.model";
 import { redisClient } from "../../config/redis";
+import { deleteFromS3FileUrl } from "../../middlewares/upload";
 
 const MY_SELECTED_GOALS_CACHE_PREFIX = "cache:client:goals:selected:";
+const PROFILE_CACHE_PREFIX = "cache:client:profile:";
+const PROFILE_CACHE_TTL_SECONDS = 60 * 5; // 5m
 
 interface IProfileUpdateData {
   firstName?: string;
@@ -57,7 +60,7 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
       { $set: updatePayload },
       { new: true, runValidators: true }
     ).select(
-      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseToken osType loginCount isLoggedIn"
+      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseToken osType loginCount isLoggedIn phoneNumber"
     );
 
     if (!updatedCustomer) {
@@ -102,10 +105,15 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
 
     const cacheKey = `${MY_SELECTED_GOALS_CACHE_PREFIX}${customerId}`;
     try {
-      await redisClient.del(cacheKey);
-      logger.info("updateCustomerProfile cache invalidated", { traceId, customerId, cacheKey });
+      const profileCacheKey = `${PROFILE_CACHE_PREFIX}${customerId}`;
+      await redisClient.del(cacheKey, profileCacheKey);
+      logger.info("updateCustomerProfile cache invalidated", { traceId, customerId, cacheKey, profileCacheKey });
     } catch (err) {
-      logger.warn("updateCustomerProfile cache invalidation failed", { traceId, customerId, error: (err as Error).message });
+      logger.warn("updateCustomerProfile cache invalidation failed", {
+        traceId,
+        customerId,
+        error: (err as Error).message,
+      });
     }
 
     logger.info("updateCustomerProfile service success", { traceId, customerId, updatedFields: Object.keys(updatePayload) });
@@ -120,8 +128,24 @@ export async function getCustomerProfile(customerId: string, traceId?: string) {
   logger.info("getCustomerProfile service invoked", { traceId, customerId });
 
   try {
+    const cacheKey = `${PROFILE_CACHE_PREFIX}${customerId}`;
+    try {
+      const cached = await redisClient.get(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        logger.info("getCustomerProfile cache hit", { traceId, customerId, count: parsed?.goals?.length ?? 0 });
+        return { ok: true, message: "Profile fetched successfully.", data: parsed };
+      }
+    } catch (err) {
+      logger.warn("getCustomerProfile cache read failed", {
+        traceId,
+        customerId,
+        error: (err as Error).message,
+      });
+    }
+
     const customer = await Customer.findById(customerId).select(
-      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseToken osType loginCount isLoggedIn"
+      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseToken osType loginCount isLoggedIn phoneNumber"
     );
 
     if (!customer) {
@@ -163,11 +187,144 @@ export async function getCustomerProfile(customerId: string, traceId?: string) {
       profile.goals = matchedLabels;
     }
 
+    try {
+      await redisClient.set(cacheKey, JSON.stringify(profile), "EX", PROFILE_CACHE_TTL_SECONDS);
+      logger.info("getCustomerProfile cache written", { traceId, customerId });
+    } catch (err) {
+      logger.warn("getCustomerProfile cache write failed", {
+        traceId,
+        customerId,
+        error: (err as Error).message,
+      });
+    }
+
     logger.info("getCustomerProfile service success", { traceId, customerId });
     return { ok: true, message: "Profile fetched successfully.", data: profile };
   } catch (error) {
     logger.error("getCustomerProfile service error", { traceId, customerId, error: (error as Error).message, stack: (error as Error).stack });
     return { ok: false, message: "An error occurred while fetching profile." };
+  }
+}
+
+interface IProfilePictureUpsertData {
+  image: string;
+}
+
+export async function upsertCustomerProfilePicture(
+  customerId: string,
+  data: IProfilePictureUpsertData,
+  traceId?: string
+) {
+  logger.info("upsertCustomerProfilePicture service invoked", { traceId, customerId });
+
+  try {
+    const { image } = data;
+    if (!image) {
+      logger.warn("upsertCustomerProfilePicture missing image", { traceId, customerId });
+      return { ok: false, message: "Profile picture image is required." };
+    }
+
+    const customer = await Customer.findOne({ _id: customerId, isAccountDeleted: false, status: true }).select(
+      "profilePicture"
+    );
+
+    if (!customer) {
+      logger.warn("upsertCustomerProfilePicture service customer not found", { traceId, customerId });
+      return { ok: false, message: "Customer not found." };
+    }
+
+    const oldImageUrl = customer.profilePicture;
+    if (oldImageUrl && oldImageUrl !== image) {
+      // Non-fatal: failure to delete an orphan file shouldn't block the profile update.
+      deleteFromS3FileUrl(oldImageUrl).catch((err) => {
+        logger.warn("upsertCustomerProfilePicture failed to delete old image", {
+          traceId,
+          customerId,
+          error: (err as Error).message,
+        });
+      });
+    }
+
+    await Customer.updateOne(
+      { _id: customerId },
+      { $set: { profilePicture: image } },
+      { runValidators: true }
+    );
+
+    const profileCacheKey = `${PROFILE_CACHE_PREFIX}${customerId}`;
+    try {
+      await redisClient.del(profileCacheKey);
+      logger.info("upsertCustomerProfilePicture cache invalidated", { traceId, customerId, profileCacheKey });
+    } catch (err) {
+      logger.warn("upsertCustomerProfilePicture cache invalidation failed", {
+        traceId,
+        customerId,
+        error: (err as Error).message,
+      });
+    }
+
+    logger.info("upsertCustomerProfilePicture service success", { traceId, customerId });
+    return { ok: true, message: "Profile picture updated successfully.", data: { profilePicture: image } };
+  } catch (error) {
+    logger.error("upsertCustomerProfilePicture service error", {
+      traceId,
+      customerId,
+      error: (error as Error).message,
+      stack: (error as Error).stack,
+    });
+    return { ok: false, message: "An error occurred while updating profile picture." };
+  }
+}
+
+export async function deleteCustomerProfilePicture(customerId: string, traceId?: string) {
+  logger.info("deleteCustomerProfilePicture service invoked", { traceId, customerId });
+
+  try {
+    const customer = await Customer.findOne({ _id: customerId, isAccountDeleted: false, status: true }).select(
+      "profilePicture"
+    );
+
+    if (!customer) {
+      logger.warn("deleteCustomerProfilePicture service customer not found", { traceId, customerId });
+      return { ok: false, message: "Customer not found." };
+    }
+
+    const oldImageUrl = customer.profilePicture;
+    if (oldImageUrl) {
+      // Non-fatal: failure to delete an orphan file shouldn't block the profile update.
+      deleteFromS3FileUrl(oldImageUrl).catch((err) => {
+        logger.warn("deleteCustomerProfilePicture failed to delete old image", {
+          traceId,
+          customerId,
+          error: (err as Error).message,
+        });
+      });
+    }
+
+    await Customer.updateOne({ _id: customerId }, { $set: { profilePicture: "" } }, { runValidators: true });
+
+    const profileCacheKey = `${PROFILE_CACHE_PREFIX}${customerId}`;
+    try {
+      await redisClient.del(profileCacheKey);
+      logger.info("deleteCustomerProfilePicture cache invalidated", { traceId, customerId, profileCacheKey });
+    } catch (err) {
+      logger.warn("deleteCustomerProfilePicture cache invalidation failed", {
+        traceId,
+        customerId,
+        error: (err as Error).message,
+      });
+    }
+
+    logger.info("deleteCustomerProfilePicture service success", { traceId, customerId });
+    return { ok: true, message: "Profile picture deleted successfully.", data: { profilePicture: "" } };
+  } catch (error) {
+    logger.error("deleteCustomerProfilePicture service error", {
+      traceId,
+      customerId,
+      error: (error as Error).message,
+      stack: (error as Error).stack,
+    });
+    return { ok: false, message: "An error occurred while deleting profile picture." };
   }
 }
 

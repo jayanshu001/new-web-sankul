@@ -32,6 +32,15 @@ This file documents caching rules, endpoints, cache keys, and invalidation behav
 - Invalidated by:
   - `createGoal`, `updateGoal`, `deleteGoal` in `src/admin/goal/goal.admin.service.ts`
 
+### 2.4 GET /api/v1/client/profile
+- Service: `src/client/profile/customer.service.ts` : `getCustomerProfile`
+- Cache key: `cache:client:profile:${customerId}`
+- TTL: 5 minutes (300 sec)
+- Hit/miss logs: `getCustomerProfile cache hit` / `getCustomerProfile cache written`
+- Invalidated by:
+  - `updateCustomerProfile` in `src/client/profile/customer.service.ts` (delete key)
+  - `upsertCustomerProfilePicture` and `deleteCustomerProfilePicture` in `src/client/profile/customer.service.ts` (delete key)
+
 ## 3. APIs excluded from caching (no implement)
 - Auth endpoints: OTP/validate/login/refresh/logout → security and freshness required
 - write endpoints: create/update/delete profile/goals/admin users
@@ -40,10 +49,11 @@ This file documents caching rules, endpoints, cache keys, and invalidation behav
 ## 4. Cache keys summary
 - `cache:client:goals:active`
 - `cache:client:goals:selected:${customerId}`
+- `cache:client:profile:${customerId}`
 - `cache:admin:goals:list`
 
 ## 5. Future caching additions
-- Per-user profile snapshot: `cache:client:profile:${customerId}` with invalidation on profile update
+- Per-user profile snapshot: (already implemented) `cache:client:profile:${customerId}` with invalidation on profile update
 - Admin role/permission read endpoints (with TTL)
 - More selective query caching using parametrized key (e.g., `cache:admin:goals:filter:${md5(query)}`)
 

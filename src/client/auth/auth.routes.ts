@@ -9,14 +9,16 @@ const router = Router();
  * @desc   Send OTP to phone number (creates account if first time)
  * @access Public
  */
-router.post("/otp/generate", otpLimiter, generateOtpHandler);
+// router.post("/otp/generate", otpLimiter, generateOtpHandler);
+router.post("/otp/generate", generateOtpHandler);
 
 /**
  * @route  POST /api/v1/auth/otp/resend
  * @desc   Resend an OTP to the user's phone number
  * @access Public
  */
-router.post("/otp/resend", otpLimiter, resendOtpHandler);
+// router.post("/otp/resend", otpLimiter, resendOtpHandler);
+router.post("/otp/resend", resendOtpHandler);
 
 /**
  * @route  POST /api/v1/auth/otp/validate
