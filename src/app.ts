@@ -112,6 +112,15 @@ app.use(
   })
 );
 
+// Normalize repeated slashes in request path (e.g. //api/v1 -> /api/v1)
+// so misconfigured clients don't miss valid routes.
+app.use((req, _res, next) => {
+  if (req.url.includes("//")) {
+    req.url = req.url.replace(/\/{2,}/g, "/");
+  }
+  next();
+});
+
 // E) (Optional) catch-all raw for binary uploads to specific endpoints
 // Put this BEFORE the route that needs it (not globally), e.g.:
 // app.post("/api/files/raw", express.raw({ type: "*/*", limit: "50mb" }), rawFileHandler);
