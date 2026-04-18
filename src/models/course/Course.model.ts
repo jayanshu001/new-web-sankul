@@ -1,5 +1,10 @@
 import mongoose, { Schema, Document } from "mongoose";
 
+export interface ICourseCategoryRef {
+  category: mongoose.Types.ObjectId;
+  order: number;
+}
+
 export interface ICourse extends Document {
   name: string;
   description: string;
@@ -10,16 +15,36 @@ export interface ICourse extends Document {
   withoutMaterial?: string;
   level: string;
   status: boolean;
-  
+
   // Relations
   courseEducatorId?: mongoose.Types.ObjectId;
   courseSubjectCategoryId?: mongoose.Types.ObjectId;
   videoCategoryId?: mongoose.Types.ObjectId;
   pcMaterialId?: mongoose.Types.ObjectId;
-  
+
+  // Embedded joins (replacement for SQL MaterialCategoryCourse / ExamCategoryCourse)
+  materialCategories: ICourseCategoryRef[];
+  examCategories: ICourseCategoryRef[];
+
   createdAt: Date;
   updatedAt: Date;
 }
+
+const materialCategoryRefSchema = new Schema<ICourseCategoryRef>(
+  {
+    category: { type: Schema.Types.ObjectId, ref: "MaterialCategory", required: true },
+    order: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
+const examCategoryRefSchema = new Schema<ICourseCategoryRef>(
+  {
+    category: { type: Schema.Types.ObjectId, ref: "ExamCategory", required: true },
+    order: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
 
 const courseSchema: Schema = new Schema(
   {
@@ -32,12 +57,15 @@ const courseSchema: Schema = new Schema(
     withoutMaterial: { type: String, default: "" },
     level: { type: String, required: true },
     status: { type: Boolean, required: true, default: true },
-    
+
     // Relations
     courseEducatorId: { type: Schema.Types.ObjectId, ref: "CourseEducator", default: null },
     courseSubjectCategoryId: { type: Schema.Types.ObjectId, ref: "CourseSubjectCategory", default: null },
     videoCategoryId: { type: Schema.Types.ObjectId, ref: "VideoCategory", default: null },
     pcMaterialId: { type: Schema.Types.ObjectId, ref: "PackageCourseMaterial", default: null },
+
+    materialCategories: { type: [materialCategoryRefSchema], default: [] },
+    examCategories: { type: [examCategoryRefSchema], default: [] },
   },
   {
     timestamps: true,

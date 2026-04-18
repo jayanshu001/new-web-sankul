@@ -132,3 +132,8 @@ export const AdminRole = {
   EDITOR: "editor",
 } as const;
 export type AdminRole = (typeof AdminRole)[keyof typeof AdminRole];
+
+export const CRM_LEAD_TYPE = {
+  VIEW_COURSE: "VIEW_COURSE",
+} as const;
+export type CRM_LEAD_TYPE = (typeof CRM_LEAD_TYPE)[keyof typeof CRM_LEAD_TYPE];

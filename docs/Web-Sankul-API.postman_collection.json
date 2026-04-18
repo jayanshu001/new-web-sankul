@@ -2,14 +2,26 @@
   "info": {
     "_postman_id": "91c3d3d7-6b98-4ac6-911d-a4f88595dbe0",
     "name": "Web Sankul API",
+    "description": "Admin + customer endpoints for Web Sankul.\n\n## Conventions\n- Collection-level **Bearer auth** — every request inherits `{{accessToken}}` unless explicitly marked otherwise.\n- **Auto-ID capture** — every `Create` endpoint has a test script that stashes the new `_id` into the matching collection variable (e.g. `{{course_id}}`, `{{plan_id}}`). Subsequent PUT / DELETE requests reference those variables directly.\n- **Runnable flows** — the `Admin APIs → 00 Getting Started` folder is a left-to-right happy-path sequence you can run via *Runner* to seed a full course with masters, relations, and plans.\n",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
   },
   "item": [
     {
       "name": "Customer APIs",
+      "description": "Endpoints hit by the Mobile App / Student Web Portal.",
       "item": [
         {
-          "name": "Authentication",
+          "name": "01 Authentication",
           "item": [
             {
               "name": "Send OTP",
@@ -21,15 +33,6 @@
                     "value": "application/json"
                   }
                 ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"phoneNumber\": \"9876543210\"\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
-                    }
-                  }
-                },
                 "url": {
                   "raw": "{{URL}}/api/v1/client/auth/otp/generate",
                   "host": [
@@ -43,6 +46,18 @@
                     "otp",
                     "generate"
                   ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"phoneNumber\": \"9876543210\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "noauth"
                 }
               },
               "response": []
@@ -57,15 +72,6 @@
                     "value": "application/json"
                   }
                 ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"phoneNumber\": \"9876543210\"\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
-                    }
-                  }
-                },
                 "url": {
                   "raw": "{{URL}}/api/v1/client/auth/otp/resend",
                   "host": [
@@ -79,44 +85,24 @@
                     "otp",
                     "resend"
                   ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"phoneNumber\": \"9876543210\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "noauth"
                 }
               },
               "response": []
             },
             {
               "name": "Validate OTP",
-              "event": [
-                {
-                  "listen": "test",
-                  "script": {
-                    "type": "text/javascript",
-                    "exec": [
-                      "pm.test(\"Validate OTP Success\", function () {",
-                      "  pm.response.to.have.status(200);",
-                      "  var jsonData = pm.response.json();",
-                      "  var accessToken = jsonData?.data?.accessToken || \"\";",
-                      "  var refreshToken = jsonData?.data?.refreshToken || \"\";",
-                      "  var userId = jsonData?.data?.user?.id || jsonData?.data?.user?._id || \"\";",
-                      "  pm.collectionVariables.set(\"accessToken\", accessToken);",
-                      "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
-                      "  pm.collectionVariables.set(\"user_id\", userId);",
-                      "  pm.environment.set(\"accessToken\", accessToken);",
-                      "  pm.environment.set(\"refreshToken\", refreshToken);",
-                      "  pm.environment.set(\"user_id\", userId);",
-                      "});"
-                    ]
-                  }
-                },
-                {
-                  "listen": "prerequest",
-                  "script": {
-                    "type": "text/javascript",
-                    "exec": [
-                      ""
-                    ]
-                  }
-                }
-              ],
               "request": {
                 "method": "POST",
                 "header": [
@@ -125,15 +111,6 @@
                     "value": "application/json"
                   }
                 ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"phoneNumber\": \"9876543210\",\n  \"otp\": \"123456\",\n  \"os_type\": \"android\"\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
-                    }
-                  }
-                },
                 "url": {
                   "raw": "{{URL}}/api/v1/client/auth/otp/validate",
                   "host": [
@@ -147,44 +124,45 @@
                     "otp",
                     "validate"
                   ]
+                },
+                "description": "On success, stashes `{{accessToken}}` + `{{refreshToken}}` + `{{user_id}}`.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"phoneNumber\": \"9876543210\",\n  \"otp\": \"123456\",\n  \"os_type\": \"android\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "noauth"
                 }
               },
-              "response": []
-            },
-            {
-              "name": "Refresh Token",
+              "response": [],
               "event": [
                 {
                   "listen": "test",
                   "script": {
                     "type": "text/javascript",
                     "exec": [
-                      "pm.test(\"Refresh Token Success\", function () {",
-                      "  pm.response.to.have.status(200);",
-                      "  var jsonData = pm.response.json();",
-                      "  var accessToken = jsonData?.data?.accessToken || \"\";",
-                      "  var refreshToken = jsonData?.data?.refreshToken || \"\";",
-                      "  var userId = jsonData?.data?.user?.id || jsonData?.data?.user?._id || \"\";",
-                      "  pm.collectionVariables.set(\"accessToken\", accessToken);",
-                      "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
-                      "  pm.collectionVariables.set(\"user_id\", userId);",
-                      "  pm.environment.set(\"accessToken\", accessToken);",
-                      "  pm.environment.set(\"refreshToken\", refreshToken);",
-                      "  pm.environment.set(\"user_id\", userId);",
-                      "});"
-                    ]
-                  }
-                },
-                {
-                  "listen": "prerequest",
-                  "script": {
-                    "type": "text/javascript",
-                    "exec": [
-                      ""
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const j = pm.response.json();",
+                      "  const at = j?.data?.accessToken || \"\";",
+                      "  const rt = j?.data?.refreshToken || \"\";",
+                      "  const uid = j?.data?.admin?.id || j?.data?.admin?._id || j?.data?.user?.id || j?.data?.user?._id || \"\";",
+                      "  if (at) { pm.collectionVariables.set(\"accessToken\", at); pm.environment.set(\"accessToken\", at); }",
+                      "  if (rt) { pm.collectionVariables.set(\"refreshToken\", rt); pm.environment.set(\"refreshToken\", rt); }",
+                      "  if (uid) { pm.collectionVariables.set(\"user_id\", uid); pm.environment.set(\"user_id\", uid); }",
+                      "} catch (e) {}"
                     ]
                   }
                 }
-              ],
+              ]
+            },
+            {
+              "name": "Refresh Token",
               "request": {
                 "method": "POST",
                 "header": [
@@ -193,15 +171,6 @@
                     "value": "application/json"
                   }
                 ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
-                    }
-                  }
-                },
                 "url": {
                   "raw": "{{URL}}/api/v1/client/auth/token/refresh",
                   "host": [
@@ -215,28 +184,50 @@
                     "token",
                     "refresh"
                   ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "noauth"
                 }
               },
-              "response": []
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const j = pm.response.json();",
+                      "  const at = j?.data?.accessToken || \"\";",
+                      "  const rt = j?.data?.refreshToken || \"\";",
+                      "  const uid = j?.data?.admin?.id || j?.data?.admin?._id || j?.data?.user?.id || j?.data?.user?._id || \"\";",
+                      "  if (at) { pm.collectionVariables.set(\"accessToken\", at); pm.environment.set(\"accessToken\", at); }",
+                      "  if (rt) { pm.collectionVariables.set(\"refreshToken\", rt); pm.environment.set(\"refreshToken\", rt); }",
+                      "  if (uid) { pm.collectionVariables.set(\"user_id\", uid); pm.environment.set(\"user_id\", uid); }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
             }
           ]
         },
         {
-          "name": "Profile",
+          "name": "02 Profile",
           "item": [
             {
               "name": "Update Profile",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "PUT",
                 "header": [
                   {
@@ -244,15 +235,6 @@
                     "value": "application/json"
                   }
                 ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"firstName\": \"Aman\",\n  \"middleName\": \"K\",\n  \"lastName\": \"Sharma\",\n  \"email\": \"aman@example.com\",\n  \"goals\": []\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
-                    }
-                  }
-                },
                 "url": {
                   "raw": "{{URL}}/api/v1/client/profile/update",
                   "host": [
@@ -265,6 +247,15 @@
                     "profile",
                     "update"
                   ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"firstName\": \"Aman\",\n  \"middleName\": \"K\",\n  \"lastName\": \"Sharma\",\n  \"email\": \"aman@example.com\",\n  \"goals\": []\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
                 }
               },
               "response": []
@@ -272,16 +263,6 @@
             {
               "name": "Get Profile Details",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "GET",
                 "header": [],
                 "url": {
@@ -302,28 +283,8 @@
             {
               "name": "Update Profile Picture",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "PUT",
                 "header": [],
-                "body": {
-                  "mode": "formdata",
-                  "formdata": [
-                    {
-                      "type": "file",
-                      "key": "image",
-                      "src": ""
-                    }
-                  ]
-                },
                 "url": {
                   "raw": "{{URL}}/api/v1/client/profile/profile-picture",
                   "host": [
@@ -336,6 +297,16 @@
                     "profile",
                     "profile-picture"
                   ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "type": "file",
+                      "key": "image",
+                      "src": ""
+                    }
+                  ]
                 }
               },
               "response": []
@@ -343,16 +314,6 @@
             {
               "name": "Remove Profile Picture",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "DELETE",
                 "header": [],
                 "url": {
@@ -374,21 +335,11 @@
           ]
         },
         {
-          "name": "Goal",
+          "name": "03 Goals",
           "item": [
             {
               "name": "Get Active Goals",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "GET",
                 "header": [],
                 "url": {
@@ -409,16 +360,6 @@
             {
               "name": "Select/Update Goals",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "PUT",
                 "header": [
                   {
@@ -426,15 +367,6 @@
                     "value": "application/json"
                   }
                 ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"goals\": [\n    \"{{goal_id}}\"\n  ]\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
-                    }
-                  }
-                },
                 "url": {
                   "raw": "{{URL}}/api/v1/client/profile/update",
                   "host": [
@@ -447,6 +379,15 @@
                     "profile",
                     "update"
                   ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"goals\": [\n    \"{{goal_id}}\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
                 }
               },
               "response": []
@@ -454,16 +395,6 @@
             {
               "name": "Get Selected Goals",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "GET",
                 "header": [],
                 "url": {
@@ -483,84 +414,35 @@
               "response": []
             }
           ]
-        }
-      ]
-    },
-    {
-      "name": "Admin APIs",
-      "item": [
+        },
         {
-          "name": "Authentication APIs",
+          "name": "04 Courses",
+          "description": "Customer-side course endpoints. The 4 routes exposed by the Course Management port.",
           "item": [
             {
-              "name": "Register Super Admin (First Time Use Only)",
+              "name": "Get Course Details",
               "request": {
-                "method": "POST",
-                "header": [
-                  {
-                    "key": "Content-Type",
-                    "value": "application/json"
-                  }
-                ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"firstName\": \"Super\",\n  \"lastName\": \"Admin\",\n  \"email\": \"admin@example.com\",\n  \"password\": \"password123\",\n  \"role\": \"super_admin\"\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
-                    }
-                  }
-                },
+                "method": "GET",
+                "header": [],
                 "url": {
-                  "raw": "{{URL}}/api/v1/admin/auth/register",
+                  "raw": "{{URL}}/api/v1/client/courses/{{course_id}}",
                   "host": [
                     "{{URL}}"
                   ],
                   "path": [
                     "api",
                     "v1",
-                    "admin",
-                    "auth",
-                    "register"
+                    "client",
+                    "courses",
+                    "{{course_id}}"
                   ]
-                }
+                },
+                "description": "Returns course (populated subject + educator), lectures (each with encrypted `videoURL` + `token`), materials tree, exams tree, pricing plans (split by `withMaterial`), and public promo codes active right now. Fires a `VIEW_COURSE` CRM lead async."
               },
               "response": []
             },
             {
-              "name": "Login",
-              "event": [
-                {
-                  "listen": "test",
-                  "script": {
-                    "type": "text/javascript",
-                    "exec": [
-                      "pm.test(\"Admin Login Success\", function () {",
-                      "  pm.response.to.have.status(200);",
-                      "  var jsonData = pm.response.json();",
-                      "  var accessToken = jsonData?.data?.accessToken || \"\";",
-                      "  var refreshToken = jsonData?.data?.refreshToken || \"\";",
-                      "  var userId = jsonData?.data?.admin?.id || jsonData?.data?.admin?._id || \"\";",
-                      "  pm.collectionVariables.set(\"accessToken\", accessToken);",
-                      "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
-                      "  pm.collectionVariables.set(\"user_id\", userId);",
-                      "  pm.environment.set(\"accessToken\", accessToken);",
-                      "  pm.environment.set(\"refreshToken\", refreshToken);",
-                      "  pm.environment.set(\"user_id\", userId);",
-                      "});"
-                    ]
-                  }
-                },
-                {
-                  "listen": "prerequest",
-                  "script": {
-                    "type": "text/javascript",
-                    "exec": [
-                      ""
-                    ]
-                  }
-                }
-              ],
+              "name": "Save Shipping Address",
               "request": {
                 "method": "POST",
                 "header": [
@@ -569,15 +451,106 @@
                     "value": "application/json"
                   }
                 ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/courses/shipping",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "courses",
+                    "shipping"
+                  ]
+                },
+                "description": "Upserts a (CustomerAddress, CustomerShipping) pair for the current user. `alternate_phone`, `email`, `state` can be null. On read, `state` is populated and numeric fields are stringified.",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"password123\"\n}",
+                  "raw": "{\n  \"name\": \"Aman Sharma\",\n  \"phone\": 9876543210,\n  \"alternate_phone\": 9876543211,\n  \"email\": \"aman@example.com\",\n  \"address\": \"12 MG Road\",\n  \"address_2\": \"Near City Mall\",\n  \"city\": \"Ahmedabad\",\n  \"state\": \"{{state_id}}\",\n  \"pincode\": 380001\n}",
                   "options": {
                     "raw": {
                       "language": "json"
                     }
                   }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Order Details",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/courses/orders/{{order_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "courses",
+                    "orders",
+                    "{{order_id}}"
+                  ]
                 },
+                "description": "Returns the subscription with `package`, `course`, `customerShipping` populated. If `trackingId` is set, adds `tracking_id` + `tracking_url` (MAHAVIR if trackingId < 119400228001, else TIRUPATI)."
+              },
+              "response": []
+            },
+            {
+              "name": "Download Order Invoice (PDF)",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Accept",
+                    "value": "application/pdf"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/courses/orders/{{order_id}}/invoice",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "courses",
+                    "orders",
+                    "{{order_id}}",
+                    "invoice"
+                  ]
+                },
+                "description": "Streams `application/pdf`. Use Postman *Send and Download*."
+              },
+              "response": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin APIs",
+      "description": "Endpoints hit by the Admin React Dashboard.",
+      "item": [
+        {
+          "name": "00 Getting Started (Runnable Flow)",
+          "description": "One-click happy path. Run this folder via Postman *Runner* to: log in → seed masters → create a course → attach plans → verify. Each step writes its new `_id` into a collection variable so the next step picks it up automatically.\n\n**Prerequisites:** your `.env` admin exists (Test@123 by default).\n\nAfter the run:\n- `{{educator_id}}`, `{{subject_category_id}}`, `{{material_master_id}}`, `{{video_category_id}}`, `{{child_video_category_id}}`, `{{video_relation_id}}`, `{{course_id}}`, `{{plan_id}}` are populated.\n",
+          "item": [
+            {
+              "name": "Step 01 — Admin login",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
                 "url": {
                   "raw": "{{URL}}/api/v1/admin/auth/login",
                   "host": [
@@ -590,44 +563,44 @@
                     "auth",
                     "login"
                   ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"Test@123\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "noauth"
                 }
               },
-              "response": []
-            },
-            {
-              "name": "Refresh Token",
+              "response": [],
               "event": [
                 {
                   "listen": "test",
                   "script": {
                     "type": "text/javascript",
                     "exec": [
-                      "pm.test(\"Admin Refresh Success\", function () {",
-                      "  pm.response.to.have.status(200);",
-                      "  var jsonData = pm.response.json();",
-                      "  var accessToken = jsonData?.data?.accessToken || \"\";",
-                      "  var refreshToken = jsonData?.data?.refreshToken || \"\";",
-                      "  var userId = jsonData?.data?.admin?.id || jsonData?.data?.admin?._id || \"\";",
-                      "  pm.collectionVariables.set(\"accessToken\", accessToken);",
-                      "  pm.collectionVariables.set(\"refreshToken\", refreshToken);",
-                      "  pm.collectionVariables.set(\"user_id\", userId);",
-                      "  pm.environment.set(\"accessToken\", accessToken);",
-                      "  pm.environment.set(\"refreshToken\", refreshToken);",
-                      "  pm.environment.set(\"user_id\", userId);",
-                      "});"
-                    ]
-                  }
-                },
-                {
-                  "listen": "prerequest",
-                  "script": {
-                    "type": "text/javascript",
-                    "exec": [
-                      ""
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const j = pm.response.json();",
+                      "  const at = j?.data?.accessToken || \"\";",
+                      "  const rt = j?.data?.refreshToken || \"\";",
+                      "  const uid = j?.data?.admin?.id || j?.data?.admin?._id || j?.data?.user?.id || j?.data?.user?._id || \"\";",
+                      "  if (at) { pm.collectionVariables.set(\"accessToken\", at); pm.environment.set(\"accessToken\", at); }",
+                      "  if (rt) { pm.collectionVariables.set(\"refreshToken\", rt); pm.environment.set(\"refreshToken\", rt); }",
+                      "  if (uid) { pm.collectionVariables.set(\"user_id\", uid); pm.environment.set(\"user_id\", uid); }",
+                      "} catch (e) {}"
                     ]
                   }
                 }
-              ],
+              ]
+            },
+            {
+              "name": "Step 02 — Create Educator",
               "request": {
                 "method": "POST",
                 "header": [
@@ -636,15 +609,562 @@
                     "value": "application/json"
                   }
                 ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/master/educators",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "master",
+                    "educators"
+                  ]
+                },
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+                  "raw": "{\n  \"name\": \"FlowTest Educator\",\n  \"email\": \"flow-edu@example.com\",\n  \"image\": \"https://example.com/edu.jpg\",\n  \"about\": \"Flow test\",\n  \"status\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                      "if (ok) {",
+                      "  try {",
+                      "    const j = pm.response.json();",
+                      "    const d = j && j.data ? j.data : {};",
+                      "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                      "    if (v) { pm.collectionVariables.set(\"educator_id\", v); pm.environment.set(\"educator_id\", v); }",
+                      "  } catch (e) { /* non-JSON body */ }",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Step 03 — Create Subject Category",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/master/subject-categories",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "master",
+                    "subject-categories"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"FlowTest Subject\",\n  \"slug\": \"flowtest-subject\",\n  \"image\": \"https://example.com/sub.jpg\",\n  \"order\": 1\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                      "if (ok) {",
+                      "  try {",
+                      "    const j = pm.response.json();",
+                      "    const d = j && j.data ? j.data : {};",
+                      "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                      "    if (v) { pm.collectionVariables.set(\"subject_category_id\", v); pm.environment.set(\"subject_category_id\", v); }",
+                      "  } catch (e) { /* non-JSON body */ }",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Step 04 — Create Material (master)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/master/materials",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "master",
+                    "materials"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"FlowTest Material\",\n  \"image\": \"https://example.com/mat.jpg\",\n  \"isActive\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                      "if (ok) {",
+                      "  try {",
+                      "    const j = pm.response.json();",
+                      "    const d = j && j.data ? j.data : {};",
+                      "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                      "    if (v) { pm.collectionVariables.set(\"material_master_id\", v); pm.environment.set(\"material_master_id\", v); }",
+                      "  } catch (e) { /* non-JSON body */ }",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Step 05 — Create Video Category (parent)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/master/video-categories",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "master",
+                    "video-categories"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"FlowTest VC\",\n  \"slug\": \"flowtest-vc\",\n  \"image\": \"https://example.com/vc.jpg\",\n  \"order_by\": 1\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                      "if (ok) {",
+                      "  try {",
+                      "    const j = pm.response.json();",
+                      "    const d = j && j.data ? j.data : {};",
+                      "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                      "    if (v) { pm.collectionVariables.set(\"video_category_id\", v); pm.environment.set(\"video_category_id\", v); }",
+                      "  } catch (e) { /* non-JSON body */ }",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Step 06 — Create child Video Category (course-scoped)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/courses/video-categories",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "courses",
+                    "video-categories"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Child Folder\",\n  \"slug\": \"flowtest-child\",\n  \"image\": \"https://example.com/child.jpg\",\n  \"order_by\": 2\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                      "if (ok) {",
+                      "  try {",
+                      "    const j = pm.response.json();",
+                      "    const d = j && j.data ? j.data : {};",
+                      "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                      "    if (v) { pm.collectionVariables.set(\"child_video_category_id\", v); pm.environment.set(\"child_video_category_id\", v); }",
+                      "  } catch (e) { /* non-JSON body */ }",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Step 07 — Link parent↔child (VideoCategoryRelation)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/courses/video-category-relations",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "courses",
+                    "video-category-relations"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"parent\": \"{{video_category_id}}\",\n  \"child\": \"{{child_video_category_id}}\",\n  \"order\": 0\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                      "if (ok) {",
+                      "  try {",
+                      "    const j = pm.response.json();",
+                      "    const d = j && j.data ? j.data : {};",
+                      "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                      "    if (v) { pm.collectionVariables.set(\"video_relation_id\", v); pm.environment.set(\"video_relation_id\", v); }",
+                      "  } catch (e) { /* non-JSON body */ }",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Step 08 — Create Course",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/courses",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "courses"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"FlowTest Course\",\n  \"description\": \"E2E happy-path course\",\n  \"image\": \"https://example.com/course.jpg\",\n  \"ordered\": 1,\n  \"level\": \"advanced\",\n  \"status\": true,\n  \"courseEducatorId\": \"{{educator_id}}\",\n  \"courseSubjectCategoryId\": \"{{subject_category_id}}\",\n  \"videoCategoryId\": \"{{video_category_id}}\",\n  \"pcMaterialId\": \"{{material_master_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                      "if (ok) {",
+                      "  try {",
+                      "    const j = pm.response.json();",
+                      "    const d = j && j.data ? j.data : {};",
+                      "    const v = d.course?._id || d.course?.id;",
+                      "    if (v) { pm.collectionVariables.set(\"course_id\", v); pm.environment.set(\"course_id\", v); }",
+                      "  } catch (e) { /* non-JSON body */ }",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Step 09 — Create Plan (3-month)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}/plans",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "courses",
+                    "{{course_id}}",
+                    "plans"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"3-month video only\",\n  \"duration\": 3,\n  \"price\": 1499,\n  \"withMaterial\": false,\n  \"isDefault\": true,\n  \"status\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                      "if (ok) {",
+                      "  try {",
+                      "    const j = pm.response.json();",
+                      "    const d = j && j.data ? j.data : {};",
+                      "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                      "    if (v) { pm.collectionVariables.set(\"plan_id\", v); pm.environment.set(\"plan_id\", v); }",
+                      "  } catch (e) { /* non-JSON body */ }",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Step 10 — Verify: GET course detail (populated)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "courses",
+                    "{{course_id}}"
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "01 Authentication",
+          "item": [
+            {
+              "name": "Register Super Admin (bootstrap)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/auth/register",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "auth",
+                    "register"
+                  ]
+                },
+                "description": "Public **only for the very first admin**. After bootstrap, this endpoint requires a logged-in super_admin token.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"firstName\": \"Super\",\n  \"lastName\": \"Admin\",\n  \"email\": \"admin@example.com\",\n  \"password\": \"Test@123\",\n  \"role\": \"super_admin\"\n}",
                   "options": {
                     "raw": {
                       "language": "json"
                     }
                   }
                 },
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Login",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/auth/login",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "auth",
+                    "login"
+                  ]
+                },
+                "description": "Stashes `{{accessToken}}` + `{{refreshToken}}` + `{{user_id}}`.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"email\": \"admin@example.com\",\n  \"password\": \"Test@123\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const j = pm.response.json();",
+                      "  const at = j?.data?.accessToken || \"\";",
+                      "  const rt = j?.data?.refreshToken || \"\";",
+                      "  const uid = j?.data?.admin?.id || j?.data?.admin?._id || j?.data?.user?.id || j?.data?.user?._id || \"\";",
+                      "  if (at) { pm.collectionVariables.set(\"accessToken\", at); pm.environment.set(\"accessToken\", at); }",
+                      "  if (rt) { pm.collectionVariables.set(\"refreshToken\", rt); pm.environment.set(\"refreshToken\", rt); }",
+                      "  if (uid) { pm.collectionVariables.set(\"user_id\", uid); pm.environment.set(\"user_id\", uid); }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Refresh Token",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
                 "url": {
                   "raw": "{{URL}}/api/v1/admin/auth/refresh",
                   "host": [
@@ -657,23 +1177,45 @@
                     "auth",
                     "refresh"
                   ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "noauth"
                 }
               },
-              "response": []
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const j = pm.response.json();",
+                      "  const at = j?.data?.accessToken || \"\";",
+                      "  const rt = j?.data?.refreshToken || \"\";",
+                      "  const uid = j?.data?.admin?.id || j?.data?.admin?._id || j?.data?.user?.id || j?.data?.user?._id || \"\";",
+                      "  if (at) { pm.collectionVariables.set(\"accessToken\", at); pm.environment.set(\"accessToken\", at); }",
+                      "  if (rt) { pm.collectionVariables.set(\"refreshToken\", rt); pm.environment.set(\"refreshToken\", rt); }",
+                      "  if (uid) { pm.collectionVariables.set(\"user_id\", uid); pm.environment.set(\"user_id\", uid); }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
             },
             {
               "name": "Logout",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "DELETE",
                 "header": [],
                 "url": {
@@ -695,18 +1237,21 @@
             {
               "name": "Update Profile",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "PUT",
                 "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/auth/profile",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "auth",
+                    "profile"
+                  ]
+                },
                 "body": {
                   "mode": "formdata",
                   "formdata": [
@@ -726,36 +1271,13 @@
                       "src": ""
                     }
                   ]
-                },
-                "url": {
-                  "raw": "{{URL}}/api/v1/admin/auth/profile",
-                  "host": [
-                    "{{URL}}"
-                  ],
-                  "path": [
-                    "api",
-                    "v1",
-                    "admin",
-                    "auth",
-                    "profile"
-                  ]
                 }
               },
               "response": []
             },
             {
-              "name": "Change Passwords",
+              "name": "Change Password",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "POST",
                 "header": [
                   {
@@ -763,15 +1285,6 @@
                     "value": "application/json"
                   }
                 ],
-                "body": {
-                  "mode": "raw",
-                  "raw": "{\n  \"currentPassword\": \"password123\",\n  \"newPassword\": \"password456\"\n}",
-                  "options": {
-                    "raw": {
-                      "language": "json"
-                    }
-                  }
-                },
                 "url": {
                   "raw": "{{URL}}/api/v1/admin/auth/change-password",
                   "host": [
@@ -784,6 +1297,15 @@
                     "auth",
                     "change-password"
                   ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"currentPassword\": \"Test@123\",\n  \"newPassword\": \"Test@456\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
                 }
               },
               "response": []
@@ -791,76 +1313,11 @@
           ]
         },
         {
-          "name": "Goal Management",
+          "name": "02 Goals",
           "item": [
             {
-              "name": "Create Goal",
+              "name": "01 List",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
-                "method": "POST",
-                "header": [],
-                "body": {
-                  "mode": "formdata",
-                  "formdata": [
-                    {
-                      "type": "text",
-                      "key": "title",
-                      "value": "Career Growth"
-                    },
-                    {
-                      "type": "text",
-                      "key": "labels",
-                      "value": "[\"Interview Prep\", \"Resume Building\"]"
-                    },
-                    {
-                      "type": "file",
-                      "key": "image",
-                      "src": ""
-                    },
-                    {
-                      "type": "text",
-                      "key": "isActive",
-                      "value": "true"
-                    }
-                  ]
-                },
-                "url": {
-                  "raw": "{{URL}}/api/v1/admin/goals",
-                  "host": [
-                    "{{URL}}"
-                  ],
-                  "path": [
-                    "api",
-                    "v1",
-                    "admin",
-                    "goals"
-                  ]
-                }
-              },
-              "response": []
-            },
-            {
-              "name": "Get Goals",
-              "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "GET",
                 "header": [],
                 "url": {
@@ -905,45 +1362,74 @@
               "response": []
             },
             {
-              "name": "Update Goal",
+              "name": "02 Create",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/goals",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "goals"
                   ]
                 },
-                "method": "PUT",
-                "header": [],
                 "body": {
                   "mode": "formdata",
                   "formdata": [
                     {
                       "type": "text",
                       "key": "title",
-                      "value": "Career Growth Updated"
+                      "value": "Career Growth"
                     },
                     {
                       "type": "text",
                       "key": "labels",
-                      "value": "[\"Interview Prep\", \"Communication\"]"
-                    },
-                    {
-                      "type": "text",
-                      "key": "isActive",
-                      "value": "true"
+                      "value": "[\"Interview Prep\",\"Resume Building\"]"
                     },
                     {
                       "type": "file",
                       "key": "image",
                       "src": ""
+                    },
+                    {
+                      "type": "text",
+                      "key": "isActive",
+                      "value": "true"
                     }
                   ]
-                },
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                      "if (ok) {",
+                      "  try {",
+                      "    const j = pm.response.json();",
+                      "    const d = j && j.data ? j.data : {};",
+                      "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                      "    if (v) { pm.collectionVariables.set(\"goal_id\", v); pm.environment.set(\"goal_id\", v); }",
+                      "  } catch (e) { /* non-JSON body */ }",
+                      "}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "03 Update",
+              "request": {
+                "method": "PUT",
+                "header": [],
                 "url": {
                   "raw": "{{URL}}/api/v1/admin/goals/{{goal_id}}",
                   "host": [
@@ -956,23 +1442,38 @@
                     "goals",
                     "{{goal_id}}"
                   ]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "type": "text",
+                      "key": "title",
+                      "value": "Career Growth Updated"
+                    },
+                    {
+                      "type": "text",
+                      "key": "labels",
+                      "value": "[\"Interview Prep\",\"Communication\"]"
+                    },
+                    {
+                      "type": "text",
+                      "key": "isActive",
+                      "value": "true"
+                    },
+                    {
+                      "type": "file",
+                      "key": "image",
+                      "src": ""
+                    }
+                  ]
                 }
               },
               "response": []
             },
             {
-              "name": "Delete Goal",
+              "name": "04 Delete",
               "request": {
-                "auth": {
-                  "type": "bearer",
-                  "bearer": [
-                    {
-                      "key": "token",
-                      "value": "{{accessToken}}",
-                      "type": "string"
-                    }
-                  ]
-                },
                 "method": "DELETE",
                 "header": [],
                 "url": {
@@ -994,38 +1495,177 @@
           ]
         },
         {
-          "name": "Course Management (Admin) - Clean Flow",
+          "name": "03 Course Management",
+          "description": "Everything related to courses: master data, per-course hierarchy, the course itself, and its pricing plans.\n\n### How to use\n1. Run `00 Masters` CRUDs once to seed educators / subjects / materials / video-categories.\n2. Build the per-course video tree with `01 Video Hierarchy`.\n3. Create the course with `02 Courses → Create`.\n4. Attach one or more `03 Pricing Plans`.\n\nAll `_id` values flow via collection variables — no copy-paste needed.",
           "item": [
             {
-              "name": "01 Master Data (Setup First)",
+              "name": "00 Pre-requisites (dropdown lookup)",
+              "item": [
+                {
+                  "name": "Aggregate lookup",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/pre-requisites",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "pre-requisites"
+                      ]
+                    },
+                    "description": "Returns `{ educators, subjectCategories, videoCategories, materials }` — the data that powers the Course **Create** form dropdowns in the admin UI."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "01 Masters",
+              "description": "Global master tables (reused across every course).",
               "item": [
                 {
                   "name": "Educators",
                   "item": [
                     {
-                  "name": "01 List Educators",
+                      "name": "01 List",
                       "request": {
-                        "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
                         "method": "GET",
                         "header": [],
-                        "url": { "raw": "{{URL}}/api/v1/admin/master/educators", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "master", "educators" ] },
-                        "description": "Fetch educator master records used in course creation."
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/educators",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "educators"
+                          ]
+                        },
+                        "description": "Fetch all Educators."
                       },
                       "response": []
                     },
                     {
-                      "name": "02 Create Educator",
+                      "name": "02 Create",
                       "request": {
-                        "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
                         "method": "POST",
-                        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/educators",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "educators"
+                          ]
+                        },
+                        "description": "Create a educator. On success, `{{educator_id}}` is auto-populated by the test script so subsequent PUT / DELETE requests work without any copy-paste.",
                         "body": {
                           "mode": "raw",
                           "raw": "{\n  \"name\": \"John Doe\",\n  \"email\": \"john@websankul.com\",\n  \"image\": \"https://example.com/john.jpg\",\n  \"about\": \"Senior Faculty\",\n  \"status\": true\n}",
-                          "options": { "raw": { "language": "json" } }
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": [],
+                      "event": [
+                        {
+                          "listen": "test",
+                          "script": {
+                            "type": "text/javascript",
+                            "exec": [
+                              "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                              "if (ok) {",
+                              "  try {",
+                              "    const j = pm.response.json();",
+                              "    const d = j && j.data ? j.data : {};",
+                              "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                              "    if (v) { pm.collectionVariables.set(\"educator_id\", v); pm.environment.set(\"educator_id\", v); }",
+                              "  } catch (e) { /* non-JSON body */ }",
+                              "}"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "03 Update",
+                      "request": {
+                        "method": "PUT",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/educators/{{educator_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "educators",
+                            "{{educator_id}}"
+                          ]
                         },
-                        "url": { "raw": "{{URL}}/api/v1/admin/master/educators", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "master", "educators" ] },
-                        "description": "Create educator before mapping courseEducatorId in courses."
+                        "description": "Update the educator whose id is in `{{educator_id}}`.",
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"name\": \"John Doe (updated)\",\n  \"status\": true\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "04 Delete",
+                      "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/educators/{{educator_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "educators",
+                            "{{educator_id}}"
+                          ]
+                        },
+                        "description": "Remove the educator whose id is in `{{educator_id}}`."
                       },
                       "response": []
                     }
@@ -1035,18 +1675,565 @@
                   "name": "Subject Categories",
                   "item": [
                     {
-                      "name": "01 Create Subject Category",
+                      "name": "01 List",
                       "request": {
-                        "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/subject-categories",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "subject-categories"
+                          ]
+                        },
+                        "description": "Fetch all Subject Categories."
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "02 Create",
+                      "request": {
                         "method": "POST",
-                        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/subject-categories",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "subject-categories"
+                          ]
+                        },
+                        "description": "Create a subject categorie. On success, `{{subject_category_id}}` is auto-populated by the test script so subsequent PUT / DELETE requests work without any copy-paste.",
                         "body": {
                           "mode": "raw",
                           "raw": "{\n  \"title\": \"GPSC\",\n  \"slug\": \"gpsc\",\n  \"image\": \"https://example.com/gpsc.jpg\",\n  \"parent\": 0,\n  \"order\": 1\n}",
-                          "options": { "raw": { "language": "json" } }
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": [],
+                      "event": [
+                        {
+                          "listen": "test",
+                          "script": {
+                            "type": "text/javascript",
+                            "exec": [
+                              "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                              "if (ok) {",
+                              "  try {",
+                              "    const j = pm.response.json();",
+                              "    const d = j && j.data ? j.data : {};",
+                              "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                              "    if (v) { pm.collectionVariables.set(\"subject_category_id\", v); pm.environment.set(\"subject_category_id\", v); }",
+                              "  } catch (e) { /* non-JSON body */ }",
+                              "}"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "03 Update",
+                      "request": {
+                        "method": "PUT",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/subject-categories/{{subject_category_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "subject-categories",
+                            "{{subject_category_id}}"
+                          ]
                         },
-                        "url": { "raw": "{{URL}}/api/v1/admin/master/subject-categories", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "master", "subject-categories" ] },
-                        "description": "Create subject category for courseSubjectCategoryId mapping."
+                        "description": "Update the subject categorie whose id is in `{{subject_category_id}}`.",
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"title\": \"GPSC (updated)\",\n  \"order\": 2\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "04 Delete",
+                      "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/subject-categories/{{subject_category_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "subject-categories",
+                            "{{subject_category_id}}"
+                          ]
+                        },
+                        "description": "Remove the subject categorie whose id is in `{{subject_category_id}}`."
+                      },
+                      "response": []
+                    }
+                  ]
+                },
+                {
+                  "name": "Materials",
+                  "item": [
+                    {
+                      "name": "01 List",
+                      "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/materials",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "materials"
+                          ]
+                        },
+                        "description": "Fetch all Materials."
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "02 Create",
+                      "request": {
+                        "method": "POST",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/materials",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "materials"
+                          ]
+                        },
+                        "description": "Create a material. On success, `{{material_master_id}}` is auto-populated by the test script so subsequent PUT / DELETE requests work without any copy-paste.",
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"title\": \"Printed Notes\",\n  \"image\": \"https://example.com/material.jpg\",\n  \"isActive\": true\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": [],
+                      "event": [
+                        {
+                          "listen": "test",
+                          "script": {
+                            "type": "text/javascript",
+                            "exec": [
+                              "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                              "if (ok) {",
+                              "  try {",
+                              "    const j = pm.response.json();",
+                              "    const d = j && j.data ? j.data : {};",
+                              "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                              "    if (v) { pm.collectionVariables.set(\"material_master_id\", v); pm.environment.set(\"material_master_id\", v); }",
+                              "  } catch (e) { /* non-JSON body */ }",
+                              "}"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "03 Update",
+                      "request": {
+                        "method": "PUT",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/materials/{{material_master_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "materials",
+                            "{{material_master_id}}"
+                          ]
+                        },
+                        "description": "Update the material whose id is in `{{material_master_id}}`.",
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"title\": \"Printed Notes (updated)\"\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "04 Delete",
+                      "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/materials/{{material_master_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "materials",
+                            "{{material_master_id}}"
+                          ]
+                        },
+                        "description": "Remove the material whose id is in `{{material_master_id}}`."
+                      },
+                      "response": []
+                    }
+                  ]
+                },
+                {
+                  "name": "Video Categories (master)",
+                  "item": [
+                    {
+                      "name": "01 List",
+                      "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/video-categories",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "video-categories"
+                          ]
+                        },
+                        "description": "Fetch all Video Categories (master)."
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "02 Create",
+                      "request": {
+                        "method": "POST",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/video-categories",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "video-categories"
+                          ]
+                        },
+                        "description": "Create a video categories (master). On success, `{{video_category_id}}` is auto-populated by the test script so subsequent PUT / DELETE requests work without any copy-paste.",
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"title\": \"Course Folder\",\n  \"slug\": \"course-folder\",\n  \"image\": \"https://example.com/folder.jpg\",\n  \"order_by\": 1,\n  \"status\": true\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": [],
+                      "event": [
+                        {
+                          "listen": "test",
+                          "script": {
+                            "type": "text/javascript",
+                            "exec": [
+                              "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                              "if (ok) {",
+                              "  try {",
+                              "    const j = pm.response.json();",
+                              "    const d = j && j.data ? j.data : {};",
+                              "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                              "    if (v) { pm.collectionVariables.set(\"video_category_id\", v); pm.environment.set(\"video_category_id\", v); }",
+                              "  } catch (e) { /* non-JSON body */ }",
+                              "}"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "03 Update",
+                      "request": {
+                        "method": "PUT",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/video-categories/{{video_category_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "video-categories",
+                            "{{video_category_id}}"
+                          ]
+                        },
+                        "description": "Update the video categories (master) whose id is in `{{video_category_id}}`.",
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"title\": \"Course Folder (updated)\",\n  \"order_by\": 2\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "04 Delete",
+                      "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/master/video-categories/{{video_category_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "master",
+                            "video-categories",
+                            "{{video_category_id}}"
+                          ]
+                        },
+                        "description": "Remove the video categories (master) whose id is in `{{video_category_id}}`."
+                      },
+                      "response": []
+                    }
+                  ]
+                },
+                {
+                  "name": "Materials (via /courses/materials alias)",
+                  "item": [
+                    {
+                      "name": "01 List",
+                      "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/materials",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "materials"
+                          ]
+                        },
+                        "description": "Fetch all Materials (via /courses/materials alias)."
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "02 Create",
+                      "request": {
+                        "method": "POST",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/materials",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "materials"
+                          ]
+                        },
+                        "description": "Create a materials (via /courses/materials alias). On success, `{{material_master_id}}` is auto-populated by the test script so subsequent PUT / DELETE requests work without any copy-paste.",
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"title\": \"Printed Notes\",\n  \"image\": \"https://example.com/material.jpg\",\n  \"isActive\": true\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": [],
+                      "event": [
+                        {
+                          "listen": "test",
+                          "script": {
+                            "type": "text/javascript",
+                            "exec": [
+                              "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                              "if (ok) {",
+                              "  try {",
+                              "    const j = pm.response.json();",
+                              "    const d = j && j.data ? j.data : {};",
+                              "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                              "    if (v) { pm.collectionVariables.set(\"material_master_id\", v); pm.environment.set(\"material_master_id\", v); }",
+                              "  } catch (e) { /* non-JSON body */ }",
+                              "}"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "03 Update",
+                      "request": {
+                        "method": "PUT",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/materials/{{material_master_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "materials",
+                            "{{material_master_id}}"
+                          ]
+                        },
+                        "description": "Update the materials (via /courses/materials alias) whose id is in `{{material_master_id}}`.",
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"title\": \"Printed Notes (course-endpoint updated)\"\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "04 Delete",
+                      "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/materials/{{material_master_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "materials",
+                            "{{material_master_id}}"
+                          ]
+                        },
+                        "description": "Remove the materials (via /courses/materials alias) whose id is in `{{material_master_id}}`."
                       },
                       "response": []
                     }
@@ -1055,303 +2242,685 @@
               ]
             },
             {
-              "name": "02 Course + Catalog + Relations",
+              "name": "02 Video Hierarchy (per-course)",
+              "description": "Manage the **child** video folders that live under a course, plus the parent↔child relations that build the tree.",
               "item": [
                 {
-                  "name": "00 Get Prerequisites",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "GET",
-                    "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/pre-requisites", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "pre-requisites" ] },
-                    "description": "Fetch dropdown data for educator/category/videoCategory/material."
-                  },
-                  "response": []
+                  "name": "Video Categories (course-scoped CRUD)",
+                  "item": [
+                    {
+                      "name": "01 List",
+                      "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/video-categories",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "video-categories"
+                          ]
+                        }
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "02 Create (child folder)",
+                      "request": {
+                        "method": "POST",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/video-categories",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "video-categories"
+                          ]
+                        },
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"title\": \"Child Folder\",\n  \"slug\": \"child-folder\",\n  \"image\": \"https://example.com/child.jpg\",\n  \"order_by\": 2,\n  \"status\": true\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": [],
+                      "event": [
+                        {
+                          "listen": "test",
+                          "script": {
+                            "type": "text/javascript",
+                            "exec": [
+                              "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                              "if (ok) {",
+                              "  try {",
+                              "    const j = pm.response.json();",
+                              "    const d = j && j.data ? j.data : {};",
+                              "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                              "    if (v) { pm.collectionVariables.set(\"child_video_category_id\", v); pm.environment.set(\"child_video_category_id\", v); }",
+                              "  } catch (e) { /* non-JSON body */ }",
+                              "}"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "03 Update",
+                      "request": {
+                        "method": "PUT",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/video-categories/{{child_video_category_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "video-categories",
+                            "{{child_video_category_id}}"
+                          ]
+                        },
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"title\": \"Child Folder (updated)\",\n  \"order_by\": 3\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "04 Delete",
+                      "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/video-categories/{{child_video_category_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "video-categories",
+                            "{{child_video_category_id}}"
+                          ]
+                        },
+                        "description": "Also cascades any `VideoCategoryRelation` row that points to this folder (returns `deletedRelations` in the response)."
+                      },
+                      "response": []
+                    }
+                  ]
                 },
                 {
-                  "name": "01 List Video Categories",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "GET",
-                    "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/video-categories", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "video-categories" ] }
-                  },
-                  "response": []
-                },
+                  "name": "Video Category Relations",
+                  "item": [
+                    {
+                      "name": "01 List",
+                      "request": {
+                        "method": "GET",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/video-category-relations",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "video-category-relations"
+                          ]
+                        }
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "02 Create (wire parent→child)",
+                      "request": {
+                        "method": "POST",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/video-category-relations",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "video-category-relations"
+                          ]
+                        },
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"parent\": \"{{video_category_id}}\",\n  \"child\": \"{{child_video_category_id}}\",\n  \"order\": 0\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": [],
+                      "event": [
+                        {
+                          "listen": "test",
+                          "script": {
+                            "type": "text/javascript",
+                            "exec": [
+                              "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                              "if (ok) {",
+                              "  try {",
+                              "    const j = pm.response.json();",
+                              "    const d = j && j.data ? j.data : {};",
+                              "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                              "    if (v) { pm.collectionVariables.set(\"video_relation_id\", v); pm.environment.set(\"video_relation_id\", v); }",
+                              "  } catch (e) { /* non-JSON body */ }",
+                              "}"
+                            ]
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "03 Update order",
+                      "request": {
+                        "method": "PUT",
+                        "header": [
+                          {
+                            "key": "Content-Type",
+                            "value": "application/json"
+                          }
+                        ],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/video-category-relations/{{video_relation_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "video-category-relations",
+                            "{{video_relation_id}}"
+                          ]
+                        },
+                        "body": {
+                          "mode": "raw",
+                          "raw": "{\n  \"order\": 5\n}",
+                          "options": {
+                            "raw": {
+                              "language": "json"
+                            }
+                          }
+                        }
+                      },
+                      "response": []
+                    },
+                    {
+                      "name": "04 Delete",
+                      "request": {
+                        "method": "DELETE",
+                        "header": [],
+                        "url": {
+                          "raw": "{{URL}}/api/v1/admin/courses/video-category-relations/{{video_relation_id}}",
+                          "host": [
+                            "{{URL}}"
+                          ],
+                          "path": [
+                            "api",
+                            "v1",
+                            "admin",
+                            "courses",
+                            "video-category-relations",
+                            "{{video_relation_id}}"
+                          ]
+                        }
+                      },
+                      "response": []
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "name": "03 Courses",
+              "item": [
                 {
-                  "name": "01 List Materials",
+                  "name": "01 List (paginated + filtered)",
                   "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "GET",
-                    "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/materials", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "materials" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "01 List Courses",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
                     "method": "GET",
                     "header": [],
                     "url": {
                       "raw": "{{URL}}/api/v1/admin/courses?search=&status=true&page=1&limit=10&sortBy=createdAt&sortOrder=desc",
-                      "host": [ "{{URL}}" ],
-                      "path": [ "api", "v1", "admin", "courses" ],
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses"
+                      ],
                       "query": [
-                        { "key": "search", "value": "" },
-                        { "key": "status", "value": "true" },
-                        { "key": "page", "value": "1" },
-                        { "key": "limit", "value": "10" },
-                        { "key": "sortBy", "value": "createdAt" },
-                        { "key": "sortOrder", "value": "desc" }
+                        {
+                          "key": "search",
+                          "value": ""
+                        },
+                        {
+                          "key": "status",
+                          "value": "true"
+                        },
+                        {
+                          "key": "page",
+                          "value": "1"
+                        },
+                        {
+                          "key": "limit",
+                          "value": "10"
+                        },
+                        {
+                          "key": "sortBy",
+                          "value": "createdAt"
+                        },
+                        {
+                          "key": "sortOrder",
+                          "value": "desc"
+                        }
                       ]
                     }
                   },
                   "response": []
                 },
                 {
-                  "name": "02 Create Video Category",
+                  "name": "02 Get by id",
                   "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "POST",
-                    "header": [ { "key": "Content-Type", "value": "application/json" } ],
-                    "body": {
-                      "mode": "raw",
-                      "raw": "{\n  \"title\": \"Course Folder\",\n  \"slug\": \"course-folder\",\n  \"image\": \"https://example.com/folder.jpg\",\n  \"order_by\": 1,\n  \"status\": true\n}",
-                      "options": { "raw": { "language": "json" } }
-                    },
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/video-categories", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "video-categories" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "03 Update Video Category",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "PUT",
-                    "header": [ { "key": "Content-Type", "value": "application/json" } ],
-                    "body": {
-                      "mode": "raw",
-                      "raw": "{\n  \"title\": \"Course Folder Updated\",\n  \"order_by\": 2\n}",
-                      "options": { "raw": { "language": "json" } }
-                    },
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/video-categories/{{video_category_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "video-categories", "{{video_category_id}}" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "04 Delete Video Category",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "DELETE",
-                    "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/video-categories/{{video_category_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "video-categories", "{{video_category_id}}" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "02 Create Material",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "POST",
-                    "header": [ { "key": "Content-Type", "value": "application/json" } ],
-                    "body": {
-                      "mode": "raw",
-                      "raw": "{\n  \"title\": \"Printed Notes\",\n  \"image\": \"https://example.com/material.jpg\",\n  \"isActive\": true\n}",
-                      "options": { "raw": { "language": "json" } }
-                    },
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/materials", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "materials" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "03 Update Material",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "PUT",
-                    "header": [ { "key": "Content-Type", "value": "application/json" } ],
-                    "body": {
-                      "mode": "raw",
-                      "raw": "{\n  \"title\": \"Printed Notes Updated\"\n}",
-                      "options": { "raw": { "language": "json" } }
-                    },
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/materials/{{material_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "materials", "{{material_id}}" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "04 Delete Material",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "DELETE",
-                    "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/materials/{{material_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "materials", "{{material_id}}" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "01 List Video Category Relations",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
                     "method": "GET",
                     "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/video-category-relations", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "video-category-relations" ] }
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "{{course_id}}"
+                      ]
+                    },
+                    "description": "Returns the course with `courseEducatorId`, `courseSubjectCategoryId`, `videoCategoryId`, `pcMaterialId` populated to `{_id, name|title}`, plus that course's pricing plans."
                   },
                   "response": []
                 },
                 {
-                  "name": "02 Create Video Category Relation",
+                  "name": "03 Create",
                   "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
                     "method": "POST",
-                    "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses"
+                      ]
+                    },
+                    "description": "Creates the course **and** auto-creates a `{name} - Root` VideoCategory in the same transaction. Both `_id`s come back in `data.course._id` and `data.folder._id`; the test script stores the course id into `{{course_id}}`.",
                     "body": {
                       "mode": "raw",
-                      "raw": "{\n  \"parent\": \"{{video_category_id}}\",\n  \"child\": \"{{video_category_child_id}}\",\n  \"order\": 1\n}",
-                      "options": { "raw": { "language": "json" } }
-                    },
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/video-category-relations", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "video-category-relations" ] }
+                      "raw": "{\n  \"name\": \"GPSC Full Prep 2026\",\n  \"description\": \"Comprehensive GPSC prep course.\",\n  \"image\": \"https://example.com/img/gpsc.jpg\",\n  \"ordered\": 1,\n  \"shareableLink\": \"https://example.com/c/gpsc\",\n  \"withMaterial\": \"yes\",\n  \"withoutMaterial\": \"no\",\n  \"level\": \"advanced\",\n  \"status\": true,\n  \"courseEducatorId\": \"{{educator_id}}\",\n  \"courseSubjectCategoryId\": \"{{subject_category_id}}\",\n  \"videoCategoryId\": \"{{video_category_id}}\",\n  \"pcMaterialId\": \"{{material_master_id}}\"\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    }
                   },
-                  "response": []
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                          "if (ok) {",
+                          "  try {",
+                          "    const j = pm.response.json();",
+                          "    const d = j && j.data ? j.data : {};",
+                          "    const v = d.course?._id || d.course?.id;",
+                          "    if (v) { pm.collectionVariables.set(\"course_id\", v); pm.environment.set(\"course_id\", v); }",
+                          "  } catch (e) { /* non-JSON body */ }",
+                          "}"
+                        ]
+                      }
+                    }
+                  ]
                 },
                 {
-                  "name": "03 Update Video Category Relation",
+                  "name": "04 Update",
                   "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
                     "method": "PUT",
-                    "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "{{course_id}}"
+                      ]
+                    },
                     "body": {
                       "mode": "raw",
-                      "raw": "{\n  \"order\": 2\n}",
-                      "options": { "raw": { "language": "json" } }
-                    },
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/video-category-relations/{{video_relation_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "video-category-relations", "{{video_relation_id}}" ] }
+                      "raw": "{\n  \"name\": \"GPSC Full Prep 2026 (revised)\",\n  \"level\": \"expert\"\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    }
                   },
                   "response": []
                 },
                 {
-                  "name": "04 Delete Video Category Relation",
+                  "name": "05 Delete",
                   "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
                     "method": "DELETE",
                     "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/video-category-relations/{{video_relation_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "video-category-relations", "{{video_relation_id}}" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "02 Create Course",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "POST",
-                    "header": [ { "key": "Content-Type", "value": "application/json" } ],
-                    "body": {
-                      "mode": "raw",
-                      "raw": "{\n  \"name\": \"Full Stack Development\",\n  \"description\": \"Mastering Node.js and MongoDB\",\n  \"image\": \"https://example.com/course-thumbnail.jpg\",\n  \"ordered\": 1,\n  \"level\": \"Intermediate\",\n  \"status\": true,\n  \"courseEducatorId\": \"{{educator_id}}\",\n  \"courseSubjectCategoryId\": \"{{category_id}}\",\n  \"videoCategoryId\": \"{{video_category_id}}\",\n  \"pcMaterialId\": \"{{material_id}}\"\n}",
-                      "options": { "raw": { "language": "json" } }
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "{{course_id}}"
+                      ]
                     },
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "03 Update Course",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "PUT",
-                    "header": [ { "key": "Content-Type", "value": "application/json" } ],
-                    "body": {
-                      "mode": "raw",
-                      "raw": "{\n  \"ordered\": 2\n}",
-                      "options": { "raw": { "language": "json" } }
-                    },
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "{{course_id}}" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "02 Get Course Detail",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "GET",
-                    "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "{{course_id}}" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "04 Delete Course",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "DELETE",
-                    "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "{{course_id}}" ] }
+                    "description": "Transactional cascade — also deletes matching `PackageCourseEbookPrice`, `VideoCategory` (scoped by `courseId`), and any `VideoCategoryRelation` rows that reference those folders. Returns `deletedPlans` / `deletedCourseVideoCategories` / `deletedVideoRelations`."
                   },
                   "response": []
                 }
               ]
             },
             {
-              "name": "03 Plan Management (Per Course)",
+              "name": "04 Pricing Plans",
+              "description": "Plans are scoped under a specific course.",
               "item": [
                 {
-                  "name": "02 Create Plan",
+                  "name": "01 List (for {{course_id}})",
                   "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}/plans",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "{{course_id}}",
+                        "plans"
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "02 Create plan (no-material)",
+                  "request": {
                     "method": "POST",
-                    "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}/plans",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "{{course_id}}",
+                        "plans"
+                      ]
+                    },
                     "body": {
                       "mode": "raw",
-                      "raw": "{\n  \"name\": \"12 Months Plan\",\n  \"duration\": 12,\n  \"price\": 9999,\n  \"withMaterial\": true,\n  \"materialPrice\": 500,\n  \"isDefault\": true,\n  \"status\": true\n}",
-                      "options": { "raw": { "language": "json" } }
+                      "raw": "{\n  \"name\": \"3-month video only\",\n  \"duration\": 3,\n  \"price\": 1499,\n  \"withMaterial\": false,\n  \"isDefault\": true,\n  \"status\": true\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    }
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                          "if (ok) {",
+                          "  try {",
+                          "    const j = pm.response.json();",
+                          "    const d = j && j.data ? j.data : {};",
+                          "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                          "    if (v) { pm.collectionVariables.set(\"plan_id\", v); pm.environment.set(\"plan_id\", v); }",
+                          "  } catch (e) { /* non-JSON body */ }",
+                          "}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "02b Create plan (with-material)",
+                  "request": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}/plans",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "{{course_id}}",
+                        "plans"
+                      ]
                     },
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}/plans", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "{{course_id}}", "plans" ] }
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"6-month + material\",\n  \"duration\": 6,\n  \"price\": 2799,\n  \"withMaterial\": true,\n  \"materialPrice\": 499,\n  \"status\": true\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    }
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "const ok = pm.response.code >= 200 && pm.response.code < 300;",
+                          "if (ok) {",
+                          "  try {",
+                          "    const j = pm.response.json();",
+                          "    const d = j && j.data ? j.data : {};",
+                          "    const v = d._id || d.id || d.course?._id || d.course?.id;",
+                          "    if (v) { pm.collectionVariables.set(\"plan_id\", v); pm.environment.set(\"plan_id\", v); }",
+                          "  } catch (e) { /* non-JSON body */ }",
+                          "}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "03 Get plan by id",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/plans/{{plan_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "plans",
+                        "{{plan_id}}"
+                      ]
+                    }
                   },
                   "response": []
                 },
                 {
-                  "name": "03 Update Plan",
+                  "name": "04 Update plan",
                   "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
                     "method": "PUT",
-                    "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/plans/{{plan_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "plans",
+                        "{{plan_id}}"
+                      ]
+                    },
                     "body": {
                       "mode": "raw",
-                      "raw": "{\n  \"price\": 10999\n}",
-                      "options": { "raw": { "language": "json" } }
-                    },
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/plans/{{plan_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "plans", "{{plan_id}}" ] }
+                      "raw": "{\n  \"price\": 1599\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    }
                   },
                   "response": []
                 },
                 {
-                  "name": "01 List Course Plans",
+                  "name": "05 Delete plan",
                   "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "GET",
-                    "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/{{course_id}}/plans", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "{{course_id}}", "plans" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "02 Get Plan Detail",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
-                    "method": "GET",
-                    "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/plans/{{plan_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "plans", "{{plan_id}}" ] }
-                  },
-                  "response": []
-                },
-                {
-                  "name": "04 Delete Plan",
-                  "request": {
-                    "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ] },
                     "method": "DELETE",
                     "header": [],
-                    "url": { "raw": "{{URL}}/api/v1/admin/courses/plans/{{plan_id}}", "host": [ "{{URL}}" ], "path": [ "api", "v1", "admin", "courses", "plans", "{{plan_id}}" ] }
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/plans/{{plan_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "plans",
+                        "{{plan_id}}"
+                      ]
+                    }
                   },
                   "response": []
                 }
@@ -1384,15 +2953,15 @@
       "value": ""
     },
     {
-      "key": "course_id",
-      "value": ""
-    },
-    {
       "key": "educator_id",
       "value": ""
     },
     {
-      "key": "category_id",
+      "key": "subject_category_id",
+      "value": ""
+    },
+    {
+      "key": "material_master_id",
       "value": ""
     },
     {
@@ -1400,7 +2969,7 @@
       "value": ""
     },
     {
-      "key": "video_category_child_id",
+      "key": "child_video_category_id",
       "value": ""
     },
     {
@@ -1408,11 +2977,19 @@
       "value": ""
     },
     {
-      "key": "material_id",
+      "key": "course_id",
       "value": ""
     },
     {
       "key": "plan_id",
+      "value": ""
+    },
+    {
+      "key": "state_id",
+      "value": ""
+    },
+    {
+      "key": "order_id",
       "value": ""
     }
   ]

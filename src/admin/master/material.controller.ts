@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import mongoose from "mongoose";
 import { PackageCourseMaterial } from "../../models/course/PackageCourseMaterial.model";
 import { createMaterialSchema, updateMaterialSchema } from "./master.validation";
 
@@ -25,8 +26,12 @@ export const createMaterial = async (req: Request, res: Response) => {
 
 export const updateMaterial = async (req: Request, res: Response) => {
   try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Material ID" });
+    }
     const validatedData = updateMaterialSchema.parse(req.body);
-    const material = await PackageCourseMaterial.findByIdAndUpdate(req.params.id, validatedData, { new: true });
+    const material = await PackageCourseMaterial.findByIdAndUpdate(id, validatedData, { new: true });
     if (!material) return res.status(404).json({ success: false, message: "Material not found" });
     res.status(200).json({ success: true, data: material });
   } catch (error: any) {
@@ -37,7 +42,11 @@ export const updateMaterial = async (req: Request, res: Response) => {
 
 export const deleteMaterial = async (req: Request, res: Response) => {
   try {
-    const material = await PackageCourseMaterial.findByIdAndDelete(req.params.id);
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Material ID" });
+    }
+    const material = await PackageCourseMaterial.findByIdAndDelete(id);
     if (!material) return res.status(404).json({ success: false, message: "Material not found" });
     res.status(200).json({ success: true, message: "Material deleted successfully" });
   } catch (error: any) {

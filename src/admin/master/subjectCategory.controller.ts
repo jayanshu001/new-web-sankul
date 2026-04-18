@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import mongoose from "mongoose";
 import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
 import { createSubjectCategorySchema, updateSubjectCategorySchema } from "./master.validation";
 
@@ -25,8 +26,12 @@ export const createSubjectCategory = async (req: Request, res: Response) => {
 
 export const updateSubjectCategory = async (req: Request, res: Response) => {
   try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Subject Category ID" });
+    }
     const validatedData = updateSubjectCategorySchema.parse(req.body);
-    const category = await CourseSubjectCategory.findByIdAndUpdate(req.params.id, validatedData, { new: true });
+    const category = await CourseSubjectCategory.findByIdAndUpdate(id, validatedData, { new: true });
     if (!category) return res.status(404).json({ success: false, message: "Category not found" });
     res.status(200).json({ success: true, data: category });
   } catch (error: any) {
@@ -37,7 +42,11 @@ export const updateSubjectCategory = async (req: Request, res: Response) => {
 
 export const deleteSubjectCategory = async (req: Request, res: Response) => {
   try {
-    const category = await CourseSubjectCategory.findByIdAndDelete(req.params.id);
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Subject Category ID" });
+    }
+    const category = await CourseSubjectCategory.findByIdAndDelete(id);
     if (!category) return res.status(404).json({ success: false, message: "Category not found" });
     res.status(200).json({ success: true, message: "Category deleted successfully" });
   } catch (error: any) {

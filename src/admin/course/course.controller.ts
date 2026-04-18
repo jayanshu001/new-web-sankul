@@ -177,8 +177,12 @@ export const createCourseMaterial = async (req: Request, res: Response) => {
 
 export const updateCourseMaterial = async (req: Request, res: Response) => {
   try {
+    const materialId = req.params.materialId as string;
+    if (!mongoose.Types.ObjectId.isValid(materialId)) {
+      return res.status(400).json({ success: false, message: "Invalid Material ID" });
+    }
     const validatedData = updateMaterialSchema.parse(req.body);
-    const material = await PackageCourseMaterial.findByIdAndUpdate(req.params.materialId, validatedData, { new: true });
+    const material = await PackageCourseMaterial.findByIdAndUpdate(materialId, validatedData, { new: true });
     if (!material) return res.status(404).json({ success: false, message: "Material not found" });
     return res.status(200).json({ success: true, data: material });
   } catch (error: any) {
@@ -224,8 +228,12 @@ export const createCourseVideoCategory = async (req: Request, res: Response) => 
 
 export const updateCourseVideoCategory = async (req: Request, res: Response) => {
   try {
+    const videoCategoryId = req.params.videoCategoryId as string;
+    if (!mongoose.Types.ObjectId.isValid(videoCategoryId)) {
+      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    }
     const validatedData = updateVideoCategorySchema.parse(req.body);
-    const category = await VideoCategory.findByIdAndUpdate(req.params.videoCategoryId, validatedData, { new: true });
+    const category = await VideoCategory.findByIdAndUpdate(videoCategoryId, validatedData, { new: true });
     if (!category) return res.status(404).json({ success: false, message: "Video Category not found" });
     return res.status(200).json({ success: true, data: category });
   } catch (error: any) {
@@ -251,7 +259,14 @@ export const deleteCourseVideoCategory = async (req: Request, res: Response) => 
 
     const category = await VideoCategory.findByIdAndDelete(videoCategoryId);
     if (!category) return res.status(404).json({ success: false, message: "Video Category not found" });
-    return res.status(200).json({ success: true, message: "Video Category deleted successfully" });
+    const rel = await VideoCategoryRelation.deleteMany({
+      $or: [{ parent: videoCategoryId }, { child: videoCategoryId }],
+    });
+    return res.status(200).json({
+      success: true,
+      message: "Video Category deleted successfully",
+      data: { deletedRelations: rel.deletedCount ?? 0 },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -299,8 +314,11 @@ export const createCourse = async (req: Request, res: Response) => {
 
 export const updateCourse = async (req: Request, res: Response) => {
   try {
-    const validatedData = createCourseSchema.partial().parse(req.body);
     const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Course ID" });
+    }
+    const validatedData = createCourseSchema.partial().parse(req.body);
     const course = await Course.findByIdAndUpdate(id, validatedData, { new: true });
     if (!course) return res.status(404).json({ success: false, message: "Course not found" });
     res.status(200).json({ success: true, data: course });
@@ -324,9 +342,20 @@ export const deleteCourse = async (req: Request, res: Response) => {
     const course = await Course.findByIdAndDelete(id, { session });
     if (!course) return res.status(404).json({ success: false, message: "Course not found" });
 
-    const [plansResult, foldersResult] = await Promise.all([
+    // Collect the ids of course-scoped video folders first so we can also
+    // sweep any VideoCategoryRelation rows that reference them.
+    const scopedFolders = await VideoCategory.find({ courseId: id }, { _id: 1 }, { session });
+    const scopedIds = scopedFolders.map((f) => f._id);
+
+    const [plansResult, foldersResult, relationsResult] = await Promise.all([
       PackageCourseEbookPrice.deleteMany({ courseId: id }, { session }),
       VideoCategory.deleteMany({ courseId: id }, { session }),
+      scopedIds.length
+        ? VideoCategoryRelation.deleteMany(
+            { $or: [{ parent: { $in: scopedIds } }, { child: { $in: scopedIds } }] },
+            { session }
+          )
+        : Promise.resolve({ deletedCount: 0 }),
     ]);
 
     await session.commitTransaction();
@@ -339,6 +368,7 @@ export const deleteCourse = async (req: Request, res: Response) => {
         deletedCourseId: id,
         deletedPlans: plansResult.deletedCount ?? 0,
         deletedCourseVideoCategories: foldersResult.deletedCount ?? 0,
+        deletedVideoRelations: relationsResult.deletedCount ?? 0,
       },
     });
   } catch (error: any) {
@@ -428,6 +458,9 @@ export const getCoursePlanById = async (req: Request, res: Response) => {
 export const updateCoursePlan = async (req: Request, res: Response) => {
   try {
     const id = req.params.planId as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Plan ID" });
+    }
     const validatedData = updateCoursePlanSchema.parse(req.body);
     const normalizedPayload = {
       ...validatedData,
@@ -445,6 +478,9 @@ export const updateCoursePlan = async (req: Request, res: Response) => {
 export const deleteCoursePlan = async (req: Request, res: Response) => {
   try {
     const id = req.params.planId as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Plan ID" });
+    }
     const plan = await PackageCourseEbookPrice.findByIdAndDelete(id);
     if (!plan) return res.status(404).json({ success: false, message: "Pricing plan not found" });
     res.status(200).json({ success: true, message: "Pricing plan deleted successfully" });

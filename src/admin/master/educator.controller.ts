@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import mongoose from "mongoose";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { createEducatorSchema, updateEducatorSchema } from "./master.validation";
 
@@ -25,8 +26,12 @@ export const createEducator = async (req: Request, res: Response) => {
 
 export const updateEducator = async (req: Request, res: Response) => {
   try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Educator ID" });
+    }
     const validatedData = updateEducatorSchema.parse(req.body);
-    const educator = await CourseEducator.findByIdAndUpdate(req.params.id, validatedData, { new: true });
+    const educator = await CourseEducator.findByIdAndUpdate(id, validatedData, { new: true });
     if (!educator) return res.status(404).json({ success: false, message: "Educator not found" });
     res.status(200).json({ success: true, data: educator });
   } catch (error: any) {
@@ -37,7 +42,11 @@ export const updateEducator = async (req: Request, res: Response) => {
 
 export const deleteEducator = async (req: Request, res: Response) => {
   try {
-    const educator = await CourseEducator.findByIdAndDelete(req.params.id);
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Educator ID" });
+    }
+    const educator = await CourseEducator.findByIdAndDelete(id);
     if (!educator) return res.status(404).json({ success: false, message: "Educator not found" });
     res.status(200).json({ success: true, message: "Educator deleted successfully" });
   } catch (error: any) {
