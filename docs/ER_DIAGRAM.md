@@ -11,6 +11,22 @@ via `Schema.Types.ObjectId` + `ref` pointers, so an ER view is accurate.
 - **embedded array** means the child lives inside the parent document (no
   separate collection); still shown as a relationship for clarity.
 
+**Key markers used in entity fields:**
+
+- **PK** (Primary Key) — uniquely identifies each document/row in the
+  collection. In MongoDB this is always `_id` (an `ObjectId`). Cannot be
+  `null`, and each collection has exactly one PK.
+- **FK** (Foreign Key) — a field that references the PK of another
+  collection, e.g. `Customer.stateId FK` points to `CustomerState._id`. In
+  Mongoose this is modelled with `Schema.Types.ObjectId` + `ref: 'Model'`.
+  `FK[] -> X` means the field is an array of foreign keys (many-to-many).
+- **UK** (Unique Key) — enforces uniqueness of a non-PK field via a unique
+  index (e.g. `Customer.phoneNumber UK`). Unlike the PK, a UK is *not* the
+  primary identifier and may allow a single `null`; a collection can have
+  multiple UKs.
+- Inline quoted text after a field (e.g. `"select:false"`, `"maxLen 11"`)
+  describes schema options or constraints from the Mongoose model.
+
 Diagrams are split by bounded context to stay readable. Cross-context edges
 (e.g. `Customer` → `Subscription`) are declared once in the context that owns
 the child entity.
