@@ -1,5 +1,10 @@
 import { Router } from "express";
-import { fetchActiveGoalsHandler, fetchMySelectedGoalsHandler } from "./goal.client.controller";
+import {
+  fetchActiveGoalsHandler,
+  fetchMySelectedGoalsHandler,
+  updateMyGoalsHandler,
+  fetchGoalsWithSelectionHandler,
+} from "./goal.client.controller";
 import authenticate from "../../middlewares/authenticate";
 
 const router = Router();
@@ -16,5 +21,11 @@ router.get("/", authenticate, fetchActiveGoalsHandler);
 
 // Specifically fetches only the selected labels chosen by the authenticated user
 router.get("/my-goals", authenticate, fetchMySelectedGoalsHandler);
+
+// Returns all active goals with isSelected flag per label
+router.get("/with-selection", authenticate, fetchGoalsWithSelectionHandler);
+
+// Updates the customer's selected goals
+router.put("/", authenticate, updateMyGoalsHandler);
 
 export default router;

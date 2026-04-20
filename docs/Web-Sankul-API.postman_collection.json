@@ -219,6 +219,28 @@
                   }
                 }
               ]
+            },
+            {
+              "name": "Logout",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/auth/logout",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "auth",
+                    "logout"
+                  ]
+                },
+                "description": "Invalidates all CustomerAccessToken records for the authenticated customer and clears the Redis session key."
+              },
+              "response": []
             }
           ]
         },
@@ -250,7 +272,7 @@
                 },
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"firstName\": \"Aman\",\n  \"middleName\": \"K\",\n  \"lastName\": \"Sharma\",\n  \"email\": \"aman@example.com\",\n  \"goals\": []\n}",
+                  "raw": "{\n  \"firstName\": \"Aman\",\n  \"middleName\": \"K\",\n  \"lastName\": \"Sharma\",\n  \"email\": \"aman@example.com\",\n  \"goals\": [],\n  \"phone2\": \"9876543211\",\n  \"dob\": \"1998-05-15\",\n  \"gender\": \"male\",\n  \"stateId\": \"\",\n  \"districtId\": \"\",\n  \"city\": \"Ahmedabad\",\n  \"educationId\": \"\",\n  \"language\": \"Gujarati\"\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -331,6 +353,66 @@
                 }
               },
               "response": []
+            },
+            {
+              "name": "Update Firebase Token",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/profile/firebase-token",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "profile",
+                    "firebase-token"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"phoneNumber\": \"9876543210\",\n  \"firebaseToken\": \"fcm_token_string_here\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "description": "Public endpoint — updates `firebaseToken` for the customer matched by `phoneNumber`. Called post-login from the device.",
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Account",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/profile",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "profile"
+                  ]
+                },
+                "description": "Soft-deletes the authenticated customer (`isAccountDeleted=true`, `status=false`), invalidates all tokens, and clears the Redis session."
+              },
+              "response": []
             }
           ]
         },
@@ -368,7 +450,7 @@
                   }
                 ],
                 "url": {
-                  "raw": "{{URL}}/api/v1/client/profile/update",
+                  "raw": "{{URL}}/api/v1/client/goals",
                   "host": [
                     "{{URL}}"
                   ],
@@ -376,8 +458,7 @@
                     "api",
                     "v1",
                     "client",
-                    "profile",
-                    "update"
+                    "goals"
                   ]
                 },
                 "body": {
@@ -388,7 +469,30 @@
                       "language": "json"
                     }
                   }
-                }
+                },
+                "description": "Replaces the authenticated customer's selected goal-label IDs. Invalid ObjectIds are silently filtered out."
+              },
+              "response": []
+            },
+            {
+              "name": "Get Goals With Selection",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/goals/with-selection",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "goals",
+                    "with-selection"
+                  ]
+                },
+                "description": "Returns all active goals; each label carries an `isSelected` flag based on the authenticated customer's selections."
               },
               "response": []
             },
@@ -416,9 +520,273 @@
           ]
         },
         {
-          "name": "04 Courses",
+          "name": "04 Address",
+          "description": "Customer address book and public location/onboarding dropdowns. `states`, `districts`, `educations`, and `characteristic` are public; address CRUD requires auth.",
+          "item": [
+            {
+              "name": "Get Characteristic (public)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/address/characteristic",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "address",
+                    "characteristic"
+                  ]
+                },
+                "description": "Returns `{ educations, goals }` for onboarding screens. Public — no auth required.",
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get States (public)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/address/states",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "address",
+                    "states"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Districts by State (public)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/address/states/{{state_id}}/districts",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "address",
+                    "states",
+                    "{{state_id}}",
+                    "districts"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Educations (public)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/address/educations",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "address",
+                    "educations"
+                  ]
+                },
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get My Addresses",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/address",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "address"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Address by Id",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/address/{{address_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "address",
+                    "{{address_id}}"
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Create Address",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/address",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "address"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Aman Sharma\",\n  \"phone\": \"9876543210\",\n  \"alternatePhone\": \"9876543211\",\n  \"email\": \"aman@example.com\",\n  \"address\": \"12 MG Road\",\n  \"address2\": \"Near City Mall\",\n  \"city\": \"Ahmedabad\",\n  \"stateId\": \"{{state_id}}\",\n  \"pincode\": \"380001\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Address",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/address/{{address_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "address",
+                    "{{address_id}}"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"city\": \"Surat\",\n  \"pincode\": \"395001\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Address",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/address/{{address_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "address",
+                    "{{address_id}}"
+                  ]
+                },
+                "description": "Soft-deletes the address (sets `status=false`)."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "05 Courses",
           "description": "Customer-side course endpoints. The 4 routes exposed by the Course Management port.",
           "item": [
+            {
+              "name": "Get Lecture",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/courses/lecture?id={{video_id}}&course={{course_id}}&type=course",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "courses",
+                    "lecture?id={{video_id}}&course={{course_id}}&type=course"
+                  ]
+                },
+                "description": "Fetch an encrypted video for playback. For free videos no subscription check is performed. For paid videos an active subscription with endAt > now is required.\n\nQuery params:\n- **id** — video ObjectId (required)\n- **type** — `course` or `package` (required)\n- **course** — courseId when type=course\n- **package** — packageId when type=package"
+              },
+              "response": []
+            },
             {
               "name": "Get Course Details",
               "request": {
@@ -526,6 +894,730 @@
                   ]
                 },
                 "description": "Streams `application/pdf`. Use Postman *Send and Download*."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "06 Referral",
+          "description": "Referral program — rewards overview, code generation, ledger, withdrawals, and bank accounts. All endpoints require customer auth.",
+          "item": [
+            {
+              "name": "Get Rewards Overview",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/referral/rewards",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "referral", "rewards"]
+                },
+                "description": "Returns `{ customer, program }`. `program` is the active `student` referral program config."
+              },
+              "response": []
+            },
+            {
+              "name": "Get My Transactions",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/referral/transactions?page=1&limit=20",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "referral", "transactions"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "20" },
+                    { "key": "type", "value": "credit", "disabled": true }
+                  ]
+                },
+                "description": "Paginated referral ledger. Optional `type=credit|debit` filter."
+              },
+              "response": []
+            },
+            {
+              "name": "Generate Referral Code",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/referral/code/generate",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "referral", "code", "generate"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"referralCode\": \"AMAN1234\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Customer-picked code. Regex: `/^[A-Z0-9]{8,10}$/`. One-shot — can't be regenerated. Blacklist is enforced."
+              },
+              "response": []
+            },
+            {
+              "name": "Request Withdrawal",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/referral/withdraw",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "referral", "withdraw"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"bankAccountId\": \"{{bank_account_id}}\",\n  \"amount\": 500\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Minimum ₹500. Amount must be ≤ `customer.rewardPoints`. Creates a `pending` debit txn; admin must mark it `successful` after payout."
+              },
+              "response": []
+            },
+            {
+              "name": "List Bank Accounts",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/referral/bank-accounts",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "referral", "bank-accounts"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Create Bank Account",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/referral/bank-accounts",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "referral", "bank-accounts"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"accountHolderName\": \"Aman Sharma\",\n  \"ifscCode\": \"HDFC0001234\",\n  \"accountNumber\": \"50100012345678\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Bank Account",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/referral/bank-accounts/{{bank_account_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "referral", "bank-accounts", "{{bank_account_id}}"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ifscCode\": \"HDFC0001235\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Bank Account",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/referral/bank-accounts/{{bank_account_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "referral", "bank-accounts", "{{bank_account_id}}"]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "07 Books",
+          "description": "Physical book catalogue, cart, shipping, and orders. Browse is open; cart/shipping/order endpoints require customer auth.",
+          "item": [
+            {
+              "name": "Catalogue",
+              "item": [
+                {
+                  "name": "List Books",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/books?search=&language=",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "books"],
+                      "query": [
+                        { "key": "search", "value": "" },
+                        { "key": "language", "value": "" }
+                      ]
+                    },
+                    "description": "Returns `{ cartId, books[] }`. Each book carries `qty` (quantity already in the customer's active cart) and `key` (`combo`|`individual`). If unauthenticated, `qty` is always 0."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Book Detail",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/books/{{book_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "books", "{{book_id}}"]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Cart",
+              "item": [
+                {
+                  "name": "Get Cart",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/books/cart",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "books", "cart"]
+                    },
+                    "description": "Returns `{ cartId, items[], shipping, totals }`. `totals.shippingWaived` reflects the free-shipping threshold (from `BookSetting`)."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Add to Cart",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/books/cart",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "books", "cart"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"bookId\": \"{{book_id}}\",\n  \"qty\": 1\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Upserts a line in the customer's active cart. If the book already exists in the cart, the qty is overwritten with the new value."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update Cart Item",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/books/cart/{{book_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "books", "cart", "{{book_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"qty\": 2\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Remove Cart Item",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/books/cart/{{book_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "books", "cart", "{{book_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Clear Cart",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/books/cart",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "books", "cart"]
+                    },
+                    "description": "Soft-deactivates the cart (`status=false`). A new active cart is auto-created on the next add-to-cart call."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Attach Shipping Address",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/books/shipping",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "books", "shipping"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"Aman Sharma\",\n  \"phone\": \"9876543210\",\n  \"alternatePhone\": \"9876543211\",\n  \"email\": \"aman@example.com\",\n  \"address\": \"12 MG Road\",\n  \"address2\": \"Near City Mall\",\n  \"city\": \"Ahmedabad\",\n  \"stateId\": \"{{state_id}}\",\n  \"pincode\": \"380001\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Upserts a CustomerShipping row (matched on name+phone+address+pincode for the same customer) and attaches its `_id` to the active cart."
+              },
+              "response": []
+            },
+            {
+              "name": "Place Order",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/books/order",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "books", "order"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"paymentMethod\": \"razorpay\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Cart must be non-empty and have a shipping address attached. Totals are recomputed server-side from the books' current prices + the free-shipping setting. Creates a BookOrder in `pending` status. A free/₹0 order is auto-marked `verified` and the cart is closed."
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "try {",
+                      "  const id = pm.response.json()?.data?._id;",
+                      "  if (id) pm.collectionVariables.set('book_order_id', id);",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "List My Orders",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/books/orders?page=1&limit=20",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "books", "orders"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "20" },
+                    { "key": "status", "value": "shipped", "disabled": true }
+                  ]
+                },
+                "description": "Each order is decorated with `trackingUrl` when courier+trackingId are set."
+              },
+              "response": []
+            },
+            {
+              "name": "Get My Order",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/books/orders/{{book_order_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "books", "orders", "{{book_order_id}}"]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "08 Exams",
+          "description": "MCQ exam module. Customer flow: browse categories → pick exam → start attempt → autosave → submit → view solution/analytics. Server owns the timer via `deadlineAt`. The correct answer is NEVER leaked before submission.",
+          "item": [
+            {
+              "name": "Discovery",
+              "item": [
+                {
+                  "name": "List Categories (root or children)",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/categories?parentId=root",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "categories"],
+                      "query": [
+                        { "key": "parentId", "value": "root", "description": "`root` or `null` for top-level; otherwise pass parent ObjectId" }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "List Exams in Category",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/categories/{{exam_category_id}}/exams",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "categories", "{{exam_category_id}}", "exams"]
+                    },
+                    "description": "Returns `{ subjects, exams }`. Each exam is decorated with `lastAttempt` (the customer's latest submitted attempt, if any)."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Daily Exams",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/daily",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "daily"]
+                    },
+                    "description": "Published exams of `type=daily` whose active window covers today."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Attempt Lifecycle",
+              "item": [
+                {
+                  "name": "Get Exam Detail",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/{{exam_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "{{exam_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Start Attempt",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/{{exam_id}}/attempts",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "{{exam_id}}", "attempts"]
+                    },
+                    "description": "Creates a new attempt with a server-computed `deadlineAt = now + exam.durationMinutes`. If an in-progress attempt already exists and hasn't expired, it is resumed (response flag `resumed: true`)."
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "try {",
+                          "  const id = pm.response.json()?.data?._id;",
+                          "  if (id) pm.collectionVariables.set('exam_attempt_id', id);",
+                          "} catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Get Attempt Questions",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/{{exam_id}}/attempts/{{exam_attempt_id}}/questions",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "{{exam_id}}", "attempts", "{{exam_attempt_id}}", "questions"]
+                    },
+                    "description": "Returns questions WITHOUT `isCorrect` flag. Each question carries the user's current `selectedOptionIds` (from autosave) and the response includes `remainingSeconds`."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Autosave Answers",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/attempts/{{exam_attempt_id}}/answers",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "attempts", "{{exam_attempt_id}}", "answers"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"answers\": [\n    { \"questionId\": \"{{exam_question_id}}\", \"selectedOptionIds\": [\"{{exam_option_id}}\"] }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Incrementally saves the customer's picks. No scoring is done here. Rejects the request if the attempt has expired."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Submit Attempt",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/{{exam_id}}/attempts/{{exam_attempt_id}}/submit",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "{{exam_id}}", "attempts", "{{exam_attempt_id}}", "submit"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"answers\": []\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Final submit. Server computes results for every active question (missing answers count as skipped), calculates score with per-question or exam-level ±marks, and computes rank among all submitters for this exam. `answers` in body is optional — if supplied, it is merged on top of autosaved state."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Post-Submit Views",
+              "item": [
+                {
+                  "name": "Get Attempt Solution",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/attempts/{{exam_attempt_id}}/solution",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "attempts", "{{exam_attempt_id}}", "solution"]
+                    },
+                    "description": "Each option includes `isCorrect` (the key) and `isSelected` (what the user picked). Only available after submission."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Attempt Analytics",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/attempts/{{exam_attempt_id}}/analytics",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "attempts", "{{exam_attempt_id}}", "analytics"]
+                    },
+                    "description": "Returns the attempt record plus `rank: \"K/N\"`."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "My Attempts + Overall",
+              "item": [
+                {
+                  "name": "List My Attempts",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/my/attempts?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "my", "attempts"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" },
+                        { "key": "examId", "value": "{{exam_id}}", "disabled": true }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "My Overall Analytics",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/exams/my/analytics",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "client", "exams", "my", "analytics"]
+                    },
+                    "description": "All-time rollup: totalExams, totalAttempts, cumulative score, average accuracy, etc."
+                  },
+                  "response": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "09 Materials",
+          "description": "Study-material browsing. Top-level entry points are exposed on the course/package detail pages via `materialCategories[]`. This folder drills down the tree and returns leaf PDFs.",
+          "item": [
+            {
+              "name": "Get Category Contents (drill-down)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/materials/categories/{{material_category_id}}/contents",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "materials", "categories", "{{material_category_id}}", "contents"]
+                },
+                "description": "Returns `{ current, breadcrumbs, subjects, materials }`.\n\n- `subjects[]` — child categories, each decorated with `havingChildDirectory`, `count` (recursive leaf count), and `isNewlyAdded` (materials added in the last 10 days).\n- `materials[]` — leaf PDFs at this node.\n- `breadcrumbs[]` — ancestor chain ending with the current category.\n\nClient walks the tree by calling this endpoint recursively: if a subject has `havingChildDirectory=true`, tap it to drill deeper; otherwise its leaves will be in `materials[]`."
+              },
+              "response": []
+            },
+            {
+              "name": "Get Material Detail",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/materials/{{material_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "materials", "{{material_id}}"]
+                },
+                "description": "Deep-link support: single material record with populated category."
+              },
+              "response": []
+            },
+            {
+              "name": "Track Download",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/materials/{{material_id}}/track-download",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "materials", "{{material_id}}", "track-download"]
+                },
+                "description": "Increments `downloadCount`. Fire-and-forget — the client opens the `file` URL after (or before) calling this."
+              },
+              "response": []
+            },
+            {
+              "name": "Recently Added",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/materials/recent?days=10&limit=20",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "materials", "recent"],
+                  "query": [
+                    { "key": "days", "value": "10" },
+                    { "key": "limit", "value": "20" }
+                  ]
+                },
+                "description": "Latest materials across all active categories within the past N days (default 10)."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "10 Packages",
+          "description": "Package = parent bundle of video subjects, materials, exams, and pricing plans. Client discovery + detail + my-subscriptions + subscription-gated chat.",
+          "item": [
+            {
+              "name": "List Package Types",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/packages/types",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "packages", "types"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "List Packages by Type",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/packages/type/{{package_type_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "packages", "type", "{{package_type_id}}"]
+                },
+                "description": "Packages under a given PackageType with plans (split `withMaterial`/`withoutMaterial`) + `subscriberCount`."
+              },
+              "response": []
+            },
+            {
+              "name": "My Active Packages",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/packages/my",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "packages", "my"]
+                },
+                "description": "Subscriptions whose `packageId` is set and `endAt > now`."
+              },
+              "response": []
+            },
+            {
+              "name": "Package Detail",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/packages/{{package_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "packages", "{{package_id}}"]
+                },
+                "description": "Returns `{ package, subjects, materials, exams, plans: { withMaterial, withoutMaterial }, availablePromoCode }`. Each subject/material/exam carries `havingChildDirectory` for drill-down."
+              },
+              "response": []
+            },
+            {
+              "name": "Package Chat (subscription-gated)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/packages/{{package_id}}/chat?page=1&limit=20",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "client", "packages", "{{package_id}}", "chat"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "20" }
+                  ]
+                },
+                "description": "Returns admin-posted messages for this package. Requires an active subscription — returns 403 otherwise."
               },
               "response": []
             }
@@ -1051,6 +2143,58 @@
                 }
               },
               "response": []
+            },
+            {
+              "name": "Create Video",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/courses/videos",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "courses",
+                    "videos"
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"videoCategoryId\": \"{{video_category_id}}\",\n  \"title\": \"Introduction to UPSC\",\n  \"topic\": \"Overview\",\n  \"slug\": \"intro-to-upsc\",\n  \"platform\": \"youtube\",\n  \"priceType\": \"paid\",\n  \"youtube_id\": \"dQw4w9WgXcQ\",\n  \"order\": 1,\n  \"status\": true\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "description": "Step 9 — add a paid video under the video category created in step 4."
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test('2xx', () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const j = pm.response.json();",
+                      "  const id = j?.data?._id || '';",
+                      "  if (id) { pm.collectionVariables.set('video_id', id); pm.environment.set('video_id', id); }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
             }
           ]
         },
@@ -2925,6 +4069,2708 @@
                   "response": []
                 }
               ]
+            },
+            {
+              "name": "05 Videos",
+              "description": "CRUD for individual videos within a video category. Create a video first — the test script auto-captures {{video_id}}.",
+              "item": [
+                {
+                  "name": "List Videos",
+                  "request": {
+                    "method": "GET",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/videos?videoCategoryId={{video_category_id}}&status=true&page=1&limit=20",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "videos?videoCategoryId={{video_category_id}}&status=true&page=1&limit=20"
+                      ]
+                    },
+                    "description": "Filter by videoCategoryId and/or status. Paginated."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Video",
+                  "request": {
+                    "method": "GET",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/videos/{{video_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "videos",
+                        "{{video_id}}"
+                      ]
+                    },
+                    "description": "Fetch a single video by ID."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Video",
+                  "request": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/videos",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "videos"
+                      ]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"videoCategoryId\": \"{{video_category_id}}\",\n  \"title\": \"Introduction to UPSC\",\n  \"topic\": \"Overview\",\n  \"slug\": \"intro-to-upsc\",\n  \"platform\": \"youtube\",\n  \"priceType\": \"paid\",\n  \"youtube_id\": \"dQw4w9WgXcQ\",\n  \"order\": 1,\n  \"status\": true\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "description": "Creates a new video under a video category. Captures {{video_id}} on success."
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "pm.test('2xx', () => pm.expect(pm.response.code).to.be.below(300));",
+                          "try {",
+                          "  const j = pm.response.json();",
+                          "  const id = j?.data?._id || '';",
+                          "  if (id) { pm.collectionVariables.set('video_id', id); pm.environment.set('video_id', id); }",
+                          "} catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Reorder Videos",
+                  "request": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/videos/reorder",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "videos",
+                        "reorder"
+                      ]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"orders\": [\n    {\n      \"id\": \"{{video_id}}\",\n      \"order\": 1\n    },\n    {\n      \"id\": \"{{video_id_2}}\",\n      \"order\": 2\n    }\n  ]\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "description": "Bulk-update the order field for multiple videos in one call."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update Video",
+                  "request": {
+                    "method": "PUT",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/videos/{{video_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "videos",
+                        "{{video_id}}"
+                      ]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"title\": \"Introduction to UPSC (Updated)\",\n  \"topic\": \"Overview\",\n  \"slug\": \"intro-to-upsc-updated\",\n  \"priceType\": \"free\",\n  \"order\": 2,\n  \"status\": true\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "description": "Partial update — only fields provided are changed."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Video",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/courses/videos/{{video_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "admin",
+                        "courses",
+                        "videos",
+                        "{{video_id}}"
+                      ]
+                    },
+                    "description": "Permanently deletes the video."
+                  },
+                  "response": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "07 Customer Management",
+          "description": "Admin CRUD for customers — list, search, create, update, soft-delete, toggle status, and view per-customer subscriptions.",
+          "item": [
+            {
+              "name": "Pre-requisites",
+              "item": [
+                {
+                  "name": "Get Pre-requisites (States & Educations)",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers/pre-requisites",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers", "pre-requisites"]
+                    },
+                    "description": "Returns all active states and education levels for use in create/edit forms."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Districts by State",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers/states/{{state_id}}/districts",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers", "states", "{{state_id}}", "districts"]
+                    },
+                    "description": "Returns active districts for the given stateId."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Customer CRUD",
+              "item": [
+                {
+                  "name": "List Customers",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" },
+                        { "key": "search", "value": "", "disabled": true, "description": "Searches name, phone, email" },
+                        { "key": "status", "value": "true", "disabled": true },
+                        { "key": "stateId", "value": "", "disabled": true },
+                        { "key": "districtId", "value": "", "disabled": true },
+                        { "key": "fromDate", "value": "2025-01-01", "disabled": true },
+                        { "key": "toDate", "value": "2025-12-31", "disabled": true }
+                      ]
+                    },
+                    "description": "Paginated list. Filter by search (name/phone/email), status, state, district, or registration date range."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Customer",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers/{{user_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers", "{{user_id}}"]
+                    },
+                    "description": "Returns full customer profile with populated state, district, education, and subscription counts."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Customer",
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "exec": [
+                          "var res = pm.response.json();",
+                          "if (res.success && res.data && res.data._id) {",
+                          "  pm.collectionVariables.set('user_id', res.data._id);",
+                          "}"
+                        ],
+                        "type": "text/javascript"
+                      }
+                    }
+                  ],
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"firstName\": \"Aman\",\n  \"middleName\": \"K\",\n  \"lastName\": \"Sharma\",\n  \"phoneNumber\": \"9876543210\",\n  \"phone2\": \"\",\n  \"emailAddress\": \"aman@example.com\",\n  \"dob\": \"1998-05-15\",\n  \"gender\": \"male\",\n  \"stateId\": \"\",\n  \"districtId\": \"\",\n  \"city\": \"Ahmedabad\",\n  \"educationId\": \"\",\n  \"language\": \"Gujarati\",\n  \"goals\": [],\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Creates a new customer. Auto-captures `{{user_id}}`."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update Customer",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers/{{user_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers", "{{user_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"firstName\": \"Aman\",\n  \"middleName\": \"K\",\n  \"lastName\": \"Sharma (Updated)\",\n  \"emailAddress\": \"aman.updated@example.com\",\n  \"phone2\": \"9999999999\",\n  \"dob\": \"1998-05-15\",\n  \"gender\": \"male\",\n  \"stateId\": \"\",\n  \"districtId\": \"\",\n  \"city\": \"Surat\",\n  \"educationId\": \"\",\n  \"language\": \"Hindi\",\n  \"goals\": [],\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Partial update — only provided fields are changed. phoneNumber cannot be changed here."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Toggle Customer Status",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers/{{user_id}}/status",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers", "{{user_id}}", "status"]
+                    },
+                    "description": "Flips the customer's active/inactive status. Returns the new status value."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Customer",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers/{{user_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers", "{{user_id}}"]
+                    },
+                    "description": "Soft-deletes the customer (sets isAccountDeleted=true, status=false). Does not permanently remove the record."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Customer Subscriptions",
+              "item": [
+                {
+                  "name": "Get Course Subscriptions",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers/{{user_id}}/course-subscriptions?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers", "{{user_id}}", "course-subscriptions"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" }
+                      ]
+                    },
+                    "description": "Paginated list of this customer's course subscriptions with populated course and plan details."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update Course Subscription End Date",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers/{{user_id}}/course-subscriptions/{{order_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers", "{{user_id}}", "course-subscriptions", "{{order_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"endAt\": \"2026-12-31\",\n  \"remarks\": \"Extended by admin\"\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Extends or adjusts the subscription end date."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get EBook Subscriptions",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/customers/{{user_id}}/ebook-subscriptions?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "customers", "{{user_id}}", "ebook-subscriptions"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" }
+                      ]
+                    },
+                    "description": "Paginated list of this customer's ebook subscriptions. Each entry includes an `isActive` flag (status=true AND endAt > now)."
+                  },
+                  "response": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "06 EBooks",
+          "description": "Full EBook management — CRUD, pricing plans, and subscriptions. Run Create EBook first to capture {{ebook_id}}, then Create EBook Plan to capture {{ebook_plan_id}}.",
+          "item": [
+            {
+              "name": "EBook CRUD",
+              "item": [
+                {
+                  "name": "List EBooks",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" },
+                        { "key": "search", "value": "", "disabled": true },
+                        { "key": "author", "value": "", "disabled": true },
+                        { "key": "publisher", "value": "", "disabled": true },
+                        { "key": "language", "value": "English", "disabled": true },
+                        { "key": "status", "value": "true", "disabled": true }
+                      ]
+                    },
+                    "description": "Paginated list. Filter by search (name/author), author, publisher, language (English/Gujarati/Hindi), status."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get EBook",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/{{ebook_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "{{ebook_id}}"]
+                    },
+                    "description": "Returns the ebook plus its active pricing plans."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create EBook",
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "exec": [
+                          "var res = pm.response.json();",
+                          "if (res.success && res.data && res.data._id) {",
+                          "  pm.collectionVariables.set('ebook_id', res.data._id);",
+                          "}"
+                        ],
+                        "type": "text/javascript"
+                      }
+                    }
+                  ],
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"GPSC Complete Guide 2026\",\n  \"description\": \"Comprehensive guide for GPSC Class 1 & 2 preparation.\",\n  \"author\": \"Dr. Rajesh Patel\",\n  \"publisher\": \"WebSankul Publications\",\n  \"language\": \"Gujarati\",\n  \"order\": 1,\n  \"image\": \"https://cdn.example.com/ebooks/gpsc-guide.jpg\",\n  \"thumbnail\": \"https://cdn.example.com/ebooks/gpsc-guide-thumb.jpg\",\n  \"demoUrl\": \"https://cdn.example.com/ebooks/gpsc-demo.pdf\",\n  \"bookUrl\": \"https://cdn.example.com/ebooks/gpsc-full.pdf\",\n  \"link\": \"https://websankul.com/ebooks/gpsc-complete-guide\",\n  \"termsAndConditions\": \"For personal use only. Redistribution prohibited.\",\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Creates a new ebook. The test script auto-captures `{{ebook_id}}`."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update EBook",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/{{ebook_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "{{ebook_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"GPSC Complete Guide 2026 (Revised)\",\n  \"status\": true,\n  \"order\": 2\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Partial update — only provided fields are changed."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Reorder EBooks",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/reorder",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "reorder"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"orders\": [\n    { \"id\": \"{{ebook_id}}\", \"order\": 1 }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Bulk-update the display order of ebooks."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete EBook",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/{{ebook_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "{{ebook_id}}"]
+                    },
+                    "description": "Deletes the ebook and all its pricing plans in a single transaction."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "EBook Pricing Plans",
+              "item": [
+                {
+                  "name": "List EBook Plans",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/{{ebook_id}}/plans",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "{{ebook_id}}", "plans"]
+                    },
+                    "description": "Returns all pricing plans (active + inactive) for the ebook."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create EBook Plan",
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "exec": [
+                          "var res = pm.response.json();",
+                          "if (res.success && res.data && res.data._id) {",
+                          "  pm.collectionVariables.set('ebook_plan_id', res.data._id);",
+                          "}"
+                        ],
+                        "type": "text/javascript"
+                      }
+                    }
+                  ],
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/{{ebook_id}}/plans",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "{{ebook_id}}", "plans"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"3 Month Access\",\n  \"duration\": 90,\n  \"price\": 499,\n  \"withMaterial\": false,\n  \"materialPrice\": 0,\n  \"isDefault\": true,\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "duration is in days. Auto-captures `{{ebook_plan_id}}`."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get EBook Plan",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/plans/{{ebook_plan_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "plans", "{{ebook_plan_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update EBook Plan",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/plans/{{ebook_plan_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "plans", "{{ebook_plan_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"3 Month Access (Updated)\",\n  \"price\": 449,\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Partial update — only provided fields are changed."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete EBook Plan",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/plans/{{ebook_plan_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "plans", "{{ebook_plan_id}}"]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "EBook Subscriptions",
+              "item": [
+                {
+                  "name": "Get EBook Prices (for subscription)",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/{{ebook_id}}/prices",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "{{ebook_id}}", "prices"]
+                    },
+                    "description": "Returns active pricing plans for an ebook — used when creating a manual subscription."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "List EBook Subscriptions",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/subscriptions/list?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "subscriptions", "list"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" },
+                        { "key": "customerId", "value": "", "disabled": true },
+                        { "key": "ebookId", "value": "", "disabled": true },
+                        { "key": "status", "value": "true", "disabled": true }
+                      ]
+                    },
+                    "description": "Filter by customerId, ebookId, status. Paginated."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create EBook Subscription",
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "exec": [
+                          "var res = pm.response.json();",
+                          "if (res.success && res.data && res.data.subscription && res.data.subscription._id) {",
+                          "  pm.collectionVariables.set('ebook_subscription_id', res.data.subscription._id);",
+                          "}"
+                        ],
+                        "type": "text/javascript"
+                      }
+                    }
+                  ],
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/subscriptions",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "subscriptions"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"customerId\": \"{{user_id}}\",\n  \"ebookId\": \"{{ebook_id}}\",\n  \"planId\": \"{{ebook_plan_id}}\",\n  \"paymentMethod\": \"Backend\",\n  \"orderPrice\": 499,\n  \"remarks\": \"Manual subscription by admin\",\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Creates an EbookOrder + EbookSubscription atomically. Provide either `planId` (duration is read from the plan) or `durationInDays` for a custom period. Auto-captures `{{ebook_subscription_id}}`."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get EBook Subscription",
+                  "request": {
+                    "method": "GET",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/subscriptions/{{ebook_subscription_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "subscriptions", "{{ebook_subscription_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update EBook Subscription",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/subscriptions/{{ebook_subscription_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "subscriptions", "{{ebook_subscription_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"razorpayOrderId\": \"order_ABC123\",\n  \"razorpayPaymentId\": \"pay_XYZ789\",\n  \"remarks\": \"Payment confirmed via Razorpay\"\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Confirms a pending order — sets status to complete and attaches Razorpay IDs."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete EBook Subscription",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/ebooks/subscriptions/{{ebook_subscription_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "ebooks", "subscriptions", "{{ebook_subscription_id}}"]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "08 Referral Management",
+          "description": "Admin tools for the referral program: program config, transaction ledger, withdrawal approvals, CSV export, and manual reward adjustments.",
+          "item": [
+            {
+              "name": "Programs",
+              "item": [
+                {
+                  "name": "List Programs",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/referrals/programs",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "referrals", "programs"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Program by Id",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/referrals/programs/{{referral_program_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "referrals", "programs", "{{referral_program_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Program",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/referrals/programs",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "referrals", "programs"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"student\",\n  \"title\": \"Refer & Earn — Student Program\",\n  \"image\": \"\",\n  \"referralDiscount\": 10,\n  \"referralReward\": 5,\n  \"minimumPrice\": 999,\n  \"initialRewardAmount\": 0,\n  \"video\": \"\",\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "`name` is unique. `referralDiscount` and `referralReward` are percentages (0-100). `minimumPrice` is the plan-price floor for eligibility."
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "try {",
+                          "  const id = pm.response.json()?.data?._id;",
+                          "  if (id) pm.collectionVariables.set('referral_program_id', id);",
+                          "} catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Update Program",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/referrals/programs/{{referral_program_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "referrals", "programs", "{{referral_program_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"referralDiscount\": 15,\n  \"referralReward\": 7,\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Program",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/referrals/programs/{{referral_program_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "referrals", "programs", "{{referral_program_id}}"]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Transactions",
+              "item": [
+                {
+                  "name": "List Transactions",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/referrals/transactions?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "referrals", "transactions"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" },
+                        { "key": "customerId", "value": "{{user_id}}", "disabled": true },
+                        { "key": "type", "value": "credit", "disabled": true },
+                        { "key": "status", "value": "pending", "disabled": true },
+                        { "key": "fromDate", "value": "2025-01-01", "disabled": true },
+                        { "key": "toDate", "value": "2025-12-31", "disabled": true }
+                      ]
+                    },
+                    "description": "Ledger of all referral transactions. Filters: `customerId`, `type` (credit|debit), `status` (pending|successful), `fromDate`, `toDate`."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Approve Withdrawal (status → successful)",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/referrals/transactions/{{referral_transaction_id}}/status",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "referrals", "transactions", "{{referral_transaction_id}}", "status"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"status\": \"successful\",\n  \"description\": \"Transferred via NEFT — UTR 1234567890\"\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Marks a pending debit (withdrawal) as `successful`. Only DEBIT txns are accepted."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Reject Withdrawal (refund)",
+                  "request": {
+                    "method": "POST",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/referrals/transactions/{{referral_transaction_id}}/reject",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "referrals", "transactions", "{{referral_transaction_id}}", "reject"]
+                    },
+                    "description": "Only pending debit transactions can be rejected. Refunds the coins back to `Customer.rewardPoints` and deletes the transaction atomically."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Export Withdrawals CSV",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Accept", "value": "text/csv" }],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/referrals/withdrawals/csv?status=pending",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "referrals", "withdrawals", "csv"],
+                  "query": [
+                    { "key": "status", "value": "pending" },
+                    { "key": "fromDate", "value": "2025-01-01", "disabled": true },
+                    { "key": "toDate", "value": "2025-12-31", "disabled": true }
+                  ]
+                },
+                "description": "Streams `WithdrawalRequests.csv`. Use Postman *Send and Download*."
+              },
+              "response": []
+            },
+            {
+              "name": "Adjust Customer Rewards (manual)",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/referrals/customers/{{customer_id}}/rewards",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "referrals", "customers", "{{customer_id}}", "rewards"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"amount\": 100,\n  \"type\": \"credit\",\n  \"description\": \"Goodwill credit issued by support\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Atomically credits or debits a customer's `rewardPoints` and records a `successful` ledger entry. `type`: `credit` | `debit`."
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "09 Book Management",
+          "description": "Admin tools for the physical book catalogue, orders, shipping tracking, and store settings.",
+          "item": [
+            {
+              "name": "Books",
+              "item": [
+                {
+                  "name": "List Books",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" },
+                        { "key": "search", "value": "", "disabled": true },
+                        { "key": "status", "value": "true", "disabled": true },
+                        { "key": "language", "value": "Gujarati", "disabled": true },
+                        { "key": "isMagazine", "value": "false", "disabled": true },
+                        { "key": "isCombo", "value": "false", "disabled": true }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Book by Id",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/{{book_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "{{book_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Book",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"GPSC Prelim Mastery\",\n  \"author\": \"WebSankul Team\",\n  \"image\": \"\",\n  \"thumbnail\": \"\",\n  \"description\": \"Complete prelim-focused book for GPSC.\",\n  \"demoUrl\": \"\",\n  \"weight\": 800,\n  \"pages\": 600,\n  \"dynamicLink\": \"\",\n  \"listPrice\": 499,\n  \"discountedPrice\": 399,\n  \"shippingPrice\": 50,\n  \"orderBy\": 1,\n  \"language\": \"Gujarati\",\n  \"isMagazine\": false,\n  \"isCombo\": false,\n  \"publication\": \"WebSankul Publication\",\n  \"deliveryEta\": \"5-7 days\",\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "`discountedPrice` must be ≤ `listPrice`. Prices are integers (rupees, no paise)."
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "try {",
+                          "  const id = pm.response.json()?.data?._id;",
+                          "  if (id) pm.collectionVariables.set('book_id', id);",
+                          "} catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Update Book",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/{{book_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "{{book_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"discountedPrice\": 349,\n  \"shippingPrice\": 40\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Toggle Book Status",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/{{book_id}}/status",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "{{book_id}}", "status"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Reorder Books",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/reorder",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "reorder"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"orders\": [\n    { \"id\": \"{{book_id}}\", \"orderBy\": 1 }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Book",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/{{book_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "{{book_id}}"]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Orders",
+              "item": [
+                {
+                  "name": "List Book Orders",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/orders/list?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "orders", "list"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" },
+                        { "key": "customerId", "value": "{{customer_id}}", "disabled": true },
+                        { "key": "status", "value": "pending", "disabled": true },
+                        { "key": "search", "value": "books-", "disabled": true },
+                        { "key": "fromDate", "value": "2025-01-01", "disabled": true },
+                        { "key": "toDate", "value": "2025-12-31", "disabled": true }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Book Order",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/orders/{{book_order_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "orders", "{{book_order_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update Order Status",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/orders/{{book_order_id}}/status",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "orders", "{{book_order_id}}", "status"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"status\": \"verified\",\n  \"remarks\": \"Payment confirmed manually\"\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Allowed values: `pending`, `verified`, `shipped`, `delivered`, `cancelled`, `failed`. Auto-stamps `paidAt`/`shippedAt`/`deliveredAt`/`cancelledAt` and pushes an entry to `tracking.history`."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Set Order Tracking",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/orders/{{book_order_id}}/tracking",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "orders", "{{book_order_id}}", "tracking"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"trackingId\": \"119400228500\",\n  \"courier\": \"tirupati\",\n  \"status\": \"shipped\",\n  \"note\": \"Handed over to Tirupati Courier\"\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Sets courier + tracking id, bumps order status to `shipped`, pushes a history entry. `courier`: `mahavir` | `tirupati`."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Settings",
+              "item": [
+                {
+                  "name": "Get Settings",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/settings",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "settings"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update Settings",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/books/settings",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "books", "settings"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"freeShippingMinOrderAmount\": 999,\n  \"supportPhone\": \"+91 7777991348\",\n  \"gstRate\": 0,\n  \"termsAndConditions\": [\n    \"Deliveries take 5-7 working days.\",\n    \"No cancellation or refund after dispatch.\"\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Upserts the singleton `BookSetting` (key=`default`). `freeShippingMinOrderAmount` controls the cart-level free-shipping threshold."
+                  },
+                  "response": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "10 Exam Management",
+          "description": "Admin tools for exam categories, exams, questions, and per-exam submissions/analytics. All endpoints require admin or super_admin.",
+          "item": [
+            {
+              "name": "Categories",
+              "item": [
+                {
+                  "name": "List Categories",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/categories?parentId=root",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "categories"],
+                      "query": [
+                        { "key": "parentId", "value": "root", "description": "`root`|`null` for top-level or a parent ObjectId" },
+                        { "key": "search", "value": "", "disabled": true },
+                        { "key": "status", "value": "true", "disabled": true }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Category Tree",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/categories/tree",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "categories", "tree"]
+                    },
+                    "description": "Returns the full tree of active categories, nested."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Category by Id",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/categories/{{exam_category_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "categories", "{{exam_category_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Category",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/categories",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "categories"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"Gujarati Literature\",\n  \"image\": \"\",\n  \"parentId\": null,\n  \"orderBy\": 1,\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "try {",
+                          "  const id = pm.response.json()?.data?._id;",
+                          "  if (id) pm.collectionVariables.set('exam_category_id', id);",
+                          "} catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Update Category",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/categories/{{exam_category_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "categories", "{{exam_category_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"Gujarati Literature (Beginner)\",\n  \"orderBy\": 2\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Category",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/categories/{{exam_category_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "categories", "{{exam_category_id}}"]
+                    },
+                    "description": "Blocked if the category has sub-categories or exams attached."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Exams",
+              "item": [
+                {
+                  "name": "List Exams",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" },
+                        { "key": "search", "value": "", "disabled": true },
+                        { "key": "categoryId", "value": "{{exam_category_id}}", "disabled": true },
+                        { "key": "type", "value": "subject", "disabled": true },
+                        { "key": "status", "value": "published", "disabled": true },
+                        { "key": "isPaid", "value": "false", "disabled": true }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Exam by Id",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/{{exam_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "{{exam_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Exam",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"title\": \"Daily Test — Day 1\",\n  \"description\": \"Mixed topics\",\n  \"type\": \"daily\",\n  \"categoryId\": \"{{exam_category_id}}\",\n  \"isPaid\": false,\n  \"durationMinutes\": 30,\n  \"questionCount\": 30,\n  \"positiveMarks\": 1,\n  \"negativeMarks\": 0.33,\n  \"passingMarks\": 10,\n  \"instructions\": \"\",\n  \"policy\": \"\",\n  \"status\": \"published\",\n  \"orderBy\": 1,\n  \"language\": \"gu\",\n  \"difficulty\": \"medium\",\n  \"sendReminder\": false\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "`type`: `daily|subject|mock|weekly`. `status`: `draft|scheduled|published|archived`. `language`: `en|gu|hi|bilingual`. `difficulty`: `easy|medium|hard`."
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "try {",
+                          "  const id = pm.response.json()?.data?._id;",
+                          "  if (id) pm.collectionVariables.set('exam_id', id);",
+                          "} catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Update Exam",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/{{exam_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "{{exam_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"durationMinutes\": 45,\n  \"questionCount\": 50\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update Exam Status",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/{{exam_id}}/status",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "{{exam_id}}", "status"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"status\": \"published\"\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Reorder Exams",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/reorder",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "reorder"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"orders\": [\n    { \"id\": \"{{exam_id}}\", \"orderBy\": 1 }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Exam",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/{{exam_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "{{exam_id}}"]
+                    },
+                    "description": "Deletes the exam, all its questions, and all attempts in a single transaction."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Questions",
+              "item": [
+                {
+                  "name": "List Questions",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/questions/list?examId={{exam_id}}&page=1&limit=50",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "questions", "list"],
+                      "query": [
+                        { "key": "examId", "value": "{{exam_id}}" },
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "50" },
+                        { "key": "search", "value": "", "disabled": true },
+                        { "key": "status", "value": "true", "disabled": true }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Question by Id",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/questions/{{exam_question_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "questions", "{{exam_question_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Question",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/questions",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "questions"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"examId\": \"{{exam_id}}\",\n  \"title\": \"What is the capital of Gujarat?\",\n  \"image\": \"\",\n  \"solutionText\": \"Gandhinagar is the capital of Gujarat.\",\n  \"solutionImage\": \"\",\n  \"type\": \"single\",\n  \"options\": [\n    { \"text\": \"Ahmedabad\", \"isCorrect\": false },\n    { \"text\": \"Gandhinagar\", \"isCorrect\": true },\n    { \"text\": \"Surat\", \"isCorrect\": false },\n    { \"text\": \"Rajkot\", \"isCorrect\": false }\n  ],\n  \"orderBy\": 1,\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "`type`: `single` (exactly one correct option) | `multi` (one or more). Minimum 2 options. Optional `positiveMarksOverride` / `negativeMarksOverride` per question."
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "try {",
+                          "  const id = pm.response.json()?.data?._id;",
+                          "  if (id) pm.collectionVariables.set('exam_question_id', id);",
+                          "} catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Bulk Create Questions",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/questions/bulk",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "questions", "bulk"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"examId\": \"{{exam_id}}\",\n  \"questions\": [\n    {\n      \"title\": \"2 + 2 = ?\",\n      \"type\": \"single\",\n      \"options\": [\n        { \"text\": \"3\", \"isCorrect\": false },\n        { \"text\": \"4\", \"isCorrect\": true },\n        { \"text\": \"5\", \"isCorrect\": false }\n      ],\n      \"orderBy\": 1\n    }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Update Question",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/questions/{{exam_question_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "questions", "{{exam_question_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"solutionText\": \"Updated solution.\"\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Reorder Questions",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/questions/reorder",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "questions", "reorder"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"orders\": [\n    { \"id\": \"{{exam_question_id}}\", \"orderBy\": 1 }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Question",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/questions/{{exam_question_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "questions", "{{exam_question_id}}"]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Submissions & Analytics",
+              "item": [
+                {
+                  "name": "List Exam Submissions",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/{{exam_id}}/submissions?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "{{exam_id}}", "submissions"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" }
+                      ]
+                    },
+                    "description": "Submitted attempts, highest-score first. Populates customer info."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Exam Analytics",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/{{exam_id}}/analytics",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "{{exam_id}}", "analytics"]
+                    },
+                    "description": "Returns `{ overall, perQuestion }`. `overall`: totalAttempts, uniqueCandidates, avg/max/min score, avgAccuracy. `perQuestion`: accuracy, correct/wrong/skipped counts sorted by lowest accuracy first (toughest first)."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Attempt by Id",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/attempts/{{exam_attempt_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "attempts", "{{exam_attempt_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Invalidate Attempt",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/exams/attempts/{{exam_attempt_id}}/invalidate",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "exams", "attempts", "{{exam_attempt_id}}", "invalidate"]
+                    },
+                    "description": "Marks the attempt as `abandoned` and zeroes out score/accuracy."
+                  },
+                  "response": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "11 Material Management",
+          "description": "Admin tools for study-material categories (tree) and leaf PDF files. Course/package attach lives on the existing course-management flows.",
+          "item": [
+            {
+              "name": "Categories",
+              "item": [
+                {
+                  "name": "List Categories (flat or tree)",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/categories?parent=root",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "categories"],
+                      "query": [
+                        { "key": "parent", "value": "root", "description": "`root`|`null` for top-level, or a parent ObjectId" },
+                        { "key": "tree", "value": "true", "disabled": true, "description": "If `true`, return nested tree" },
+                        { "key": "search", "value": "", "disabled": true },
+                        { "key": "status", "value": "true", "disabled": true }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Category by Id",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/categories/{{material_category_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "categories", "{{material_category_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Category",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/categories",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "categories"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"title\": \"Gujarati Literature\",\n  \"image\": \"\",\n  \"parent\": null,\n  \"order\": 1,\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "try {",
+                          "  const id = pm.response.json()?.data?._id;",
+                          "  if (id) pm.collectionVariables.set('material_category_id', id);",
+                          "} catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Update Category",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/categories/{{material_category_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "categories", "{{material_category_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"title\": \"Gujarati Literature (Beginner)\",\n  \"order\": 2\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Toggle Category Status",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/categories/{{material_category_id}}/status",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "categories", "{{material_category_id}}", "status"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Reorder Categories",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/categories/reorder",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "categories", "reorder"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"orders\": [\n    { \"id\": \"{{material_category_id}}\", \"order\": 1 }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Category",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/categories/{{material_category_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "categories", "{{material_category_id}}"]
+                    },
+                    "description": "Blocked if the category has sub-categories or leaf materials."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Courses Using Category",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/categories/{{material_category_id}}/courses",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "categories", "{{material_category_id}}", "courses"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Child Materials",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/categories/{{material_category_id}}/materials?page=1&limit=50",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "categories", "{{material_category_id}}", "materials"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "50" }
+                      ]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Materials (leaf PDFs)",
+              "item": [
+                {
+                  "name": "List Materials",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" },
+                        { "key": "search", "value": "", "disabled": true },
+                        { "key": "materialCategoryId", "value": "{{material_category_id}}", "disabled": true },
+                        { "key": "status", "value": "true", "disabled": true },
+                        { "key": "language", "value": "gu", "disabled": true },
+                        { "key": "isPreview", "value": "false", "disabled": true }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Material by Id",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/{{material_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "{{material_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Material",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"title\": \"Chapter 1 - Gujarati Poetry Notes\",\n  \"description\": \"Compact notes for Chapter 1.\",\n  \"materialCategoryId\": \"{{material_category_id}}\",\n  \"file\": \"https://cdn.example.com/uploads/materials/ch-1-notes.pdf\",\n  \"directLink\": \"\",\n  \"thumbnail\": \"\",\n  \"fileSize\": 1048576,\n  \"fileMime\": \"application/pdf\",\n  \"language\": \"gu\",\n  \"isPreview\": false,\n  \"order\": 1,\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "`file` = absolute CDN URL to the uploaded PDF. Upload the file to your storage (S3/Spaces) separately and pass the public URL here."
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "try {",
+                          "  const id = pm.response.json()?.data?._id;",
+                          "  if (id) pm.collectionVariables.set('material_id', id);",
+                          "} catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Update Material",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/{{material_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "{{material_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"title\": \"Chapter 1 - Gujarati Poetry Notes (v2)\",\n  \"isPreview\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Toggle Material Status",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/{{material_id}}/status",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "{{material_id}}", "status"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Reorder Materials",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/reorder",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "reorder"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"materialCategoryId\": \"{{material_category_id}}\",\n  \"orders\": [\n    { \"id\": \"{{material_id}}\", \"order\": 1 }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Bulk Status",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/bulk-status",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "bulk-status"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"ids\": [\"{{material_id}}\"],\n  \"status\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Bulk Delete",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/bulk-delete",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "bulk-delete"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"ids\": [\"{{material_id}}\"]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Material",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/materials/{{material_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "materials", "{{material_id}}"]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "12 Package Management",
+          "description": "Admin tools for packages — parent bundle of video subjects, materials, exams, pricing plans, chat, and subscribers.",
+          "item": [
+            {
+              "name": "Package Types",
+              "item": [
+                {
+                  "name": "List Package Types",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/types",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "types"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Package Type",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/types",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "types"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"Recorded Course\",\n  \"order\": 1,\n  \"active\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "try { const id = pm.response.json()?.data?._id; if (id) pm.collectionVariables.set('package_type_id', id); } catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Update Package Type",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/types/{{package_type_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "types", "{{package_type_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"Recorded Course\",\n  \"active\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Package Type",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/types/{{package_type_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "types", "{{package_type_id}}"]
+                    },
+                    "description": "Blocked if any package still uses this type."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Packages CRUD",
+              "item": [
+                {
+                  "name": "List Packages",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" },
+                        { "key": "search", "value": "", "disabled": true },
+                        { "key": "active", "value": "true", "disabled": true },
+                        { "key": "packageTypeId", "value": "{{package_type_id}}", "disabled": true },
+                        { "key": "goalId", "value": "{{goal_id}}", "disabled": true }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Package by Id",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Create Package",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"name\": \"GPSC Prelim Pack 2025\",\n  \"description\": \"<p>Complete GPSC Prelim preparation with videos, notes, and daily tests.</p>\",\n  \"image\": \"\",\n  \"shareableLink\": \"\",\n  \"withMaterialText\": \"Printed notes + online access\",\n  \"withoutMaterialText\": \"Online-only access\",\n  \"packageTypeId\": \"{{package_type_id}}\",\n  \"goalId\": \"{{goal_id}}\",\n  \"pcMaterialId\": null,\n  \"educatorId\": null,\n  \"specificSubjects\": [\n    { \"category\": \"{{video_category_id}}\", \"order\": 1, \"status\": true }\n  ],\n  \"materialCategories\": [\n    { \"category\": \"{{material_category_id}}\", \"order\": 1, \"status\": true }\n  ],\n  \"examCategories\": [],\n  \"order\": 1,\n  \"active\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Embeds `specificSubjects`, `materialCategories`, `examCategories` directly (mirror of `Course.materialCategories[]` pattern). `goalId` replaces the old misleading `exam_id`. `withMaterialText`/`withoutMaterialText` are marketing strings — the real with-material flag lives on each pricing plan."
+                  },
+                  "response": [],
+                  "event": [
+                    {
+                      "listen": "test",
+                      "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                          "try { const id = pm.response.json()?.data?._id; if (id) pm.collectionVariables.set('package_id', id); } catch (e) {}"
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "name": "Update Package",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"description\": \"<p>Updated.</p>\",\n  \"active\": true\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Toggle Package Status",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/status",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "status"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Reorder Packages",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/reorder",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "reorder"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"orders\": [\n    { \"id\": \"{{package_id}}\", \"order\": 1 }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Package",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}"]
+                    },
+                    "description": "Blocked if package has any subscribers — archive (toggle active=false) instead. Cascades to chat and video-relation pivot; detaches plans."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Embedded Reorders",
+              "item": [
+                {
+                  "name": "Reorder Specific Subjects",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/specific-subjects/reorder",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "specific-subjects", "reorder"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"orders\": [\n    { \"category\": \"{{video_category_id}}\", \"order\": 1 }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Reorder Material Categories",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/material-categories/reorder",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "material-categories", "reorder"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"orders\": [\n    { \"category\": \"{{material_category_id}}\", \"order\": 1 }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Reorder Exam Categories",
+                  "request": {
+                    "method": "PATCH",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/exam-categories/reorder",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "exam-categories", "reorder"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"orders\": [\n    { \"category\": \"{{exam_category_id}}\", \"order\": 1 }\n  ]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Plans",
+              "item": [
+                {
+                  "name": "List Package Plans",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/plans",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "plans"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Attach Plans",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/plans/attach",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "plans", "attach"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"planIds\": [\"{{plan_id}}\"]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Reassigns existing `PackageCourseEbookPrice` rows to this package (nulls out any prior course/ebook link). A plan can only belong to one entity at a time."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Detach Plan",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/plans/{{plan_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "plans", "{{plan_id}}"]
+                    },
+                    "description": "Soft-detach — sets plan `status=false` (does not delete the plan record)."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Subscribers & Promoted",
+              "item": [
+                {
+                  "name": "List Subscribers",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/subscribers?page=1&limit=20",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "subscribers"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "20" }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "List Promoted Codes",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/promoted-codes",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "promoted-codes"]
+                    },
+                    "description": "All `PromotedPackageCourseEbook` rows whose `planId` belongs to this package."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Video-Category Relations",
+              "item": [
+                {
+                  "name": "List Relations",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/video-relations",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "video-relations"]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Set Relations (replace)",
+                  "request": {
+                    "method": "PUT",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/video-relations",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "video-relations"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"videoCategoryRelationIds\": [\"{{video_relation_id}}\"]\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Deactivates all existing relations for this package, then upserts the given relation ids as active. Controls which descendant video categories are included in the package."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Expand Subjects to Relations",
+                  "request": {
+                    "method": "POST",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/video-relations/expand",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "video-relations", "expand"]
+                    },
+                    "description": "BFS-walks the `VideoCategoryRelation` tree starting from `Package.specificSubjects`, then activates every descendant relation for this package. Replaces the old Laravel recursive `getChildIds()` function."
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Chat",
+              "item": [
+                {
+                  "name": "List Chat Messages",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/chat?page=1&limit=50",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "chat"],
+                      "query": [
+                        { "key": "page", "value": "1" },
+                        { "key": "limit", "value": "50" }
+                      ]
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Post Chat Message",
+                  "request": {
+                    "method": "POST",
+                    "header": [{ "key": "Content-Type", "value": "application/json" }],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/{{package_id}}/chat",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "{{package_id}}", "chat"]
+                    },
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"text\": \"Welcome to the package! Daily live sessions start next Monday.\",\n  \"mediaUrl\": \"\",\n  \"mediaType\": \"other\",\n  \"sendPush\": false\n}",
+                      "options": { "raw": { "language": "json" } }
+                    },
+                    "description": "Provide `text`, `mediaUrl`, or both. FCM push is stubbed (returns `pushSent: false`); wire it when `firebase-admin` is integrated."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Delete Chat Message",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/admin/packages/chat/{{package_chat_message_id}}",
+                      "host": ["{{URL}}"],
+                      "path": ["api", "v1", "admin", "packages", "chat", "{{package_chat_message_id}}"]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "13 Plan Management",
+          "description": "Standalone pricing-plan admin. Plans live in `ws_package_course_ebook_prices` and are mutually exclusive: each plan is attached to exactly one Course, Package, or Ebook. Use this folder for cross-entity listing, bulk ops, default toggling, and cloning.",
+          "item": [
+            {
+              "name": "List Plans",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/plans?page=1&limit=20",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "plans"],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "20" },
+                    { "key": "entityType", "value": "package", "disabled": true, "description": "course | package | ebook" },
+                    { "key": "courseId", "value": "{{course_id}}", "disabled": true },
+                    { "key": "packageId", "value": "{{package_id}}", "disabled": true },
+                    { "key": "ebookId", "value": "{{ebook_id}}", "disabled": true },
+                    { "key": "status", "value": "true", "disabled": true },
+                    { "key": "isDefault", "value": "true", "disabled": true },
+                    { "key": "withMaterial", "value": "true", "disabled": true },
+                    { "key": "search", "value": "", "disabled": true }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Plan by Id",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/plans/{{plan_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "plans", "{{plan_id}}"]
+                },
+                "description": "Returns the plan plus `promotedCount` (promo-code linkage count) and `subscriberCount`."
+              },
+              "response": []
+            },
+            {
+              "name": "Create Plan",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/plans",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "plans"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"3 Months\",\n  \"packageId\": \"{{package_id}}\",\n  \"duration\": 90,\n  \"price\": 2499,\n  \"withMaterial\": true,\n  \"materialPrice\": 500,\n  \"isDefault\": false,\n  \"status\": true\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Exactly one of `courseId`, `packageId`, `ebookId` must be set. If `isDefault=true`, any other default plan on the same entity is automatically unmarked."
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "try { const id = pm.response.json()?.data?._id; if (id) pm.collectionVariables.set('plan_id', id); } catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Update Plan",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/plans/{{plan_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "plans", "{{plan_id}}"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"price\": 1999,\n  \"materialPrice\": 400\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Entity attachment cannot be changed via PUT — use Clone Plan to move a plan."
+              },
+              "response": []
+            },
+            {
+              "name": "Toggle Plan Status",
+              "request": {
+                "method": "PATCH",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/plans/{{plan_id}}/status",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "plans", "{{plan_id}}", "status"]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Mark as Default",
+              "request": {
+                "method": "PATCH",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/plans/{{plan_id}}/default",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "plans", "{{plan_id}}", "default"]
+                },
+                "description": "Sets this plan as the default for its owning course/package/ebook and unmarks any other default on the same entity."
+              },
+              "response": []
+            },
+            {
+              "name": "Clone Plan",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/plans/{{plan_id}}/clone",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "plans", "{{plan_id}}", "clone"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"targetPackageId\": \"{{package_id}}\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Clones the plan onto a different course/package/ebook. Provide exactly one of `targetCourseId` / `targetPackageId` / `targetEbookId`. Cloned plan starts with `isDefault=false`."
+              },
+              "response": []
+            },
+            {
+              "name": "Bulk Toggle Status",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/plans/bulk-status",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "plans", "bulk-status"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ids\": [\"{{plan_id}}\"],\n  \"status\": false\n}",
+                  "options": { "raw": { "language": "json" } }
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Bulk Delete",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/plans/bulk-delete",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "plans", "bulk-delete"]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"ids\": [\"{{plan_id}}\"]\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "description": "Blocked if any of the plans have active subscribers."
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Plan",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/plans/{{plan_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api", "v1", "admin", "plans", "{{plan_id}}"]
+                },
+                "description": "Blocked if the plan has subscribers; archive (toggle status) instead. Also removes any `PromotedPackageCourseEbook` linkages."
+              },
+              "response": []
             }
           ]
         }
@@ -2991,6 +6837,116 @@
     {
       "key": "order_id",
       "value": ""
+    },
+    {
+      "key": "video_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "video_id_2",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ebook_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ebook_plan_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ebook_subscription_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "address_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "bank_account_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "referral_program_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "referral_transaction_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "customer_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "book_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "book_order_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "exam_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "exam_category_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "exam_question_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "exam_option_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "exam_attempt_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "material_category_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "material_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "package_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "package_type_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "package_chat_message_id",
+      "value": "",
+      "type": "string"
     }
   ]
 }

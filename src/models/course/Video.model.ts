@@ -1,11 +1,15 @@
 import mongoose, { Schema, Document } from "mongoose";
+import { VideoType } from "../enums";
 
 export type VideoPlatform = "youtube" | "aws" | "vimeo";
 
 export interface IVideo extends Document {
   videoCategoryId: mongoose.Types.ObjectId;
   title?: string;
+  topic?: string;
+  slug?: string;
   platform: VideoPlatform;
+  priceType: VideoType;
   youtube_id?: string;
   aws_id?: string;
   vimeo_id?: string;
@@ -19,7 +23,10 @@ const videoSchema: Schema = new Schema(
   {
     videoCategoryId: { type: Schema.Types.ObjectId, ref: "VideoCategory", required: true },
     title: { type: String, default: "" },
+    topic: { type: String, default: "" },
+    slug: { type: String, default: "" },
     platform: { type: String, enum: ["youtube", "aws", "vimeo"], required: true },
+    priceType: { type: String, enum: ["free", "paid"], default: "paid" },
     youtube_id: { type: String, default: null },
     aws_id: { type: String, default: null },
     vimeo_id: { type: String, default: null },

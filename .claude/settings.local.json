@@ -3,7 +3,15 @@
     "allow": [
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:4000/api)",
       "Bash(node /tmp/course_mgmt_full.mjs)",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(npx tsc *)",
+      "Read(//d//**)",
+      "Read(//mnt/**)",
+      "Read(//c/Users/pszan/**)",
+      "Bash(xargs grep *)",
+      "Bash(node *)",
+      "Bash(read f *)",
+      "Bash(awk '{ if \\(match\\($0, /[A-Z][a-zA-Z]+::class/\\)\\) { print substr\\($0, RSTART, RLENGTH\\) } }')"
     ]
   }
 }

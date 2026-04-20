@@ -82,6 +82,6 @@ const CustomerSchema = new Schema<ICustomer>(
 
 // Indexes for performance
 CustomerSchema.index({ status: 1, isAccountDeleted: 1 });
-CustomerSchema.index({ referralCode: 1 }, { sparse: true });
+CustomerSchema.index({ referralCode: 1 }, { unique: true, sparse: true });
 
 export const Customer = model<ICustomer>("Customer", CustomerSchema);

@@ -22,6 +22,8 @@ export type BookOrderType = (typeof BookOrderType)[keyof typeof BookOrderType];
 export const ExamType = {
   DAILY: "daily",
   SUBJECT: "subject",
+  MOCK: "mock",
+  WEEKLY: "weekly",
 } as const;
 export type ExamType = (typeof ExamType)[keyof typeof ExamType];
 
@@ -31,6 +33,43 @@ export const ExamResultType = {
   SKIP: "skip",
 } as const;
 export type ExamResultType = (typeof ExamResultType)[keyof typeof ExamResultType];
+
+export const ExamStatus = {
+  DRAFT: "draft",
+  SCHEDULED: "scheduled",
+  PUBLISHED: "published",
+  ARCHIVED: "archived",
+} as const;
+export type ExamStatus = (typeof ExamStatus)[keyof typeof ExamStatus];
+
+export const ExamAttemptStatus = {
+  IN_PROGRESS: "in_progress",
+  SUBMITTED: "submitted",
+  EXPIRED: "expired",
+  ABANDONED: "abandoned",
+} as const;
+export type ExamAttemptStatus = (typeof ExamAttemptStatus)[keyof typeof ExamAttemptStatus];
+
+export const ExamQuestionType = {
+  SINGLE: "single",
+  MULTI: "multi",
+} as const;
+export type ExamQuestionType = (typeof ExamQuestionType)[keyof typeof ExamQuestionType];
+
+export const ExamDifficulty = {
+  EASY: "easy",
+  MEDIUM: "medium",
+  HARD: "hard",
+} as const;
+export type ExamDifficulty = (typeof ExamDifficulty)[keyof typeof ExamDifficulty];
+
+export const ExamLanguage = {
+  ENGLISH: "en",
+  GUJARATI: "gu",
+  HINDI: "hi",
+  BILINGUAL: "bilingual",
+} as const;
+export type ExamLanguage = (typeof ExamLanguage)[keyof typeof ExamLanguage];
 
 export const PaymentMethod = {
   BACKEND: "Backend",
@@ -96,6 +135,22 @@ export const RefferalTransactionStatus = {
 } as const;
 export type RefferalTransactionStatus =
   (typeof RefferalTransactionStatus)[keyof typeof RefferalTransactionStatus];
+
+export const BookOrderStatus = {
+  PENDING: "pending",
+  VERIFIED: "verified",
+  SHIPPED: "shipped",
+  DELIVERED: "delivered",
+  CANCELLED: "cancelled",
+  FAILED: "failed",
+} as const;
+export type BookOrderStatus = (typeof BookOrderStatus)[keyof typeof BookOrderStatus];
+
+export const BookCourier = {
+  MAHAVIR: "mahavir",
+  TIRUPATI: "tirupati",
+} as const;
+export type BookCourier = (typeof BookCourier)[keyof typeof BookCourier];
 
 export const OsType = {
   ANDROID: "android",

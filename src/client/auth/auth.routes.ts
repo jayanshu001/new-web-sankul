@@ -1,5 +1,6 @@
 import { Router } from "express";
-import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpHandler } from "./auth.controller";
+import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpHandler, logoutHandler } from "./auth.controller";
+import authenticate from "../../middlewares/authenticate";
 import { otpLimiter } from "../../config/rateLimiter";
 
 const router = Router();
@@ -33,5 +34,12 @@ router.post("/otp/validate", validateOtpHandler);
  * @access Public
  */
 router.post("/token/refresh", refreshTokenHandler);
+
+/**
+ * @route  DELETE /api/v1/client/auth/logout
+ * @desc   Invalidate all tokens and clear session
+ * @access Private (Customer)
+ */
+router.delete("/logout", authenticate, logoutHandler);
 
 export default router;

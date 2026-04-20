@@ -6,6 +6,8 @@ export interface IPackageCourseSubscription extends Document {
   packageId: mongoose.Types.ObjectId;
   customerShippingId?: mongoose.Types.ObjectId | null;
   trackingId?: number | null;
+  startAt?: Date | null;
+  endAt?: Date | null;
   status: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -18,6 +20,8 @@ const packageCourseSubscriptionSchema: Schema = new Schema(
     packageId: { type: Schema.Types.ObjectId, ref: "PackageCourseEbookPrice", required: true },
     customerShippingId: { type: Schema.Types.ObjectId, ref: "CustomerShipping", default: null },
     trackingId: { type: Number, default: null },
+    startAt: { type: Date, default: null },
+    endAt: { type: Date, default: null },
     status: { type: Boolean, default: true },
   },
   { timestamps: true }

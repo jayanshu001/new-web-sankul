@@ -45,3 +45,10 @@ export const shippingBodySchema = z.object({
 });
 
 export type ShippingBody = z.infer<typeof shippingBodySchema>;
+
+export const lectureQuerySchema = z.object({
+  id: z.string().regex(objectIdRegex, "Invalid video ID"),
+  course: z.string().regex(objectIdRegex, "Invalid course ID").optional(),
+  package: z.string().regex(objectIdRegex, "Invalid package ID").optional(),
+  type: z.enum(["course", "package"]),
+});

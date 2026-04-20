@@ -365,7 +365,24 @@ export async function validateOtp(
 }
 
 /**
- * Step 3 — Refresh Token Logic.
+ * Step 3 — Logout: invalidate all tokens.
+ */
+export async function logoutCustomer(customerId: string, traceId?: string): Promise<{
+  ok: boolean;
+  message: string;
+}> {
+  logger.info("logoutCustomer service invoked", { traceId, customerId });
+  await CustomerAccessToken.updateMany(
+    { customerId },
+    { active: false, deleted: true }
+  );
+  await redisClient.del(`customer_session:${customerId}`);
+  logger.info("logoutCustomer service completed", { traceId, customerId });
+  return { ok: true, message: "Logged out successfully." };
+}
+
+/**
+ * Step 4 — Refresh Token Logic.
  */
 export async function refreshCustomerToken(refreshToken: string, traceId?: string) {
   logger.info("refreshCustomerToken service invoked", { traceId });

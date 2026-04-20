@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
-import { generateOtp, validateOtp, refreshCustomerToken, resendOtp } from "./auth.service";
+import { generateOtp, validateOtp, refreshCustomerToken, resendOtp, logoutCustomer } from "./auth.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 
 /**
@@ -110,6 +110,28 @@ export const refreshTokenHandler = async (req: Request, res: Response) => {
     );
   } catch (err) {
     logger.error("refreshTokenHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+/**
+ * DELETE /api/v1/client/auth/logout
+ * Requires: Bearer token
+ */
+export const logoutHandler = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("logoutHandler invoked", { traceId, userId });
+  try {
+    if (!userId) {
+      logger.warn("logoutHandler unauthorized", { traceId });
+      return failure(res, "Unauthorized request.", 401);
+    }
+    const result = await logoutCustomer(userId, traceId);
+    logger.info("logoutHandler success", { traceId, userId });
+    return success(res, {}, result.message, 200);
+  } catch (err) {
+    logger.error("logoutHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
   }
 };

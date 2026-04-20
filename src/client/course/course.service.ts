@@ -4,6 +4,7 @@ import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
 import { Video } from "../../models/course/Video.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
+import { Material } from "../../models/course/Material.model";
 import { ExamCategory } from "../../models/course/ExamCategory.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
@@ -66,13 +67,21 @@ export interface CourseDetailsResponse {
 }
 
 /**
- * Matches websankul-api-staging: both helpers are active stubs that always
- * return "". The real recursion (commented out in staging) requires a Material
- * and Exam entity model that counts items in the leaf category; until those
- * collections are wired up, we return "" to preserve client compatibility.
+ * Recursively counts leaf Materials under a MaterialCategory subtree.
+ * Returns a stringified count to preserve wire compatibility with the old API
+ * (which typed this as string and always returned "").
  */
-export async function findMaterialCounts(_id: Types.ObjectId | string): Promise<string> {
-  return "";
+export async function findMaterialCounts(id: Types.ObjectId | string): Promise<string> {
+  const children = await MaterialCategory.find({ parent: id, status: true })
+    .select("_id")
+    .lean();
+  if (children.length === 0) {
+    const count = await Material.countDocuments({ materialCategoryId: id, status: true });
+    return String(count);
+  }
+  const counts = await Promise.all(children.map((c) => findMaterialCounts(c._id as any)));
+  const total = counts.reduce((a, b) => a + Number(b || 0), 0);
+  return String(total);
 }
 
 export async function findExamCounts(_id: Types.ObjectId | string): Promise<string> {

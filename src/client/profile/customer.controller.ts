@@ -5,6 +5,8 @@ import {
   getCustomerProfile,
   upsertCustomerProfilePicture,
   deleteCustomerProfilePicture,
+  deleteCustomerAccount,
+  updateCustomerFirebaseToken,
 } from "./customer.service";
 import logger from "../../utils/logger";
 
@@ -19,7 +21,7 @@ export const updateProfileHandler = async (req: Request, res: Response) => {
       return failure(res, "Unauthorized request.", 401);
     }
 
-    const { firstName, middleName, lastName, email, goals } = req.body;
+    const { firstName, middleName, lastName, email, goals, phone2, dob, gender, stateId, districtId, city, educationId, language } = req.body;
 
     const result = await updateCustomerProfile(userId, {
       firstName,
@@ -27,6 +29,14 @@ export const updateProfileHandler = async (req: Request, res: Response) => {
       lastName,
       email,
       goals,
+      phone2,
+      dob,
+      gender,
+      stateId,
+      districtId,
+      city,
+      educationId,
+      language,
     }, traceId);
 
     if (!result.ok) {
@@ -122,6 +132,52 @@ export const upsertProfilePictureHandler = async (req: Request, res: Response) =
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+/**
+ * DELETE /api/v1/client/profile
+ * Soft-deletes the authenticated customer's account and invalidates all tokens.
+ */
+export const deleteAccountHandler = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("deleteAccountHandler invoked", { traceId, userId });
+  try {
+    if (!userId) {
+      logger.warn("deleteAccountHandler unauthorized", { traceId });
+      return failure(res, "Unauthorized request.", 401);
+    }
+    const result = await deleteCustomerAccount(userId, traceId);
+    if (!result.ok) return failure(res, result.message, 404);
+    logger.info("deleteAccountHandler success", { traceId, userId });
+    return success(res, {}, result.message, 200);
+  } catch (err) {
+    logger.error("deleteAccountHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+/**
+ * PATCH /api/v1/client/profile/firebase-token
+ * Body: { phoneNumber: string; firebaseToken: string }
+ * No auth required — called immediately after login on device.
+ */
+export const updateFirebaseTokenHandler = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("updateFirebaseTokenHandler invoked", { traceId });
+  try {
+    const { phoneNumber, firebaseToken } = req.body;
+    if (!phoneNumber || !firebaseToken) {
+      return failure(res, "phoneNumber and firebaseToken are required.", 422);
+    }
+    const result = await updateCustomerFirebaseToken(String(phoneNumber), String(firebaseToken), traceId);
+    if (!result.ok) return failure(res, result.message, 404);
+    logger.info("updateFirebaseTokenHandler success", { traceId });
+    return success(res, {}, result.message, 200);
+  } catch (err) {
+    logger.error("updateFirebaseTokenHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
   }
 };

@@ -25,6 +25,14 @@ import {
   updateCoursePlan,
   deleteCoursePlan,
 } from "./course.controller";
+import {
+  getVideos,
+  getVideoById,
+  createVideo,
+  updateVideo,
+  deleteVideo,
+  reorderVideos,
+} from "./video.controller";
 
 const router = Router();
 
@@ -65,5 +73,13 @@ router.post("/:id/plans", createCoursePlan);
 router.get("/plans/:planId", getCoursePlanById);
 router.put("/plans/:planId", updateCoursePlan);
 router.delete("/plans/:planId", deleteCoursePlan);
+
+// Videos
+router.get("/videos", getVideos);
+router.post("/videos", createVideo);
+router.post("/videos/reorder", reorderVideos);
+router.get("/videos/:videoId", getVideoById);
+router.put("/videos/:videoId", updateVideo);
+router.delete("/videos/:videoId", deleteVideo);
 
 export default router;

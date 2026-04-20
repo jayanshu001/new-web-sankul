@@ -33,6 +33,23 @@ export const createMaterialSchema = z.object({
 
 export const updateMaterialSchema = createMaterialSchema.partial();
 
+// Video Validation
+export const createVideoSchema = z.object({
+  videoCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId"),
+  title: z.string().min(1, "Title is required"),
+  topic: z.string().optional().default(""),
+  slug: z.string().min(1, "Slug is required"),
+  platform: z.enum(["youtube", "aws", "vimeo"]),
+  priceType: z.enum(["free", "paid"]).optional().default("paid"),
+  youtube_id: z.string().optional(),
+  aws_id: z.string().optional(),
+  vimeo_id: z.string().optional(),
+  order: z.number().int().optional().default(0),
+  status: z.boolean().optional().default(true),
+});
+
+export const updateVideoSchema = createVideoSchema.partial();
+
 // Video Category Validation
 export const createVideoCategorySchema = z.object({
   title: z.string().min(1, "Title is required"),

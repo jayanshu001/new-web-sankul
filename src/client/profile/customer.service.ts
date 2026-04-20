@@ -1,6 +1,7 @@
 import logger from "../../utils/logger";
 import { Types } from "mongoose";
 import { Customer } from "../../models/customer/Customer.model";
+import { CustomerAccessToken } from "../../models/customer/CustomerAccessToken.model";
 import { Goal } from "../../models/Goal.model";
 import { redisClient } from "../../config/redis";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
@@ -14,7 +15,15 @@ interface IProfileUpdateData {
   middleName?: string;
   lastName?: string;
   email?: string;
-  goals?: string[]; // Array of ObjectIds as strings
+  goals?: string[];
+  phone2?: string;
+  dob?: string;
+  gender?: string;
+  stateId?: string;
+  districtId?: string;
+  city?: string;
+  educationId?: string;
+  language?: string;
 }
 
 export async function updateCustomerProfile(customerId: string, data: IProfileUpdateData, traceId?: string) {
@@ -26,6 +35,14 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
     if (data.firstName !== undefined) updatePayload.firstName = data.firstName;
     if (data.middleName !== undefined) updatePayload.middleName = data.middleName;
     if (data.lastName !== undefined) updatePayload.lastName = data.lastName;
+    if (data.phone2 !== undefined) updatePayload.phone2 = data.phone2;
+    if (data.dob !== undefined) updatePayload.dob = data.dob ? new Date(data.dob) : null;
+    if (data.gender !== undefined) updatePayload.gender = data.gender;
+    if (data.stateId !== undefined) updatePayload.stateId = data.stateId || null;
+    if (data.districtId !== undefined) updatePayload.districtId = data.districtId || null;
+    if (data.city !== undefined) updatePayload.city = data.city;
+    if (data.educationId !== undefined) updatePayload.educationId = data.educationId || null;
+    if (data.language !== undefined) updatePayload.language = data.language;
 
     // Explicitly handle goals if provided
     if (data.goals !== undefined) {
@@ -273,6 +290,47 @@ export async function upsertCustomerProfilePicture(
       stack: (error as Error).stack,
     });
     return { ok: false, message: "An error occurred while updating profile picture." };
+  }
+}
+
+export async function deleteCustomerAccount(customerId: string, traceId?: string) {
+  logger.info("deleteCustomerAccount service invoked", { traceId, customerId });
+  try {
+    const customer = await Customer.findOneAndUpdate(
+      { _id: customerId, isAccountDeleted: false },
+      { $set: { isAccountDeleted: true, status: false } },
+      { new: true }
+    );
+    if (!customer) {
+      logger.warn("deleteCustomerAccount service customer not found", { traceId, customerId });
+      return { ok: false, message: "Customer not found." };
+    }
+    await CustomerAccessToken.updateMany({ customerId }, { active: false, deleted: true });
+    await redisClient.del(`customer_session:${customerId}`);
+    logger.info("deleteCustomerAccount service completed", { traceId, customerId });
+    return { ok: true, message: "Account deleted successfully." };
+  } catch (error) {
+    logger.error("deleteCustomerAccount service error", { traceId, customerId, error: (error as Error).message });
+    return { ok: false, message: "An error occurred while deleting account." };
+  }
+}
+
+export async function updateCustomerFirebaseToken(phoneNumber: string, firebaseToken: string, traceId?: string) {
+  logger.info("updateCustomerFirebaseToken service invoked", { traceId, phoneNumber });
+  try {
+    const customer = await Customer.findOneAndUpdate(
+      { phoneNumber, isAccountDeleted: false },
+      { $set: { firebaseToken } }
+    );
+    if (!customer) {
+      logger.warn("updateCustomerFirebaseToken service customer not found", { traceId, phoneNumber });
+      return { ok: false, message: "Customer not found." };
+    }
+    logger.info("updateCustomerFirebaseToken service completed", { traceId, phoneNumber });
+    return { ok: true, message: "Firebase token updated." };
+  } catch (error) {
+    logger.error("updateCustomerFirebaseToken service error", { traceId, phoneNumber, error: (error as Error).message });
+    return { ok: false, message: "An error occurred while updating firebase token." };
   }
 }
 

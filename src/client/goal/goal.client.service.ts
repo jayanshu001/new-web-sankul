@@ -1,10 +1,12 @@
 import logger from "../../utils/logger";
+import { Types } from "mongoose";
 import { Goal } from "../../models/Goal.model";
 import { Customer } from "../../models/customer/Customer.model";
 import { redisClient } from "../../config/redis";
 
 const ACTIVE_GOALS_CACHE_KEY = "cache:client:goals:active";
 const MY_SELECTED_GOALS_CACHE_PREFIX = "cache:client:goals:selected:";
+const PROFILE_CACHE_PREFIX = "cache:client:profile:";
 
 export const getActiveGoals = async (traceId?: string) => {
   logger.info("getActiveGoals service invoked", { traceId });
@@ -33,6 +35,83 @@ export const getActiveGoals = async (traceId?: string) => {
 
   logger.info("getActiveGoals service completed", { traceId, count: goals.length });
   return goals;
+};
+
+/**
+ * Updates the customer's selected goal labels.
+ * Accepts an array of goal-label ObjectIds; invalid IDs are filtered out.
+ */
+export const updateMyGoals = async (customerId: string, goals: string[], traceId?: string) => {
+  logger.info("updateMyGoals service invoked", { traceId, customerId, goalCount: goals?.length });
+  try {
+    if (!Array.isArray(goals)) {
+      return { ok: false, message: "Goals must be an array of IDs." };
+    }
+    const validGoals = goals.filter((id) => Types.ObjectId.isValid(id));
+
+    const customer = await Customer.findByIdAndUpdate(
+      customerId,
+      { $set: { goals: validGoals } },
+      { new: true }
+    ).select("goals");
+
+    if (!customer) {
+      logger.warn("updateMyGoals service customer not found", { traceId, customerId });
+      return { ok: false, message: "Customer not found." };
+    }
+
+    try {
+      await redisClient.del(
+        `${MY_SELECTED_GOALS_CACHE_PREFIX}${customerId}`,
+        `${PROFILE_CACHE_PREFIX}${customerId}`
+      );
+    } catch (err) {
+      logger.warn("updateMyGoals cache invalidation failed", { traceId, customerId, error: (err as Error).message });
+    }
+
+    logger.info("updateMyGoals service completed", { traceId, customerId, count: validGoals.length });
+    return { ok: true, data: { goals: validGoals }, message: "Goals updated successfully." };
+  } catch (error) {
+    logger.error("updateMyGoals service error", { traceId, customerId, error: (error as Error).message });
+    return { ok: false, message: "Failed to update goals." };
+  }
+};
+
+/**
+ * Returns all active goals with an isSelected flag per label for the given customer.
+ */
+export const getGoalsWithSelection = async (customerId: string, traceId?: string) => {
+  logger.info("getGoalsWithSelection service invoked", { traceId, customerId });
+  try {
+    const customer = await Customer.findById(customerId).select("goals");
+    if (!customer) {
+      return { ok: false, message: "Customer not found." };
+    }
+    const selectedSet = new Set((customer.goals || []).map((id) => id.toString()));
+
+    const goals = await Goal.find({ isActive: true })
+      .select("title image labels")
+      .sort({ createdAt: 1 });
+
+    const shaped = goals.map((g) => {
+      const doc = g.toObject();
+      return {
+        _id: doc._id,
+        title: doc.title,
+        image: doc.image,
+        labels: doc.labels.map((label: any) => ({
+          _id: label._id,
+          name: label.name,
+          isSelected: selectedSet.has(label._id?.toString()),
+        })),
+      };
+    });
+
+    return { ok: true, data: shaped };
+  } catch (error) {
+    logger.error("getGoalsWithSelection service error", { traceId, customerId, error: (error as Error).message });
+    return { ok: false, message: "Failed to fetch goals." };
+  }
 };
 
 /**

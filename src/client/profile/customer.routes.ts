@@ -6,6 +6,8 @@ import {
   getProfileHandler,
   upsertProfilePictureHandler,
   deleteProfilePictureHandler,
+  deleteAccountHandler,
+  updateFirebaseTokenHandler,
 } from "./customer.controller";
 
 const router = Router();
@@ -42,5 +44,19 @@ router.put(
  * @access Private (Customer)
  */
 router.delete("/profile-picture", authenticate, deleteProfilePictureHandler);
+
+/**
+ * @route  PATCH /api/v1/client/profile/firebase-token
+ * @desc   Update firebase token by phone number (post-login sync from device)
+ * @access Public
+ */
+router.patch("/firebase-token", updateFirebaseTokenHandler);
+
+/**
+ * @route  DELETE /api/v1/client/profile
+ * @desc   Soft-delete the authenticated customer's account
+ * @access Private (Customer)
+ */
+router.delete("/", authenticate, deleteAccountHandler);
 
 export default router;
