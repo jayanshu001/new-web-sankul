@@ -40,7 +40,7 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
     const role = decoded.role ?? "customer";
 
     // Enforce 1 active device rule for customers
-    if (role === "customer" && decoded.type !== "admin") {
+    if (decoded.type === "customer") {
       const activeToken = await redisClient.get(`customer_session:${decoded.id}`);
       if (!activeToken || activeToken !== token) {
         return failure(res, "Session expired or logged in on another device.", 401);

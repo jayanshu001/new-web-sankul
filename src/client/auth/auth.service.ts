@@ -127,18 +127,27 @@ export async function generateOtp(rawPhone: string, traceId?: string): Promise<{
   } else {
     // Create new stub customer
     isNewUser = true;
-    const created = await Customer.create({
-      phoneNumber: phone,
-      isPhoneVerified: false,
-      verified: false,
-      otp,
-      otpExpiresAt: expiresAt,
-      triedOtp: 0,
-      loginCount: 1,
-      isAccountDeleted: false,
-      status: true,
-    });
-    logger.info("generateOtp service new user created", { traceId, phone, customerId: created._id });
+    try {
+      const created = await Customer.create({
+        phoneNumber: phone,
+        isPhoneVerified: false,
+        verified: false,
+        otp,
+        otpExpiresAt: expiresAt,
+        triedOtp: 0,
+        loginCount: 1,
+        isAccountDeleted: false,
+        status: true,
+      });
+      logger.info("generateOtp service new user created", { traceId, phone, customerId: created._id });
+    } catch (err: any) {
+      if (err?.code === 11000) {
+        // Concurrent signup — phone already registered, treat as existing user
+        logger.warn("generateOtp service duplicate phone race condition", { traceId, phone });
+        return { ok: false, message: "Please wait before requesting a new OTP." };
+      }
+      throw err;
+    }
   }
 
   // Log OTP in history
@@ -308,13 +317,13 @@ export async function validateOtp(
 
   // Issue new JWT
   const token = jwt.sign(
-    { id: customer._id.toString(), phone: customer.phoneNumber, role: "customer" },
+    { id: customer._id.toString(), phone: customer.phoneNumber, role: "customer", type: "customer" },
     JWT_SECRET,
     { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` }
   );
 
   const refreshToken = jwt.sign(
-    { id: customer._id.toString(), phone: customer.phoneNumber, role: "customer" },
+    { id: customer._id.toString(), phone: customer.phoneNumber, role: "customer", type: "customer" },
     JWT_REFRESH_SECRET,
     { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` }
   );
@@ -421,13 +430,13 @@ export async function refreshCustomerToken(refreshToken: string, traceId?: strin
 
     // Issue new pair
     const newToken = jwt.sign(
-      { id: customer._id.toString(), phone: customer.phoneNumber, role: "customer" },
+      { id: customer._id.toString(), phone: customer.phoneNumber, role: "customer", type: "customer" },
       JWT_SECRET,
       { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` }
     );
 
     const newRefreshToken = jwt.sign(
-      { id: customer._id.toString(), phone: customer.phoneNumber, role: "customer" },
+      { id: customer._id.toString(), phone: customer.phoneNumber, role: "customer", type: "customer" },
       JWT_REFRESH_SECRET,
       { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` }
     );

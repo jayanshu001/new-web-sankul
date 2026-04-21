@@ -4,7 +4,7 @@ const objectIdSchema = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id.");
 
 export const saveAnswersSchema = z.object({
   examId: objectIdSchema,
-  timing: z.string().min(1).max(20),
+  timing: z.string().regex(/^\d{1,3}:\d{2}(:\d{2})?$/, "Timing must be in MM:SS or HH:MM:SS format."),
   test: z
     .array(
       z.object({

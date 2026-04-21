@@ -25,6 +25,7 @@ const CustomerAccessTokenSchema = new Schema<ICustomerAccessToken>(
 CustomerAccessTokenSchema.index({ customerId: 1 });
 CustomerAccessTokenSchema.index({ token: 1 });
 CustomerAccessTokenSchema.index({ refreshToken: 1 });
+CustomerAccessTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const CustomerAccessToken = model<ICustomerAccessToken>(
   "CustomerAccessToken",

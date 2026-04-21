@@ -170,7 +170,7 @@ export const getExams = async (req: Request, res: Response) => {
     if (isPaid === "true" || isPaid === "false") filter.isPaid = isPaid === "true";
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
     const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
@@ -327,7 +327,7 @@ export const getQuestions = async (req: Request, res: Response) => {
     if (status === "true" || status === "false") filter.status = status === "true";
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 50, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
     const skip = (pageNum - 1) * limitNum;
 
     const [questions, total] = await Promise.all([
@@ -410,8 +410,8 @@ export const createQuestion = async (req: Request, res: Response) => {
         image: o.image ?? null,
         orderBy: o.orderBy ?? idx,
       }));
-      await ExamQuestionOption.insertMany(optionDocs, { session });
-      created = { ...q.toObject(), options: optionDocs };
+      const insertedOptions = await ExamQuestionOption.insertMany(optionDocs, { session });
+      created = { ...q.toObject(), options: insertedOptions };
     });
 
     return res.status(201).json({ success: true, data: created });
@@ -463,8 +463,8 @@ export const bulkCreateQuestions = async (req: Request, res: Response) => {
           image: o.image ?? null,
           orderBy: o.orderBy ?? idx,
         }));
-        await ExamQuestionOption.insertMany(optionDocs, { session });
-        created.push({ ...doc.toObject(), options: optionDocs });
+        const insertedOptions = await ExamQuestionOption.insertMany(optionDocs, { session });
+        created.push({ ...doc.toObject(), options: insertedOptions });
       }
     });
     return res.status(201).json({ success: true, data: created, count: created.length });
@@ -583,7 +583,7 @@ export const getExamSubmissions = async (req: Request, res: Response) => {
 
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
     const skip = (pageNum - 1) * limitNum;
 
     const filter = { examId };

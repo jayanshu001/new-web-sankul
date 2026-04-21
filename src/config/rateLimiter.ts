@@ -2,10 +2,10 @@ import rateLimit from "express-rate-limit";
 import RedisStore from "rate-limit-redis";
 import { redisClient, isRedisReady } from "./redis";
 
-// Global API rate limiter (Anti-DDOS)
+// Global API rate limiter (Anti-DDOS) — 60 req/min per IP
 export const globalLimiter = rateLimit({
-  windowMs: 1 * 60 * 1000, // 1 minute
-  max: 200,
+  windowMs: 1 * 60 * 1000,
+  max: 60,
   standardHeaders: true,
   legacyHeaders: false,
   message: {

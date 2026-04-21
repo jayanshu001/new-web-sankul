@@ -273,46 +273,50 @@ export const saveAnswers = async (req: Request, res: Response) => {
     }
     const attempt = total - skip;
 
-    const examResult = await ExamResult.findOneAndUpdate(
-      { customerId, examId: data.examId },
-      {
-        $set: {
-          customerId,
-          examId: data.examId,
-          total,
-          attempt,
-          skip,
-          success,
-          failed,
-          score: Math.round(score * 100) / 100,
-          timing: data.timing,
-          ratting: data.ratting ?? null,
-          status: true,
-        },
-      },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
-
-    for (const d of details) {
-      await ExamResultDetail.updateOne(
-        {
-          customerId,
-          examId: data.examId,
-          questionId: d.questionId,
-        },
-        {
-          $set: {
-            examResultId: examResult._id,
-            customerId,
-            examId: data.examId,
-            questionId: d.questionId,
-            answerId: d.answerId,
-            result: d.result,
-            point: d.point,
+    let examResult: any;
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        examResult = await ExamResult.findOneAndUpdate(
+          { customerId, examId: data.examId },
+          {
+            $set: {
+              customerId,
+              examId: data.examId,
+              total,
+              attempt,
+              skip,
+              success,
+              failed,
+              score: Math.round(score * 100) / 100,
+              timing: data.timing,
+              ratting: data.ratting ?? null,
+              status: true,
+            },
           },
-        },
-        { upsert: true }
-      );
+          { new: true, upsert: true, setDefaultsOnInsert: true, session }
+        );
+
+        for (const d of details) {
+          await ExamResultDetail.updateOne(
+            { customerId, examId: data.examId, questionId: d.questionId },
+            {
+              $set: {
+                examResultId: examResult._id,
+                customerId,
+                examId: data.examId,
+                questionId: d.questionId,
+                answerId: d.answerId,
+                result: d.result,
+                point: d.point,
+              },
+            },
+            { upsert: true, session }
+          );
+        }
+      });
+    } finally {
+      session.endSession();
     }
 
     await recomputeAnalytics(customerId);
@@ -444,7 +448,7 @@ export const listMyResults = async (req: Request, res: Response) => {
 
     const { page = "1", limit = "20", examId } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
     const skip = (pageNum - 1) * limitNum;
 
     const filter: any = { customerId, status: true };

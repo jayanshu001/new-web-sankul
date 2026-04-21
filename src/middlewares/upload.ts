@@ -36,14 +36,17 @@ export const uploadS3 = multer({
     fileSize: 5 * 1024 * 1024, // 5 MB ceiling
   },
   fileFilter: (req, file, cb) => {
+    if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
+      return cb(new Error("File uploads are disabled: DigitalOcean Spaces credentials are not configured."));
+    }
+
     const allowedTypes = /jpeg|jpg|png|webp/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
 
     if (mimetype && extname) {
-      return cb(null, true); // Allow
+      return cb(null, true);
     }
-    // Reject
     cb(new Error("Invalid file type. Only JPEG, PNG, and WebP images are allowed."));
   },
 });

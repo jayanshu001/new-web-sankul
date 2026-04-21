@@ -44,9 +44,10 @@ app.use(
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
 // 3) Stricter API CORS (handles preflight)
-const allowedOrigins = [
-  "http://localhost:3000",
-];
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:3000")
+  .split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
 
 app.use(
   cors({
@@ -133,6 +134,9 @@ app.use(captureCrashContextMiddleware());
 // --- Health/Index ----------------------------------------------------------
 app.get("/index.php", async (_req, res) => res.json({ Project: "AppNameUpdateHere" }));
 app.get("/api", (_req, res) => res.json({ Project: "AppNameUpdateHere" }));
+
+// --- Global Rate Limiter ---------------------------------------------------
+app.use(globalLimiter);
 
 // --- Routes ----------------------------------------------------------------
 // Master Client Routes (Mobile App / Web Portal)

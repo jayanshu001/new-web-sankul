@@ -26,6 +26,7 @@ const AdminAccessTokenSchema = new Schema<IAdminAccessToken>(
 AdminAccessTokenSchema.index({ adminUserId: 1 });
 AdminAccessTokenSchema.index({ token: 1 });
 AdminAccessTokenSchema.index({ refreshToken: 1 });
+AdminAccessTokenSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const AdminAccessToken = model<IAdminAccessToken>(
   "AdminAccessToken",

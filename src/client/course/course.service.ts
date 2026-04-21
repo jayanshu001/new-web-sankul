@@ -145,63 +145,55 @@ export async function buildCourseDetails(
     })
   );
 
-  // Materials (from embedded join, preserve order)
+  // Materials — batch all child-count queries in parallel
   const materialRefs = [...((courseDoc as any).materialCategories ?? [])].sort(
     (a: any, b: any) => (a.order ?? 0) - (b.order ?? 0)
   );
-  const materials: CategoryDTO[] = (
-    await Promise.all(
-      materialRefs.map(async (ref: any) => {
-        const cat = ref.category;
-        if (!cat || cat.status !== true) return null;
-        const [childCount, count] = await Promise.all([
-          MaterialCategory.countDocuments({ parent: cat._id }),
-          findMaterialCounts(cat._id),
-        ]);
-        return {
-          _id: cat._id,
-          title: cat.title,
-          image: cat.image ?? null,
-          parent: cat.parent ?? null,
-          order: cat.order,
-          status: cat.status,
-          havingChildDirectory: childCount > 0,
-          count,
-          createdAt: cat.createdAt,
-          updatedAt: cat.updatedAt,
-        } as CategoryDTO;
-      })
-    )
-  ).filter((x): x is CategoryDTO => x !== null);
+  const activeMaterialCats = materialRefs
+    .map((ref: any) => ref.category)
+    .filter((cat: any) => cat && cat.status === true);
+  const materialCatIds = activeMaterialCats.map((cat: any) => cat._id);
+  const [materialChildCounts, materialCountStrs] = await Promise.all([
+    Promise.all(materialCatIds.map((id: any) => MaterialCategory.countDocuments({ parent: id }))),
+    Promise.all(materialCatIds.map((id: any) => findMaterialCounts(id))),
+  ]);
+  const materials: CategoryDTO[] = activeMaterialCats.map((cat: any, i: number) => ({
+    _id: cat._id,
+    title: cat.title,
+    image: cat.image ?? null,
+    parent: cat.parent ?? null,
+    order: cat.order,
+    status: cat.status,
+    havingChildDirectory: materialChildCounts[i] > 0,
+    count: materialCountStrs[i],
+    createdAt: cat.createdAt,
+    updatedAt: cat.updatedAt,
+  }));
 
-  // Exams (same pattern)
+  // Exams — batch all child-count queries in parallel
   const examRefs = [...((courseDoc as any).examCategories ?? [])].sort(
     (a: any, b: any) => (a.order ?? 0) - (b.order ?? 0)
   );
-  const exams: CategoryDTO[] = (
-    await Promise.all(
-      examRefs.map(async (ref: any) => {
-        const cat = ref.category;
-        if (!cat || cat.status !== true) return null;
-        const [childCount, count] = await Promise.all([
-          ExamCategory.countDocuments({ parentId: cat._id }),
-          findExamCounts(cat._id),
-        ]);
-        return {
-          _id: cat._id,
-          title: cat.name,
-          image: cat.image ?? null,
-          parent: cat.parentId ?? null,
-          order: cat.orderBy,
-          status: cat.status,
-          havingChildDirectory: childCount > 0,
-          count,
-          createdAt: cat.createdAt,
-          updatedAt: cat.updatedAt,
-        } as CategoryDTO;
-      })
-    )
-  ).filter((x): x is CategoryDTO => x !== null);
+  const activeExamCats = examRefs
+    .map((ref: any) => ref.category)
+    .filter((cat: any) => cat && cat.status === true);
+  const examCatIds = activeExamCats.map((cat: any) => cat._id);
+  const [examChildCounts, examCountStrs] = await Promise.all([
+    Promise.all(examCatIds.map((id: any) => ExamCategory.countDocuments({ parentId: id }))),
+    Promise.all(examCatIds.map((id: any) => findExamCounts(id))),
+  ]);
+  const exams: CategoryDTO[] = activeExamCats.map((cat: any, i: number) => ({
+    _id: cat._id,
+    title: cat.name,
+    image: cat.image ?? null,
+    parent: cat.parentId ?? null,
+    order: cat.orderBy,
+    status: cat.status,
+    havingChildDirectory: examChildCounts[i] > 0,
+    count: examCountStrs[i],
+    createdAt: cat.createdAt,
+    updatedAt: cat.updatedAt,
+  }));
 
   // Plans
   const AllPlans = await PackageCourseEbookPrice.find({

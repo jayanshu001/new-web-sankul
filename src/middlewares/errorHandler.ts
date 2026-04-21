@@ -26,6 +26,10 @@ export class HttpError extends Error implements AppError {
   }
 }
 
+// Prevent email floods — max one notification per unique error message per minute
+const _errorEmailCooldown = new Map<string, number>();
+const ERROR_EMAIL_COOLDOWN_MS = 60_000;
+
 const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
   const appErr = err as AppError;
 
@@ -63,8 +67,14 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
     });
   }
 
-  // Fire-and-forget email for 5xx only (don’t slow down the response)
+  // Fire-and-forget email for 5xx only — debounced to 1 per unique error per minute
   if (statusCode >= 500) {
+    const cooldownKey = `${statusCode}:${message}`;
+    const lastSent = _errorEmailCooldown.get(cooldownKey) ?? 0;
+    const shouldSend = Date.now() - lastSent > ERROR_EMAIL_COOLDOWN_MS;
+    if (shouldSend) _errorEmailCooldown.set(cooldownKey, Date.now());
+    if (!shouldSend) return;
+
     const emailTo = "ranavinit6834@gmail.com";
     const subject = `Web Sankul API Error: ${statusCode}`;
     const emailBody = `

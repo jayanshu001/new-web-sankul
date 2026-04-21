@@ -117,6 +117,10 @@ export async function createAdminUser(data: {
     return { ok: false, message: "Admin with this email already exists." };
   }
 
+  if (data.password.length < 8) {
+    return { ok: false, message: "Password must be at least 8 characters." };
+  }
+
   const hashed = await bcrypt.hash(data.password, SALT_ROUNDS);
   const created = await AdminUser.create({ ...data, password: hashed, email: data.email.toLowerCase() });
 

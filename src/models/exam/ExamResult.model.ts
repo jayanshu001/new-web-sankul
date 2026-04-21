@@ -40,6 +40,7 @@ const ExamResultSchema = new Schema<IExamResult>(
 );
 
 ExamResultSchema.index({ customerId: 1, examId: 1 }, { unique: true });
+ExamResultSchema.index({ examId: 1 });
 ExamResultSchema.index({ examId: 1, score: -1 });
 
 export const ExamResult = model<IExamResult>("ExamResult", ExamResultSchema);
