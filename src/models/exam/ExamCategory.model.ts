@@ -1,4 +1,4 @@
-import { Schema, model, Document, Types } from "mongoose";
+import mongoose, { Schema, model, Document, Types } from "mongoose";
 
 export interface IExamCategory extends Document {
   name: string;
@@ -26,4 +26,6 @@ const ExamCategorySchema = new Schema<IExamCategory>(
 ExamCategorySchema.index({ parentId: 1, status: 1, orderBy: 1 });
 ExamCategorySchema.index({ ancestors: 1 });
 
-export const ExamCategory = model<IExamCategory>("ExamCategory", ExamCategorySchema);
+export const ExamCategory =
+  (mongoose.models.ExamCategory as mongoose.Model<IExamCategory>) ||
+  model<IExamCategory>("ExamCategory", ExamCategorySchema);

@@ -5,7 +5,7 @@ import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory
 import { Video } from "../../models/course/Video.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { Material } from "../../models/course/Material.model";
-import { ExamCategory } from "../../models/course/ExamCategory.model";
+import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
@@ -184,15 +184,15 @@ export async function buildCourseDetails(
         const cat = ref.category;
         if (!cat || cat.status !== true) return null;
         const [childCount, count] = await Promise.all([
-          ExamCategory.countDocuments({ parent: cat._id }),
+          ExamCategory.countDocuments({ parentId: cat._id }),
           findExamCounts(cat._id),
         ]);
         return {
           _id: cat._id,
-          title: cat.title,
+          title: cat.name,
           image: cat.image ?? null,
-          parent: cat.parent ?? null,
-          order: cat.order,
+          parent: cat.parentId ?? null,
+          order: cat.orderBy,
           status: cat.status,
           havingChildDirectory: childCount > 0,
           count,

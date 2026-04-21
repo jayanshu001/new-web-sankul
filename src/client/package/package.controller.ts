@@ -7,7 +7,7 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { PackageChat } from "../../models/course/PackageChat.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
-import { ExamCategory } from "../../models/course/ExamCategory.model";
+import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -38,10 +38,10 @@ async function decorateMaterialCategory(cat: any) {
 
 async function decorateExamCategory(cat: any) {
   if (!cat) return null;
-  const childCount = await ExamCategory.countDocuments({ parent: cat._id, status: true });
+  const childCount = await ExamCategory.countDocuments({ parentId: cat._id, status: true });
   return {
     _id: cat._id,
-    title: cat.title,
+    title: cat.name,
     image: cat.image,
     havingChildDirectory: childCount > 0,
     count: "",
