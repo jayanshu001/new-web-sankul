@@ -9,6 +9,7 @@ export interface IPromoCode extends Document {
   promo_start_at: Date;
   promo_expire_at: Date;
   status: boolean;
+  promoterId?: mongoose.Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -22,9 +23,12 @@ const promoCodeSchema: Schema = new Schema(
     promo_start_at: { type: Date, required: true },
     promo_expire_at: { type: Date, required: true },
     status: { type: Boolean, default: true },
+    promoterId: { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
   },
   { timestamps: true }
 );
+
+promoCodeSchema.index({ promoterId: 1 });
 
 promoCodeSchema.index({ type: 1, status: 1 });
 promoCodeSchema.index({ promocode: 1 });

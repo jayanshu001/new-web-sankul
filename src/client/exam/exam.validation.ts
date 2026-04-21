@@ -1,21 +1,21 @@
 import { z } from "zod";
 
-export const autosaveAnswerSchema = z.object({
-  questionId: z.string().min(1),
-  selectedOptionIds: z.array(z.string()).default([]),
-});
+const objectIdSchema = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id.");
 
-export const autosaveAnswersSchema = z.object({
-  answers: z.array(autosaveAnswerSchema).min(1),
-});
-
-export const submitAttemptSchema = z.object({
-  answers: z
+export const saveAnswersSchema = z.object({
+  examId: objectIdSchema,
+  timing: z.string().min(1).max(20),
+  test: z
     .array(
       z.object({
-        questionId: z.string().min(1),
-        selectedOptionIds: z.array(z.string()).default([]),
+        questionId: objectIdSchema,
+        answerId: objectIdSchema,
       })
     )
-    .default([]),
+    .min(1),
+  ratting: z.string().max(20).optional(),
+});
+
+export const rateResultSchema = z.object({
+  ratting: z.string().min(1).max(20),
 });

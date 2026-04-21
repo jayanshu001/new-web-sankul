@@ -1,0 +1,708 @@
+{
+  "info": {
+    "_postman_id": "b7f4a921-3d88-4e7a-9f5a-2a9c0f8e1234",
+    "name": "Web Sankul API — v2 Additions",
+    "description": "Companion collection covering modules added in the v2 build:\n\n**Customer:** promocodes, ebooks, orders, cms, inquiry/contact, notifications, dashboard, offline, wishlist, webhook, tracking, save-answers\n\n**Admin:** promocode, subscriptions & reports, cms, inquiry/departments, notifications, offline, promoters, dashboard, activity-tracking\n\n**Educator portal** (separate auth domain)\n\n**Promoter portal** (separate auth domain)\n\nImport alongside the main Web Sankul API collection. Uses the same `{{URL}}` and `{{accessToken}}` variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      { "key": "token", "value": "{{accessToken}}", "type": "string" }
+    ]
+  },
+  "item": [
+    {
+      "name": "Customer APIs — Additions",
+      "description": "New customer endpoints added in v2.",
+      "item": [
+        {
+          "name": "11 Promocodes",
+          "item": [
+            {
+              "name": "Apply Promocode",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/promocodes/apply", "host": ["{{URL}}"], "path": ["api","v1","client","promocodes","apply"] },
+                "body": { "mode": "raw", "raw": "{\n  \"promocode\": \"SANKUL20\",\n  \"course\": \"{{course_id}}\",\n  \"package\": null,\n  \"ebook\": null\n}" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "12 Ebooks",
+          "item": [
+            {
+              "name": "List Ebooks",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{URL}}/api/v1/client/ebooks?search=&language=", "host": ["{{URL}}"], "path": ["api","v1","client","ebooks"], "query": [ { "key": "search", "value": "" }, { "key": "language", "value": "" } ] }
+              }
+            },
+            {
+              "name": "Ebook Detail",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{URL}}/api/v1/client/ebooks/{{ebook_id}}", "host": ["{{URL}}"], "path": ["api","v1","client","ebooks","{{ebook_id}}"] }
+              }
+            },
+            {
+              "name": "My Ebook Subscriptions",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{URL}}/api/v1/client/ebooks/subscriptions", "host": ["{{URL}}"], "path": ["api","v1","client","ebooks","subscriptions"] }
+              }
+            },
+            {
+              "name": "Ebook Order Invoice",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{URL}}/api/v1/client/ebooks/orders/{{ebook_order_id}}/invoice", "host": ["{{URL}}"], "path": ["api","v1","client","ebooks","orders","{{ebook_order_id}}","invoice"] }
+              }
+            }
+          ]
+        },
+        {
+          "name": "13 Orders",
+          "item": [
+            {
+              "name": "List My Orders (unified)",
+              "request": {
+                "method": "GET",
+                "url": { "raw": "{{URL}}/api/v1/client/orders", "host": ["{{URL}}"], "path": ["api","v1","client","orders"] }
+              }
+            },
+            {
+              "name": "Place Course/Package Order",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/orders/course", "host": ["{{URL}}"], "path": ["api","v1","client","orders","course"] },
+                "body": { "mode": "raw", "raw": "{\n  \"courseId\": \"{{course_id}}\",\n  \"planId\": \"{{plan_id}}\",\n  \"shippingId\": \"{{shipping_id}}\",\n  \"promocode\": \"SANKUL20\",\n  \"paymentMethod\": \"razorpay\"\n}" },
+                "event": [
+                  { "listen": "test", "script": { "exec": [ "const j = pm.response.json();", "if (j?.data?.orderId) pm.collectionVariables.set('subscription_id', j.data.orderId);" ], "type": "text/javascript" } }
+                ]
+              }
+            },
+            {
+              "name": "Place Ebook Order",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/orders/ebook", "host": ["{{URL}}"], "path": ["api","v1","client","orders","ebook"] },
+                "body": { "mode": "raw", "raw": "{\n  \"ebookId\": \"{{ebook_id}}\",\n  \"planId\": \"{{ebook_plan_id}}\",\n  \"promocode\": \"\",\n  \"paymentMethod\": \"razorpay\"\n}" },
+                "event": [
+                  { "listen": "test", "script": { "exec": [ "const j = pm.response.json();", "if (j?.data?.orderId) pm.collectionVariables.set('ebook_order_id', j.data.orderId);" ], "type": "text/javascript" } }
+                ]
+              }
+            },
+            {
+              "name": "Verify Payment",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/orders/verify-payment", "host": ["{{URL}}"], "path": ["api","v1","client","orders","verify-payment"] },
+                "body": { "mode": "raw", "raw": "{\n  \"orderType\": \"course\",\n  \"orderId\": \"{{subscription_id}}\",\n  \"razorpayOrderId\": \"order_xxx\",\n  \"razorpayPaymentId\": \"pay_xxx\",\n  \"razorpaySignature\": \"sig_xxx\"\n}" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "14 CMS (public)",
+          "item": [
+            { "name": "FAQs", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/faqs?type=", "host": ["{{URL}}"], "path": ["api","v1","client","faqs"], "query": [{ "key": "type", "value": "" }] } } },
+            { "name": "Active Popup", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/popup", "host": ["{{URL}}"], "path": ["api","v1","client","popup"] } } },
+            { "name": "Banners", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/banners?key=", "host": ["{{URL}}"], "path": ["api","v1","client","banners"], "query": [{ "key": "key", "value": "" }] } } },
+            { "name": "Testimonials", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/testimonials", "host": ["{{URL}}"], "path": ["api","v1","client","testimonials"] } } },
+            { "name": "Terms", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/terms?module=", "host": ["{{URL}}"], "path": ["api","v1","client","terms"], "query": [{ "key": "module", "value": "" }] } } },
+            { "name": "Version", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/version", "host": ["{{URL}}"], "path": ["api","v1","client","version"] } } },
+            { "name": "Upgrade Check", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/upgrade?clientVersion=100", "host": ["{{URL}}"], "path": ["api","v1","client","upgrade"], "query": [{ "key": "clientVersion", "value": "100" }] } } }
+          ]
+        },
+        {
+          "name": "15 Inquiry / Contact",
+          "item": [
+            {
+              "name": "Submit Inquiry",
+              "request": {
+                "method": "POST",
+                "auth": { "type": "noauth" },
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/inquiry", "host": ["{{URL}}"], "path": ["api","v1","client","inquiry"] },
+                "body": { "mode": "raw", "raw": "{\n  \"name\": \"Student\",\n  \"mobile\": \"9876543210\",\n  \"email\": \"s@example.com\",\n  \"city\": \"Ahmedabad\",\n  \"course\": \"GPSC\",\n  \"mode\": \"online\",\n  \"message\": \"Interested in batch.\"\n}" }
+              }
+            },
+            { "name": "Contact Us", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/contactus", "host": ["{{URL}}"], "path": ["api","v1","client","contactus"] } } }
+          ]
+        },
+        {
+          "name": "16 Notifications",
+          "item": [
+            { "name": "My Notifications", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/notifications?page=1&limit=20", "host": ["{{URL}}"], "path": ["api","v1","client","notifications"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] } } },
+            { "name": "Mark As Read", "request": { "method": "POST", "url": { "raw": "{{URL}}/api/v1/client/notifications/{{notification_id}}/read", "host": ["{{URL}}"], "path": ["api","v1","client","notifications","{{notification_id}}","read"] } } },
+            { "name": "Mark All Read", "request": { "method": "POST", "url": { "raw": "{{URL}}/api/v1/client/notifications/read-all", "host": ["{{URL}}"], "path": ["api","v1","client","notifications","read-all"] } } },
+            { "name": "Image Notifications", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/image-notifications", "host": ["{{URL}}"], "path": ["api","v1","client","image-notifications"] } } }
+          ]
+        },
+        {
+          "name": "17 Dashboard",
+          "item": [
+            { "name": "Customer Dashboard", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/dashboard", "host": ["{{URL}}"], "path": ["api","v1","client","dashboard"] } } }
+          ]
+        },
+        {
+          "name": "18 Offline",
+          "item": [
+            { "name": "Offline Dashboard", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/offline", "host": ["{{URL}}"], "path": ["api","v1","client","offline"] } } },
+            { "name": "List Cities", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/offline/cities", "host": ["{{URL}}"], "path": ["api","v1","client","offline","cities"] } } },
+            { "name": "Centers By City", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/offline/cities/{{offline_city_id}}/centers", "host": ["{{URL}}"], "path": ["api","v1","client","offline","cities","{{offline_city_id}}","centers"] } } },
+            { "name": "Center Detail", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/offline/centers/{{offline_center_id}}", "host": ["{{URL}}"], "path": ["api","v1","client","offline","centers","{{offline_center_id}}"] } } },
+            { "name": "Batch Detail", "request": { "method": "GET", "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/client/offline/batches/{{offline_batch_id}}", "host": ["{{URL}}"], "path": ["api","v1","client","offline","batches","{{offline_batch_id}}"] } } },
+            {
+              "name": "Submit Enquiry",
+              "request": {
+                "method": "POST",
+                "auth": { "type": "noauth" },
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/offline/enquiry", "host": ["{{URL}}"], "path": ["api","v1","client","offline","enquiry"] },
+                "body": { "mode": "raw", "raw": "{\n  \"name\": \"Student\",\n  \"email\": \"s@example.com\",\n  \"mobile\": \"9876543210\",\n  \"qualification\": \"Graduate\",\n  \"batchId\": \"{{offline_batch_id}}\",\n  \"remarks\": \"\"\n}" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "19 Wishlist",
+          "item": [
+            { "name": "List My Wishlist", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/wishlist?itemType=", "host": ["{{URL}}"], "path": ["api","v1","client","wishlist"], "query": [{ "key": "itemType", "value": "" }] } } },
+            {
+              "name": "Add To Wishlist",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/wishlist", "host": ["{{URL}}"], "path": ["api","v1","client","wishlist"] },
+                "body": { "mode": "raw", "raw": "{\n  \"itemType\": \"course\",\n  \"itemId\": \"{{course_id}}\"\n}" }
+              }
+            },
+            { "name": "Check Wishlist", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/wishlist/check/course/{{course_id}}", "host": ["{{URL}}"], "path": ["api","v1","client","wishlist","check","course","{{course_id}}"] } } },
+            { "name": "Remove From Wishlist", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/client/wishlist/course/{{course_id}}", "host": ["{{URL}}"], "path": ["api","v1","client","wishlist","course","{{course_id}}"] } } }
+          ]
+        },
+        {
+          "name": "20 Webhook",
+          "item": [
+            {
+              "name": "Razorpay Payment Webhook",
+              "request": {
+                "method": "POST",
+                "auth": { "type": "noauth" },
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "X-Razorpay-Signature", "value": "{{razorpay_signature}}" }
+                ],
+                "url": { "raw": "{{URL}}/api/v1/client/webhook/payment", "host": ["{{URL}}"], "path": ["api","v1","client","webhook","payment"] },
+                "body": { "mode": "raw", "raw": "{\n  \"event\": \"payment.captured\",\n  \"payload\": {\n    \"payment\": {\n      \"entity\": {\n        \"id\": \"pay_xxx\",\n        \"order_id\": \"order_xxx\"\n      }\n    }\n  }\n}" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "21 Tracking",
+          "item": [
+            {
+              "name": "Track Event",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/tracking", "host": ["{{URL}}"], "path": ["api","v1","client","tracking"] },
+                "body": { "mode": "raw", "raw": "{\n  \"event\": \"video_watched\",\n  \"entityType\": \"video\",\n  \"entityId\": \"{{video_id}}\",\n  \"duration\": 420,\n  \"metadata\": { \"progress\": 0.87 }\n}" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "22 Save Answers (legacy compat)",
+          "item": [
+            {
+              "name": "Submit Exam Answers",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/save/answers", "host": ["{{URL}}"], "path": ["api","v1","client","save","answers"] },
+                "body": { "mode": "raw", "raw": "{\n  \"examId\": \"{{exam_id}}\",\n  \"timing\": \"12:34\",\n  \"test\": [\n    { \"questionId\": \"{{exam_question_id}}\", \"answerId\": \"{{exam_option_id}}\" }\n  ],\n  \"ratting\": \"5\"\n}" }
+              }
+            }
+          ]
+        },
+        {
+          "name": "23 Exams (legacy shape)",
+          "item": [
+            { "name": "Get Questions For Taking", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/exams/{{exam_id}}/questions", "host": ["{{URL}}"], "path": ["api","v1","client","exams","{{exam_id}}","questions"] } } },
+            { "name": "Exam Solution", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/exams/{{exam_id}}/solution", "host": ["{{URL}}"], "path": ["api","v1","client","exams","{{exam_id}}","solution"] } } },
+            { "name": "Solution Analytics", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/exams/{{exam_id}}/solution/analytics", "host": ["{{URL}}"], "path": ["api","v1","client","exams","{{exam_id}}","solution","analytics"] } } },
+            { "name": "Solution PDF Download", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/exams/{{exam_id}}/solution/download", "host": ["{{URL}}"], "path": ["api","v1","client","exams","{{exam_id}}","solution","download"] } } },
+            {
+              "name": "Rate Exam",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/exams/{{exam_id}}/rate", "host": ["{{URL}}"], "path": ["api","v1","client","exams","{{exam_id}}","rate"] },
+                "body": { "mode": "raw", "raw": "{\n  \"ratting\": \"5\"\n}" }
+              }
+            },
+            { "name": "My Attempts", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/exams/my/attempts", "host": ["{{URL}}"], "path": ["api","v1","client","exams","my","attempts"] } } },
+            { "name": "My Analytics", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/exams/my/analytics", "host": ["{{URL}}"], "path": ["api","v1","client","exams","my","analytics"] } } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Admin APIs — Additions",
+      "description": "New admin endpoints added in v2.",
+      "item": [
+        {
+          "name": "14 Promocode Management",
+          "item": [
+            { "name": "List Promocodes", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/promocodes?page=1&limit=20", "host": ["{{URL}}"], "path": ["api","v1","admin","promocodes"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] } } },
+            {
+              "name": "Create Promocode",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/promocodes", "host": ["{{URL}}"], "path": ["api","v1","admin","promocodes"] },
+                "body": { "mode": "raw", "raw": "{\n  \"promocode\": \"SANKUL20\",\n  \"title\": \"20% off launch\",\n  \"description\": \"Launch promo\",\n  \"promo_start_at\": \"2026-04-01T00:00:00Z\",\n  \"promo_expire_at\": \"2026-12-31T23:59:59Z\",\n  \"type\": \"public\",\n  \"promoterId\": null,\n  \"status\": true,\n  \"plans\": [\n    { \"planId\": \"{{plan_id}}\", \"customerPercentage\": 20, \"promoterPercentage\": 5 }\n  ]\n}" },
+                "event": [{ "listen": "test", "script": { "exec": ["const j = pm.response.json(); if (j?.data?._id) pm.collectionVariables.set('promocode_id', j.data._id);"], "type": "text/javascript" } }]
+              }
+            },
+            { "name": "Get Promocode", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/promocodes/{{promocode_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","promocodes","{{promocode_id}}"] } } },
+            {
+              "name": "Update Promocode",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/promocodes/{{promocode_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","promocodes","{{promocode_id}}"] },
+                "body": { "mode": "raw", "raw": "{\n  \"title\": \"Updated\",\n  \"plans\": [\n    { \"planId\": \"{{plan_id}}\", \"customerPercentage\": 25, \"promoterPercentage\": 5 }\n  ]\n}" }
+              }
+            },
+            { "name": "Delete Promocode", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/promocodes/{{promocode_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","promocodes","{{promocode_id}}"] } } },
+            {
+              "name": "Toggle Status",
+              "request": {
+                "method": "PATCH",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/promocodes/{{promocode_id}}/status", "host": ["{{URL}}"], "path": ["api","v1","admin","promocodes","{{promocode_id}}","status"] },
+                "body": { "mode": "raw", "raw": "{ \"status\": true }" }
+              }
+            },
+            { "name": "List Plans (for linking)", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/promocodes/plans?packageId=&courseId=&ebookId=", "host": ["{{URL}}"], "path": ["api","v1","admin","promocodes","plans"], "query": [{ "key": "packageId", "value": "" }, { "key": "courseId", "value": "" }, { "key": "ebookId", "value": "" }] } } }
+          ]
+        },
+        {
+          "name": "15 Subscriptions & Reports",
+          "item": [
+            { "name": "List Course Subscriptions", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/subscriptions?page=1&limit=20", "host": ["{{URL}}"], "path": ["api","v1","admin","subscriptions"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] } } },
+            {
+              "name": "Create Manual Subscription",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/subscriptions", "host": ["{{URL}}"], "path": ["api","v1","admin","subscriptions"] },
+                "body": { "mode": "raw", "raw": "{\n  \"customerId\": \"{{customer_id}}\",\n  \"courseId\": \"{{course_id}}\",\n  \"planId\": \"{{plan_id}}\",\n  \"startAt\": \"2026-04-20T00:00:00Z\",\n  \"endAt\": \"2027-04-20T00:00:00Z\",\n  \"paymentMethod\": \"backend\"\n}" }
+              }
+            },
+            { "name": "Get Subscription", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/subscriptions/{{subscription_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","subscriptions","{{subscription_id}}"] } } },
+            {
+              "name": "Update Subscription",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/subscriptions/{{subscription_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","subscriptions","{{subscription_id}}"] },
+                "body": { "mode": "raw", "raw": "{\n  \"endAt\": \"2027-06-20T00:00:00Z\",\n  \"remarks\": \"Extended by 2 months\"\n}" }
+              }
+            },
+            { "name": "Delete Subscription", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/subscriptions/{{subscription_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","subscriptions","{{subscription_id}}"] } } },
+            { "name": "List Ebook Subscriptions", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/subscriptions/ebook", "host": ["{{URL}}"], "path": ["api","v1","admin","subscriptions","ebook"] } } },
+            { "name": "Report: Summary", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/subscriptions/reports/summary?fromDate=&toDate=", "host": ["{{URL}}"], "path": ["api","v1","admin","subscriptions","reports","summary"], "query": [{ "key": "fromDate", "value": "" }, { "key": "toDate", "value": "" }] } } },
+            { "name": "Report: By Course", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/subscriptions/reports/by-course", "host": ["{{URL}}"], "path": ["api","v1","admin","subscriptions","reports","by-course"] } } },
+            { "name": "Report: By Ebook", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/subscriptions/reports/by-ebook", "host": ["{{URL}}"], "path": ["api","v1","admin","subscriptions","reports","by-ebook"] } } },
+            { "name": "Report: Book Orders", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/subscriptions/reports/book-orders?status=", "host": ["{{URL}}"], "path": ["api","v1","admin","subscriptions","reports","book-orders"], "query": [{ "key": "status", "value": "" }] } } }
+          ]
+        },
+        {
+          "name": "16 CMS Management",
+          "item": [
+            { "name": "List FAQs", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/cms/faqs", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","faqs"] } } },
+            { "name": "Create FAQ", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/faqs", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","faqs"] }, "body": { "mode": "raw", "raw": "{\n  \"type\": \"general\",\n  \"question\": \"How to reset password?\",\n  \"answer\": \"Use Forgot password link.\"\n}" } } },
+            { "name": "Update FAQ", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/faqs/{{faq_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","faqs","{{faq_id}}"] }, "body": { "mode": "raw", "raw": "{ \"answer\": \"Updated answer\" }" } } },
+            { "name": "Delete FAQ", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/cms/faqs/{{faq_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","faqs","{{faq_id}}"] } } },
+            { "name": "List Popups", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/cms/popups", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","popups"] } } },
+            { "name": "Create Popup", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/popups", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","popups"] }, "body": { "mode": "raw", "raw": "{\n  \"title\": \"Welcome\",\n  \"description\": \"Launch popup\",\n  \"image\": \"https://example.com/img.png\",\n  \"discount\": \"20%\",\n  \"promocode\": \"SANKUL20\",\n  \"promoExpireAt\": \"2026-12-31T00:00:00Z\",\n  \"status\": true\n}" } } },
+            { "name": "Update Popup", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/popups/{{popup_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","popups","{{popup_id}}"] }, "body": { "mode": "raw", "raw": "{ \"status\": false }" } } },
+            { "name": "Delete Popup", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/cms/popups/{{popup_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","popups","{{popup_id}}"] } } },
+            { "name": "List Banners", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/cms/banners", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","banners"] } } },
+            { "name": "Create Banner", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/banners", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","banners"] }, "body": { "mode": "raw", "raw": "{\n  \"image\": \"https://example.com/banner.png\",\n  \"orderBy\": 0\n}" } } },
+            { "name": "Reorder Banners", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/banners/reorder", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","banners","reorder"] }, "body": { "mode": "raw", "raw": "{\n  \"orders\": [ { \"id\": \"{{banner_id}}\", \"orderBy\": 0 } ]\n}" } } },
+            { "name": "Update Banner", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/banners/{{banner_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","banners","{{banner_id}}"] }, "body": { "mode": "raw", "raw": "{ \"orderBy\": 1 }" } } },
+            { "name": "Delete Banner", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/cms/banners/{{banner_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","banners","{{banner_id}}"] } } },
+            { "name": "List Testimonials", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/cms/testimonials", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","testimonials"] } } },
+            { "name": "Create Testimonial", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/testimonials", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","testimonials"] }, "body": { "mode": "raw", "raw": "{\n  \"name\": \"Student A\",\n  \"title\": \"Great platform\",\n  \"description\": \"Loved the courses.\",\n  \"rating\": 5\n}" } } },
+            { "name": "Update Testimonial", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/testimonials/{{testimonial_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","testimonials","{{testimonial_id}}"] }, "body": { "mode": "raw", "raw": "{ \"rating\": 4 }" } } },
+            { "name": "Delete Testimonial", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/cms/testimonials/{{testimonial_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","testimonials","{{testimonial_id}}"] } } },
+            { "name": "List Terms", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/cms/terms", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","terms"] } } },
+            { "name": "Create Terms", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/terms", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","terms"] }, "body": { "mode": "raw", "raw": "{\n  \"module\": \"books\",\n  \"terms\": \"Terms content...\",\n  \"freeShippingMinimumOrderAmount\": 500,\n  \"status\": true\n}" } } },
+            { "name": "Update Terms", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/terms/{{terms_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","terms","{{terms_id}}"] }, "body": { "mode": "raw", "raw": "{ \"freeShippingMinimumOrderAmount\": 600 }" } } },
+            { "name": "Delete Terms", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/cms/terms/{{terms_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","terms","{{terms_id}}"] } } },
+            { "name": "Get Version", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/cms/version", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","version"] } } },
+            { "name": "Upsert Version", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/version", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","version"] }, "body": { "mode": "raw", "raw": "{ \"latestVersionCode\": 120, \"lastSupportedVersionCode\": 100 }" } } },
+            { "name": "Get App Update", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/cms/app-update", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","app-update"] } } },
+            { "name": "Upsert App Update", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/cms/app-update", "host": ["{{URL}}"], "path": ["api","v1","admin","cms","app-update"] }, "body": { "mode": "raw", "raw": "{ \"latestVersion\": 120, \"updateType\": \"flexible\", \"isUpdateAvailable\": true }" } } }
+          ]
+        },
+        {
+          "name": "17 Inquiry / Departments",
+          "item": [
+            { "name": "List Inquiries", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/inquiries?page=1&limit=20", "host": ["{{URL}}"], "path": ["api","v1","admin","inquiries"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] } } },
+            { "name": "Get Inquiry", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/inquiries/{{inquiry_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","inquiries","{{inquiry_id}}"] } } },
+            { "name": "Delete Inquiry", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/inquiries/{{inquiry_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","inquiries","{{inquiry_id}}"] } } },
+            { "name": "List Departments", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/departments", "host": ["{{URL}}"], "path": ["api","v1","admin","departments"] } } },
+            {
+              "name": "Create Department",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/departments", "host": ["{{URL}}"], "path": ["api","v1","admin","departments"] },
+                "body": { "mode": "raw", "raw": "{\n  \"name\": \"Sales\",\n  \"description\": \"Sales department\",\n  \"order\": 0,\n  \"active\": true,\n  \"contacts\": [ { \"mobile\": \"9876543210\", \"isCallAvailable\": true, \"isWhatsAppAvailable\": true, \"order\": 0, \"active\": true } ]\n}" }
+              }
+            },
+            { "name": "Update Department", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/departments/{{department_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","departments","{{department_id}}"] }, "body": { "mode": "raw", "raw": "{ \"active\": false }" } } },
+            { "name": "Delete Department", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/departments/{{department_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","departments","{{department_id}}"] } } }
+          ]
+        },
+        {
+          "name": "18 Notification Management",
+          "item": [
+            {
+              "name": "Broadcast Notification",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/notifications/broadcast", "host": ["{{URL}}"], "path": ["api","v1","admin","notifications","broadcast"] },
+                "body": { "mode": "raw", "raw": "{\n  \"title\": \"New course available\",\n  \"body\": \"Check out the latest course\",\n  \"type\": \"announcement\",\n  \"deepLink\": \"/courses/{{course_id}}\"\n}" }
+              }
+            },
+            { "name": "List Notifications (log)", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/notifications?page=1&limit=20", "host": ["{{URL}}"], "path": ["api","v1","admin","notifications"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] } } },
+            { "name": "Delete Notification", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/notifications/{{notification_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","notifications","{{notification_id}}"] } } },
+            { "name": "List Image Notifications", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/notifications/images", "host": ["{{URL}}"], "path": ["api","v1","admin","notifications","images"] } } },
+            { "name": "Create Image Notification", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/notifications/images", "host": ["{{URL}}"], "path": ["api","v1","admin","notifications","images"] }, "body": { "mode": "raw", "raw": "{ \"image\": \"https://example.com/img.png\", \"redirectUrl\": \"/courses\", \"active\": true }" } } },
+            { "name": "Update Image Notification", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/notifications/images/{{image_notification_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","notifications","images","{{image_notification_id}}"] }, "body": { "mode": "raw", "raw": "{ \"active\": false }" } } },
+            { "name": "Delete Image Notification", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/notifications/images/{{image_notification_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","notifications","images","{{image_notification_id}}"] } } }
+          ]
+        },
+        {
+          "name": "19 Offline Management",
+          "item": [
+            { "name": "List Offline Banners", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/offline/banners", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","banners"] } } },
+            { "name": "Create Offline Banner", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/offline/banners", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","banners"] }, "body": { "mode": "raw", "raw": "{ \"image\": \"https://example.com/b.png\", \"orderBy\": 0 }" } } },
+            { "name": "Reorder Offline Banners", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/offline/banners/reorder", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","banners","reorder"] }, "body": { "mode": "raw", "raw": "{ \"orders\": [ { \"id\": \"{{offline_banner_id}}\", \"orderBy\": 0 } ] }" } } },
+            { "name": "Update Offline Banner", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/offline/banners/{{offline_banner_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","banners","{{offline_banner_id}}"] }, "body": { "mode": "raw", "raw": "{ \"orderBy\": 1 }" } } },
+            { "name": "Delete Offline Banner", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/offline/banners/{{offline_banner_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","banners","{{offline_banner_id}}"] } } },
+            { "name": "List Cities", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/offline/cities", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","cities"] } } },
+            {
+              "name": "Create City",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/offline/cities", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","cities"] },
+                "body": { "mode": "raw", "raw": "{\n  \"name\": \"Ahmedabad\",\n  \"image\": \"https://example.com/city.png\",\n  \"order\": 0,\n  \"status\": true\n}" },
+                "event": [{ "listen": "test", "script": { "exec": ["const j = pm.response.json(); if (j?.data?._id) pm.collectionVariables.set('offline_city_id', j.data._id);"], "type": "text/javascript" } }]
+              }
+            },
+            { "name": "Get City", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/offline/cities/{{offline_city_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","cities","{{offline_city_id}}"] } } },
+            { "name": "Update City", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/offline/cities/{{offline_city_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","cities","{{offline_city_id}}"] }, "body": { "mode": "raw", "raw": "{ \"order\": 1 }" } } },
+            { "name": "Delete City", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/offline/cities/{{offline_city_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","cities","{{offline_city_id}}"] } } },
+            { "name": "List Centers", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/offline/centers?cityId=&status=", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","centers"], "query": [{ "key": "cityId", "value": "" }, { "key": "status", "value": "" }] } } },
+            {
+              "name": "Create Center",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/offline/centers", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","centers"] },
+                "body": { "mode": "raw", "raw": "{\n  \"name\": \"Main Center\",\n  \"images\": [\"https://example.com/c.png\"],\n  \"address\": \"123 Main Rd\",\n  \"latitude\": 23.02,\n  \"longitude\": 72.57,\n  \"phone\": \"9876543210\",\n  \"cityId\": \"{{offline_city_id}}\",\n  \"status\": true\n}" },
+                "event": [{ "listen": "test", "script": { "exec": ["const j = pm.response.json(); if (j?.data?._id) pm.collectionVariables.set('offline_center_id', j.data._id);"], "type": "text/javascript" } }]
+              }
+            },
+            { "name": "Get Center", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/offline/centers/{{offline_center_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","centers","{{offline_center_id}}"] } } },
+            { "name": "Update Center", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/offline/centers/{{offline_center_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","centers","{{offline_center_id}}"] }, "body": { "mode": "raw", "raw": "{ \"status\": true }" } } },
+            { "name": "Delete Center", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/offline/centers/{{offline_center_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","centers","{{offline_center_id}}"] } } },
+            { "name": "List Batches", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/offline/batches?centerId=&upcoming=true", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","batches"], "query": [{ "key": "centerId", "value": "" }, { "key": "upcoming", "value": "true" }] } } },
+            {
+              "name": "Create Batch",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/offline/batches", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","batches"] },
+                "body": { "mode": "raw", "raw": "{\n  \"name\": \"GPSC Batch May\",\n  \"image\": \"https://example.com/b.png\",\n  \"description\": \"Intensive prep\",\n  \"startAt\": \"2026-05-01T09:00:00Z\",\n  \"duration\": \"6 months\",\n  \"centerId\": \"{{offline_center_id}}\",\n  \"status\": true\n}" },
+                "event": [{ "listen": "test", "script": { "exec": ["const j = pm.response.json(); if (j?.data?._id) pm.collectionVariables.set('offline_batch_id', j.data._id);"], "type": "text/javascript" } }]
+              }
+            },
+            { "name": "Get Batch", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/offline/batches/{{offline_batch_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","batches","{{offline_batch_id}}"] } } },
+            { "name": "Update Batch", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/offline/batches/{{offline_batch_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","batches","{{offline_batch_id}}"] }, "body": { "mode": "raw", "raw": "{ \"status\": true }" } } },
+            { "name": "Delete Batch", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/offline/batches/{{offline_batch_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","batches","{{offline_batch_id}}"] } } },
+            { "name": "List Enquiries", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/offline/enquiries?batchId=&page=1&limit=20", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","enquiries"], "query": [{ "key": "batchId", "value": "" }, { "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] } } },
+            { "name": "Delete Enquiry", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/offline/enquiries/{{offline_enquiry_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","offline","enquiries","{{offline_enquiry_id}}"] } } }
+          ]
+        },
+        {
+          "name": "20 Promoter Management",
+          "item": [
+            { "name": "List Promoters", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/promoters?page=1&limit=20", "host": ["{{URL}}"], "path": ["api","v1","admin","promoters"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] } } },
+            {
+              "name": "Create Promoter",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/admin/promoters", "host": ["{{URL}}"], "path": ["api","v1","admin","promoters"] },
+                "body": { "mode": "raw", "raw": "{\n  \"fullName\": \"Jane Promoter\",\n  \"email\": \"jane@promoter.com\",\n  \"phone\": \"9876543210\",\n  \"password\": \"secret123\",\n  \"status\": true\n}" },
+                "event": [{ "listen": "test", "script": { "exec": ["const j = pm.response.json(); if (j?.data?._id) pm.collectionVariables.set('promoter_id', j.data._id);"], "type": "text/javascript" } }]
+              }
+            },
+            { "name": "Get Promoter", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/promoters/{{promoter_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","promoters","{{promoter_id}}"] } } },
+            { "name": "Update Promoter", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }], "url": { "raw": "{{URL}}/api/v1/admin/promoters/{{promoter_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","promoters","{{promoter_id}}"] }, "body": { "mode": "raw", "raw": "{ \"fullName\": \"Updated Name\" }" } } },
+            { "name": "Delete Promoter (soft)", "request": { "method": "DELETE", "url": { "raw": "{{URL}}/api/v1/admin/promoters/{{promoter_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","promoters","{{promoter_id}}"] } } },
+            { "name": "Toggle Status", "request": { "method": "PATCH", "url": { "raw": "{{URL}}/api/v1/admin/promoters/{{promoter_id}}/status", "host": ["{{URL}}"], "path": ["api","v1","admin","promoters","{{promoter_id}}","status"] } } },
+            { "name": "Promoter's Promocodes", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/promoters/{{promoter_id}}/promocodes", "host": ["{{URL}}"], "path": ["api","v1","admin","promoters","{{promoter_id}}","promocodes"] } } },
+            { "name": "Promoter's Subscriptions", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/promoters/{{promoter_id}}/subscriptions", "host": ["{{URL}}"], "path": ["api","v1","admin","promoters","{{promoter_id}}","subscriptions"] } } }
+          ]
+        },
+        {
+          "name": "21 Admin Dashboard",
+          "item": [
+            { "name": "Global Dashboard", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/dashboard?fromDate=&toDate=", "host": ["{{URL}}"], "path": ["api","v1","admin","dashboard"], "query": [{ "key": "fromDate", "value": "" }, { "key": "toDate", "value": "" }] } } }
+          ]
+        },
+        {
+          "name": "22 Activity Tracking",
+          "item": [
+            { "name": "List Activity", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/tracking?event=&page=1&limit=50", "host": ["{{URL}}"], "path": ["api","v1","admin","tracking"], "query": [{ "key": "event", "value": "" }, { "key": "page", "value": "1" }, { "key": "limit", "value": "50" }] } } },
+            { "name": "Activity Summary", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/tracking/summary?fromDate=&toDate=", "host": ["{{URL}}"], "path": ["api","v1","admin","tracking","summary"], "query": [{ "key": "fromDate", "value": "" }, { "key": "toDate", "value": "" }] } } }
+          ]
+        },
+        {
+          "name": "23 Exams — Admin (revised)",
+          "item": [
+            { "name": "Get Result by Id", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/exams/results/{{exam_result_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","exams","results","{{exam_result_id}}"] } } },
+            { "name": "Invalidate Result", "request": { "method": "PATCH", "url": { "raw": "{{URL}}/api/v1/admin/exams/results/{{exam_result_id}}/invalidate", "host": ["{{URL}}"], "path": ["api","v1","admin","exams","results","{{exam_result_id}}","invalidate"] } } },
+            { "name": "Customer Lifetime Analytics", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/admin/exams/analytics/customer/{{customer_id}}", "host": ["{{URL}}"], "path": ["api","v1","admin","exams","analytics","customer","{{customer_id}}"] } } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Educator APIs",
+      "description": "Separate auth domain. Login via email + password.",
+      "item": [
+        {
+          "name": "01 Auth",
+          "item": [
+            {
+              "name": "Login",
+              "request": {
+                "method": "POST",
+                "auth": { "type": "noauth" },
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/educator/auth/login", "host": ["{{URL}}"], "path": ["api","v1","educator","auth","login"] },
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"educator@example.com\",\n  \"password\": \"secret123\"\n}" },
+                "event": [{ "listen": "test", "script": { "exec": ["const j = pm.response.json(); if (j?.data?.accessToken) { pm.collectionVariables.set('educatorAccessToken', j.data.accessToken); pm.collectionVariables.set('educatorRefreshToken', j.data.refreshToken); }"], "type": "text/javascript" } }]
+              }
+            },
+            {
+              "name": "Refresh Token",
+              "request": {
+                "method": "POST",
+                "auth": { "type": "noauth" },
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/educator/auth/token/refresh", "host": ["{{URL}}"], "path": ["api","v1","educator","auth","token","refresh"] },
+                "body": { "mode": "raw", "raw": "{ \"refreshToken\": \"{{educatorRefreshToken}}\" }" }
+              }
+            },
+            { "name": "Me", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/auth/me", "host": ["{{URL}}"], "path": ["api","v1","educator","auth","me"] } } },
+            {
+              "name": "Update Profile (multipart)",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }],
+                "auth": { "type": "noauth" },
+                "url": { "raw": "{{URL}}/api/v1/educator/auth/me", "host": ["{{URL}}"], "path": ["api","v1","educator","auth","me"] },
+                "body": { "mode": "formdata", "formdata": [
+                  { "key": "name", "value": "Updated Educator", "type": "text" },
+                  { "key": "about", "value": "About me", "type": "text" },
+                  { "key": "image", "type": "file" }
+                ] }
+              }
+            },
+            {
+              "name": "Change Password",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }, { "key": "Content-Type", "value": "application/json" }],
+                "auth": { "type": "noauth" },
+                "url": { "raw": "{{URL}}/api/v1/educator/auth/change-password", "host": ["{{URL}}"], "path": ["api","v1","educator","auth","change-password"] },
+                "body": { "mode": "raw", "raw": "{ \"currentPassword\": \"secret123\", \"newPassword\": \"newsecret456\" }" }
+              }
+            },
+            { "name": "Logout", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/auth/logout", "host": ["{{URL}}"], "path": ["api","v1","educator","auth","logout"] } } }
+          ]
+        },
+        {
+          "name": "02 Dashboard",
+          "item": [
+            { "name": "Dashboard", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/dashboard", "host": ["{{URL}}"], "path": ["api","v1","educator","dashboard"] } } }
+          ]
+        },
+        {
+          "name": "03 Courses",
+          "item": [
+            { "name": "My Courses", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/courses", "host": ["{{URL}}"], "path": ["api","v1","educator","courses"] } } },
+            { "name": "Course Detail", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/courses/{{course_id}}", "host": ["{{URL}}"], "path": ["api","v1","educator","courses","{{course_id}}"] } } },
+            { "name": "Course Dashboard", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/courses/{{course_id}}/dashboard", "host": ["{{URL}}"], "path": ["api","v1","educator","courses","{{course_id}}","dashboard"] } } },
+            { "name": "Course Subscribers", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/courses/{{course_id}}/subscribers?page=1&limit=20", "host": ["{{URL}}"], "path": ["api","v1","educator","courses","{{course_id}}","subscribers"], "query": [{ "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] } } }
+          ]
+        },
+        {
+          "name": "04 Packages",
+          "item": [
+            { "name": "My Packages", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/packages", "host": ["{{URL}}"], "path": ["api","v1","educator","packages"] } } },
+            { "name": "Package Detail", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/packages/{{package_id}}", "host": ["{{URL}}"], "path": ["api","v1","educator","packages","{{package_id}}"] } } },
+            { "name": "Package Dashboard", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/packages/{{package_id}}/dashboard", "host": ["{{URL}}"], "path": ["api","v1","educator","packages","{{package_id}}","dashboard"] } } },
+            { "name": "Package Subscribers", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{educatorAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/educator/packages/{{package_id}}/subscribers", "host": ["{{URL}}"], "path": ["api","v1","educator","packages","{{package_id}}","subscribers"] } } }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Promoter APIs",
+      "description": "Separate auth domain. Login via email + password.",
+      "item": [
+        {
+          "name": "01 Auth",
+          "item": [
+            {
+              "name": "Login",
+              "request": {
+                "method": "POST",
+                "auth": { "type": "noauth" },
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/promoter/auth/login", "host": ["{{URL}}"], "path": ["api","v1","promoter","auth","login"] },
+                "body": { "mode": "raw", "raw": "{\n  \"email\": \"jane@promoter.com\",\n  \"password\": \"secret123\"\n}" },
+                "event": [{ "listen": "test", "script": { "exec": ["const j = pm.response.json(); if (j?.data?.accessToken) { pm.collectionVariables.set('promoterAccessToken', j.data.accessToken); pm.collectionVariables.set('promoterRefreshToken', j.data.refreshToken); }"], "type": "text/javascript" } }]
+              }
+            },
+            {
+              "name": "Refresh Token",
+              "request": {
+                "method": "POST",
+                "auth": { "type": "noauth" },
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/promoter/auth/token/refresh", "host": ["{{URL}}"], "path": ["api","v1","promoter","auth","token","refresh"] },
+                "body": { "mode": "raw", "raw": "{ \"refreshToken\": \"{{promoterRefreshToken}}\" }" }
+              }
+            },
+            { "name": "Me", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/promoter/auth/me", "host": ["{{URL}}"], "path": ["api","v1","promoter","auth","me"] } } },
+            {
+              "name": "Update Profile (multipart)",
+              "request": {
+                "method": "PUT",
+                "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }],
+                "auth": { "type": "noauth" },
+                "url": { "raw": "{{URL}}/api/v1/promoter/auth/me", "host": ["{{URL}}"], "path": ["api","v1","promoter","auth","me"] },
+                "body": { "mode": "formdata", "formdata": [
+                  { "key": "fullName", "value": "Updated Promoter", "type": "text" },
+                  { "key": "phone", "value": "9876543210", "type": "text" },
+                  { "key": "image", "type": "file" }
+                ] }
+              }
+            },
+            {
+              "name": "Change Password",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }, { "key": "Content-Type", "value": "application/json" }],
+                "auth": { "type": "noauth" },
+                "url": { "raw": "{{URL}}/api/v1/promoter/auth/change-password", "host": ["{{URL}}"], "path": ["api","v1","promoter","auth","change-password"] },
+                "body": { "mode": "raw", "raw": "{ \"currentPassword\": \"secret123\", \"newPassword\": \"newsecret456\" }" }
+              }
+            },
+            { "name": "Logout", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/promoter/auth/logout", "host": ["{{URL}}"], "path": ["api","v1","promoter","auth","logout"] } } }
+          ]
+        },
+        {
+          "name": "02 Dashboard",
+          "item": [
+            { "name": "Dashboard", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/promoter/dashboard", "host": ["{{URL}}"], "path": ["api","v1","promoter","dashboard"] } } }
+          ]
+        },
+        {
+          "name": "03 Promocodes",
+          "item": [
+            { "name": "My Promocodes", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/promoter/promocodes", "host": ["{{URL}}"], "path": ["api","v1","promoter","promocodes"] } } },
+            { "name": "Promocode Detail", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/promoter/promocodes/{{promocode_id}}", "host": ["{{URL}}"], "path": ["api","v1","promoter","promocodes","{{promocode_id}}"] } } }
+          ]
+        },
+        {
+          "name": "04 Customers",
+          "item": [
+            { "name": "My Customers", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/promoter/customers?search=&page=1&limit=20", "host": ["{{URL}}"], "path": ["api","v1","promoter","customers"], "query": [{ "key": "search", "value": "" }, { "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] } } },
+            { "name": "Customer Detail", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/promoter/customers/{{customer_id}}", "host": ["{{URL}}"], "path": ["api","v1","promoter","customers","{{customer_id}}"] } } }
+          ]
+        },
+        {
+          "name": "05 Subscriptions",
+          "item": [
+            { "name": "My Subscriptions (course)", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/promoter/subscriptions?type=course&page=1&limit=20", "host": ["{{URL}}"], "path": ["api","v1","promoter","subscriptions"], "query": [{ "key": "type", "value": "course" }, { "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] } } },
+            { "name": "My Subscriptions (ebook)", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/promoter/subscriptions?type=ebook", "host": ["{{URL}}"], "path": ["api","v1","promoter","subscriptions"], "query": [{ "key": "type", "value": "ebook" }] } } },
+            { "name": "Subscription Report", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{promoterAccessToken}}" }], "auth": { "type": "noauth" }, "url": { "raw": "{{URL}}/api/v1/promoter/subscriptions/report", "host": ["{{URL}}"], "path": ["api","v1","promoter","subscriptions","report"] } } }
+          ]
+        }
+      ]
+    }
+  ],
+  "variable": [
+    { "key": "URL", "value": "http://localhost:8000", "type": "string" },
+    { "key": "accessToken", "value": "", "type": "string" },
+    { "key": "educatorAccessToken", "value": "", "type": "string" },
+    { "key": "educatorRefreshToken", "value": "", "type": "string" },
+    { "key": "promoterAccessToken", "value": "", "type": "string" },
+    { "key": "promoterRefreshToken", "value": "", "type": "string" },
+    { "key": "course_id", "value": "", "type": "string" },
+    { "key": "plan_id", "value": "", "type": "string" },
+    { "key": "package_id", "value": "", "type": "string" },
+    { "key": "ebook_id", "value": "", "type": "string" },
+    { "key": "ebook_plan_id", "value": "", "type": "string" },
+    { "key": "ebook_order_id", "value": "", "type": "string" },
+    { "key": "subscription_id", "value": "", "type": "string" },
+    { "key": "customer_id", "value": "", "type": "string" },
+    { "key": "shipping_id", "value": "", "type": "string" },
+    { "key": "video_id", "value": "", "type": "string" },
+    { "key": "exam_id", "value": "", "type": "string" },
+    { "key": "exam_question_id", "value": "", "type": "string" },
+    { "key": "exam_option_id", "value": "", "type": "string" },
+    { "key": "exam_result_id", "value": "", "type": "string" },
+    { "key": "promocode_id", "value": "", "type": "string" },
+    { "key": "promoter_id", "value": "", "type": "string" },
+    { "key": "faq_id", "value": "", "type": "string" },
+    { "key": "popup_id", "value": "", "type": "string" },
+    { "key": "banner_id", "value": "", "type": "string" },
+    { "key": "testimonial_id", "value": "", "type": "string" },
+    { "key": "terms_id", "value": "", "type": "string" },
+    { "key": "inquiry_id", "value": "", "type": "string" },
+    { "key": "department_id", "value": "", "type": "string" },
+    { "key": "notification_id", "value": "", "type": "string" },
+    { "key": "image_notification_id", "value": "", "type": "string" },
+    { "key": "offline_banner_id", "value": "", "type": "string" },
+    { "key": "offline_city_id", "value": "", "type": "string" },
+    { "key": "offline_center_id", "value": "", "type": "string" },
+    { "key": "offline_batch_id", "value": "", "type": "string" },
+    { "key": "offline_enquiry_id", "value": "", "type": "string" },
+    { "key": "razorpay_signature", "value": "", "type": "string" }
+  ]
+}

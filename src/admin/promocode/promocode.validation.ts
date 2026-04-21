@@ -1,0 +1,39 @@
+import { z } from "zod";
+import { PromocodeType } from "../../models/enums";
+
+const promocodeBase = z.object({
+  promocode: z.string().min(1).max(50),
+  title: z.string().max(255).optional().default(""),
+  description: z.string().max(1000).optional().default(""),
+  promo_start_at: z.string().min(1),
+  promo_expire_at: z.string().min(1),
+  type: z.enum([PromocodeType.PUBLIC, PromocodeType.PRIVATE]).default(PromocodeType.PRIVATE),
+  status: z.boolean().optional(),
+  promoterId: z.string().regex(/^[0-9a-fA-F]{24}$/).nullable().optional(),
+});
+
+const planLinkSchema = z.object({
+  planId: z.string().min(1),
+  customerPercentage: z.number().min(0).max(100).default(0),
+  promoterPercentage: z.number().min(0).max(100).default(0),
+});
+
+export const createPromocodeSchema = promocodeBase.extend({
+  plans: z.array(planLinkSchema).optional().default([]),
+});
+
+export const updatePromocodeSchema = promocodeBase.partial().extend({
+  plans: z.array(planLinkSchema).optional(),
+});
+
+export const togglePromocodeStatusSchema = z.object({
+  status: z.boolean(),
+});
+
+export const bulkPromocodeIdsSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1),
+});
+
+export const bulkPromocodeStatusSchema = bulkPromocodeIdsSchema.extend({
+  status: z.boolean(),
+});

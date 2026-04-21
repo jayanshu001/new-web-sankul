@@ -9,6 +9,11 @@ export interface IPackageCourseSubscription extends Document {
   startAt?: Date | null;
   endAt?: Date | null;
   status: boolean;
+  promocodeId?: mongoose.Types.ObjectId | null;
+  promoterId?: mongoose.Types.ObjectId | null;
+  paidAmount?: number | null;
+  customerPercentage?: number | null;
+  promoterPercentage?: number | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -23,9 +28,17 @@ const packageCourseSubscriptionSchema: Schema = new Schema(
     startAt: { type: Date, default: null },
     endAt: { type: Date, default: null },
     status: { type: Boolean, default: true },
+    promocodeId: { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
+    promoterId: { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
+    paidAmount: { type: Number, default: null },
+    customerPercentage: { type: Number, default: null },
+    promoterPercentage: { type: Number, default: null },
   },
   { timestamps: true }
 );
+
+packageCourseSubscriptionSchema.index({ promoterId: 1, createdAt: -1 });
+packageCourseSubscriptionSchema.index({ promocodeId: 1 });
 
 packageCourseSubscriptionSchema.index({ customerId: 1 });
 packageCourseSubscriptionSchema.index({ courseId: 1 });

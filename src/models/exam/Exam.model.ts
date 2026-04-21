@@ -21,7 +21,7 @@ export interface IExam extends Document {
   orderBy: number;
   language: ExamLanguage;
   difficulty?: ExamDifficulty;
-  sendReminder: boolean;
+  sendPush: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -61,9 +61,9 @@ const ExamSchema = new Schema<IExam>(
       default: ExamLanguage.GUJARATI,
     },
     difficulty: { type: String, enum: Object.values(ExamDifficulty) },
-    sendReminder: { type: Boolean, default: false },
+    sendPush: { type: Boolean, default: false },
   },
-  { collection: "ws_exams", timestamps: true }
+  { collection: "ws_exam", timestamps: true }
 );
 
 ExamSchema.index({ categoryId: 1, status: 1, orderBy: 1 });

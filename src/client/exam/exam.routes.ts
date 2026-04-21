@@ -4,15 +4,15 @@ import {
   listCategories,
   listExamsByCategory,
   getDailyExams,
+  getExamQuestions,
   getExamDetail,
-  startAttempt,
-  getAttemptQuestions,
-  autosaveAnswers,
-  submitAttempt,
-  getAttemptSolution,
-  getAttemptAnalytics,
-  listMyAttempts,
+  saveAnswers,
+  getSolutionByExam,
+  getSolutionAnalyticsByExam,
+  getSolutionDownloadByExam,
+  listMyResults,
   getMyOverallAnalytics,
+  rateExamResult,
 } from "./exam.controller";
 
 const router = Router();
@@ -24,19 +24,23 @@ router.get("/categories", listCategories);
 router.get("/categories/:categoryId/exams", listExamsByCategory);
 router.get("/daily", getDailyExams);
 
-// My attempt history + summary
-router.get("/my/attempts", listMyAttempts);
+// My history / analytics
+router.get("/my/attempts", listMyResults);
 router.get("/my/analytics", getMyOverallAnalytics);
 
-// Exam detail + lifecycle
-router.get("/:id", getExamDetail);
-router.post("/:id/attempts", startAttempt);
-router.get("/:id/attempts/:attemptId/questions", getAttemptQuestions);
-router.patch("/attempts/:attemptId/answers", autosaveAnswers);
-router.post("/:id/attempts/:attemptId/submit", submitAttempt);
+// Exam detail (meta only) + taking
+router.get("/:id/detail", getExamDetail);
+router.get("/:id/questions", getExamQuestions);
 
-// Post-submit views
-router.get("/attempts/:attemptId/solution", getAttemptSolution);
-router.get("/attempts/:attemptId/analytics", getAttemptAnalytics);
+// Post-submit views (keyed by examId, as in old API)
+router.get("/:id/solution", getSolutionByExam);
+router.get("/:id/solution/analytics", getSolutionAnalyticsByExam);
+router.get("/:id/solution/download", getSolutionDownloadByExam);
+
+// Submit rating
+router.post("/:id/rate", rateExamResult);
+
+// Old-API compat: `GET /:id` returned questions for taking (same as /:id/questions)
+router.get("/:id", getExamQuestions);
 
 export default router;

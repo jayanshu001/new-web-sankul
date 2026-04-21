@@ -4,7 +4,6 @@ import {
   ExamStatus,
   ExamDifficulty,
   ExamLanguage,
-  ExamQuestionType,
 } from "../../models/enums";
 
 // ─── Category ─────────────────────────────────────────────────────────────────
@@ -49,7 +48,7 @@ export const createExamSchema = z.object({
   difficulty: z
     .enum([ExamDifficulty.EASY, ExamDifficulty.MEDIUM, ExamDifficulty.HARD])
     .optional(),
-  sendReminder: z.boolean().optional(),
+  sendPush: z.boolean().optional(),
 });
 
 export const updateExamSchema = createExamSchema.partial();
@@ -59,30 +58,41 @@ export const reorderExamsSchema = z.object({
 });
 
 // ─── Question ─────────────────────────────────────────────────────────────────
+// Matches old schema: question has `answer` (text), options live in separate collection.
+// A special option named "skip" is allowed — submitting it counts as a skipped answer.
 
 const optionSchema = z.object({
-  text: z.string().min(1).max(1000),
+  name: z.string().min(1).max(1000),
   image: z.string().max(500).optional(),
-  isCorrect: z.boolean().default(false),
+  orderBy: z.number().int().optional(),
 });
 
-export const createQuestionSchema = z.object({
-  examId: z.string().min(1),
+const questionBase = {
   title: z.string().min(1),
+  answer: z.string().min(1).max(1000),
   image: z.string().max(500).optional(),
   solutionText: z.string().optional(),
   solutionImage: z.string().max(500).optional(),
-  type: z
-    .enum([ExamQuestionType.SINGLE, ExamQuestionType.MULTI])
-    .default(ExamQuestionType.SINGLE),
   options: z.array(optionSchema).min(2),
-  positiveMarksOverride: z.number().nullable().optional(),
-  negativeMarksOverride: z.number().nullable().optional(),
   orderBy: z.number().int().optional(),
   status: z.boolean().optional(),
+};
+
+export const createQuestionSchema = z.object({
+  examId: z.string().min(1),
+  ...questionBase,
 });
 
-export const updateQuestionSchema = createQuestionSchema.partial().omit({ examId: true });
+export const updateQuestionSchema = z.object({
+  title: questionBase.title.optional(),
+  answer: questionBase.answer.optional(),
+  image: questionBase.image,
+  solutionText: questionBase.solutionText,
+  solutionImage: questionBase.solutionImage,
+  options: questionBase.options.optional(),
+  orderBy: questionBase.orderBy,
+  status: questionBase.status,
+});
 
 export const reorderQuestionsSchema = z.object({
   orders: z.array(z.object({ id: z.string(), orderBy: z.number().int() })).min(1),
@@ -90,5 +100,7 @@ export const reorderQuestionsSchema = z.object({
 
 export const bulkCreateQuestionsSchema = z.object({
   examId: z.string().min(1),
-  questions: z.array(createQuestionSchema.omit({ examId: true })).min(1),
+  questions: z
+    .array(z.object(questionBase))
+    .min(1),
 });

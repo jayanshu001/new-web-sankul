@@ -11,7 +11,7 @@ declare module "express-serve-static-core" {
       id: string;
       phone?: string;
       email?: string;
-      role: "customer" | "admin" | "super_admin" | "editor";
+      role: "customer" | "admin" | "super_admin" | "editor" | "educator" | "promoter";
       [k: string]: any;
     };
   }
@@ -52,6 +52,22 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
       const activeAdminToken = await redisClient.get(`admin_session:${decoded.id}`);
       if (!activeAdminToken || activeAdminToken !== token) {
         return failure(res, "Admin session expired or logged in elsewhere.", 401);
+      }
+    }
+
+    // Enforce 1 active device rule for educators
+    if (decoded.type === "educator") {
+      const activeEducatorToken = await redisClient.get(`educator_session:${decoded.id}`);
+      if (!activeEducatorToken || activeEducatorToken !== token) {
+        return failure(res, "Educator session expired or logged in elsewhere.", 401);
+      }
+    }
+
+    // Enforce 1 active device rule for promoters
+    if (decoded.type === "promoter") {
+      const activePromoterToken = await redisClient.get(`promoter_session:${decoded.id}`);
+      if (!activePromoterToken || activePromoterToken !== token) {
+        return failure(res, "Promoter session expired or logged in elsewhere.", 401);
       }
     }
 

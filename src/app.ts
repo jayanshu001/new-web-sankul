@@ -18,6 +18,8 @@ import {
 // ─── Route modules ──────────────────────────────────────────────────────────
 import clientRoutes from "./client/client.routes";
 import adminRoutes from "./admin/admin.routes";
+import educatorRoutes from "./educator/educator.routes";
+import promoterRoutes from "./promoter/promoter.routes";
 
 const app = express();
 
@@ -138,6 +140,12 @@ app.use("/api/v1/client", clientRoutes);
 
 // Master Admin Routes (Dashboard)
 app.use("/api/v1/admin", adminRoutes);
+
+// Master Educator Routes (Educator Portal)
+app.use("/api/v1/educator", educatorRoutes);
+
+// Master Promoter Routes (Promoter Portal)
+app.use("/api/v1/promoter", promoterRoutes);
 
 
 // --- 400 on bad JSON (syntax) ----------------------------------------------

@@ -23,8 +23,9 @@ import {
   reorderQuestions,
   getExamSubmissions,
   getExamAnalytics,
-  getAttemptById,
-  invalidateAttempt,
+  getResultById,
+  invalidateResult,
+  getCustomerAnalytics,
 } from "./exam.controller";
 
 const router = Router();
@@ -60,7 +61,8 @@ router.delete("/questions/:id", deleteQuestion);
 // Submissions / Analytics
 router.get("/:examId/submissions", getExamSubmissions);
 router.get("/:examId/analytics", getExamAnalytics);
-router.get("/attempts/:id", getAttemptById);
-router.patch("/attempts/:id/invalidate", invalidateAttempt);
+router.get("/results/:id", getResultById);
+router.patch("/results/:id/invalidate", invalidateResult);
+router.get("/analytics/customer/:customerId", getCustomerAnalytics);
 
 export default router;

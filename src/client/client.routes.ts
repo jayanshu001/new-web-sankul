@@ -9,6 +9,18 @@ import clientBookRoutes from "./book/book.routes";
 import clientExamRoutes from "./exam/exam.routes";
 import clientMaterialRoutes from "./material/material.routes";
 import clientPackageRoutes from "./package/package.routes";
+import clientPromocodeRoutes from "./promocode/promocode.routes";
+import clientEbookRoutes from "./ebook/ebook.routes";
+import clientOrdersRoutes from "./orders/orders.routes";
+import clientCmsRoutes from "./cms/cms.routes";
+import clientInquiryRoutes from "./inquiry/inquiry.routes";
+import clientNotificationRoutes from "./notification/notification.routes";
+import clientDashboardRoutes from "./dashboard/dashboard.routes";
+import clientOfflineRoutes from "./offline/offline.routes";
+import clientWishlistRoutes from "./wishlist/wishlist.routes";
+import clientWebhookRoutes from "./webhook/webhook.routes";
+import clientTrackingRoutes from "./tracking/tracking.routes";
+import clientSaveRoutes from "./save/save.routes";
 
 const router = Router();
 
@@ -30,8 +42,17 @@ router.use("/books", clientBookRoutes); // -> /api/v1/client/books/*
 router.use("/exams", clientExamRoutes); // -> /api/v1/client/exams/*
 router.use("/materials", clientMaterialRoutes); // -> /api/v1/client/materials/*
 router.use("/packages", clientPackageRoutes); // -> /api/v1/client/packages/*
-
-// Future Routes (e.g. Exams, Payments)
-// router.use("/exams", clientExamRoutes);
+router.use("/promocodes", clientPromocodeRoutes); // -> /api/v1/client/promocodes/*
+router.use("/ebooks", clientEbookRoutes); // -> /api/v1/client/ebooks/*
+router.use("/orders", clientOrdersRoutes); // -> /api/v1/client/orders/*
+router.use("/", clientCmsRoutes); // -> /api/v1/client/{faqs|popup|banners|testimonials|terms|version|upgrade}
+router.use("/", clientInquiryRoutes); // -> /api/v1/client/{inquiry|contactus}
+router.use("/", clientNotificationRoutes); // -> /api/v1/client/{notifications|image-notifications}
+router.use("/dashboard", clientDashboardRoutes); // -> /api/v1/client/dashboard
+router.use("/offline", clientOfflineRoutes); // -> /api/v1/client/offline/*
+router.use("/wishlist", clientWishlistRoutes); // -> /api/v1/client/wishlist/*
+router.use("/webhook", clientWebhookRoutes); // -> /api/v1/client/webhook/*
+router.use("/tracking", clientTrackingRoutes); // -> /api/v1/client/tracking
+router.use("/save", clientSaveRoutes); // -> /api/v1/client/save/answers (old-API compat)
 
 export default router;

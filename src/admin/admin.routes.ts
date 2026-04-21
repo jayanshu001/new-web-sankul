@@ -12,6 +12,15 @@ import adminExamRoutes from "./exam/exam.routes";
 import adminMaterialRoutes from "./material/material.routes";
 import adminPackageRoutes from "./package/package.routes";
 import adminPlanRoutes from "./plan/plan.routes";
+import adminPromocodeRoutes from "./promocode/promocode.routes";
+import adminSubscriptionRoutes from "./subscription/subscription.routes";
+import adminCmsRoutes from "./cms/cms.routes";
+import adminInquiryRoutes from "./inquiry/inquiry.routes";
+import adminNotificationRoutes from "./notification/notification.routes";
+import adminOfflineRoutes from "./offline/offline.routes";
+import adminPromoterRoutes from "./promoter/promoter.routes";
+import adminDashboardRoutes from "./dashboard/dashboard.routes";
+import adminTrackingRoutes from "./tracking/tracking.routes";
 
 const router = Router();
 
@@ -38,5 +47,14 @@ router.use("/exams", adminExamRoutes);
 router.use("/materials", adminMaterialRoutes);
 router.use("/packages", adminPackageRoutes);
 router.use("/plans", adminPlanRoutes);
+router.use("/promocodes", adminPromocodeRoutes);
+router.use("/subscriptions", adminSubscriptionRoutes);
+router.use("/cms", adminCmsRoutes);
+router.use("/", adminInquiryRoutes); // -> /api/v1/admin/{inquiries|departments}
+router.use("/notifications", adminNotificationRoutes);
+router.use("/offline", adminOfflineRoutes);
+router.use("/promoters", adminPromoterRoutes);
+router.use("/dashboard", adminDashboardRoutes);
+router.use("/tracking", adminTrackingRoutes);
 
 export default router;

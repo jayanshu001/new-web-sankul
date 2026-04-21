@@ -3,8 +3,11 @@ import mongoose from "mongoose";
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { ExamQuestion } from "../../models/exam/ExamQuestion.model";
-import { ExamAttempt } from "../../models/exam/ExamAttempt.model";
-import { ExamStatus, ExamQuestionType, ExamAttemptStatus, ExamResultType } from "../../models/enums";
+import { ExamQuestionOption } from "../../models/exam/ExamQuestionOption.model";
+import { ExamResult } from "../../models/exam/ExamResult.model";
+import { ExamResultDetail } from "../../models/exam/ExamResultDetail.model";
+import { ExamResultDetailAnalytics } from "../../models/exam/ExamResultDetailAnalytics.model";
+import { ExamStatus, ExamResultType } from "../../models/enums";
 import {
   createCategorySchema,
   updateCategorySchema,
@@ -17,6 +20,8 @@ import {
   bulkCreateQuestionsSchema,
 } from "./exam.validation";
 
+const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
+
 // ─── Exam Categories ──────────────────────────────────────────────────────────
 
 export const getCategories = async (req: Request, res: Response) => {
@@ -24,7 +29,7 @@ export const getCategories = async (req: Request, res: Response) => {
     const { parentId, search, status } = req.query as Record<string, string>;
     const filter: any = {};
     if (parentId === "root" || parentId === "null") filter.parentId = null;
-    else if (parentId && mongoose.Types.ObjectId.isValid(parentId)) filter.parentId = parentId;
+    else if (parentId && isObjectId(parentId)) filter.parentId = parentId;
     if (search) filter.name = { $regex: search, $options: "i" };
     if (status === "true" || status === "false") filter.status = status === "true";
 
@@ -59,7 +64,7 @@ export const getCategoryTree = async (_req: Request, res: Response) => {
 export const getCategoryById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const cat = await ExamCategory.findById(id);
     if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
@@ -71,7 +76,7 @@ export const getCategoryById = async (req: Request, res: Response) => {
 
 async function buildAncestors(parentId?: string | null): Promise<mongoose.Types.ObjectId[]> {
   if (!parentId) return [];
-  if (!mongoose.Types.ObjectId.isValid(parentId)) return [];
+  if (!isObjectId(parentId)) return [];
   const parent = await ExamCategory.findById(parentId).select("_id ancestors");
   if (!parent) return [];
   return [...(parent.ancestors || []), parent._id];
@@ -96,7 +101,7 @@ export const createCategory = async (req: Request, res: Response) => {
 export const updateCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const data = updateCategorySchema.parse(req.body);
     const update: any = { ...data };
@@ -119,7 +124,7 @@ export const updateCategory = async (req: Request, res: Response) => {
 export const deleteCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const childCount = await ExamCategory.countDocuments({ parentId: id });
     if (childCount > 0) {
@@ -159,7 +164,7 @@ export const getExams = async (req: Request, res: Response) => {
 
     const filter: any = {};
     if (search) filter.title = { $regex: search, $options: "i" };
-    if (categoryId && mongoose.Types.ObjectId.isValid(categoryId)) filter.categoryId = categoryId;
+    if (categoryId && isObjectId(categoryId)) filter.categoryId = categoryId;
     if (type) filter.type = type;
     if (status) filter.status = status;
     if (isPaid === "true" || isPaid === "false") filter.isPaid = isPaid === "true";
@@ -190,7 +195,7 @@ export const getExams = async (req: Request, res: Response) => {
 export const getExamById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
     const exam = await Exam.findById(id).populate("categoryId", "_id name");
     if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
@@ -224,7 +229,7 @@ export const createExam = async (req: Request, res: Response) => {
 export const updateExam = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
     const data = updateExamSchema.parse(req.body);
     if (data.startAt && data.endAt && new Date(data.startAt) >= new Date(data.endAt)) {
@@ -247,12 +252,18 @@ export const deleteExam = async (req: Request, res: Response) => {
   const session = await mongoose.startSession();
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
 
     await session.withTransaction(async () => {
+      const qIds = await ExamQuestion.find({ examId: id }, { _id: 1 }, { session });
+      const questionIds = qIds.map((q) => q._id);
+      if (questionIds.length) {
+        await ExamQuestionOption.deleteMany({ questionId: { $in: questionIds } }, { session });
+      }
       await ExamQuestion.deleteMany({ examId: id }, { session });
-      await ExamAttempt.deleteMany({ examId: id }, { session });
+      await ExamResultDetail.deleteMany({ examId: id }, { session });
+      await ExamResult.deleteMany({ examId: id }, { session });
       await Exam.findByIdAndDelete(id, { session });
     });
 
@@ -267,7 +278,7 @@ export const deleteExam = async (req: Request, res: Response) => {
 export const updateExamStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
     const { status } = req.body as { status: ExamStatus };
     if (!Object.values(ExamStatus).includes(status)) {
@@ -284,12 +295,8 @@ export const updateExamStatus = async (req: Request, res: Response) => {
 export const reorderExams = async (req: Request, res: Response) => {
   try {
     const { orders } = reorderExamsSchema.parse(req.body);
-    const orderBys = new Set(orders.map((o) => o.orderBy));
-    if (orderBys.size !== orders.length) {
-      return res.status(400).json({ success: false, message: "Duplicate orderBy values." });
-    }
     const ops = orders
-      .filter((o) => mongoose.Types.ObjectId.isValid(o.id))
+      .filter((o) => isObjectId(o.id))
       .map((o) => ({ updateOne: { filter: { _id: o.id }, update: { $set: { orderBy: o.orderBy } } } }));
     if (!ops.length) return res.status(400).json({ success: false, message: "No valid ids." });
     await Exam.bulkWrite(ops);
@@ -301,15 +308,13 @@ export const reorderExams = async (req: Request, res: Response) => {
 };
 
 // ─── Questions ────────────────────────────────────────────────────────────────
+// Options live in a separate collection. Correctness uses ExamQuestion.answer text match.
 
-function validateQuestionOptions(options: any[], type: ExamQuestionType) {
-  const correctCount = options.filter((o) => o.isCorrect).length;
-  if (type === ExamQuestionType.SINGLE && correctCount !== 1) {
-    return "Single-choice question must have exactly one correct option.";
-  }
-  if (type === ExamQuestionType.MULTI && correctCount < 1) {
-    return "Multi-choice question must have at least one correct option.";
-  }
+function validateAnswerAmongOptions(answer: string, options: { name: string }[]) {
+  const norm = (s: string) => (s ?? "").trim().toLowerCase();
+  const match = options.find((o) => norm(o.name) === norm(answer));
+  if (!match)
+    return "The `answer` value must match one of the option `name`s.";
   return null;
 }
 
@@ -317,7 +322,7 @@ export const getQuestions = async (req: Request, res: Response) => {
   try {
     const { examId, search, status, page = "1", limit = "50" } = req.query as Record<string, string>;
     const filter: any = {};
-    if (examId && mongoose.Types.ObjectId.isValid(examId)) filter.examId = examId;
+    if (examId && isObjectId(examId)) filter.examId = examId;
     if (search) filter.title = { $regex: search, $options: "i" };
     if (status === "true" || status === "false") filter.status = status === "true";
 
@@ -325,14 +330,27 @@ export const getQuestions = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 50, 1);
     const skip = (pageNum - 1) * limitNum;
 
-    const [data, total] = await Promise.all([
-      ExamQuestion.find(filter).sort({ orderBy: 1, createdAt: 1 }).skip(skip).limit(limitNum),
+    const [questions, total] = await Promise.all([
+      ExamQuestion.find(filter).sort({ orderBy: 1, createdAt: 1 }).skip(skip).limit(limitNum).lean(),
       ExamQuestion.countDocuments(filter),
     ]);
 
+    const qIds = questions.map((q: any) => q._id);
+    const options = await ExamQuestionOption.find({ questionId: { $in: qIds } })
+      .sort({ orderBy: 1, createdAt: 1 })
+      .lean();
+    const optsByQuestion: Record<string, any[]> = {};
+    options.forEach((o: any) => {
+      (optsByQuestion[String(o.questionId)] ||= []).push(o);
+    });
+    const decorated = questions.map((q: any) => ({
+      ...q,
+      options: optsByQuestion[String(q._id)] || [],
+    }));
+
     return res.status(200).json({
       success: true,
-      data,
+      data: decorated,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
@@ -343,91 +361,199 @@ export const getQuestions = async (req: Request, res: Response) => {
 export const getQuestionById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid question id." });
-    const q = await ExamQuestion.findById(id);
+    const q = await ExamQuestion.findById(id).lean();
     if (!q) return res.status(404).json({ success: false, message: "Question not found." });
-    return res.status(200).json({ success: true, data: q });
+    const options = await ExamQuestionOption.find({ questionId: id })
+      .sort({ orderBy: 1, createdAt: 1 })
+      .lean();
+    return res.status(200).json({ success: true, data: { ...q, options } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const createQuestion = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
   try {
     const data = createQuestionSchema.parse(req.body);
-    if (!mongoose.Types.ObjectId.isValid(data.examId)) {
+    if (!isObjectId(data.examId)) {
       return res.status(400).json({ success: false, message: "Invalid examId." });
     }
     const exam = await Exam.findById(data.examId);
     if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
 
-    const err = validateQuestionOptions(data.options, data.type);
+    const err = validateAnswerAmongOptions(data.answer, data.options);
     if (err) return res.status(400).json({ success: false, message: err });
 
-    const q = await ExamQuestion.create(data);
-    return res.status(201).json({ success: true, data: q });
+    let created: any;
+    await session.withTransaction(async () => {
+      const [q] = await ExamQuestion.create(
+        [
+          {
+            examId: data.examId,
+            title: data.title,
+            answer: data.answer,
+            image: data.image ?? null,
+            solutionText: data.solutionText ?? null,
+            solutionImage: data.solutionImage ?? null,
+            orderBy: data.orderBy ?? 0,
+            status: data.status ?? true,
+          },
+        ],
+        { session }
+      );
+      const optionDocs = data.options.map((o, idx) => ({
+        questionId: q._id,
+        name: o.name,
+        image: o.image ?? null,
+        orderBy: o.orderBy ?? idx,
+      }));
+      await ExamQuestionOption.insertMany(optionDocs, { session });
+      created = { ...q.toObject(), options: optionDocs };
+    });
+
+    return res.status(201).json({ success: true, data: created });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
 export const bulkCreateQuestions = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
   try {
     const { examId, questions } = bulkCreateQuestionsSchema.parse(req.body);
-    if (!mongoose.Types.ObjectId.isValid(examId))
+    if (!isObjectId(examId))
       return res.status(400).json({ success: false, message: "Invalid examId." });
 
     const exam = await Exam.findById(examId);
     if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
 
     for (const q of questions) {
-      const err = validateQuestionOptions(q.options, q.type);
-      if (err) return res.status(400).json({ success: false, message: `Question "${q.title.slice(0, 40)}": ${err}` });
+      const err = validateAnswerAmongOptions(q.answer, q.options);
+      if (err)
+        return res.status(400).json({ success: false, message: `Question "${q.title.slice(0, 40)}": ${err}` });
     }
 
-    const payload = questions.map((q) => ({ ...q, examId }));
-    const created = await ExamQuestion.insertMany(payload);
+    const created: any[] = [];
+    await session.withTransaction(async () => {
+      for (const q of questions) {
+        const [doc] = await ExamQuestion.create(
+          [
+            {
+              examId,
+              title: q.title,
+              answer: q.answer,
+              image: q.image ?? null,
+              solutionText: q.solutionText ?? null,
+              solutionImage: q.solutionImage ?? null,
+              orderBy: q.orderBy ?? 0,
+              status: q.status ?? true,
+            },
+          ],
+          { session }
+        );
+        const optionDocs = q.options.map((o, idx) => ({
+          questionId: doc._id,
+          name: o.name,
+          image: o.image ?? null,
+          orderBy: o.orderBy ?? idx,
+        }));
+        await ExamQuestionOption.insertMany(optionDocs, { session });
+        created.push({ ...doc.toObject(), options: optionDocs });
+      }
+    });
     return res.status(201).json({ success: true, data: created, count: created.length });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
 export const updateQuestion = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid question id." });
     const data = updateQuestionSchema.parse(req.body);
 
-    if (data.options) {
-      const type = data.type ?? ExamQuestionType.SINGLE;
-      const err = validateQuestionOptions(data.options, type);
+    // If both options + answer updated, validate match. If only answer, validate against existing options.
+    if (data.options || data.answer !== undefined) {
+      const options =
+        data.options ??
+        (await ExamQuestionOption.find({ questionId: id })
+          .select("name")
+          .lean());
+      const answer =
+        data.answer ??
+        (await ExamQuestion.findById(id).select("answer").lean())?.answer ??
+        "";
+      const err = validateAnswerAmongOptions(answer, options as any);
       if (err) return res.status(400).json({ success: false, message: err });
     }
 
-    const q = await ExamQuestion.findByIdAndUpdate(id, { $set: data }, { new: true });
-    if (!q) return res.status(404).json({ success: false, message: "Question not found." });
-    return res.status(200).json({ success: true, data: q });
+    let updated: any;
+    await session.withTransaction(async () => {
+      const update: any = { ...data };
+      delete update.options;
+      const q = await ExamQuestion.findByIdAndUpdate(id, { $set: update }, { new: true, session });
+      if (!q) throw new Error("Question not found.");
+
+      if (data.options) {
+        await ExamQuestionOption.deleteMany({ questionId: id }, { session });
+        const docs = data.options.map((o: any, idx: number) => ({
+          questionId: id,
+          name: o.name,
+          image: o.image ?? null,
+          orderBy: o.orderBy ?? idx,
+        }));
+        await ExamQuestionOption.insertMany(docs, { session });
+      }
+
+      const options = await ExamQuestionOption.find({ questionId: id })
+        .sort({ orderBy: 1 })
+        .lean({ session } as any);
+      updated = { ...q.toObject(), options };
+    });
+
+    return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.message === "Question not found.")
+      return res.status(404).json({ success: false, message: error.message });
     return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
 export const deleteQuestion = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid question id." });
-    const q = await ExamQuestion.findByIdAndDelete(id);
-    if (!q) return res.status(404).json({ success: false, message: "Question not found." });
+
+    let found: any = null;
+    await session.withTransaction(async () => {
+      found = await ExamQuestion.findByIdAndDelete(id, { session });
+      if (!found) return;
+      await ExamQuestionOption.deleteMany({ questionId: id }, { session });
+      await ExamResultDetail.deleteMany({ questionId: id }, { session });
+    });
+    if (!found) return res.status(404).json({ success: false, message: "Question not found." });
     return res.status(200).json({ success: true, message: "Question deleted." });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -435,7 +561,7 @@ export const reorderQuestions = async (req: Request, res: Response) => {
   try {
     const { orders } = reorderQuestionsSchema.parse(req.body);
     const ops = orders
-      .filter((o) => mongoose.Types.ObjectId.isValid(o.id))
+      .filter((o) => isObjectId(o.id))
       .map((o) => ({ updateOne: { filter: { _id: o.id }, update: { $set: { orderBy: o.orderBy } } } }));
     if (!ops.length) return res.status(400).json({ success: false, message: "No valid ids." });
     await ExamQuestion.bulkWrite(ops);
@@ -448,10 +574,11 @@ export const reorderQuestions = async (req: Request, res: Response) => {
 
 // ─── Submissions / Analytics ──────────────────────────────────────────────────
 
+// GET /api/v1/admin/exams/:examId/submissions
 export const getExamSubmissions = async (req: Request, res: Response) => {
   try {
     const examId = req.params.examId as string;
-    if (!mongoose.Types.ObjectId.isValid(examId))
+    if (!isObjectId(examId))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
 
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
@@ -459,14 +586,14 @@ export const getExamSubmissions = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
-    const filter = { examId, status: ExamAttemptStatus.SUBMITTED };
+    const filter = { examId };
     const [data, total] = await Promise.all([
-      ExamAttempt.find(filter)
+      ExamResult.find(filter)
         .populate("customerId", "_id firstName lastName phoneNumber emailAddress")
-        .sort({ score: -1, submittedAt: 1 })
+        .sort({ score: -1, updatedAt: 1 })
         .skip(skip)
         .limit(limitNum),
-      ExamAttempt.countDocuments(filter),
+      ExamResult.countDocuments(filter),
     ]);
 
     return res.status(200).json({
@@ -479,35 +606,39 @@ export const getExamSubmissions = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/admin/exams/:examId/analytics
 export const getExamAnalytics = async (req: Request, res: Response) => {
   try {
     const examId = req.params.examId as string;
-    if (!mongoose.Types.ObjectId.isValid(examId))
+    if (!isObjectId(examId))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
 
-    const overall = await ExamAttempt.aggregate([
-      {
-        $match: {
-          examId: new mongoose.Types.ObjectId(examId),
-          status: ExamAttemptStatus.SUBMITTED,
-        },
-      },
+    const oid = new mongoose.Types.ObjectId(examId);
+
+    const overall = await ExamResult.aggregate([
+      { $match: { examId: oid } },
       {
         $group: {
           _id: null,
-          totalAttempts: { $sum: 1 },
-          uniqueCandidates: { $addToSet: "$customerId" },
+          totalCandidates: { $sum: 1 },
           avgScore: { $avg: "$score" },
           maxScore: { $max: "$score" },
           minScore: { $min: "$score" },
-          avgAccuracy: { $avg: "$accuracy" },
+          avgAccuracy: {
+            $avg: {
+              $cond: [
+                { $gt: ["$total", 0] },
+                { $multiply: [{ $divide: ["$success", "$total"] }, 100] },
+                0,
+              ],
+            },
+          },
         },
       },
       {
         $project: {
           _id: 0,
-          totalAttempts: 1,
-          uniqueCandidates: { $size: "$uniqueCandidates" },
+          totalCandidates: 1,
           avgScore: { $round: ["$avgScore", 2] },
           maxScore: 1,
           minScore: 1,
@@ -516,33 +647,20 @@ export const getExamAnalytics = async (req: Request, res: Response) => {
       },
     ]);
 
-    // Per-question accuracy
-    const perQuestion = await ExamAttempt.aggregate([
-      {
-        $match: {
-          examId: new mongoose.Types.ObjectId(examId),
-          status: ExamAttemptStatus.SUBMITTED,
-        },
-      },
-      { $unwind: "$answers" },
+    const perQuestion = await ExamResultDetail.aggregate([
+      { $match: { examId: oid } },
       {
         $group: {
-          _id: "$answers.questionId",
+          _id: "$questionId",
           total: { $sum: 1 },
-          correct: {
-            $sum: { $cond: [{ $eq: ["$answers.result", ExamResultType.TRUE] }, 1, 0] },
-          },
-          wrong: {
-            $sum: { $cond: [{ $eq: ["$answers.result", ExamResultType.FALSE] }, 1, 0] },
-          },
-          skipped: {
-            $sum: { $cond: [{ $eq: ["$answers.result", ExamResultType.SKIP] }, 1, 0] },
-          },
+          correct: { $sum: { $cond: [{ $eq: ["$result", ExamResultType.TRUE] }, 1, 0] } },
+          wrong: { $sum: { $cond: [{ $eq: ["$result", ExamResultType.FALSE] }, 1, 0] } },
+          skipped: { $sum: { $cond: [{ $eq: ["$result", ExamResultType.SKIP] }, 1, 0] } },
         },
       },
       {
         $lookup: {
-          from: "ws_exam_questions",
+          from: "ws_exam_question",
           localField: "_id",
           foreignField: "_id",
           as: "question",
@@ -578,33 +696,49 @@ export const getExamAnalytics = async (req: Request, res: Response) => {
   }
 };
 
-export const getAttemptById = async (req: Request, res: Response) => {
+// GET /api/v1/admin/exams/results/:id — fetch one ExamResult with details
+export const getResultById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid attempt id." });
-    const attempt = await ExamAttempt.findById(id)
+    if (!isObjectId(id))
+      return res.status(400).json({ success: false, message: "Invalid result id." });
+    const result = await ExamResult.findById(id)
       .populate("customerId", "_id firstName lastName phoneNumber emailAddress")
-      .populate("examId", "_id title type");
-    if (!attempt) return res.status(404).json({ success: false, message: "Attempt not found." });
-    return res.status(200).json({ success: true, data: attempt });
+      .populate("examId", "_id title type durationMinutes");
+    if (!result) return res.status(404).json({ success: false, message: "Result not found." });
+    const details = await ExamResultDetail.find({ examResultId: id }).lean();
+    return res.status(200).json({ success: true, data: { result, details } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-export const invalidateAttempt = async (req: Request, res: Response) => {
+// PATCH /api/v1/admin/exams/results/:id/invalidate — zero out a result (retains row)
+export const invalidateResult = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid attempt id." });
-    const attempt = await ExamAttempt.findByIdAndUpdate(
+    if (!isObjectId(id))
+      return res.status(400).json({ success: false, message: "Invalid result id." });
+    const result = await ExamResult.findByIdAndUpdate(
       id,
-      { $set: { status: ExamAttemptStatus.ABANDONED, score: 0, accuracy: 0 } },
+      { $set: { status: false, score: 0 } },
       { new: true }
     );
-    if (!attempt) return res.status(404).json({ success: false, message: "Attempt not found." });
-    return res.status(200).json({ success: true, data: attempt });
+    if (!result) return res.status(404).json({ success: false, message: "Result not found." });
+    return res.status(200).json({ success: true, data: result });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/admin/exams/analytics/customer/:customerId — lifetime aggregates
+export const getCustomerAnalytics = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.params.customerId as string;
+    if (!isObjectId(customerId))
+      return res.status(400).json({ success: false, message: "Invalid customer id." });
+    const analytics = await ExamResultDetailAnalytics.findOne({ customerId });
+    return res.status(200).json({ success: true, data: analytics });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

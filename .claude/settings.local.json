@@ -11,7 +11,8 @@
       "Bash(xargs grep *)",
       "Bash(node *)",
       "Bash(read f *)",
-      "Bash(awk '{ if \\(match\\($0, /[A-Z][a-zA-Z]+::class/\\)\\) { print substr\\($0, RSTART, RLENGTH\\) } }')"
+      "Bash(awk '{ if \\(match\\($0, /[A-Z][a-zA-Z]+::class/\\)\\) { print substr\\($0, RSTART, RLENGTH\\) } }')",
+      "Bash(npm run *)"
     ]
   }
 }

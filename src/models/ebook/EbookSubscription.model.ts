@@ -11,6 +11,8 @@ export interface IEbookSubscription extends Document {
   remarks?: string | null;
   paymentType: PackageCourseEbookPaymentType;
   status: boolean;
+  promocodeId?: mongoose.Types.ObjectId | null;
+  promoterId?: mongoose.Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -26,9 +28,13 @@ const ebookSubscriptionSchema: Schema = new Schema(
     remarks: { type: String, default: null },
     paymentType: { type: String, enum: Object.values(PackageCourseEbookPaymentType), default: PackageCourseEbookPaymentType.BACKEND },
     status: { type: Boolean, default: true },
+    promocodeId: { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
+    promoterId: { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
   },
   { timestamps: true }
 );
+
+ebookSubscriptionSchema.index({ promoterId: 1, createdAt: -1 });
 
 ebookSubscriptionSchema.index({ customerId: 1 });
 ebookSubscriptionSchema.index({ ebookId: 1 });
