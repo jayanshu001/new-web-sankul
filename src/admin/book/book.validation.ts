@@ -8,21 +8,22 @@ export const createBookSchema = z.object({
   image: z.string().max(500).optional(),
   description: z.string().optional(),
   demoUrl: z.string().max(500).optional(),
-  weight: z.number().int().nonnegative().optional(),
-  pages: z.number().int().nonnegative().optional(),
+  bookUrl: z.string().max(500).optional(),
+  weight: z.coerce.number().int().nonnegative().optional(),
+  pages: z.coerce.number().int().nonnegative().optional(),
   dynamicLink: z.string().max(500).optional(),
-  listPrice: z.number().int().nonnegative(),
-  discountedPrice: z.number().int().nonnegative(),
-  shippingPrice: z.number().int().nonnegative().default(0),
-  orderBy: z.number().int().default(0),
+  listPrice: z.coerce.number().int().nonnegative(),
+  discountedPrice: z.coerce.number().int().nonnegative(),
+  shippingPrice: z.coerce.number().int().nonnegative().default(0),
+  orderBy: z.coerce.number().int().default(0),
   language: z
     .enum([BookLanguage.ENGLISH, BookLanguage.GUJARATI, BookLanguage.HINDI])
     .optional(),
-  isMagazine: z.boolean().optional(),
-  isCombo: z.boolean().optional(),
+  isMagazine: z.coerce.boolean().optional(),
+  isCombo: z.coerce.boolean().optional(),
   publication: z.string().max(150).optional(),
   deliveryEta: z.string().max(100).optional(),
-  status: z.boolean().optional(),
+  status: z.coerce.boolean().optional(),
 });
 
 export const updateBookSchema = createBookSchema.partial();

@@ -8,6 +8,7 @@ export interface IBook extends Document {
   image?: string;
   description?: string;
   demoUrl?: string;
+  bookUrl?: string;
   weight?: number;
   pages?: number;
   dynamicLink?: string;
@@ -33,6 +34,7 @@ const BookSchema = new Schema<IBook>(
     image: { type: String, maxlength: 500 },
     description: { type: String },
     demoUrl: { type: String, maxlength: 500 },
+    bookUrl: { type: String, maxlength: 500 },
     weight: { type: Number, default: 0 },
     pages: { type: Number, default: 0 },
     dynamicLink: { type: String, maxlength: 500 },

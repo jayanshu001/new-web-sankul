@@ -84,6 +84,8 @@ async function buildAncestors(parentId?: string | null): Promise<mongoose.Types.
 
 export const createCategory = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
     const data = createCategorySchema.parse(req.body);
     const ancestors = await buildAncestors(data.parentId ?? null);
     const cat = await ExamCategory.create({
@@ -103,6 +105,8 @@ export const updateCategory = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
     const data = updateCategorySchema.parse(req.body);
     const update: any = { ...data };
     if (data.parentId !== undefined) {
@@ -389,6 +393,15 @@ export const createQuestion = async (req: Request, res: Response) => {
 
     let created: any;
     await session.withTransaction(async () => {
+      let nextOrder = data.orderBy;
+      if (nextOrder === undefined) {
+        const last = await ExamQuestion.findOne({ examId: data.examId })
+          .sort({ orderBy: -1 })
+          .select("orderBy")
+          .session(session)
+          .lean();
+        nextOrder = (last?.orderBy ?? -1) + 1;
+      }
       const [q] = await ExamQuestion.create(
         [
           {
@@ -398,7 +411,7 @@ export const createQuestion = async (req: Request, res: Response) => {
             image: data.image ?? null,
             solutionText: data.solutionText ?? null,
             solutionImage: data.solutionImage ?? null,
-            orderBy: data.orderBy ?? 0,
+            orderBy: nextOrder,
             status: data.status ?? true,
           },
         ],
@@ -441,7 +454,14 @@ export const bulkCreateQuestions = async (req: Request, res: Response) => {
 
     const created: any[] = [];
     await session.withTransaction(async () => {
+      const last = await ExamQuestion.findOne({ examId })
+        .sort({ orderBy: -1 })
+        .select("orderBy")
+        .session(session)
+        .lean();
+      let cursor = (last?.orderBy ?? -1) + 1;
       for (const q of questions) {
+        const orderBy = q.orderBy ?? cursor++;
         const [doc] = await ExamQuestion.create(
           [
             {
@@ -451,7 +471,7 @@ export const bulkCreateQuestions = async (req: Request, res: Response) => {
               image: q.image ?? null,
               solutionText: q.solutionText ?? null,
               solutionImage: q.solutionImage ?? null,
-              orderBy: q.orderBy ?? 0,
+              orderBy,
               status: q.status ?? true,
             },
           ],

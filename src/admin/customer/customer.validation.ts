@@ -17,10 +17,11 @@ export const createCustomerSchema = z.object({
   educationId: z.string().regex(objectIdRegex, "Invalid educationId").optional().nullable(),
   language: z.string().max(50).optional().nullable(),
   goals: z.array(z.string().regex(objectIdRegex)).optional().default([]),
-  status: z.boolean().optional().default(true),
+  profilePicture: z.string().max(500).optional().nullable(),
+  status: z.coerce.boolean().optional().default(true),
 });
 
-export const updateCustomerSchema = createCustomerSchema.partial().omit({ phoneNumber: true });
+export const updateCustomerSchema = createCustomerSchema.partial();
 
 export const updateSubscriptionDatesSchema = z.object({
   endAt: z.string().min(1, "endAt is required"),

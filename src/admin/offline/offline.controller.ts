@@ -32,6 +32,10 @@ export const listBanners = async (_req: Request, res: Response) => {
 
 export const createBanner = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.keyId === "string") req.body.keyId = Number(req.body.keyId);
+    if (typeof req.body.orderBy === "string") req.body.orderBy = Number(req.body.orderBy);
     const data = bannerCreateSchema.parse(req.body);
     const doc = await OfflineBannerSlider.create(data);
     return res.status(201).json({ success: true, data: doc });
@@ -45,6 +49,10 @@ export const updateBanner = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.keyId === "string") req.body.keyId = Number(req.body.keyId);
+    if (typeof req.body.orderBy === "string") req.body.orderBy = Number(req.body.orderBy);
     const data = bannerUpdateSchema.parse(req.body);
     const doc = await OfflineBannerSlider.findByIdAndUpdate(id, { $set: data }, { new: true });
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });
@@ -112,6 +120,10 @@ export const getCity = async (req: Request, res: Response) => {
 
 export const createCity = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const data = cityCreateSchema.parse(req.body);
     const doc = await OfflineCity.create(data);
     return res.status(201).json({ success: true, data: doc });
@@ -125,6 +137,10 @@ export const updateCity = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const data = cityUpdateSchema.parse(req.body);
     const doc = await OfflineCity.findByIdAndUpdate(id, { $set: data }, { new: true });
     if (!doc) return res.status(404).json({ success: false, message: "City not found." });
@@ -185,9 +201,29 @@ export const getCenter = async (req: Request, res: Response) => {
   }
 };
 
+const buildCenterPayload = (req: Request) => {
+  const body: Record<string, any> = { ...req.body };
+  if (body.latitude !== undefined) body.latitude = Number(body.latitude);
+  if (body.longitude !== undefined) body.longitude = Number(body.longitude);
+  if (body.status !== undefined && typeof body.status === "string") {
+    body.status = body.status === "true";
+  }
+
+  const uploaded = (req.files as Array<{ location?: string }> | undefined) ?? [];
+  const uploadedUrls = uploaded.map((f) => f.location).filter((u): u is string => !!u);
+
+  let existing: string[] = [];
+  if (Array.isArray(body.images)) existing = body.images.filter((x: any) => typeof x === "string");
+  else if (typeof body.images === "string" && body.images.length) existing = [body.images];
+
+  body.images = [...existing, ...uploadedUrls];
+  return body;
+};
+
 export const createCenter = async (req: Request, res: Response) => {
   try {
-    const data = centerCreateSchema.parse(req.body);
+    const payload = buildCenterPayload(req);
+    const data = centerCreateSchema.parse(payload);
     const cityExists = await OfflineCity.exists({ _id: data.cityId });
     if (!cityExists) return res.status(404).json({ success: false, message: "City not found." });
     const doc = await OfflineCenter.create(data);
@@ -202,7 +238,9 @@ export const updateCenter = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    const data = centerUpdateSchema.parse(req.body);
+    const payload = buildCenterPayload(req);
+    if (payload.images && payload.images.length === 0) delete payload.images;
+    const data = centerUpdateSchema.parse(payload);
     const doc = await OfflineCenter.findByIdAndUpdate(id, { $set: data }, { new: true });
     if (!doc) return res.status(404).json({ success: false, message: "Center not found." });
     return res.status(200).json({ success: true, data: doc });
@@ -274,6 +312,9 @@ export const getBatch = async (req: Request, res: Response) => {
 
 export const createBatch = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const data = batchCreateSchema.parse(req.body);
     const centerExists = await OfflineCenter.exists({ _id: data.centerId });
     if (!centerExists) return res.status(404).json({ success: false, message: "Center not found." });
@@ -289,6 +330,9 @@ export const updateBatch = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const data = batchUpdateSchema.parse(req.body);
     const update: any = { ...data };
     if (data.startAt) update.startAt = new Date(data.startAt);

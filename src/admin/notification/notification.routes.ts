@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { uploadS3 } from "../../middlewares/upload";
 import {
   broadcastNotification,
   listNotifications,
@@ -15,14 +16,14 @@ const router = Router();
 router.use(authenticate, requireRole("admin", "super_admin"));
 
 // Broadcast / log
-router.post("/broadcast", broadcastNotification);
+router.post("/broadcast", uploadS3.single("image"), broadcastNotification);
 router.get("/", listNotifications);
 router.delete("/:id", deleteNotification);
 
 // ImageNotification CRUD (in-app banners)
 router.get("/images", listImageNotifications);
-router.post("/images", createImageNotification);
-router.put("/images/:id", updateImageNotification);
+router.post("/images", uploadS3.single("image"), createImageNotification);
+router.put("/images/:id", uploadS3.single("image"), updateImageNotification);
 router.delete("/images/:id", deleteImageNotification);
 
 export default router;

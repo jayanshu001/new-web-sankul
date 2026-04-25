@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { uploadS3 } from "../../middlewares/upload";
 import {
   getCustomers,
   getCustomerById,
@@ -23,9 +24,9 @@ router.get("/pre-requisites", getCustomerPreRequisites);
 router.get("/states/:stateId/districts", getDistrictsByState);
 
 router.get("/", getCustomers);
-router.post("/", createCustomer);
+router.post("/", uploadS3.single("profilePicture"), createCustomer);
 router.get("/:id", getCustomerById);
-router.put("/:id", updateCustomer);
+router.put("/:id", uploadS3.single("profilePicture"), updateCustomer);
 router.delete("/:id", deleteCustomer);
 router.patch("/:id/status", toggleCustomerStatus);
 

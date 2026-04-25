@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { uploadS3Mixed } from "../../middlewares/upload";
 import {
   getBooks,
   getBookById,
@@ -20,14 +21,21 @@ const router = Router();
 
 router.use(authenticate, requireRole("admin", "super_admin"));
 
+const bookUploadFields = uploadS3Mixed.fields([
+  { name: "image", maxCount: 1 },
+  { name: "thumbnail", maxCount: 1 },
+  { name: "demoUrl", maxCount: 1 },
+  { name: "bookUrl", maxCount: 1 },
+]);
+
 // Books CRUD
 router.get("/", getBooks);
-router.post("/", createBook);
+router.post("/", bookUploadFields, createBook);
 router.post("/reorder", reorderBooks);
 router.get("/settings", getSettings);
 router.put("/settings", updateSettings);
 router.get("/:id", getBookById);
-router.put("/:id", updateBook);
+router.put("/:id", bookUploadFields, updateBook);
 router.delete("/:id", deleteBook);
 router.patch("/:id/status", toggleBookStatus);
 

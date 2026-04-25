@@ -67,6 +67,9 @@ export const getPromoter = async (req: Request, res: Response) => {
 // POST /api/v1/admin/promoters
 export const createPromoter = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const data = createPromoterSchema.parse(req.body);
     const existing = await Promoter.findOne({ email: data.email.toLowerCase() });
     if (existing)
@@ -93,6 +96,9 @@ export const updatePromoter = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
 
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const data = updatePromoterSchema.parse(req.body);
     const update: any = { ...data };
     if (data.email) update.email = data.email.toLowerCase();

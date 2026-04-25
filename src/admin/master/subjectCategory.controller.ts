@@ -14,6 +14,10 @@ export const getSubjectCategories = async (req: Request, res: Response) => {
 
 export const createSubjectCategory = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = createSubjectCategorySchema.parse(req.body);
     const category = new CourseSubjectCategory(validatedData);
     await category.save();
@@ -30,6 +34,10 @@ export const updateSubjectCategory = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Subject Category ID" });
     }
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = updateSubjectCategorySchema.parse(req.body);
     const category = await CourseSubjectCategory.findByIdAndUpdate(id, validatedData, { new: true });
     if (!category) return res.status(404).json({ success: false, message: "Category not found" });

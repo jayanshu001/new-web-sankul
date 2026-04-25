@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { uploadS3 } from "../../middlewares/upload";
 import {
   getCategories,
   getCategoryTree,
@@ -35,9 +36,9 @@ router.use(authenticate, requireRole("admin", "super_admin"));
 // Categories
 router.get("/categories/tree", getCategoryTree);
 router.get("/categories", getCategories);
-router.post("/categories", createCategory);
+router.post("/categories", uploadS3.single("image"), createCategory);
 router.get("/categories/:id", getCategoryById);
-router.put("/categories/:id", updateCategory);
+router.put("/categories/:id", uploadS3.single("image"), updateCategory);
 router.delete("/categories/:id", deleteCategory);
 
 // Exams

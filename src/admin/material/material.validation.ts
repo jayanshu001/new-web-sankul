@@ -7,8 +7,8 @@ export const createMaterialCategorySchema = z.object({
   slug: z.string().max(255).optional(),
   image: z.string().max(500).optional(),
   parent: z.string().nullable().optional(),
-  order: z.number().int().optional(),
-  status: z.boolean().optional(),
+  order: z.coerce.number().int().optional(),
+  status: z.coerce.boolean().optional(),
 });
 
 export const updateMaterialCategorySchema = createMaterialCategorySchema.partial();

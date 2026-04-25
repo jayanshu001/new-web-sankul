@@ -87,6 +87,8 @@ export const getCategoryById = async (req: Request, res: Response) => {
 
 export const createCategory = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
     const data = createMaterialCategorySchema.parse(req.body);
     const ancestors = await buildAncestors(data.parent ?? null);
     const cat = await MaterialCategory.create({
@@ -107,6 +109,8 @@ export const updateCategory = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
     const data = updateMaterialCategorySchema.parse(req.body);
     const update: any = { ...data };
     if (data.parent !== undefined) {

@@ -278,6 +278,10 @@ export const createCourse = async (req: Request, res: Response) => {
     session = await mongoose.startSession();
     session.startTransaction();
 
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = createCourseSchema.parse(req.body);
 
     const newCourse = new Course(validatedData);
@@ -318,6 +322,10 @@ export const updateCourse = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Course ID" });
     }
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = createCourseSchema.partial().parse(req.body);
     const course = await Course.findByIdAndUpdate(id, validatedData, { new: true });
     if (!course) return res.status(404).json({ success: false, message: "Course not found" });

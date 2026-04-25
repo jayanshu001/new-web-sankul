@@ -15,6 +15,10 @@ export const getVideoCategories = async (req: Request, res: Response) => {
 
 export const createVideoCategory = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.order_by === "string") req.body.order_by = Number(req.body.order_by);
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = createVideoCategorySchema.parse(req.body);
     const category = new VideoCategory(validatedData);
     await category.save();
@@ -31,6 +35,10 @@ export const updateVideoCategory = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
     }
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.order_by === "string") req.body.order_by = Number(req.body.order_by);
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = updateVideoCategorySchema.parse(req.body);
     const category = await VideoCategory.findByIdAndUpdate(id, validatedData, { new: true });
     if (!category) return res.status(404).json({ success: false, message: "Video Category not found" });

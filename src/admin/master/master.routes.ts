@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { uploadS3 } from "../../middlewares/upload";
 import { getEducators, createEducator, updateEducator, deleteEducator } from "./educator.controller";
 import { getSubjectCategories, createSubjectCategory, updateSubjectCategory, deleteSubjectCategory } from "./subjectCategory.controller";
 import { getMaterials, createMaterial, updateMaterial, deleteMaterial } from "./material.controller";
@@ -12,26 +13,26 @@ router.use(authenticate, requireRole("admin", "super_admin"));
 
 // Educator Master
 router.get("/educators", getEducators);
-router.post("/educators", createEducator);
-router.put("/educators/:id", updateEducator);
+router.post("/educators", uploadS3.single("image"), createEducator);
+router.put("/educators/:id", uploadS3.single("image"), updateEducator);
 router.delete("/educators/:id", deleteEducator);
 
 // Subject Category Master
 router.get("/subject-categories", getSubjectCategories);
-router.post("/subject-categories", createSubjectCategory);
-router.put("/subject-categories/:id", updateSubjectCategory);
+router.post("/subject-categories", uploadS3.single("image"), createSubjectCategory);
+router.put("/subject-categories/:id", uploadS3.single("image"), updateSubjectCategory);
 router.delete("/subject-categories/:id", deleteSubjectCategory);
 
 // Material Master
 router.get("/materials", getMaterials);
-router.post("/materials", createMaterial);
-router.put("/materials/:id", updateMaterial);
+router.post("/materials", uploadS3.single("image"), createMaterial);
+router.put("/materials/:id", uploadS3.single("image"), updateMaterial);
 router.delete("/materials/:id", deleteMaterial);
 
 // Video Category Master
 router.get("/video-categories", getVideoCategories);
-router.post("/video-categories", createVideoCategory);
-router.put("/video-categories/:id", updateVideoCategory);
+router.post("/video-categories", uploadS3.single("image"), createVideoCategory);
+router.put("/video-categories/:id", uploadS3.single("image"), updateVideoCategory);
 router.delete("/video-categories/:id", deleteVideoCategory);
 
 export default router;

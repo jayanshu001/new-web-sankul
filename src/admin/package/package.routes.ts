@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { uploadS3 } from "../../middlewares/upload";
 import {
   listPackageTypes,
   createPackageType,
@@ -40,10 +41,10 @@ router.delete("/types/:id", deletePackageType);
 
 // Packages
 router.get("/", listPackages);
-router.post("/", createPackage);
+router.post("/", uploadS3.single("image"), createPackage);
 router.post("/reorder", reorderPackages);
 router.get("/:id", getPackageById);
-router.put("/:id", updatePackage);
+router.put("/:id", uploadS3.single("image"), updatePackage);
 router.delete("/:id", deletePackage);
 router.patch("/:id/status", togglePackageStatus);
 

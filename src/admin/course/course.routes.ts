@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { uploadS3 } from "../../middlewares/upload";
 import {
   getPreRequisites,
   getCourses,
@@ -59,10 +60,10 @@ router.get("/", getCourses);
 router.get("/:id", getCourseById);
 
 // POST create course
-router.post("/", createCourse);
+router.post("/", uploadS3.single("image"), createCourse);
 
 // PUT update course
-router.put("/:id", updateCourse);
+router.put("/:id", uploadS3.single("image"), updateCourse);
 
 // DELETE delete course
 router.delete("/:id", deleteCourse);

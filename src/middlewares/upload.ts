@@ -19,19 +19,26 @@ const s3Config = new S3Client({
   forcePathStyle: false // Ensures DO virtual routing (bucket.blr1.digitaloceanspaces.com) works perfectly
 });
 
+const s3Storage = multerS3({
+  s3: s3Config,
+  bucket: process.env.DO_BUCKET || "websankul-staging",
+  acl: "public-read", // Makes file publicly accessible via CDN URL
+  contentType: multerS3.AUTO_CONTENT_TYPE,
+  key: function (req, file, cb) {
+    // e.g. admin/profiles/1678123412-image.jpg
+    const extension = path.extname(file.originalname);
+    const filename = `admin/profiles/${Date.now()}-${file.fieldname}${extension}`;
+    cb(null, filename);
+  },
+});
+
+const IMAGE_FIELDS = new Set(["image", "thumbnail", "profilePicture"]);
+const PDF_FIELDS = new Set(["demoUrl", "bookUrl"]);
+const IMAGE_TYPES = /jpeg|jpg|png|webp/;
+const PDF_TYPES = /pdf/;
+
 export const uploadS3 = multer({
-  storage: multerS3({
-    s3: s3Config,
-    bucket: process.env.DO_BUCKET || "websankul-staging",
-    acl: "public-read", // Makes file publicly accessible via CDN URL
-    contentType: multerS3.AUTO_CONTENT_TYPE,
-    key: function (req, file, cb) {
-      // e.g. admin/profiles/1678123412-image.jpg
-      const extension = path.extname(file.originalname);
-      const filename = `admin/profiles/${Date.now()}-${file.fieldname}${extension}`;
-      cb(null, filename);
-    },
-  }),
+  storage: s3Storage,
   limits: {
     fileSize: 5 * 1024 * 1024, // 5 MB ceiling
   },
@@ -40,14 +47,39 @@ export const uploadS3 = multer({
       return cb(new Error("File uploads are disabled: DigitalOcean Spaces credentials are not configured."));
     }
 
-    const allowedTypes = /jpeg|jpg|png|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
+    const extname = IMAGE_TYPES.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = IMAGE_TYPES.test(file.mimetype);
 
     if (mimetype && extname) {
       return cb(null, true);
     }
     cb(new Error("Invalid file type. Only JPEG, PNG, and WebP images are allowed."));
+  },
+});
+
+// For routes that accept both images (image/thumbnail) and PDFs (demoUrl/bookUrl)
+// in a single multipart request — use with `.fields([...])`.
+export const uploadS3Mixed = multer({
+  storage: s3Storage,
+  limits: {
+    fileSize: 50 * 1024 * 1024, // 50 MB ceiling for PDFs
+  },
+  fileFilter: (req, file, cb) => {
+    if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
+      return cb(new Error("File uploads are disabled: DigitalOcean Spaces credentials are not configured."));
+    }
+
+    const ext = path.extname(file.originalname).toLowerCase();
+
+    if (IMAGE_FIELDS.has(file.fieldname)) {
+      if (IMAGE_TYPES.test(ext) && IMAGE_TYPES.test(file.mimetype)) return cb(null, true);
+      return cb(new Error(`Invalid file type for ${file.fieldname}. Only JPEG, PNG, WebP allowed.`));
+    }
+    if (PDF_FIELDS.has(file.fieldname)) {
+      if (PDF_TYPES.test(ext) && PDF_TYPES.test(file.mimetype)) return cb(null, true);
+      return cb(new Error(`Invalid file type for ${file.fieldname}. Only PDF allowed.`));
+    }
+    cb(new Error(`Unexpected file field: ${file.fieldname}`));
   },
 });
 

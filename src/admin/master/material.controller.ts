@@ -14,6 +14,9 @@ export const getMaterials = async (req: Request, res: Response) => {
 
 export const createMaterial = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.isActive === "string") req.body.isActive = req.body.isActive === "true";
     const validatedData = createMaterialSchema.parse(req.body);
     const material = new PackageCourseMaterial(validatedData);
     await material.save();
@@ -30,6 +33,9 @@ export const updateMaterial = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Material ID" });
     }
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.isActive === "string") req.body.isActive = req.body.isActive === "true";
     const validatedData = updateMaterialSchema.parse(req.body);
     const material = await PackageCourseMaterial.findByIdAndUpdate(id, validatedData, { new: true });
     if (!material) return res.status(404).json({ success: false, message: "Material not found" });

@@ -14,6 +14,9 @@ export const getEducators = async (req: Request, res: Response) => {
 
 export const createEducator = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = createEducatorSchema.parse(req.body);
     const educator = new CourseEducator(validatedData);
     await educator.save();
@@ -30,6 +33,9 @@ export const updateEducator = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Educator ID" });
     }
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = updateEducatorSchema.parse(req.body);
     const educator = await CourseEducator.findByIdAndUpdate(id, validatedData, { new: true });
     if (!educator) return res.status(404).json({ success: false, message: "Educator not found" });

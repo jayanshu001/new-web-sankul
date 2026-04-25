@@ -71,8 +71,18 @@ export const getBookById = async (req: Request, res: Response) => {
   }
 };
 
+const mergeUploadedFiles = (req: Request) => {
+  const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
+  if (!files) return;
+  for (const field of ["image", "thumbnail", "demoUrl", "bookUrl"]) {
+    const f = files[field]?.[0] as any;
+    if (f?.location) req.body[field] = f.location;
+  }
+};
+
 export const createBook = async (req: Request, res: Response) => {
   try {
+    mergeUploadedFiles(req);
     const data = createBookSchema.parse(req.body);
     if (data.discountedPrice > data.listPrice) {
       return res.status(400).json({
@@ -93,6 +103,7 @@ export const updateBook = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid book id." });
+    mergeUploadedFiles(req);
     const data = updateBookSchema.parse(req.body);
     if (
       data.discountedPrice !== undefined &&

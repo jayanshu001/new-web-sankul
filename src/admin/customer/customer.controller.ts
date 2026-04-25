@@ -131,6 +131,8 @@ export const getDistrictsByState = async (req: Request, res: Response) => {
 
 export const createCustomer = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.profilePicture = file.location;
     const validatedData = createCustomerSchema.parse(req.body);
 
     const phoneExists = await Customer.exists({ phoneNumber: validatedData.phoneNumber, isAccountDeleted: false });
@@ -169,6 +171,8 @@ export const updateCustomer = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Customer ID" });
     }
 
+    const file = req.file as any;
+    if (file?.location) req.body.profilePicture = file.location;
     const validatedData = updateCustomerSchema.parse(req.body);
 
     if (validatedData.emailAddress) {
@@ -182,8 +186,20 @@ export const updateCustomer = async (req: Request, res: Response) => {
       }
     }
 
+    if (validatedData.phoneNumber) {
+      const phoneExists = await Customer.exists({
+        phoneNumber: validatedData.phoneNumber,
+        _id: { $ne: id },
+        isAccountDeleted: false,
+      });
+      if (phoneExists) {
+        return res.status(409).json({ success: false, message: "Phone number already registered" });
+      }
+    }
+
     const updatePayload: any = { ...validatedData };
     if (validatedData.dob) updatePayload.dob = new Date(validatedData.dob);
+    if (validatedData.phoneNumber) updatePayload.isPhoneVerified = false;
 
     const customer = await Customer.findOneAndUpdate(
       { _id: id, isAccountDeleted: false },

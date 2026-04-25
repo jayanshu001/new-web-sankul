@@ -23,6 +23,8 @@ const broadcastSchema = z.object({
 // Persists to ws_notifications and fans out Firebase push (placeholder — wire FCM SDK later).
 export const broadcastNotification = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
     const data = broadcastSchema.parse(req.body);
 
     let targets: string[] = [];
@@ -141,6 +143,9 @@ export const listImageNotifications = async (_req: Request, res: Response) => {
 
 export const createImageNotification = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
     const data = imageCreateSchema.parse(req.body);
     const doc = await ImageNotification.create(data);
     return res.status(201).json({ success: true, data: doc });
@@ -154,6 +159,9 @@ export const updateImageNotification = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
     const data = imageUpdateSchema.parse(req.body);
     const doc = await ImageNotification.findByIdAndUpdate(id, { $set: data }, { new: true });
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });

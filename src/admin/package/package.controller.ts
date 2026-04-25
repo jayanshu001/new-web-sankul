@@ -160,6 +160,10 @@ export const getPackageById = async (req: Request, res: Response) => {
 
 export const createPackage = async (req: Request, res: Response) => {
   try {
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
+    if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
     const data = createPackageSchema.parse(req.body);
     const payload: any = {
       ...data,
@@ -185,6 +189,10 @@ export const updatePackage = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid package id." });
+    const file = req.file as any;
+    if (file?.location) req.body.image = file.location;
+    if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
+    if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
     const data = updatePackageSchema.parse(req.body);
     const update: any = { ...data };
     if (data.packageTypeId !== undefined) update.packageTypeId = data.packageTypeId || null;
