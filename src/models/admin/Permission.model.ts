@@ -15,4 +15,6 @@ const PermissionSchema = new Schema<IPermission>(
   { collection: "ws_permissions", timestamps: true }
 );
 
+PermissionSchema.index({ name: 1, guardName: 1 }, { unique: true });
+
 export const Permission = model<IPermission>("Permission", PermissionSchema);

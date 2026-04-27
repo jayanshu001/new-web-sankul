@@ -5,6 +5,8 @@ export interface IVideoCategory extends Document {
   slug: string;
   image: string;
   courseId?: mongoose.Types.ObjectId;
+  childCategoryId?: mongoose.Types.ObjectId;
+  educatorId?: mongoose.Types.ObjectId;
   order_by: number;
   status: boolean;
   createdAt: Date;
@@ -17,6 +19,8 @@ const videoCategorySchema: Schema = new Schema(
     slug: { type: String, required: true },
     image: { type: String, required: true },
     courseId: { type: Schema.Types.ObjectId, ref: "Course", default: null },
+    childCategoryId: { type: Schema.Types.ObjectId, ref: "VideoCategory", default: null },
+    educatorId: { type: Schema.Types.ObjectId, ref: "CourseEducator", default: null },
     order_by: { type: Number, default: 0 },
     status: { type: Boolean, default: true },
   },

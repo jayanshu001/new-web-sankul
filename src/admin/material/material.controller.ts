@@ -291,8 +291,22 @@ export const getMaterialById = async (req: Request, res: Response) => {
   }
 };
 
+function applyUploadedFile(req: Request) {
+  const file = req.file as any;
+  if (file?.location) {
+    req.body.file = file.location;
+    if (file.size != null && req.body.fileSize == null) req.body.fileSize = file.size;
+    if (file.mimetype && !req.body.fileMime) req.body.fileMime = file.mimetype;
+  }
+  if (typeof req.body.fileSize === "string") req.body.fileSize = Number(req.body.fileSize);
+  if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
+  if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+  if (typeof req.body.isPreview === "string") req.body.isPreview = req.body.isPreview === "true";
+}
+
 export const createMaterial = async (req: Request, res: Response) => {
   try {
+    applyUploadedFile(req);
     const data = createMaterialSchema.parse(req.body);
     if (!mongoose.Types.ObjectId.isValid(data.materialCategoryId))
       return res.status(400).json({ success: false, message: "Invalid materialCategoryId." });
@@ -313,6 +327,7 @@ export const updateMaterial = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid material id." });
+    applyUploadedFile(req);
     const data = updateMaterialSchema.parse(req.body);
     if (
       data.materialCategoryId &&

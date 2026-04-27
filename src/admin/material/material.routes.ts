@@ -39,12 +39,12 @@ router.get("/categories/:id/materials", getCategoryMaterials);
 
 // Leaf materials
 router.get("/", listMaterials);
-router.post("/", createMaterial);
+router.post("/", uploadS3.single("file"), createMaterial);
 router.post("/reorder", reorderMaterials);
 router.post("/bulk-status", bulkStatus);
 router.post("/bulk-delete", bulkDelete);
 router.get("/:id", getMaterialById);
-router.put("/:id", updateMaterial);
+router.put("/:id", uploadS3.single("file"), updateMaterial);
 router.delete("/:id", deleteMaterial);
 router.patch("/:id/status", toggleMaterialStatus);
 
