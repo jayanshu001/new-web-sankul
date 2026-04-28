@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { uploadS3Mixed } from "../../middlewares/upload";
 import {
   getEbooks,
   getEbookById,
@@ -31,8 +32,15 @@ router.get("/", getEbooks);
 router.get("/reorder", reorderEbooks);
 router.post("/reorder", reorderEbooks);
 router.get("/:id", getEbookById);
-router.post("/", createEbook);
-router.put("/:id", updateEbook);
+const ebookUpload = uploadS3Mixed.fields([
+  { name: "image", maxCount: 1 },
+  { name: "thumbnail", maxCount: 1 },
+  { name: "demoUrl", maxCount: 1 },
+  { name: "bookUrl", maxCount: 1 },
+]);
+
+router.post("/", ebookUpload, createEbook);
+router.put("/:id", ebookUpload, updateEbook);
 router.delete("/:id", deleteEbook);
 
 // Pricing Plans

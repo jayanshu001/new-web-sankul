@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
+import mongoose from "mongoose";
 import { FAQ } from "../../models/system/FAQ.model";
+import { FaqType } from "../../models/system/FaqType.model";
 import { PopupNotification } from "../../models/system/PopupNotification.model";
 import { BannerSlider } from "../../models/system/BannerSlider.model";
 import { Testimonial } from "../../models/system/Testimonial.model";
@@ -7,13 +9,26 @@ import { TermsAndConditions } from "../../models/system/TermsAndConditions.model
 import { Version } from "../../models/system/Version.model";
 import { AppUpdate } from "../../models/system/AppUpdate.model";
 
-// GET /api/v1/client/faqs[?type=xxx]
+// GET /api/v1/client/faqs[?typeId=…]
 export const listFaqs = async (req: Request, res: Response) => {
   try {
-    const { type } = req.query as Record<string, string>;
+    const { typeId } = req.query as Record<string, string>;
     const filter: any = {};
-    if (type) filter.type = type;
-    const data = await FAQ.find(filter).sort({ createdAt: 1 }).lean();
+    if (typeId && mongoose.Types.ObjectId.isValid(typeId)) filter.typeId = typeId;
+    const data = await FAQ.find(filter)
+      .populate("typeId", "_id title")
+      .sort({ createdAt: 1 })
+      .lean();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/client/faq-types
+export const listFaqTypes = async (_req: Request, res: Response) => {
+  try {
+    const data = await FaqType.find().sort({ title: 1 }).lean();
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });

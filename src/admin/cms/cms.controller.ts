@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import mongoose, { Model } from "mongoose";
 import { FAQ } from "../../models/system/FAQ.model";
+import { FaqType } from "../../models/system/FaqType.model";
 import { PopupNotification } from "../../models/system/PopupNotification.model";
 import { BannerSlider } from "../../models/system/BannerSlider.model";
 import { Testimonial } from "../../models/system/Testimonial.model";
@@ -10,6 +11,8 @@ import { AppUpdate } from "../../models/system/AppUpdate.model";
 import {
   faqCreateSchema,
   faqUpdateSchema,
+  faqTypeCreateSchema,
+  faqTypeUpdateSchema,
   popupCreateSchema,
   popupUpdateSchema,
   bannerCreateSchema,
@@ -95,6 +98,31 @@ export const getFaq = genericGet(FAQ);
 export const createFaq = genericCreate(FAQ, faqCreateSchema);
 export const updateFaq = genericUpdate(FAQ, faqUpdateSchema);
 export const deleteFaq = genericDelete(FAQ);
+
+// ─── FAQ Type ──
+export const listFaqTypes = genericList(FaqType, { title: 1 });
+export const getFaqType = genericGet(FaqType);
+export const createFaqType = genericCreate(FaqType, faqTypeCreateSchema);
+export const updateFaqType = genericUpdate(FaqType, faqTypeUpdateSchema);
+
+export const deleteFaqType = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const inUse = await FAQ.exists({ typeId: id });
+    if (inUse) {
+      return res.status(409).json({
+        success: false,
+        message: "FAQ Type is in use by one or more FAQs and cannot be deleted.",
+      });
+    }
+    const doc = await FaqType.findByIdAndDelete(id);
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, message: "Deleted." });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
 
 // ─── Popup ──
 const popupTransform = (d: any) => ({ ...d, promoExpireAt: new Date(d.promoExpireAt) });

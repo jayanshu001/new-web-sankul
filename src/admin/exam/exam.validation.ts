@@ -1,10 +1,5 @@
 import { z } from "zod";
-import {
-  ExamType,
-  ExamStatus,
-  ExamDifficulty,
-  ExamLanguage,
-} from "../../models/enums";
+import { ExamType } from "../../models/enums";
 
 // ─── Category ─────────────────────────────────────────────────────────────────
 
@@ -22,33 +17,20 @@ export const updateCategorySchema = createCategorySchema.partial();
 
 export const createExamSchema = z.object({
   title: z.string().min(1).max(255),
-  description: z.string().optional(),
+  durationMinutes: z.coerce.number().int().positive(),
+  questionCount: z.coerce.number().int().positive(),
+  categoryId: z.string().nullable().optional(),
   type: z
     .enum([ExamType.DAILY, ExamType.SUBJECT, ExamType.MOCK, ExamType.WEEKLY])
     .default(ExamType.SUBJECT),
-  categoryId: z.string().nullable().optional(),
-  isPaid: z.boolean().optional(),
-  durationMinutes: z.number().int().positive(),
-  questionCount: z.number().int().positive(),
-  positiveMarks: z.number().nonnegative(),
-  negativeMarks: z.number(),
-  passingMarks: z.number().nonnegative().optional(),
-  solutionPdfUrl: z.string().max(500).optional(),
-  instructions: z.string().optional(),
-  policy: z.string().optional(),
+  positiveMarks: z.coerce.number().nonnegative(),
+  negativeMarks: z.coerce.number(),
   startAt: z.string().optional(),
   endAt: z.string().optional(),
-  status: z
-    .enum([ExamStatus.DRAFT, ExamStatus.SCHEDULED, ExamStatus.PUBLISHED, ExamStatus.ARCHIVED])
-    .optional(),
-  orderBy: z.number().int().optional(),
-  language: z
-    .enum([ExamLanguage.ENGLISH, ExamLanguage.GUJARATI, ExamLanguage.HINDI, ExamLanguage.BILINGUAL])
-    .optional(),
-  difficulty: z
-    .enum([ExamDifficulty.EASY, ExamDifficulty.MEDIUM, ExamDifficulty.HARD])
-    .optional(),
-  sendPush: z.boolean().optional(),
+  solutionPdfUrl: z.string().max(500).optional(),
+  sendPush: z.coerce.boolean().optional(),
+  isPaid: z.coerce.boolean().optional(),
+  status: z.coerce.boolean().optional(),
 });
 
 export const updateExamSchema = createExamSchema.partial();

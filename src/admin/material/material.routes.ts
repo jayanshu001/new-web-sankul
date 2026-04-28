@@ -1,6 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadS3Mixed } from "../../middlewares/upload";
 import {
   listCategories,
   getCategoryById,
@@ -39,12 +39,12 @@ router.get("/categories/:id/materials", getCategoryMaterials);
 
 // Leaf materials
 router.get("/", listMaterials);
-router.post("/", uploadS3.single("file"), createMaterial);
+router.post("/", uploadS3Mixed.single("file"), createMaterial);
 router.post("/reorder", reorderMaterials);
 router.post("/bulk-status", bulkStatus);
 router.post("/bulk-delete", bulkDelete);
 router.get("/:id", getMaterialById);
-router.put("/:id", uploadS3.single("file"), updateMaterial);
+router.put("/:id", uploadS3Mixed.single("file"), updateMaterial);
 router.delete("/:id", deleteMaterial);
 router.patch("/:id/status", toggleMaterialStatus);
 

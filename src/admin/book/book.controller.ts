@@ -74,7 +74,7 @@ export const getBookById = async (req: Request, res: Response) => {
 const mergeUploadedFiles = (req: Request) => {
   const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
   if (!files) return;
-  for (const field of ["image", "thumbnail", "demoUrl", "bookUrl"]) {
+  for (const field of ["image", "thumbnail", "demoUrl"]) {
     const f = files[field]?.[0] as any;
     if (f?.location) req.body[field] = f.location;
   }

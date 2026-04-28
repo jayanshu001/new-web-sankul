@@ -25,7 +25,6 @@ const bookUploadFields = uploadS3Mixed.fields([
   { name: "image", maxCount: 1 },
   { name: "thumbnail", maxCount: 1 },
   { name: "demoUrl", maxCount: 1 },
-  { name: "bookUrl", maxCount: 1 },
 ]);
 
 // Books CRUD

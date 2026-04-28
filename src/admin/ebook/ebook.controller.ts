@@ -71,8 +71,20 @@ export const getEbookById = async (req: Request, res: Response) => {
   }
 };
 
+function applyEbookUploads(req: Request) {
+  const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
+  if (!files) return;
+  for (const key of ["image", "thumbnail", "demoUrl", "bookUrl"] as const) {
+    const url = files[key]?.[0]?.location;
+    if (url) req.body[key] = url;
+  }
+  if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
+  if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+}
+
 export const createEbook = async (req: Request, res: Response) => {
   try {
+    applyEbookUploads(req);
     const validatedData = createEbookSchema.parse(req.body);
     const ebook = new Ebook(validatedData);
     await ebook.save();
@@ -90,6 +102,7 @@ export const updateEbook = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Ebook ID" });
     }
 
+    applyEbookUploads(req);
     const validatedData = updateEbookSchema.parse(req.body);
     const ebook = await Ebook.findByIdAndUpdate(id, validatedData, { new: true });
     if (!ebook) return res.status(404).json({ success: false, message: "Ebook not found" });

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   listFaqs,
+  listFaqTypes,
   getActivePopup,
   listBanners,
   listTestimonials,
@@ -13,6 +14,7 @@ const router = Router();
 
 // All CMS endpoints are public (no auth) — they power splash/onboarding screens.
 router.get("/faqs", listFaqs);
+router.get("/faq-types", listFaqTypes);
 router.get("/popup", getActivePopup);
 router.get("/banners", listBanners);
 router.get("/testimonials", listTestimonials);

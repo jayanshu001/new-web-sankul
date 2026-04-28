@@ -2,8 +2,8 @@ import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import {
   getOfflineDashboard,
-  listCities,
-  listCentersByCity,
+  // listCities,            // moved to /api/v1/client/address/cities
+  // listCentersByCity,     // moved to /api/v1/client/address/cities/:cityId/centers
   getCenterDetail,
   getBatchDetail,
   submitEnquiry,
@@ -13,8 +13,9 @@ const router = Router();
 
 // Dashboard + browsing — public (no auth) so marketing site can surface
 router.get("/", getOfflineDashboard);
-router.get("/cities", listCities);
-router.get("/cities/:cityId/centers", listCentersByCity);
+// Cities + centers-by-city moved to the address module — see address.routes.ts
+// router.get("/cities", listCities);
+// router.get("/cities/:cityId/centers", listCentersByCity);
 router.get("/centers/:id", getCenterDetail);
 router.get("/batches/:id", getBatchDetail);
 

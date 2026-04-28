@@ -3,6 +3,7 @@ import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
 import {
   listFaqs, getFaq, createFaq, updateFaq, deleteFaq,
+  listFaqTypes, getFaqType, createFaqType, updateFaqType, deleteFaqType,
   listPopups, getPopup, createPopup, updatePopup, deletePopup,
   listBanners, getBanner, createBanner, updateBanner, deleteBanner, reorderBanners,
   listTestimonials, getTestimonial, createTestimonial, updateTestimonial, deleteTestimonial,
@@ -38,6 +39,13 @@ router.post("/faqs", createFaq);
 router.get("/faqs/:id", getFaq);
 router.put("/faqs/:id", updateFaq);
 router.delete("/faqs/:id", deleteFaq);
+
+// FAQ Types
+router.get("/faq-types", listFaqTypes);
+router.post("/faq-types", createFaqType);
+router.get("/faq-types/:id", getFaqType);
+router.put("/faq-types/:id", updateFaqType);
+router.delete("/faq-types/:id", deleteFaqType);
 
 // Popup
 router.get("/popups", listPopups);

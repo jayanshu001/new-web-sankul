@@ -1,22 +1,22 @@
-import { Schema, model, Document } from "mongoose";
+import { Schema, model, Document, Types } from "mongoose";
 
 export interface IFAQ extends Document {
-  type: string;
+  typeId: Types.ObjectId;
   question: string;
   answer: string;
-  isExpand: boolean;
   createdAt?: Date;
   updatedAt?: Date;
 }
 
 const FAQSchema = new Schema<IFAQ>(
   {
-    type: { type: String, required: true },
+    typeId: { type: Schema.Types.ObjectId, ref: "FaqType", required: true },
     question: { type: String, required: true },
     answer: { type: String, required: true },
-    isExpand: { type: Boolean, required: true, default: false },
   },
   { collection: "ws_faqs", timestamps: true }
 );
+
+FAQSchema.index({ typeId: 1 });
 
 export const FAQ = model<IFAQ>("FAQ", FAQSchema);

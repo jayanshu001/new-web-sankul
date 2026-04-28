@@ -3,12 +3,17 @@ import { UpdateType } from "../../models/enums";
 
 // ─── FAQ ──
 export const faqCreateSchema = z.object({
-  type: z.string().min(1).max(100),
+  typeId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid typeId"),
   question: z.string().min(1).max(1000),
   answer: z.string().min(1),
-  isExpand: z.boolean().optional(),
 });
 export const faqUpdateSchema = faqCreateSchema.partial();
+
+// ─── FAQ Type ──
+export const faqTypeCreateSchema = z.object({
+  title: z.string().min(1).max(255),
+});
+export const faqTypeUpdateSchema = faqTypeCreateSchema.partial();
 
 // ─── Popup ──
 export const popupCreateSchema = z.object({

@@ -1,7 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import {
-  getStates, createState, updateState, deleteState,
   getDistricts, createDistrict, updateDistrict, deleteDistrict,
   getEducations, createEducation, updateEducation, deleteEducation,
   getTargetGoals, createTargetGoal, updateTargetGoal, deleteTargetGoal,
@@ -11,11 +10,11 @@ const router = Router();
 
 router.use(authenticate, requireRole("admin", "super_admin"));
 
-// States
-router.get("/states", getStates);
-router.post("/states", createState);
-router.put("/states/:id", updateState);
-router.delete("/states/:id", deleteState);
+// States — moved to /api/v1/admin/address/states (see admin/address/admin.address.routes.ts)
+// router.get("/states", getStates);
+// router.post("/states", createState);
+// router.put("/states/:id", updateState);
+// router.delete("/states/:id", deleteState);
 
 // Districts
 router.get("/districts", getDistricts);

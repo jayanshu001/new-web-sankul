@@ -27,6 +27,7 @@ import adminOfflineRoutes from "./offline/offline.routes";
 import adminPromoterRoutes from "./promoter/promoter.routes";
 import adminDashboardRoutes from "./dashboard/dashboard.routes";
 import adminTrackingRoutes from "./tracking/tracking.routes";
+import adminAddressRoutes from "./address/admin.address.routes";
 
 const router = Router();
 
@@ -68,5 +69,6 @@ router.use("/offline", adminOfflineRoutes);
 router.use("/promoters", adminPromoterRoutes);
 router.use("/dashboard", adminDashboardRoutes);
 router.use("/tracking", adminTrackingRoutes);
+router.use("/address", adminAddressRoutes); // -> /api/v1/admin/address/{states,cities}/*
 
 export default router;

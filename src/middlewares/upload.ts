@@ -33,7 +33,7 @@ const s3Storage = multerS3({
 });
 
 const IMAGE_FIELDS = new Set(["image", "thumbnail", "profilePicture"]);
-const PDF_FIELDS = new Set(["demoUrl", "bookUrl"]);
+const PDF_FIELDS = new Set(["demoUrl", "bookUrl", "file", "solutionPdfUrl"]);
 const IMAGE_TYPES = /jpeg|jpg|png|webp/;
 const PDF_TYPES = /pdf/;
 

@@ -210,8 +210,21 @@ export const getExamById = async (req: Request, res: Response) => {
   }
 };
 
+function applyExamUpload(req: Request) {
+  const file = req.file as any;
+  if (file?.location) req.body.solutionPdfUrl = file.location;
+}
+
+// Map the form's boolean Status toggle to the underlying enum.
+// Schema accepts boolean (z.coerce.boolean), then we translate here.
+function mapStatusFlagToEnum(statusFlag: unknown): string | undefined {
+  if (statusFlag === undefined || statusFlag === null) return undefined;
+  return statusFlag ? ExamStatus.PUBLISHED : ExamStatus.DRAFT;
+}
+
 export const createExam = async (req: Request, res: Response) => {
   try {
+    applyExamUpload(req);
     const data = createExamSchema.parse(req.body);
     if (data.startAt && data.endAt && new Date(data.startAt) >= new Date(data.endAt)) {
       return res.status(400).json({ success: false, message: "endAt must be after startAt." });
@@ -221,6 +234,7 @@ export const createExam = async (req: Request, res: Response) => {
       categoryId: data.categoryId || null,
       startAt: data.startAt ? new Date(data.startAt) : undefined,
       endAt: data.endAt ? new Date(data.endAt) : undefined,
+      status: mapStatusFlagToEnum(data.status),
     };
     const exam = await Exam.create(payload);
     return res.status(201).json({ success: true, data: exam });
@@ -235,6 +249,7 @@ export const updateExam = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
+    applyExamUpload(req);
     const data = updateExamSchema.parse(req.body);
     if (data.startAt && data.endAt && new Date(data.startAt) >= new Date(data.endAt)) {
       return res.status(400).json({ success: false, message: "endAt must be after startAt." });
@@ -243,6 +258,7 @@ export const updateExam = async (req: Request, res: Response) => {
     if (data.categoryId !== undefined) update.categoryId = data.categoryId || null;
     if (data.startAt) update.startAt = new Date(data.startAt);
     if (data.endAt) update.endAt = new Date(data.endAt);
+    if (data.status !== undefined) update.status = mapStatusFlagToEnum(data.status);
     const exam = await Exam.findByIdAndUpdate(id, { $set: update }, { new: true });
     if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
     return res.status(200).json({ success: true, data: exam });

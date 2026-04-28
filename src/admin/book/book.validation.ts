@@ -8,7 +8,6 @@ export const createBookSchema = z.object({
   image: z.string().max(500).optional(),
   description: z.string().optional(),
   demoUrl: z.string().max(500).optional(),
-  bookUrl: z.string().max(500).optional(),
   weight: z.coerce.number().int().nonnegative().optional(),
   pages: z.coerce.number().int().nonnegative().optional(),
   dynamicLink: z.string().max(500).optional(),
@@ -21,8 +20,6 @@ export const createBookSchema = z.object({
     .optional(),
   isMagazine: z.coerce.boolean().optional(),
   isCombo: z.coerce.boolean().optional(),
-  publication: z.string().max(150).optional(),
-  deliveryEta: z.string().max(100).optional(),
   status: z.coerce.boolean().optional(),
 });
 

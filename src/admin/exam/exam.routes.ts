@@ -1,6 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3 } from "../../middlewares/upload";
+import { uploadS3, uploadS3Mixed } from "../../middlewares/upload";
 import {
   getCategories,
   getCategoryTree,
@@ -42,11 +42,13 @@ router.put("/categories/:id", uploadS3.single("image"), updateCategory);
 router.delete("/categories/:id", deleteCategory);
 
 // Exams
+const examUpload = uploadS3Mixed.single("solutionPdfUrl");
+
 router.get("/", getExams);
-router.post("/", createExam);
+router.post("/", examUpload, createExam);
 router.post("/reorder", reorderExams);
 router.get("/:id", getExamById);
-router.put("/:id", updateExam);
+router.put("/:id", examUpload, updateExam);
 router.delete("/:id", deleteExam);
 router.patch("/:id/status", updateExamStatus);
 

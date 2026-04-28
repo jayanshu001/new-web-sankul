@@ -20,12 +20,12 @@ router.post("/banners/reorder", reorderBanners);
 router.put("/banners/:id", uploadS3.single("image"), updateBanner);
 router.delete("/banners/:id", deleteBanner);
 
-// Cities
-router.get("/cities", listCities);
-router.post("/cities", uploadS3.single("image"), createCity);
-router.get("/cities/:id", getCity);
-router.put("/cities/:id", uploadS3.single("image"), updateCity);
-router.delete("/cities/:id", deleteCity);
+// Cities — moved to /api/v1/admin/address/cities (see admin/address/admin.address.routes.ts)
+// router.get("/cities", listCities);
+// router.post("/cities", uploadS3.single("image"), createCity);
+// router.get("/cities/:id", getCity);
+// router.put("/cities/:id", uploadS3.single("image"), updateCity);
+// router.delete("/cities/:id", deleteCity);
 
 // Centers
 router.get("/centers", listCenters);
