@@ -14,6 +14,7 @@ export interface IEbook extends Document {
   bookUrl?: string;
   link: string;
   termsAndConditions?: string;
+  isTrending: boolean;
   status: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -33,12 +34,14 @@ const ebookSchema: Schema = new Schema(
     bookUrl: { type: String, default: null },
     link: { type: String, required: true },
     termsAndConditions: { type: String, default: null },
+    isTrending: { type: Boolean, default: false },
     status: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
 
 ebookSchema.index({ status: 1, order: 1 });
+ebookSchema.index({ status: 1, isTrending: 1, order: 1 });
 ebookSchema.index({ author: "text", name: "text" });
 
 export const Ebook = mongoose.model<IEbook>("Ebook", ebookSchema, "ws_ebooks");

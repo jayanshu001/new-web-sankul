@@ -152,6 +152,21 @@ export const toggleBookStatus = async (req: Request, res: Response) => {
   }
 };
 
+export const toggleBookTrending = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid book id." });
+    const book = await Book.findById(id).select("isTrending");
+    if (!book) return res.status(404).json({ success: false, message: "Book not found." });
+    book.isTrending = !book.isTrending;
+    await book.save();
+    return res.status(200).json({ success: true, data: { isTrending: book.isTrending } });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const reorderBooks = async (req: Request, res: Response) => {
   try {
     const { orders } = reorderBooksSchema.parse(req.body);

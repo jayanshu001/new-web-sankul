@@ -20,6 +20,7 @@ export const createBookSchema = z.object({
     .optional(),
   isMagazine: z.coerce.boolean().optional(),
   isCombo: z.coerce.boolean().optional(),
+  isTrending: z.coerce.boolean().optional(),
   status: z.coerce.boolean().optional(),
 });
 

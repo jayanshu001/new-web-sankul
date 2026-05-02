@@ -21,6 +21,7 @@ import clientWishlistRoutes from "./wishlist/wishlist.routes";
 import clientWebhookRoutes from "./webhook/webhook.routes";
 import clientTrackingRoutes from "./tracking/tracking.routes";
 import clientSaveRoutes from "./save/save.routes";
+import clientFreeRoutes from "./free/free.routes";
 
 const router = Router();
 
@@ -39,7 +40,7 @@ router.use("/courses", clientCourseRoutes); // -> /api/v1/client/courses/*
 router.use("/address", clientAddressRoutes); // -> /api/v1/client/address/*
 router.use("/referral", clientReferralRoutes); // -> /api/v1/client/referral/*
 router.use("/books", clientBookRoutes); // -> /api/v1/client/books/*
-router.use("/exams", clientExamRoutes); // -> /api/v1/client/exams/*
+router.use("/quizzes", clientExamRoutes); // -> /api/v1/client/quizzes/*
 router.use("/materials", clientMaterialRoutes); // -> /api/v1/client/materials/*
 router.use("/packages", clientPackageRoutes); // -> /api/v1/client/packages/*
 router.use("/promocodes", clientPromocodeRoutes); // -> /api/v1/client/promocodes/*
@@ -48,7 +49,8 @@ router.use("/orders", clientOrdersRoutes); // -> /api/v1/client/orders/*
 router.use("/", clientCmsRoutes); // -> /api/v1/client/{faqs|popup|banners|testimonials|terms|version|upgrade}
 router.use("/", clientInquiryRoutes); // -> /api/v1/client/{inquiry|contactus}
 router.use("/", clientNotificationRoutes); // -> /api/v1/client/{notifications|image-notifications}
-router.use("/dashboard", clientDashboardRoutes); // -> /api/v1/client/dashboard
+router.use("/", clientDashboardRoutes); // -> /api/v1/client/{dashboard|free-dashboard}
+router.use("/", clientFreeRoutes); // -> /api/v1/client/{free-tests|free-materials|free-videos}
 router.use("/offline", clientOfflineRoutes); // -> /api/v1/client/offline/*
 router.use("/wishlist", clientWishlistRoutes); // -> /api/v1/client/wishlist/*
 router.use("/webhook", clientWebhookRoutes); // -> /api/v1/client/webhook/*

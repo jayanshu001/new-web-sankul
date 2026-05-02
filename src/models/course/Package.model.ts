@@ -15,8 +15,11 @@ export interface IPackage extends Document {
   withoutMaterialText?: string;
   order: number;
   active: boolean;
+  isMagazine: boolean;
+  isPaid: boolean;
   packageTypeId?: Types.ObjectId | null;
   goalId?: Types.ObjectId | null;
+  goalLabelId?: Types.ObjectId | null;
   pcMaterialId?: Types.ObjectId | null;
   educatorId?: Types.ObjectId | null;
   specificSubjects: IPackageCategoryRef[];
@@ -46,8 +49,11 @@ const packageSchema = new Schema<IPackage>(
     withoutMaterialText: { type: String, default: "" },
     order: { type: Number, default: 0 },
     active: { type: Boolean, default: true },
+    isMagazine: { type: Boolean, default: false },
+    isPaid: { type: Boolean, default: true },
     packageTypeId: { type: Schema.Types.ObjectId, ref: "PackageType", default: null },
     goalId: { type: Schema.Types.ObjectId, ref: "Goal", default: null },
+    goalLabelId: { type: Schema.Types.ObjectId, default: null },
     pcMaterialId: {
       type: Schema.Types.ObjectId,
       ref: "PackageCourseMaterial",
@@ -64,6 +70,7 @@ const packageSchema = new Schema<IPackage>(
 
 packageSchema.index({ active: 1, order: 1 });
 packageSchema.index({ goalId: 1, active: 1 });
+packageSchema.index({ goalLabelId: 1, active: 1 });
 packageSchema.index({ packageTypeId: 1, active: 1 });
 packageSchema.index({ "specificSubjects.category": 1 });
 packageSchema.index({ "materialCategories.category": 1 });

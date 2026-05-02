@@ -17,7 +17,8 @@ export const getMyAddresses = async (req: Request, res: Response) => {
   try {
     const customerId = req.user?.id;
     const addresses = await CustomerAddress.find({ customerId, status: true })
-      .populate("stateId", "_id name stateCode")
+      .populate("stateId")
+      .populate("cityId")
       .sort({ createdAt: -1 });
     return res.status(200).json({ success: true, data: addresses });
   } catch (error: any) {
@@ -33,7 +34,9 @@ export const getAddressById = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
 
     const address = await CustomerAddress.findOne({ _id: id, customerId })
-      .populate("stateId", "_id name stateCode");
+      .populate("stateId", "_id name stateCode")
+      .populate("cityId", "_id name");
+
     if (!address) return res.status(404).json({ success: false, message: "Address not found" });
     return res.status(200).json({ success: true, data: address });
   } catch (error: any) {
@@ -72,6 +75,33 @@ export const updateAddress = async (req: Request, res: Response) => {
     return res.status(200).json({ success: true, data: address });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// PATCH /api/v1/client/address/:id/default
+export const setDefaultAddress = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid Address ID" });
+
+    const target = await CustomerAddress.findOne({ _id: id, customerId, status: true });
+    if (!target) return res.status(404).json({ success: false, message: "Address not found" });
+
+    await CustomerAddress.updateMany(
+      { customerId, _id: { $ne: id } },
+      { $set: { isDefault: false } }
+    );
+    target.isDefault = true;
+    await target.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Default address updated.",
+    });
+  } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };

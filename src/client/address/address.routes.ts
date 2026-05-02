@@ -5,6 +5,7 @@ import {
   getAddressById,
   createAddress,
   updateAddress,
+  setDefaultAddress,
   deleteAddress,
   getStates,
   // getDistrictsByState, // deprecated — use /cities instead
@@ -29,6 +30,7 @@ router.get("/", authenticate, getMyAddresses);
 router.post("/", authenticate, createAddress);
 router.get("/:id", authenticate, getAddressById);
 router.put("/:id", authenticate, updateAddress);
+router.patch("/:id/default", authenticate, setDefaultAddress);
 router.delete("/:id", authenticate, deleteAddress);
 
 export default router;

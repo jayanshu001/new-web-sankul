@@ -2,6 +2,7 @@ import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import {
   listBooks,
+  listTrendingBooks,
   getBookDetail,
   getCart,
   addToCart,
@@ -18,6 +19,7 @@ const router = Router();
 
 // Catalogue (public-ish: no auth required to browse; cart decoration enabled if auth header present)
 router.get("/", listBooks);
+router.get("/trending", authenticate, listTrendingBooks);
 
 // Cart (auth required)
 router.get("/cart", authenticate, getCart);

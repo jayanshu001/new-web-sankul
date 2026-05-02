@@ -8,6 +8,7 @@ import {
   updateBook,
   deleteBook,
   toggleBookStatus,
+  toggleBookTrending,
   reorderBooks,
   getOrders,
   getOrderById,
@@ -37,6 +38,7 @@ router.get("/:id", getBookById);
 router.put("/:id", bookUploadFields, updateBook);
 router.delete("/:id", deleteBook);
 router.patch("/:id/status", toggleBookStatus);
+router.patch("/:id/trending", toggleBookTrending);
 
 // Orders
 router.get("/orders/list", getOrders);

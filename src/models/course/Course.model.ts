@@ -15,6 +15,7 @@ export interface ICourse extends Document {
   withoutMaterial?: string;
   level: string;
   status: boolean;
+  isPaid: boolean;
 
   // Relations
   courseEducatorId?: mongoose.Types.ObjectId;
@@ -57,6 +58,7 @@ const courseSchema: Schema = new Schema(
     withoutMaterial: { type: String, default: "" },
     level: { type: String, required: true },
     status: { type: Boolean, required: true, default: true },
+    isPaid: { type: Boolean, default: true },
 
     // Relations
     courseEducatorId: { type: Schema.Types.ObjectId, ref: "CourseEducator", default: null },

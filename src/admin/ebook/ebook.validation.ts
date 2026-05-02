@@ -16,6 +16,7 @@ export const createEbookSchema = z.object({
   bookUrl: z.string().optional().nullable(),
   link: z.string().min(1, "Link is required"),
   termsAndConditions: z.string().optional().nullable(),
+  isTrending: z.boolean().optional().default(false),
   status: z.boolean().optional().default(true),
 });
 

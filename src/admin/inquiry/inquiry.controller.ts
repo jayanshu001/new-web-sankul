@@ -17,6 +17,7 @@ export const listInquiries = async (req: Request, res: Response) => {
     if (mode) filter.mode = mode;
     if (search) {
       filter.$or = [
+        { description: { $regex: search, $options: "i" } },
         { name: { $regex: search, $options: "i" } },
         { mobile: { $regex: search, $options: "i" } },
         { email: { $regex: search, $options: "i" } },
@@ -33,7 +34,11 @@ export const listInquiries = async (req: Request, res: Response) => {
     const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
-      Inquiry.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
+      Inquiry.find(filter)
+        .populate("customerId", "_id firstName lastName phoneNumber email")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
       Inquiry.countDocuments(filter),
     ]);
 
@@ -52,7 +57,9 @@ export const getInquiry = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    const doc = await Inquiry.findById(id).lean();
+    const doc = await Inquiry.findById(id)
+      .populate("customerId", "_id firstName lastName phoneNumber email")
+      .lean();
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });
     return res.status(200).json({ success: true, data: doc });
   } catch (e: any) {
@@ -77,8 +84,6 @@ export const deleteInquiry = async (req: Request, res: Response) => {
 
 const contactSchema = z.object({
   mobile: z.string().min(1).max(20),
-  isCallAvailable: z.boolean(),
-  isWhatsAppAvailable: z.boolean(),
   order: z.number().int().default(0),
   active: z.boolean().default(true),
 });

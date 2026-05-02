@@ -100,6 +100,8 @@ export const listPackages = async (req: Request, res: Response) => {
     const {
       search,
       active,
+      isMagazine,
+      isPaid,
       packageTypeId,
       goalId,
       page = "1",
@@ -109,6 +111,8 @@ export const listPackages = async (req: Request, res: Response) => {
     const filter: any = {};
     if (search) filter.name = { $regex: search, $options: "i" };
     if (active === "true" || active === "false") filter.active = active === "true";
+    if (isMagazine === "true" || isMagazine === "false") filter.isMagazine = isMagazine === "true";
+    if (isPaid === "true" || isPaid === "false") filter.isPaid = isPaid === "true";
     if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))
       filter.packageTypeId = packageTypeId;
     if (goalId && mongoose.Types.ObjectId.isValid(goalId)) filter.goalId = goalId;
@@ -164,11 +168,14 @@ export const createPackage = async (req: Request, res: Response) => {
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
     if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
+    if (typeof req.body.isMagazine === "string") req.body.isMagazine = req.body.isMagazine === "true";
+    if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
     const data = createPackageSchema.parse(req.body);
     const payload: any = {
       ...data,
       packageTypeId: data.packageTypeId || null,
       goalId: data.goalId || null,
+      goalLabelId: data.goalLabelId || null,
       pcMaterialId: data.pcMaterialId || null,
       educatorId: data.educatorId || null,
       specificSubjects: toCategoryRefs(data.specificSubjects) ?? [],
@@ -193,10 +200,13 @@ export const updatePackage = async (req: Request, res: Response) => {
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
     if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
+    if (typeof req.body.isMagazine === "string") req.body.isMagazine = req.body.isMagazine === "true";
+    if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
     const data = updatePackageSchema.parse(req.body);
     const update: any = { ...data };
     if (data.packageTypeId !== undefined) update.packageTypeId = data.packageTypeId || null;
     if (data.goalId !== undefined) update.goalId = data.goalId || null;
+    if (data.goalLabelId !== undefined) update.goalLabelId = data.goalLabelId || null;
     if (data.pcMaterialId !== undefined) update.pcMaterialId = data.pcMaterialId || null;
     if (data.educatorId !== undefined) update.educatorId = data.educatorId || null;
     if (data.specificSubjects) update.specificSubjects = toCategoryRefs(data.specificSubjects);

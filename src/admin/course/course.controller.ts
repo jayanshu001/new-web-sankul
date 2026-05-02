@@ -58,6 +58,7 @@ export const getCourses = async (req: Request, res: Response) => {
     const {
       search = "",
       status,
+      isPaid,
       page = "1",
       limit = "10",
       sortBy = "createdAt",
@@ -73,6 +74,9 @@ export const getCourses = async (req: Request, res: Response) => {
     }
     if (status === "true" || status === "false") {
       filters.status = status === "true";
+    }
+    if (isPaid === "true" || isPaid === "false") {
+      filters.isPaid = isPaid === "true";
     }
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -282,6 +286,7 @@ export const createCourse = async (req: Request, res: Response) => {
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+    if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
     const validatedData = createCourseSchema.parse(req.body);
 
     const newCourse = new Course(validatedData);
@@ -326,6 +331,7 @@ export const updateCourse = async (req: Request, res: Response) => {
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+    if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
     const validatedData = createCourseSchema.partial().parse(req.body);
     const course = await Course.findByIdAndUpdate(id, validatedData, { new: true });
     if (!course) return res.status(404).json({ success: false, message: "Course not found" });

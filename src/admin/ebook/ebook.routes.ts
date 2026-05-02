@@ -8,6 +8,7 @@ import {
   updateEbook,
   deleteEbook,
   reorderEbooks,
+  toggleEbookTrending,
   getEbookPlans,
   createEbookPlan,
   getEbookPlanById,
@@ -42,6 +43,7 @@ const ebookUpload = uploadS3Mixed.fields([
 router.post("/", ebookUpload, createEbook);
 router.put("/:id", ebookUpload, updateEbook);
 router.delete("/:id", deleteEbook);
+router.patch("/:id/trending", toggleEbookTrending);
 
 // Pricing Plans
 router.get("/:id/plans", getEbookPlans);

@@ -9,6 +9,7 @@ import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
+import { Goal } from "../../models/Goal.model";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -152,6 +153,57 @@ export const getPackageDetail = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/client/packages
+// Flat paginated listing of active packages, with optional filters.
+export const listPackages = async (req: Request, res: Response) => {
+  try {
+    const {
+      search,
+      isMagazine,
+      packageTypeId,
+      goalId,
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string>;
+
+    const filter: any = { active: true };
+    if (search) filter.name = { $regex: search, $options: "i" };
+    if (isMagazine === "true" || isMagazine === "false") filter.isMagazine = isMagazine === "true";
+    if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))
+      filter.packageTypeId = packageTypeId;
+    if (goalId && mongoose.Types.ObjectId.isValid(goalId)) filter.goalId = goalId;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [packages, total] = await Promise.all([
+      Package.find(filter)
+        .populate("packageTypeId", "_id name")
+        .populate("goalId", "_id title")
+        .sort({ order: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      Package.countDocuments(filter),
+    ]);
+
+    const data = await enrichPackages(packages);
+
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum),
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const listPackagesByType = async (req: Request, res: Response) => {
   try {
     const typeId = req.params.typeId as string;
@@ -181,6 +233,92 @@ export const listPackagesByType = async (req: Request, res: Response) => {
     );
 
     return res.status(200).json({ success: true, data: enriched });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+async function enrichPackages(packages: any[]) {
+  return Promise.all(
+    packages.map(async (p) => {
+      const [plans, subCount] = await Promise.all([
+        PackageCourseEbookPrice.find({ packageId: p._id, status: true }).sort({ duration: 1 }),
+        PackageCourseSubscription.countDocuments({ packageId: p._id, status: true }),
+      ]);
+      return {
+        ...p.toObject(),
+        plans: {
+          withMaterial: plans.filter((pl) => pl.withMaterial),
+          withoutMaterial: plans.filter((pl) => !pl.withMaterial),
+        },
+        subscriberCount: subCount,
+      };
+    })
+  );
+}
+
+// GET /api/v1/client/packages/goal?labelIds=id1,id2,id3
+// Returns one entry per requested goal-label, with that label's packages
+// nested inside the `label` object. Driven by labels from /client/goals/my-goals.
+export const listPackagesByGoal = async (req: Request, res: Response) => {
+  try {
+    const raw = (req.query.labelIds as string) || "";
+    const ids = raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+
+    if (!ids.length) {
+      return res.status(400).json({
+        success: false,
+        message: "labelIds query param is required (comma-separated).",
+      });
+    }
+
+    const validIds = ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
+    if (!validIds.length) {
+      return res.status(400).json({ success: false, message: "No valid label ids supplied." });
+    }
+
+    // Resolve label metadata (name + parent goal) for each requested label.
+    const goals = await Goal.find({ "labels._id": { $in: validIds } })
+      .select("title labels")
+      .lean();
+
+    const labelMeta = new Map<string, { name: string; goalId: any; goalTitle: string }>();
+    for (const g of goals as any[]) {
+      for (const l of g.labels || []) {
+        const lid = l._id?.toString();
+        if (lid && validIds.includes(lid)) {
+          labelMeta.set(lid, { name: l.name, goalId: g._id, goalTitle: g.title });
+        }
+      }
+    }
+
+    // One entry per requested label, preserving input order.
+    const result = await Promise.all(
+      validIds.map(async (labelId) => {
+        const packages = await Package.find({ goalLabelId: labelId, active: true })
+          .populate("packageTypeId", "_id name")
+          .populate("goalId", "_id title")
+          .sort({ order: 1, createdAt: -1 });
+
+        const enriched = await enrichPackages(packages);
+        const meta = labelMeta.get(labelId);
+
+        return {
+          label: {
+            _id: labelId,
+            name: meta?.name ?? null,
+            goalId: meta?.goalId ?? null,
+            goalTitle: meta?.goalTitle ?? null,
+            packages: enriched,
+          },
+        };
+      })
+    );
+
+    return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

@@ -67,6 +67,23 @@ export const appUpdateUpsertSchema = z.object({
   isUpdateAvailable: z.boolean(),
 });
 
+// ─── Social Link Type ──
+export const socialLinkTypeCreateSchema = z.object({
+  title: z.string().min(1).max(255),
+});
+export const socialLinkTypeUpdateSchema = socialLinkTypeCreateSchema.partial();
+
+// ─── Social Link ──
+export const socialLinkCreateSchema = z.object({
+  typeId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid typeId"),
+  title: z.string().min(1).max(255),
+  icon: z.string().max(500).optional(),
+  link: z.string().min(1).max(500).url("Invalid link URL"),
+  order: z.number().int().default(0),
+  status: z.boolean().optional(),
+});
+export const socialLinkUpdateSchema = socialLinkCreateSchema.partial();
+
 export const reorderSchema = z.object({
   orders: z.array(z.object({ id: z.string().min(1), orderBy: z.number().int() })).min(1),
 });

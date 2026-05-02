@@ -1,10 +1,13 @@
 import { Router } from "express";
+import authenticate from "../../middlewares/authenticate";
 import {
   listFaqs,
   listFaqTypes,
   getActivePopup,
   listBanners,
   listTestimonials,
+  listSocialLinks,
+  listSocialLinkTypes,
   getTerms,
   getVersion,
   checkUpgrade,
@@ -12,12 +15,15 @@ import {
 
 const router = Router();
 
-// All CMS endpoints are public (no auth) — they power splash/onboarding screens.
+router.use(authenticate);
+
 router.get("/faqs", listFaqs);
 router.get("/faq-types", listFaqTypes);
 router.get("/popup", getActivePopup);
 router.get("/banners", listBanners);
 router.get("/testimonials", listTestimonials);
+router.get("/social-links", listSocialLinks);
+router.get("/social-link-types", listSocialLinkTypes);
 router.get("/terms", getTerms);
 router.get("/version", getVersion);
 router.get("/upgrade", checkUpgrade);

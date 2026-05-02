@@ -7,6 +7,8 @@ import {
   listPopups, getPopup, createPopup, updatePopup, deletePopup,
   listBanners, getBanner, createBanner, updateBanner, deleteBanner, reorderBanners,
   listTestimonials, getTestimonial, createTestimonial, updateTestimonial, deleteTestimonial,
+  listSocialLinkTypes, getSocialLinkType, createSocialLinkType, updateSocialLinkType, deleteSocialLinkType,
+  listSocialLinks, getSocialLink, createSocialLink, updateSocialLink, deleteSocialLink,
   listTerms, getTerms, createTerms, updateTerms, deleteTerms,
   getVersion, upsertVersion,
   getAppUpdate, upsertAppUpdate,
@@ -28,6 +30,18 @@ const coercePopup = (req: Request, _res: Response, next: NextFunction) => {
 const coerceBanner = (req: Request, _res: Response, next: NextFunction) => {
   if (typeof req.body.keyId === "string") req.body.keyId = Number(req.body.keyId);
   if (typeof req.body.orderBy === "string") req.body.orderBy = Number(req.body.orderBy);
+  next();
+};
+
+const attachIcon = (req: Request, _res: Response, next: NextFunction) => {
+  const file = req.file as any;
+  if (file?.location) req.body.icon = file.location;
+  next();
+};
+
+const coerceSocialLink = (req: Request, _res: Response, next: NextFunction) => {
+  if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
+  if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
   next();
 };
 
@@ -68,6 +82,20 @@ router.post("/testimonials", createTestimonial);
 router.get("/testimonials/:id", getTestimonial);
 router.put("/testimonials/:id", updateTestimonial);
 router.delete("/testimonials/:id", deleteTestimonial);
+
+// Social Link Types
+router.get("/social-link-types", listSocialLinkTypes);
+router.post("/social-link-types", createSocialLinkType);
+router.get("/social-link-types/:id", getSocialLinkType);
+router.put("/social-link-types/:id", updateSocialLinkType);
+router.delete("/social-link-types/:id", deleteSocialLinkType);
+
+// Social Links
+router.get("/social-links", listSocialLinks);
+router.post("/social-links", uploadS3.single("icon"), attachIcon, coerceSocialLink, createSocialLink);
+router.get("/social-links/:id", getSocialLink);
+router.put("/social-links/:id", uploadS3.single("icon"), attachIcon, coerceSocialLink, updateSocialLink);
+router.delete("/social-links/:id", deleteSocialLink);
 
 // Terms
 router.get("/terms", listTerms);

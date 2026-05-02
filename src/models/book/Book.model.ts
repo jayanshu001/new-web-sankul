@@ -21,6 +21,7 @@ export interface IBook extends Document {
   isCombo: boolean;
   publication?: string;
   deliveryEta?: string;
+  isTrending: boolean;
   status: boolean;
   createdAt?: Date;
   updatedAt?: Date;
@@ -47,12 +48,14 @@ const BookSchema = new Schema<IBook>(
     isCombo: { type: Boolean, default: false },
     publication: { type: String, default: "WebSankul Publication", maxlength: 150 },
     deliveryEta: { type: String, default: "5-7 days", maxlength: 100 },
+    isTrending: { type: Boolean, default: false },
     status: { type: Boolean, default: true },
   },
   { collection: "ws_books", timestamps: true }
 );
 
 BookSchema.index({ status: 1, orderBy: 1 });
+BookSchema.index({ status: 1, isTrending: 1, orderBy: 1 });
 BookSchema.index({ name: "text", author: "text" });
 
 export const Book = model<IBook>("Book", BookSchema);

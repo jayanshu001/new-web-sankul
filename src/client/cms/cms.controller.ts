@@ -8,6 +8,8 @@ import { Testimonial } from "../../models/system/Testimonial.model";
 import { TermsAndConditions } from "../../models/system/TermsAndConditions.model";
 import { Version } from "../../models/system/Version.model";
 import { AppUpdate } from "../../models/system/AppUpdate.model";
+import { SocialLink } from "../../models/system/SocialLink.model";
+import { SocialLinkType } from "../../models/system/SocialLinkType.model";
 
 // GET /api/v1/client/faqs[?typeId=…]
 export const listFaqs = async (req: Request, res: Response) => {
@@ -68,6 +70,29 @@ export const listBanners = async (req: Request, res: Response) => {
 export const listTestimonials = async (_req: Request, res: Response) => {
   try {
     const data = await Testimonial.find().sort({ rating: -1 }).lean();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/client/social-links — active social links, ordered
+export const listSocialLinks = async (_req: Request, res: Response) => {
+  try {
+    const data = await SocialLink.find({ status: true })
+      .populate("typeId", "_id title")
+      .sort({ order: 1 })
+      .lean();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/client/social-link-types
+export const listSocialLinkTypes = async (_req: Request, res: Response) => {
+  try {
+    const data = await SocialLinkType.find().sort({ title: 1 }).lean();
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });

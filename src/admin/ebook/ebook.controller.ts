@@ -144,6 +144,21 @@ export const deleteEbook = async (req: Request, res: Response) => {
   }
 };
 
+export const toggleEbookTrending = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid Ebook ID" });
+    const ebook = await Ebook.findById(id).select("isTrending");
+    if (!ebook) return res.status(404).json({ success: false, message: "Ebook not found" });
+    ebook.isTrending = !ebook.isTrending;
+    await ebook.save();
+    return res.status(200).json({ success: true, data: { isTrending: ebook.isTrending } });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const reorderEbooks = async (req: Request, res: Response) => {
   try {
     const { orders } = reorderEbooksSchema.parse(req.body);

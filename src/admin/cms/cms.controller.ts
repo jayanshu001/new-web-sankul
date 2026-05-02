@@ -8,6 +8,8 @@ import { Testimonial } from "../../models/system/Testimonial.model";
 import { TermsAndConditions } from "../../models/system/TermsAndConditions.model";
 import { Version } from "../../models/system/Version.model";
 import { AppUpdate } from "../../models/system/AppUpdate.model";
+import { SocialLink } from "../../models/system/SocialLink.model";
+import { SocialLinkType } from "../../models/system/SocialLinkType.model";
 import {
   faqCreateSchema,
   faqUpdateSchema,
@@ -23,6 +25,10 @@ import {
   termsUpdateSchema,
   versionUpsertSchema,
   appUpdateUpsertSchema,
+  socialLinkCreateSchema,
+  socialLinkUpdateSchema,
+  socialLinkTypeCreateSchema,
+  socialLinkTypeUpdateSchema,
   reorderSchema,
 } from "./cms.validation";
 
@@ -164,6 +170,48 @@ export const getTestimonial = genericGet(Testimonial);
 export const createTestimonial = genericCreate(Testimonial, testimonialCreateSchema);
 export const updateTestimonial = genericUpdate(Testimonial, testimonialUpdateSchema);
 export const deleteTestimonial = genericDelete(Testimonial);
+
+// ─── Social Link Type ──
+export const listSocialLinkTypes = genericList(SocialLinkType, { title: 1 });
+export const getSocialLinkType = genericGet(SocialLinkType);
+export const createSocialLinkType = genericCreate(SocialLinkType, socialLinkTypeCreateSchema);
+export const updateSocialLinkType = genericUpdate(SocialLinkType, socialLinkTypeUpdateSchema);
+
+export const deleteSocialLinkType = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const inUse = await SocialLink.exists({ typeId: id });
+    if (inUse) {
+      return res.status(409).json({
+        success: false,
+        message: "Social Link Type is in use by one or more links and cannot be deleted.",
+      });
+    }
+    const doc = await SocialLinkType.findByIdAndDelete(id);
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, message: "Deleted." });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// ─── Social Link ──
+export const listSocialLinks = async (_req: Request, res: Response) => {
+  try {
+    const data = await SocialLink.find()
+      .populate("typeId", "_id title")
+      .sort({ order: 1 })
+      .lean();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const getSocialLink = genericGet(SocialLink);
+export const createSocialLink = genericCreate(SocialLink, socialLinkCreateSchema);
+export const updateSocialLink = genericUpdate(SocialLink, socialLinkUpdateSchema);
+export const deleteSocialLink = genericDelete(SocialLink);
 
 // ─── Terms ──
 export const listTerms = genericList(TermsAndConditions);

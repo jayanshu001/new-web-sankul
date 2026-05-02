@@ -4,6 +4,8 @@ import { Book } from "../../models/book/Book.model";
 import { BookCart } from "../../models/book/BookCart.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
 import { BookSetting } from "../../models/book/BookSetting.model";
+import { Ebook } from "../../models/ebook/Ebook.model";
+import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { CustomerShipping } from "../../models/customer/CustomerShipping.model";
 import { BookOrderStatus, BookCourier, PaymentMethod } from "../../models/enums";
 import {
@@ -112,6 +114,208 @@ export const listBooks = async (req: Request, res: Response) => {
     });
 
     return res.status(200).json({ success: true, data: { cartId, books: decorated } });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+type TrendingOpts = { type?: string; search?: string; language?: string; limit?: number };
+
+export async function fetchTrendingBookItems(opts: TrendingOpts = {}) {
+  const wantFree = opts.type === "free";
+  const wantPaid = opts.type === "paid" || !opts.type;
+  const limitNum = Math.min(Math.max(opts.limit ?? 20, 1), 100);
+
+  const bookFilter: any = { status: true, isTrending: true };
+  const ebookFilter: any = { status: true, isTrending: true };
+  if (opts.language) {
+    bookFilter.language = opts.language;
+    ebookFilter.language = opts.language;
+  }
+  if (opts.search) {
+    const rx = { $regex: opts.search, $options: "i" };
+    bookFilter.$or = [{ name: rx }, { author: rx }];
+    ebookFilter.$or = [{ name: rx }, { author: rx }];
+  }
+  if (wantFree) {
+    bookFilter.discountedPrice = 0;
+  } else if (wantPaid) {
+    bookFilter.discountedPrice = { $gt: 0 };
+  }
+
+  const [books, ebooks] = await Promise.all([
+    Book.find(bookFilter).sort({ orderBy: 1, createdAt: -1 }).lean(),
+    Ebook.find(ebookFilter).sort({ order: 1, createdAt: -1 }).lean(),
+  ]);
+
+  const ebookIds = ebooks.map((e) => e._id);
+  const plans = ebookIds.length
+    ? await EbookPrice.find({ ebookId: { $in: ebookIds }, status: true }).sort({ duration: 1 }).lean()
+    : [];
+  const plansByEbook = new Map<string, any[]>();
+  plans.forEach((p) => {
+    const key = String(p.ebookId);
+    const arr = plansByEbook.get(key) || [];
+    arr.push(p);
+    plansByEbook.set(key, arr);
+  });
+
+  const ebookItems = ebooks
+    .map((e) => {
+      const ePlans = plansByEbook.get(String(e._id)) || [];
+      const minPrice = ePlans.length ? Math.min(...ePlans.map((p) => p.price ?? 0)) : 0;
+      const isFree = minPrice === 0;
+      if (wantFree && !isFree) return null;
+      if (wantPaid && isFree) return null;
+      return {
+        type: "ebook" as const,
+        _id: e._id,
+        name: e.name,
+        description: e.description,
+        author: e.author,
+        publisher: e.publisher,
+        language: e.language,
+        image: e.image,
+        thumbnail: e.thumbnail,
+        demoUrl: e.demoUrl,
+        isTrending: e.isTrending,
+        price: minPrice,
+        isFree,
+        plans: ePlans,
+        createdAt: e.createdAt,
+      };
+    })
+    .filter(Boolean) as any[];
+
+  const bookItems = books.map((b) => ({
+    type: "book" as const,
+    _id: b._id,
+    name: b.name,
+    description: b.description,
+    author: b.author,
+    language: b.language,
+    image: b.image,
+    thumbnail: b.thumbnail,
+    demoUrl: b.demoUrl,
+    isTrending: b.isTrending,
+    isCombo: b.isCombo,
+    isMagazine: b.isMagazine,
+    listPrice: b.listPrice,
+    discountedPrice: b.discountedPrice,
+    shippingPrice: b.shippingPrice,
+    price: b.discountedPrice,
+    isFree: b.discountedPrice === 0,
+    createdAt: b.createdAt,
+  }));
+
+  const merged = [...bookItems, ...ebookItems]
+    .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
+    .slice(0, limitNum);
+
+  return { type: wantFree ? "free" : "paid", items: merged };
+}
+
+// GET /api/v1/client/books/trending?type=paid|free&language=&search=&limit=
+export const listTrendingBooks = async (req: Request, res: Response) => {
+  try {
+    const { type, search, language, limit } = req.query as Record<string, string>;
+    const wantFree = type === "free";
+    const wantPaid = type === "paid" || !type; // default to paid
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+
+    const bookFilter: any = { status: true, isTrending: true };
+    const ebookFilter: any = { status: true, isTrending: true };
+    if (language) {
+      bookFilter.language = language;
+      ebookFilter.language = language;
+    }
+    if (search) {
+      const rx = { $regex: search, $options: "i" };
+      bookFilter.$or = [{ name: rx }, { author: rx }];
+      ebookFilter.$or = [{ name: rx }, { author: rx }];
+    }
+    if (wantFree) {
+      bookFilter.discountedPrice = 0;
+    } else if (wantPaid) {
+      bookFilter.discountedPrice = { $gt: 0 };
+    }
+
+    const [books, ebooks] = await Promise.all([
+      Book.find(bookFilter).sort({ orderBy: 1, createdAt: -1 }).lean(),
+      Ebook.find(ebookFilter).sort({ order: 1, createdAt: -1 }).lean(),
+    ]);
+
+    // Resolve ebook pricing — an ebook is "free" if its lowest active plan price is 0 (or no plans).
+    const ebookIds = ebooks.map((e) => e._id);
+    const plans = ebookIds.length
+      ? await EbookPrice.find({ ebookId: { $in: ebookIds }, status: true })
+          .sort({ duration: 1 })
+          .lean()
+      : [];
+    const plansByEbook = new Map<string, any[]>();
+    plans.forEach((p) => {
+      const key = String(p.ebookId);
+      const arr = plansByEbook.get(key) || [];
+      arr.push(p);
+      plansByEbook.set(key, arr);
+    });
+
+    const ebookItems = ebooks
+      .map((e) => {
+        const ePlans = plansByEbook.get(String(e._id)) || [];
+        const minPrice = ePlans.length ? Math.min(...ePlans.map((p) => p.price ?? 0)) : 0;
+        const isFree = minPrice === 0;
+        if (wantFree && !isFree) return null;
+        if (wantPaid && isFree) return null;
+        return {
+          type: "ebook" as const,
+          _id: e._id,
+          name: e.name,
+          description: e.description,
+          author: e.author,
+          publisher: e.publisher,
+          language: e.language,
+          image: e.image,
+          thumbnail: e.thumbnail,
+          demoUrl: e.demoUrl,
+          isTrending: e.isTrending,
+          price: minPrice,
+          isFree,
+          plans: ePlans,
+          createdAt: e.createdAt,
+        };
+      })
+      .filter(Boolean) as any[];
+
+    const bookItems = books.map((b) => ({
+      type: "book" as const,
+      _id: b._id,
+      name: b.name,
+      description: b.description,
+      author: b.author,
+      language: b.language,
+      image: b.image,
+      thumbnail: b.thumbnail,
+      demoUrl: b.demoUrl,
+      isTrending: b.isTrending,
+      isCombo: b.isCombo,
+      isMagazine: b.isMagazine,
+      listPrice: b.listPrice,
+      discountedPrice: b.discountedPrice,
+      shippingPrice: b.shippingPrice,
+      price: b.discountedPrice,
+      isFree: b.discountedPrice === 0,
+      createdAt: b.createdAt,
+    }));
+
+    const merged = [...bookItems, ...ebookItems]
+      .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
+      .slice(0, limitNum);
+
+    return res.status(200).json({
+      success: true,
+      data: { type: wantFree ? "free" : "paid", items: merged, total: merged.length },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

@@ -56,7 +56,7 @@ router.use("/customers", adminCustomerRoutes);
 router.use("/customer-masters", adminCustomerMasterRoutes);
 router.use("/referrals", adminReferralRoutes);
 router.use("/books", adminBookRoutes);
-router.use("/exams", adminExamRoutes);
+router.use("/quizzes", adminExamRoutes);
 router.use("/materials", adminMaterialRoutes);
 router.use("/packages", adminPackageRoutes);
 router.use("/plans", adminPlanRoutes);
