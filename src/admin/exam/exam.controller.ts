@@ -22,6 +22,18 @@ import {
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
+// Recompute exam.questionCount = number of active questions for that exam.
+// Call this whenever questions are created, deleted, or bulk-imported.
+async function recomputeExamQuestionCount(
+  examId: string | mongoose.Types.ObjectId,
+  session?: mongoose.ClientSession
+) {
+  const count = await ExamQuestion.countDocuments({ examId, status: true }).session(
+    session ?? null
+  );
+  await Exam.updateOne({ _id: examId }, { $set: { questionCount: count } }, { session });
+}
+
 // ─── Exam Categories ──────────────────────────────────────────────────────────
 
 export const getCategories = async (req: Request, res: Response) => {
@@ -226,14 +238,10 @@ export const createExam = async (req: Request, res: Response) => {
   try {
     applyExamUpload(req);
     const data = createExamSchema.parse(req.body);
-    if (data.startAt && data.endAt && new Date(data.startAt) >= new Date(data.endAt)) {
-      return res.status(400).json({ success: false, message: "endAt must be after startAt." });
-    }
     const payload: any = {
       ...data,
       categoryId: data.categoryId || null,
       startAt: data.startAt ? new Date(data.startAt) : undefined,
-      endAt: data.endAt ? new Date(data.endAt) : undefined,
       status: mapStatusFlagToEnum(data.status),
     };
     const exam = await Exam.create(payload);
@@ -251,15 +259,15 @@ export const updateExam = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid exam id." });
     applyExamUpload(req);
     const data = updateExamSchema.parse(req.body);
-    if (data.startAt && data.endAt && new Date(data.startAt) >= new Date(data.endAt)) {
-      return res.status(400).json({ success: false, message: "endAt must be after startAt." });
-    }
-    const update: any = { ...data };
-    if (data.categoryId !== undefined) update.categoryId = data.categoryId || null;
-    if (data.startAt) update.startAt = new Date(data.startAt);
-    if (data.endAt) update.endAt = new Date(data.endAt);
-    if (data.status !== undefined) update.status = mapStatusFlagToEnum(data.status);
-    const exam = await Exam.findByIdAndUpdate(id, { $set: update }, { new: true });
+    const set: any = { ...data };
+    if (data.categoryId !== undefined) set.categoryId = data.categoryId || null;
+    if (data.startAt) set.startAt = new Date(data.startAt);
+    if (data.status !== undefined) set.status = mapStatusFlagToEnum(data.status);
+    const exam = await Exam.findByIdAndUpdate(
+      id,
+      { $set: set, $unset: { endAt: "" } },
+      { new: true }
+    );
     if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
     return res.status(200).json({ success: true, data: exam });
   } catch (error: any) {
@@ -440,6 +448,7 @@ export const createQuestion = async (req: Request, res: Response) => {
         orderBy: o.orderBy ?? idx,
       }));
       const insertedOptions = await ExamQuestionOption.insertMany(optionDocs, { session });
+      await recomputeExamQuestionCount(data.examId, session);
       created = { ...q.toObject(), options: insertedOptions };
     });
 
@@ -502,6 +511,7 @@ export const bulkCreateQuestions = async (req: Request, res: Response) => {
         const insertedOptions = await ExamQuestionOption.insertMany(optionDocs, { session });
         created.push({ ...doc.toObject(), options: insertedOptions });
       }
+      await recomputeExamQuestionCount(examId, session);
     });
     return res.status(201).json({ success: true, data: created, count: created.length });
   } catch (error: any) {
@@ -556,6 +566,10 @@ export const updateQuestion = async (req: Request, res: Response) => {
       const options = await ExamQuestionOption.find({ questionId: id })
         .sort({ orderBy: 1 })
         .lean({ session } as any);
+      // status may have flipped, which affects the count.
+      if (data.status !== undefined) {
+        await recomputeExamQuestionCount(q.examId, session);
+      }
       updated = { ...q.toObject(), options };
     });
 
@@ -583,6 +597,7 @@ export const deleteQuestion = async (req: Request, res: Response) => {
       if (!found) return;
       await ExamQuestionOption.deleteMany({ questionId: id }, { session });
       await ExamResultDetail.deleteMany({ questionId: id }, { session });
+      await recomputeExamQuestionCount(found.examId, session);
     });
     if (!found) return res.status(404).json({ success: false, message: "Question not found." });
     return res.status(200).json({ success: true, message: "Question deleted." });

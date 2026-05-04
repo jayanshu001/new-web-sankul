@@ -8,7 +8,12 @@ import { ExamResult } from "../../models/exam/ExamResult.model";
 import { ExamResultDetail } from "../../models/exam/ExamResultDetail.model";
 import { ExamResultDetailAnalytics } from "../../models/exam/ExamResultDetailAnalytics.model";
 import { ExamStatus, ExamResultType, ExamType } from "../../models/enums";
-import { saveAnswersSchema, rateResultSchema } from "./exam.validation";
+import {
+  saveAnswersSchema,
+  rateResultSchema,
+  saveSingleAnswerSchema,
+  submitAttemptSchema,
+} from "./exam.validation";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 const norm = (s: string) => (s ?? "").trim().toLowerCase();
@@ -48,7 +53,7 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
       categoryId,
       status: ExamStatus.PUBLISHED,
     })
-      .select("_id title description type isPaid durationMinutes questionCount positiveMarks negativeMarks startAt endAt language difficulty orderBy")
+      .select("_id title type isPaid durationMinutes questionCount positiveMarks negativeMarks startAt language difficulty orderBy")
       .sort({ orderBy: 1, createdAt: -1 });
 
     let resultByExam = new Map<string, any>();
@@ -80,32 +85,57 @@ export const getDailyExams = async (req: Request, res: Response) => {
   try {
     const customerId = req.user?.id;
     const now = new Date();
-    const startOfDay = new Date(now); startOfDay.setHours(0, 0, 0, 0);
     const endOfDay = new Date(now); endOfDay.setHours(23, 59, 59, 999);
 
     const exams = await Exam.find({
       type: ExamType.DAILY,
       status: ExamStatus.PUBLISHED,
       startAt: { $lte: endOfDay },
-      $or: [{ endAt: { $gte: startOfDay } }, { endAt: null }],
     })
-      .select("_id title description durationMinutes questionCount positiveMarks negativeMarks startAt endAt orderBy language")
+      .select("_id title durationMinutes questionCount positiveMarks negativeMarks startAt orderBy language")
       .sort({ startAt: 1 });
 
-    let resultByExam = new Map<string, any>();
+    const statsByExam = new Map<string, { attemptsCount: number; bestScore: number; lastResult: any }>();
     if (customerId && exams.length) {
-      const results = await ExamResult.find({
-        customerId,
-        examId: { $in: exams.map((e) => e._id) },
-        status: true,
-      }).select("examId score timing updatedAt");
-      for (const r of results) resultByExam.set(String(r.examId), r);
+      const cid = new mongoose.Types.ObjectId(customerId);
+      const examIds = exams.map((e) => e._id);
+      const agg = await ExamResult.aggregate([
+        { $match: { customerId: cid, examId: { $in: examIds }, status: true } },
+        { $sort: { submittedAt: -1, attemptNumber: -1 } },
+        {
+          $group: {
+            _id: "$examId",
+            attemptsCount: { $sum: 1 },
+            bestScore: { $max: "$score" },
+            last: { $first: "$$ROOT" },
+          },
+        },
+      ]);
+      for (const row of agg) {
+        statsByExam.set(String(row._id), {
+          attemptsCount: row.attemptsCount,
+          bestScore: row.bestScore,
+          lastResult: {
+            _id: row.last._id,
+            attemptNumber: row.last.attemptNumber,
+            score: row.last.score,
+            timing: row.last.timing,
+            submittedAt: row.last.submittedAt,
+          },
+        });
+      }
     }
 
-    const decorated = exams.map((e: any) => ({
-      ...e.toObject(),
-      lastResult: resultByExam.get(String(e._id)) ?? null,
-    }));
+    const decorated = exams.map((e: any) => {
+      const s = statsByExam.get(String(e._id));
+      return {
+        ...e.toObject(),
+        attemptsCount: s?.attemptsCount ?? 0,
+        bestScore: s?.bestScore ?? 0,
+        isAttempted: (s?.attemptsCount ?? 0) > 0,
+        lastResult: s?.lastResult ?? null,
+      };
+    });
 
     return res.status(200).json({ success: true, data: decorated });
   } catch (error: any) {
@@ -277,12 +307,18 @@ export const saveAnswers = async (req: Request, res: Response) => {
     const session = await mongoose.startSession();
     try {
       await session.withTransaction(async () => {
-        examResult = await ExamResult.findOneAndUpdate(
-          { customerId, examId: data.examId },
-          {
-            $set: {
+        const last = await ExamResult.findOne({ customerId, examId: data.examId })
+          .sort({ attemptNumber: -1 })
+          .select("attemptNumber")
+          .session(session);
+        const nextNumber = (last?.attemptNumber ?? 0) + 1;
+        const now = new Date();
+        const created = await ExamResult.create(
+          [
+            {
               customerId,
               examId: data.examId,
+              attemptNumber: nextNumber,
               total,
               attempt,
               skip,
@@ -292,14 +328,18 @@ export const saveAnswers = async (req: Request, res: Response) => {
               timing: data.timing,
               ratting: data.ratting ?? null,
               status: true,
+              inProgress: false,
+              startedAt: now,
+              submittedAt: now,
             },
-          },
-          { new: true, upsert: true, setDefaultsOnInsert: true, session }
+          ],
+          { session }
         );
+        examResult = created[0];
 
         for (const d of details) {
           await ExamResultDetail.updateOne(
-            { customerId, examId: data.examId, questionId: d.questionId },
+            { examResultId: examResult._id, questionId: d.questionId },
             {
               $set: {
                 examResultId: examResult._id,
@@ -321,12 +361,13 @@ export const saveAnswers = async (req: Request, res: Response) => {
 
     await recomputeAnalytics(customerId);
 
-    const higher = await ExamResult.countDocuments({
-      examId: data.examId,
-      score: { $gt: examResult.score },
-      status: true,
-    });
-    const totalCandidates = await ExamResult.countDocuments({ examId: data.examId, status: true });
+    const bestPerUser = await ExamResult.aggregate([
+      { $match: { examId: new mongoose.Types.ObjectId(data.examId), status: true } },
+      { $group: { _id: "$customerId", best: { $max: "$score" } } },
+    ]);
+    const myBest = bestPerUser.find((u: any) => String(u._id) === String(customerId))?.best ?? examResult.score;
+    const higher = bestPerUser.filter((u: any) => u.best > myBest).length;
+    const totalCandidates = bestPerUser.length;
     const rank = higher + 1;
 
     return res.status(200).json({
@@ -353,7 +394,21 @@ export const getSolutionByExam = async (req: Request, res: Response) => {
     if (!isObjectId(examId))
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
 
-    const details = await ExamResultDetail.find({ customerId, examId })
+    // Resolve which attempt to show: ?attemptId=<id> if provided, else latest submitted.
+    const reqAttemptId = (req.query.attemptId as string | undefined) ?? undefined;
+    let target;
+    if (reqAttemptId) {
+      if (!isObjectId(reqAttemptId))
+        return res.status(400).json({ success: false, message: "Invalid attemptId." });
+      target = await ExamResult.findOne({ _id: reqAttemptId, customerId, examId, status: true });
+    } else {
+      target = await ExamResult.findOne({ customerId, examId, status: true })
+        .sort({ submittedAt: -1, attemptNumber: -1 });
+    }
+    if (!target)
+      return res.status(404).json({ success: false, message: "No submitted attempt found." });
+
+    const details = await ExamResultDetail.find({ examResultId: target._id })
       .populate({ path: "questionId", model: ExamQuestion })
       .lean();
 
@@ -377,7 +432,7 @@ export const getSolutionByExam = async (req: Request, res: Response) => {
           name: o.name,
           image: o.image ?? null,
           isSelect: String(d.answerId) === String(o._id),
-          answer: norm(q.answer) === norm(o.name),
+          isCorrect: norm(q.answer) === norm(o.name),
         }));
         return { ...q, answers: questionOptions, result: d.result, point: d.point };
       });
@@ -397,19 +452,31 @@ export const getSolutionAnalyticsByExam = async (req: Request, res: Response) =>
     if (!isObjectId(examId))
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
 
-    const examResult: any = await ExamResult.findOne({ customerId, examId }).lean();
+    const reqAttemptId = (req.query.attemptId as string | undefined) ?? undefined;
+    let examResult: any;
+    if (reqAttemptId) {
+      if (!isObjectId(reqAttemptId))
+        return res.status(400).json({ success: false, message: "Invalid attemptId." });
+      examResult = await ExamResult.findOne({ _id: reqAttemptId, customerId, examId, status: true }).lean();
+    } else {
+      examResult = await ExamResult.findOne({ customerId, examId, status: true })
+        .sort({ submittedAt: -1, attemptNumber: -1 })
+        .lean();
+    }
     if (!examResult)
-      return res.status(404).json({ success: false, message: "No result found for this exam." });
+      return res.status(404).json({ success: false, message: "No submitted attempt found." });
 
     const accuracy =
       examResult.total > 0 ? (examResult.success * 100) / examResult.total : 0;
 
-    const higher = await ExamResult.countDocuments({
-      examId,
-      score: { $gt: examResult.score },
-      status: true,
-    });
-    const totalCandidates = await ExamResult.countDocuments({ examId, status: true });
+    // Rank = customer's best score across attempts.
+    const bestPerUser = await ExamResult.aggregate([
+      { $match: { examId: new mongoose.Types.ObjectId(examId), status: true } },
+      { $group: { _id: "$customerId", best: { $max: "$score" } } },
+    ]);
+    const myBest = bestPerUser.find((u: any) => String(u._id) === String(customerId))?.best ?? examResult.score;
+    const higher = bestPerUser.filter((u: any) => u.best > myBest).length;
+    const totalCandidates = bestPerUser.length;
 
     examResult.accuracy = Math.round(accuracy * 100) / 100;
     examResult.rank = `${higher + 1}/${totalCandidates}`;
@@ -518,6 +585,443 @@ export const getExamDetail = async (req: Request, res: Response) => {
     const exam = await Exam.findOne({ _id: id, status: ExamStatus.PUBLISHED });
     if (!exam) return res.status(404).json({ success: false, message: "Exam not found or not published." });
     return res.status(200).json({ success: true, data: exam });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── Attempt lifecycle (Start / SaveAnswer / Submit / Resume) ─────────────────
+
+const isAttemptExpired = (r: any, durationMinutes: number) => {
+  if (!r?.startedAt) return false;
+  const deadline = new Date(r.startedAt).getTime() + durationMinutes * 60_000;
+  return Date.now() > deadline;
+};
+
+// POST /api/v1/client/quizzes/:id/attempts/start
+export const startAttempt = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    const examId = req.params.id as string;
+    if (!isObjectId(examId))
+      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+
+    const exam = await Exam.findOne({ _id: examId, status: ExamStatus.PUBLISHED });
+    if (!exam) return res.status(404).json({ success: false, message: "Exam not found or not published." });
+
+    const now = new Date();
+    if (exam.startAt && now < new Date(exam.startAt))
+      return res.status(400).json({ success: false, message: "Exam has not started yet." });
+
+    // Resume any in-progress attempt instead of creating a new row.
+    const inProgress = await ExamResult.findOne({ customerId, examId, status: false });
+    let attempt;
+    if (inProgress) {
+      attempt = inProgress;
+    } else {
+      const last = await ExamResult.findOne({ customerId, examId })
+        .sort({ attemptNumber: -1 })
+        .select("attemptNumber");
+      const nextNumber = (last?.attemptNumber ?? 0) + 1;
+      attempt = await ExamResult.create({
+        customerId,
+        examId,
+        attemptNumber: nextNumber,
+        startedAt: now,
+        submittedAt: null,
+        inProgress: true,
+        status: false,
+        total: 0,
+        attempt: 0,
+        skip: 0,
+        success: 0,
+        failed: 0,
+        score: 0,
+        timing: "00:00",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        attemptId: attempt._id,
+        attemptNumber: attempt.attemptNumber,
+        startedAt: attempt.startedAt,
+        serverNow: now,
+        durationMinutes: exam.durationMinutes,
+        questionCount: exam.questionCount,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// POST /api/v1/client/quizzes/:id/attempts/:attemptId/answer
+// Body: { questionId, answerId? }   (answerId omitted/null => skip)
+export const saveSingleAnswer = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    const { id: examId, attemptId } = req.params as { id: string; attemptId: string };
+    if (!isObjectId(examId) || !isObjectId(attemptId))
+      return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
+
+    const data = saveSingleAnswerSchema.parse(req.body);
+
+    const attempt = await ExamResult.findOne({ _id: attemptId, customerId, examId });
+    if (!attempt) return res.status(404).json({ success: false, message: "Attempt not found." });
+    if (attempt.status === true)
+      return res.status(400).json({ success: false, message: "Attempt already submitted." });
+
+    const exam = await Exam.findById(examId);
+    if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
+    if (isAttemptExpired(attempt, exam.durationMinutes))
+      return res.status(400).json({ success: false, message: "Attempt has expired. Please submit." });
+
+    const question = await ExamQuestion.findOne({ _id: data.questionId, examId });
+    if (!question) return res.status(400).json({ success: false, message: "Question does not belong to exam." });
+
+    let result: ExamResultType;
+    let point = 0;
+    let answerId: string | null = null;
+
+    if (!data.answerId) {
+      result = ExamResultType.SKIP;
+    } else {
+      const option = await ExamQuestionOption.findOne({ _id: data.answerId, questionId: data.questionId });
+      if (!option)
+        return res.status(400).json({ success: false, message: "Answer does not belong to question." });
+      answerId = String(option._id);
+      if (norm(option.name) === "skip") {
+        result = ExamResultType.SKIP;
+      } else if (norm(option.name) === norm(question.answer)) {
+        result = ExamResultType.TRUE;
+        point = exam.positiveMarks;
+      } else {
+        result = ExamResultType.FALSE;
+        point = -Math.abs(exam.negativeMarks);
+      }
+    }
+
+    await ExamResultDetail.updateOne(
+      { examResultId: attempt._id, questionId: data.questionId },
+      {
+        $set: {
+          examResultId: attempt._id,
+          customerId,
+          examId,
+          questionId: data.questionId,
+          answerId,
+          result,
+          point,
+        },
+      },
+      { upsert: true }
+    );
+
+    return res.status(200).json({ success: true, data: { saved: true } });
+  } catch (error: any) {
+    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// POST /api/v1/client/quizzes/:id/attempts/:attemptId/submit
+// Body: { timing?, ratting? }   Scores from saved details; unanswered => SKIP.
+export const submitAttempt = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    const { id: examId, attemptId } = req.params as { id: string; attemptId: string };
+    if (!isObjectId(examId) || !isObjectId(attemptId))
+      return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
+
+    const data = submitAttemptSchema.parse(req.body ?? {});
+
+    const attempt = await ExamResult.findOne({ _id: attemptId, customerId, examId });
+    if (!attempt) return res.status(404).json({ success: false, message: "Attempt not found." });
+    if (attempt.status === true)
+      return res.status(400).json({ success: false, message: "Attempt already submitted." });
+
+    const exam = await Exam.findById(examId);
+    if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
+
+    const questions = await ExamQuestion.find({ examId, status: true }).select("_id");
+    const allQIds = questions.map((q) => String(q._id));
+    const total = allQIds.length;
+
+    const saved = await ExamResultDetail.find({ examResultId: attempt._id });
+    const savedByQ = new Map<string, any>();
+    for (const d of saved) savedByQ.set(String(d.questionId), d);
+
+    let skip = 0, success = 0, failed = 0, score = 0;
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        for (const qid of allQIds) {
+          const existing = savedByQ.get(qid);
+          if (!existing) {
+            await ExamResultDetail.updateOne(
+              { examResultId: attempt._id, questionId: qid },
+              {
+                $set: {
+                  examResultId: attempt._id,
+                  customerId,
+                  examId,
+                  questionId: qid,
+                  answerId: null,
+                  result: ExamResultType.SKIP,
+                  point: 0,
+                },
+              },
+              { upsert: true, session }
+            );
+            skip += 1;
+          } else {
+            if (existing.result === ExamResultType.SKIP) skip += 1;
+            else if (existing.result === ExamResultType.TRUE) success += 1;
+            else failed += 1;
+            score += existing.point ?? 0;
+          }
+        }
+
+        const submittedAt = new Date();
+        const computedTiming =
+          data.timing ??
+          (() => {
+            const ms = submittedAt.getTime() - new Date(attempt.startedAt as any).getTime();
+            const totalSec = Math.max(0, Math.floor(ms / 1000));
+            const m = String(Math.floor(totalSec / 60)).padStart(2, "0");
+            const s = String(totalSec % 60).padStart(2, "0");
+            return `${m}:${s}`;
+          })();
+
+        await ExamResult.updateOne(
+          { _id: attempt._id },
+          {
+            $set: {
+              total,
+              attempt: total - skip,
+              skip,
+              success,
+              failed,
+              score: Math.round(score * 100) / 100,
+              timing: computedTiming,
+              ratting: data.ratting ?? attempt.ratting ?? null,
+              status: true,
+              inProgress: false,
+              submittedAt,
+            },
+          },
+          { session }
+        );
+      });
+    } finally {
+      session.endSession();
+    }
+
+    await recomputeAnalytics(customerId);
+
+    const finalResult = await ExamResult.findById(attempt._id);
+
+    // Rank by each customer's best score for this exam.
+    const bestPerUser = await ExamResult.aggregate([
+      { $match: { examId: new mongoose.Types.ObjectId(examId), status: true } },
+      { $group: { _id: "$customerId", best: { $max: "$score" } } },
+    ]);
+    const myBest = Math.max(
+      finalResult!.score,
+      ...bestPerUser.filter((u: any) => String(u._id) === String(customerId)).map((u: any) => u.best)
+    );
+    const higher = bestPerUser.filter((u: any) => u.best > myBest).length;
+    const totalCandidates = bestPerUser.length;
+    const rank = higher + 1;
+
+    return res.status(200).json({
+      success: true,
+      data: { examResult: finalResult, rank: `${rank}/${totalCandidates}` },
+    });
+  } catch (error: any) {
+    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/client/quizzes/:id/attempts
+// Lists all of this user's attempts for an exam (history list).
+export const listAttempts = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    const examId = req.params.id as string;
+    if (!isObjectId(examId))
+      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+
+    const exam = await Exam.findById(examId).select("title type durationMinutes");
+    if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
+
+    const attempts = await ExamResult.find({ customerId, examId })
+      .sort({ attemptNumber: -1 })
+      .select("_id attemptNumber total attempt skip success failed score timing status inProgress startedAt submittedAt createdAt")
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        exam: { _id: exam._id, title: exam.title, type: (exam as any).type, durationMinutes: exam.durationMinutes },
+        attempts,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/client/quizzes/:id/attempts/aggregate
+// Aggregate stats across ALL of this user's submitted attempts for the exam.
+// Powers the donut + summary on the Exam Analytics screen.
+export const getAttemptsAggregate = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    const examId = req.params.id as string;
+    if (!isObjectId(examId))
+      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+
+    const exam = await Exam.findById(examId).select("title questionCount durationMinutes");
+    if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
+
+    const cid = new mongoose.Types.ObjectId(customerId);
+    const eid = new mongoose.Types.ObjectId(examId);
+
+    const [agg] = await ExamResult.aggregate([
+      { $match: { customerId: cid, examId: eid, status: true } },
+      {
+        $group: {
+          _id: null,
+          attemptsCount: { $sum: 1 },
+          total: { $sum: "$total" },
+          attempt: { $sum: "$attempt" },
+          skip: { $sum: "$skip" },
+          success: { $sum: "$success" },
+          failed: { $sum: "$failed" },
+          scoreSum: { $sum: "$score" },
+          bestScore: { $max: "$score" },
+          lastSubmittedAt: { $max: "$submittedAt" },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          attemptsCount: 1,
+          total: 1,
+          attempt: 1,
+          skip: 1,
+          success: 1,
+          failed: 1,
+          scoreSum: { $round: ["$scoreSum", 2] },
+          bestScore: { $round: ["$bestScore", 2] },
+          avgScore: {
+            $cond: [
+              { $gt: ["$attemptsCount", 0] },
+              { $round: [{ $divide: ["$scoreSum", "$attemptsCount"] }, 2] },
+              0,
+            ],
+          },
+          accuracy: {
+            $cond: [
+              { $gt: ["$total", 0] },
+              { $round: [{ $multiply: [{ $divide: ["$success", "$total"] }, 100] }, 2] },
+              0,
+            ],
+          },
+          lastSubmittedAt: 1,
+        },
+      },
+    ]);
+
+    const summary = agg ?? {
+      attemptsCount: 0,
+      total: 0,
+      attempt: 0,
+      skip: 0,
+      success: 0,
+      failed: 0,
+      scoreSum: 0,
+      bestScore: 0,
+      avgScore: 0,
+      accuracy: 0,
+      lastSubmittedAt: null,
+    };
+
+    // Rank by best score across users.
+    const bestPerUser = await ExamResult.aggregate([
+      { $match: { examId: eid, status: true } },
+      { $group: { _id: "$customerId", best: { $max: "$score" } } },
+    ]);
+    const myBest = bestPerUser.find((u: any) => String(u._id) === String(customerId))?.best ?? 0;
+    const higher = bestPerUser.filter((u: any) => u.best > myBest).length;
+    const totalCandidates = bestPerUser.length;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        exam: { _id: exam._id, title: exam.title, questionCount: exam.questionCount },
+        summary,
+        rank: totalCandidates > 0 ? `${higher + 1}/${totalCandidates}` : "-",
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/client/quizzes/:id/attempts/active
+export const getActiveAttempt = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    const examId = req.params.id as string;
+    if (!isObjectId(examId))
+      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+
+    const attempt = await ExamResult.findOne({ customerId, examId, status: false });
+    if (!attempt)
+      return res.status(200).json({ success: true, data: null });
+
+    const exam = await Exam.findById(examId);
+    if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
+
+    const details = await ExamResultDetail.find({ examResultId: attempt._id })
+      .select("questionId answerId result")
+      .lean();
+
+    const now = new Date();
+    const expired = isAttemptExpired(attempt, exam.durationMinutes);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        attemptId: attempt._id,
+        attemptNumber: attempt.attemptNumber,
+        startedAt: attempt.startedAt,
+        serverNow: now,
+        durationMinutes: exam.durationMinutes,
+        expired,
+        savedAnswers: details.map((d: any) => ({
+          questionId: d.questionId,
+          answerId: d.answerId,
+        })),
+      },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

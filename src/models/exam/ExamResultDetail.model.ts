@@ -6,7 +6,7 @@ import { ExamResultType } from "../enums";
  * Upserted on submit.
  */
 export interface IExamResultDetail extends Document {
-  examResultId?: Types.ObjectId | null;
+  examResultId: Types.ObjectId;
   customerId: Types.ObjectId;
   examId: Types.ObjectId;
   questionId: Types.ObjectId;
@@ -19,7 +19,7 @@ export interface IExamResultDetail extends Document {
 
 const ExamResultDetailSchema = new Schema<IExamResultDetail>(
   {
-    examResultId: { type: Schema.Types.ObjectId, ref: "ExamResult", default: null },
+    examResultId: { type: Schema.Types.ObjectId, ref: "ExamResult", required: true },
     customerId: { type: Schema.Types.ObjectId, ref: "Customer", required: true },
     examId: { type: Schema.Types.ObjectId, ref: "Exam", required: true },
     questionId: { type: Schema.Types.ObjectId, ref: "ExamQuestion", required: true },
@@ -36,10 +36,10 @@ const ExamResultDetailSchema = new Schema<IExamResultDetail>(
 );
 
 ExamResultDetailSchema.index(
-  { customerId: 1, examId: 1, questionId: 1 },
+  { examResultId: 1, questionId: 1 },
   { unique: true }
 );
-ExamResultDetailSchema.index({ examResultId: 1 });
+ExamResultDetailSchema.index({ customerId: 1, examId: 1 });
 ExamResultDetailSchema.index({ examId: 1 });
 
 export const ExamResultDetail = model<IExamResultDetail>(

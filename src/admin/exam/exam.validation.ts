@@ -18,7 +18,7 @@ export const updateCategorySchema = createCategorySchema.partial();
 export const createExamSchema = z.object({
   title: z.string().min(1).max(255),
   durationMinutes: z.coerce.number().int().positive(),
-  questionCount: z.coerce.number().int().positive(),
+  questionCount: z.coerce.number().int().nonnegative().optional(),
   categoryId: z.string().nullable().optional(),
   type: z
     .enum([ExamType.DAILY, ExamType.SUBJECT, ExamType.MOCK, ExamType.WEEKLY])
@@ -26,7 +26,6 @@ export const createExamSchema = z.object({
   positiveMarks: z.coerce.number().nonnegative(),
   negativeMarks: z.coerce.number(),
   startAt: z.string().optional(),
-  endAt: z.string().optional(),
   solutionPdfUrl: z.string().max(500).optional(),
   sendPush: z.coerce.boolean().optional(),
   isPaid: z.coerce.boolean().optional(),

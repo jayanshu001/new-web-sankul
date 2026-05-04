@@ -13,6 +13,12 @@ import {
   listMyResults,
   getMyOverallAnalytics,
   rateExamResult,
+  startAttempt,
+  saveSingleAnswer,
+  submitAttempt,
+  getActiveAttempt,
+  listAttempts,
+  getAttemptsAggregate,
 } from "./exam.controller";
 
 const router = Router();
@@ -31,6 +37,14 @@ router.get("/my/analytics", getMyOverallAnalytics);
 // Exam detail (meta only) + taking
 router.get("/:id/detail", getExamDetail);
 router.get("/:id/questions", getExamQuestions);
+
+// Attempt lifecycle
+router.post("/:id/attempts/start", startAttempt);
+router.get("/:id/attempts/active", getActiveAttempt);
+router.get("/:id/attempts/aggregate", getAttemptsAggregate);
+router.get("/:id/attempts", listAttempts);
+router.post("/:id/attempts/:attemptId/answer", saveSingleAnswer);
+router.post("/:id/attempts/:attemptId/submit", submitAttempt);
 
 // Post-submit views (keyed by examId, as in old API)
 router.get("/:id/solution", getSolutionByExam);

@@ -16,7 +16,6 @@ export interface IExam extends Document {
   instructions?: string;
   policy?: string;
   startAt?: Date;
-  endAt?: Date;
   status: ExamStatus;
   orderBy: number;
   language: ExamLanguage;
@@ -39,7 +38,7 @@ const ExamSchema = new Schema<IExam>(
     categoryId: { type: Schema.Types.ObjectId, ref: "ExamCategory", default: null },
     isPaid: { type: Boolean, default: false },
     durationMinutes: { type: Number, required: true, min: 1 },
-    questionCount: { type: Number, required: true, min: 1 },
+    questionCount: { type: Number, default: 0, min: 0 },
     positiveMarks: { type: Number, required: true, default: 1 },
     negativeMarks: { type: Number, required: true, default: 0 },
     passingMarks: { type: Number, default: 0 },
@@ -47,7 +46,6 @@ const ExamSchema = new Schema<IExam>(
     instructions: { type: String },
     policy: { type: String },
     startAt: { type: Date },
-    endAt: { type: Date },
     status: {
       type: String,
       enum: Object.values(ExamStatus),
