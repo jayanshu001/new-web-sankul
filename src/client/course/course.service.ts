@@ -2,10 +2,13 @@ import { Types } from "mongoose";
 import { Course } from "../../models/course/Course.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
-import { Video } from "../../models/course/Video.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { Material } from "../../models/course/Material.model";
+import { Video } from "../../models/course/Video.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
+import { Exam } from "../../models/exam/Exam.model";
+import { VideoCategory } from "../../models/course/VideoCategory.model";
+import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
@@ -13,12 +16,6 @@ import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { CustomerShipping } from "../../models/customer/CustomerShipping.model";
 import { CustomerState } from "../../models/customer/CustomerState.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import {
-  generateKey,
-  generateToken,
-  generateVector,
-  encrypt,
-} from "../../utils/videoEncryption";
 import { ShippingBody } from "./course.validation";
 import { COURIER } from "../../config/courier";
 
@@ -28,64 +25,20 @@ export interface PromoCodeDTO {
   description: string;
 }
 
-export interface LectureDTO {
-  _id: Types.ObjectId;
-  videoCategoryId: Types.ObjectId;
-  title?: string;
-  platform: "youtube" | "aws" | "vimeo";
-  order: number;
-  status: boolean;
-  token: string;
-  videoURL: string;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface CategoryDTO {
-  _id: Types.ObjectId;
-  title: string;
-  image?: string | null;
-  parent: Types.ObjectId | null;
-  order: number;
-  status: boolean;
-  havingChildDirectory: boolean;
-  count: string | number;
-  createdAt: Date;
-  updatedAt: Date;
+export interface CategoryGroupDTO {
+  category: any;
 }
 
 export interface CourseDetailsResponse {
   course: any;
-  lectures: LectureDTO[];
-  materials: CategoryDTO[];
-  exams: CategoryDTO[];
+  videos: CategoryGroupDTO[];
+  materials: CategoryGroupDTO[];
+  tests: CategoryGroupDTO[];
   plans: {
     withMaterial: any[];
     withoutMaterial: any[];
   };
   availablePromoCode: PromoCodeDTO[];
-}
-
-/**
- * Recursively counts leaf Materials under a MaterialCategory subtree.
- * Returns a stringified count to preserve wire compatibility with the old API
- * (which typed this as string and always returned "").
- */
-export async function findMaterialCounts(id: Types.ObjectId | string): Promise<string> {
-  const children = await MaterialCategory.find({ parent: id, status: true })
-    .select("_id")
-    .lean();
-  if (children.length === 0) {
-    const count = await Material.countDocuments({ materialCategoryId: id, status: true });
-    return String(count);
-  }
-  const counts = await Promise.all(children.map((c) => findMaterialCounts(c._id as any)));
-  const total = counts.reduce((a, b) => a + Number(b || 0), 0);
-  return String(total);
-}
-
-export async function findExamCounts(_id: Types.ObjectId | string): Promise<string> {
-  return "";
 }
 
 export async function buildCourseDetails(
@@ -111,88 +64,62 @@ export async function buildCourseDetails(
   delete course.materialCategories;
   delete course.examCategories;
 
-  // Lectures — encrypted per-lecture URL
-  const rawLectures = courseDoc.videoCategoryId
-    ? await Video.find({ videoCategoryId: courseDoc.videoCategoryId, status: true })
-        .sort({ order: 1 })
-        .lean()
-    : [];
+  // Videos — Course has a single videoCategoryId; expose as one-entry videos[]
+  const videos: CategoryGroupDTO[] = [];
+  if (courseDoc.videoCategoryId) {
+    const videoCat: any = await VideoCategory.findById(courseDoc.videoCategoryId).lean();
+    if (videoCat) {
+      const [count, childCount] = await Promise.all([
+        Video.countDocuments({ videoCategoryId: videoCat._id, status: true }),
+        VideoCategoryRelation.countDocuments({ parent: videoCat._id }),
+      ]);
+      videos.push({
+        category: {
+          ...videoCat,
+          havingChildDirectory: childCount > 0,
+          count,
+        },
+      });
+    }
+  }
 
-  const lectures: LectureDTO[] = await Promise.all(
-    rawLectures.map(async (lecture) => {
-      const token = generateToken(16);
-      const key = generateKey(token);
-      const vector = generateVector(token);
-      const sourceId =
-        lecture.platform === "youtube"
-          ? lecture.youtube_id
-          : lecture.platform === "aws"
-          ? lecture.aws_id
-          : lecture.vimeo_id;
-      const videoURL = sourceId ? encrypt(sourceId, key, vector) : "";
-      return {
-        _id: lecture._id,
-        videoCategoryId: lecture.videoCategoryId,
-        title: lecture.title,
-        platform: lecture.platform,
-        order: lecture.order,
-        status: lecture.status,
-        token,
-        videoURL,
-        createdAt: lecture.createdAt,
-        updatedAt: lecture.updatedAt,
-      };
-    })
-  );
-
-  // Materials — batch all child-count queries in parallel
+  // Materials — category groups with full category details + count
   const materialRefs = [...((courseDoc as any).materialCategories ?? [])].sort(
     (a: any, b: any) => (a.order ?? 0) - (b.order ?? 0)
   );
   const activeMaterialCats = materialRefs
     .map((ref: any) => ref.category)
     .filter((cat: any) => cat && cat.status === true);
-  const materialCatIds = activeMaterialCats.map((cat: any) => cat._id);
-  const [materialChildCounts, materialCountStrs] = await Promise.all([
-    Promise.all(materialCatIds.map((id: any) => MaterialCategory.countDocuments({ parent: id }))),
-    Promise.all(materialCatIds.map((id: any) => findMaterialCounts(id))),
+  const [materialChildCounts, materialCounts] = await Promise.all([
+    Promise.all(activeMaterialCats.map((cat: any) => MaterialCategory.countDocuments({ parent: cat._id, status: true }))),
+    Promise.all(activeMaterialCats.map((cat: any) => Material.countDocuments({ materialCategoryId: cat._id, status: true }))),
   ]);
-  const materials: CategoryDTO[] = activeMaterialCats.map((cat: any, i: number) => ({
-    _id: cat._id,
-    title: cat.title,
-    image: cat.image ?? null,
-    parent: cat.parent ?? null,
-    order: cat.order,
-    status: cat.status,
-    havingChildDirectory: materialChildCounts[i] > 0,
-    count: materialCountStrs[i],
-    createdAt: cat.createdAt,
-    updatedAt: cat.updatedAt,
+  const materials: CategoryGroupDTO[] = activeMaterialCats.map((cat: any, i: number) => ({
+    category: {
+      ...cat,
+      havingChildDirectory: materialChildCounts[i] > 0,
+      count: materialCounts[i],
+    },
   }));
 
-  // Exams — batch all child-count queries in parallel
+  // Tests — exam categories with full category details + exam count
   const examRefs = [...((courseDoc as any).examCategories ?? [])].sort(
     (a: any, b: any) => (a.order ?? 0) - (b.order ?? 0)
   );
   const activeExamCats = examRefs
     .map((ref: any) => ref.category)
     .filter((cat: any) => cat && cat.status === true);
-  const examCatIds = activeExamCats.map((cat: any) => cat._id);
-  const [examChildCounts, examCountStrs] = await Promise.all([
-    Promise.all(examCatIds.map((id: any) => ExamCategory.countDocuments({ parentId: id }))),
-    Promise.all(examCatIds.map((id: any) => findExamCounts(id))),
+  const [examChildCounts, examCounts] = await Promise.all([
+    Promise.all(activeExamCats.map((cat: any) => ExamCategory.countDocuments({ parentId: cat._id, status: true }))),
+    Promise.all(activeExamCats.map((cat: any) => Exam.countDocuments({ categoryId: cat._id }))),
   ]);
-  const exams: CategoryDTO[] = activeExamCats.map((cat: any, i: number) => ({
-    _id: cat._id,
-    title: cat.name,
-    image: cat.image ?? null,
-    parent: cat.parentId ?? null,
-    order: cat.orderBy,
-    status: cat.status,
-    havingChildDirectory: examChildCounts[i] > 0,
-    count: examCountStrs[i],
-    createdAt: cat.createdAt,
-    updatedAt: cat.updatedAt,
+  const tests: CategoryGroupDTO[] = activeExamCats.map((cat: any, i: number) => ({
+    category: {
+      ...cat,
+      title: cat.name,
+      havingChildDirectory: examChildCounts[i] > 0,
+      count: examCounts[i],
+    },
   }));
 
   // Plans
@@ -240,7 +167,7 @@ export async function buildCourseDetails(
     withoutMaterial: AllPlans.filter((p) => p.withMaterial === false),
   };
 
-  return { course, lectures, materials, exams, plans, availablePromoCode };
+  return { course, videos, materials, tests, plans, availablePromoCode };
 }
 
 // ───────────────────────────────────────────────────────────────────────────

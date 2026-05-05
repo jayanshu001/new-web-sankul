@@ -8,6 +8,7 @@ import { PackageChat } from "../../models/course/PackageChat.model";
 import { PackageVideoCategoryRelation } from "../../models/course/PackageVideoCategoryRelation.model";
 import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
+import { Goal } from "../../models/Goal.model";
 import {
   createPackageSchema,
   updatePackageSchema,
@@ -21,6 +22,23 @@ import {
 } from "./package.validation";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Validates that, when goalLabelId is supplied, goalId is also supplied and the
+// label exists inside that goal's labels[]. Returns an error string or null.
+async function validateGoalLabelPair(
+  goalId: string | null | undefined,
+  goalLabelId: string | null | undefined
+): Promise<string | null> {
+  if (!goalLabelId) return null;
+  if (!goalId) return "goalId is required when goalLabelId is provided.";
+  if (!mongoose.Types.ObjectId.isValid(goalId)) return "Invalid goalId.";
+  if (!mongoose.Types.ObjectId.isValid(goalLabelId)) return "Invalid goalLabelId.";
+  const goal = await Goal.findById(goalId).select("labels._id").lean();
+  if (!goal) return "Goal not found for the supplied goalId.";
+  const owns = (goal.labels ?? []).some((l: any) => l._id?.toString() === goalLabelId);
+  if (!owns) return "goalLabelId does not belong to the supplied goalId.";
+  return null;
+}
 
 function toCategoryRefs(items?: Array<{ category: string; order?: number; status?: boolean }>) {
   if (!items) return undefined;
@@ -124,7 +142,6 @@ export const listPackages = async (req: Request, res: Response) => {
     const [data, total] = await Promise.all([
       Package.find(filter)
         .populate("packageTypeId", "_id name")
-        .populate("goalId", "_id title")
         .populate("pcMaterialId", "_id title")
         .sort({ order: 1, createdAt: -1 })
         .skip(skip)
@@ -149,7 +166,6 @@ export const getPackageById = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid package id." });
     const pkg = await Package.findById(id)
       .populate("packageTypeId", "_id name")
-      .populate("goalId", "_id title")
       .populate("pcMaterialId", "_id title")
       .populate("educatorId", "_id name")
       .populate("specificSubjects.category", "_id title image")
@@ -171,6 +187,8 @@ export const createPackage = async (req: Request, res: Response) => {
     if (typeof req.body.isMagazine === "string") req.body.isMagazine = req.body.isMagazine === "true";
     if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
     const data = createPackageSchema.parse(req.body);
+    const goalErr = await validateGoalLabelPair(data.goalId, data.goalLabelId);
+    if (goalErr) return res.status(400).json({ success: false, message: goalErr });
     const payload: any = {
       ...data,
       packageTypeId: data.packageTypeId || null,
@@ -203,6 +221,14 @@ export const updatePackage = async (req: Request, res: Response) => {
     if (typeof req.body.isMagazine === "string") req.body.isMagazine = req.body.isMagazine === "true";
     if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
     const data = updatePackageSchema.parse(req.body);
+    if (data.goalId !== undefined || data.goalLabelId !== undefined) {
+      const existing = await Package.findById(id).select("goalId goalLabelId").lean();
+      const nextGoalId = data.goalId !== undefined ? data.goalId : existing?.goalId?.toString() ?? null;
+      const nextLabelId =
+        data.goalLabelId !== undefined ? data.goalLabelId : existing?.goalLabelId?.toString() ?? null;
+      const goalErr = await validateGoalLabelPair(nextGoalId, nextLabelId);
+      if (goalErr) return res.status(400).json({ success: false, message: goalErr });
+    }
     const update: any = { ...data };
     if (data.packageTypeId !== undefined) update.packageTypeId = data.packageTypeId || null;
     if (data.goalId !== undefined) update.goalId = data.goalId || null;

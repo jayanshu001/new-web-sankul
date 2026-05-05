@@ -8,44 +8,59 @@ import { PackageChat } from "../../models/course/PackageChat.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
+import { Video } from "../../models/course/Video.model";
+import { Material } from "../../models/course/Material.model";
+import { Exam } from "../../models/exam/Exam.model";
 import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
 import { Goal } from "../../models/Goal.model";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async function decorateVideoCategory(cat: any) {
+async function buildVideoCategoryGroup(cat: any) {
   if (!cat) return null;
-  const childCount = await VideoCategoryRelation.countDocuments({ parent: cat._id });
+  const [count, childCount] = await Promise.all([
+    Video.countDocuments({ videoCategoryId: cat._id, status: true }),
+    VideoCategoryRelation.countDocuments({ parent: cat._id }),
+  ]);
   return {
-    _id: cat._id,
-    title: cat.title,
-    image: cat.image,
-    havingChildDirectory: childCount > 0,
-    count: "",
+    category: {
+      ...cat,
+      title: cat.title,
+      havingChildDirectory: childCount > 0,
+      count,
+    },
   };
 }
 
-async function decorateMaterialCategory(cat: any) {
+async function buildMaterialCategoryGroup(cat: any) {
   if (!cat) return null;
-  const childCount = await MaterialCategory.countDocuments({ parent: cat._id, status: true });
+  const [count, childCount] = await Promise.all([
+    Material.countDocuments({ materialCategoryId: cat._id, status: true }),
+    MaterialCategory.countDocuments({ parent: cat._id, status: true }),
+  ]);
   return {
-    _id: cat._id,
-    title: cat.title,
-    image: cat.image,
-    havingChildDirectory: childCount > 0,
-    count: "",
+    category: {
+      ...cat,
+      title: cat.title,
+      havingChildDirectory: childCount > 0,
+      count,
+    },
   };
 }
 
-async function decorateExamCategory(cat: any) {
+async function buildExamCategoryEntry(cat: any) {
   if (!cat) return null;
-  const childCount = await ExamCategory.countDocuments({ parentId: cat._id, status: true });
+  const [count, childCount] = await Promise.all([
+    Exam.countDocuments({ categoryId: cat._id }),
+    ExamCategory.countDocuments({ parentId: cat._id, status: true }),
+  ]);
   return {
-    _id: cat._id,
-    title: cat.name,
-    image: cat.image,
-    havingChildDirectory: childCount > 0,
-    count: "",
+    category: {
+      ...cat,
+      title: cat.name,
+      havingChildDirectory: childCount > 0,
+      count,
+    },
   };
 }
 
@@ -54,12 +69,13 @@ async function buildPackageDetail(packageId: string) {
     .populate("packageTypeId", "_id name")
     .populate("goalId", "_id title")
     .populate("pcMaterialId", "_id title")
-    .populate("specificSubjects.category", "_id title image")
-    .populate("materialCategories.category", "_id title image")
-    .populate("examCategories.category", "_id title image");
+    .populate({ path: "specificSubjects.category", model: "VideoCategory" })
+    .populate({ path: "materialCategories.category", model: "MaterialCategory" })
+    .populate({ path: "examCategories.category", model: "ExamCategory" })
+    .lean();
   if (!pkg) return null;
 
-  const subjectRefs = (pkg.specificSubjects ?? [])
+  const videoRefs = (pkg.specificSubjects ?? [])
     .filter((r: any) => r.status !== false)
     .sort((a: any, b: any) => a.order - b.order);
   const materialRefs = (pkg.materialCategories ?? [])
@@ -69,10 +85,10 @@ async function buildPackageDetail(packageId: string) {
     .filter((r: any) => r.status !== false)
     .sort((a: any, b: any) => a.order - b.order);
 
-  const [subjects, materials, exams] = await Promise.all([
-    Promise.all(subjectRefs.map((r: any) => decorateVideoCategory(r.category))),
-    Promise.all(materialRefs.map((r: any) => decorateMaterialCategory(r.category))),
-    Promise.all(examRefs.map((r: any) => decorateExamCategory(r.category))),
+  const [videos, materials, tests] = await Promise.all([
+    Promise.all(videoRefs.map((r: any) => buildVideoCategoryGroup(r.category))),
+    Promise.all(materialRefs.map((r: any) => buildMaterialCategoryGroup(r.category))),
+    Promise.all(examRefs.map((r: any) => buildExamCategoryEntry(r.category))),
   ]);
 
   const plans = await PackageCourseEbookPrice.find({ packageId, status: true }).sort({ duration: 1 });
@@ -117,9 +133,9 @@ async function buildPackageDetail(packageId: string) {
       goal: pkg.goalId,
       pcMaterial: pkg.pcMaterialId,
     },
-    subjects: subjects.filter(Boolean),
+    videos: videos.filter(Boolean),
     materials: materials.filter(Boolean),
-    exams: exams.filter(Boolean),
+    tests: tests.filter(Boolean),
     plans: splitPlans,
     availablePromoCode,
   };

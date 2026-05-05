@@ -22,6 +22,9 @@ import clientWebhookRoutes from "./webhook/webhook.routes";
 import clientTrackingRoutes from "./tracking/tracking.routes";
 import clientSaveRoutes from "./save/save.routes";
 import clientFreeRoutes from "./free/free.routes";
+import clientCategoriesRoutes from "./categories/categories.routes";
+import clientFolderRoutes from "./folder/folder.routes";
+import clientExamCountdownRoutes from "./examCountdown/examCountdown.routes";
 
 const router = Router();
 
@@ -56,5 +59,8 @@ router.use("/wishlist", clientWishlistRoutes); // -> /api/v1/client/wishlist/*
 router.use("/webhook", clientWebhookRoutes); // -> /api/v1/client/webhook/*
 router.use("/tracking", clientTrackingRoutes); // -> /api/v1/client/tracking
 router.use("/save", clientSaveRoutes); // -> /api/v1/client/save/answers (old-API compat)
+router.use("/", clientCategoriesRoutes); // -> /api/v1/client/{video|material|exam}-categories/:id/{videos|materials|exams}
+router.use("/folders", clientFolderRoutes); // -> /api/v1/client/folders/*
+router.use("/exam-countdowns", clientExamCountdownRoutes); // -> /api/v1/client/exam-countdowns/*
 
 export default router;

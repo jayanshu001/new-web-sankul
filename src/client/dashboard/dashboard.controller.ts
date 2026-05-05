@@ -9,9 +9,22 @@ import { Testimonial } from "../../models/system/Testimonial.model";
 import { fetchTrendingBookItems } from "../book/book.controller";
 import { Video } from "../../models/course/Video.model";
 import { resolveFreeCategoryIds } from "../free/free.controller";
+import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
 
 const RECENTLY_ADDED_LIMIT = 5;
 const COURSE_CATEGORY_LIMIT = 6;
+const EXAM_COUNTDOWN_LIMIT = 2;
+const MS_PER_DAY = 86_400_000;
+
+function todayUTC(): Date {
+  const n = new Date();
+  return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()));
+}
+
+function daysLeftFor(d: Date): number {
+  const e = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  return Math.ceil((e.getTime() - todayUTC().getTime()) / MS_PER_DAY);
+}
 
 async function buildPackageEntry(pkg: any) {
   const [plans, subCount] = await Promise.all([
@@ -32,7 +45,7 @@ async function buildPackageEntry(pkg: any) {
 // GET /api/v1/client/dashboard
 export const getDashboard = async (_req: Request, res: Response) => {
   try {
-    const [banners, recentPackages, courses, trending, testimonial, courseCategories] = await Promise.all([
+    const [banners, recentPackages, courses, trending, testimonial, courseCategories, examCountdownsRaw] = await Promise.all([
       BannerSlider.find().sort({ orderBy: 1 }).lean(),
       Package.find({ active: true })
         .populate("packageTypeId", "_id name createdAt updatedAt")
@@ -46,7 +59,23 @@ export const getDashboard = async (_req: Request, res: Response) => {
         .sort({ order: 1, title: 1 })
         .limit(COURSE_CATEGORY_LIMIT)
         .lean(),
+      ExamCountdown.find({ status: true, examDate: { $gte: todayUTC() } })
+        .populate("categoryId", "_id name colorHex")
+        .sort({ examDate: 1, order: 1 })
+        .limit(EXAM_COUNTDOWN_LIMIT)
+        .lean(),
     ]);
+
+    const examCountdowns = examCountdownsRaw.map((d: any) => ({
+      _id: d._id,
+      title: d.title,
+      examDate: d.examDate,
+      daysLeft: daysLeftFor(d.examDate),
+      category:
+        d.categoryId && typeof d.categoryId === "object"
+          ? { _id: d.categoryId._id, name: d.categoryId.name, colorHex: d.categoryId.colorHex }
+          : null,
+    }));
 
     const courseCategoryIds = courseCategories.map((c: any) => c._id);
     const categoryCounts = courseCategoryIds.length
@@ -88,6 +117,8 @@ export const getDashboard = async (_req: Request, res: Response) => {
     const dashboard: Array<{ title: string; type: string; data: unknown }> = [];
 
     if (banners.length) dashboard.push({ title: "Banner", type: "banner", data: banners });
+    if (examCountdowns.length)
+      dashboard.push({ title: "Exam Countdown", type: "exam-countdown", data: examCountdowns });
     if (recentlyAddedData.length)
       dashboard.push({ title: "Recently Added", type: "package", data: recentlyAddedData });
     if (coursesWithPlans.length) dashboard.push({ title: "Course Subjects", type: "course", data: coursesWithPlans });

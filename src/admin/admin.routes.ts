@@ -28,6 +28,7 @@ import adminPromoterRoutes from "./promoter/promoter.routes";
 import adminDashboardRoutes from "./dashboard/dashboard.routes";
 import adminTrackingRoutes from "./tracking/tracking.routes";
 import adminAddressRoutes from "./address/admin.address.routes";
+import adminExamCountdownRoutes from "./examCountdown/examCountdown.routes";
 
 const router = Router();
 
@@ -70,5 +71,6 @@ router.use("/promoters", adminPromoterRoutes);
 router.use("/dashboard", adminDashboardRoutes);
 router.use("/tracking", adminTrackingRoutes);
 router.use("/address", adminAddressRoutes); // -> /api/v1/admin/address/{states,cities}/*
+router.use("/exam-countdowns", adminExamCountdownRoutes); // -> /api/v1/admin/exam-countdowns/*
 
 export default router;
