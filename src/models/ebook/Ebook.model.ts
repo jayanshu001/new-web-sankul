@@ -3,6 +3,7 @@ import { EBookLanguage } from "../enums";
 
 export interface IEbook extends Document {
   name: string;
+  examCountdownCategoryId?: mongoose.Types.ObjectId | null;
   description: string;
   author: string;
   publisher: string;
@@ -23,6 +24,11 @@ export interface IEbook extends Document {
 const ebookSchema: Schema = new Schema(
   {
     name: { type: String, required: true },
+    examCountdownCategoryId: {
+      type: Schema.Types.ObjectId,
+      ref: "ExamCountdownCategory",
+      default: null,
+    },
     description: { type: String, required: true },
     author: { type: String, required: true },
     publisher: { type: String, required: true },
@@ -41,6 +47,7 @@ const ebookSchema: Schema = new Schema(
 );
 
 ebookSchema.index({ status: 1, order: 1 });
+ebookSchema.index({ examCountdownCategoryId: 1, status: 1, order: 1 });
 ebookSchema.index({ status: 1, isTrending: 1, order: 1 });
 ebookSchema.index({ author: "text", name: "text" });
 

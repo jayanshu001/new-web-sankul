@@ -178,6 +178,8 @@ export const listPackages = async (req: Request, res: Response) => {
       isMagazine,
       packageTypeId,
       goalId,
+      isSmartCourse,
+      isPlannerCourse,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
@@ -188,6 +190,10 @@ export const listPackages = async (req: Request, res: Response) => {
     if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))
       filter.packageTypeId = packageTypeId;
     if (goalId && mongoose.Types.ObjectId.isValid(goalId)) filter.goalId = goalId;
+    if (isSmartCourse === "true" || isSmartCourse === "false")
+      filter.isSmartCourse = isSmartCourse === "true";
+    if (isPlannerCourse === "true" || isPlannerCourse === "false")
+      filter.isPlannerCourse = isPlannerCourse === "true";
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);

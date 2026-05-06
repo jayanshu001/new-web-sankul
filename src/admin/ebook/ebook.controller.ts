@@ -60,7 +60,10 @@ export const getEbookById = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Ebook ID" });
     }
 
-    const ebook = await Ebook.findById(id);
+    const ebook = await Ebook.findById(id).populate(
+      "examCountdownCategoryId",
+      "_id name colorHex"
+    );
     if (!ebook) return res.status(404).json({ success: false, message: "Ebook not found" });
 
     const plans = await EbookPrice.find({ ebookId: id, status: true }).sort({ price: 1 });
@@ -86,6 +89,7 @@ export const createEbook = async (req: Request, res: Response) => {
   try {
     applyEbookUploads(req);
     const validatedData = createEbookSchema.parse(req.body);
+    (validatedData as any).examCountdownCategoryId = validatedData.examCountdownCategoryId || null;
     const ebook = new Ebook(validatedData);
     await ebook.save();
     return res.status(201).json({ success: true, data: ebook });
@@ -104,6 +108,9 @@ export const updateEbook = async (req: Request, res: Response) => {
 
     applyEbookUploads(req);
     const validatedData = updateEbookSchema.parse(req.body);
+    if (validatedData.examCountdownCategoryId !== undefined) {
+      (validatedData as any).examCountdownCategoryId = validatedData.examCountdownCategoryId || null;
+    }
     const ebook = await Ebook.findByIdAndUpdate(id, validatedData, { new: true });
     if (!ebook) return res.status(404).json({ success: false, message: "Ebook not found" });
 

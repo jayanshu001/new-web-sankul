@@ -65,16 +65,27 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
         status: true,
       })
         .select("examId score total success failed skip attempt timing updatedAt")
+        .sort({ updatedAt: -1, attemptNumber: -1 })
         .lean();
-      for (const r of results) resultByExam.set(String(r.examId), r);
+      for (const r of results) {
+        const key = String(r.examId);
+        if (!resultByExam.has(key)) resultByExam.set(key, r);
+      }
     }
 
     const decorated = exams.map((e: any) => ({
       ...e.toObject(),
+      isCompleted: resultByExam.has(String(e._id)),
       lastResult: resultByExam.get(String(e._id)) ?? null,
     }));
+    const completedTests = decorated.filter(
+      (exam: any) => exam.type === ExamType.SUBJECT && exam.isCompleted
+    );
 
-    return res.status(200).json({ success: true, data: { subjects, exams: decorated } });
+    return res.status(200).json({
+      success: true,
+      data: { subjects, exams: decorated, completedTests },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

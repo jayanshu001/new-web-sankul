@@ -3,6 +3,7 @@ import { BookLanguage, BookOrderStatus, BookCourier } from "../../models/enums";
 
 export const createBookSchema = z.object({
   name: z.string().min(1).max(255),
+  examCountdownCategoryId: z.string().nullable().optional(),
   thumbnail: z.string().max(500).optional(),
   author: z.string().max(150).optional(),
   image: z.string().max(500).optional(),

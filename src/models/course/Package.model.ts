@@ -17,9 +17,12 @@ export interface IPackage extends Document {
   active: boolean;
   isMagazine: boolean;
   isPaid: boolean;
+  isSmartCourse: boolean;
+  isPlannerCourse: boolean;
   packageTypeId?: Types.ObjectId | null;
   goalId?: Types.ObjectId | null;
   goalLabelId?: Types.ObjectId | null;
+  examCountdownCategoryId?: Types.ObjectId | null;
   pcMaterialId?: Types.ObjectId | null;
   educatorId?: Types.ObjectId | null;
   specificSubjects: IPackageCategoryRef[];
@@ -51,9 +54,16 @@ const packageSchema = new Schema<IPackage>(
     active: { type: Boolean, default: true },
     isMagazine: { type: Boolean, default: false },
     isPaid: { type: Boolean, default: true },
+    isSmartCourse: { type: Boolean, default: false },
+    isPlannerCourse: { type: Boolean, default: false },
     packageTypeId: { type: Schema.Types.ObjectId, ref: "PackageType", default: null },
     goalId: { type: Schema.Types.ObjectId, ref: "Goal", default: null },
     goalLabelId: { type: Schema.Types.ObjectId, default: null },
+    examCountdownCategoryId: {
+      type: Schema.Types.ObjectId,
+      ref: "ExamCountdownCategory",
+      default: null,
+    },
     pcMaterialId: {
       type: Schema.Types.ObjectId,
       ref: "PackageCourseMaterial",
@@ -72,6 +82,9 @@ packageSchema.index({ active: 1, order: 1 });
 packageSchema.index({ goalId: 1, active: 1 });
 packageSchema.index({ goalLabelId: 1, active: 1 });
 packageSchema.index({ packageTypeId: 1, active: 1 });
+packageSchema.index({ examCountdownCategoryId: 1, active: 1 });
+packageSchema.index({ isSmartCourse: 1, active: 1 });
+packageSchema.index({ isPlannerCourse: 1, active: 1 });
 packageSchema.index({ "specificSubjects.category": 1 });
 packageSchema.index({ "materialCategories.category": 1 });
 packageSchema.index({ "examCategories.category": 1 });

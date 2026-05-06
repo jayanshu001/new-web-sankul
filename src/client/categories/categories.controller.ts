@@ -6,6 +6,12 @@ import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { Material } from "../../models/course/Material.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { Exam } from "../../models/exam/Exam.model";
+import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
+import { Package } from "../../models/course/Package.model";
+import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
+import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { Book } from "../../models/book/Book.model";
+import { Ebook } from "../../models/ebook/Ebook.model";
 
 function parsePaging(req: Request) {
   const { page = "1", limit = "20", search = "" } = req.query as Record<string, string>;
@@ -93,6 +99,100 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
       Exam.find(filter).sort({ orderBy: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
       Exam.countDocuments(filter),
     ]);
+
+    return res.status(200).json({
+      success: true,
+      data: { category, list },
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /client/exam-countdown-categories/:id/packages
+export const listPackagesByExamCountdownCategory = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid category id." });
+
+    const category = await ExamCountdownCategory.findById(id).lean();
+    if (!category)
+      return res.status(404).json({ success: false, message: "Exam countdown category not found." });
+
+    const { pageNum, limitNum, skip, search } = parsePaging(req);
+    const filter: any = { examCountdownCategoryId: id, active: true };
+    if (search) filter.name = { $regex: search, $options: "i" };
+
+    const [packages, total] = await Promise.all([
+      Package.find(filter)
+        .populate("packageTypeId", "_id name")
+        .populate("goalId", "_id title")
+        .sort({ order: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum),
+      Package.countDocuments(filter),
+    ]);
+
+    const list = await Promise.all(
+      packages.map(async (p) => {
+        const [plans, subCount] = await Promise.all([
+          PackageCourseEbookPrice.find({ packageId: p._id, status: true }).sort({ duration: 1 }),
+          PackageCourseSubscription.countDocuments({ packageId: p._id, status: true }),
+        ]);
+        return {
+          ...p.toObject(),
+          plans: {
+            withMaterial: plans.filter((pl) => pl.withMaterial),
+            withoutMaterial: plans.filter((pl) => !pl.withMaterial),
+          },
+          subscriberCount: subCount,
+        };
+      })
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: { category, list },
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /client/exam-countdown-categories/:id/books-ebooks
+// Returns books + ebooks merged into a single `list`, each row tagged with `type`.
+export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid category id." });
+
+    const category = await ExamCountdownCategory.findById(id).lean();
+    if (!category)
+      return res.status(404).json({ success: false, message: "Exam countdown category not found." });
+
+    const { pageNum, limitNum, skip, search } = parsePaging(req);
+    const filter: any = { examCountdownCategoryId: id, status: true };
+    if (search) filter.name = { $regex: search, $options: "i" };
+
+    const [books, ebooks] = await Promise.all([
+      Book.find(filter).lean(),
+      Ebook.find(filter).lean(),
+    ]);
+
+    const merged = [
+      ...books.map((b) => ({ ...b, type: "book" as const })),
+      ...ebooks.map((e) => ({ ...e, type: "ebook" as const })),
+    ].sort(
+      (a, b) =>
+        new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime()
+    );
+
+    const total = merged.length;
+    const list = merged.slice(skip, skip + limitNum);
 
     return res.status(200).json({
       success: true,

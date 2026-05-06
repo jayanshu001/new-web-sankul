@@ -63,7 +63,10 @@ export const getBookById = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid book id." });
-    const book = await Book.findById(id);
+    const book = await Book.findById(id).populate(
+      "examCountdownCategoryId",
+      "_id name colorHex"
+    );
     if (!book) return res.status(404).json({ success: false, message: "Book not found." });
     return res.status(200).json({ success: true, data: book });
   } catch (error: any) {
@@ -84,6 +87,9 @@ export const createBook = async (req: Request, res: Response) => {
   try {
     mergeUploadedFiles(req);
     const data = createBookSchema.parse(req.body);
+    if (data.examCountdownCategoryId && !mongoose.Types.ObjectId.isValid(data.examCountdownCategoryId))
+      return res.status(400).json({ success: false, message: "Invalid examCountdownCategoryId." });
+    (data as any).examCountdownCategoryId = data.examCountdownCategoryId || null;
     if (data.discountedPrice > data.listPrice) {
       return res.status(400).json({
         success: false,
@@ -105,6 +111,11 @@ export const updateBook = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid book id." });
     mergeUploadedFiles(req);
     const data = updateBookSchema.parse(req.body);
+    if (data.examCountdownCategoryId !== undefined) {
+      if (data.examCountdownCategoryId && !mongoose.Types.ObjectId.isValid(data.examCountdownCategoryId))
+        return res.status(400).json({ success: false, message: "Invalid examCountdownCategoryId." });
+      (data as any).examCountdownCategoryId = data.examCountdownCategoryId || null;
+    }
     if (
       data.discountedPrice !== undefined &&
       data.listPrice !== undefined &&

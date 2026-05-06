@@ -53,14 +53,13 @@ export async function buildCourseDetails(
 
   if (!courseDoc) return null;
 
-  // Project the populated subject/educator under the source-contract keys.
+  // Keep the populated relations and expose friendly aliases for the client.
   const course: any = {
     ...courseDoc,
     subject: (courseDoc as any).courseSubjectCategoryId ?? null,
     educator: (courseDoc as any).courseEducatorId ?? null,
   };
   delete course.courseSubjectCategoryId;
-  delete course.courseEducatorId;
   delete course.materialCategories;
   delete course.examCategories;
 

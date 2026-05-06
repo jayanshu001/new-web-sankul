@@ -5,6 +5,7 @@ const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 
 export const createEbookSchema = z.object({
   name: z.string().min(1, "Name is required"),
+  examCountdownCategoryId: z.string().regex(objectIdRegex, "Invalid examCountdownCategoryId").nullable().optional(),
   description: z.string().min(1, "Description is required"),
   author: z.string().min(1, "Author is required"),
   publisher: z.string().min(1, "Publisher is required"),

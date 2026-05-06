@@ -166,6 +166,7 @@ export const getPackageById = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid package id." });
     const pkg = await Package.findById(id)
       .populate("packageTypeId", "_id name")
+      .populate("examCountdownCategoryId", "_id name colorHex")
       .populate("pcMaterialId", "_id title")
       .populate("educatorId", "_id name")
       .populate("specificSubjects.category", "_id title image")
@@ -186,14 +187,19 @@ export const createPackage = async (req: Request, res: Response) => {
     if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
     if (typeof req.body.isMagazine === "string") req.body.isMagazine = req.body.isMagazine === "true";
     if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
+    if (typeof req.body.isSmartCourse === "string") req.body.isSmartCourse = req.body.isSmartCourse === "true";
+    if (typeof req.body.isPlannerCourse === "string") req.body.isPlannerCourse = req.body.isPlannerCourse === "true";
     const data = createPackageSchema.parse(req.body);
     const goalErr = await validateGoalLabelPair(data.goalId, data.goalLabelId);
     if (goalErr) return res.status(400).json({ success: false, message: goalErr });
+    if (data.examCountdownCategoryId && !mongoose.Types.ObjectId.isValid(data.examCountdownCategoryId))
+      return res.status(400).json({ success: false, message: "Invalid examCountdownCategoryId." });
     const payload: any = {
       ...data,
       packageTypeId: data.packageTypeId || null,
       goalId: data.goalId || null,
       goalLabelId: data.goalLabelId || null,
+      examCountdownCategoryId: data.examCountdownCategoryId || null,
       pcMaterialId: data.pcMaterialId || null,
       educatorId: data.educatorId || null,
       specificSubjects: toCategoryRefs(data.specificSubjects) ?? [],
@@ -220,6 +226,8 @@ export const updatePackage = async (req: Request, res: Response) => {
     if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
     if (typeof req.body.isMagazine === "string") req.body.isMagazine = req.body.isMagazine === "true";
     if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
+    if (typeof req.body.isSmartCourse === "string") req.body.isSmartCourse = req.body.isSmartCourse === "true";
+    if (typeof req.body.isPlannerCourse === "string") req.body.isPlannerCourse = req.body.isPlannerCourse === "true";
     const data = updatePackageSchema.parse(req.body);
     if (data.goalId !== undefined || data.goalLabelId !== undefined) {
       const existing = await Package.findById(id).select("goalId goalLabelId").lean();
@@ -233,6 +241,11 @@ export const updatePackage = async (req: Request, res: Response) => {
     if (data.packageTypeId !== undefined) update.packageTypeId = data.packageTypeId || null;
     if (data.goalId !== undefined) update.goalId = data.goalId || null;
     if (data.goalLabelId !== undefined) update.goalLabelId = data.goalLabelId || null;
+    if (data.examCountdownCategoryId !== undefined) {
+      if (data.examCountdownCategoryId && !mongoose.Types.ObjectId.isValid(data.examCountdownCategoryId))
+        return res.status(400).json({ success: false, message: "Invalid examCountdownCategoryId." });
+      update.examCountdownCategoryId = data.examCountdownCategoryId || null;
+    }
     if (data.pcMaterialId !== undefined) update.pcMaterialId = data.pcMaterialId || null;
     if (data.educatorId !== undefined) update.educatorId = data.educatorId || null;
     if (data.specificSubjects) update.specificSubjects = toCategoryRefs(data.specificSubjects);

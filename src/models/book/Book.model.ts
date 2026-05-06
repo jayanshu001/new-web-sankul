@@ -1,8 +1,9 @@
-import { Schema, model, Document } from "mongoose";
+import { Schema, model, Document, Types } from "mongoose";
 import { BookLanguage } from "../enums";
 
 export interface IBook extends Document {
   name: string;
+  examCountdownCategoryId?: Types.ObjectId | null;
   thumbnail?: string;
   author?: string;
   image?: string;
@@ -30,6 +31,11 @@ export interface IBook extends Document {
 const BookSchema = new Schema<IBook>(
   {
     name: { type: String, required: true, maxlength: 255 },
+    examCountdownCategoryId: {
+      type: Schema.Types.ObjectId,
+      ref: "ExamCountdownCategory",
+      default: null,
+    },
     thumbnail: { type: String, maxlength: 500 },
     author: { type: String, maxlength: 150 },
     image: { type: String, maxlength: 500 },
@@ -55,6 +61,7 @@ const BookSchema = new Schema<IBook>(
 );
 
 BookSchema.index({ status: 1, orderBy: 1 });
+BookSchema.index({ examCountdownCategoryId: 1, status: 1, orderBy: 1 });
 BookSchema.index({ status: 1, isTrending: 1, orderBy: 1 });
 BookSchema.index({ name: "text", author: "text" });
 
