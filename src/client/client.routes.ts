@@ -18,6 +18,9 @@ import clientNotificationRoutes from "./notification/notification.routes";
 import clientDashboardRoutes from "./dashboard/dashboard.routes";
 import clientOfflineRoutes from "./offline/offline.routes";
 import clientWishlistRoutes from "./wishlist/wishlist.routes";
+import clientCartRoutes from "./cart/cart.routes";
+import clientPaymentRoutes from "./payment/payment.routes";
+import clientPurchaseHistoryRoutes from "./purchase-history/purchase-history.routes";
 import clientWebhookRoutes from "./webhook/webhook.routes";
 import clientTrackingRoutes from "./tracking/tracking.routes";
 import clientSaveRoutes from "./save/save.routes";
@@ -56,6 +59,9 @@ router.use("/", clientDashboardRoutes); // -> /api/v1/client/{dashboard|free-das
 router.use("/", clientFreeRoutes); // -> /api/v1/client/{free-tests|free-materials|free-videos}
 router.use("/offline", clientOfflineRoutes); // -> /api/v1/client/offline/*
 router.use("/wishlist", clientWishlistRoutes); // -> /api/v1/client/wishlist/*
+router.use("/cart", clientCartRoutes); // -> /api/v1/client/cart/*
+router.use("/payment", clientPaymentRoutes); // -> /api/v1/client/payment/*
+router.use("/purchase-history", clientPurchaseHistoryRoutes); // -> /api/v1/client/purchase-history/*
 router.use("/webhook", clientWebhookRoutes); // -> /api/v1/client/webhook/*
 router.use("/tracking", clientTrackingRoutes); // -> /api/v1/client/tracking
 router.use("/save", clientSaveRoutes); // -> /api/v1/client/save/answers (old-API compat)

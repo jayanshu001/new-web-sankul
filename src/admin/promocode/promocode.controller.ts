@@ -91,6 +91,8 @@ export const createPromocode = async (req: Request, res: Response) => {
       promo_expire_at: new Date(data.promo_expire_at),
       type: data.type,
       status: data.status ?? true,
+      discountType: data.discountType,
+      discountValue: data.discountValue,
       promoterId: data.promoterId || null,
     });
 

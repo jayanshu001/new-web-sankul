@@ -11,6 +11,7 @@ export const createCourseSchema = z.object({
   level: z.string().min(1, "Level is required"),
   status: z.boolean(),
   isPaid: z.boolean().optional(),
+  isPopular: z.boolean().optional(),
   courseEducatorId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
   courseSubjectCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
   videoCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),

@@ -551,6 +551,87 @@ export const listMyResults = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/client/quizzes/my/past-daily
+// Past (finished) attempts of DAILY-type exams, for the "Exam Analytics" screen.
+// Predicate matches the `pastExams` count on /profile/dashboard exactly so badge ⇄ list agree.
+export const listMyPastDailyResults = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    const { page = "1", limit = "20" } = req.query as Record<string, string>;
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const skip = (pageNum - 1) * limitNum;
+
+    const cid = new mongoose.Types.ObjectId(customerId);
+    const matchResult = {
+      customerId: cid,
+      status: true,
+      inProgress: false,
+      submittedAt: { $ne: null },
+    };
+
+    const pipeline: any[] = [
+      { $match: matchResult },
+      {
+        $lookup: {
+          from: "ws_exam",
+          localField: "examId",
+          foreignField: "_id",
+          as: "exam",
+        },
+      },
+      { $unwind: "$exam" },
+      { $match: { "exam.type": ExamType.DAILY } },
+      { $sort: { submittedAt: -1, attemptNumber: -1 } },
+    ];
+
+    const [data, totalRows] = await Promise.all([
+      ExamResult.aggregate([
+        ...pipeline,
+        { $skip: skip },
+        { $limit: limitNum },
+        {
+          $project: {
+            _id: 1,
+            attemptNumber: 1,
+            total: 1,
+            attempt: 1,
+            skip: 1,
+            success: 1,
+            failed: 1,
+            score: 1,
+            timing: 1,
+            submittedAt: 1,
+            createdAt: 1,
+            updatedAt: 1,
+            exam: {
+              _id: "$exam._id",
+              title: "$exam.title",
+              type: "$exam.type",
+              durationMinutes: "$exam.durationMinutes",
+              positiveMarks: "$exam.positiveMarks",
+              negativeMarks: "$exam.negativeMarks",
+              startAt: "$exam.startAt",
+            },
+          },
+        },
+      ]),
+      ExamResult.aggregate([...pipeline, { $count: "n" }]),
+    ]);
+
+    const total = totalRows[0]?.n ?? 0;
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // GET /api/v1/client/exams/my/analytics
 export const getMyOverallAnalytics = async (req: Request, res: Response) => {
   try {

@@ -4,13 +4,6 @@ import {
   listBooks,
   listTrendingBooks,
   getBookDetail,
-  getCart,
-  addToCart,
-  updateCartItem,
-  removeCartItem,
-  clearCart,
-  attachShipping,
-  placeOrder,
   listMyOrders,
   getMyOrderById,
 } from "./book.controller";
@@ -21,18 +14,11 @@ const router = Router();
 router.get("/", listBooks);
 router.get("/trending", authenticate, listTrendingBooks);
 
-// Cart (auth required)
-router.get("/cart", authenticate, getCart);
-router.post("/cart", authenticate, addToCart);
-router.put("/cart/:bookId", authenticate, updateCartItem);
-router.delete("/cart/:bookId", authenticate, removeCartItem);
-router.delete("/cart", authenticate, clearCart);
+// Cart endpoints have moved to /api/v1/client/cart (see src/client/cart/*)
 
-// Shipping
-router.post("/shipping", authenticate, attachShipping);
+// Shipping moved to POST /api/v1/client/cart/shipping (see src/client/cart/*)
 
-// Orders
-router.post("/order", authenticate, placeOrder);
+// Orders (place-order moved to /api/v1/client/payment/create-order)
 router.get("/orders", authenticate, listMyOrders);
 router.get("/orders/:id", authenticate, getMyOrderById);
 

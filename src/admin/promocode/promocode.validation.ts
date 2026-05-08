@@ -9,8 +9,17 @@ const promocodeBase = z.object({
   promo_expire_at: z.string().min(1),
   type: z.enum([PromocodeType.PUBLIC, PromocodeType.PRIVATE]).default(PromocodeType.PRIVATE),
   status: z.boolean().optional(),
+  discountType: z.enum(["flat", "percentage"]).default("percentage"),
+  discountValue: z.number().nonnegative("discountValue must be >= 0"),
   promoterId: z.string().regex(/^[0-9a-fA-F]{24}$/).nullable().optional(),
 });
+
+const validateDiscount = <T extends { discountType?: "flat" | "percentage"; discountValue?: number }>(d: T) =>
+  d.discountType !== "percentage" || d.discountValue === undefined || d.discountValue <= 100;
+const discountErr = {
+  message: "discountValue must be <= 100 when discountType is 'percentage'",
+  path: ["discountValue"],
+};
 
 const planLinkSchema = z.object({
   planId: z.string().min(1),
@@ -18,13 +27,14 @@ const planLinkSchema = z.object({
   promoterPercentage: z.number().min(0).max(100).default(0),
 });
 
-export const createPromocodeSchema = promocodeBase.extend({
-  plans: z.array(planLinkSchema).optional().default([]),
-});
+export const createPromocodeSchema = promocodeBase
+  .extend({ plans: z.array(planLinkSchema).optional().default([]) })
+  .refine(validateDiscount, discountErr);
 
-export const updatePromocodeSchema = promocodeBase.partial().extend({
-  plans: z.array(planLinkSchema).optional(),
-});
+export const updatePromocodeSchema = promocodeBase
+  .partial()
+  .extend({ plans: z.array(planLinkSchema).optional() })
+  .refine(validateDiscount, discountErr);
 
 export const togglePromocodeStatusSchema = z.object({
   status: z.boolean(),

@@ -10,6 +10,10 @@ import {
   listCoursesByCategoryHandler,
 } from "./course.controller";
 import { getLectureHandler } from "./lecture.controller";
+import {
+  reportLectureProgress,
+  listMyCoursesForResume,
+} from "./progress.controller";
 
 const router = Router();
 
@@ -23,6 +27,11 @@ router.get("/categories/:categoryId/courses", listCoursesByCategoryHandler);
 router.post("/shipping", addCourseOrderShippingHandler);
 router.get("/orders/:id/invoice", getOrderInvoiceHandler);
 router.get("/orders/:id", getOrderDetailsHandler);
+
+// Resume-Learning screen
+router.get("/my", listMyCoursesForResume);
+router.post("/lectures/:videoId/progress", reportLectureProgress);
+
 router.get("/:id", getCourseByIdHandler);
 
 export default router;

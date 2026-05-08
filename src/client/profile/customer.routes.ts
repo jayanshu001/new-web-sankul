@@ -9,6 +9,7 @@ import {
   deleteAccountHandler,
   updateFirebaseTokenHandler,
 } from "./customer.controller";
+import { getProfileDashboardCounts } from "./dashboard.controller";
 
 const router = Router();
 
@@ -24,6 +25,13 @@ router.put("/update", authenticate, updateProfileHandler);
  * @desc   Get full customer profile data natively mapped to UI state
  */
 router.get("/", authenticate, getProfileHandler);
+
+/**
+ * @route  GET /api/v1/client/profile/dashboard
+ * @desc   Badge counts for the My Profile screen (addresses, downloads, active plans, unread notifications)
+ * @access Private (Customer)
+ */
+router.get("/dashboard", authenticate, getProfileDashboardCounts);
 
 /**
  * @route  PUT /api/v1/client/profile/profile-picture

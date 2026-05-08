@@ -22,6 +22,7 @@ async function paginateCoursesWithPlans(
 ) {
   const {
     search = "",
+    isPopular,
     page = "1",
     limit = "10",
     sortBy = "createdAt",
@@ -29,6 +30,9 @@ async function paginateCoursesWithPlans(
   } = query;
 
   const filters: any = { ...baseFilters };
+  if (isPopular === "true" || isPopular === "false") {
+    filters.isPopular = isPopular === "true";
+  }
   if (search) {
     filters.$or = [
       { name: { $regex: search, $options: "i" } },

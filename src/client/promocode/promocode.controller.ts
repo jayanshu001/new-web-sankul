@@ -18,6 +18,41 @@ const splitByMaterial = (plans: PlanDoc[]) => {
   return { withMaterial, withoutMaterial };
 };
 
+export const listPromocodes = async (req: Request, res: Response) => {
+  try {
+    const { page = "1", limit = "20" } = req.query as Record<string, string>;
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const now = new Date();
+    const filter = {
+      status: true,
+      type: "public",
+      promo_start_at: { $lt: now },
+      promo_expire_at: { $gt: now },
+    };
+
+    const [data, total] = await Promise.all([
+      PromoCode.find(filter)
+        .select("_id promocode title description discountType discountValue promo_start_at promo_expire_at")
+        .sort({ promo_expire_at: 1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      PromoCode.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const applyPromocode = async (req: Request, res: Response) => {
   try {
     const userId = (req as any).user?.id || (req as any).user?._id;
@@ -117,14 +152,29 @@ export const applyPromocode = async (req: Request, res: Response) => {
         .json({ success: false, message: "This promocode is not valid for this course!" });
     }
 
+    const promoDiscountType = (promo as any)!.discountType as "flat" | "percentage" | undefined;
+    const promoDiscountValue = Number((promo as any)!.discountValue ?? 0);
+    const usePromoLevelDiscount = !!promoDiscountType && promoDiscountValue > 0;
+
     pricingPlans.forEach((plan) => {
       plan.offerAvailable = false;
       plan.orginalPrice = plan.price;
       const match = validPromoted.find(
         (pp: any) => String(pp.planId._id) === String(plan._id)
       );
-      if (match) {
-        plan.offerAvailable = true;
+      if (!match) return;
+
+      plan.offerAvailable = true;
+      if (usePromoLevelDiscount) {
+        plan.discountType = promoDiscountType;
+        plan.discountValue = promoDiscountValue;
+        if (promoDiscountType === "percentage") {
+          plan.offerPercentage = promoDiscountValue;
+          plan.price = plan.price - Math.round((plan.price * promoDiscountValue) / 100);
+        } else {
+          plan.price = Math.max(0, plan.price - promoDiscountValue);
+        }
+      } else {
         plan.offerPercentage = match.customerPercentage;
         plan.price = plan.price - Math.round((plan.price * match.customerPercentage) / 100);
       }

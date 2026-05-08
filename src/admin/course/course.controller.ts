@@ -59,6 +59,7 @@ export const getCourses = async (req: Request, res: Response) => {
       search = "",
       status,
       isPaid,
+      isPopular,
       page = "1",
       limit = "10",
       sortBy = "createdAt",
@@ -77,6 +78,9 @@ export const getCourses = async (req: Request, res: Response) => {
     }
     if (isPaid === "true" || isPaid === "false") {
       filters.isPaid = isPaid === "true";
+    }
+    if (isPopular === "true" || isPopular === "false") {
+      filters.isPopular = isPopular === "true";
     }
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -287,6 +291,7 @@ export const createCourse = async (req: Request, res: Response) => {
     if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
+    if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
     const validatedData = createCourseSchema.parse(req.body);
 
     const newCourse = new Course(validatedData);
@@ -332,6 +337,7 @@ export const updateCourse = async (req: Request, res: Response) => {
     if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
+    if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
     const validatedData = createCourseSchema.partial().parse(req.body);
     const course = await Course.findByIdAndUpdate(id, validatedData, { new: true });
     if (!course) return res.status(404).json({ success: false, message: "Course not found" });
@@ -390,6 +396,40 @@ export const deleteCourse = async (req: Request, res: Response) => {
       await session.abortTransaction();
       session.endSession();
     }
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const toggleCoursePopular = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Course ID" });
+    }
+
+    const course = await Course.findById(id).select("_id isPopular");
+    if (!course) {
+      return res.status(404).json({ success: false, message: "Course not found" });
+    }
+
+    let nextValue: boolean;
+    if (typeof req.body?.isPopular === "boolean") {
+      nextValue = req.body.isPopular;
+    } else if (req.body?.isPopular === "true" || req.body?.isPopular === "false") {
+      nextValue = req.body.isPopular === "true";
+    } else {
+      nextValue = !course.isPopular;
+    }
+
+    course.isPopular = nextValue;
+    await course.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `Course marked as ${nextValue ? "popular" : "not popular"}`,
+      data: { _id: course._id, isPopular: course.isPopular },
+    });
+  } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };

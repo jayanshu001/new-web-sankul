@@ -16,6 +16,7 @@ export interface ICourse extends Document {
   level: string;
   status: boolean;
   isPaid: boolean;
+  isPopular: boolean;
 
   // Relations
   courseEducatorId?: mongoose.Types.ObjectId;
@@ -59,6 +60,7 @@ const courseSchema: Schema = new Schema(
     level: { type: String, required: true },
     status: { type: Boolean, required: true, default: true },
     isPaid: { type: Boolean, default: true },
+    isPopular: { type: Boolean, default: false, index: true },
 
     // Relations
     courseEducatorId: { type: Schema.Types.ObjectId, ref: "CourseEducator", default: null },

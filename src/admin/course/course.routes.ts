@@ -20,6 +20,7 @@ import {
   createCourse,
   updateCourse,
   deleteCourse,
+  toggleCoursePopular,
   getCoursePlans,
   createCoursePlan,
   getCoursePlanById,
@@ -67,6 +68,9 @@ router.put("/:id", uploadS3.single("image"), updateCourse);
 
 // DELETE delete course
 router.delete("/:id", deleteCourse);
+
+// PATCH toggle popular flag
+router.patch("/:id/popular", toggleCoursePopular);
 
 // Pricing Plans
 router.get("/:id/plans", getCoursePlans);

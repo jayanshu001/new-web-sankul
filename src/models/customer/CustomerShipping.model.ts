@@ -4,7 +4,7 @@ export interface ICustomerShipping extends Document {
   name: string;
   phone: string;
   alternatePhone?: string;
-  email: string;
+  email?: string;
   address: string;
   address2: string;
   city: string;
@@ -21,7 +21,7 @@ const CustomerShippingSchema = new Schema<ICustomerShipping>(
     name: { type: String, required: true, maxlength: 50 },
     phone: { type: String, required: true, maxlength: 15 },
     alternatePhone: { type: String, maxlength: 15 },
-    email: { type: String, required: true, maxlength: 100 },
+    email: { type: String, maxlength: 100 },
     address: { type: String, required: true, maxlength: 255 },
     address2: { type: String, maxlength: 255 },
     city: { type: String, required: true, maxlength: 20 },

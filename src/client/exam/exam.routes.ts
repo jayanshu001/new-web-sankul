@@ -11,6 +11,7 @@ import {
   getSolutionAnalyticsByExam,
   getSolutionDownloadByExam,
   listMyResults,
+  listMyPastDailyResults,
   getMyOverallAnalytics,
   rateExamResult,
   startAttempt,
@@ -32,6 +33,7 @@ router.get("/daily", getDailyExams);
 
 // My history / analytics
 router.get("/my/attempts", listMyResults);
+router.get("/my/past-daily", listMyPastDailyResults);
 router.get("/my/analytics", getMyOverallAnalytics);
 
 // Exam detail (meta only) + taking
