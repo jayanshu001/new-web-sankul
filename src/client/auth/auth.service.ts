@@ -81,23 +81,23 @@ export async function generateOtp(rawPhone: string, traceId?: string): Promise<{
   }).select("+otp otpExpiresAt triedOtp loginCount status");
 
   // Account checks for existing users
-  // if (existing) {
-  //   if ((existing.loginCount ?? 0) > LOGIN_MAX_ATTEMPTS) {
-  //     logger.warn("generateOtp service login attempts exceeded", { traceId, phone });
-  //     return { ok: false, message: "Account suspended due to login policy violations." };
-  //   }
-  //   if (!existing.status) {
-  //     logger.warn("generateOtp service account blocked", { traceId, phone });
-  //     return { ok: false, message: "Your account has been blocked. Please contact support." };
-  //   }
-  //   // OTP cooldown — still within TTL
-  //   if (existing.otp && existing.otpExpiresAt && existing.otpExpiresAt > new Date()) {
-  //     return {
-  //       ok: false,
-  //       message: `Please wait ${OTP_TTL_MINUTES} minutes before requesting a new OTP.`,
-  //     };
-  //   }
-  // }
+  if (existing) {
+    if ((existing.loginCount ?? 0) > LOGIN_MAX_ATTEMPTS) {
+      logger.warn("generateOtp service login attempts exceeded", { traceId, phone });
+      return { ok: false, message: "Account suspended due to login policy violations." };
+    }
+    if (!existing.status) {
+      logger.warn("generateOtp service account blocked", { traceId, phone });
+      return { ok: false, message: "Your account has been blocked. Please contact support." };
+    }
+    // OTP cooldown — still within TTL
+    if (existing.otp && existing.otpExpiresAt && existing.otpExpiresAt > new Date()) {
+      return {
+        ok: false,
+        message: `Please wait ${OTP_TTL_MINUTES} minutes before requesting a new OTP.`,
+      };
+    }
+  }
 
   const otp = isStatic ? STATIC_OTP : String(Math.floor(1000 + Math.random() * 8999));
   console.log(`\x1b[1m\x1b[38;5;50m[OTP]\x1b[0m \x1b[38;5;208mGenerated\x1b[0m → \x1b[1m\x1b[38;5;226m${otp}\x1b[0m`);
