@@ -108,7 +108,9 @@
       "Bash(python3 -c \" import json,sys d=json.load\\(sys.stdin\\) def find_names\\(items, path=''\\): for item in items: name = item.get\\('name',''\\) if 'item' in item: find_names\\(item['item'], path+'/'+name\\) else: req = item.get\\('request',{}\\) method = req.get\\('method',''\\) url = req.get\\('url',{}\\) raw = url.get\\('raw',''\\) if isinstance\\(url,dict\\) else url print\\(f'{method:7} {raw}'\\) find_names\\(d.get\\('item',[]\\)\\) \")",
       "Bash(python3 -c \" import json,sys d=json.load\\(sys.stdin\\) def find_all\\(items, path=''\\): for item in items: name = item.get\\('name',''\\) if 'item' in item: find_all\\(item['item'], path+' > '+name\\) else: req = item.get\\('request',{}\\) method = req.get\\('method',''\\) url = req.get\\('url',{}\\) raw = url.get\\('raw',''\\) if isinstance\\(url,dict\\) else url body = req.get\\('body',{}\\) raw_body = body.get\\('raw',''\\) if body else '' print\\(f'[{path} > {name}] {method} {raw}'\\) if raw_body: print\\(f' BODY: {raw_body[:200]}'\\) find_all\\(d.get\\('item',[]\\)\\) \")",
       "Bash(python3 -c \" import json,sys d=json.load\\(sys.stdin\\) def find_all\\(items, path=''\\): for item in items: name = item.get\\('name',''\\) if 'item' in item: find_all\\(item['item'], path+' > '+name\\) else: req = item.get\\('request',{}\\) method = req.get\\('method',''\\) url = req.get\\('url',{}\\) raw = url.get\\('raw',''\\) if isinstance\\(url,dict\\) else url body = req.get\\('body',{}\\) raw_body = body.get\\('raw',''\\) if body else '' print\\(f'[{path} > {name}] {method} {raw}'\\) if raw_body: print\\(f' BODY: {raw_body[:300]}'\\) find_all\\(d.get\\('item',[]\\)\\) \")",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(yarn add *)",
+      "Bash(xargs ls)"
     ]
   }
 }

@@ -265,17 +265,17 @@ export async function validateOtp(
   const triedOtp = (customer.triedOtp ?? 0) + 1;
 
   // Too many attempts — block
-  if (triedOtp >= OTP_MAX_ATTEMPTS) {
-    await Customer.updateOne(
-      { _id: customer._id },
-      { triedOtp, otpBlockedAt: new Date(), status: false }
-    );
-    logger.warn("validateOtp service otp attempts exceeded", { traceId, customerId: customer._id });
-    return {
-      ok: false,
-      message: `Too many wrong attempts. Account blocked for 24 hours.`,
-    };
-  }
+  // if (triedOtp >= OTP_MAX_ATTEMPTS) {
+  //   await Customer.updateOne(
+  //     { _id: customer._id },
+  //     { triedOtp, otpBlockedAt: new Date(), status: false }
+  //   );
+  //   logger.warn("validateOtp service otp attempts exceeded", { traceId, customerId: customer._id });
+  //   return {
+  //     ok: false,
+  //     message: `Too many wrong attempts. Account blocked for 24 hours.`,
+  //   };
+  // }
 
   // Wrong OTP
   if (customer.otp !== otp) {

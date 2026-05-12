@@ -29,6 +29,8 @@ import adminDashboardRoutes from "./dashboard/dashboard.routes";
 import adminTrackingRoutes from "./tracking/tracking.routes";
 import adminAddressRoutes from "./address/admin.address.routes";
 import adminExamCountdownRoutes from "./examCountdown/examCountdown.routes";
+import adminLivePollRoutes from "./livepoll/livepoll.routes";
+import adminLiveChatRoutes from "./livechat/livechat.routes";
 
 const router = Router();
 
@@ -72,5 +74,7 @@ router.use("/dashboard", adminDashboardRoutes);
 router.use("/tracking", adminTrackingRoutes);
 router.use("/address", adminAddressRoutes); // -> /api/v1/admin/address/{states,cities}/*
 router.use("/exam-countdowns", adminExamCountdownRoutes); // -> /api/v1/admin/exam-countdowns/*
+router.use("/live-polls", adminLivePollRoutes);           // -> /api/v1/admin/live-polls/*
+router.use("/live-chat",  adminLiveChatRoutes);           // -> /api/v1/admin/live-chat/*
 
 export default router;

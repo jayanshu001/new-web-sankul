@@ -31,6 +31,8 @@ import { videoFolderRouter, materialFolderRouter } from "./folder/folder.routes"
 import clientExamCountdownRoutes from "./examCountdown/examCountdown.routes";
 import clientEducatorRoutes from "./educator/educator.routes";
 import { youtubeStreamProxy } from "./categories/yt-proxy.controller";
+import clientLiveChatRoutes from "./livechat/livechat.routes";
+import clientLivePollRoutes from "./livepoll/livepoll.routes";
 
 const router = Router();
 
@@ -79,5 +81,7 @@ router.use("/video-folders", videoFolderRouter); // -> /api/v1/client/video-fold
 router.use("/material-folders", materialFolderRouter); // -> /api/v1/client/material-folders/*
 router.use("/exam-countdowns", clientExamCountdownRoutes); // -> /api/v1/client/exam-countdowns/*
 router.use("/educators", clientEducatorRoutes); // -> /api/v1/client/educators/*
+router.use("/live-chat",  clientLiveChatRoutes);          // -> /api/v1/client/live-chat/:liveClassId/history
+router.use("/live-polls", clientLivePollRoutes);          // -> /api/v1/client/live-polls/:liveClassId/active
 
 export default router;

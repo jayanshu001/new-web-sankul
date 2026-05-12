@@ -139,6 +139,14 @@ app.use(captureCrashContextMiddleware());
 app.get("/index.php", async (_req, res) => res.json({ Project: "AppNameUpdateHere" }));
 app.get("/api", (_req, res) => res.json({ Project: "AppNameUpdateHere" }));
 
+// --- Live Chat Demo (dev only) ---------------------------------------------
+if (process.env.NODE_ENV !== "production") {
+  app.get("/demo/live-chat", (_req, res) => {
+    res.setHeader("Content-Security-Policy", ""); // allow inline scripts & CDN in demo
+    res.sendFile(path.join(process.cwd(), "docs", "live-chat-demo.html"));
+  });
+}
+
 // --- Global Rate Limiter ---------------------------------------------------
 app.use(globalLimiter);
 

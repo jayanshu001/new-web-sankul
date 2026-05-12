@@ -2148,6 +2148,115 @@
               "response": []
             }
           ]
+        },
+        {
+          "name": "11 Live Class",
+          "item": [
+            {
+              "name": "Live Chat (REST)",
+              "item": [
+                {
+                  "name": "Get Chat History",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/live-chat/{{live_class_id}}/history?limit=50",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "live-chat",
+                        "{{live_class_id}}",
+                        "history"
+                      ],
+                      "query": [
+                        {
+                          "key": "limit",
+                          "value": "50"
+                        },
+                        {
+                          "key": "before",
+                          "value": "",
+                          "disabled": true
+                        }
+                      ]
+                    },
+                    "description": "Returns the most recent messages for a live class (newest-first). Use `before` (ISO date) for cursor-based pagination to load older messages.",
+                    "auth": {
+                      "type": "bearer",
+                      "bearer": [
+                        {
+                          "key": "token",
+                          "value": "{{accessToken}}",
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Live Poll (REST)",
+              "item": [
+                {
+                  "name": "Get Active Poll",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/live-polls/{{live_class_id}}/active",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "live-polls",
+                        "{{live_class_id}}",
+                        "active"
+                      ]
+                    },
+                    "description": "Returns the currently active poll for a live class (if any), plus `myVote` (option index) if the customer already voted. Returns 204 when no active poll.",
+                    "auth": {
+                      "type": "bearer",
+                      "bearer": [
+                        {
+                          "key": "token",
+                          "value": "{{accessToken}}",
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Socket.IO Events (reference)",
+              "item": [
+                {
+                  "name": "Socket Events \u2014 Documentation",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "ws://{{WS_URL}}/socket.io"
+                    },
+                    "description": "## Socket.IO \u2014 Live Chat & Poll\n\n**Connection**: `ws://<host>/socket.io`  \n**Auth**: send `token` in `handshake.auth` (customer JWT)\n\n---\n\n### Client \u2192 Server events\n\n| Event | Payload | Description |\n|-------|---------|-------------|\n| `join_live_chat` | `{liveClassId}` | Join the room; receives `chat_history` + `active_poll` |\n| `send_message` | `{liveClassId, message}` | Send a chat message (max 2000 chars) |\n| `submit_vote` | `{pollId, optionIndex}` | Cast a vote on the active poll (one vote per user) |\n| `leave_live_chat` | `{liveClassId}` | Leave the room |\n\n---\n\n### Server \u2192 Client events\n\n| Event | Payload | Description |\n|-------|---------|-------------|\n| `chat_history` | `{liveClassId, messages[]}` | Sent on join; last 50 messages |\n| `new_message` | `{_id, liveClassId, customerId, userName, message, createdAt}` | New chat message broadcast |\n| `active_poll` | `{poll, myVote}` | Sent on join if a poll is active; `myVote` = option index or null |\n| `poll_created` | `{poll}` | Admin launched a new poll |\n| `poll_update` | `{pollId, options[], totalVotes}` | Live vote counts after each vote |\n| `poll_updated` | `{poll}` | Admin edited the poll (question/options changed) |\n| `poll_closed` | `{pollId}` | Admin closed the poll |\n| `poll_deleted` | `{pollId}` | Admin deleted the poll |\n| `error` | `{message}` | Error from server |\n"
+                  },
+                  "response": []
+                }
+              ]
+            }
+          ]
         }
       ]
     },
@@ -9366,6 +9475,257 @@
               "response": []
             }
           ]
+        },
+        {
+          "name": "14 Live Class \u2014 Polls",
+          "item": [
+            {
+              "name": "Create Poll",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-polls",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-polls"
+                  ]
+                },
+                "description": "Creates a live poll for a class. Closes any currently active poll first. Broadcasts `poll_created` to all students in the room.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"liveClassId\": \"{{live_class_id}}\",\n  \"question\": \"Which topic should we cover next?\",\n  \"options\": [\n    \"Data Structures\",\n    \"Algorithms\",\n    \"System Design\",\n    \"Database Concepts\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const val = pm.response.json()?.data?.poll?._id || pm.response.json()?.data?.poll?.id || \"\";",
+                      "  if (val) { pm.collectionVariables.set(\"poll_id\", val); pm.environment.set(\"poll_id\", val); }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "List Polls by Class",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-polls/{{live_class_id}}?page=1&limit=20",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-polls",
+                    "{{live_class_id}}"
+                  ],
+                  "query": [
+                    {
+                      "key": "page",
+                      "value": "1"
+                    },
+                    {
+                      "key": "limit",
+                      "value": "20"
+                    }
+                  ]
+                },
+                "description": "Returns paginated list of all polls (active + closed) for a given live class.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Poll Results",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-polls/{{poll_id}}/results",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-polls",
+                    "{{poll_id}}",
+                    "results"
+                  ]
+                },
+                "description": "Returns poll details with per-option vote counts and total unique voter count.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Close Poll",
+              "request": {
+                "method": "PATCH",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-polls/{{poll_id}}/close",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-polls",
+                    "{{poll_id}}",
+                    "close"
+                  ]
+                },
+                "description": "Marks the poll as closed (isActive=false). Broadcasts `poll_closed` to all students in the room.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Edit Poll",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-polls/{{poll_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-polls",
+                    "{{poll_id}}"
+                  ]
+                },
+                "description": "Updates question and/or options. Blocked server-side if poll is closed or has votes > 0. Broadcasts `poll_updated` to all students.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"question\": \"Updated question text?\",\n  \"options\": [\n    \"Option A\",\n    \"Option B\",\n    \"Option C\"\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Poll",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-polls/{{poll_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-polls",
+                    "{{poll_id}}"
+                  ]
+                },
+                "description": "Deletes the poll and all associated votes. Broadcasts `poll_deleted` to students so they dismiss the poll card.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
         }
       ]
     }
@@ -9538,6 +9898,16 @@
     },
     {
       "key": "package_chat_message_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "live_class_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "poll_id",
       "value": "",
       "type": "string"
     }

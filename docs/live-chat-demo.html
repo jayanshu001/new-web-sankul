@@ -1,0 +1,1218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Live Class — Poll & Chat Demo</title>
+  <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #0f172a; color: #e2e8f0;
+      height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+    }
+
+    header {
+      background: #1e293b; border-bottom: 1px solid #334155;
+      padding: 10px 20px; display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+    }
+    header h1 { font-size: 14px; font-weight: 700; color: #f1f5f9; }
+    .badge {
+      font-size: 11px; padding: 2px 9px; border-radius: 999px; font-weight: 700;
+    }
+    .badge-gray   { background:#475569; color:#cbd5e1; }
+    .badge-grn    { background:#22c55e; color:#fff; }
+    .badge-ylw    { background:#f59e0b; color:#000; }
+    .badge-red    { background:#ef4444; color:#fff; }
+    .badge-purple { background:#7c3aed; color:#fff; }
+
+    /* two-column layout */
+    .layout { display:flex; flex:1; overflow:hidden; }
+
+    /* ── Admin panel (left) ── */
+    .admin-panel {
+      width: 280px; flex-shrink: 0;
+      background: #1e1b4b; border-right: 1px solid #4f46e5;
+      display: flex; flex-direction: column; overflow-y: auto;
+    }
+    .admin-panel::-webkit-scrollbar { width: 3px; }
+    .admin-panel::-webkit-scrollbar-thumb { background: #4f46e5; }
+
+    .ap-header {
+      padding: 12px 14px; background: #312e81; border-bottom: 1px solid #4f46e5;
+      font-size: 11px; font-weight: 800; text-transform: uppercase;
+      letter-spacing: 1px; color: #a5b4fc; flex-shrink: 0;
+    }
+
+    .ap-sec { padding: 14px; border-bottom: 1px solid #312e81; }
+    .ap-sec h3 { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #818cf8; margin-bottom: 10px; }
+
+    /* ── Student panel (right, takes remaining space) ── */
+    .student-panel {
+      flex: 1; display: flex; overflow: hidden;
+    }
+
+    /* student sidebar */
+    .stu-side {
+      width: 260px; flex-shrink: 0; background: #1e293b;
+      border-right: 1px solid #334155; display: flex; flex-direction: column; overflow-y: auto;
+    }
+    .stu-side::-webkit-scrollbar { width: 3px; }
+    .stu-side::-webkit-scrollbar-thumb { background: #334155; }
+
+    .stu-header {
+      padding: 12px 14px; background: #0f172a; border-bottom: 1px solid #334155;
+      font-size: 11px; font-weight: 800; text-transform: uppercase;
+      letter-spacing: 1px; color: #22c55e; flex-shrink: 0;
+    }
+    .ss-sec { padding: 14px; border-bottom: 1px solid #334155; }
+    .ss-sec h3 { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 1px; color: #64748b; margin-bottom: 10px; }
+
+    /* shared form elements */
+    label { font-size: 12px; color: #94a3b8; display:block; margin-bottom:3px; margin-top:8px; }
+    label:first-of-type { margin-top: 0; }
+    input, textarea {
+      width: 100%; background: #0f172a; border: 1px solid #334155; border-radius: 6px;
+      color: #e2e8f0; font-size: 13px; padding: 7px 10px; outline: none;
+      transition: border-color .15s; font-family: inherit;
+    }
+    input:focus, textarea:focus { border-color: #6366f1; }
+    input:disabled { opacity: .4; }
+    .admin-panel input { border-color: #4f46e5; background: #1e1b4b; }
+    .admin-panel input:focus { border-color: #818cf8; }
+
+    .row { display:flex; gap:6px; margin-top:8px; }
+    button {
+      cursor: pointer; border: none; border-radius: 6px;
+      font-size: 12px; font-weight: 700; padding: 8px 12px;
+      transition: opacity .15s, transform .1s; line-height: 1;
+    }
+    button:active { transform: scale(.96); }
+    button:disabled { opacity: .35; cursor: not-allowed; }
+    .btn-indigo { background:#6366f1; color:#fff; flex:1; }
+    .btn-red    { background:#ef4444; color:#fff; flex:1; }
+    .btn-slate  { background:#334155; color:#e2e8f0; flex:1; }
+    .btn-purple { background:#7c3aed; color:#fff; flex:1; }
+    .btn-violet { background:#4f46e5; color:#fff; flex:1; }
+    .btn-sm     { padding: 7px 10px; font-size: 11px; }
+    .btn-full   { width:100%; margin-top:6px; }
+
+    .toast { font-size:12px; padding:6px 10px; border-radius:6px; margin-top:8px; display:none; }
+    .toast.ok  { background:#14532d; color:#86efac; display:block; }
+    .toast.err { background:#450a0a; color:#fca5a5; display:block; }
+    .toast.inf { background:#1e3a5f; color:#93c5fd; display:block; }
+
+    /* status dot */
+    .dot-row { display:flex; align-items:center; gap:7px; font-size:12px; color:#64748b; margin-top:8px; }
+    #stu-dot { width:8px; height:8px; border-radius:50%; background:#475569; flex-shrink:0; transition:background .2s; }
+    #stu-dot.connected  { background:#22c55e; }
+    #stu-dot.connecting { background:#f59e0b; animation:pulse .7s infinite; }
+    #stu-dot.error      { background:#ef4444; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.2} }
+
+    /* poll option builder (admin) */
+    .pob-row { display:flex; gap:4px; margin-bottom:4px; }
+    .pob-row input { flex:1; }
+    .btn-rm { background:#3b0764; color:#d8b4fe; border:none; border-radius:6px; font-size:14px; padding:0 10px; cursor:pointer; flex-shrink:0; }
+
+    /* admin chat input */
+    .admin-chat-input {
+      display:flex; gap:6px; margin-top:8px;
+    }
+    .admin-chat-input input {
+      flex:1; background:#1e1b4b; border:1px solid #4f46e5; border-radius:6px;
+      color:#e2e8f0; font-size:13px; padding:7px 10px;
+    }
+    .admin-chat-input input:focus { border-color:#818cf8; outline:none; }
+    .admin-chat-input button { flex-shrink:0; }
+
+    /* admin message bubble */
+    .msg.admin { align-self:flex-start; align-items:flex-start; }
+    .msg.admin .bubble {
+      background: linear-gradient(135deg,#312e81,#4c1d95);
+      border:1px solid #6d28d9; color:#e9d5ff;
+      border-bottom-left-radius:3px;
+    }
+    .msg.admin .msg-meta .name { color:#a78bfa; }
+    .admin-badge {
+      font-size:9px; font-weight:800; background:#7c3aed; color:#fff;
+      padding:1px 5px; border-radius:3px; text-transform:uppercase; letter-spacing:.5px;
+    }
+
+    /* log */
+    .log-wrap { padding: 12px 14px; flex:1; }
+    .log-wrap h3 { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:1px; color:#475569; margin-bottom:6px; }
+    #log { background:#0f172a; border:1px solid #1e293b; border-radius:6px; padding:8px; font-size:10px; font-family:monospace; color:#64748b; height:100px; overflow-y:auto; white-space:pre-wrap; word-break:break-all; }
+    #log::-webkit-scrollbar { width:3px; }
+    #log::-webkit-scrollbar-thumb { background:#334155; }
+    .li{color:#22c55e;} .lo{color:#6366f1;} .le{color:#ef4444;} .ln{color:#64748b;} .lp{color:#a78bfa;}
+
+    /* ── Chat area ── */
+    .chat-area { flex:1; display:flex; flex-direction:column; overflow:hidden; position:relative; }
+
+    .chat-bar {
+      padding:10px 16px; background:#1e293b; border-bottom:1px solid #334155;
+      display:flex; align-items:center; gap:10px; flex-shrink:0;
+    }
+    .chat-bar .lbl { font-size:12px; color:#64748b; }
+    #room-label { font-size:13px; font-weight:700; color:#f1f5f9; }
+    #user-label { font-size:12px; color:#818cf8; margin-left:auto; }
+
+    #messages { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:10px; }
+    #messages::-webkit-scrollbar { width:4px; }
+    #messages::-webkit-scrollbar-thumb { background:#334155; border-radius:2px; }
+
+    .empty { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#475569; gap:8px; }
+    .empty .ico { font-size:32px; }
+    .empty p { font-size:13px; }
+
+    .msg { display:flex; flex-direction:column; max-width:74%; animation:fadein .2s; }
+    @keyframes fadein { from{opacity:0;transform:translateY(4px)} to{opacity:1} }
+    .msg.mine   { align-self:flex-end; align-items:flex-end; }
+    .msg.theirs { align-self:flex-start; align-items:flex-start; }
+    .msg.sys    { align-self:center; align-items:center; max-width:90%; }
+    .msg-meta   { font-size:11px; color:#475569; margin-bottom:3px; display:flex; gap:6px; }
+    .msg-meta .name { font-weight:700; color:#94a3b8; }
+    .msg-meta .name.me { color:#818cf8; }
+    .bubble { padding:8px 13px; border-radius:12px; font-size:14px; line-height:1.5; word-break:break-word; }
+    .msg.mine   .bubble { background:#6366f1; color:#fff; border-bottom-right-radius:3px; }
+    .msg.theirs .bubble { background:#1e293b; border:1px solid #334155; color:#e2e8f0; border-bottom-left-radius:3px; }
+    .msg.sys    .bubble { background:#1e293b; border:1px dashed #334155; color:#64748b; font-size:12px; text-align:center; border-radius:6px; }
+
+    .input-bar {
+      padding:10px 14px; background:#1e293b; border-top:1px solid #334155;
+      display:flex; gap:8px; align-items:flex-end; flex-shrink:0;
+    }
+    #msg-input {
+      flex:1; background:#0f172a; border:1px solid #334155; border-radius:8px;
+      color:#e2e8f0; font-size:14px; padding:9px 12px; outline:none;
+      resize:none; min-height:40px; max-height:100px; font-family:inherit; line-height:1.5;
+      transition:border-color .15s;
+    }
+    #msg-input:focus { border-color:#6366f1; }
+    #msg-input:disabled { opacity:.3; }
+    .send-btn { background:#6366f1; color:#fff; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:700; height:40px; flex-shrink:0; }
+
+    /* ── Poll card (floating top-right of chat) ── */
+    #poll-card {
+      display:none; position:absolute; top:10px; right:10px; width:310px;
+      background:#1e293b; border:1.5px solid #4f46e5; border-radius:14px;
+      padding:14px; box-shadow:0 8px 32px rgba(0,0,0,.5); z-index:10;
+      animation:slidein .2s ease;
+    }
+    @keyframes slidein { from{opacity:0;transform:translateY(-8px)} to{opacity:1;transform:none} }
+    #poll-card.ended { border-color:#334155; }
+
+    .pc-head { display:flex; align-items:flex-start; justify-content:space-between; margin-bottom:8px; gap:8px; }
+    .pc-head-left { display:flex; flex-direction:column; flex:1; }
+    .pc-label { font-size:10px; font-weight:800; text-transform:uppercase; letter-spacing:1px; color:#818cf8; }
+    .pc-by    { font-size:10px; color:#475569; margin-top:2px; }
+    .pc-head-right { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+    .pc-total { font-size:11px; font-weight:700; background:#312e81; color:#a5b4fc; padding:2px 9px; border-radius:999px; }
+    .pc-close {
+      width:22px; height:22px; border-radius:50%; background:#1e293b; border:1px solid #334155;
+      color:#64748b; font-size:14px; line-height:1; cursor:pointer; display:flex;
+      align-items:center; justify-content:center; transition:background .15s, color .15s; flex-shrink:0;
+    }
+    .pc-close:hover { background:#334155; color:#f1f5f9; }
+    .pc-ended { display:none; font-size:10px; font-weight:800; text-transform:uppercase; color:#ef4444; border:1px solid #ef4444; padding:2px 7px; border-radius:4px; margin-bottom:6px; }
+    .pc-q { font-size:14px; font-weight:700; color:#f1f5f9; margin-bottom:12px; line-height:1.4; }
+
+    .poll-opt {
+      position:relative; overflow:hidden; border:1.5px solid #334155; border-radius:9px;
+      padding:9px 12px; margin-bottom:7px; cursor:pointer; background:#0f172a;
+      transition:border-color .15s;
+    }
+    .poll-opt:hover:not(.voted):not(.done) { border-color:#6366f1; }
+    .poll-opt.selected { border-color:#6366f1; background:#1e1b4b; }
+    .poll-opt.winner   { border-color:#22c55e; }
+    .poll-opt.done     { cursor:default; }
+    .opt-bar  { position:absolute; left:0; top:0; bottom:0; background:#312e81; opacity:.45; border-radius:8px; transition:width .4s ease; z-index:0; }
+    .poll-opt.winner .opt-bar { background:#14532d; opacity:.55; }
+    .opt-inner { position:relative; z-index:1; display:flex; align-items:center; gap:10px; }
+    .opt-radio {
+      width:17px; height:17px; border-radius:50%; border:2px solid #475569; flex-shrink:0;
+      display:flex; align-items:center; justify-content:center; transition:border-color .15s;
+    }
+    .poll-opt.selected .opt-radio { border-color:#6366f1; }
+    .poll-opt.selected .opt-radio::after { content:''; width:7px; height:7px; border-radius:50%; background:#6366f1; }
+    .poll-opt.winner   .opt-radio { border-color:#22c55e; }
+    .poll-opt.winner   .opt-radio::after { content:''; width:7px; height:7px; border-radius:50%; background:#22c55e; }
+    .opt-text { flex:1; font-size:13px; color:#e2e8f0; font-weight:500; }
+    .opt-pct  { font-size:12px; font-weight:700; color:#64748b; min-width:34px; text-align:right; }
+    .poll-opt.selected .opt-pct { color:#818cf8; }
+    .poll-opt.winner   .opt-pct { color:#4ade80; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Live Class — Poll &amp; Chat Demo</h1>
+  <span class="badge badge-purple">ADMIN</span>
+  <span style="font-size:11px;color:#64748b;">creates polls</span>
+  <span style="margin-left:auto;font-size:11px;color:#64748b;">Students connect &amp; vote →</span>
+  <span class="badge badge-gray" id="conn-badge">Student: Not connected</span>
+</header>
+
+<div class="layout">
+
+  <!-- ══════════════════ ADMIN PANEL ══════════════════ -->
+  <div class="admin-panel">
+    <div class="ap-header">Admin Panel</div>
+
+    <!-- Admin Login -->
+    <div class="ap-sec">
+      <h3>1. Admin Login</h3>
+      <label>Email</label>
+      <input id="a-email" type="email" placeholder="admin@example.com" />
+      <label>Password</label>
+      <input id="a-pwd" type="password" placeholder="••••••••" />
+      <div class="row">
+        <button class="btn-violet" id="btn-a-login">Login</button>
+        <button class="btn-slate btn-sm" id="btn-a-logout" disabled>Logout</button>
+      </div>
+      <div id="a-logged" style="display:none;margin-top:8px;">
+        <span style="color:#a5b4fc;font-size:12px;">✓ <b id="a-name">—</b></span>
+      </div>
+      <div id="toast-a-login" class="toast"></div>
+    </div>
+
+    <!-- Create Poll -->
+    <div class="ap-sec">
+      <h3>2. Create Poll</h3>
+      <label>Live Class ID</label>
+      <input id="a-class-id" value="live_class_001" placeholder="e.g. live_class_001" />
+      <label>Question</label>
+      <input id="a-question" placeholder="Which planet is the Red Planet?" />
+      <label>Options (2–6)</label>
+      <div id="pob">
+        <div class="pob-row"><input class="pov" placeholder="Option 1" /><button class="btn-rm" onclick="rmOpt(this)">×</button></div>
+        <div class="pob-row"><input class="pov" placeholder="Option 2" /><button class="btn-rm" onclick="rmOpt(this)">×</button></div>
+      </div>
+      <button class="btn-slate btn-sm btn-full" id="btn-add-opt">+ Add Option</button>
+      <div class="row" style="margin-top:8px;">
+        <button class="btn-violet" id="btn-launch" disabled>Launch Poll</button>
+        <button class="btn-red btn-sm" id="btn-close-poll" disabled>End Poll</button>
+      </div>
+      <!-- Edit / Delete row — shown after poll is launched -->
+      <div class="row" id="poll-edit-row" style="display:none;">
+        <button class="btn-slate btn-sm" id="btn-edit-poll">✏ Edit</button>
+        <button class="btn-red btn-sm" id="btn-delete-poll">🗑 Delete</button>
+      </div>
+      <div id="toast-poll" class="toast"></div>
+
+      <!-- Inline edit form — hidden by default -->
+      <div id="edit-form" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #4f46e5;">
+        <div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:#818cf8;margin-bottom:8px;">Edit Poll <span style="color:#475569;font-weight:400;text-transform:none;">(0 votes only)</span></div>
+        <label>Question</label>
+        <input id="edit-question" placeholder="Updated question…" />
+        <label>Options (2–6)</label>
+        <div id="edit-pob">
+          <div class="pob-row"><input class="epov" placeholder="Option 1" /><button class="btn-rm" onclick="rmEditOpt(this)">×</button></div>
+          <div class="pob-row"><input class="epov" placeholder="Option 2" /><button class="btn-rm" onclick="rmEditOpt(this)">×</button></div>
+        </div>
+        <button class="btn-slate btn-sm btn-full" id="btn-add-edit-opt" style="margin-top:4px;">+ Option</button>
+        <div class="row" style="margin-top:8px;">
+          <button class="btn-violet" id="btn-save-edit">Save Changes</button>
+          <button class="btn-slate btn-sm" id="btn-cancel-edit">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Live results shown to admin -->
+      <div id="admin-poll-results" style="display:none;margin-top:12px;">
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+          <span style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:1px;color:#818cf8;">Live Results</span>
+          <span id="adm-refresh-dot" style="width:6px;height:6px;border-radius:50%;background:#22c55e;animation:pulse .7s infinite;display:none;"></span>
+          <span style="font-size:10px;color:#475569;margin-left:auto;" id="adm-refresh-label"></span>
+        </div>
+        <div style="font-size:11px;color:#64748b;">Total votes: <b id="adm-total" style="color:#a5b4fc;">0</b></div>
+        <div id="adm-bars" style="margin-top:8px;"></div>
+      </div>
+    </div>
+
+    <!-- Admin Chat -->
+    <div class="ap-sec">
+      <h3>3. Admin Chat</h3>
+      <label>Live Class ID</label>
+      <input id="a-chat-class-id" value="live_class_001" placeholder="e.g. live_class_001" />
+      <div class="admin-chat-input">
+        <input id="a-chat-msg" placeholder="Type a message as admin…" maxlength="2000" />
+        <button class="btn-violet btn-sm" id="btn-a-send">Send</button>
+      </div>
+      <div id="toast-a-chat" class="toast"></div>
+    </div>
+
+    <!-- Log -->
+    <div class="log-wrap">
+      <h3>Event Log</h3>
+      <div id="log"></div>
+    </div>
+  </div>
+
+  <!-- ══════════════════ STUDENT PANEL ══════════════════ -->
+  <div class="student-panel">
+
+    <!-- Student sidebar -->
+    <div class="stu-side">
+      <div class="stu-header">Student View</div>
+
+      <div class="ss-sec">
+        <h3>1. Login (OTP)</h3>
+        <label>Server URL</label>
+        <input id="server-url" value="http://localhost:4000" />
+        <label>Phone Number</label>
+        <div style="display:flex;gap:6px;">
+          <input id="phone" placeholder="e.g. 9876543210" style="flex:1;" />
+          <button class="btn-slate btn-sm" id="btn-otp">Send OTP</button>
+        </div>
+        <div id="otp-row" style="display:none;">
+          <label>OTP <span style="color:#64748b;">(test: <b style="color:#f59e0b;">5786</b>)</span></label>
+          <div style="display:flex;gap:6px;">
+            <input id="otp" maxlength="6" placeholder="Enter OTP" style="flex:1;letter-spacing:4px;font-weight:700;" />
+            <button class="btn-indigo btn-sm" id="btn-verify">Verify</button>
+          </div>
+        </div>
+        <div id="toast-login" class="toast"></div>
+        <div id="logged-row" style="display:none;margin-top:8px;">
+          <span style="color:#22c55e;font-size:12px;">✓ <b id="logged-name">—</b></span><br>
+          <button class="btn-slate btn-sm btn-full" id="btn-relogin" style="margin-top:6px;">Switch account</button>
+        </div>
+      </div>
+
+      <div class="ss-sec">
+        <h3>2. Join Live Class</h3>
+        <label>Live Class ID</label>
+        <input id="live-class-id" value="live_class_001" />
+        <div class="dot-row"><span id="stu-dot"></span><span id="status-text">Not connected</span></div>
+        <div class="row">
+          <button class="btn-indigo" id="btn-connect">Connect</button>
+          <button class="btn-red" id="btn-disconnect" disabled>Leave</button>
+        </div>
+        <div id="toast-connect" class="toast"></div>
+      </div>
+
+      <div class="ss-sec" style="font-size:11px;color:#64748b;line-height:1.8;">
+        <b style="color:#94a3b8;font-size:10px;text-transform:uppercase;letter-spacing:1px;">How it works</b><br>
+        Admin launches a poll from the left panel.<br>
+        It appears instantly for all connected students.<br>
+        Tap an option to vote — counts update live.
+      </div>
+    </div>
+
+    <!-- Chat + Poll area -->
+    <div class="chat-area">
+      <div class="chat-bar">
+        <span class="lbl">Room:</span>
+        <span id="room-label">—</span>
+        <span id="user-label"></span>
+      </div>
+
+      <!-- Live Poll card -->
+      <div id="poll-card">
+        <div class="pc-head">
+          <div class="pc-head-left">
+            <div class="pc-label">Live Poll</div>
+            <div class="pc-by" id="poll-by"></div>
+          </div>
+          <div class="pc-head-right">
+            <span class="pc-total" id="poll-total">0 votes</span>
+            <button class="pc-close" id="btn-dismiss-poll" title="Dismiss poll" onclick="dismissPoll()">×</button>
+          </div>
+        </div>
+        <div class="pc-ended" id="poll-ended">Poll Ended</div>
+        <div class="pc-q" id="poll-q"></div>
+        <div id="poll-opts"></div>
+      </div>
+
+      <div id="messages">
+        <div class="empty" id="empty-state">
+          <div class="ico">💬</div>
+          <p>Connect to join the live class chat</p>
+        </div>
+      </div>
+
+      <div class="input-bar">
+        <textarea id="msg-input" placeholder="Type a message… (Enter to send)" rows="1" disabled></textarea>
+        <button class="send-btn" id="btn-send" disabled>Send</button>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+let adminToken = null, activePollId = null, adminPollInterval = null;
+let stuToken = null, socket = null, myId = null, myName = null, currentRoom = null, myVote = null;
+
+const $ = id => document.getElementById(id);
+
+// ── localStorage helpers ───────────────────────────────────────────────────────
+const LS = {
+  save: (k, v) => { try { if(v != null) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch(_){} },
+  load: (k, d='')  => { try { return localStorage.getItem(k) ?? d; } catch(_){ return d; } },
+  del:  (...keys)  => { keys.forEach(k => { try { localStorage.removeItem(k); } catch(_){} }); },
+};
+
+function log(msg, type='n') {
+  const el = document.createElement('div');
+  el.className = {i:'li',o:'lo',e:'le',n:'ln',p:'lp'}[type]||'ln';
+  el.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+  $('log').appendChild(el);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+function toast(id, msg, type='ok') {
+  const el=$(id); el.textContent=msg; el.className='toast '+type;
+  if(type!=='err') setTimeout(()=>{el.style.display='none';},4000);
+}
+function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// ── Student connection badge ───────────────────────────────────────────────────
+function setBadge(state, text) {
+  $('conn-badge').textContent = 'Student: '+text;
+  $('conn-badge').className = 'badge '+({connected:'badge-grn',connecting:'badge-ylw',error:'badge-red'}[state]||'badge-gray');
+  const d=$('stu-dot'); if(d) d.className=state;
+  const s=$('status-text'); if(s) s.textContent=text;
+}
+
+// ── Chat render ───────────────────────────────────────────────────────────────
+function hideEmpty(){ const e=$('empty-state'); if(e) e.style.display='none'; }
+
+function renderMsg(msg, mine) {
+  hideEmpty();
+  const isAdmin = !!msg.isAdmin;
+  const cls = isAdmin ? 'admin' : (mine ? 'mine' : 'theirs');
+  const wrap=document.createElement('div'); wrap.className='msg '+cls;
+  const meta=document.createElement('div'); meta.className='msg-meta';
+  const name=document.createElement('span'); name.className='name'+(mine&&!isAdmin?' me':'');
+  name.textContent = isAdmin ? (msg.userName||'Admin') : (mine ? 'You' : (msg.userName||'Unknown'));
+  const time=document.createElement('span');
+  time.textContent=new Date(msg.createdAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+  if(isAdmin){
+    const badge=document.createElement('span'); badge.className='admin-badge'; badge.textContent='ADMIN';
+    meta.append(name,badge,time);
+  } else {
+    meta.append(name,time);
+  }
+  const bubble=document.createElement('div'); bubble.className='bubble'; bubble.textContent=msg.message;
+  wrap.append(meta,bubble); $('messages').appendChild(wrap);
+  $('messages').scrollTop=$('messages').scrollHeight;
+}
+
+function renderSys(text){
+  hideEmpty();
+  const wrap=document.createElement('div'); wrap.className='msg sys';
+  const b=document.createElement('div'); b.className='bubble'; b.textContent=text;
+  wrap.appendChild(b); $('messages').appendChild(wrap);
+  $('messages').scrollTop=$('messages').scrollHeight;
+}
+
+// ── Poll UI ───────────────────────────────────────────────────────────────────
+function showPoll(poll, voted, closed) {
+  activePollId = poll._id;
+  myVote = voted;
+  $('poll-q').textContent = poll.question;
+  $('poll-total').textContent = (poll.totalVotes||0)+' votes';
+  $('poll-by').textContent = 'by '+( poll.createdByName||'Admin');
+  $('poll-ended').style.display = closed ? 'block' : 'none';
+  $('poll-card').className = closed ? 'ended' : '';
+  buildOpts(poll.options, poll.totalVotes, voted, closed);
+  $('poll-card').style.display = 'block';
+  // also update admin results panel
+  updateAdminBars(poll.options, poll.totalVotes);
+}
+
+function buildOpts(options, total, voted, closed) {
+  const list=$('poll-opts'); list.innerHTML='';
+  const maxV = Math.max(...options.map(o=>o.votes),1);
+  options.forEach((opt,i)=>{
+    const pct = total>0 ? Math.round(opt.votes/total*100) : 0;
+    const sel = voted===i, win = closed&&opt.votes===maxV&&opt.votes>0;
+    const canVote = !closed && voted===null;
+    const div=document.createElement('div');
+    div.className='poll-opt'+(sel?' selected':'')+(win?' winner':'')+(closed||voted!==null?' done':'');
+    if(canVote) div.onclick=()=>vote(i);
+    div.innerHTML=`<div class="opt-bar" style="width:${pct}%"></div>
+      <div class="opt-inner">
+        <div class="opt-radio"></div>
+        <span class="opt-text">${esc(opt.text)}</span>
+        <span class="opt-pct">${pct}%</span>
+      </div>`;
+    list.appendChild(div);
+  });
+}
+
+function liveUpdatePoll(pollId, options, totalVotes) {
+  if(pollId!==activePollId) return;
+  $('poll-total').textContent = totalVotes+' votes';
+  const items=$('poll-opts').querySelectorAll('.poll-opt');
+  options.forEach((opt,i)=>{
+    const pct=totalVotes>0?Math.round(opt.votes/totalVotes*100):0;
+    items[i]?.querySelector('.opt-bar')?.style && (items[i].querySelector('.opt-bar').style.width=pct+'%');
+    const pel=items[i]?.querySelector('.opt-pct'); if(pel) pel.textContent=pct+'%';
+  });
+  updateAdminBars(options, totalVotes);
+}
+
+function endPoll(pollId) {
+  if(pollId!==activePollId) return;
+  $('poll-ended').style.display='block';
+  $('poll-card').className='ended';
+  const items=$('poll-opts').querySelectorAll('.poll-opt');
+  let maxPct=-1;
+  items.forEach(el=>{ const p=parseInt(el.querySelector('.opt-pct').textContent)||0; if(p>maxPct)maxPct=p; });
+  items.forEach(el=>{
+    el.onclick=null; el.classList.add('done');
+    const p=parseInt(el.querySelector('.opt-pct').textContent)||0;
+    if(p===maxPct&&maxPct>0) el.classList.add('winner');
+  });
+  $('btn-close-poll').disabled=true;
+  renderSys('Poll ended — see results!');
+  $('admin-poll-results').style.display='block';
+}
+
+function vote(i) {
+  if(!socket||!activePollId) return;
+  socket.emit('submit_vote',{pollId:activePollId,optionIndex:i});
+  log(`→ submit_vote { optionIndex:${i} }`,'o');
+  myVote=i;
+  $('poll-opts').querySelectorAll('.poll-opt').forEach((el,j)=>{
+    el.onclick=null; el.classList.add('done');
+    if(j===i) el.classList.add('selected');
+  });
+}
+
+function dismissPoll() {
+  $('poll-card').style.display = 'none';
+  activePollId = null;
+  myVote = null;
+  log('Poll card dismissed by student','n');
+}
+
+// ── Admin results bars ────────────────────────────────────────────────────────
+function updateAdminBars(options, total) {
+  $('adm-total').textContent = total;
+  const bars=$('adm-bars'); bars.innerHTML='';
+  const maxV=Math.max(...options.map(o=>o.votes),1);
+  options.forEach(opt=>{
+    const pct=total>0?Math.round(opt.votes/total*100):0;
+    const isW=opt.votes===maxV&&opt.votes>0;
+    const div=document.createElement('div');
+    div.style.cssText='margin-bottom:6px;';
+    div.innerHTML=`<div style="display:flex;justify-content:space-between;font-size:11px;color:#94a3b8;margin-bottom:3px;">
+      <span>${esc(opt.text)}</span><span style="color:${isW?'#4ade80':'#818cf8'}">${opt.votes} (${pct}%)</span></div>
+      <div style="background:#1e293b;border-radius:4px;height:6px;">
+        <div style="width:${pct}%;background:${isW?'#22c55e':'#6366f1'};border-radius:4px;height:6px;transition:width .4s;"></div>
+      </div>`;
+    bars.appendChild(div);
+  });
+  $('admin-poll-results').style.display='block';
+}
+
+// ── Admin live results polling ────────────────────────────────────────────────
+function startAdminPolling() {
+  stopAdminPolling();
+  $('adm-refresh-dot').style.display = 'inline-block';
+  $('adm-refresh-label').textContent = 'refreshing every 3s';
+  adminPollInterval = setInterval(fetchAdminResults, 3000);
+}
+
+function stopAdminPolling() {
+  if (adminPollInterval) { clearInterval(adminPollInterval); adminPollInterval = null; }
+  const dot = $('adm-refresh-dot'); if (dot) dot.style.display = 'none';
+  const lbl = $('adm-refresh-label'); if (lbl) lbl.textContent = 'final';
+}
+
+async function fetchAdminResults() {
+  if (!activePollId || !adminToken) return;
+  const server = $('server-url').value.trim() || 'http://localhost:4000';
+  try {
+    const res  = await fetch(`${server}/api/v1/admin/live-polls/${activePollId}/results`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const json = await res.json();
+    if (json.success && json.data?.poll) {
+      const poll = json.data.poll;
+      updateAdminBars(poll.options, poll.totalVotes);
+      if (!poll.isActive) stopAdminPolling();
+    }
+  } catch (_) {}
+}
+
+// ── Admin edit option builder ─────────────────────────────────────────────────
+function rmEditOpt(btn) {
+  const rows = $('edit-pob').querySelectorAll('.pob-row');
+  if (rows.length > 2) btn.parentElement.remove();
+}
+
+$('btn-add-edit-opt').addEventListener('click', () => {
+  const rows = $('edit-pob').querySelectorAll('.pob-row');
+  if (rows.length >= 6) return;
+  const div = document.createElement('div'); div.className = 'pob-row';
+  div.innerHTML = `<input class="epov" placeholder="Option ${rows.length + 1}" /><button class="btn-rm" onclick="rmEditOpt(this)">×</button>`;
+  $('edit-pob').appendChild(div);
+});
+
+function openEditForm(poll) {
+  $('edit-question').value = poll.question || '';
+  const builder = $('edit-pob');
+  builder.innerHTML = '';
+  (poll.options || []).forEach((opt, i) => {
+    const div = document.createElement('div'); div.className = 'pob-row';
+    div.innerHTML = `<input class="epov" value="${esc(opt.text)}" placeholder="Option ${i+1}" /><button class="btn-rm" onclick="rmEditOpt(this)">×</button>`;
+    builder.appendChild(div);
+  });
+  if (builder.querySelectorAll('.pob-row').length < 2) {
+    // ensure at least 2 rows
+    const div = document.createElement('div'); div.className = 'pob-row';
+    div.innerHTML = `<input class="epov" placeholder="Option 2" /><button class="btn-rm" onclick="rmEditOpt(this)">×</button>`;
+    builder.appendChild(div);
+  }
+  $('edit-form').style.display = 'block';
+}
+
+$('btn-cancel-edit').addEventListener('click', () => { $('edit-form').style.display = 'none'; });
+
+// ── Admin option builder ───────────────────────────────────────────────────────
+function rmOpt(btn){
+  const rows=$('pob').querySelectorAll('.pob-row');
+  if(rows.length>2) btn.parentElement.remove();
+}
+$('btn-add-opt').addEventListener('click',()=>{
+  const rows=$('pob').querySelectorAll('.pob-row');
+  if(rows.length>=6) return;
+  const div=document.createElement('div'); div.className='pob-row';
+  div.innerHTML=`<input class="pov" placeholder="Option ${rows.length+1}" /><button class="btn-rm" onclick="rmOpt(this)">×</button>`;
+  $('pob').appendChild(div);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ADMIN — Login
+// ═══════════════════════════════════════════════════════════════
+$('btn-a-login').addEventListener('click', async ()=>{
+  const server=$('server-url').value.trim()||'http://localhost:4000';
+  const email=$('a-email').value.trim(), pwd=$('a-pwd').value.trim();
+  if(!email||!pwd){ toast('toast-a-login','Enter email and password','err'); return; }
+  $('btn-a-login').disabled=true;
+  toast('toast-a-login','Logging in…','inf');
+  log(`POST /api/v1/admin/auth/login  email=${email}`,'o');
+  try {
+    const res=await fetch(`${server}/api/v1/admin/auth/login`,{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({email,password:pwd}),
+    });
+    const json=await res.json();
+    log(`← ${res.status}  ${json.message}`, res.ok?'p':'e');
+    if(json.success&&json.data?.accessToken){
+      adminToken=json.data.accessToken;
+      const a=json.data.admin||{};
+      const nm=[a.firstName,a.lastName].filter(Boolean).join(' ')||email;
+      LS.save('demo_admin_token', adminToken);
+      LS.save('demo_admin_name', nm);
+      $('a-name').textContent=nm;
+      $('a-logged').style.display='block';
+      $('a-pwd').value='';
+      $('btn-a-logout').disabled=false;
+      $('btn-launch').disabled=false;
+      toast('toast-a-login','Logged in as '+nm,'ok');
+    } else {
+      toast('toast-a-login', json.message||'Login failed','err');
+    }
+  } catch(err){ log('Admin login error: '+err.message,'e'); toast('toast-a-login','Cannot reach server','err'); }
+  finally { $('btn-a-login').disabled=false; }
+});
+
+$('btn-a-logout').addEventListener('click', async ()=>{
+  const server=$('server-url').value.trim()||'http://localhost:4000';
+  if(adminToken){
+    try{ await fetch(`${server}/api/v1/admin/auth/logout`,{method:'DELETE',headers:{Authorization:`Bearer ${adminToken}`}}); }catch(_){}
+  }
+  adminToken=null;
+  LS.del('demo_admin_token','demo_admin_name');
+  stopAdminPolling();
+  $('a-logged').style.display='none';
+  $('btn-a-logout').disabled=true;
+  $('btn-launch').disabled=true;
+  $('btn-close-poll').disabled=true;
+  $('poll-edit-row').style.display='none';
+  $('edit-form').style.display='none';
+  toast('toast-a-login','Logged out','ok');
+  log('Admin logged out','p');
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ADMIN — Launch poll
+// ═══════════════════════════════════════════════════════════════
+$('btn-launch').addEventListener('click', async ()=>{
+  const server=$('server-url').value.trim()||'http://localhost:4000';
+  const liveClassId=$('a-class-id').value.trim();
+  const question=$('a-question').value.trim();
+  const options=[...document.querySelectorAll('.pov')].map(el=>el.value.trim()).filter(Boolean);
+  if(!adminToken){ toast('toast-poll','Login as admin first','err'); return; }
+  if(!liveClassId){ toast('toast-poll','Enter Live Class ID','err'); return; }
+  if(!question){ toast('toast-poll','Enter a question','err'); return; }
+  if(options.length<2){ toast('toast-poll','Add at least 2 options','err'); return; }
+
+  $('btn-launch').disabled=true;
+  log(`POST /api/v1/admin/live-polls  liveClassId=${liveClassId}`,'o');
+  try {
+    const res=await fetch(`${server}/api/v1/admin/live-polls`,{
+      method:'POST',
+      headers:{'Content-Type':'application/json',Authorization:`Bearer ${adminToken}`},
+      body:JSON.stringify({liveClassId,question,options}),
+    });
+    const json=await res.json();
+    log(`← ${res.status}  ${json.message}`, res.ok?'p':'e');
+    if(json.success){
+      activePollId=json.data?.poll?._id;
+      $('btn-close-poll').disabled=false;
+      $('poll-edit-row').style.display='flex';
+      $('edit-form').style.display='none';
+      toast('toast-poll','Poll launched! Students will see it now.','ok');
+      $('admin-poll-results').style.display='block';
+      $('adm-total').textContent='0';
+      $('adm-bars').innerHTML='';
+      if(json.data?.poll) updateAdminBars(json.data.poll.options, 0);
+      startAdminPolling();
+    } else {
+      toast('toast-poll', json.message||'Failed','err');
+      $('btn-launch').disabled=false;
+    }
+  } catch(err){
+    log('Poll launch error: '+err.message,'e');
+    toast('toast-poll','Request failed','err');
+    $('btn-launch').disabled=false;
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ADMIN — Close poll
+// ═══════════════════════════════════════════════════════════════
+$('btn-close-poll').addEventListener('click', async ()=>{
+  if(!activePollId){ toast('toast-poll','No active poll','err'); return; }
+  const server=$('server-url').value.trim()||'http://localhost:4000';
+  $('btn-close-poll').disabled=true;
+  log(`PATCH /api/v1/admin/live-polls/${activePollId}/close`,'o');
+  try {
+    const res=await fetch(`${server}/api/v1/admin/live-polls/${activePollId}/close`,{
+      method:'PATCH', headers:{Authorization:`Bearer ${adminToken}`},
+    });
+    const json=await res.json();
+    log(`← ${res.status}  ${json.message}`, res.ok?'p':'e');
+    if(!json.success){
+      toast('toast-poll', json.message||'Failed','err');
+      $('btn-close-poll').disabled=false;
+    } else {
+      stopAdminPolling();
+      fetchAdminResults();
+      $('poll-edit-row').style.display='none';
+      $('edit-form').style.display='none';
+      toast('toast-poll','Poll ended.','ok');
+      $('btn-launch').disabled=false;
+    }
+  } catch(err){
+    log('Poll close error: '+err.message,'e');
+    toast('toast-poll','Request failed','err');
+    $('btn-close-poll').disabled=false;
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ADMIN — Edit poll
+// ═══════════════════════════════════════════════════════════════
+$('btn-edit-poll').addEventListener('click', async () => {
+  if (!activePollId || !adminToken) return;
+  const server = $('server-url').value.trim() || 'http://localhost:4000';
+  // Fetch latest poll data to pre-fill the edit form
+  try {
+    const res  = await fetch(`${server}/api/v1/admin/live-polls/${activePollId}/results`, {
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const json = await res.json();
+    if (json.success && json.data?.poll) {
+      if (json.data.poll.totalVotes > 0) {
+        toast('toast-poll', 'Cannot edit — poll already has votes.', 'err'); return;
+      }
+      openEditForm(json.data.poll);
+    }
+  } catch (err) { toast('toast-poll', 'Failed to load poll', 'err'); }
+});
+
+$('btn-save-edit').addEventListener('click', async () => {
+  if (!activePollId || !adminToken) return;
+  const server   = $('server-url').value.trim() || 'http://localhost:4000';
+  const question = $('edit-question').value.trim();
+  const options  = [...document.querySelectorAll('.epov')].map(el => el.value.trim()).filter(Boolean);
+
+  if (!question) { toast('toast-poll', 'Question cannot be empty', 'err'); return; }
+  if (options.length < 2) { toast('toast-poll', 'Need at least 2 options', 'err'); return; }
+
+  $('btn-save-edit').disabled = true;
+  log(`PATCH /api/v1/admin/live-polls/${activePollId}`, 'o');
+  try {
+    const res  = await fetch(`${server}/api/v1/admin/live-polls/${activePollId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ question, options }),
+    });
+    const json = await res.json();
+    log(`← ${res.status}  ${json.message}`, res.ok ? 'p' : 'e');
+    if (json.success) {
+      toast('toast-poll', 'Poll updated!', 'ok');
+      $('edit-form').style.display = 'none';
+      if (json.data?.poll) updateAdminBars(json.data.poll.options, json.data.poll.totalVotes);
+    } else {
+      toast('toast-poll', json.message || 'Update failed', 'err');
+    }
+  } catch (err) {
+    log('Edit error: ' + err.message, 'e');
+    toast('toast-poll', 'Request failed', 'err');
+  } finally { $('btn-save-edit').disabled = false; }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ADMIN — Delete poll
+// ═══════════════════════════════════════════════════════════════
+$('btn-delete-poll').addEventListener('click', async () => {
+  if (!activePollId || !adminToken) return;
+  if (!confirm('Delete this poll and all its votes?')) return;
+
+  const server = $('server-url').value.trim() || 'http://localhost:4000';
+  $('btn-delete-poll').disabled = true;
+  log(`DELETE /api/v1/admin/live-polls/${activePollId}`, 'o');
+  try {
+    const res  = await fetch(`${server}/api/v1/admin/live-polls/${activePollId}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    const json = await res.json();
+    log(`← ${res.status}  ${json.message}`, res.ok ? 'p' : 'e');
+    if (json.success) {
+      stopAdminPolling();
+      activePollId = null;
+      $('poll-edit-row').style.display = 'none';
+      $('edit-form').style.display = 'none';
+      $('admin-poll-results').style.display = 'none';
+      $('btn-close-poll').disabled = true;
+      $('btn-launch').disabled = false;
+      toast('toast-poll', 'Poll deleted.', 'ok');
+    } else {
+      toast('toast-poll', json.message || 'Delete failed', 'err');
+    }
+  } catch (err) {
+    log('Delete error: ' + err.message, 'e');
+    toast('toast-poll', 'Request failed', 'err');
+  } finally { $('btn-delete-poll').disabled = false; }
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ADMIN — Send chat message
+// ═══════════════════════════════════════════════════════════════
+async function adminSendMessage() {
+  const server = $('server-url').value.trim() || 'http://localhost:4000';
+  const liveClassId = $('a-chat-class-id').value.trim();
+  const message = $('a-chat-msg').value.trim();
+  if(!adminToken){ toast('toast-a-chat','Login as admin first','err'); return; }
+  if(!liveClassId){ toast('toast-a-chat','Enter Live Class ID','err'); return; }
+  if(!message){ toast('toast-a-chat','Message cannot be empty','err'); return; }
+
+  $('btn-a-send').disabled = true;
+  log(`POST /api/v1/admin/live-chat/message  "${message.substring(0,40)}"`, 'o');
+  try {
+    const res = await fetch(`${server}/api/v1/admin/live-chat/message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ liveClassId, message }),
+    });
+    const json = await res.json();
+    log(`← ${res.status}  ${json.message}`, res.ok ? 'p' : 'e');
+    if(json.success){
+      $('a-chat-msg').value = '';
+      // sync the chat class ID with the student panel for convenience
+      $('a-class-id').value = liveClassId;
+    } else {
+      toast('toast-a-chat', json.message || 'Failed', 'err');
+    }
+  } catch(err){
+    log('Admin chat error: '+err.message,'e');
+    toast('toast-a-chat','Request failed','err');
+  } finally { $('btn-a-send').disabled = false; }
+}
+
+$('btn-a-send').addEventListener('click', adminSendMessage);
+$('a-chat-msg').addEventListener('keydown', e => { if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); adminSendMessage(); }});
+
+// ═══════════════════════════════════════════════════════════════
+// STUDENT — OTP Login
+// ═══════════════════════════════════════════════════════════════
+$('btn-otp').addEventListener('click', async ()=>{
+  const phone=$('phone').value.trim(), server=$('server-url').value.trim();
+  if(!phone){ toast('toast-login','Enter a phone number','err'); return; }
+  $('btn-otp').disabled=true; toast('toast-login','Sending OTP…','inf');
+  log(`POST /api/v1/client/auth/otp/generate  phone=${phone}`,'o');
+  try {
+    const res=await fetch(`${server}/api/v1/client/auth/otp/generate`,{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phoneNumber:phone}),
+    });
+    const json=await res.json();
+    log(`← ${res.status}  ${json.message}`,res.ok?'i':'e');
+    if(json.success){ $('otp-row').style.display='block'; toast('toast-login',json.message+' (test: 5786)','ok'); }
+    else toast('toast-login',json.message||'Failed','err');
+  } catch(err){ log('Error: '+err.message,'e'); toast('toast-login','Cannot reach server','err'); }
+  finally { $('btn-otp').disabled=false; }
+});
+
+$('btn-verify').addEventListener('click', async ()=>{
+  const phone=$('phone').value.trim(), otp=$('otp').value.trim(), server=$('server-url').value.trim();
+  if(!otp){ toast('toast-login','Enter the OTP','err'); return; }
+  $('btn-verify').disabled=true; toast('toast-login','Verifying…','inf');
+  log(`POST /api/v1/client/auth/otp/validate  phone=${phone}  otp=${otp}`,'o');
+  try {
+    const res=await fetch(`${server}/api/v1/client/auth/otp/validate`,{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phoneNumber:phone,otp}),
+    });
+    const json=await res.json();
+    log(`← ${res.status}  ${json.message}`,res.ok?'i':'e');
+    if(json.success&&json.data?.accessToken){
+      stuToken=json.data.accessToken;
+      try { const p=JSON.parse(atob(stuToken.split('.')[1])); myId=p.id; } catch(_){}
+      const c=json.data.user||{};
+      myName=[c.firstName,c.middleName,c.lastName].filter(Boolean).join(' ')||`User_${myId?.slice(-4)}`;
+      LS.save('demo_stu_token', stuToken);
+      LS.save('demo_stu_id', myId);
+      LS.save('demo_stu_name', myName);
+      $('logged-name').textContent=myName;
+      $('otp-row').style.display='none';
+      $('logged-row').style.display='block';
+      $('phone').disabled=true; $('otp').disabled=true; $('btn-otp').disabled=true;
+      toast('toast-login','Logged in as '+myName,'ok');
+      log('Token received. Customer: '+myName,'i');
+    } else toast('toast-login',json.message||'Verification failed','err');
+  } catch(err){ log('Error: '+err.message,'e'); toast('toast-login','Cannot reach server','err'); }
+  finally { $('btn-verify').disabled=false; }
+});
+
+$('btn-relogin').addEventListener('click',()=>{
+  LS.del('demo_stu_token','demo_stu_id','demo_stu_name','demo_live_class_id');
+  stuToken=null; myId=null; myName=null;
+  ['phone','otp'].forEach(id=>{ $(id).value=''; $(id).disabled=false; });
+  $('btn-otp').disabled=false;
+  $('otp-row').style.display='none'; $('logged-row').style.display='none';
+  if(socket){ socket.disconnect(); socket=null; }
+  resetChat();
+  setBadge('','Not connected');
+});
+
+// ═══════════════════════════════════════════════════════════════
+// STUDENT — Connect to room
+// ═══════════════════════════════════════════════════════════════
+$('btn-connect').addEventListener('click',()=>{
+  const server=$('server-url').value.trim(), liveClassId=$('live-class-id').value.trim();
+  if(!stuToken){ toast('toast-connect','Login first','err'); return; }
+  if(!liveClassId){ toast('toast-connect','Enter a Live Class ID','err'); return; }
+  if(socket) socket.disconnect();
+
+  setBadge('connecting','Connecting…');
+  log(`io('${server}')`,'o');
+
+  socket=io(server,{auth:{token:stuToken},transports:['websocket','polling'],path:'/socket.io'});
+
+  socket.on('connect',()=>{
+    setBadge('connected','Connected');
+    log('Connected  id='+socket.id,'i');
+    $('btn-connect').disabled=true; $('btn-disconnect').disabled=false;
+    $('msg-input').disabled=false; $('btn-send').disabled=false;
+    currentRoom=liveClassId;
+    LS.save('demo_live_class_id', liveClassId);
+    LS.save('demo_server_url', server);
+    $('room-label').textContent='live_chat:'+liveClassId;
+    $('user-label').textContent=myName?'👤 '+myName:'';
+    socket.emit('join_live_chat',{liveClassId});
+    log(`→ join_live_chat { liveClassId:"${liveClassId}" }`,'o');
+    toast('toast-connect','Joined live class!','ok');
+  });
+
+  socket.on('connect_error',err=>{
+    setBadge('error','Auth failed');
+    log('connect_error: '+err.message,'e');
+    toast('toast-connect','Connection failed: '+err.message,'err');
+    // If token is invalid/expired, clear stored session so user re-logs in
+    if(err.message.includes('Invalid') || err.message.includes('expired') || err.message.includes('token')){
+      LS.del('demo_stu_token','demo_stu_id','demo_stu_name','demo_live_class_id');
+      stuToken=null; myId=null; myName=null;
+      $('logged-row').style.display='none';
+      ['phone','otp'].forEach(id=>{ $(id).value=''; $(id).disabled=false; });
+      $('btn-otp').disabled=false;
+      log('Session expired — please log in again','e');
+    }
+  });
+
+  socket.on('disconnect',reason=>{
+    setBadge('','Disconnected'); log('Disconnected: '+reason,'e');
+    resetChat();
+  });
+
+  socket.on('chat_history',({messages})=>{
+    log(`← chat_history  ${messages.length} msg(s)`,'i');
+    $('messages').innerHTML='';
+    const emp=document.createElement('div'); emp.className='empty'; emp.id='empty-state';
+    emp.innerHTML='<div class="ico">💬</div><p>Connect to join the live class chat</p>';
+    $('messages').appendChild(emp);
+    if(!messages.length){ hideEmpty(); renderSys('No messages yet — say something!'); }
+    else messages.forEach(m=>renderMsg(m,String(m.customerId)===myId));
+  });
+
+  socket.on('new_message',msg=>{
+    log(`← new_message  from="${msg.userName}"  "${String(msg.message).substring(0,40)}"`,'i');
+    renderMsg(msg,String(msg.customerId)===myId);
+  });
+
+  // ── Poll events ──
+  socket.on('active_poll',({poll,myVote:v})=>{
+    log(`← active_poll  "${poll.question}"  ${poll.totalVotes} votes`,'p');
+    showPoll(poll, v, false);
+    renderSys('A poll is active — cast your vote!');
+  });
+
+  socket.on('poll_created',({poll})=>{
+    log(`← poll_created  "${poll.question}"  by "${poll.createdByName}"`,'p');
+    $('poll-card').style.display='none'; activePollId=null; myVote=null;
+    showPoll(poll, null, false);
+    renderSys(`📊 ${poll.createdByName} launched a poll — vote now!`);
+  });
+
+  socket.on('poll_update',({pollId,options,totalVotes})=>{
+    log(`← poll_update  totalVotes=${totalVotes}`,'p');
+    liveUpdatePoll(pollId,options,totalVotes);
+  });
+
+  socket.on('poll_closed',({pollId})=>{
+    log(`← poll_closed  pollId=${pollId}`,'p');
+    endPoll(pollId);
+  });
+
+  socket.on('poll_updated',({poll})=>{
+    log(`← poll_updated  "${poll.question}"`,'p');
+    // Re-render the poll card with fresh question/options, reset vote state
+    myVote = null;
+    showPoll(poll, null, false);
+    renderSys('📝 Poll was updated — cast your vote!');
+  });
+
+  socket.on('poll_deleted',({pollId})=>{
+    log(`← poll_deleted  pollId=${pollId}`,'p');
+    if(pollId !== activePollId) return;
+    $('poll-card').style.display='none';
+    activePollId=null; myVote=null;
+    renderSys('Poll was removed by admin.');
+  });
+
+  socket.on('error',({message})=>{
+    log('Server error: '+message,'e');
+    renderSys('⚠ '+message);
+  });
+});
+
+$('btn-disconnect').addEventListener('click',()=>{
+  if(!socket || !currentRoom) return;
+  socket.emit('leave_live_chat',{liveClassId:currentRoom});
+  log(`→ leave_live_chat { liveClassId:"${currentRoom}" }`,'o');
+  LS.del('demo_live_class_id');
+  leaveRoom();
+  // Socket stays connected — student is still logged in
+  setBadge('connected','Connected');
+  toast('toast-connect','Left the room.','ok');
+});
+
+// Clear room UI but keep socket connected
+function leaveRoom(){
+  $('btn-connect').disabled=false; $('btn-disconnect').disabled=true;
+  $('msg-input').disabled=true; $('btn-send').disabled=true;
+  $('room-label').textContent='—'; $('user-label').textContent='';
+  $('poll-card').style.display='none';
+  activePollId=null; myVote=null;
+  currentRoom=null;
+  $('messages').innerHTML='';
+  const emp=document.createElement('div'); emp.className='empty'; emp.id='empty-state';
+  emp.innerHTML='<div class="ico">💬</div><p>Connect to join the live class chat</p>';
+  $('messages').appendChild(emp);
+}
+
+// Full reset — called only on actual socket disconnect
+function resetChat(){
+  leaveRoom();
+  setBadge('','Not connected');
+}
+
+// ═══════════════════════════════════════════════════════════════
+// STUDENT — Send message
+// ═══════════════════════════════════════════════════════════════
+function sendMsg(){
+  const text=$('msg-input').value.trim();
+  if(!text||!socket||!currentRoom) return;
+  socket.emit('send_message',{liveClassId:currentRoom,message:text});
+  log(`→ send_message  "${text.substring(0,40)}"`,'o');
+  $('msg-input').value=''; $('msg-input').style.height='auto';
+}
+$('btn-send').addEventListener('click',sendMsg);
+$('msg-input').addEventListener('keydown',e=>{ if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMsg();} });
+$('msg-input').addEventListener('input',()=>{
+  $('msg-input').style.height='auto';
+  $('msg-input').style.height=Math.min($('msg-input').scrollHeight,100)+'px';
+});
+
+// ═══════════════════════════════════════════════════════════════
+// RESTORE SESSION ON PAGE REFRESH
+// ═══════════════════════════════════════════════════════════════
+window.addEventListener('DOMContentLoaded', () => {
+
+  // Restore server URL
+  const savedServer = LS.load('demo_server_url');
+  if(savedServer) $('server-url').value = savedServer;
+
+  // Restore admin session
+  const savedAdminToken = LS.load('demo_admin_token');
+  const savedAdminName  = LS.load('demo_admin_name');
+  if(savedAdminToken && savedAdminName){
+    adminToken = savedAdminToken;
+    $('a-name').textContent = savedAdminName;
+    $('a-logged').style.display = 'block';
+    $('btn-a-logout').disabled = false;
+    $('btn-launch').disabled = false;
+    log(`Admin session restored: ${savedAdminName}`,'p');
+  }
+
+  // Restore student session
+  const savedStuToken = LS.load('demo_stu_token');
+  const savedStuId    = LS.load('demo_stu_id');
+  const savedStuName  = LS.load('demo_stu_name');
+  const savedClassId  = LS.load('demo_live_class_id');
+
+  if(savedStuToken && savedStuName){
+    stuToken = savedStuToken;
+    myId     = savedStuId;
+    myName   = savedStuName;
+    $('logged-name').textContent = myName;
+    $('otp-row').style.display   = 'none';
+    $('logged-row').style.display = 'block';
+    $('phone').disabled = true; $('btn-otp').disabled = true;
+    log(`Student session restored: ${myName}`,'p');
+
+    // Restore last live class ID into all inputs
+    if(savedClassId){
+      $('live-class-id').value = savedClassId;
+      $('a-class-id').value    = savedClassId;
+      $('a-chat-class-id').value = savedClassId;
+    }
+
+    // Auto-reconnect to last room
+    if(savedClassId){
+      log('Auto-reconnecting to last room…','n');
+      setTimeout(() => $('btn-connect').click(), 600);
+    }
+  }
+});
+</script>
+</body>
+</html>
