@@ -60,8 +60,11 @@ export const paymentWebhook = async (req: Request, res: Response) => {
 
         const plan = await EbookPrice.findById(ebookOrder.planId);
         if (plan) {
+          // `duration` is stored as MONTHS (matches admin plan UI). Use
+          // setMonth so calendar months are honoured.
           const startAt = new Date();
-          const endAt = new Date(startAt.getTime() + plan.duration * 24 * 60 * 60 * 1000);
+          const endAt = new Date(startAt);
+          endAt.setMonth(endAt.getMonth() + plan.duration);
           await EbookSubscription.create({
             orderId: ebookOrder._id,
             customerId: ebookOrder.customerId,

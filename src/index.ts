@@ -5,6 +5,7 @@ import logger from "./utils/logger";
 import { sendEmail } from "./utils/emailService";
 import getLocalIpAddress from "./utils/getLocalIp";
 import { pm2Ready } from "./utils/pm2Logger";
+import { startNotificationWorker } from "./admin/notification/notification.worker";
 
 dotenv.config();
 const PORT = process.env.PORT || 5000;
@@ -13,6 +14,7 @@ const startServer = async () => {
   try {
     // Connect to the database
     await connectDB();
+    startNotificationWorker();
     // Start the Express server
 
     app.listen(PORT, async () => {

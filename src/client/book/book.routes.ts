@@ -10,8 +10,8 @@ import {
 
 const router = Router();
 
-// Catalogue (public-ish: no auth required to browse; cart decoration enabled if auth header present)
-router.get("/", listBooks);
+// Catalogue — auth required so we can decorate with cart + isPurchased.
+router.get("/", authenticate, listBooks);
 router.get("/trending", authenticate, listTrendingBooks);
 
 // Cart endpoints have moved to /api/v1/client/cart (see src/client/cart/*)
@@ -23,6 +23,6 @@ router.get("/orders", authenticate, listMyOrders);
 router.get("/orders/:id", authenticate, getMyOrderById);
 
 // Book detail — must be last so it doesn't match /cart, /shipping, /order etc.
-router.get("/:id", getBookDetail);
+router.get("/:id", authenticate, getBookDetail);
 
 export default router;

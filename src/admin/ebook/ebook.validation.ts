@@ -3,6 +3,11 @@ import { EBookLanguage, PackageCourseEbookOrderStatus, PackageCourseEbookPayment
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 
+const zBool = z.preprocess(
+  (v) => (typeof v === "string" ? v === "true" : v),
+  z.boolean()
+);
+
 export const createEbookSchema = z.object({
   name: z.string().min(1, "Name is required"),
   examCountdownCategoryId: z.string().regex(objectIdRegex, "Invalid examCountdownCategoryId").nullable().optional(),
@@ -10,15 +15,15 @@ export const createEbookSchema = z.object({
   author: z.string().min(1, "Author is required"),
   publisher: z.string().min(1, "Publisher is required"),
   language: z.enum(Object.values(EBookLanguage) as [string, ...string[]]),
-  order: z.number().int().nonnegative().optional().default(0),
+  order: z.coerce.number().int().nonnegative().optional().default(0),
   image: z.string().optional().nullable(),
   thumbnail: z.string().optional().nullable(),
   demoUrl: z.string().optional().nullable(),
   bookUrl: z.string().optional().nullable(),
   link: z.string().min(1, "Link is required"),
   termsAndConditions: z.string().optional().nullable(),
-  isTrending: z.boolean().optional().default(false),
-  status: z.boolean().optional().default(true),
+  isTrending: zBool.optional().default(false),
+  status: zBool.optional().default(true),
 });
 
 export const updateEbookSchema = createEbookSchema.partial();
@@ -27,10 +32,10 @@ export const createEbookPlanSchema = z.object({
   name: z.string().optional().nullable(),
   duration: z.number().int().positive("Duration must be a positive integer"),
   price: z.number().nonnegative("Price must be non-negative"),
-  withMaterial: z.boolean().optional().default(false),
-  materialPrice: z.number().nonnegative().optional().default(0),
-  isDefault: z.boolean().optional().default(false),
-  status: z.boolean().optional().default(true),
+  withMaterial: zBool.optional().default(false),
+  materialPrice: z.coerce.number().nonnegative().optional().default(0),
+  isDefault: zBool.optional().default(false),
+  status: zBool.optional().default(true),
 });
 
 export const updateEbookPlanSchema = createEbookPlanSchema.partial();

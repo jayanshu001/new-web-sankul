@@ -15,6 +15,7 @@ const daysBetween = (from: Date, to: Date) =>
 // GET /api/v1/client/ebooks
 export const listEbooks = async (req: Request, res: Response) => {
   try {
+    const customerId = (req as any).user?.id;
     const { search, language } = req.query as Record<string, string>;
     const filter: any = { status: true };
     if (search) filter.$or = [
@@ -39,15 +40,46 @@ export const listEbooks = async (req: Request, res: Response) => {
       (plansByEbook[key] ||= []).push(p);
     });
 
-    const data = ebooks.map((e) => ({
-      ...e,
-      plans: plansByEbook[String(e._id)] || [],
-      details: [
-        { id: 1, mainText: "Language", subText: e.language },
-        { id: 2, mainText: "Author", subText: e.author },
-        { id: 3, mainText: "Publisher", subText: e.publisher },
-      ],
-    }));
+    // Ebook access is time-bound: only currently-active subscriptions count
+    // as "purchased". Endpoint also returns the soonest expiry so the catalog
+    // card can show "X days left" without a second call.
+    const now = new Date();
+    const activeByEbook = new Map<string, Date>();
+    if (customerId && ebookIds.length) {
+      const subs = await EbookSubscription.find({
+        customerId,
+        ebookId: { $in: ebookIds },
+        status: true,
+        endAt: { $gt: now },
+      })
+        .select("ebookId endAt")
+        .lean();
+      subs.forEach((s: any) => {
+        const key = String(s.ebookId);
+        const prev = activeByEbook.get(key);
+        // If a customer somehow has two overlapping subs for the same ebook,
+        // keep the LATEST endAt — that's the access window they actually have.
+        if (!prev || s.endAt.getTime() > prev.getTime()) {
+          activeByEbook.set(key, s.endAt);
+        }
+      });
+    }
+
+    const data = ebooks.map((e) => {
+      const endAt = activeByEbook.get(String(e._id)) || null;
+      return {
+        ...e,
+        plans: plansByEbook[String(e._id)] || [],
+        details: [
+          { id: 1, mainText: "Language", subText: e.language },
+          { id: 2, mainText: "Author", subText: e.author },
+          { id: 3, mainText: "Publisher", subText: e.publisher },
+        ],
+        isPurchased: !!endAt,
+        subscriptionEndAt: endAt,
+        daysLeft: endAt ? daysBetween(now, endAt) : null,
+      };
+    });
 
     return res.status(200).json({ success: true, data: { ebooks: data } });
   } catch (error: any) {
@@ -92,12 +124,29 @@ export const getEbookDetail = async (req: Request, res: Response) => {
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Please select valid ebook." });
 
+    const customerId = (req as any).user?.id;
     const ebook = await Ebook.findOne({ _id: id, status: true }).lean();
     if (!ebook) return res.status(404).json({ success: false, message: "Ebook not found." });
 
     const plans = await EbookPrice.find({ ebookId: id, status: true })
       .sort({ duration: 1 })
       .lean();
+
+    // Active subscription lookup — same rule as listEbooks: latest endAt wins.
+    const nowAccess = new Date();
+    let subscriptionEndAt: Date | null = null;
+    if (customerId) {
+      const sub = await EbookSubscription.findOne({
+        customerId,
+        ebookId: id,
+        status: true,
+        endAt: { $gt: nowAccess },
+      })
+        .select("endAt")
+        .sort({ endAt: -1 })
+        .lean();
+      if (sub) subscriptionEndAt = sub.endAt;
+    }
 
     // Public promocodes available for this ebook (via PackageCourseEbookPrice linkage)
     const pceplans = await PackageCourseEbookPrice.find({ ebookId: id, status: true })
@@ -133,7 +182,16 @@ export const getEbookDetail = async (req: Request, res: Response) => {
 
     return res.status(200).json({
       success: true,
-      data: { ebook: { ...ebook, plans }, availablePromoCode },
+      data: {
+        ebook: {
+          ...ebook,
+          plans,
+          isPurchased: !!subscriptionEndAt,
+          subscriptionEndAt,
+          daysLeft: subscriptionEndAt ? daysBetween(nowAccess, subscriptionEndAt) : null,
+        },
+        availablePromoCode,
+      },
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

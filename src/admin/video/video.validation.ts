@@ -15,8 +15,8 @@ const baseShape = {
   youtube: z.coerce.boolean().optional().default(false),
   youtubeId: z.string().max(255).optional().nullable(),
 
-  vimeo: z.coerce.boolean().optional().default(false),
-  vimeoId: z.string().max(255).optional().nullable(),
+  // vimeo: z.coerce.boolean().optional().default(false),
+  // vimeoId: z.string().max(255).optional().nullable(),
 
   aws: z.coerce.boolean().optional().default(false),
   awsId: z.string().max(255).optional().nullable(),
@@ -27,7 +27,7 @@ export const createVideoSchema = z
   .superRefine((val, ctx) => {
     const enabled = [
       ["youtube", val.youtube, val.youtubeId] as const,
-      ["vimeo", val.vimeo, val.vimeoId] as const,
+      // ["vimeo", val.vimeo, val.vimeoId] as const,
       ["aws", val.aws, val.awsId] as const,
     ].filter(([, on]) => on);
 
@@ -35,7 +35,7 @@ export const createVideoSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["platform"],
-        message: "At least one of youtube/vimeo/aws must be enabled",
+        message: "At least one of youtube/aws must be enabled",
       });
       return;
     }
@@ -43,7 +43,7 @@ export const createVideoSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["platform"],
-        message: "Only one of youtube/vimeo/aws can be enabled at a time",
+        message: "Only one of youtube/aws can be enabled at a time",
       });
       return;
     }
@@ -69,19 +69,19 @@ export const updateVideoSchema = z
 
     youtube: z.coerce.boolean().optional(),
     youtubeId: z.string().max(255).optional().nullable(),
-    vimeo: z.coerce.boolean().optional(),
-    vimeoId: z.string().max(255).optional().nullable(),
+    // vimeo: z.coerce.boolean().optional(),
+    // vimeoId: z.string().max(255).optional().nullable(),
     aws: z.coerce.boolean().optional(),
     awsId: z.string().max(255).optional().nullable(),
   })
   .superRefine((val, ctx) => {
     const touchedAny =
-      val.youtube !== undefined || val.vimeo !== undefined || val.aws !== undefined;
+      val.youtube !== undefined || /* val.vimeo !== undefined || */ val.aws !== undefined;
     if (!touchedAny) return;
 
     const enabled = [
       ["youtube", val.youtube, val.youtubeId] as const,
-      ["vimeo", val.vimeo, val.vimeoId] as const,
+      // ["vimeo", val.vimeo, val.vimeoId] as const,
       ["aws", val.aws, val.awsId] as const,
     ].filter(([, on]) => on === true);
 
@@ -89,7 +89,7 @@ export const updateVideoSchema = z
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["platform"],
-        message: "Only one of youtube/vimeo/aws can be enabled at a time",
+        message: "Only one of youtube/aws can be enabled at a time",
       });
       return;
     }

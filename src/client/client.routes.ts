@@ -21,15 +21,23 @@ import clientWishlistRoutes from "./wishlist/wishlist.routes";
 import clientCartRoutes from "./cart/cart.routes";
 import clientPaymentRoutes from "./payment/payment.routes";
 import clientPurchaseHistoryRoutes from "./purchase-history/purchase-history.routes";
+import clientMySubscriptionsRoutes from "./my-subscriptions/my-subscriptions.routes";
 import clientWebhookRoutes from "./webhook/webhook.routes";
 import clientTrackingRoutes from "./tracking/tracking.routes";
 import clientSaveRoutes from "./save/save.routes";
 import clientFreeRoutes from "./free/free.routes";
 import clientCategoriesRoutes from "./categories/categories.routes";
-import clientFolderRoutes from "./folder/folder.routes";
+import { videoFolderRouter, materialFolderRouter } from "./folder/folder.routes";
 import clientExamCountdownRoutes from "./examCountdown/examCountdown.routes";
+import clientEducatorRoutes from "./educator/educator.routes";
+import { youtubeStreamProxy } from "./categories/yt-proxy.controller";
 
 const router = Router();
+
+// Public: HMAC token in the URL is the auth (short-lived, scoped to one
+// youtube_id+itag). Native players can't send Bearer headers, so this route
+// must be registered BEFORE any sub-router that applies `authenticate`.
+router.get("/yt-proxy", youtubeStreamProxy);
 
 /**
  * ==========================================
@@ -62,11 +70,14 @@ router.use("/wishlist", clientWishlistRoutes); // -> /api/v1/client/wishlist/*
 router.use("/cart", clientCartRoutes); // -> /api/v1/client/cart/*
 router.use("/payment", clientPaymentRoutes); // -> /api/v1/client/payment/*
 router.use("/purchase-history", clientPurchaseHistoryRoutes); // -> /api/v1/client/purchase-history/*
+router.use("/my-subscriptions", clientMySubscriptionsRoutes); // -> /api/v1/client/my-subscriptions
 router.use("/webhook", clientWebhookRoutes); // -> /api/v1/client/webhook/*
 router.use("/tracking", clientTrackingRoutes); // -> /api/v1/client/tracking
 router.use("/save", clientSaveRoutes); // -> /api/v1/client/save/answers (old-API compat)
 router.use("/", clientCategoriesRoutes); // -> /api/v1/client/{video|material|exam}-categories/:id/{videos|materials|exams}
-router.use("/folders", clientFolderRoutes); // -> /api/v1/client/folders/*
+router.use("/video-folders", videoFolderRouter); // -> /api/v1/client/video-folders/*
+router.use("/material-folders", materialFolderRouter); // -> /api/v1/client/material-folders/*
 router.use("/exam-countdowns", clientExamCountdownRoutes); // -> /api/v1/client/exam-countdowns/*
+router.use("/educators", clientEducatorRoutes); // -> /api/v1/client/educators/*
 
 export default router;

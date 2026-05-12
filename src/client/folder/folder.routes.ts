@@ -1,23 +1,21 @@
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
-import {
-  listFolders,
-  createFolder,
-  getFolderDetail,
-  deleteFolder,
-  addFolderItem,
-  removeFolderItem,
-} from "./folder.controller";
+import { videoFolderController, materialFolderController } from "./folder.controller";
 
-const router = Router();
+type Controller = typeof videoFolderController;
 
-router.use(authenticate);
+function buildRouter(c: Controller) {
+  const router = Router();
+  router.use(authenticate);
+  router.get("/", c.list);
+  router.post("/", c.create);
+  router.get("/:id", c.detail);
+  router.patch("/:id", c.update);
+  router.delete("/:id", c.remove);
+  router.post("/:id/items", c.addItem);
+  router.delete("/:id/items/:itemId", c.removeItem);
+  return router;
+}
 
-router.get("/", listFolders);
-router.post("/", createFolder);
-router.get("/:id", getFolderDetail);
-router.delete("/:id", deleteFolder);
-router.post("/:id/items", addFolderItem);
-router.delete("/:id/items/:itemId", removeFolderItem);
-
-export default router;
+export const videoFolderRouter = buildRouter(videoFolderController);
+export const materialFolderRouter = buildRouter(materialFolderController);

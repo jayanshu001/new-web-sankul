@@ -5,7 +5,14 @@ import { BookOrder } from "../../models/book/BookOrder.model";
 import { BookCart } from "../../models/book/BookCart.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
-import { BookOrderStatus } from "../../models/enums";
+import { EbookOrder } from "../../models/ebook/EbookOrder.model";
+import { EbookPrice } from "../../models/ebook/EbookPrice.model";
+import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
+import {
+  BookOrderStatus,
+  PackageCourseEbookOrderStatus,
+  PackageCourseEbookPaymentType,
+} from "../../models/enums";
 
 const verifySchema = z.object({
   razorpay_order_id: z.string().min(1),
@@ -54,15 +61,16 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
     // Find which local entity owns this Razorpay order. It's exactly one of
     // these two — neither, both, or duplicates would be a bug worth surfacing.
-    const [bookOrder, courseSub] = await Promise.all([
+    const [bookOrder, courseSub, ebookOrder] = await Promise.all([
       BookOrder.findOne({ razorpayOrderId: razorpay_order_id, customerId: userId }),
       PackageCourseSubscription.findOne({
         razorpayOrderId: razorpay_order_id,
         customerId: userId,
       }),
+      EbookOrder.findOne({ razorpayOrderId: razorpay_order_id, customerId: userId }),
     ]);
 
-    if (!bookOrder && !courseSub) {
+    if (!bookOrder && !courseSub && !ebookOrder) {
       return res.status(404).json({
         success: false,
         message: "No local order found for this Razorpay order id.",
@@ -109,16 +117,18 @@ export const verifyPayment = async (req: Request, res: Response) => {
         });
       }
 
-      // Look up the plan to compute access window from `duration`. Treated as
-      // days here — see doc note. If your duration is in months, the call
-      // site is the only place to change.
+      // Look up the plan to compute access window. `duration` is stored as
+      // MONTHS (matches the admin UI: "1 Month / 3 Months / 6 Months / 12 Months").
+      // We use setMonth so calendar-month length is honoured — a 6-month plan
+      // bought on Mar 11 expires on Sep 11, not "now + 180 days".
       const plan = await PackageCourseEbookPrice.findById(courseSub.packageId)
         .select("duration")
         .lean();
-      const durationDays = plan?.duration ?? 0;
+      const durationMonths = plan?.duration ?? 0;
 
       const now = new Date();
-      const endAt = new Date(now.getTime() + durationDays * 24 * 60 * 60 * 1000);
+      const endAt = new Date(now);
+      endAt.setMonth(endAt.getMonth() + durationMonths);
 
       courseSub.paymentStatus = "verified";
       courseSub.razorpayPaymentId = razorpay_payment_id;
@@ -130,6 +140,43 @@ export const verifyPayment = async (req: Request, res: Response) => {
       return res.status(200).json({
         success: true,
         data: { kind: "course", subscription: courseSub },
+      });
+    }
+
+    if (ebookOrder) {
+      if (ebookOrder.status !== PackageCourseEbookOrderStatus.PENDING) {
+        return res.status(200).json({
+          success: true,
+          data: { kind: "ebook", order: ebookOrder },
+          message: "Already verified.",
+        });
+      }
+
+      // `duration` is stored as MONTHS — matches the webhook fulfillment path.
+      const plan = await EbookPrice.findById(ebookOrder.planId).select("duration").lean();
+      const durationMonths = plan?.duration ?? 0;
+
+      ebookOrder.status = PackageCourseEbookOrderStatus.COMPLETE;
+      ebookOrder.razorpayPaymentId = razorpay_payment_id;
+      await ebookOrder.save();
+
+      const startAt = new Date();
+      const endAt = new Date(startAt);
+      endAt.setMonth(endAt.getMonth() + durationMonths);
+      await EbookSubscription.create({
+        orderId: ebookOrder._id,
+        customerId: ebookOrder.customerId,
+        ebookId: ebookOrder.ebookId,
+        price: ebookOrder.orderPrice,
+        startAt,
+        endAt,
+        paymentType: PackageCourseEbookPaymentType.ONLINE,
+        status: true,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: { kind: "ebook", order: ebookOrder },
       });
     }
 

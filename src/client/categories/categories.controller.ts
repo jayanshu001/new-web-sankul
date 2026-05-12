@@ -12,6 +12,148 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { Book } from "../../models/book/Book.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
+import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
+import { Innertube, Log } from "youtubei.js";
+import { signYoutubeStream } from "./yt-proxy.controller";
+
+Log.setLevel(Log.Level.ERROR);
+import { randomBytes } from "crypto";
+
+function proxyUrl(req: Request, youtubeId: string, itag: number): string {
+  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") ?? `${req.protocol}://${req.get("host")}`;
+  return `${base}/api/v1/client/yt-proxy?t=${signYoutubeStream(youtubeId, itag)}`;
+}
+
+function uniqId(): string {
+  return randomBytes(8).toString("hex");
+}
+
+let cachedInnertube: Promise<InstanceType<typeof Innertube>> | undefined;
+function getInnertube() {
+  if (!cachedInnertube) cachedInnertube = Innertube.create();
+  return cachedInnertube;
+}
+
+function encryptFlat(v: any) {
+  const token = generateToken(16);
+  const key = generateKey(token);
+  const vector = generateVector(token);
+  const sourceId =
+    v.platform === "youtube" ? v.youtube_id
+    : v.platform === "aws" ? v.aws_id
+    : v.vimeo_id;
+  const videoURL = sourceId ? encrypt(String(sourceId), key, vector) : "";
+  const { youtube_id, aws_id, vimeo_id, ...rest } = v;
+  return { ...rest, token, videoURL };
+}
+
+function normalizeFormat(f: any) {
+  const mime: string = f.mime_type ?? "";
+  const isAudio = mime.startsWith("audio/");
+  const isVideo = mime.startsWith("video/");
+  const hasAudioInMux = isVideo && /,\s*mp4a|,\s*opus|,\s*vorbis/i.test(mime);
+  return {
+    url: f.url as string | undefined,
+    itag: f.itag,
+    mimeType: mime,
+    bitrate: f.bitrate,
+    hasAudio: isAudio || hasAudioInMux,
+    hasVideo: isVideo,
+    height: f.height,
+    width: f.width,
+    fps: f.fps,
+    contentLength: f.content_length,
+    audioBitrate: f.audio_quality === "AUDIO_QUALITY_HIGH" ? 192 : f.audio_quality === "AUDIO_QUALITY_MEDIUM" ? 128 : undefined,
+    audioCodec: isAudio ? mime.match(/codecs="([^"]+)"/)?.[1] : undefined,
+    videoCodec: isVideo ? mime.match(/codecs="([^"]+)"/)?.[1]?.split(",")[0]?.trim() : undefined,
+    container: mime.split(";")[0]?.split("/")[1],
+    approxDurationMs: f.approx_duration_ms,
+    qualityLabel: f.quality_label ?? null,
+  };
+}
+
+async function buildYoutubeItem(req: Request, v: any) {
+  const yt = await getInnertube();
+  const clientsToTry = ["IOS", "ANDROID", "WEB_EMBEDDED", "TV", "WEB"] as const;
+
+  let normalized: ReturnType<typeof normalizeFormat>[] = [];
+  for (const client of clientsToTry) {
+    const info = await yt.getInfo(String(v.youtube_id), client as any);
+    const sd: any = (info as any).streaming_data;
+    if (!sd) continue;
+    const raw = [...(sd.formats ?? []), ...(sd.adaptive_formats ?? [])];
+    if (raw.length > 0) {
+      normalized = raw.map(normalizeFormat);
+      break;
+    }
+  }
+
+  if (normalized.length === 0) throw new Error("No formats from YouTube");
+
+  const videoStreams = normalized
+    .filter((f) => f.hasVideo)
+    .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
+  const audioStreams = normalized
+    .filter((f) => f.hasAudio && !f.hasVideo)
+    .sort((a, b) => (b.audioBitrate ?? 0) - (a.audioBitrate ?? 0));
+
+  const ordered = [...videoStreams, ...audioStreams];
+  const defaultStream = videoStreams[0] ?? audioStreams[0];
+
+  const token = generateToken(16);
+  const key = generateKey(token);
+  const vector = generateVector(token);
+
+  const youtubeId = String(v.youtube_id);
+
+  const progressive = ordered.map((f) => {
+    const label = f.qualityLabel ?? (f.hasAudio && !f.hasVideo ? "audio" : undefined);
+    return {
+      ...f,
+      id: uniqId(),
+      quality: label,
+      qualityLabel: label,
+      url: encrypt(proxyUrl(req, youtubeId, Number(f.itag)), key, vector),
+    };
+  });
+
+  const hlsUrl = encrypt(proxyUrl(req, youtubeId, Number(defaultStream.itag)), key, vector);
+  const { youtube_id, aws_id, vimeo_id, ...rest } = v;
+
+  return {
+    ...rest,
+    request: {
+      files: {
+        hls: {
+          default_cdn: "akfire_interconnect_quic",
+          cdns: { akfire_interconnect_quic: { url: hlsUrl } },
+        },
+        progressive,
+        token,
+      },
+    },
+  };
+}
+
+async function shapeVideoForList(req: Request, v: any) {
+  if (v.platform === "youtube") {
+    if (!v.youtube_id) {
+      console.warn("[video-list] youtube item missing youtube_id", { _id: v._id });
+      return encryptFlat(v);
+    }
+    try {
+      return await buildYoutubeItem(req, v);
+    } catch (err: any) {
+      console.error("[video-list] ytdl.getInfo failed", {
+        _id: v._id,
+        youtube_id: v.youtube_id,
+        error: err?.message,
+      });
+      return encryptFlat(v);
+    }
+  }
+  return encryptFlat(v);
+}
 
 function parsePaging(req: Request) {
   const { page = "1", limit = "20", search = "" } = req.query as Record<string, string>;
@@ -35,10 +177,12 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     const filter: any = { videoCategoryId: id, status: true };
     if (search) filter.title = { $regex: search, $options: "i" };
 
-    const [list, total] = await Promise.all([
+    const [rawList, total] = await Promise.all([
       Video.find(filter).sort({ order: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
       Video.countDocuments(filter),
     ]);
+
+    const list = await Promise.all(rawList.map((v) => shapeVideoForList(req, v)));
 
     return res.status(200).json({
       success: true,

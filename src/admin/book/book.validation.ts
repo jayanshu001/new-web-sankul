@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { BookLanguage, BookOrderStatus, BookCourier } from "../../models/enums";
 
+const zBool = z.preprocess(
+  (v) => (typeof v === "string" ? v === "true" : v),
+  z.boolean()
+);
+
 export const createBookSchema = z.object({
   name: z.string().min(1).max(255),
   examCountdownCategoryId: z.string().nullable().optional(),
@@ -19,10 +24,10 @@ export const createBookSchema = z.object({
   language: z
     .enum([BookLanguage.ENGLISH, BookLanguage.GUJARATI, BookLanguage.HINDI])
     .optional(),
-  isMagazine: z.coerce.boolean().optional(),
-  isCombo: z.coerce.boolean().optional(),
-  isTrending: z.coerce.boolean().optional(),
-  status: z.coerce.boolean().optional(),
+  isMagazine: zBool.optional(),
+  isCombo: zBool.optional(),
+  isTrending: zBool.optional(),
+  status: zBool.optional(),
 });
 
 export const updateBookSchema = createBookSchema.partial();

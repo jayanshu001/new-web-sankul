@@ -8,6 +8,7 @@ import { CustomerEducation } from "../../models/customer/CustomerEducation.model
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSchema } from "./customer.validation";
+import { ensureDefaultFolders } from "../../client/folder/folder.controller";
 
 // ─── List & Get ───────────────────────────────────────────────────────────────
 
@@ -149,6 +150,11 @@ export const createCustomer = async (req: Request, res: Response) => {
 
     const customer = new Customer({ ...validatedData, verified: false, isPhoneVerified: false });
     await customer.save();
+    try {
+      await ensureDefaultFolders(customer._id);
+    } catch {
+      // non-fatal
+    }
 
     const result = await Customer.findById(customer._id)
       .select("-password -otp")

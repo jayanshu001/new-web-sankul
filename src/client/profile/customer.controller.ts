@@ -7,6 +7,8 @@ import {
   deleteCustomerProfilePicture,
   deleteCustomerAccount,
   updateCustomerFirebaseToken,
+  registerDeviceToken,
+  unregisterDeviceToken,
 } from "./customer.service";
 import logger from "../../utils/logger";
 
@@ -168,16 +170,80 @@ export const updateFirebaseTokenHandler = async (req: Request, res: Response) =>
   const traceId = req.traceId;
   logger.info("updateFirebaseTokenHandler invoked", { traceId });
   try {
-    const { phoneNumber, firebaseToken } = req.body;
+    const { phoneNumber, firebaseToken, platform } = req.body;
     if (!phoneNumber || !firebaseToken) {
       return failure(res, "phoneNumber and firebaseToken are required.", 422);
     }
-    const result = await updateCustomerFirebaseToken(String(phoneNumber), String(firebaseToken), traceId);
+    const normalizedPlatform =
+      platform === "ios" || platform === "android" ? platform : undefined;
+    const result = await updateCustomerFirebaseToken(
+      String(phoneNumber),
+      String(firebaseToken),
+      normalizedPlatform,
+      traceId
+    );
     if (!result.ok) return failure(res, result.message, 404);
     logger.info("updateFirebaseTokenHandler success", { traceId });
     return success(res, {}, result.message, 200);
   } catch (err) {
     logger.error("updateFirebaseTokenHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+/**
+ * PUT /api/v1/client/profile/device-token
+ * Body: { firebaseToken: string; platform?: "ios" | "android" }
+ * Authenticated. Preferred over the legacy phone-based endpoint.
+ */
+export const registerDeviceTokenHandler = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  try {
+    if (!userId) return failure(res, "Unauthorized request.", 401);
+    const { firebaseToken, platform } = req.body;
+    if (!firebaseToken || typeof firebaseToken !== "string") {
+      return failure(res, "firebaseToken is required.", 422);
+    }
+    const normalizedPlatform =
+      platform === "ios" || platform === "android" ? platform : undefined;
+    const result = await registerDeviceToken(userId, firebaseToken, normalizedPlatform, traceId);
+    if (!result.ok) return failure(res, result.message, 404);
+    return success(res, {}, result.message, 200);
+  } catch (err) {
+    logger.error("registerDeviceTokenHandler failed", {
+      traceId,
+      error: getErrorMessage(err),
+      stack: (err as Error).stack,
+    });
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+/**
+ * DELETE /api/v1/client/profile/device-token
+ * Body: { firebaseToken: string }
+ * Authenticated. Removes only this device's token, leaving other logged-in
+ * devices receiving pushes.
+ */
+export const unregisterDeviceTokenHandler = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  try {
+    if (!userId) return failure(res, "Unauthorized request.", 401);
+    const { firebaseToken } = req.body;
+    if (!firebaseToken || typeof firebaseToken !== "string") {
+      return failure(res, "firebaseToken is required.", 422);
+    }
+    const result = await unregisterDeviceToken(userId, firebaseToken, traceId);
+    if (!result.ok) return failure(res, result.message, 404);
+    return success(res, {}, result.message, 200);
+  } catch (err) {
+    logger.error("unregisterDeviceTokenHandler failed", {
+      traceId,
+      error: getErrorMessage(err),
+      stack: (err as Error).stack,
+    });
     return failure(res, getErrorMessage(err), 500);
   }
 };

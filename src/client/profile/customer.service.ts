@@ -77,7 +77,7 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
       { $set: updatePayload },
       { new: true, runValidators: true }
     ).select(
-      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseToken osType loginCount isLoggedIn phoneNumber"
+      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseTokens osType loginCount isLoggedIn phoneNumber"
     );
 
     if (!updatedCustomer) {
@@ -162,7 +162,7 @@ export async function getCustomerProfile(customerId: string, traceId?: string) {
     }
 
     const customer = await Customer.findById(customerId).select(
-      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseToken osType loginCount isLoggedIn phoneNumber"
+      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseTokens osType loginCount isLoggedIn phoneNumber"
     );
 
     if (!customer) {
@@ -315,12 +315,35 @@ export async function deleteCustomerAccount(customerId: string, traceId?: string
   }
 }
 
-export async function updateCustomerFirebaseToken(phoneNumber: string, firebaseToken: string, traceId?: string) {
+async function upsertFirebaseToken(
+  filter: Record<string, unknown>,
+  firebaseToken: string,
+  platform?: "ios" | "android"
+) {
+  // Two-step atomic upsert into firebaseTokens[]: pull any existing entry with
+  // the same token (carrying stale platform/updatedAt), then push a fresh one.
+  // If the same physical device re-registers, this refreshes its row instead
+  // of duplicating it, while other devices' tokens remain untouched.
+  await Customer.updateOne(filter, { $pull: { firebaseTokens: { token: firebaseToken } } });
+  const update: Record<string, unknown> = {
+    $push: { firebaseTokens: { token: firebaseToken, platform, updatedAt: new Date() } },
+  };
+  if (platform) (update as any).$set = { osType: platform };
+  return Customer.findOneAndUpdate(filter, update);
+}
+
+export async function updateCustomerFirebaseToken(
+  phoneNumber: string,
+  firebaseToken: string,
+  platform?: "ios" | "android",
+  traceId?: string
+) {
   logger.info("updateCustomerFirebaseToken service invoked", { traceId, phoneNumber });
   try {
-    const customer = await Customer.findOneAndUpdate(
+    const customer = await upsertFirebaseToken(
       { phoneNumber, isAccountDeleted: false },
-      { $set: { firebaseToken } }
+      firebaseToken,
+      platform
     );
     if (!customer) {
       logger.warn("updateCustomerFirebaseToken service customer not found", { traceId, phoneNumber });
@@ -331,6 +354,46 @@ export async function updateCustomerFirebaseToken(phoneNumber: string, firebaseT
   } catch (error) {
     logger.error("updateCustomerFirebaseToken service error", { traceId, phoneNumber, error: (error as Error).message });
     return { ok: false, message: "An error occurred while updating firebase token." };
+  }
+}
+
+export async function registerDeviceToken(
+  customerId: string,
+  firebaseToken: string,
+  platform?: "ios" | "android",
+  traceId?: string
+) {
+  logger.info("registerDeviceToken service invoked", { traceId, customerId });
+  try {
+    const customer = await upsertFirebaseToken(
+      { _id: customerId, isAccountDeleted: false },
+      firebaseToken,
+      platform
+    );
+    if (!customer) return { ok: false, message: "Customer not found." };
+    return { ok: true, message: "Device token registered." };
+  } catch (error) {
+    logger.error("registerDeviceToken service error", { traceId, customerId, error: (error as Error).message });
+    return { ok: false, message: "An error occurred while registering device token." };
+  }
+}
+
+export async function unregisterDeviceToken(
+  customerId: string,
+  firebaseToken: string,
+  traceId?: string
+) {
+  logger.info("unregisterDeviceToken service invoked", { traceId, customerId });
+  try {
+    const result = await Customer.updateOne(
+      { _id: customerId, isAccountDeleted: false },
+      { $pull: { firebaseTokens: { token: firebaseToken } } }
+    );
+    if (!result.matchedCount) return { ok: false, message: "Customer not found." };
+    return { ok: true, message: "Device token unregistered." };
+  } catch (error) {
+    logger.error("unregisterDeviceToken service error", { traceId, customerId, error: (error as Error).message });
+    return { ok: false, message: "An error occurred while unregistering device token." };
   }
 }
 

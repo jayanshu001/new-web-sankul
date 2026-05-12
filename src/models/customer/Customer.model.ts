@@ -26,7 +26,7 @@ export interface ICustomer extends Document {
   referralCode?: string;
   rewardPoints?: number;
   verified: boolean;
-  firebaseToken?: string;
+  firebaseTokens?: Array<{ token: string; platform?: string; updatedAt: Date }>;
   osType: OsType;
   lastLoginDate?: Date;
   lastLoginIp?: string;
@@ -64,7 +64,17 @@ const CustomerSchema = new Schema<ICustomer>(
     referralCode: { type: String },
     rewardPoints: { type: Number, default: 0 },
     verified: { type: Boolean, required: true, default: false },
-    firebaseToken: { type: String },
+    firebaseTokens: {
+      type: [
+        {
+          _id: false,
+          token: { type: String, required: true },
+          platform: { type: String },
+          updatedAt: { type: Date, default: () => new Date() },
+        },
+      ],
+      default: [],
+    },
     osType: {
       type: String,
       enum: Object.values(OsType),
@@ -83,5 +93,7 @@ const CustomerSchema = new Schema<ICustomer>(
 // Indexes for performance
 CustomerSchema.index({ status: 1, isAccountDeleted: 1 });
 CustomerSchema.index({ referralCode: 1 }, { unique: true, sparse: true });
+CustomerSchema.index({ "firebaseTokens.token": 1 }, { sparse: true });
+CustomerSchema.index({ osType: 1, "firebaseTokens.token": 1 });
 
 export const Customer = model<ICustomer>("Customer", CustomerSchema);

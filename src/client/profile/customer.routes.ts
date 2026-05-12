@@ -8,6 +8,8 @@ import {
   deleteProfilePictureHandler,
   deleteAccountHandler,
   updateFirebaseTokenHandler,
+  registerDeviceTokenHandler,
+  unregisterDeviceTokenHandler,
 } from "./customer.controller";
 import { getProfileDashboardCounts } from "./dashboard.controller";
 
@@ -59,6 +61,23 @@ router.delete("/profile-picture", authenticate, deleteProfilePictureHandler);
  * @access Public
  */
 router.patch("/firebase-token", updateFirebaseTokenHandler);
+
+/**
+ * @route  PUT /api/v1/client/profile/device-token
+ * @desc   Register/update FCM device token for the authenticated customer
+ * @access Private (Customer)
+ * @body   { firebaseToken: string; platform?: "ios" | "android" }
+ */
+router.put("/device-token", authenticate, registerDeviceTokenHandler);
+
+/**
+ * @route  DELETE /api/v1/client/profile/device-token
+ * @desc   Unregister a single FCM device token (call on logout). Other
+ *         devices logged in with the same account continue to receive pushes.
+ * @access Private (Customer)
+ * @body   { firebaseToken: string }
+ */
+router.delete("/device-token", authenticate, unregisterDeviceTokenHandler);
 
 /**
  * @route  DELETE /api/v1/client/profile

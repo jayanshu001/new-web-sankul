@@ -40,20 +40,32 @@ export const listBooks = async (req: Request, res: Response) => {
 
     let cartMap = new Map<string, number>();
     let cartId: string | null = null;
+    let purchasedSet = new Set<string>();
     if (customerId) {
       const cart = await BookCart.findOne({ customerId, status: true }).select("_id items");
       if (cart) {
         cartId = cart._id.toString();
         cart.items.forEach((i) => cartMap.set(i.bookId.toString(), i.qty));
       }
+      // Books are permanent once delivered — any successful past order counts
+      // as purchased. Matches the rule for /purchase-history/books.
+      const purchasedIds = await BookOrder.distinct("items.bookId", {
+        customerId,
+        status: {
+          $in: [BookOrderStatus.VERIFIED, BookOrderStatus.SHIPPED, BookOrderStatus.DELIVERED],
+        },
+      });
+      purchasedSet = new Set(purchasedIds.map((id: any) => String(id)));
     }
 
     const decorated = books.map((b) => {
       const doc = b.toObject();
+      const idStr = b._id.toString();
       return {
         ...doc,
-        qty: cartMap.get(b._id.toString()) ?? 0,
+        qty: cartMap.get(idStr) ?? 0,
         key: b.isCombo ? "combo" : "individual",
+        isPurchased: purchasedSet.has(idStr),
       };
     });
 
@@ -268,16 +280,31 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
 
 export const getBookDetail = async (req: Request, res: Response) => {
   try {
+    const customerId = req.user?.id;
     const id = req.params.id as string;
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid book id." });
     const book = await Book.findOne({ _id: id, status: true }).lean();
     if (!book) return res.status(404).json({ success: false, message: "Book not found." });
+
+    let isPurchased = false;
+    if (customerId) {
+      const owned = await BookOrder.exists({
+        customerId,
+        "items.bookId": book._id,
+        status: {
+          $in: [BookOrderStatus.VERIFIED, BookOrderStatus.SHIPPED, BookOrderStatus.DELIVERED],
+        },
+      });
+      isPurchased = !!owned;
+    }
+
     return res.status(200).json({
       success: true,
       data: {
         ...book,
         pages: book.pages ?? 0,
+        isPurchased,
       },
     });
   } catch (error: any) {

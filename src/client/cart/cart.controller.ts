@@ -222,7 +222,7 @@ export const getCart = async (req: Request, res: Response) => {
         data: {
           _id: cart?._id ?? null,
           items: [],
-          summary: { subtotal: 0, listTotal: 0, discount: 0, itemCount: 0 },
+          summary: { subtotal: 0, listTotal: 0, discount: 0, itemCount: 0, shipping: 0, shippingWaived: true, total: 0 },
         },
       });
     }
@@ -235,6 +235,7 @@ export const getCart = async (req: Request, res: Response) => {
     let subtotal = 0;
     let listTotal = 0;
     let itemCount = 0;
+    let shipping = 0;
 
     const items = cart.items
       .map((line) => {
@@ -245,6 +246,7 @@ export const getCart = async (req: Request, res: Response) => {
         subtotal += lineSubtotal;
         listTotal += lineList;
         itemCount += line.qty;
+        shipping += book.shippingPrice ?? 0;
         return {
           bookId: line.bookId,
           qty: line.qty,
@@ -254,6 +256,9 @@ export const getCart = async (req: Request, res: Response) => {
         };
       })
       .filter(Boolean);
+
+    const shippingWaived = shipping === 0;
+    const total = shippingWaived ? subtotal : subtotal + shipping;
 
     return res.status(200).json({
       success: true,
@@ -265,6 +270,9 @@ export const getCart = async (req: Request, res: Response) => {
           listTotal,
           discount: Math.max(0, listTotal - subtotal),
           itemCount,
+          shipping,
+          shippingWaived,
+          total,
         },
       },
     });

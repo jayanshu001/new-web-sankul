@@ -171,7 +171,7 @@ export const createVideo = async (req: Request, res: Response) => {
       priceType: d.type,
       platform,
       youtube_id: platform === "youtube" ? d.youtubeId ?? undefined : undefined,
-      vimeo_id: platform === "vimeo" ? d.vimeoId ?? undefined : undefined,
+      // vimeo_id: platform === "vimeo" ? d.vimeoId ?? undefined : undefined,
       aws_id: platform === "aws" ? d.awsId ?? undefined : undefined,
       status: d.status,
     });
@@ -229,21 +229,21 @@ export const updateVideo = async (req: Request, res: Response) => {
     if (d.status !== undefined) video.status = d.status;
 
     const platformTouched =
-      d.youtube !== undefined || d.vimeo !== undefined || d.aws !== undefined;
+      d.youtube !== undefined || /* d.vimeo !== undefined || */ d.aws !== undefined;
     if (platformTouched) {
       const platform = pickEnabledPlatform(d);
       if (platform) {
         video.platform = platform;
         video.youtube_id = platform === "youtube" ? d.youtubeId ?? undefined : undefined;
-        video.vimeo_id = platform === "vimeo" ? d.vimeoId ?? undefined : undefined;
+        // video.vimeo_id = platform === "vimeo" ? d.vimeoId ?? undefined : undefined;
         video.aws_id = platform === "aws" ? d.awsId ?? undefined : undefined;
       }
     } else {
       // Allow updating just the active platform's id without flipping toggles
       if (video.platform === "youtube" && d.youtubeId !== undefined)
         video.youtube_id = d.youtubeId ?? undefined;
-      if (video.platform === "vimeo" && d.vimeoId !== undefined)
-        video.vimeo_id = d.vimeoId ?? undefined;
+      // if (video.platform === "vimeo" && d.vimeoId !== undefined)
+      //   video.vimeo_id = d.vimeoId ?? undefined;
       if (video.platform === "aws" && d.awsId !== undefined)
         video.aws_id = d.awsId ?? undefined;
     }
