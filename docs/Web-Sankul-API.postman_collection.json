@@ -2240,6 +2240,87 @@
               ]
             },
             {
+              "name": "Live Session (REST)",
+              "item": [
+                {
+                  "name": "Get Live Session (status + playback)",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/live-sessions/{{live_session_stream_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "live-sessions",
+                        "{{live_session_stream_id}}"
+                      ]
+                    },
+                    "description": "Returns `{ title, streamId, status, isLive, hlsUrl, hlsUrls, recordings, liveClassId }`. While the stream is live, open `hlsUrl` in an HLS player. After Streamos posts to the recording webhook, `status` becomes `READY` and `recordings[]` is populated. `liveClassId` (stringified `streamId`) is the room id to use when joining the Socket.IO room for chat/polls.",
+                    "auth": {
+                      "type": "bearer",
+                      "bearer": [
+                        {
+                          "key": "token",
+                          "value": "{{accessToken}}",
+                          "type": "string"
+                        }
+                      ]
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
+              "name": "Recording Webhook (server-to-server)",
+              "item": [
+                {
+                  "name": "Streamos Recording Webhook",
+                  "request": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/webhook/recording",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "webhook",
+                        "recording"
+                      ]
+                    },
+                    "description": "Public endpoint Streamos calls after a stream ends and the recordings are ready. Updates the matching `LiveSession` with `recordings[]` and flips `status` to `READY`. Not called by app clients \u2014 included here for inspection/testing.",
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"streamId\": {{live_session_stream_id}},\n  \"recordings\": [\n    {\n      \"quality\": \"720p\",\n      \"file_size\": 12345,\n      \"path\": \"https://cdn.streamos.co/recordings/sample.mp4\"\n    }\n  ]\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    },
+                    "auth": {
+                      "type": "noauth"
+                    }
+                  },
+                  "response": []
+                }
+              ]
+            },
+            {
               "name": "Socket.IO Events (reference)",
               "item": [
                 {
@@ -2250,11 +2331,121 @@
                     "url": {
                       "raw": "ws://{{WS_URL}}/socket.io"
                     },
-                    "description": "## Socket.IO \u2014 Live Chat & Poll\n\n**Connection**: `ws://<host>/socket.io`  \n**Auth**: send `token` in `handshake.auth` (customer JWT)\n\n---\n\n### Client \u2192 Server events\n\n| Event | Payload | Description |\n|-------|---------|-------------|\n| `join_live_chat` | `{liveClassId}` | Join the room; receives `chat_history` + `active_poll` |\n| `send_message` | `{liveClassId, message}` | Send a chat message (max 2000 chars) |\n| `submit_vote` | `{pollId, optionIndex}` | Cast a vote on the active poll (one vote per user) |\n| `leave_live_chat` | `{liveClassId}` | Leave the room |\n\n---\n\n### Server \u2192 Client events\n\n| Event | Payload | Description |\n|-------|---------|-------------|\n| `chat_history` | `{liveClassId, messages[]}` | Sent on join; last 50 messages |\n| `new_message` | `{_id, liveClassId, customerId, userName, message, createdAt}` | New chat message broadcast |\n| `active_poll` | `{poll, myVote}` | Sent on join if a poll is active; `myVote` = option index or null |\n| `poll_created` | `{poll}` | Admin launched a new poll |\n| `poll_update` | `{pollId, options[], totalVotes}` | Live vote counts after each vote |\n| `poll_updated` | `{poll}` | Admin edited the poll (question/options changed) |\n| `poll_closed` | `{pollId}` | Admin closed the poll |\n| `poll_deleted` | `{pollId}` | Admin deleted the poll |\n| `error` | `{message}` | Error from server |\n"
+                    "description": "## Socket.IO \u2014 Live Chat & Poll\n\n**Connection**: `ws://<host>/socket.io`  \n**Auth**: send `token` in `handshake.auth` (customer JWT)\n\n---\n\n### Client \u2192 Server events\n\n| Event | Payload | Description |\n|-------|---------|-------------|\n| `join_live_chat` | `{liveClassId}` | Join the room; receives `chat_history` + `active_poll` |\n| `send_message` | `{liveClassId, message}` | Send a chat message (max 2000 chars) |\n| `submit_vote` | `{pollId, optionIndex}` | Cast a vote on the active poll (one vote per user) |\n| `leave_live_chat` | `{liveClassId}` | Leave the room |\n\n---\n\n### Server \u2192 Client events\n\n| Event | Payload | Description |\n|-------|---------|-------------|\n| `chat_history` | `{liveClassId, messages[]}` | Sent on join; last 50 messages |\n| `new_message` | `{_id, liveClassId, customerId, userName, message, createdAt}` | New chat message broadcast |\n| `active_poll` | `{poll, myVote}` | Sent on join if a poll is active; `myVote` = option index or null |\n| `poll_created` | `{poll}` | Admin launched a new poll |\n| `poll_update` | `{pollId, options[], totalVotes}` | Live vote counts after each vote |\n| `poll_updated` | `{poll}` | Admin edited the poll (question/options changed) |\n| `poll_closed` | `{pollId}` | Admin closed the poll |\n| `poll_deleted` | `{pollId}` | Admin deleted the poll |\n| `live_session_ended` | `{streamId, liveClassId, status: \"ENDED\", endedAt}` | Admin ended the live session. Client should close the HLS player, disable chat/poll UI, and leave the room. Further `send_message` / `submit_vote` events will be rejected by the server. |\n| `recordings_ready` | `{streamId, liveClassId, status: \"READY\", recordings[]}` | Streamos has finished processing recordings and the server saved them. Client can swap the 'ended' UI for a recordings/replay list without polling. |\n| `error` | `{message}` | Error from server |\n"
                   },
                   "response": []
                 }
               ]
+            }
+          ]
+        },
+        {
+          "name": "12 Live Courses",
+          "description": "Customer-facing browse + purchase + sessions for live courses.\n\n**Entitlement model:** a logged-in user can hit `Get Live Session` and watch the first `previewSeconds` of any live class. The response also includes `purchaseOptions` listing all attached live courses + plans. Once the user buys ANY of the attached courses (via `Payment → Create Order: Live Course` then `Payment → Verify`), the next `Get Live Session` call returns `accessLevel: \"full\"` and removes the cutoff.",
+          "item": [
+            {
+              "name": "List Live Courses",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/live-courses?page=1&limit=20&search=",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "client", "live-courses" ],
+                  "query": [
+                    { "key": "page",   "value": "1" },
+                    { "key": "limit",  "value": "20" },
+                    { "key": "search", "value": "" }
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Live Course",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/live-courses/{{live_course_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "client", "live-courses", "{{live_course_id}}" ]
+                },
+                "description": "Returns `{ liveCourse, plans, subscribed }`. `subscribed` is true when the current customer holds an active verified subscription to this course.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Sessions Under Live Course",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/live-courses/{{live_course_id}}/sessions?upcoming=&status=&page=1&limit=50",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "client", "live-courses", "{{live_course_id}}", "sessions" ],
+                  "query": [
+                    { "key": "upcoming", "value": "", "description": "true → SCHEDULED with scheduledAt >= now" },
+                    { "key": "status",   "value": "", "description": "SCHEDULED | CREATED | ENDED | READY" },
+                    { "key": "page",     "value": "1" },
+                    { "key": "limit",    "value": "50" }
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Payment: Create Order (Live Course)",
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/payment/create-order/live-course",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "client", "payment", "create-order", "live-course" ]
+                },
+                "description": "Creates a pending `LiveCourseSubscription` plus a Razorpay order for the selected plan. After the app completes Razorpay checkout, POST the returned ids to `/api/v1/client/payment/verify` — that flips the subscription to `verified` and computes `startAt` / `endAt` from the plan's duration (months). Refuses with `409` if the customer already has an active verified subscription to this live course.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"planId\": \"{{live_course_plan_id}}\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Live Session (with access gate)",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/live-sessions/{{live_session_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "client", "live-sessions", "{{live_session_id}}" ]
+                },
+                "description": "Same route as `Customer → 11 Live Class → Live Session (REST)`, re-surfaced here for the live-course flow. Response now includes:\n- `accessLevel`: `\"full\"` if the customer is subscribed to any attached course, else `\"preview\"`.\n- `previewSeconds`: `180` when previewing, `null` when full.\n- `purchaseOptions[]`: list of attached courses + plans the user can purchase to unlock the rest. Empty when subscribed.\n\nClient is expected to cut playback at `previewSeconds` and show a purchase CTA — Streamos URLs are not server-signed, so the cutoff is client-trusted.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
             }
           ]
         }
@@ -9726,6 +9917,1018 @@
               "response": []
             }
           ]
+        },
+        {
+          "name": "15 Live Class — Sessions (Streamos)",
+          "description": "Wraps the Streamos live streaming API. Requires `STREAMOS_ACCESS_KEY` and `STREAMOS_ACCESS_SECRET` in the server env.\n\n**Lifecycle**\n\n- `SCHEDULED` — created in DB only, no Streamos call yet. Has `_id` and `scheduledAt` but no `streamId`. Can be edited / deleted / started.\n- `CREATED` — Streamos stream exists, `streamId/rtmpUrl/hlsUrl` populated. Use `rtmpUrl` in OBS; share `streamId` with students. Must be ended (not deleted) while in this state.\n- `ENDED` — admin called `/end`.\n- `READY` — Streamos posted recordings to the webhook.\n\n**Start rule**: a SCHEDULED session can only be started within 2 minutes of `scheduledAt`. Late starts (after `scheduledAt`) are always allowed — sessions never expire.\n\nMost endpoints accept either the Mongo `_id` (`{{live_session_id}}`) or the numeric `streamId` (`{{live_session_stream_id}}`) as the path param.",
+          "item": [
+            {
+              "name": "Create Live Session (immediate)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions"
+                  ]
+                },
+                "description": "Immediate create — calls Streamos right away. Returns the persisted session with `status=CREATED`, `streamId`, `rtmpUrl`, `hlsUrl`. Omit `scheduledAt` (or pass a past date) for this mode.\n\nSame optional fields as Schedule:\n- `liveCourseIds: [...]` — attach to one or more live courses (multi-cohort).\n- `recordingTargetFolderId` — auto-promote the recording into this folder when Streamos delivers it. Folder must belong to one of the `liveCourseIds`.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Live Class Title\",\n  \"liveCourseIds\": [\"{{live_course_id}}\"],\n  \"recordingTargetFolderId\": \"{{live_course_folder_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const s = pm.response.json()?.data?.session || {};",
+                      "  if (s.id) { pm.collectionVariables.set(\"live_session_id\", s.id); pm.environment.set(\"live_session_id\", s.id); }",
+                      "  if (s.streamId !== undefined && s.streamId !== null) {",
+                      "    pm.collectionVariables.set(\"live_session_stream_id\", String(s.streamId));",
+                      "    pm.environment.set(\"live_session_stream_id\", String(s.streamId));",
+                      "  }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Schedule Live Session",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions"
+                  ]
+                },
+                "description": "Schedule for later. Pass `scheduledAt` (ISO 8601) in the future. Optionally pass `liveCourseIds: [...]` to attach the session to **one or more** LiveCourses simultaneously (admin can run a single live class across multiple cohorts). `liveCourseId: \"...\"` is still accepted as a single-id shortcut.\n\nOptionally pass `recordingTargetFolderId` (a VideoCategory `_id` that belongs to one of the `liveCourseIds`). When set, the recording webhook auto-creates a Video record in that folder once Streamos delivers recordings — the admin doesn't have to manually promote. Omit this field to leave the recording only on the Live tab and promote later via `Videos: Add from Live Recording`.\n\nStreamos is **not** called yet — the session is stored with `status=SCHEDULED` and only `_id` + `scheduledAt` are populated. Admin must later call `Start Scheduled Session` within 2 minutes of `scheduledAt` (or anytime after) to actually create the Streamos stream.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Tomorrow 7pm Live\",\n  \"scheduledAt\": \"2026-05-14T19:00:00.000Z\",\n  \"liveCourseIds\": [\"{{live_course_id}}\"],\n  \"recordingTargetFolderId\": \"{{live_course_folder_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const s = pm.response.json()?.data?.session || {};",
+                      "  if (s.id) { pm.collectionVariables.set(\"live_session_id\", s.id); pm.environment.set(\"live_session_id\", s.id); }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "List Live Sessions",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions?status=&upcoming=&page=1&limit=50",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions"
+                  ],
+                  "query": [
+                    { "key": "status", "value": "", "description": "SCHEDULED | CREATED | ENDED | READY" },
+                    { "key": "upcoming", "value": "", "description": "true → only SCHEDULED with scheduledAt >= now" },
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "50" }
+                  ]
+                },
+                "description": "Paginated list. Sort: scheduledAt asc, createdAt desc.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Start Scheduled Session",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions/{{live_session_id}}/start",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions",
+                    "{{live_session_id}}",
+                    "start"
+                  ]
+                },
+                "description": "Promotes a SCHEDULED session to CREATED by calling Streamos. Returns the updated session including `streamId`, `rtmpUrl`, `hlsUrl`. Allowed only when `now >= scheduledAt - 2min`; rejects with 409 + remaining seconds otherwise. Late starts (after `scheduledAt`) are always allowed.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const s = pm.response.json()?.data?.session || {};",
+                      "  if (s.streamId !== undefined && s.streamId !== null) {",
+                      "    pm.collectionVariables.set(\"live_session_stream_id\", String(s.streamId));",
+                      "    pm.environment.set(\"live_session_stream_id\", String(s.streamId));",
+                      "  }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Update Scheduled Session",
+              "request": {
+                "method": "PATCH",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions/{{live_session_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions",
+                    "{{live_session_id}}"
+                  ]
+                },
+                "description": "Edit `title`, `scheduledAt`, `liveCourseIds`, and/or `recordingTargetFolderId` of a SCHEDULED session. Pass `liveCourseIds: []` to clear all course attachments, or `recordingTargetFolderId: null` to clear the auto-promote folder. Rejects with 409 if the session has already been started.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Renamed Live Class\",\n  \"scheduledAt\": \"2026-05-14T20:00:00.000Z\",\n  \"liveCourseIds\": [\"{{live_course_id}}\"],\n  \"recordingTargetFolderId\": \"{{live_course_folder_id}}\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Live Session",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions/{{live_session_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions",
+                    "{{live_session_id}}"
+                  ]
+                },
+                "description": "Delete a SCHEDULED / ENDED / READY session. Rejects with 409 for a currently-live `CREATED` session — end it first via `/end`.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Get Live Session",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions/{{live_session_stream_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions",
+                    "{{live_session_stream_id}}"
+                  ]
+                },
+                "description": "Returns `{ session, isLive, hlsUrl, hlsUrls }`. Path param accepts either the Mongo `_id` (`{{live_session_id}}` — needed for SCHEDULED sessions) or the numeric `streamId` (`{{live_session_stream_id}}`). Streamos `streamDetails` is only consulted when status is CREATED.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "End Live Session",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions/end",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions",
+                    "end"
+                  ]
+                },
+                "description": "Calls Streamos `endStream` and flips local status to `ENDED`. Broadcasts socket event `live_session_ended` to the room so connected students close their player. Streamos later POSTs recordings to `/api/v1/client/webhook/recording`.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"streamId\": {{live_session_stream_id}}\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{accessToken}}",
+                      "type": "string"
+                    }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Recording Webhook (simulate)",
+              "request": {
+                "method": "POST",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/webhook/recording",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "client",
+                    "webhook",
+                    "recording"
+                  ]
+                },
+                "description": "Public endpoint Streamos calls after a stream ends and recordings are ready. Finds the LiveSession by `streamId`, sets `recordings[]` and flips status to `READY`, and broadcasts socket event `recordings_ready` to the room so students currently sitting on the 'ended' UI see the recordings appear without a refresh.\n\nIf this webhook is missed for any reason, `Get Live Session` will recover recordings by polling Streamos `streamDetails` on the next admin/student fetch.\n\nNot called by clients in production — surfaced here so admins can simulate it during testing.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"streamId\": {{live_session_stream_id}},\n  \"recordings\": [\n    { \"quality\": \"720p\", \"file_size\": 12345, \"path\": \"https://cdn.streamos.co/recordings/720.mp4\" },\n    { \"quality\": \"480p\", \"file_size\":  9876, \"path\": \"https://cdn.streamos.co/recordings/480.mp4\" },\n    { \"quality\": \"360p\", \"file_size\":  6543, \"path\": \"https://cdn.streamos.co/recordings/360.mp4\" }\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "noauth"
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Streamos: Get Uploaded Video Details",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions/streamos/recordings/{{streamos_recording_id}}",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions",
+                    "streamos",
+                    "recordings",
+                    "{{streamos_recording_id}}"
+                  ]
+                },
+                "description": "Wraps Streamos `uploadedVideoDetails`. Returns `{ recordingId, hlsUrl, status, title, dateAndTime, recordings[] }` for a single past recording id (from the Streamos dashboard's View Details modal).",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    { "key": "token", "value": "{{accessToken}}", "type": "string" }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Streamos: Get Org Details",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions/streamos/org",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions",
+                    "streamos",
+                    "org"
+                  ]
+                },
+                "description": "Wraps Streamos `orgDetails`. Useful to confirm credentials and the `recordingWebhook` URL Streamos thinks it should POST to. `accessSecret` is filtered out of the response.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    { "key": "token", "value": "{{accessToken}}", "type": "string" }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Streamos: Update Webhook URL",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" }
+                ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-sessions/streamos/webhook",
+                  "host": [
+                    "{{URL}}"
+                  ],
+                  "path": [
+                    "api",
+                    "v1",
+                    "admin",
+                    "live-sessions",
+                    "streamos",
+                    "webhook"
+                  ]
+                },
+                "description": "Wraps Streamos `updateWebhook`. Registers the URL Streamos will POST to once a recording finishes processing. Set this once per environment to `https://<your-host>/api/v1/client/webhook/recording`.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"webhook\": \"https://your-host.example.com/api/v1/client/webhook/recording\"\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    { "key": "token", "value": "{{accessToken}}", "type": "string" }
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
+        },
+        {
+          "name": "16 Live Courses",
+          "description": "Admin CRUD for **LiveCourse** — the container that owns scheduled / live `LiveSession` records. Mirrors the recorded `Course` module but drops video-folder fields.\n\nA live session can be attached to a course by passing `liveCourseId` when scheduling (under `15 Live Class — Sessions`). A live course with attached sessions cannot be deleted until the sessions are reassigned or removed.",
+          "item": [
+            {
+              "name": "List Live Courses",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses?page=1&limit=20&search=&status=",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses" ],
+                  "query": [
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "20" },
+                    { "key": "search", "value": "" },
+                    { "key": "status", "value": "", "description": "true | false" }
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    { "key": "token", "value": "{{accessToken}}", "type": "string" }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Create Live Course",
+              "request": {
+                "method": "POST",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses" ]
+                },
+                "description": "Multipart form. Upload `image` as a file (preferred), or pass an `image` URL string. Server validates `courseEducatorId` / `courseSubjectCategoryId` exist when provided, rejects duplicate names with `409`, and **auto-creates a root VideoCategory folder** for the course (its id is stored on `liveCourse.videoCategoryId` and is also returned in the response as `rootFolder`).",
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    { "key": "name",            "value": "GPSC Live Batch — May 2026", "type": "text" },
+                    { "key": "description",     "value": "Live classes for GPSC prep — Mon/Wed/Fri 7pm.", "type": "text" },
+                    { "key": "ordered",         "value": "1", "type": "text" },
+                    { "key": "level",           "value": "intermediate", "type": "text" },
+                    { "key": "status",          "value": "true", "type": "text" },
+                    { "key": "isPaid",          "value": "true", "type": "text" },
+                    { "key": "isPopular",       "value": "false", "type": "text" },
+                    { "key": "shareableLink",   "value": "", "type": "text" },
+                    { "key": "withMaterial",    "value": "Hardcopy material included", "type": "text" },
+                    { "key": "withoutMaterial", "value": "Live access only", "type": "text" },
+                    { "key": "courseEducatorId",        "value": "{{educator_id}}", "type": "text" },
+                    { "key": "courseSubjectCategoryId", "value": "{{subject_category_id}}", "type": "text" },
+                    { "key": "image", "type": "file" }
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    { "key": "token", "value": "{{accessToken}}", "type": "string" }
+                  ]
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const d  = pm.response.json()?.data || {};",
+                      "  const lc = d.liveCourse;",
+                      "  if (lc?._id) { pm.collectionVariables.set(\"live_course_id\", lc._id); pm.environment.set(\"live_course_id\", lc._id); }",
+                      "  const rf = d.rootFolder?._id || lc?.videoCategoryId;",
+                      "  if (rf) { pm.collectionVariables.set(\"live_course_folder_id\", rf); pm.environment.set(\"live_course_folder_id\", rf); }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Get Live Course",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}" ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    { "key": "token", "value": "{{accessToken}}", "type": "string" }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Update Live Course",
+              "request": {
+                "method": "PUT",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}" ]
+                },
+                "description": "Partial update — pass only the fields you want to change. `image` may be a new file upload or an existing URL string.",
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    { "key": "name", "value": "GPSC Live Batch — May 2026 (revised)", "type": "text" },
+                    { "key": "ordered", "value": "2", "type": "text" }
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    { "key": "token", "value": "{{accessToken}}", "type": "string" }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Toggle Popular",
+              "request": {
+                "method": "PATCH",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/popular",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "popular" ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    { "key": "token", "value": "{{accessToken}}", "type": "string" }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "List Sessions Under Course",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/sessions?upcoming=&status=&page=1&limit=50",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "sessions" ],
+                  "query": [
+                    { "key": "upcoming", "value": "", "description": "true → SCHEDULED with scheduledAt >= now" },
+                    { "key": "status", "value": "", "description": "SCHEDULED | CREATED | ENDED | READY" },
+                    { "key": "page", "value": "1" },
+                    { "key": "limit", "value": "50" }
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    { "key": "token", "value": "{{accessToken}}", "type": "string" }
+                  ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Plans: Create",
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/plans",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "plans" ]
+                },
+                "description": "Create a pricing plan for this live course. `duration` is in months. If `isDefault` is true, any other default plan on this course is unset (only one default at a time).",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"name\": \"3 Months\",\n  \"duration\": 3,\n  \"price\": 1999,\n  \"isDefault\": true,\n  \"status\": true\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const p = pm.response.json()?.data?.plan;",
+                      "  if (p?._id) { pm.collectionVariables.set(\"live_course_plan_id\", p._id); pm.environment.set(\"live_course_plan_id\", p._id); }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Plans: List",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/plans",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "plans" ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Plans: Get One",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/plans/{{live_course_plan_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "plans", "{{live_course_plan_id}}" ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Plans: Update",
+              "request": {
+                "method": "PUT",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/plans/{{live_course_plan_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "plans", "{{live_course_plan_id}}" ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"price\": 1499,\n  \"isDefault\": true\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Plans: Delete",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/plans/{{live_course_plan_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "plans", "{{live_course_plan_id}}" ]
+                },
+                "description": "Refuses with `409` if any verified subscriptions point at this plan. Toggle `status: false` instead to retire the plan without breaking existing access.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Folders: List",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/folders",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "folders" ]
+                },
+                "description": "Returns `{ folders[], relations[] }`. `relations` are VideoCategoryRelation rows for any folder referenced by parent or child — enough for the UI to render a tree.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Folders: Create",
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/folders",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "folders" ]
+                },
+                "description": "Creates a subfolder. If `parentFolderId` is provided, also inserts a VideoCategoryRelation row linking parent → new child. Defaults the folder image to the live course image when not provided.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Week 1 — Foundations\",\n  \"parentFolderId\": \"{{live_course_folder_id}}\",\n  \"order_by\": 0\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const f = pm.response.json()?.data?.folder;",
+                      "  if (f?._id) { pm.collectionVariables.set(\"live_course_folder_id\", f._id); pm.environment.set(\"live_course_folder_id\", f._id); }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Folders: Update",
+              "request": {
+                "method": "PATCH",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/folders/{{live_course_folder_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "folders", "{{live_course_folder_id}}" ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Week 1 — Foundations (renamed)\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Folders: Delete",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/folders/{{live_course_folder_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "folders", "{{live_course_folder_id}}" ]
+                },
+                "description": "Cascades — removes videos and parent/child relations referencing this folder. Refuses with `409` if you try to delete the root folder.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Videos: List in Folder",
+              "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/folders/{{live_course_folder_id}}/videos",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "folders", "{{live_course_folder_id}}", "videos" ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Videos: Add Manual",
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/folders/{{live_course_folder_id}}/videos",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "folders", "{{live_course_folder_id}}", "videos" ]
+                },
+                "description": "Add any pre-recorded video. Set `platform` to `\"youtube\"` / `\"aws\"` / `\"vimeo\"` and supply the matching id field. `aws_id` may hold any externally-hosted MP4/HLS URL — the frontend just plays whatever URL it receives.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"title\": \"Pre-recorded lecture on syllabus\",\n  \"platform\": \"youtube\",\n  \"youtube_id\": \"dQw4w9WgXcQ\",\n  \"priceType\": \"paid\",\n  \"order\": 0\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "type": "text/javascript",
+                    "exec": [
+                      "pm.test(\"2xx\", () => pm.expect(pm.response.code).to.be.below(300));",
+                      "try {",
+                      "  const v = pm.response.json()?.data?.video;",
+                      "  if (v?._id) { pm.collectionVariables.set(\"live_course_video_id\", v._id); pm.environment.set(\"live_course_video_id\", v._id); }",
+                      "} catch (e) {}"
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Videos: Add from Live Recording",
+              "request": {
+                "method": "POST",
+                "header": [ { "key": "Content-Type", "value": "application/json" } ],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/folders/{{live_course_folder_id}}/videos/from-recording",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "folders", "{{live_course_folder_id}}", "videos", "from-recording" ]
+                },
+                "description": "Promote a Streamos recording from a past LiveSession into a Video record in this folder. Pick by `recordingIndex` (default 0) or `quality` (e.g. `\"720p\"`). The recording URL is stored on the Video as `aws_id` with `platform=\"aws\"`, which the player will load as a regular URL.",
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"liveSessionId\": \"{{live_session_id}}\",\n  \"quality\": \"720p\",\n  \"title\": \"Live Class — Week 1 (replay)\"\n}",
+                  "options": { "raw": { "language": "json" } }
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Videos: Delete",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}/folders/{{live_course_folder_id}}/videos/{{live_course_video_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}", "folders", "{{live_course_folder_id}}", "videos", "{{live_course_video_id}}" ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [ { "key": "token", "value": "{{accessToken}}", "type": "string" } ]
+                }
+              },
+              "response": []
+            },
+            {
+              "name": "Delete Live Course",
+              "request": {
+                "method": "DELETE",
+                "header": [],
+                "url": {
+                  "raw": "{{URL}}/api/v1/admin/live-courses/{{live_course_id}}",
+                  "host": [ "{{URL}}" ],
+                  "path": [ "api", "v1", "admin", "live-courses", "{{live_course_id}}" ]
+                },
+                "description": "Refuses with `409` if any sessions are still attached. Cascades: removes all folders, videos, and parent/child relations under the course.",
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    { "key": "token", "value": "{{accessToken}}", "type": "string" }
+                  ]
+                }
+              },
+              "response": []
+            }
+          ]
         }
       ]
     }
@@ -9909,6 +11112,41 @@
     {
       "key": "poll_id",
       "value": "",
+      "type": "string"
+    },
+    {
+      "key": "live_session_stream_id",
+      "value": "123",
+      "type": "string"
+    },
+    {
+      "key": "live_session_id",
+      "value": "6a04858c24c88bb307cbd223",
+      "type": "string"
+    },
+    {
+      "key": "streamos_recording_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "live_course_id",
+      "value": "6a048535876e7a6704640da9",
+      "type": "string"
+    },
+    {
+      "key": "live_course_folder_id",
+      "value": "6a048535876e7a6704640dad",
+      "type": "string"
+    },
+    {
+      "key": "live_course_video_id",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "live_course_plan_id",
+      "value": "6a048535876e7a6704640db5",
       "type": "string"
     }
   ]

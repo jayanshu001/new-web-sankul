@@ -4,6 +4,7 @@ import { createBookOrderPayment } from "./payment.controller";
 import { createCourseOrderPayment } from "./course-payment.controller";
 import { createEbookOrderPayment } from "./ebook-payment.controller";
 import { createPackageOrderPayment } from "./package-payment.controller";
+import { createLiveCourseOrderPayment } from "./live-course-payment.controller";
 import { verifyPayment } from "./verify.controller";
 
 const router = Router();
@@ -26,6 +27,10 @@ router.post("/create-order/ebook", createEbookOrderPayment);
 // Package purchase — body: { packageId } (a PackageCourseEbookPrice._id whose
 // target is a Package, not a Course/Ebook). Mirrors the course flow.
 router.post("/create-order/package", createPackageOrderPayment);
+
+// Live course purchase — body: { planId } (a LiveCoursePlan._id). Mirrors the
+// course flow but isolated from PackageCourseSubscription / PackageCourseEbookPrice.
+router.post("/create-order/live-course", createLiveCourseOrderPayment);
 
 // Verify — single endpoint for both book and course payments. Dispatches
 // fulfillment based on which local row holds the razorpay_order_id.

@@ -4,7 +4,9 @@ import { z } from "zod";
 import { BookOrder } from "../../models/book/BookOrder.model";
 import { BookCart } from "../../models/book/BookCart.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
+import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import { EbookOrder } from "../../models/ebook/EbookOrder.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
@@ -60,17 +62,21 @@ export const verifyPayment = async (req: Request, res: Response) => {
     }
 
     // Find which local entity owns this Razorpay order. It's exactly one of
-    // these two — neither, both, or duplicates would be a bug worth surfacing.
-    const [bookOrder, courseSub, ebookOrder] = await Promise.all([
+    // these — neither, multiple, or duplicates would be a bug worth surfacing.
+    const [bookOrder, courseSub, ebookOrder, liveCourseSub] = await Promise.all([
       BookOrder.findOne({ razorpayOrderId: razorpay_order_id, customerId: userId }),
       PackageCourseSubscription.findOne({
         razorpayOrderId: razorpay_order_id,
         customerId: userId,
       }),
       EbookOrder.findOne({ razorpayOrderId: razorpay_order_id, customerId: userId }),
+      LiveCourseSubscription.findOne({
+        razorpayOrderId: razorpay_order_id,
+        customerId: userId,
+      }),
     ]);
 
-    if (!bookOrder && !courseSub && !ebookOrder) {
+    if (!bookOrder && !courseSub && !ebookOrder && !liveCourseSub) {
       return res.status(404).json({
         success: false,
         message: "No local order found for this Razorpay order id.",
@@ -140,6 +146,35 @@ export const verifyPayment = async (req: Request, res: Response) => {
       return res.status(200).json({
         success: true,
         data: { kind: "course", subscription: courseSub },
+      });
+    }
+
+    if (liveCourseSub) {
+      if (liveCourseSub.paymentStatus !== "pending") {
+        return res.status(200).json({
+          success: true,
+          data: { kind: "live-course", subscription: liveCourseSub },
+          message: "Already verified.",
+        });
+      }
+
+      const plan = await LiveCoursePlan.findById(liveCourseSub.planId).select("duration").lean();
+      const durationMonths = plan?.duration ?? 0;
+
+      const now = new Date();
+      const endAt = new Date(now);
+      endAt.setMonth(endAt.getMonth() + durationMonths);
+
+      liveCourseSub.paymentStatus = "verified";
+      liveCourseSub.razorpayPaymentId = razorpay_payment_id;
+      liveCourseSub.paidAt = now;
+      liveCourseSub.startAt = now;
+      liveCourseSub.endAt = endAt;
+      await liveCourseSub.save();
+
+      return res.status(200).json({
+        success: true,
+        data: { kind: "live-course", subscription: liveCourseSub },
       });
     }
 

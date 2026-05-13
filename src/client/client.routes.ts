@@ -34,6 +34,8 @@ import { youtubeStreamProxy } from "./categories/yt-proxy.controller";
 import clientLiveChatRoutes from "./livechat/livechat.routes";
 import clientLivePollRoutes from "./livepoll/livepoll.routes";
 import clientSearchRoutes from "./search/search.routes";
+import clientLiveSessionRoutes from "./live/live.routes";
+import clientLiveCourseRoutes from "./live-course/live-course.routes";
 
 const router = Router();
 
@@ -85,5 +87,7 @@ router.use("/educators", clientEducatorRoutes); // -> /api/v1/client/educators/*
 router.use("/live-chat",  clientLiveChatRoutes);          // -> /api/v1/client/live-chat/:liveClassId/history
 router.use("/live-polls", clientLivePollRoutes);          // -> /api/v1/client/live-polls/:liveClassId/active
 router.use("/search", clientSearchRoutes);                // -> /api/v1/client/search
+router.use("/live-sessions", clientLiveSessionRoutes);    // -> /api/v1/client/live-sessions/:streamId
+router.use("/live-courses",  clientLiveCourseRoutes);     // -> /api/v1/client/live-courses/*
 
 export default router;

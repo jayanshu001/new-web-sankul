@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { Types } from "mongoose";
 import { LiveChatMessage } from "../../models/course/LiveChatMessage.model";
 import { io, roomKey } from "../../socket/livechat.socket";
+import { resolveLiveClassId } from "../live/live.guards";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 
@@ -10,8 +11,9 @@ export const sendAdminMessage = async (req: Request, res: Response) => {
   try {
     const { liveClassId, message } = req.body;
 
-    if (!liveClassId || typeof liveClassId !== "string") {
-      return failure(res, "liveClassId is required.", 422);
+    const streamId = await resolveLiveClassId(liveClassId);
+    if (!streamId) {
+      return failure(res, "No live session for this liveClassId.", 404);
     }
     const text = typeof message === "string" ? message.trim() : "";
     if (!text) return failure(res, "Message cannot be empty.", 422);

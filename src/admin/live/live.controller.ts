@@ -1,0 +1,640 @@
+import { Request, Response } from "express";
+import { Types } from "mongoose";
+import { LiveSession, ILiveSession, ILiveSessionRecording } from "../../models/course/LiveSession.model";
+import { LiveCourse } from "../../models/course/LiveCourse.model";
+import {
+  createStream as streamosCreateStream,
+  getStreamDetails as streamosGetStreamDetails,
+  endStream as streamosEndStream,
+  getUploadedVideoDetails as streamosGetUploadedVideoDetails,
+  getOrgDetails as streamosGetOrgDetails,
+  updateWebhook as streamosUpdateWebhook,
+  StreamosError,
+} from "./streamos.service";
+import { io, roomKey } from "../../socket/livechat.socket";
+import {
+  maybeAutoPromoteRecording,
+  validateRecordingTargetFolder,
+} from "./recording.promote";
+import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import logger from "../../utils/logger";
+
+// Admin must wait until 2 minutes before scheduledAt to actually start the
+// Streamos stream. Late starts after scheduledAt remain allowed indefinitely.
+export const START_WINDOW_MS = 2 * 60 * 1000;
+
+function parseStreamIdParam(raw: unknown): number | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+}
+
+function parseScheduledAt(raw: unknown): Date | null | undefined {
+  if (raw === undefined) return undefined;            // omitted → don't change
+  if (raw === null || raw === "") return null;        // explicit clear
+  const d = new Date(raw as any);
+  if (isNaN(d.getTime())) return undefined;           // invalid → caller handles
+  return d;
+}
+
+// Find a session by either Mongo ObjectId (used for SCHEDULED rows that have
+// no streamId yet) or numeric streamId.
+async function findSessionByAnyId(id: string) {
+  if (Types.ObjectId.isValid(id) && /^[0-9a-fA-F]{24}$/.test(id)) {
+    const byObjId = await LiveSession.findById(id);
+    if (byObjId) return byObjId;
+  }
+  const streamId = parseStreamIdParam(id);
+  if (streamId) {
+    return LiveSession.findOne({ streamId });
+  }
+  return null;
+}
+
+function publicView(session: ILiveSession) {
+  return {
+    id: String(session._id),
+    title: session.title,
+    liveCourseIds: session.liveCourseIds ?? [],
+    recordingTargetFolderId: session.recordingTargetFolderId ?? null,
+    status: session.status,
+    scheduledAt: session.scheduledAt ?? null,
+    streamId: session.streamId ?? null,
+    rtmpUrl: session.rtmpUrl ?? null,
+    hlsUrl: session.hlsUrl ?? null,
+    hlsUrls: session.hlsUrls ?? null,
+    recordings: session.recordings ?? [],
+    createdAt: session.createdAt,
+    updatedAt: session.updatedAt,
+  };
+}
+
+// Accepts either `liveCourseIds: [...]` (preferred — supports multiple courses
+// per session) or `liveCourseId: "..."` (single-id convenience). Returns
+// `provided: false` when the caller didn't include either field, so update
+// handlers can distinguish "unchanged" from "set to empty".
+async function resolveLiveCourseIds(
+  body: any
+): Promise<{ provided: boolean; ids: Types.ObjectId[]; error?: string }> {
+  const hasMulti  = body?.liveCourseIds !== undefined;
+  const hasSingle = body?.liveCourseId  !== undefined;
+  if (!hasMulti && !hasSingle) return { provided: false, ids: [] };
+
+  const raw: unknown[] = [];
+  if (hasMulti) {
+    if (body.liveCourseIds === null || body.liveCourseIds === "") {
+      // explicit clear
+    } else if (Array.isArray(body.liveCourseIds)) {
+      raw.push(...body.liveCourseIds);
+    } else {
+      return { provided: true, ids: [], error: "liveCourseIds must be an array of ObjectIds." };
+    }
+  }
+  if (hasSingle && body.liveCourseId !== null && body.liveCourseId !== "") {
+    raw.push(body.liveCourseId);
+  }
+
+  const seen = new Set<string>();
+  const ids: Types.ObjectId[] = [];
+  for (const r of raw) {
+    if (typeof r !== "string" || !/^[0-9a-fA-F]{24}$/.test(r)) {
+      return { provided: true, ids: [], error: "Each live course id must be a valid ObjectId." };
+    }
+    if (seen.has(r)) continue;
+    seen.add(r);
+    ids.push(new Types.ObjectId(r));
+  }
+
+  if (ids.length === 0) return { provided: true, ids: [] };
+
+  const found = await LiveCourse.find({ _id: { $in: ids } }).select("_id").lean();
+  if (found.length !== ids.length) {
+    const foundSet = new Set(found.map((d: any) => String(d._id)));
+    const missing = ids.map(String).filter((id) => !foundSet.has(id));
+    return {
+      provided: true,
+      ids: [],
+      error: `Live course(s) not found: ${missing.join(", ")}.`,
+    };
+  }
+
+  return { provided: true, ids };
+}
+
+// POST /api/v1/admin/live-sessions
+// Two modes:
+//  - `scheduledAt` in the future → store as SCHEDULED, no Streamos call yet.
+//  - otherwise → create on Streamos immediately, status = CREATED.
+export const createLiveSession = async (req: Request, res: Response) => {
+  try {
+    const titleRaw = req.body?.title;
+    const title = typeof titleRaw === "string" ? titleRaw.trim() : "";
+    if (!title) return failure(res, "title is required.", 422);
+    if (title.length > 500) return failure(res, "title is too long (max 500).", 422);
+
+    const scheduledAt = parseScheduledAt(req.body?.scheduledAt);
+    if (req.body?.scheduledAt !== undefined && req.body?.scheduledAt !== null && req.body?.scheduledAt !== "" && scheduledAt === undefined) {
+      return failure(res, "scheduledAt must be a valid date.", 422);
+    }
+
+    const courseRef = await resolveLiveCourseIds(req.body);
+    if (courseRef.error) return failure(res, courseRef.error, 422);
+
+    // Optional recording target folder. Only valid when the session is
+    // attached to at least one liveCourseId AND the folder belongs to one
+    // of those courses.
+    let recordingTargetFolderId: Types.ObjectId | null = null;
+    if (req.body?.recordingTargetFolderId) {
+      const folderRef = await validateRecordingTargetFolder(
+        String(req.body.recordingTargetFolderId),
+        courseRef.ids
+      );
+      if (folderRef.error) return failure(res, folderRef.error, 422);
+      recordingTargetFolderId = folderRef.id;
+    }
+
+    if (scheduledAt && scheduledAt.getTime() > Date.now()) {
+      const session = await LiveSession.create({
+        title,
+        liveCourseIds: courseRef.ids,
+        recordingTargetFolderId,
+        scheduledAt,
+        status: "SCHEDULED",
+        recordings: [],
+      });
+
+      logger.info("LiveSession scheduled", {
+        sessionId: session._id,
+        scheduledAt,
+        liveCourseIds: courseRef.ids,
+        recordingTargetFolderId,
+      });
+      return success(res, { session: publicView(session) }, "Live session scheduled.", 201);
+    }
+
+    // Immediate create (existing behaviour).
+    const created = await streamosCreateStream(title);
+
+    const session = await LiveSession.create({
+      title,
+      liveCourseIds: courseRef.ids,
+      recordingTargetFolderId,
+      streamId: created.streamId,
+      rtmpUrl: created.rtmpUrl,
+      hlsUrl: created.hlsUrl,
+      hlsUrls: created.hlsUrls ?? null,
+      status: "CREATED",
+      recordings: [],
+    });
+
+    logger.info("LiveSession created", { streamId: session.streamId, sessionId: session._id });
+    return success(res, { session: publicView(session) }, "Live stream created.", 201);
+  } catch (err) {
+    if (err instanceof StreamosError) {
+      logger.error("LiveSession create: Streamos error", {
+        message: err.message,
+        upstreamStatus: err.upstreamStatus,
+      });
+      return failure(res, err.message, err.status);
+    }
+    logger.error("LiveSession create failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to create live stream.", 500);
+  }
+};
+
+// GET /api/v1/admin/live-sessions
+// Optional list. Filters: status, upcoming=true (SCHEDULED + scheduledAt>=now).
+export const listLiveSessions = async (req: Request, res: Response) => {
+  try {
+    const status = typeof req.query.status === "string" ? req.query.status : undefined;
+    const upcoming = req.query.upcoming === "true";
+    const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
+    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
+
+    const query: Record<string, any> = {};
+    if (status) query.status = status;
+    if (upcoming) {
+      query.status = "SCHEDULED";
+      query.scheduledAt = { $gte: new Date() };
+    }
+
+    const [rows, total] = await Promise.all([
+      LiveSession.find(query)
+        .sort({ scheduledAt: 1, createdAt: -1 })
+        .skip((page - 1) * limit)
+        .limit(limit),
+      LiveSession.countDocuments(query),
+    ]);
+
+    return success(
+      res,
+      { sessions: rows.map(publicView), total, page, limit },
+      "Live sessions fetched."
+    );
+  } catch (err) {
+    logger.error("LiveSession list failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to list live sessions.", 500);
+  }
+};
+
+// GET /api/v1/admin/live-sessions/:id    (id = Mongo _id or streamId)
+// For CREATED and ENDED sessions we poll Streamos `streamDetails` because:
+//  - CREATED: tells us liveness + current quality URLs.
+//  - ENDED:   may already contain recordings — used as a recovery path if the
+//             recording webhook was missed. We persist + flip status to READY.
+export const getLiveSessionStatus = async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id ?? req.params.streamId ?? "");
+    const session = await findSessionByAnyId(id);
+    if (!session) return failure(res, "Live session not found.", 404);
+
+    let isLive = false;
+
+    if (session.streamId && (session.status === "CREATED" || session.status === "ENDED")) {
+      try {
+        const details = await streamosGetStreamDetails(session.streamId);
+        isLive = details.isLive;
+
+        // Refresh URLs whenever Streamos reports newer ones.
+        let dirty = false;
+        if (details.hlsUrl && details.hlsUrl !== session.hlsUrl) {
+          session.hlsUrl = details.hlsUrl;
+          dirty = true;
+        }
+        if (details.hlsUrls && Object.keys(details.hlsUrls).length > 0) {
+          session.hlsUrls = details.hlsUrls;
+          dirty = true;
+        }
+
+        // Recovery: webhook missed but recordings already exist upstream.
+        if (
+          session.status === "ENDED" &&
+          details.recordings.length > 0 &&
+          (session.recordings?.length ?? 0) === 0
+        ) {
+          session.recordings = details.recordings;
+          session.status = "READY";
+          dirty = true;
+          logger.info("LiveSession: recordings recovered from streamDetails", {
+            sessionId: session._id,
+            streamId: session.streamId,
+            count: details.recordings.length,
+          });
+          // Same notification the webhook would have sent.
+          const liveClassId = String(session.streamId);
+          io?.to(roomKey(liveClassId)).emit("recordings_ready", {
+            streamId: session.streamId,
+            liveClassId,
+            status: "READY",
+            recordings: details.recordings,
+          });
+          // Mirror the webhook's auto-promote so a missed webhook doesn't
+          // skip the configured target folder.
+          await maybeAutoPromoteRecording(session);
+        }
+
+        if (dirty) await session.save();
+      } catch (err) {
+        if (err instanceof StreamosError) {
+          logger.warn("LiveSession status: Streamos error", {
+            sessionId: session._id,
+            message: err.message,
+            upstreamStatus: err.upstreamStatus,
+          });
+        } else {
+          logger.warn("LiveSession status: Streamos error", {
+            sessionId: session._id,
+            error: getErrorMessage(err),
+          });
+        }
+      }
+    }
+
+    return success(
+      res,
+      {
+        session: publicView(session),
+        isLive,
+      },
+      "Stream status fetched."
+    );
+  } catch (err) {
+    logger.error("LiveSession status failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to fetch stream status.", 500);
+  }
+};
+
+// POST /api/v1/admin/live-sessions/:id/start
+// Promotes a SCHEDULED session to CREATED by calling Streamos. Only allowed
+// when current time is within 2 minutes of scheduledAt; late starts are fine.
+export const startScheduledLiveSession = async (req: Request, res: Response) => {
+  try {
+    const session = await findSessionByAnyId(String(req.params.id));
+    if (!session) return failure(res, "Live session not found.", 404);
+
+    if (session.status !== "SCHEDULED") {
+      return failure(res, `Only SCHEDULED sessions can be started (current: ${session.status}).`, 409);
+    }
+    if (!session.scheduledAt) {
+      return failure(res, "Session has no scheduledAt; cannot determine start window.", 422);
+    }
+
+    const earliest = session.scheduledAt.getTime() - START_WINDOW_MS;
+    if (Date.now() < earliest) {
+      const secondsRemaining = Math.ceil((earliest - Date.now()) / 1000);
+      return failure(
+        res,
+        `Too early to start. You can start within 2 minutes of the scheduled time (in ${secondsRemaining}s).`,
+        409
+      );
+    }
+
+    const created = await streamosCreateStream(session.title);
+
+    session.streamId = created.streamId;
+    session.rtmpUrl = created.rtmpUrl;
+    session.hlsUrl = created.hlsUrl;
+    session.hlsUrls = created.hlsUrls ?? null;
+    session.status = "CREATED";
+    await session.save();
+
+    logger.info("LiveSession started", { sessionId: session._id, streamId: session.streamId });
+    return success(res, { session: publicView(session) }, "Live stream started.");
+  } catch (err) {
+    if (err instanceof StreamosError) {
+      logger.error("LiveSession start: Streamos error", {
+        message: err.message,
+        upstreamStatus: err.upstreamStatus,
+      });
+      return failure(res, err.message, err.status);
+    }
+    logger.error("LiveSession start failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to start live stream.", 500);
+  }
+};
+
+// PATCH /api/v1/admin/live-sessions/:id
+// Allowed only while SCHEDULED. Editable fields: title, scheduledAt.
+export const updateScheduledLiveSession = async (req: Request, res: Response) => {
+  try {
+    const session = await findSessionByAnyId(String(req.params.id));
+    if (!session) return failure(res, "Live session not found.", 404);
+
+    if (session.status !== "SCHEDULED") {
+      return failure(res, `Only SCHEDULED sessions can be edited (current: ${session.status}).`, 409);
+    }
+
+    let changed = false;
+
+    if (req.body?.title !== undefined) {
+      const t = typeof req.body.title === "string" ? req.body.title.trim() : "";
+      if (!t) return failure(res, "title must be a non-empty string.", 422);
+      if (t.length > 500) return failure(res, "title is too long (max 500).", 422);
+      session.title = t;
+      changed = true;
+    }
+
+    if (req.body?.scheduledAt !== undefined) {
+      const parsed = parseScheduledAt(req.body.scheduledAt);
+      if (parsed === undefined) return failure(res, "scheduledAt must be a valid date.", 422);
+      if (parsed === null) return failure(res, "scheduledAt cannot be cleared on a SCHEDULED session.", 422);
+      session.scheduledAt = parsed;
+      changed = true;
+    }
+
+    const courseRef = await resolveLiveCourseIds(req.body);
+    if (courseRef.error) return failure(res, courseRef.error, 422);
+    if (courseRef.provided) {
+      session.liveCourseIds = courseRef.ids;
+      changed = true;
+    }
+
+    if (req.body?.recordingTargetFolderId !== undefined) {
+      if (req.body.recordingTargetFolderId === null || req.body.recordingTargetFolderId === "") {
+        session.recordingTargetFolderId = null;
+      } else {
+        // Validate against the about-to-be-saved set of courses (changes above
+        // already applied to the in-memory doc).
+        const folderRef = await validateRecordingTargetFolder(
+          String(req.body.recordingTargetFolderId),
+          session.liveCourseIds ?? []
+        );
+        if (folderRef.error) return failure(res, folderRef.error, 422);
+        session.recordingTargetFolderId = folderRef.id;
+      }
+      changed = true;
+    }
+
+    if (!changed) {
+      return failure(
+        res,
+        "Provide title, scheduledAt, liveCourseIds, or recordingTargetFolderId to update.",
+        422
+      );
+    }
+
+    await session.save();
+    logger.info("LiveSession updated", { sessionId: session._id });
+    return success(res, { session: publicView(session) }, "Live session updated.");
+  } catch (err) {
+    logger.error("LiveSession update failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to update live session.", 500);
+  }
+};
+
+// DELETE /api/v1/admin/live-sessions/:id
+// CREATED (currently live on Streamos) must be ended first.
+export const deleteLiveSession = async (req: Request, res: Response) => {
+  try {
+    const session = await findSessionByAnyId(String(req.params.id));
+    if (!session) return failure(res, "Live session not found.", 404);
+
+    if (session.status === "CREATED") {
+      return failure(res, "End the live stream before deleting.", 409);
+    }
+
+    await LiveSession.deleteOne({ _id: session._id });
+    logger.info("LiveSession deleted", { sessionId: session._id, status: session.status });
+    return success(res, { id: String(session._id) }, "Live session deleted.");
+  } catch (err) {
+    logger.error("LiveSession delete failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to delete live session.", 500);
+  }
+};
+
+// POST /api/v1/admin/live-sessions/end
+export const endLiveSession = async (req: Request, res: Response) => {
+  try {
+    const streamId = parseStreamIdParam(req.body?.streamId);
+    if (!streamId) return failure(res, "Valid streamId is required.", 422);
+
+    await streamosEndStream(streamId);
+
+    const updated = await LiveSession.findOneAndUpdate(
+      { streamId },
+      { $set: { status: "ENDED" } },
+      { new: true }
+    );
+
+    // Notify everyone in the live class room so their UI closes the player
+    // and stops chat/poll input. liveClassId === String(streamId).
+    const liveClassId = String(streamId);
+    io?.to(roomKey(liveClassId)).emit("live_session_ended", {
+      streamId,
+      liveClassId,
+      status: "ENDED",
+      endedAt: new Date().toISOString(),
+    });
+
+    logger.info("LiveSession ended", { streamId, found: Boolean(updated) });
+
+    return success(
+      res,
+      { streamId, status: "ENDED" },
+      "Live stream ended."
+    );
+  } catch (err) {
+    if (err instanceof StreamosError) {
+      logger.error("LiveSession end: Streamos error", {
+        message: err.message,
+        upstreamStatus: err.upstreamStatus,
+      });
+      return failure(res, err.message, err.status);
+    }
+    logger.error("LiveSession end failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to end live stream.", 500);
+  }
+};
+
+// GET /api/v1/admin/live-sessions/streamos/recordings/:recordingId
+// Wraps Streamos `uploadedVideoDetails` — used to look up a single past
+// recording by its id (from the Streamos dashboard).
+export const getUploadedVideoDetails = async (req: Request, res: Response) => {
+  try {
+    const recordingId = String(req.params.recordingId ?? "").trim();
+    if (!recordingId) return failure(res, "recordingId is required.", 422);
+
+    const details = await streamosGetUploadedVideoDetails(recordingId);
+    return success(res, details, "Uploaded video details fetched.");
+  } catch (err) {
+    if (err instanceof StreamosError) {
+      return failure(res, err.message, err.status);
+    }
+    logger.error("Uploaded video details failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to fetch uploaded video details.", 500);
+  }
+};
+
+// GET /api/v1/admin/live-sessions/streamos/org
+// Returns the connected Streamos org — handy to verify accessKey + which
+// webhook URL Streamos thinks it should post to.
+export const getOrgDetails = async (_req: Request, res: Response) => {
+  try {
+    const details = await streamosGetOrgDetails();
+    // Don't leak accessSecret even though Streamos echoes it back.
+    return success(
+      res,
+      {
+        name: details.name,
+        accessKey: details.accessKey,
+        recordingWebhook: details.recordingWebhook,
+      },
+      "Org details fetched."
+    );
+  } catch (err) {
+    if (err instanceof StreamosError) {
+      return failure(res, err.message, err.status);
+    }
+    logger.error("Org details failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to fetch org details.", 500);
+  }
+};
+
+// POST /api/v1/admin/live-sessions/streamos/webhook
+// Registers (or updates) the recording webhook URL Streamos will POST to.
+// Body: { webhook: "https://your-host/api/v1/client/webhook/recording" }
+export const updateRecordingWebhook = async (req: Request, res: Response) => {
+  try {
+    const webhook = typeof req.body?.webhook === "string" ? req.body.webhook.trim() : "";
+    if (!webhook) return failure(res, "webhook URL is required.", 422);
+    try {
+      // Reject anything that doesn't parse as a valid URL.
+      // eslint-disable-next-line no-new
+      new URL(webhook);
+    } catch {
+      return failure(res, "webhook must be a valid URL.", 422);
+    }
+
+    const result = await streamosUpdateWebhook(webhook);
+    logger.info("Streamos webhook updated", { webhook });
+    return success(res, { webhook, upstream: result }, "Webhook updated.");
+  } catch (err) {
+    if (err instanceof StreamosError) {
+      return failure(res, err.message, err.status);
+    }
+    logger.error("Update webhook failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to update webhook.", 500);
+  }
+};
+
+// POST /api/v1/client/webhook/recording  (public — called by Streamos)
+export const recordingWebhook = async (req: Request, res: Response) => {
+  try {
+    const streamId = parseStreamIdParam(req.body?.streamId);
+    const rawRecordings = req.body?.recordings;
+
+    if (!streamId) {
+      logger.warn("Recording webhook: invalid streamId", { body: req.body });
+      return res.status(400).json({ success: false, message: "Invalid streamId." });
+    }
+    if (!Array.isArray(rawRecordings)) {
+      logger.warn("Recording webhook: recordings must be an array", { streamId });
+      return res.status(400).json({ success: false, message: "recordings must be an array." });
+    }
+
+    const recordings: ILiveSessionRecording[] = rawRecordings
+      .filter((r: any) => r && typeof r.path === "string" && r.path.length > 0)
+      .map((r: any) => ({
+        quality: typeof r.quality === "string" ? r.quality : undefined,
+        file_size: typeof r.file_size === "number" ? r.file_size : Number(r.file_size) || undefined,
+        path: r.path,
+      }));
+
+    const updated = await LiveSession.findOneAndUpdate(
+      { streamId },
+      { $set: { recordings, status: "READY" } },
+      { new: true }
+    );
+
+    if (!updated) {
+      logger.warn("Recording webhook: stream not found", { streamId });
+      return res.status(200).json({ success: true, message: "Acknowledged (no matching stream)." });
+    }
+
+    // If the admin pre-selected a target folder when scheduling, drop the
+    // best-quality recording into it automatically. Non-fatal — admin can
+    // still promote manually from the live tab if this fails.
+    await maybeAutoPromoteRecording(updated);
+
+    // Tell anyone still connected to the room that recordings are now
+    // available. Clients can replace the "ended" UI with a "watch recording"
+    // view without polling the GET endpoint.
+    const liveClassId = String(streamId);
+    io?.to(roomKey(liveClassId)).emit("recordings_ready", {
+      streamId,
+      liveClassId,
+      status: "READY",
+      recordings,
+    });
+
+    logger.info("Recording webhook processed", {
+      streamId,
+      recordingCount: recordings.length,
+    });
+
+    return res.status(200).json({ success: true, message: "Recording saved." });
+  } catch (err) {
+    logger.error("Recording webhook failed", { error: getErrorMessage(err) });
+    return res.status(200).json({ success: false, message: "Internal error logged." });
+  }
+};

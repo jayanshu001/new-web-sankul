@@ -3,6 +3,7 @@ import { Types } from "mongoose";
 import { LivePoll } from "../../models/course/LivePoll.model";
 import { LivePollVote } from "../../models/course/LivePollVote.model";
 import { io, roomKey } from "../../socket/livechat.socket";
+import { resolveLiveClassId } from "../live/live.guards";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 
@@ -11,8 +12,9 @@ export const createPoll = async (req: Request, res: Response) => {
   try {
     const { liveClassId, question, options } = req.body;
 
-    if (!liveClassId || typeof liveClassId !== "string") {
-      return failure(res, "liveClassId is required.", 422);
+    const streamId = await resolveLiveClassId(liveClassId);
+    if (!streamId) {
+      return failure(res, "No live session for this liveClassId.", 404);
     }
     if (!question || typeof question !== "string" || question.trim().length === 0) {
       return failure(res, "question is required.", 422);

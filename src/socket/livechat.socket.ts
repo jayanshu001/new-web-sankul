@@ -6,6 +6,7 @@ import { Customer } from "../models/customer/Customer.model";
 import { LiveChatMessage } from "../models/course/LiveChatMessage.model";
 import { LivePoll } from "../models/course/LivePoll.model";
 import { LivePollVote } from "../models/course/LivePollVote.model";
+import { resolveLiveClassId } from "../admin/live/live.guards";
 import { redisClient } from "../config/redis";
 import logger from "../utils/logger";
 
@@ -73,8 +74,9 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
 
     // ── Join room ─────────────────────────────────────────────────────────────
     socket.on("join_live_chat", async ({ liveClassId }: { liveClassId: string }) => {
-      if (!liveClassId || typeof liveClassId !== "string" || !liveClassId.trim()) {
-        socket.emit("error", { message: "liveClassId is required" });
+      const streamId = await resolveLiveClassId(liveClassId);
+      if (!streamId) {
+        socket.emit("error", { message: "No live session for this id" });
         return;
       }
 
@@ -164,8 +166,9 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
 
     // ── Send chat message ─────────────────────────────────────────────────────
     socket.on("send_message", async ({ liveClassId, message }: { liveClassId: string; message: string }) => {
-      if (!liveClassId || typeof liveClassId !== "string") {
-        socket.emit("error", { message: "liveClassId is required" }); return;
+      const streamId = await resolveLiveClassId(liveClassId);
+      if (!streamId) {
+        socket.emit("error", { message: "No live session for this id" }); return;
       }
       const text = typeof message === "string" ? message.trim() : "";
       if (!text) { socket.emit("error", { message: "Message cannot be empty" }); return; }
