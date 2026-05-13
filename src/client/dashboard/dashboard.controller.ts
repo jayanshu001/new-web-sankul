@@ -10,6 +10,7 @@ import { fetchTrendingBookItems } from "../book/book.controller";
 import { Video } from "../../models/course/Video.model";
 import { resolveFreeCategoryIds } from "../free/free.controller";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
+import { Notification } from "../../models/system/Notification.model";
 
 const RECENTLY_ADDED_LIMIT = 5;
 const COURSE_CATEGORY_LIMIT = 6;
@@ -43,9 +44,10 @@ async function buildPackageEntry(pkg: any) {
 }
 
 // GET /api/v1/client/dashboard
-export const getDashboard = async (_req: Request, res: Response) => {
+export const getDashboard = async (req: Request, res: Response) => {
   try {
-    const [banners, recentPackages, courses, trending, testimonial, courseCategories, examCountdownsRaw] = await Promise.all([
+    const userId = req.user?.id;
+    const [banners, recentPackages, courses, trending, testimonial, courseCategories, examCountdownsRaw, unreadNotifications] = await Promise.all([
       BannerSlider.find().sort({ orderBy: 1 }).lean(),
       Package.find({ active: true })
         .populate("packageTypeId", "_id name createdAt updatedAt")
@@ -64,6 +66,14 @@ export const getDashboard = async (_req: Request, res: Response) => {
         .sort({ examDate: 1, order: 1 })
         .limit(EXAM_COUNTDOWN_LIMIT)
         .lean(),
+      // Same visibility filter as GET /client/notifications so the badge here
+      // can never disagree with the list.
+      userId
+        ? Notification.countDocuments({
+            $or: [{ customerId: userId }, { broadcast: true }],
+            isRead: false,
+          })
+        : Promise.resolve(0),
     ]);
 
     const examCountdowns = examCountdownsRaw.map((d: any) => ({
@@ -130,6 +140,7 @@ export const getDashboard = async (_req: Request, res: Response) => {
     return res.status(200).json({
       todayDate: new Date().toISOString().slice(0, 10),
       logo: process.env.APP_LOGO_URL ?? "",
+      unreadNotifications,
       dashboard,
       testimonial,
     });

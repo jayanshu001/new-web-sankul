@@ -360,7 +360,7 @@
       <div class="ss-sec">
         <h3>1. Login (OTP)</h3>
         <label>Server URL</label>
-        <input id="server-url" value="http://localhost:4000" />
+        <input id="server-url" value="http://localhost:4001" />
         <label>Phone Number</label>
         <div style="display:flex;gap:6px;">
           <input id="phone" placeholder="e.g. 9876543210" style="flex:1;" />
@@ -464,7 +464,7 @@ function log(msg, type='n') {
 }
 function toast(id, msg, type='ok') {
   const el=$(id); el.textContent=msg; el.className='toast '+type;
-  if(type!=='err') setTimeout(()=>{el.style.display='none';},4000);
+  if(type!=='err') setTimeout(()=>{el.style.display='none';},4001);
 }
 function esc(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
@@ -626,7 +626,7 @@ function stopAdminPolling() {
 
 async function fetchAdminResults() {
   if (!activePollId || !adminToken) return;
-  const server = $('server-url').value.trim() || 'http://localhost:4000';
+  const server = $('server-url').value.trim() || 'http://localhost:4001';
   try {
     const res  = await fetch(`${server}/api/v1/admin/live-polls/${activePollId}/results`, {
       headers: { Authorization: `Bearer ${adminToken}` },
@@ -691,7 +691,7 @@ $('btn-add-opt').addEventListener('click',()=>{
 // ADMIN — Login
 // ═══════════════════════════════════════════════════════════════
 $('btn-a-login').addEventListener('click', async ()=>{
-  const server=$('server-url').value.trim()||'http://localhost:4000';
+  const server=$('server-url').value.trim()||'http://localhost:4001';
   const email=$('a-email').value.trim(), pwd=$('a-pwd').value.trim();
   if(!email||!pwd){ toast('toast-a-login','Enter email and password','err'); return; }
   $('btn-a-login').disabled=true;
@@ -724,7 +724,7 @@ $('btn-a-login').addEventListener('click', async ()=>{
 });
 
 $('btn-a-logout').addEventListener('click', async ()=>{
-  const server=$('server-url').value.trim()||'http://localhost:4000';
+  const server=$('server-url').value.trim()||'http://localhost:4001';
   if(adminToken){
     try{ await fetch(`${server}/api/v1/admin/auth/logout`,{method:'DELETE',headers:{Authorization:`Bearer ${adminToken}`}}); }catch(_){}
   }
@@ -745,7 +745,7 @@ $('btn-a-logout').addEventListener('click', async ()=>{
 // ADMIN — Launch poll
 // ═══════════════════════════════════════════════════════════════
 $('btn-launch').addEventListener('click', async ()=>{
-  const server=$('server-url').value.trim()||'http://localhost:4000';
+  const server=$('server-url').value.trim()||'http://localhost:4001';
   const liveClassId=$('a-class-id').value.trim();
   const question=$('a-question').value.trim();
   const options=[...document.querySelectorAll('.pov')].map(el=>el.value.trim()).filter(Boolean);
@@ -791,7 +791,7 @@ $('btn-launch').addEventListener('click', async ()=>{
 // ═══════════════════════════════════════════════════════════════
 $('btn-close-poll').addEventListener('click', async ()=>{
   if(!activePollId){ toast('toast-poll','No active poll','err'); return; }
-  const server=$('server-url').value.trim()||'http://localhost:4000';
+  const server=$('server-url').value.trim()||'http://localhost:4001';
   $('btn-close-poll').disabled=true;
   log(`PATCH /api/v1/admin/live-polls/${activePollId}/close`,'o');
   try {
@@ -823,7 +823,7 @@ $('btn-close-poll').addEventListener('click', async ()=>{
 // ═══════════════════════════════════════════════════════════════
 $('btn-edit-poll').addEventListener('click', async () => {
   if (!activePollId || !adminToken) return;
-  const server = $('server-url').value.trim() || 'http://localhost:4000';
+  const server = $('server-url').value.trim() || 'http://localhost:4001';
   // Fetch latest poll data to pre-fill the edit form
   try {
     const res  = await fetch(`${server}/api/v1/admin/live-polls/${activePollId}/results`, {
@@ -841,7 +841,7 @@ $('btn-edit-poll').addEventListener('click', async () => {
 
 $('btn-save-edit').addEventListener('click', async () => {
   if (!activePollId || !adminToken) return;
-  const server   = $('server-url').value.trim() || 'http://localhost:4000';
+  const server   = $('server-url').value.trim() || 'http://localhost:4001';
   const question = $('edit-question').value.trim();
   const options  = [...document.querySelectorAll('.epov')].map(el => el.value.trim()).filter(Boolean);
 
@@ -878,7 +878,7 @@ $('btn-delete-poll').addEventListener('click', async () => {
   if (!activePollId || !adminToken) return;
   if (!confirm('Delete this poll and all its votes?')) return;
 
-  const server = $('server-url').value.trim() || 'http://localhost:4000';
+  const server = $('server-url').value.trim() || 'http://localhost:4001';
   $('btn-delete-poll').disabled = true;
   log(`DELETE /api/v1/admin/live-polls/${activePollId}`, 'o');
   try {
@@ -910,7 +910,7 @@ $('btn-delete-poll').addEventListener('click', async () => {
 // ADMIN — Send chat message
 // ═══════════════════════════════════════════════════════════════
 async function adminSendMessage() {
-  const server = $('server-url').value.trim() || 'http://localhost:4000';
+  const server = $('server-url').value.trim() || 'http://localhost:4001';
   const liveClassId = $('a-chat-class-id').value.trim();
   const message = $('a-chat-msg').value.trim();
   if(!adminToken){ toast('toast-a-chat','Login as admin first','err'); return; }

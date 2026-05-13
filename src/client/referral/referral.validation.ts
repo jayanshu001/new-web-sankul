@@ -13,13 +13,51 @@ export const withdrawRewardsSchema = z.object({
   amount: z.number().int().positive("Amount must be a positive integer."),
 });
 
-export const createBankAccountSchema = z.object({
-  accountHolderName: z.string().min(1).max(150),
-  ifscCode: z.string().min(1).max(50),
-  accountNumber: z.string().min(1).max(50),
-});
+export const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const ACCOUNT_NUMBER_REGEX = /^\d{9,18}$/;
 
-export const updateBankAccountSchema = createBankAccountSchema.partial();
+export const createBankAccountSchema = z
+  .object({
+    accountHolderName: z.string().trim().min(1).max(150),
+    ifscCode: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(IFSC_REGEX, "IFSC must be 11 chars: 4 letters + 0 + 6 alphanumerics."),
+    accountNumber: z
+      .string()
+      .trim()
+      .regex(ACCOUNT_NUMBER_REGEX, "Account number must be 9-18 digits."),
+    confirmAccountNumber: z.string().trim(),
+  })
+  .refine((d) => d.accountNumber === d.confirmAccountNumber, {
+    message: "Account numbers do not match.",
+    path: ["confirmAccountNumber"],
+  });
+
+export const updateBankAccountSchema = z
+  .object({
+    accountHolderName: z.string().trim().min(1).max(150).optional(),
+    ifscCode: z
+      .string()
+      .trim()
+      .toUpperCase()
+      .regex(IFSC_REGEX, "IFSC must be 11 chars: 4 letters + 0 + 6 alphanumerics.")
+      .optional(),
+    accountNumber: z
+      .string()
+      .trim()
+      .regex(ACCOUNT_NUMBER_REGEX, "Account number must be 9-18 digits.")
+      .optional(),
+    confirmAccountNumber: z.string().trim().optional(),
+  })
+  .refine(
+    (d) =>
+      d.accountNumber === undefined ||
+      d.confirmAccountNumber === undefined ||
+      d.accountNumber === d.confirmAccountNumber,
+    { message: "Account numbers do not match.", path: ["confirmAccountNumber"] }
+  );
 
 export const BLACKLISTED_REFERRAL_WORDS = [
   "GPSC", "WEBSANKUL", "PSI", "TALATI", "COSTABLE", "GPSCONLINE",

@@ -8,6 +8,7 @@ import { ExamResult } from "../../models/exam/ExamResult.model";
 import { ExamResultDetail } from "../../models/exam/ExamResultDetail.model";
 import { ExamResultDetailAnalytics } from "../../models/exam/ExamResultDetailAnalytics.model";
 import { ExamStatus, ExamResultType, ExamType } from "../../models/enums";
+import { generateExamSolutionPdf } from "../../libs/core/generate";
 import {
   saveAnswersSchema,
   rateResultSchema,
@@ -91,17 +92,132 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/exams/daily
+// GET /api/v1/client/quizzes/daily
+// Drill-down filter (all params optional, applied progressively):
+//   no params              -> years      [{ year, testsCount }]
+//   ?year=YYYY             -> months     [{ year, month, label, testsCount }]
+//   ?year&month            -> weeks      [{ week, label, startDate, endDate, testsCount }]
+//   ?year&month&week       -> tests      (same shape as before, decorated per-customer)
+const MONTH_LABELS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+// Week 1 = days 1–7, Week 2 = 8–14, Week 3 = 15–21, Week 4 = 22–28, Week 5 = 29–end.
+const weekOfMonth = (day: number) => (day <= 28 ? Math.ceil(day / 7) : 5);
+const weekRange = (year: number, month: number, week: number) => {
+  const startDay = (week - 1) * 7 + 1;
+  const start = new Date(year, month - 1, startDay, 0, 0, 0, 0);
+  const end =
+    week === 5
+      ? new Date(year, month, 0, 23, 59, 59, 999) // last day of month
+      : new Date(year, month - 1, startDay + 6, 23, 59, 59, 999);
+  return { start, end };
+};
+
 export const getDailyExams = async (req: Request, res: Response) => {
   try {
     const customerId = req.user?.id;
     const now = new Date();
     const endOfDay = new Date(now); endOfDay.setHours(23, 59, 59, 999);
 
-    const exams = await Exam.find({
+    const yearQ = req.query.year ? Number(req.query.year) : undefined;
+    const monthQ = req.query.month ? Number(req.query.month) : undefined;
+    const weekQ = req.query.week ? Number(req.query.week) : undefined;
+
+    if (yearQ !== undefined && (!Number.isInteger(yearQ) || yearQ < 1970 || yearQ > 9999)) {
+      return res.status(400).json({ success: false, message: "Invalid year." });
+    }
+    if (monthQ !== undefined && (!Number.isInteger(monthQ) || monthQ < 1 || monthQ > 12)) {
+      return res.status(400).json({ success: false, message: "Invalid month (1-12)." });
+    }
+    if (weekQ !== undefined && (!Number.isInteger(weekQ) || weekQ < 1 || weekQ > 5)) {
+      return res.status(400).json({ success: false, message: "Invalid week (1-5)." });
+    }
+    if (monthQ !== undefined && yearQ === undefined) {
+      return res.status(400).json({ success: false, message: "`month` requires `year`." });
+    }
+    if (weekQ !== undefined && (yearQ === undefined || monthQ === undefined)) {
+      return res.status(400).json({ success: false, message: "`week` requires `year` and `month`." });
+    }
+
+    const baseMatch: any = {
       type: ExamType.DAILY,
       status: ExamStatus.PUBLISHED,
       startAt: { $lte: endOfDay },
+    };
+
+    // Level 1: years
+    if (yearQ === undefined) {
+      const rows = await Exam.aggregate([
+        { $match: baseMatch },
+        { $group: { _id: { $year: "$startAt" }, testsCount: { $sum: 1 } } },
+        { $sort: { _id: -1 } },
+        { $project: { _id: 0, year: "$_id", testsCount: 1 } },
+      ]);
+      return res.status(200).json({ success: true, data: { level: "years", items: rows } });
+    }
+
+    // Level 2: months in a year
+    if (monthQ === undefined) {
+      const yearStart = new Date(yearQ, 0, 1, 0, 0, 0, 0);
+      const yearEnd = new Date(yearQ, 11, 31, 23, 59, 59, 999);
+      const upper = yearEnd < endOfDay ? yearEnd : endOfDay;
+      const rows = await Exam.aggregate([
+        { $match: { ...baseMatch, startAt: { $gte: yearStart, $lte: upper } } },
+        { $group: { _id: { $month: "$startAt" }, testsCount: { $sum: 1 } } },
+        { $sort: { _id: 1 } },
+        { $project: { _id: 0, month: "$_id", testsCount: 1 } },
+      ]);
+      const items = rows.map((r: any) => ({
+        year: yearQ,
+        month: r.month,
+        label: MONTH_LABELS[r.month - 1],
+        testsCount: r.testsCount,
+      }));
+      return res.status(200).json({ success: true, data: { level: "months", year: yearQ, items } });
+    }
+
+    // Level 3: weeks in a month
+    if (weekQ === undefined) {
+      const monthStart = new Date(yearQ, monthQ - 1, 1, 0, 0, 0, 0);
+      const monthEnd = new Date(yearQ, monthQ, 0, 23, 59, 59, 999);
+      const upper = monthEnd < endOfDay ? monthEnd : endOfDay;
+      const exams = await Exam.find({
+        ...baseMatch,
+        startAt: { $gte: monthStart, $lte: upper },
+      }).select("startAt");
+
+      const counts = new Map<number, number>();
+      for (const e of exams) {
+        if (!e.startAt) continue;
+        const w = weekOfMonth(new Date(e.startAt as Date).getDate());
+        counts.set(w, (counts.get(w) ?? 0) + 1);
+      }
+      const items = Array.from(counts.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map(([week, testsCount]) => {
+          const { start, end } = weekRange(yearQ, monthQ, week);
+          return {
+            week,
+            label: `Week ${week}`,
+            startDate: start,
+            endDate: end,
+            testsCount,
+          };
+        });
+      return res.status(200).json({
+        success: true,
+        data: { level: "weeks", year: yearQ, month: monthQ, items },
+      });
+    }
+
+    // Level 4: tests in a week (original shape, with per-customer stats)
+    const { start: weekStart, end: weekEnd } = weekRange(yearQ, monthQ, weekQ);
+    const upper = weekEnd < endOfDay ? weekEnd : endOfDay;
+
+    const exams = await Exam.find({
+      ...baseMatch,
+      startAt: { $gte: weekStart, $lte: upper },
     })
       .select("_id title durationMinutes questionCount positiveMarks negativeMarks startAt orderBy language")
       .sort({ startAt: 1 });
@@ -148,7 +264,16 @@ export const getDailyExams = async (req: Request, res: Response) => {
       };
     });
 
-    return res.status(200).json({ success: true, data: decorated });
+    return res.status(200).json({
+      success: true,
+      data: {
+        level: "tests",
+        year: yearQ,
+        month: monthQ,
+        week: weekQ,
+        items: decorated,
+      },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -507,12 +632,19 @@ export const getSolutionDownloadByExam = async (req: Request, res: Response) => 
     if (!isObjectId(examId))
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
 
-    return res.status(501).json({
-      success: false,
-      message: "PDF generation not yet wired. See generateExamSolutionPdf utility (pending).",
+    const attemptId = (req.query.attemptId as string | undefined) ?? undefined;
+    const { pdf, fileName } = await generateExamSolutionPdf(examId, customerId, attemptId);
+
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Length": String(pdf.length),
+      "Content-Disposition": `attachment; filename="${fileName}"`,
     });
+    return res.send(pdf);
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
+    const msg = error?.message || "Failed to generate PDF.";
+    const code = /not found|Invalid/i.test(msg) ? 404 : 500;
+    return res.status(code).json({ success: false, message: msg });
   }
 };
 

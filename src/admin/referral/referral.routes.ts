@@ -12,6 +12,18 @@ import {
   exportWithdrawalsCsv,
   adjustCustomerRewards,
 } from "./referral.controller";
+import {
+  listTerms,
+  getTerm,
+  createTerm,
+  updateTerm,
+  deleteTerm,
+  listFaqs,
+  getFaq,
+  createFaq,
+  updateFaq,
+  deleteFaq,
+} from "./content.controller";
 
 const router = Router();
 
@@ -34,5 +46,19 @@ router.get("/withdrawals/csv", exportWithdrawalsCsv);
 
 // Manual reward adjustment
 router.post("/customers/:customerId/rewards", adjustCustomerRewards);
+
+// Terms & Conditions
+router.get("/terms", listTerms);
+router.post("/terms", createTerm);
+router.get("/terms/:id", getTerm);
+router.put("/terms/:id", updateTerm);
+router.delete("/terms/:id", deleteTerm);
+
+// FAQs
+router.get("/faqs", listFaqs);
+router.post("/faqs", createFaq);
+router.get("/faqs/:id", getFaq);
+router.put("/faqs/:id", updateFaq);
+router.delete("/faqs/:id", deleteFaq);
 
 export default router;

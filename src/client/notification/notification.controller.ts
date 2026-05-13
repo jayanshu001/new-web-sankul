@@ -17,11 +17,14 @@ export const listMyNotifications = async (req: Request, res: Response) => {
     const skip = (pageNum - 1) * limitNum;
 
     const filter = { $or: [{ customerId: userId }, { broadcast: true }] };
+    // unreadCount must use the SAME visibility filter as the list — otherwise
+    // broadcasts (customerId: null) get excluded and the badge under-reports.
+    const unreadFilter = { ...filter, isRead: false };
 
     const [data, total, unreadCount] = await Promise.all([
       Notification.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
       Notification.countDocuments(filter),
-      Notification.countDocuments({ customerId: userId, isRead: false }),
+      Notification.countDocuments(unreadFilter),
     ]);
 
     return res.status(200).json({

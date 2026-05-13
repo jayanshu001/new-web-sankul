@@ -4,6 +4,7 @@ import { z } from "zod";
 import { Notification } from "../../models/system/Notification.model";
 import { ImageNotification } from "../../models/system/ImageNotification.model";
 import { dispatchAudience } from "./dispatcher";
+import { scheduleNotificationJob, cancelNotificationJob } from "./scheduler";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -77,6 +78,7 @@ export const broadcastNotification = async (req: Request, res: Response) => {
         scheduledAt: data.scheduledAt,
         audience: audienceSnapshot,
       });
+      await scheduleNotificationJob(String(doc._id), data.scheduledAt);
       return res.status(200).json({
         success: true,
         message: "Notification scheduled.",
@@ -153,6 +155,7 @@ export const cancelScheduledNotification = async (req: Request, res: Response) =
         success: false,
         message: "Scheduled notification not found.",
       });
+    await cancelNotificationJob(id);
     return res.status(200).json({ success: true, message: "Notification cancelled.", data: doc });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
@@ -231,7 +234,15 @@ export const bulkDeleteNotifications = async (req: Request, res: Response) => {
     if (ids.length === 0) {
       return res.status(400).json({ success: false, message: "No valid ids provided." });
     }
+    // Pull any still-scheduled rows so we can also remove their BullMQ jobs.
+    const scheduledRows = await Notification.find({
+      _id: { $in: ids },
+      status: "scheduled",
+    })
+      .select("_id")
+      .lean();
     const result = await Notification.deleteMany({ _id: { $in: ids } });
+    await Promise.all(scheduledRows.map((r) => cancelNotificationJob(String(r._id))));
     return res.status(200).json({
       success: true,
       message: "Notifications deleted.",
@@ -249,6 +260,7 @@ export const deleteNotification = async (req: Request, res: Response) => {
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const doc = await Notification.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    if (doc.status === "scheduled") await cancelNotificationJob(id);
     return res.status(200).json({ success: true, message: "Notification deleted." });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });

@@ -10,6 +10,7 @@ import {
   updateBankAccount,
   deleteBankAccount,
 } from "./referral.controller";
+import { getTerms, getFaqs } from "./content.controller";
 
 const router = Router();
 
@@ -30,5 +31,9 @@ router.get("/bank-accounts", listBankAccounts);
 router.post("/bank-accounts", createBankAccount);
 router.put("/bank-accounts/:id", updateBankAccount);
 router.delete("/bank-accounts/:id", deleteBankAccount);
+
+// Refer & Earn content
+router.get("/terms", getTerms);
+router.get("/faqs", getFaqs);
 
 export default router;

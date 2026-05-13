@@ -2,10 +2,11 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
+import { FolderItem } from "../../models/customer/FolderItem.model";
 import { Notification } from "../../models/system/Notification.model";
 import { ExamResult } from "../../models/exam/ExamResult.model";
 import { ExamType } from "../../models/enums";
+import { countActiveEbookDownloads } from "../ebook/ebook-downloads.controller";
 
 // GET /api/v1/client/profile/dashboard
 // Aggregator for the My Profile screen — returns just the badge counts the UI needs.
@@ -39,26 +40,49 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
       { $count: "n" },
     ]);
 
-    const [savedAddresses, packageSubs, ebookSubs, unreadNotifications, pastExamsRows] =
-      await Promise.all([
-        CustomerAddress.countDocuments({ customerId: userId, status: true }),
-        PackageCourseSubscription.countDocuments({
-          customerId: userId,
-          status: true,
-          paymentStatus: "verified",
-        }),
-        EbookSubscription.countDocuments({ customerId: userId, status: true }),
-        Notification.countDocuments({ customerId: userId, isRead: false }),
-        pastDailyExamsAgg,
-      ]);
+    const [
+      savedAddresses,
+      activePlans,
+      savedMaterials,
+      savedVideos,
+      activeEbookDownloads,
+      unreadNotifications,
+      pastExamsRows,
+    ] = await Promise.all([
+      CustomerAddress.countDocuments({ customerId: userId, status: true }),
+      PackageCourseSubscription.countDocuments({
+        customerId: userId,
+        status: true,
+        paymentStatus: "verified",
+      }),
+      FolderItem.aggregate([
+        { $match: { customerId: cid, kind: "material" } },
+        { $lookup: { from: "ws_materials", localField: "refId", foreignField: "_id", as: "ref" } },
+        { $unwind: "$ref" },
+        { $count: "n" },
+      ]).then((r) => r[0]?.n ?? 0),
+      FolderItem.aggregate([
+        { $match: { customerId: cid, kind: "video" } },
+        { $lookup: { from: "ws_videos", localField: "refId", foreignField: "_id", as: "ref" } },
+        { $unwind: "$ref" },
+        { $count: "n" },
+      ]).then((r) => r[0]?.n ?? 0),
+      countActiveEbookDownloads(userId),
+      Notification.countDocuments({
+        $or: [{ customerId: userId }, { broadcast: true }],
+        isRead: false,
+      }),
+      pastDailyExamsAgg,
+    ]);
     const pastExams = pastExamsRows[0]?.n ?? 0;
+    const downloads = savedMaterials + savedVideos + activeEbookDownloads;
 
     return res.status(200).json({
       success: true,
       data: {
         savedAddresses,
-        downloads: 0,
-        activePlans: packageSubs + ebookSubs,
+        downloads,
+        activePlans,
         unreadNotifications,
         pastExams,
       },

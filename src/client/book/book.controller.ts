@@ -6,6 +6,7 @@ import { BookOrder } from "../../models/book/BookOrder.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { BookOrderStatus, BookCourier } from "../../models/enums";
+import { generateBookReceipt } from "../../libs/core/generate";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -352,6 +353,28 @@ export const listMyOrders = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getMyOrderInvoice = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid order id." });
+
+    const pdf = await generateBookReceipt(id, customerId);
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Length": String(pdf.length),
+    });
+    return res.send(pdf);
+  } catch (error: any) {
+    const msg = error?.message || "Failed to generate invoice.";
+    const code = /not found|invalid|not been paid/i.test(msg) ? 404 : 500;
+    return res.status(code).json({ success: false, message: msg });
   }
 };
 

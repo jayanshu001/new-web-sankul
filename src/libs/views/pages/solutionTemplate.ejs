@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Hind+Vadodara&display=swap');
+    * { box-sizing: border-box; }
+    body { font-family: Segoe UI, Hind Vadodara, sans-serif; color: #1a1a1a; margin: 0; padding: 0; }
+    .wrap { padding: 30px 30px 20px 30px; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #27a9e1; padding-bottom: 14px; margin-bottom: 18px; }
+    .header .brand img { height: 26px; margin-bottom: 8px; }
+    .header .brand .addr { font-size: 11px; color: #555; line-height: 1.4; }
+    .header .title { text-align: right; }
+    .header .title h1 { font-size: 22px; margin: 0 0 4px 0; color: #27a9e1; }
+    .header .title .sub { font-size: 12px; color: #555; }
+    .meta { width: 100%; border-collapse: collapse; margin-bottom: 16px; font-size: 12px; }
+    .meta td { padding: 6px 10px; border: 1px solid #e2e2e2; }
+    .meta .label { background: #f5fbfe; width: 18%; font-weight: 600; color: #444; }
+    .summary { width: 100%; border-collapse: collapse; margin-bottom: 22px; font-size: 12px; }
+    .summary th, .summary td { padding: 8px 10px; border: 1px solid #e2e2e2; text-align: center; }
+    .summary th { background: #27a9e1; color: #fff; font-weight: 600; }
+    .summary .good { color: #1aa260; font-weight: 600; }
+    .summary .bad { color: #d93025; font-weight: 600; }
+    .summary .skip { color: #b58300; font-weight: 600; }
+    h2.section { font-size: 14px; color: #27a9e1; margin: 18px 0 10px 0; border-bottom: 1px solid #e2e2e2; padding-bottom: 4px; }
+    .q { border: 1px solid #e2e2e2; border-radius: 6px; padding: 12px 14px; margin-bottom: 12px; page-break-inside: avoid; font-size: 12px; }
+    .q .head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+    .q .qno { font-weight: 700; color: #333; }
+    .q .badge { font-size: 11px; padding: 3px 8px; border-radius: 10px; font-weight: 600; }
+    .badge.correct { background: #e6f6ec; color: #1aa260; }
+    .badge.wrong { background: #fde7e6; color: #d93025; }
+    .badge.skipped { background: #fff4d6; color: #b58300; }
+    .q .qtext { font-size: 13px; margin-bottom: 8px; line-height: 1.45; }
+    .opts { list-style: none; padding: 0; margin: 0; }
+    .opts li { padding: 6px 10px; margin: 4px 0; border: 1px solid #e2e2e2; border-radius: 4px; display: flex; justify-content: space-between; align-items: center; }
+    .opts li.correct { background: #e6f6ec; border-color: #b7e3c5; }
+    .opts li.selected-wrong { background: #fde7e6; border-color: #f4b8b4; }
+    .opts li .tag { font-size: 10px; padding: 2px 6px; border-radius: 3px; margin-left: 8px; }
+    .tag.you { background: #27a9e1; color: #fff; }
+    .tag.ans { background: #1aa260; color: #fff; }
+    .q .foot { margin-top: 8px; font-size: 11px; color: #555; display: flex; justify-content: space-between; }
+    .footer { text-align: center; font-size: 10px; color: #888; margin-top: 18px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="header">
+      <div class="brand">
+        <img src="https://websankul.org/images/websankul_black.svg" alt="WebSankul" />
+        <div class="addr">
+          311, WebSankul, Shalin Galleria, G-1 Circle, Near RTO, Gandhinagar<br>
+          <%= contactNumber %> &nbsp;|&nbsp; <%= email %>
+        </div>
+      </div>
+      <div class="title">
+        <h1>Quiz Result</h1>
+        <div class="sub">Generated on <%= generatedAt %></div>
+      </div>
+    </div>
+
+    <table class="meta">
+      <tr>
+        <td class="label">Exam</td><td><%= examTitle %></td>
+        <td class="label">Attempt #</td><td><%= attemptNumber %></td>
+      </tr>
+      <tr>
+        <td class="label">Candidate</td><td><%= userName %></td>
+        <td class="label">Submitted</td><td><%= submittedAt %></td>
+      </tr>
+      <tr>
+        <td class="label">Email</td><td><%= userEmailAddress %></td>
+        <td class="label">Phone</td><td><%= userPhone %></td>
+      </tr>
+    </table>
+
+    <table class="summary">
+      <tr>
+        <th>Score</th>
+        <th>Correct</th>
+        <th>Incorrect</th>
+        <th>Skipped</th>
+        <th>Attempted</th>
+        <th>Accuracy</th>
+        <th>Rank</th>
+        <th>Time</th>
+      </tr>
+      <tr>
+        <td><strong><%= score %> / <%= totalMarks %></strong></td>
+        <td class="good"><%= success %></td>
+        <td class="bad"><%= failed %></td>
+        <td class="skip"><%= skip %></td>
+        <td><%= attempt %> / <%= total %></td>
+        <td><%= accuracy %>%</td>
+        <td><%= rank %></td>
+        <td><%= timing %></td>
+      </tr>
+    </table>
+
+    <h2 class="section">Questions &amp; Answers</h2>
+
+    <% questions.forEach(function(q, i) { %>
+      <div class="q">
+        <div class="head">
+          <span class="qno">Q<%= i + 1 %>.</span>
+          <% if (q.status === 'correct') { %>
+            <span class="badge correct">Correct &nbsp;+<%= q.point %></span>
+          <% } else if (q.status === 'wrong') { %>
+            <span class="badge wrong">Incorrect &nbsp;<%= q.point %></span>
+          <% } else { %>
+            <span class="badge skipped">Skipped</span>
+          <% } %>
+        </div>
+        <div class="qtext"><%= q.title %></div>
+        <ul class="opts">
+          <% q.options.forEach(function(o) { %>
+            <li class="<%= o.isCorrect ? 'correct' : (o.isSelect && !o.isCorrect ? 'selected-wrong' : '') %>">
+              <span><%= o.name %></span>
+              <span>
+                <% if (o.isSelect) { %><span class="tag you">Your Answer</span><% } %>
+                <% if (o.isCorrect) { %><span class="tag ans">Correct</span><% } %>
+              </span>
+            </li>
+          <% }); %>
+        </ul>
+        <div class="foot">
+          <span>Correct Answer: <strong><%= q.correctAnswer || '-' %></strong></span>
+          <span>Your Answer: <strong><%= q.selectedAnswer || 'Not Answered' %></strong></span>
+        </div>
+      </div>
+    <% }); %>
+
+    <div class="footer">
+      This is a system-generated report. For queries contact <%= email %>.
+    </div>
+  </div>
+</body>
+</html>

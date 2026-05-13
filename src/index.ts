@@ -6,7 +6,7 @@ import logger from "./utils/logger";
 import { sendEmail } from "./utils/emailService";
 import getLocalIpAddress from "./utils/getLocalIp";
 import { pm2Ready } from "./utils/pm2Logger";
-import { startNotificationWorker } from "./admin/notification/notification.worker";
+import { initNotificationScheduler, shutdownNotificationScheduler } from "./admin/notification/scheduler";
 import { initLiveChatSocket } from "./socket/livechat.socket";
 
 dotenv.config();
@@ -23,7 +23,15 @@ const allowedOrigins = (
 const startServer = async () => {
   try {
     await connectDB();
-    startNotificationWorker();
+    await initNotificationScheduler();
+
+    const gracefulShutdown = async (signal: string) => {
+      logger.info(`Received ${signal}, shutting down notification scheduler...`);
+      await shutdownNotificationScheduler();
+      process.exit(0);
+    };
+    process.on("SIGTERM", () => gracefulShutdown("SIGTERM"));
+    process.on("SIGINT", () => gracefulShutdown("SIGINT"));
     // Start the Express server
 
     const httpServer = createServer(app);

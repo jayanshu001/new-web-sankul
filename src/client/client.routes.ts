@@ -33,6 +33,7 @@ import clientEducatorRoutes from "./educator/educator.routes";
 import { youtubeStreamProxy } from "./categories/yt-proxy.controller";
 import clientLiveChatRoutes from "./livechat/livechat.routes";
 import clientLivePollRoutes from "./livepoll/livepoll.routes";
+import clientSearchRoutes from "./search/search.routes";
 
 const router = Router();
 
@@ -83,5 +84,6 @@ router.use("/exam-countdowns", clientExamCountdownRoutes); // -> /api/v1/client/
 router.use("/educators", clientEducatorRoutes); // -> /api/v1/client/educators/*
 router.use("/live-chat",  clientLiveChatRoutes);          // -> /api/v1/client/live-chat/:liveClassId/history
 router.use("/live-polls", clientLivePollRoutes);          // -> /api/v1/client/live-polls/:liveClassId/active
+router.use("/search", clientSearchRoutes);                // -> /api/v1/client/search
 
 export default router;

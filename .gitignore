@@ -5,3 +5,16 @@
 /.yarn
 /logs
 /.env
+
+# Secrets — never commit
+/secrets/
+
+# Python artifacts (utility scripts)
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Stray uploaded player scripts at repo root
+/*-player-script.js

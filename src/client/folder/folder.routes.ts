@@ -9,6 +9,7 @@ function buildRouter(c: Controller) {
   router.use(authenticate);
   router.get("/", c.list);
   router.post("/", c.create);
+  router.get("/all-items", c.allItems);
   router.get("/:id", c.detail);
   router.patch("/:id", c.update);
   router.delete("/:id", c.remove);

@@ -6,6 +6,7 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
 import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
+import { generateEbookReceipt } from "../../libs/core/generate";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -198,14 +199,25 @@ export const getEbookDetail = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/ebooks/:id/invoice/:orderId (placeholder for invoice)
+// GET /api/v1/client/ebooks/orders/:orderId/invoice
 export const getEbookOrderInvoice = async (req: Request, res: Response) => {
   try {
-    // Stub — PDF generation to be wired with generate lib from old project
-    return res
-      .status(501)
-      .json({ success: false, message: "Invoice generation not yet implemented." });
+    const customerId = (req as any).user?.id;
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    const orderId = req.params.orderId as string;
+    if (!isObjectId(orderId))
+      return res.status(400).json({ success: false, message: "Invalid order id." });
+
+    const pdf = await generateEbookReceipt(orderId, customerId);
+    res.set({
+      "Content-Type": "application/pdf",
+      "Content-Length": String(pdf.length),
+    });
+    return res.send(pdf);
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
+    const msg = error?.message || "Failed to generate invoice.";
+    const code = /not found|invalid|not been paid/i.test(msg) ? 404 : 500;
+    return res.status(code).json({ success: false, message: msg });
   }
 };

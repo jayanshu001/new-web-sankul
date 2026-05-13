@@ -104,9 +104,70 @@ export async function dispatchAudience(
 }
 
 /**
- * Cron worker entrypoint: atomically claim due scheduled notifications and dispatch them.
- * Uses findOneAndUpdate to flip status → "sent" (tentative) so concurrent workers
- * cannot pick up the same row. If dispatch fails, we restore status to "failed".
+ * Dispatch a single scheduled notification by id. Used by the BullMQ worker.
+ * Atomically flips status "scheduled" → "sent" so re-deliveries of the same
+ * job (BullMQ retry, multi-instance) cannot double-send. Throws on dispatch
+ * failure so BullMQ can apply its retry policy; on final failure the caller
+ * is responsible for setting status="failed".
+ *
+ * Returns null if the row was already claimed/cancelled (no-op).
+ */
+export async function dispatchScheduledById(
+  notificationId: string,
+  now: Date = new Date()
+): Promise<DispatchResult | null> {
+  const claimed = (await Notification.findOneAndUpdate(
+    { _id: notificationId, status: "scheduled" },
+    { $set: { status: "sent", sentAt: now } },
+    { new: true }
+  )) as INotification | null;
+
+  if (!claimed) return null;
+
+  try {
+    const result = await dispatchAudience(
+      {
+        title: claimed.title,
+        body: claimed.body,
+        image: claimed.image,
+        type: claimed.type,
+        deepLink: claimed.deepLink,
+        data: claimed.data,
+      },
+      {
+        platforms: claimed.audience?.platforms,
+        courseIds: claimed.audience?.courseIds?.map((id) => id.toString()),
+        userIds: claimed.audience?.userIds?.map((id) => id.toString()),
+      },
+      claimed._id as mongoose.Types.ObjectId
+    );
+
+    await Notification.updateOne(
+      { _id: claimed._id },
+      {
+        $set: {
+          status: result.status,
+          failureReason: result.failureReason,
+          recipientCount: result.recipientCount,
+          sentAt: now,
+        },
+      }
+    );
+    return result;
+  } catch (err) {
+    // Roll the row back so BullMQ retries can re-claim it. Final-failure
+    // bookkeeping happens in the worker's "failed" listener.
+    await Notification.updateOne(
+      { _id: claimed._id },
+      { $set: { status: "scheduled", sentAt: null } }
+    );
+    throw err;
+  }
+}
+
+/**
+ * Legacy cron entrypoint: atomically claim due scheduled notifications and dispatch them.
+ * Kept as a safety-net sweep — the BullMQ scheduler is the primary path.
  */
 export async function processDueNotifications(now: Date = new Date()): Promise<number> {
   let processed = 0;

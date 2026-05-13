@@ -190,15 +190,18 @@ function makeFolderController(type: FolderType) {
 
       const existing = await Folder.findOne({ _id: id, customerId: uid, type }).select("isDefaultFolder").lean();
       if (!existing) return res.status(404).json({ success: false, message: "Folder not found." });
-      if (existing.isDefaultFolder)
-        return res.status(403).json({ success: false, message: "Default folder cannot be deleted." });
 
       await session.withTransaction(async () => {
-        await Folder.deleteOne({ _id: id, customerId: uid, type }, { session });
         await FolderItem.deleteMany({ folderId: id, customerId: uid }, { session });
+        if (!existing.isDefaultFolder) {
+          await Folder.deleteOne({ _id: id, customerId: uid, type }, { session });
+        }
       });
 
-      return res.status(200).json({ success: true, message: "Folder deleted." });
+      return res.status(200).json({
+        success: true,
+        message: existing.isDefaultFolder ? "Folder emptied." : "Folder deleted.",
+      });
     } catch (error: any) {
       return res.status(500).json({ success: false, message: error.message });
     } finally {
@@ -269,7 +272,61 @@ function makeFolderController(type: FolderType) {
     }
   };
 
-  return { list, create, detail, update, remove, addItem, removeItem };
+  // GET /{video|material}-folders/all-items
+  // Returns every folder the customer owns for this type, with its items + joined refs.
+  // Mirrors the per-folder `detail` shape but in one call, and only counts items whose
+  // underlying Material/Video still exists — so list length matches the dashboard count.
+  const allItems = async (req: Request, res: Response) => {
+    try {
+      const uid = userId(req);
+      if (!uid) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+      await ensureDefaultFolders(uid);
+
+      const folders = await Folder.find({ customerId: uid, type })
+        .sort({ isDefaultFolder: -1, createdAt: -1 })
+        .lean();
+      if (!folders.length) return res.status(200).json({ success: true, data: [] });
+
+      const folderIds = folders.map((f) => f._id);
+      const items = await FolderItem.find({
+        folderId: { $in: folderIds },
+        customerId: new Types.ObjectId(uid),
+        kind: allowedKind,
+      })
+        .sort({ addedAt: -1 })
+        .lean();
+
+      const refIds = items.map((it) => it.refId);
+      const refs = refIds.length
+        ? await KIND_MODELS[allowedKind].find({ _id: { $in: refIds } }).lean()
+        : [];
+      const refMap = new Map<string, any>();
+      for (const r of refs as any[]) refMap.set(String(r._id), r);
+
+      const itemsByFolder = new Map<string, any[]>();
+      for (const it of items) {
+        const ref = refMap.get(String(it.refId));
+        if (!ref) continue;
+        const key = String(it.folderId);
+        const row = { _id: it._id, kind: it.kind, refId: it.refId, addedAt: it.addedAt, ref };
+        const arr = itemsByFolder.get(key);
+        if (arr) arr.push(row);
+        else itemsByFolder.set(key, [row]);
+      }
+
+      const data = folders.map((f) => ({
+        folder: { ...f, isDefaultFolder: !!f.isDefaultFolder },
+        list: itemsByFolder.get(String(f._id)) ?? [],
+      }));
+
+      return res.status(200).json({ success: true, data });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  };
+
+  return { list, create, detail, update, remove, addItem, removeItem, allItems };
 }
 
 export const videoFolderController = makeFolderController("video");

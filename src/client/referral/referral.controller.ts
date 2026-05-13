@@ -12,6 +12,7 @@ import {
   updateBankAccountSchema,
   BLACKLISTED_REFERRAL_WORDS,
 } from "./referral.validation";
+import { lookupIfsc } from "./ifsc";
 
 const MIN_WITHDRAWAL_AMOUNT = 500;
 
@@ -236,8 +237,19 @@ export const createBankAccount = async (req: Request, res: Response) => {
     const customerId = req.user?.id;
     if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
 
-    const data = createBankAccountSchema.parse(req.body);
-    const account = await CustomerBankAccount.create({ ...data, customerId });
+    const parsed = createBankAccountSchema.parse(req.body);
+    const ifscDetails = await lookupIfsc(parsed.ifscCode);
+    if (!ifscDetails)
+      return res.status(400).json({ success: false, message: "Invalid IFSC code." });
+
+    const { confirmAccountNumber: _confirm, ...rest } = parsed;
+    const account = await CustomerBankAccount.create({
+      ...rest,
+      customerId,
+      bankName: ifscDetails.bankName,
+      branchName: ifscDetails.branchName,
+      city: ifscDetails.city,
+    });
     return res.status(201).json({ success: true, data: account });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
@@ -253,10 +265,22 @@ export const updateBankAccount = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid bank account id." });
 
-    const data = updateBankAccountSchema.parse(req.body);
+    const parsed = updateBankAccountSchema.parse(req.body);
+    const { confirmAccountNumber: _confirm, ...rest } = parsed;
+    const update: Record<string, unknown> = { ...rest };
+
+    if (parsed.ifscCode) {
+      const ifscDetails = await lookupIfsc(parsed.ifscCode);
+      if (!ifscDetails)
+        return res.status(400).json({ success: false, message: "Invalid IFSC code." });
+      update.bankName = ifscDetails.bankName;
+      update.branchName = ifscDetails.branchName;
+      update.city = ifscDetails.city;
+    }
+
     const account = await CustomerBankAccount.findOneAndUpdate(
       { _id: id, customerId },
-      { $set: data },
+      { $set: update },
       { new: true }
     );
     if (!account) return res.status(404).json({ success: false, message: "Bank account not found." });
