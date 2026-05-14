@@ -36,6 +36,7 @@ import clientLivePollRoutes from "./livepoll/livepoll.routes";
 import clientSearchRoutes from "./search/search.routes";
 import clientLiveSessionRoutes from "./live/live.routes";
 import clientLiveCourseRoutes from "./live-course/live-course.routes";
+import clientLiveReminderRoutes from "./live-reminder/live-reminder.routes";
 
 const router = Router();
 
@@ -89,5 +90,6 @@ router.use("/live-polls", clientLivePollRoutes);          // -> /api/v1/client/l
 router.use("/search", clientSearchRoutes);                // -> /api/v1/client/search
 router.use("/live-sessions", clientLiveSessionRoutes);    // -> /api/v1/client/live-sessions/:streamId
 router.use("/live-courses",  clientLiveCourseRoutes);     // -> /api/v1/client/live-courses/*
+router.use("/live-reminders", clientLiveReminderRoutes);  // -> /api/v1/client/live-reminders/*
 
 export default router;

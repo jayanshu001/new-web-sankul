@@ -1,11 +1,12 @@
 /**
- * One-shot: the live_sessions collection was originally created with
- * { streamId: 1 } unique (non-sparse). The schema now treats streamId as
- * optional with `unique + sparse`, so multiple SCHEDULED rows (which have
- * streamId: null until they start) need to coexist. Drop the legacy index
- * and rebuild via syncIndexes() so Mongoose recreates it with the new
- * options.
+ * One-shot: rebuild the unique { streamId: 1 } index on ws_live_sessions.
  *
+ * The index uses a partialFilterExpression so SCHEDULED rows (streamId: null)
+ * can coexist. The filter's `$type` changed from "number" to "string" when we
+ * learned the real Streamos account returns streamId as a STRING — so the old
+ * index must be dropped and rebuilt from the current schema.
+ *
+ * Drops the legacy `streamId_1` index and rebuilds via syncIndexes().
  * Idempotent. Safe to re-run — dropping a non-existent index is a no-op.
  *
  * Usage (from repo root):

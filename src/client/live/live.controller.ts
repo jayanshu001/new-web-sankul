@@ -15,10 +15,11 @@ import {
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 
-function parseStreamIdParam(raw: unknown): number | null {
-  if (raw === undefined || raw === null || raw === "") return null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+// Streamos stream ids are strings (e.g. "T_17787583234029").
+function parseStreamIdParam(raw: unknown): string | null {
+  if (typeof raw !== "string" && typeof raw !== "number") return null;
+  const s = String(raw).trim();
+  return s.length > 0 ? s : null;
 }
 
 async function findSessionByAnyId(id: string) {
@@ -135,6 +136,9 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
         id: String(session._id),
         title: session.title,
         status: session.status,
+        // Joinable only while the live room exists on Streamos (status
+        // CREATED). The client gates the "Join" button on this.
+        canJoin: session.status === "CREATED",
         scheduledAt: session.scheduledAt ?? null,
         streamId: session.streamId ?? null,
         liveCourseIds,

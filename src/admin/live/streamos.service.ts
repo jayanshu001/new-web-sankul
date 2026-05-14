@@ -158,7 +158,9 @@ function normalizeQualityHlsUrls(raw: unknown): QualityHlsUrls | undefined {
 }
 
 export interface CreateStreamResult {
-  streamId: number;
+  // Canonical Streamos stream id — a STRING, e.g. "T_17787583234029".
+  streamId: string;
+  // Full RTMP push URL (base + the push-token-carrying streamId string).
   rtmpUrl: string;
   hlsUrl: string;
   hlsUrls?: QualityHlsUrls;
@@ -180,11 +182,18 @@ export async function createStream(title: string): Promise<CreateStreamResult> {
 
   const body = res.data ?? {};
   const payload = body.data ?? body;
-  const streamId = Number(payload.streamId ?? payload.streamID ?? payload.id);
-  const rtmpUrl = payload.rtmpURL ?? payload.rtmpUrl;
-  const hlsUrl  = payload.hlsURL  ?? payload.hlsUrl;
 
-  if (!streamId || !rtmpUrl || !hlsUrl) {
+  // Streamos returns `streamId` as a STRING that carries the RTMP push token:
+  //   "T_17787583234029?txSecret=...&txTime=..."
+  // The part before "?" is the canonical id used for streamDetails / endStream
+  // lookups and stored on the session; the whole string is appended to the
+  // base rtmpURL to form the URL an encoder pushes to.
+  const rawStreamId = String(payload.streamId ?? payload.streamID ?? payload.id ?? "").trim();
+  const streamId = rawStreamId.split("?")[0];
+  const rtmpBase = String(payload.rtmpURL ?? payload.rtmpUrl ?? "").replace(/\/+$/, "");
+  const hlsUrl = payload.hlsURL ?? payload.hlsUrl;
+
+  if (!streamId || !rtmpBase || !hlsUrl) {
     throw new StreamosError(
       "Unexpected response from Streamos createStream.",
       502,
@@ -195,7 +204,7 @@ export async function createStream(title: string): Promise<CreateStreamResult> {
 
   return {
     streamId,
-    rtmpUrl,
+    rtmpUrl: rawStreamId ? `${rtmpBase}/${rawStreamId}` : rtmpBase,
     hlsUrl,
     hlsUrls: pickQualityHlsUrls(payload),
     raw: body,
@@ -211,7 +220,7 @@ export interface StreamDetailsResult {
   raw: any;
 }
 
-export async function getStreamDetails(streamId: number): Promise<StreamDetailsResult> {
+export async function getStreamDetails(streamId: string): Promise<StreamDetailsResult> {
   const { accessKey } = getCreds();
 
   const res = await request<any>({
@@ -233,7 +242,7 @@ export async function getStreamDetails(streamId: number): Promise<StreamDetailsR
   };
 }
 
-export async function endStream(streamId: number): Promise<any> {
+export async function endStream(streamId: string): Promise<any> {
   const { accessKey, accessSecret } = getCreds();
 
   const res = await request<any>({

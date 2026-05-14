@@ -9,6 +9,7 @@ import {
   deleteLiveSession,
   endLiveSession,
   promoteSessionRecording,
+  getLiveSessionAttendance,
   getUploadedVideoDetails,
   getOrgDetails,
   updateRecordingWebhook,
@@ -30,6 +31,7 @@ router.get("/",           listLiveSessions);             // GET    /api/v1/admin
 router.post("/end",       endLiveSession);               // POST   /api/v1/admin/live-sessions/end
 router.post("/:id/start", startScheduledLiveSession);    // POST   /api/v1/admin/live-sessions/:id/start
 router.post("/:id/promote-recording", promoteSessionRecording); // POST /api/v1/admin/live-sessions/:id/promote-recording
+router.get("/:id/attendance", getLiveSessionAttendance);   // GET    /api/v1/admin/live-sessions/:id/attendance
 router.get("/:id",        getLiveSessionStatus);         // GET    /api/v1/admin/live-sessions/:id
 router.patch("/:id",      updateScheduledLiveSession);   // PATCH  /api/v1/admin/live-sessions/:id
 router.delete("/:id",     deleteLiveSession);            // DELETE /api/v1/admin/live-sessions/:id

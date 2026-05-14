@@ -5,6 +5,7 @@ import { LiveSession, ILiveSession, ILiveSessionRecording } from "../../models/c
 import { LiveCourse } from "../../models/course/LiveCourse.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { Video } from "../../models/course/Video.model";
+import { LiveSessionAttendance } from "../../models/customer/LiveSessionAttendance.model";
 import {
   createStream as streamosCreateStream,
   getStreamDetails as streamosGetStreamDetails,
@@ -23,6 +24,10 @@ import {
 } from "./recording.promote";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
+import {
+  syncRemindersForSession,
+  cancelRemindersForSession,
+} from "../../client/live-reminder/live-reminder.service";
 
 // Admin must wait until 2 minutes before scheduledAt to actually start the
 // Streamos stream. Late starts after scheduledAt remain allowed indefinitely.
@@ -43,10 +48,12 @@ function secretMatches(provided: string): boolean {
   );
 }
 
-function parseStreamIdParam(raw: unknown): number | null {
-  if (raw === undefined || raw === null || raw === "") return null;
-  const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
+// Streamos stream ids are strings (e.g. "T_17787583234029"). Accept a string
+// or a number (legacy / loose callers) and return a trimmed non-empty string.
+function parseStreamIdParam(raw: unknown): string | null {
+  if (typeof raw !== "string" && typeof raw !== "number") return null;
+  const s = String(raw).trim();
+  return s.length > 0 ? s : null;
 }
 
 function parseScheduledAt(raw: unknown): Date | null | undefined {
@@ -58,7 +65,7 @@ function parseScheduledAt(raw: unknown): Date | null | undefined {
 }
 
 // Find a session by either Mongo ObjectId (used for SCHEDULED rows that have
-// no streamId yet) or numeric streamId.
+// no streamId yet) or the Streamos streamId string.
 async function findSessionByAnyId(id: string) {
   if (Types.ObjectId.isValid(id) && /^[0-9a-fA-F]{24}$/.test(id)) {
     const byObjId = await LiveSession.findById(id);
@@ -484,6 +491,46 @@ export const promoteSessionRecording = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/admin/live-sessions/:id/attendance
+// Who joined this live class, when, and for how long — one row per join→leave
+// stint — plus a summary. Rows with leftAt: null are viewers still connected.
+export const getLiveSessionAttendance = async (req: Request, res: Response) => {
+  try {
+    const session = await findSessionByAnyId(String(req.params.id));
+    if (!session) return failure(res, "Live session not found.", 404);
+
+    if (!session.streamId) {
+      return success(
+        res,
+        { attendance: [], summary: { totalJoins: 0, uniqueViewers: 0, currentlyActive: 0 } },
+        "Session has not started — no attendance yet."
+      );
+    }
+
+    const records = await LiveSessionAttendance.find({ streamId: session.streamId })
+      .sort({ joinedAt: -1 })
+      .populate("customerId", "firstName middleName lastName phoneNumber")
+      .lean();
+
+    const uniqueViewers = new Set(
+      records.map((r) => String((r.customerId as any)?._id ?? r.customerId))
+    ).size;
+    const currentlyActive = records.filter((r) => !r.leftAt).length;
+
+    return success(
+      res,
+      {
+        attendance: records,
+        summary: { totalJoins: records.length, uniqueViewers, currentlyActive },
+      },
+      "Attendance fetched."
+    );
+  } catch (err) {
+    logger.error("LiveSession attendance failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to fetch attendance.", 500);
+  }
+};
+
 // POST /api/v1/admin/live-sessions/:id/start
 // Promotes a SCHEDULED session to CREATED by calling Streamos. Only allowed
 // when current time is within 2 minutes of scheduledAt; late starts are fine.
@@ -545,6 +592,8 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
     }
 
     let changed = false;
+    // Track scheduledAt edits specifically — a reschedule must re-point reminders.
+    let scheduleChanged = false;
 
     if (req.body?.title !== undefined) {
       const t = typeof req.body.title === "string" ? req.body.title.trim() : "";
@@ -560,6 +609,7 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
       if (parsed === null) return failure(res, "scheduledAt cannot be cleared on a SCHEDULED session.", 422);
       session.scheduledAt = parsed;
       changed = true;
+      scheduleChanged = true;
     }
 
     const courseRef = await resolveLiveCourseIds(req.body);
@@ -617,6 +667,13 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
     }
 
     await session.save();
+    if (scheduleChanged) {
+      // A reschedule must re-point every reminder's fire time + job so users
+      // are still notified relative to the *new* start time.
+      await syncRemindersForSession(String(session._id)).catch((e) =>
+        logger.error("Live reminder sync after reschedule failed", { error: getErrorMessage(e) })
+      );
+    }
     logger.info("LiveSession updated", { sessionId: session._id });
     return success(res, { session: publicView(session) }, "Live session updated.");
   } catch (err) {
@@ -637,6 +694,10 @@ export const deleteLiveSession = async (req: Request, res: Response) => {
     }
 
     await LiveSession.deleteOne({ _id: session._id });
+    // Drop any user reminders + their pending notifications for this session.
+    await cancelRemindersForSession(String(session._id)).catch((e) =>
+      logger.error("Live reminder cleanup after session delete failed", { error: getErrorMessage(e) })
+    );
     logger.info("LiveSession deleted", { sessionId: session._id, status: session.status });
     return success(res, { id: String(session._id) }, "Live session deleted.");
   } catch (err) {
@@ -661,15 +722,39 @@ export const endLiveSession = async (req: Request, res: Response) => {
 
     // Notify everyone in the live class room so their UI closes the player
     // and stops chat/poll input. liveClassId === String(streamId).
+    const endedAt = new Date();
     const liveClassId = String(streamId);
     io?.to(roomKey(liveClassId)).emit("live_session_ended", {
       streamId,
       liveClassId,
       status: "ENDED",
-      endedAt: new Date().toISOString(),
+      endedAt: endedAt.toISOString(),
     });
 
-    logger.info("LiveSession ended", { streamId, found: Boolean(updated) });
+    // Close any still-open attendance rows — viewers' sockets may not
+    // disconnect immediately when the stream ends.
+    const closed = await LiveSessionAttendance.updateMany(
+      { streamId, leftAt: null },
+      [
+        {
+          $set: {
+            leftAt: endedAt,
+            durationSec: {
+              $max: [
+                0,
+                { $round: [{ $divide: [{ $subtract: [endedAt, "$joinedAt"] }, 1000] }, 0] },
+              ],
+            },
+          },
+        },
+      ]
+    );
+
+    logger.info("LiveSession ended", {
+      streamId,
+      found: Boolean(updated),
+      attendanceClosed: closed.modifiedCount,
+    });
 
     return success(
       res,

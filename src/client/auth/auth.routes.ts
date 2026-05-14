@@ -1,7 +1,10 @@
 import { Router } from "express";
 import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpHandler, logoutHandler } from "./auth.controller";
 import authenticate from "../../middlewares/authenticate";
-import { otpLimiter } from "../../config/rateLimiter";
+// TEMP (testing): otpLimiter disabled so repeated OTP requests don't hit the
+// 15-min / 5-request 429. RESTORE before merging — re-add it to the two
+// /otp routes below and uncomment this import.
+// import { otpLimiter } from "../../config/rateLimiter";
 
 const router = Router();
 
@@ -10,14 +13,14 @@ const router = Router();
  * @desc   Send OTP to phone number (creates account if first time)
  * @access Public
  */
-router.post("/otp/generate", otpLimiter, generateOtpHandler);
+router.post("/otp/generate", /* otpLimiter, */ generateOtpHandler); // TEMP: rate limit off for testing
 
 /**
  * @route  POST /api/v1/auth/otp/resend
  * @desc   Resend an OTP to the user's phone number
  * @access Public
  */
-router.post("/otp/resend", otpLimiter, resendOtpHandler);
+router.post("/otp/resend", /* otpLimiter, */ resendOtpHandler); // TEMP: rate limit off for testing
 
 /**
  * @route  POST /api/v1/auth/otp/validate

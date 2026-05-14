@@ -82,10 +82,14 @@ export async function generateOtp(rawPhone: string, traceId?: string): Promise<{
 
   // Account checks for existing users
   if (existing) {
-    if ((existing.loginCount ?? 0) > LOGIN_MAX_ATTEMPTS) {
-      logger.warn("generateOtp service login attempts exceeded", { traceId, phone });
-      return { ok: false, message: "Account suspended due to login policy violations." };
-    }
+    // TEMPORARILY DISABLED — `loginCount` is incremented on every OTP request
+    // and is NEVER reset on success, so this permanently locks out any account
+    // after 20 lifetime logins (not a real brute-force guard). Re-enable once
+    // loginCount is reset to 0 on successful OTP validation.
+    // if ((existing.loginCount ?? 0) > LOGIN_MAX_ATTEMPTS) {
+    //   logger.warn("generateOtp service login attempts exceeded", { traceId, phone });
+    //   return { ok: false, message: "Account suspended due to login policy violations." };
+    // }
     if (!existing.status) {
       logger.warn("generateOtp service account blocked", { traceId, phone });
       return { ok: false, message: "Your account has been blocked. Please contact support." };
@@ -184,10 +188,12 @@ export async function resendOtp(rawPhone: string, traceId?: string): Promise<{
     return { ok: false, message: "User not found. Please register first." };
   }
 
-  if ((existing.loginCount ?? 0) > LOGIN_MAX_ATTEMPTS) {
-    return { ok: false, message: "Account suspended due to login policy violations." };
-  }
-  
+  // TEMPORARILY DISABLED — see the note in generateOtp: loginCount never resets,
+  // so this permanently locks out accounts after 20 lifetime logins.
+  // if ((existing.loginCount ?? 0) > LOGIN_MAX_ATTEMPTS) {
+  //   return { ok: false, message: "Account suspended due to login policy violations." };
+  // }
+
   if (!existing.status) {
     return { ok: false, message: "Your account has been blocked. Please contact support." };
   }

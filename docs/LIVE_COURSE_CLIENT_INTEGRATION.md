@@ -155,7 +155,14 @@ Query: `status` (`SCHEDULED`|`CREATED`|`ENDED`|`READY`), `upcoming=true`
 - **"Live Now"** = `?status=CREATED`
 - **Upcoming** = `?upcoming=true`
 
-`data`: `{ sessions: [{ _id, title, status, scheduledAt, streamId, liveCourseIds, hasRecordings, createdAt, updatedAt }], total, page, limit }`
+`data`: `{ sessions: [{ _id, title, status, canJoin, scheduledAt, streamId, liveCourseIds, hasRecordings, createdAt, updatedAt }], total, page, limit }`
+
+**`canJoin`** is the flag to bind the **"Join" button** to — it's `true` only
+while `status === "CREATED"` (the admin has gone live and the room exists).
+Enable Join when `canJoin`, disable it for `SCHEDULED` (not started) and
+`ENDED`/`READY` (over — show "Watch recording" instead). It is NOT gated by
+subscription — *anyone* can join; the 3-minute preview gate applies once they're
+inside.
 
 ---
 
@@ -166,7 +173,8 @@ Applies the entitlement gate (section 3). `data`:
 ```jsonc
 {
   "id": "...", "title": "...", "status": "CREATED",
-  "scheduledAt": null, "streamId": 99231,
+  "canJoin": true,                      // status === "CREATED" — bind the Join button to this
+  "scheduledAt": null, "streamId": "T_17787590328754",
   "liveCourseIds": ["..."],
   "isLive": true,                       // live on Streamos right now
   "hlsUrl": "https://...m3u8",          // null when accessLevel = "preview_ended"
@@ -191,12 +199,104 @@ Applies the entitlement gate (section 3). `data`:
 - `preview` → play, but cut at `previewSecondsRemaining`; then show the popup
   built from `purchaseOptions` (you already have it — no refetch needed).
 - `preview_ended` → no URLs; show the popup immediately.
-- Live chat / polls: connect Socket.IO using `liveClassId` as the room id
-  (only valid once `streamId` exists — status `CREATED` or later).
+- Live chat / polls / presence: connect Socket.IO using `liveClassId` as the
+  room id (only valid once `streamId` exists — status `CREATED` or later). See §6.
 
 ---
 
-## 6. Recorded lectures
+## 6. Live chat, polls & presence (Socket.IO)
+
+The live experience (chat, polls, viewer presence, end-of-stream) runs over
+**Socket.IO**, not REST. Connect once the session is `CREATED` and you have its
+`liveClassId` (from `GET /client/live-sessions/:id`).
+
+### Connecting
+
+```js
+import { io } from "socket.io-client";
+
+const socket = io("{{API origin, e.g. https://api.websankul.com}}", {
+  path: "/socket.io",
+  auth: { token: "<customer access token>" },   // same JWT as the REST calls
+  transports: ["websocket", "polling"],
+});
+```
+Only **customer** tokens are accepted. On a bad/expired token the connection is
+rejected with a `connect_error`.
+
+### You emit → server
+
+| Event | Payload | Notes |
+|---|---|---|
+| `join_live_chat` | `{ liveClassId }` | Join the room. Server replies with `chat_history` (+ `active_poll` if one is live) and broadcasts `user_joined` / `viewer_count`. Joining a second room auto-leaves the first. |
+| `send_message` | `{ liveClassId, message }` | Post a chat message. `message` ≤ 2000 chars. |
+| `submit_vote` | `{ pollId, optionIndex }` | Vote on the active poll. One vote per poll — a second vote returns an `error`. |
+| `leave_live_chat` | `{ liveClassId }` | Leave the room (also closes your attendance record). |
+
+> You don't need to emit `leave_live_chat` on tab close — a `disconnect` is
+> handled server-side (attendance closed, `user_left` / `viewer_count` broadcast).
+
+### Server emits → you
+
+**On join**
+| Event | Payload |
+|---|---|
+| `chat_history` | `{ liveClassId, messages: [{ _id, customerId?, adminId?, isAdmin, userName, message, createdAt }] }` — last 50 |
+| `active_poll` | `{ poll: { _id, question, options, totalVotes, ... }, myVote }` — `myVote` = your chosen `optionIndex`, or `null` |
+
+**Chat**
+| Event | Payload |
+|---|---|
+| `new_message` | `{ _id, liveClassId, customerId?, adminId?, isAdmin, userName, message, createdAt }` — a new message from a student or admin |
+
+**Polls** (admin-driven)
+| Event | Payload |
+|---|---|
+| `poll_created` | `{ poll: { _id, question, options, totalVotes, ... } }` — a new poll went live |
+| `poll_update` | `{ pollId, options, totalVotes }` — vote counts changed (after any vote) |
+| `poll_updated` | `{ poll }` — admin edited the poll |
+| `poll_closed` | `{ pollId }` — poll closed, stop accepting votes |
+| `poll_deleted` | `{ pollId }` — poll removed |
+
+**Presence** *(new)*
+| Event | Payload |
+|---|---|
+| `user_joined` | `{ liveClassId, customerId, userName, joinedAt }` — someone joined the room |
+| `user_left` | `{ liveClassId, customerId, userName, leftAt }` — someone left / disconnected |
+| `viewer_count` | `{ liveClassId, count }` — distinct viewers currently in the room; emitted on every join/leave. Bind your "👤 N watching" UI to this. |
+
+**Session lifecycle** *(new)*
+| Event | Payload |
+|---|---|
+| `live_session_ended` | `{ streamId, liveClassId, status: "ENDED", endedAt }` — the admin ended the stream. Close the player and show an "ended" state. |
+| `recordings_ready` | `{ streamId, liveClassId, status: "READY", recordings: [{ quality, file_size, path }] }` — the recording is now available; you can switch to a "watch recording" view. |
+
+**Errors**
+| Event | Payload |
+|---|---|
+| `error` | `{ message }` — bad room id, empty/too-long message, already voted, etc. Non-fatal; the socket stays connected. |
+
+### Minimal handler set
+
+```js
+socket.on("connect",       () => socket.emit("join_live_chat", { liveClassId }));
+socket.on("chat_history",  ({ messages }) => renderHistory(messages));
+socket.on("new_message",   (m) => appendMessage(m));
+socket.on("viewer_count",  ({ count }) => setViewerCount(count));
+socket.on("user_joined",   ({ userName }) => toast(`${userName} joined`));
+socket.on("user_left",     ({ userName }) => toast(`${userName} left`));
+socket.on("active_poll",   ({ poll, myVote }) => showPoll(poll, myVote));
+socket.on("poll_created",  ({ poll }) => showPoll(poll, null));
+socket.on("poll_update",   ({ pollId, options, totalVotes }) => updatePollCounts(pollId, options, totalVotes));
+socket.on("poll_closed",   ({ pollId }) => closePoll(pollId));
+socket.on("live_session_ended", () => endPlayer());
+socket.on("recordings_ready",   ({ recordings }) => offerRecording(recordings));
+socket.on("error",         ({ message }) => console.warn("socket:", message));
+```
+
+---
+
+## 7. Recorded lectures
 
 There are **two** recordings views — they're different on purpose:
 
@@ -242,9 +342,16 @@ Videos an admin promoted into folders (+ any manually added).
       "lectures": [
         {
           "_id": "...", "title": "...", "topic": "...",
-          "platform": "aws", "priceType": "paid", "order": 0,
+          "platform": "youtube", "priceType": "paid", "order": 0,
           "locked": true,               // !subscribed && priceType != "free"
-          "videoUrl": null              // present only when not locked
+          // all four below are null while `locked` — they're the playable
+          // source and must not leak. `videoUrl` is the unified value for
+          // `platform`; the *_id fields mirror it so the client can pick a
+          // player. When not locked they hold the real values.
+          "videoUrl": null,
+          "youtube_id": null,
+          "aws_id": null,
+          "vimeo_id": null
         }
       ]
     }
@@ -253,13 +360,24 @@ Videos an admin promoted into folders (+ any manually added).
 }
 ```
 
+> **`videoUrl`/`youtube_id` empty?** That's the paywall, not a bug — the
+> lecture is `priceType: "paid"` and the customer isn't subscribed
+> (`locked: true`). A subscribed customer, or a `priceType: "free"` lecture,
+> gets the real values.
+>
+> **Note on `platform`:** an HLS (`.m3u8`) or MP4 URL should be stored with
+> `platform: "aws"` (the `aws_id` field accepts any URL). `youtube_id` is for
+> a real YouTube video id. If a full URL is put in `youtube_id` with
+> `platform: "youtube"`, the client must special-case it.
+
 ### `GET /client/live-courses/:id/lecture/:videoId`  ← play one folder lecture
-`data` on success: `{ _id, title, topic, platform, priceType, videoUrl }`.
+`data` on success: `{ _id, title, topic, platform, priceType, videoUrl, youtube_id, aws_id, vimeo_id }`
+— `videoUrl` is the unified source; the `*_id` fields mirror it per platform.
 On `403` (not subscribed, paid lecture): `data` carries `{ purchaseOptions }`.
 
 ---
 
-## 7. Schedule tab
+## 8. Schedule tab
 
 ### `GET /client/live-courses/:id/schedule`
 Not gated — course info shown to everyone.
@@ -294,7 +412,7 @@ as the downloadable list.
 
 ---
 
-## 8. Buy flow (Razorpay)
+## 9. Buy flow (Razorpay)
 
 > These 3 endpoints are under `/api/v1/client/payment` and return
 > `{ "success": true, "data": {...} }` (no `code`/`messages`).
@@ -341,7 +459,7 @@ safety net if the app dies before this call.
 
 ---
 
-## 9. Quick reference
+## 10. Quick reference
 
 | Method | Path | Purpose |
 |---|---|---|

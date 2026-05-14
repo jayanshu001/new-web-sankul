@@ -2341,7 +2341,7 @@
         },
         {
           "name": "12 Live Courses",
-          "description": "Customer-facing live courses, organised folder-wise:\n- **01 Browse** \u2014 list / detail (header stats + plan discount) / my subscriptions\n- **02 Live Sessions** \u2014 watch live, with the server-enforced per-viewer preview\n- **03 Recorded Lectures** \u2014 course-wise recordings + gated single-lecture playback\n- **04 Purchase** \u2014 create the Razorpay order\n- **05 Schedule** \u2014 the study timetable + timetable files\n\n**Entitlement:** a non-subscriber gets a server-enforced 3-minute per-viewer preview of a live session; after that, playback URLs are withheld and `purchaseOptions` lists every attached course + plan. Buying ANY attached course unlocks the session.",
+          "description": "Customer-facing live courses, organised folder-wise:\n- **01 Browse** \u2014 list / detail (header stats + plan discount) / my subscriptions\n- **02 Live Sessions** \u2014 watch live, with the server-enforced per-viewer preview\n- **03 Recorded Lectures** \u2014 course-wise recordings + gated single-lecture playback\n- **04 Purchase** \u2014 create the Razorpay order\n- **05 Schedule** \u2014 the study timetable + timetable files\n- **06 Reminders** \u2014 per-session 'remind me' for upcoming SCHEDULED classes\n\n**Entitlement:** a non-subscriber gets a server-enforced 3-minute per-viewer preview of a live session; after that, playback URLs are withheld and `purchaseOptions` lists every attached course + plan. Buying ANY attached course unlocks the session.",
           "item": [
             {
               "name": "01 Browse",
@@ -2813,6 +2813,159 @@
                 }
               ],
               "description": "The course's study timetable, derived from its scheduled live sessions, plus the uploaded timetable files."
+            },
+            {
+              "name": "06 Reminders",
+              "item": [
+                {
+                  "name": "Set Reminder",
+                  "request": {
+                    "method": "POST",
+                    "header": [
+                      {
+                        "key": "Content-Type",
+                        "value": "application/json"
+                      }
+                    ],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/live-reminders",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "live-reminders"
+                      ]
+                    },
+                    "auth": {
+                      "type": "bearer",
+                      "bearer": [
+                        {
+                          "key": "token",
+                          "value": "{{accessToken}}",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "description": "Set (or replace) the caller's reminder for a SCHEDULED live session. `minutesBefore` is optional \u2014 default 30, max 10080 (1 week). The reminder push fires that many minutes before the session's `scheduledAt`; if the class is sooner than `minutesBefore`, it fires almost immediately instead of in the past.\n\nUpserts on (customer, session) \u2014 calling it again just moves the fire time. Returns the reminder with its `session` summary populated. Errors: 404 session not found, 409 session is not SCHEDULED / has no upcoming time, 422 bad `liveSessionId` or `minutesBefore`.",
+                    "body": {
+                      "mode": "raw",
+                      "raw": "{\n  \"liveSessionId\": \"{{live_session_id}}\",\n  \"minutesBefore\": 30\n}",
+                      "options": {
+                        "raw": {
+                          "language": "json"
+                        }
+                      }
+                    }
+                  },
+                  "response": []
+                },
+                {
+                  "name": "List My Reminders",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/live-reminders?upcoming=true",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "live-reminders"
+                      ],
+                      "query": [
+                        {
+                          "key": "upcoming",
+                          "value": "true"
+                        }
+                      ]
+                    },
+                    "auth": {
+                      "type": "bearer",
+                      "bearer": [
+                        {
+                          "key": "token",
+                          "value": "{{accessToken}}",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "description": "The caller's reminders, soonest first. `?upcoming=true` keeps only still-scheduled reminders whose session start is still in the future; omit it for ALL reminders (including fired / cancelled ones). Each row carries the populated `session` summary and a derived `fired` flag (the scheduled fire time has already passed)."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Get Reminder for Session",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/live-reminders/session/{{live_session_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "live-reminders",
+                        "session",
+                        "{{live_session_id}}"
+                      ]
+                    },
+                    "auth": {
+                      "type": "bearer",
+                      "bearer": [
+                        {
+                          "key": "token",
+                          "value": "{{accessToken}}",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "description": "Whether the caller already has a reminder on this session \u2014 drives the per-session 'reminder on / off' toggle. `data.reminder` is the reminder object, or `null` when none is set."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Remove Reminder",
+                  "request": {
+                    "method": "DELETE",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/live-reminders/{{live_session_id}}",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "live-reminders",
+                        "{{live_session_id}}"
+                      ]
+                    },
+                    "auth": {
+                      "type": "bearer",
+                      "bearer": [
+                        {
+                          "key": "token",
+                          "value": "{{accessToken}}",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "description": "Remove the caller's reminder for a session and cancel its pending notification. Note the path id is the **liveSessionId**, not the reminder id. 404 if no reminder was set."
+                  },
+                  "response": []
+                }
+              ],
+              "description": "Per-session 'remind me' for upcoming SCHEDULED live classes. A reminder is delivered as a push notification (FCM, `type: \"live_reminder\"`) `minutesBefore` the class starts \u2014 default 30 min. One reminder per customer per session."
             }
           ]
         }

@@ -145,6 +145,11 @@ if (process.env.NODE_ENV !== "production") {
     res.setHeader("Content-Security-Policy", ""); // allow inline scripts & CDN in demo
     res.sendFile(path.join(process.cwd(), "docs", "live-chat-demo.html"));
   });
+  // Live course streaming test harness (admin go-live + customer join/watch).
+  app.get("/demo/live-course", (_req, res) => {
+    res.setHeader("Content-Security-Policy", "");
+    res.sendFile(path.join(process.cwd(), "docs", "live-course-demo.html"));
+  });
 }
 
 // --- Global Rate Limiter ---------------------------------------------------

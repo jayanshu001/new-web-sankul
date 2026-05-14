@@ -6,6 +6,8 @@ import { Customer } from "../models/customer/Customer.model";
 import { LiveChatMessage } from "../models/course/LiveChatMessage.model";
 import { LivePoll } from "../models/course/LivePoll.model";
 import { LivePollVote } from "../models/course/LivePollVote.model";
+import { LiveSession } from "../models/course/LiveSession.model";
+import { LiveSessionAttendance } from "../models/customer/LiveSessionAttendance.model";
 import { resolveLiveClassId } from "../admin/live/live.guards";
 import { redisClient } from "../config/redis";
 import logger from "../utils/logger";
@@ -16,10 +18,64 @@ export let io: SocketServer;
 interface AuthenticatedSocket extends Socket {
   customerId?: string;
   userName?: string;
+  // The live class this socket is currently in, plus its open attendance row.
+  liveRoom?: string;
+  attendanceId?: string;
 }
 
 export function roomKey(liveClassId: string) {
   return `live_chat:${liveClassId}`;
+}
+
+// Distinct customers currently in a live class room — a customer with two tabs
+// counts once.
+function viewerCount(liveClassId: string): number {
+  const room = io?.sockets.adapter.rooms.get(roomKey(liveClassId));
+  if (!room) return 0;
+  const customers = new Set<string>();
+  for (const sid of room) {
+    const s = io.sockets.sockets.get(sid) as AuthenticatedSocket | undefined;
+    if (s?.customerId) customers.add(s.customerId);
+  }
+  return customers.size;
+}
+
+// Open an attendance row for this socket's stint in a live class. Best-effort.
+async function openAttendance(socket: AuthenticatedSocket, liveClassId: string) {
+  try {
+    const session = await LiveSession.findOne({ streamId: liveClassId }).select("_id").lean();
+    const rec = await LiveSessionAttendance.create({
+      streamId: liveClassId,
+      liveSessionId: session?._id ?? null,
+      customerId: new Types.ObjectId(socket.customerId!),
+      userName: socket.userName ?? "",
+      joinedAt: new Date(),
+    });
+    socket.attendanceId = String(rec._id);
+    socket.liveRoom = liveClassId;
+  } catch (err) {
+    logger.error("Live attendance: open failed", { liveClassId, error: (err as Error).message });
+  }
+}
+
+// Close this socket's open attendance row (idempotent — no-op if already closed).
+async function closeAttendance(socket: AuthenticatedSocket) {
+  const id = socket.attendanceId;
+  socket.attendanceId = undefined;
+  if (!id) return;
+  try {
+    const rec = await LiveSessionAttendance.findById(id);
+    if (rec && !rec.leftAt) {
+      rec.leftAt = new Date();
+      rec.durationSec = Math.max(
+        0,
+        Math.round((rec.leftAt.getTime() - rec.joinedAt.getTime()) / 1000)
+      );
+      await rec.save();
+    }
+  } catch (err) {
+    logger.error("Live attendance: close failed", { attendanceId: id, error: (err as Error).message });
+  }
 }
 
 async function authenticateSocket(token: string): Promise<{ customerId: string; userName: string } | null> {
@@ -80,7 +136,24 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
         return;
       }
 
+      // If this socket was already in another live room, cleanly leave it first
+      // (close its attendance row, notify that room).
+      if (socket.liveRoom && socket.liveRoom !== liveClassId) {
+        const prev = socket.liveRoom;
+        socket.leave(roomKey(prev));
+        await closeAttendance(socket);
+        socket.liveRoom = undefined;
+        io.to(roomKey(prev)).emit("user_left", {
+          liveClassId: prev,
+          customerId: socket.customerId,
+          userName: socket.userName,
+          leftAt: new Date().toISOString(),
+        });
+        io.to(roomKey(prev)).emit("viewer_count", { liveClassId: prev, count: viewerCount(prev) });
+      }
+
       socket.join(roomKey(liveClassId));
+      await openAttendance(socket, liveClassId);
 
       try {
         const history = await LiveChatMessage.find({ liveClassId })
@@ -114,6 +187,18 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
       } catch (err) {
         logger.error("Live chat: active poll load failed", { liveClassId, error: (err as Error).message });
       }
+
+      // ── Presence: tell the room someone joined + the new viewer count ──────
+      io.to(roomKey(liveClassId)).emit("user_joined", {
+        liveClassId,
+        customerId: socket.customerId,
+        userName: socket.userName,
+        joinedAt: new Date().toISOString(),
+      });
+      io.to(roomKey(liveClassId)).emit("viewer_count", {
+        liveClassId,
+        count: viewerCount(liveClassId),
+      });
     });
 
     // ── Vote on a poll (students only) ────────────────────────────────────────
@@ -199,11 +284,39 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
     });
 
     // ── Leave room ────────────────────────────────────────────────────────────
-    socket.on("leave_live_chat", ({ liveClassId }: { liveClassId: string }) => {
-      if (liveClassId) socket.leave(roomKey(liveClassId));
+    socket.on("leave_live_chat", async ({ liveClassId }: { liveClassId: string }) => {
+      if (!liveClassId) return;
+      socket.leave(roomKey(liveClassId));
+      await closeAttendance(socket);
+      if (socket.liveRoom === liveClassId) socket.liveRoom = undefined;
+      io.to(roomKey(liveClassId)).emit("user_left", {
+        liveClassId,
+        customerId: socket.customerId,
+        userName: socket.userName,
+        leftAt: new Date().toISOString(),
+      });
+      io.to(roomKey(liveClassId)).emit("viewer_count", {
+        liveClassId,
+        count: viewerCount(liveClassId),
+      });
     });
 
-    socket.on("disconnect", () => {
+    socket.on("disconnect", async () => {
+      // If still in a live room, close the attendance row and notify the room.
+      // By the time `disconnect` fires, socket.io has already removed this
+      // socket from its rooms, so viewerCount() below already excludes it.
+      if (socket.liveRoom) {
+        const room = socket.liveRoom;
+        socket.liveRoom = undefined;
+        await closeAttendance(socket);
+        io.to(roomKey(room)).emit("user_left", {
+          liveClassId: room,
+          customerId: socket.customerId,
+          userName: socket.userName,
+          leftAt: new Date().toISOString(),
+        });
+        io.to(roomKey(room)).emit("viewer_count", { liveClassId: room, count: viewerCount(room) });
+      }
       logger.info("Live chat: client disconnected", { socketId: socket.id, customerId: socket.customerId });
     });
   });

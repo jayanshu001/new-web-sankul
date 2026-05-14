@@ -1,0 +1,852 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Live Course — Streaming Test Harness</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:#0f172a;color:#e2e8f0;padding:16px;font-size:13px;line-height:1.5}
+  h1{font-size:16px;margin-bottom:4px}
+  h2{font-size:13px;color:#93c5fd;margin:14px 0 6px;text-transform:uppercase;letter-spacing:.04em}
+  .sub{color:#64748b;font-size:12px;margin-bottom:12px}
+  .wrap{display:grid;grid-template-columns:1fr 380px;gap:16px;max-width:1400px;margin:0 auto}
+  .card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:12px;margin-bottom:12px}
+  input,button,select{font:inherit}
+  input,select{background:#0f172a;border:1px solid #334155;color:#e2e8f0;padding:6px 8px;border-radius:5px}
+  input{width:100%}
+  button{background:#7c3aed;color:#fff;border:0;padding:6px 12px;border-radius:5px;cursor:pointer;font-weight:600}
+  button:hover{background:#6d28d9}
+  button.sec{background:#334155}
+  button.sec:hover{background:#475569}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+  .row label{color:#94a3b8;min-width:78px}
+  .badge{font-size:11px;padding:2px 8px;border-radius:999px;font-weight:700;display:inline-block}
+  .b-grn{background:#16a34a;color:#fff}.b-ylw{background:#d97706;color:#fff}.b-red{background:#dc2626;color:#fff}
+  .b-gray{background:#475569;color:#cbd5e1}.b-blue{background:#2563eb;color:#fff}
+  .list .item{padding:7px 9px;border:1px solid #334155;border-radius:6px;margin-bottom:5px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .list .item:hover{border-color:#7c3aed;background:#1e293b}
+  .list .item.on{border-color:#7c3aed;background:#2e1065}
+  video{width:100%;border-radius:6px;background:#000;aspect-ratio:16/9}
+  .player-wrap{position:relative}
+  .overlay{position:absolute;inset:0;background:rgba(15,23,42,.94);border-radius:6px;display:none;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center}
+  .overlay.show{display:flex}
+  .live-btn{position:absolute;top:8px;left:8px;z-index:5;border:0;border-radius:6px;padding:5px 10px;font-weight:700;font-size:11px;cursor:pointer;display:none}
+  .live-btn.show{display:inline-block}
+  .live-btn.at-edge{background:#dc2626;color:#fff}
+  .live-btn.behind{background:#475569;color:#e2e8f0}
+  .overlay h3{font-size:15px;margin-bottom:8px}
+  .plan-pill{display:inline-block;background:#334155;border:1px solid #475569;border-radius:6px;padding:6px 10px;margin:4px;cursor:pointer}
+  .plan-pill:hover{border-color:#7c3aed}
+  pre{background:#0f172a;border:1px solid #334155;border-radius:6px;padding:8px;overflow:auto;max-height:240px;font-size:11px;color:#a5b4fc;white-space:pre-wrap;word-break:break-word}
+  .log{background:#020617;border:1px solid #334155;border-radius:6px;padding:8px;height:150px;overflow:auto;font-family:ui-monospace,monospace;font-size:11px}
+  .log .l{margin-bottom:2px}.log .i{color:#38bdf8}.log .o{color:#a78bfa}.log .e{color:#f87171}.log .s{color:#4ade80}
+  .chat{height:230px;overflow:auto;background:#0f172a;border:1px solid #334155;border-radius:6px;padding:8px;margin-bottom:6px}
+  .msg{margin-bottom:5px}.msg .who{color:#93c5fd;font-weight:700}.msg.admin .who{color:#f59e0b}
+  .stat{display:inline-block;background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 10px;margin-right:6px;text-align:center}
+  .stat b{display:block;font-size:14px;color:#fff}.stat span{color:#64748b;font-size:11px}
+  .muted{color:#64748b}
+  code{background:#0f172a;padding:1px 5px;border-radius:4px;color:#fbbf24}
+</style>
+</head>
+<body>
+
+<h1>Live Course — Streaming Test Harness</h1>
+<p class="sub">End-to-end test page. <b>Customer</b>: auth → browse → watch live (HLS + preview gate) → chat/polls. <b>Admin</b> (sections 6–6d): login → create/schedule sessions → start/end → run chat &amp; polls. Single file, no build.</p>
+
+<div class="wrap">
+  <!-- ════════════ LEFT COLUMN ════════════ -->
+  <div>
+    <!-- Config + Auth -->
+    <div class="card">
+      <h2>1 · Config &amp; Auth</h2>
+      <div class="row"><label>API base</label><input id="apiBase" value="http://localhost:4000" style="flex:1"></div>
+      <div class="row">
+        <label>Phone</label><input id="phone" value="9999999999" style="width:130px">
+        <input id="otp" value="5786" style="width:70px" placeholder="OTP">
+        <button class="sec" onclick="sendOtp()">Send OTP</button>
+        <button onclick="verifyOtp()">Login</button>
+        <span id="authState" class="badge b-gray">not logged in</span>
+      </div>
+      <div class="row"><label>or token</label><input id="tokenIn" placeholder="paste a customer access token" style="flex:1"><button class="sec" onclick="useToken()">Use</button></div>
+      <p class="muted">Testing phones <code>9999999999 / 8888888888 / 7777777777</code> use static OTP <code>5786</code>.</p>
+    </div>
+
+    <!-- Course -->
+    <div class="card">
+      <h2>2 · Live course</h2>
+      <div class="row">
+        <label>Course id</label>
+        <input id="courseId" value="6a058c63ea69f98d3d42f382" style="flex:1">
+        <button onclick="loadCourse()">Load</button>
+        <button class="sec" onclick="loadCourses()">List all</button>
+      </div>
+      <div id="courseList" class="list"></div>
+      <div id="courseDetail"></div>
+    </div>
+
+    <!-- Sessions -->
+    <div class="card">
+      <h2>3 · Sessions</h2>
+      <div class="row">
+        <button class="sec" onclick="loadSessions('')">All</button>
+        <button class="sec" onclick="loadSessions('CREATED')">Live now</button>
+        <button class="sec" onclick="loadSessions('SCHEDULED')">Scheduled</button>
+        <button class="sec" onclick="loadSessions('READY')">Recorded</button>
+      </div>
+      <div id="sessionList" class="list"></div>
+    </div>
+
+    <!-- Player -->
+    <div class="card">
+      <h2>4 · Player <span id="accessBadge"></span></h2>
+      <div id="sessionMeta" class="muted" style="margin-bottom:6px">Pick a session above and hit “Watch”.</div>
+      <div class="player-wrap">
+        <video id="video" controls playsinline></video>
+        <button id="liveBtn" class="live-btn" onclick="seekToLive()" title="jump to the live edge">● LIVE</button>
+        <div id="overlay" class="overlay">
+          <h3 id="overlayTitle">Preview ended</h3>
+          <p class="muted" id="overlayText">Subscribe to keep watching.</p>
+          <div id="overlayPlans" style="margin-top:8px"></div>
+        </div>
+      </div>
+      <div id="previewBar" class="muted" style="margin-top:6px"></div>
+    </div>
+
+    <!-- Recordings / Schedule -->
+    <div class="card">
+      <h2>5 · Recordings &amp; Schedule</h2>
+      <div class="row">
+        <button class="sec" onclick="dump('/client/live-courses/'+cid()+'/recordings','Folder recordings')">Folder recordings</button>
+        <button class="sec" onclick="dump('/client/live-courses/'+cid()+'/session-recordings','Session recordings')">Session recordings</button>
+        <button class="sec" onclick="dump('/client/live-courses/'+cid()+'/schedule','Schedule')">Schedule</button>
+        <button class="sec" onclick="dump('/client/live-courses/my','My courses')">My courses</button>
+      </div>
+      <pre id="dump" class="muted">—</pre>
+    </div>
+
+    <!-- Admin: Login + create/schedule -->
+    <div class="card">
+      <h2>6 · Admin — Login &amp; create session <span id="admState" class="badge b-gray">not logged in</span></h2>
+      <p class="muted">Separate <b>admin</b> login. Leave <b>Schedule at</b> empty and hit <b>Go Live now</b> to create a Streamos stream immediately (the customer's <b>Join Live</b> in section 3 enables; point OBS at the RTMP URL below to broadcast video). Set a future time + <b>Create</b> to make a <b>SCHEDULED</b> session you can start from 6b.</p>
+      <div class="row"><label>Email</label><input id="admEmail" placeholder="admin email"></div>
+      <div class="row"><label>Password</label><input id="admPass" type="password" placeholder="admin password"><button onclick="adminLogin()">Login</button></div>
+      <div class="row"><label>Course</label>
+        <select id="admCourse" style="flex:1"><option value="">— login to load courses —</option></select>
+        <button class="sec" onclick="loadAdminCourses()" title="reload courses">↻</button></div>
+      <div class="row"><label>Title</label><input id="admTitle" value="Live Class — Demo"></div>
+      <div class="row"><label>Schedule at</label>
+        <input id="admSchedule" type="datetime-local" style="flex:1">
+        <button onclick="createAdminSession()">＋ Create</button>
+        <button onclick="goLive()" title="create + go live immediately">● Go Live now</button></div>
+      <div id="admOut" class="muted">—</div>
+    </div>
+
+    <!-- Admin: Sessions (scheduled + live) -->
+    <div class="card">
+      <h2>6b · Admin — Sessions</h2>
+      <p class="muted">All sessions across courses. <b>▶ Start</b> a SCHEDULED one (only works within 2 min of its scheduled time) to create its Streamos stream; <b>■ End</b> a live one. Click a row to point the admin chat &amp; poll panels (6c / 6d) at it.</p>
+      <div class="row">
+        <button class="sec" onclick="loadAdminSessions('')">All</button>
+        <button class="sec" onclick="loadAdminSessions('CREATED')">Live now</button>
+        <button class="sec" onclick="loadAdminSessions('SCHEDULED')">Scheduled</button>
+        <button class="sec" onclick="loadAdminSessions('READY')">Recorded</button>
+      </div>
+      <div id="admSessionList" class="list"><span class="muted">Login, then load sessions.</span></div>
+    </div>
+
+    <!-- Admin: Chat -->
+    <div class="card">
+      <h2>6c · Admin — Chat <span id="admChatTarget" class="badge b-gray">no session</span></h2>
+      <p class="muted">Posts as <b>admin</b> via <code>POST /admin/live-chat/message</code> — broadcast to the room over Socket.IO, so a customer tab joined to the same session sees it instantly in the right-hand panel. Customer messages appear here on refresh (admins aren't on the socket).</p>
+      <div id="admChat" class="chat"><span class="muted">Select a live session in 6b.</span></div>
+      <div class="row">
+        <input id="admChatInput" placeholder="message as admin…" style="flex:1" onkeydown="if(event.key==='Enter')sendAdminChat()">
+        <button onclick="sendAdminChat()">Send</button>
+        <button class="sec" onclick="loadAdminChat()" title="refresh history">↻</button>
+        <label style="min-width:auto"><input type="checkbox" id="admChatAuto" style="width:auto" onchange="toggleAdminChatAuto()"> auto&nbsp;3s</label>
+      </div>
+    </div>
+
+    <!-- Admin: Polls -->
+    <div class="card">
+      <h2>6d · Admin — Polls <span id="admPollTarget" class="badge b-gray">no session</span></h2>
+      <p class="muted">Create a poll (<code>POST /admin/live-polls</code>) — pushed live to the room; customers vote from the right-hand panel and counts stream back here on refresh. Creating a new poll auto-closes the previous active one.</p>
+      <div class="row"><input id="admPollQ" placeholder="poll question" style="flex:1"></div>
+      <div class="row"><input id="admPollO1" placeholder="option 1" style="flex:1"><input id="admPollO2" placeholder="option 2" style="flex:1"></div>
+      <div class="row"><input id="admPollO3" placeholder="option 3 (optional)" style="flex:1"><input id="admPollO4" placeholder="option 4 (optional)" style="flex:1"></div>
+      <div class="row"><button onclick="createAdminPoll()">＋ Create poll</button><button class="sec" onclick="loadAdminPolls()">↻ Refresh polls</button></div>
+      <div id="admPollList" class="list"><span class="muted">Select a live session in 6b.</span></div>
+    </div>
+
+    <!-- Admin: Go live from camera -->
+    <div class="card">
+      <h2>6e · Admin — Go live from camera <span id="camStatus"></span></h2>
+      <p class="muted">Broadcast your <b>browser camera + mic</b> straight to the session selected in 6b — it must be <code>CREATED</code> (live). The browser streams WebM chunks over a WebSocket; the server runs <b>ffmpeg</b> to transcode and push RTMP to Streamos, so no OBS is needed. Chrome recommended; <b>open this page on <code>localhost</code></b> (camera access needs a secure context).</p>
+      <video id="camPreview" muted autoplay playsinline style="width:100%;border-radius:6px;background:#000;aspect-ratio:16/9;margin-bottom:6px"></video>
+      <div class="row">
+        <button class="sec" onclick="enableCamera()">Enable camera</button>
+        <button onclick="startCamBroadcast()">● Start broadcast</button>
+        <button class="sec" onclick="stopCamBroadcast(false)">■ Stop broadcast</button>
+      </div>
+      <p class="muted">Flow: section 6 → <b>Go Live now</b> (creates the stream) → 6e → <b>Enable camera</b> → <b>Start broadcast</b>. Customers watching in section 3 see your camera within a few seconds (HLS latency).</p>
+    </div>
+  </div>
+
+  <!-- ════════════ RIGHT COLUMN ════════════ -->
+  <div>
+    <div class="card">
+      <h2>Live chat &amp; polls
+        <span id="sockBadge" class="badge b-gray">disconnected</span>
+        <span id="viewerBadge" class="badge b-blue">👤 0</span></h2>
+      <div id="chat" class="chat"><span class="muted">Watch a CREATED session to join its chat room.</span></div>
+      <div class="row">
+        <input id="chatInput" placeholder="type a message…" style="flex:1" onkeydown="if(event.key==='Enter')sendMsg()">
+        <button onclick="sendMsg()">Send</button>
+      </div>
+      <div id="poll"></div>
+    </div>
+    <div class="card">
+      <h2>Event log</h2>
+      <div id="log" class="log"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────── state ───────────
+let token = "", currentSession = null, socket = null, hls = null, previewTimer = null, activePollId = null, liveSyncTimer = null;
+const $ = id => document.getElementById(id);
+const apiBase = () => $("apiBase").value.replace(/\/+$/,"");
+const cid = () => $("courseId").value.trim();
+
+// Served from the server (http) → default API base to this origin so calls are
+// same-origin (no CORS). Opened as a file:// → keeps the localhost:4000 default.
+if (location.protocol.startsWith("http")) $("apiBase").value = location.origin;
+
+function log(msg, cls="i"){
+  const d = $("log"); const el = document.createElement("div");
+  el.className = "l "+cls; el.textContent = "› "+msg;
+  d.appendChild(el); d.scrollTop = d.scrollHeight;
+}
+
+// ─────────── api helper ───────────
+async function api(path, opts={}){
+  const res = await fetch(apiBase()+"/api/v1"+path, {
+    ...opts,
+    headers: { "Content-Type":"application/json", ...(token?{Authorization:"Bearer "+token}:{}) , ...(opts.headers||{}) },
+  });
+  let body; try { body = await res.json(); } catch { body = {}; }
+  if (!res.ok) log(`${opts.method||"GET"} ${path} → ${res.status} ${body.message||""}`,"e");
+  return { ok: res.ok, status: res.status, body };
+}
+
+// ─────────── auth ───────────
+async function sendOtp(){
+  const r = await api("/client/auth/otp/generate",{method:"POST",body:JSON.stringify({phoneNumber:$("phone").value.trim()})});
+  log(r.ok ? "OTP sent (use 5786 for testing numbers)" : "OTP generate failed", r.ok?"s":"e");
+}
+async function verifyOtp(){
+  const r = await api("/client/auth/otp/validate",{method:"POST",body:JSON.stringify({phoneNumber:$("phone").value.trim(),otp:$("otp").value.trim()})});
+  const t = r.body?.data?.accessToken || r.body?.data?.token;
+  if (t){ token = t; $("authState").textContent="logged in"; $("authState").className="badge b-grn"; log("logged in","s"); }
+  else { log("login failed: "+(r.body?.message||r.status),"e"); }
+}
+function useToken(){
+  token = $("tokenIn").value.trim();
+  if (token){ $("authState").textContent="token set"; $("authState").className="badge b-grn"; log("token set manually","s"); }
+}
+
+// ─────────── courses ───────────
+async function loadCourses(){
+  const r = await api("/client/live-courses");
+  const rows = r.body?.data?.liveCourses || [];
+  $("courseList").innerHTML = rows.map(c =>
+    `<div class="item" onclick="$('courseId').value='${c._id}';loadCourse()">
+       <span>${esc(c.name)}</span><span class="badge b-gray">${c.classType||"live"}</span></div>`).join("") || `<span class="muted">none</span>`;
+  log(`loaded ${rows.length} live courses`);
+}
+async function loadCourse(){
+  if(!cid()) return;
+  const r = await api("/client/live-courses/"+cid());
+  const d = r.body?.data;
+  if(!d){ $("courseDetail").innerHTML = `<span class="e">not found</span>`; return; }
+  const st = d.stats||{};
+  const plans = (d.plans||[]).map(p =>
+    `<div class="stat"><b>₹${p.price}${p.originalPrice?` <s class="muted">₹${p.originalPrice}</s>`:""}</b>
+       <span>${p.name||p.duration+"mo"}${p.discountPercent?` · ${p.discountPercent}% off`:""}</span></div>`).join("");
+  $("courseDetail").innerHTML = `
+    <div style="margin-top:8px;font-weight:700;font-size:14px">${esc(d.liveCourse?.name||"")}
+      ${d.subscribed?'<span class="badge b-grn">subscribed</span>':'<span class="badge b-ylw">not subscribed</span>'}</div>
+    <div class="muted" style="margin-bottom:6px">${esc(d.liveCourse?.description||"")}</div>
+    <div><span class="stat"><b>${st.subjectsCount??"–"}</b><span>Subjects</span></span>
+      <span class="stat"><b>${st.materialsCount??"–"}</b><span>Materials</span></span>
+      <span class="stat"><b>${st.classType||"live"}</b><span>Class type</span></span></div>
+    <div style="margin-top:6px">${plans}</div>`;
+  log(`course loaded — subscribed=${d.subscribed}`);
+  loadSessions("");
+}
+
+// ─────────── sessions ───────────
+async function loadSessions(status){
+  if(!cid()) return;
+  const q = status ? "?status="+status : "";
+  const r = await api("/client/live-courses/"+cid()+"/sessions"+q);
+  const rows = r.body?.data?.sessions || [];
+  $("sessionList").innerHTML = rows.map(s => {
+    const b = s.status==="CREATED"?"b-red":s.status==="SCHEDULED"?"b-blue":s.status==="READY"?"b-grn":"b-gray";
+    const isRecording = s.status==="ENDED" || s.status==="READY";
+    // canJoin comes from the backend (true only while status === CREATED).
+    const label = s.canJoin ? "● Join Live" : isRecording ? "Watch recording" : "Not started";
+    const disabled = !s.canJoin && !isRecording;   // SCHEDULED → button disabled
+    return `<div class="item">
+      <span>${esc(s.title)}</span>
+      <span><span class="badge ${b}">${s.status}</span>
+        <button ${disabled?"disabled":""} onclick="watch('${s._id}',this)">${label}</button></span></div>`;
+  }).join("") || `<span class="muted">no sessions</span>`;
+  log(`loaded ${rows.length} sessions ${status?"("+status+")":""}`);
+}
+
+// ─────────── watch / player ───────────
+async function watch(id, el){
+  document.querySelectorAll("#sessionList .item").forEach(i=>i.classList.remove("on"));
+  if(el) el.closest(".item").classList.add("on");
+  clearPreview(); hideOverlay();
+  const r = await api("/client/live-sessions/"+id);
+  const s = r.body?.data;
+  if(!s){ $("sessionMeta").innerHTML = `<span class="e">failed to load session</span>`; return; }
+  currentSession = s;
+  const lvl = s.accessLevel;
+  $("accessBadge").innerHTML = `<span class="badge ${lvl==="full"?"b-grn":lvl==="preview"?"b-ylw":"b-red"}">${lvl}</span>`;
+  $("sessionMeta").innerHTML =
+    `<b>${esc(s.title)}</b> · status <code>${s.status}</code> · isLive <code>${s.isLive}</code>` +
+    ` · streamId <code>${s.streamId||"—"}</code> · liveClassId <code>${s.liveClassId||"—"}</code>`;
+  log(`watch "${s.title}" — accessLevel=${lvl}, hlsUrl=${s.hlsUrl?"present":"none"}`,"s");
+
+  // playback
+  if (s.hlsUrl && (lvl==="full"||lvl==="preview")) {
+    playHls(s.hlsUrl);
+    if (lvl==="preview") startPreviewCutoff(s);
+    else $("previewBar").textContent = "Full access — no cutoff.";
+  } else {
+    stopHls();
+    if (lvl==="preview_ended") showPurchase(s, "Preview ended", "Your free preview is over — subscribe to keep watching.");
+    else $("previewBar").innerHTML = `<span class="muted">No playable URL (status ${s.status}).</span>`;
+  }
+
+  // chat room
+  if (s.liveClassId) connectChat(s.liveClassId);
+  else { $("chat").innerHTML = `<span class="muted">Session has no streamId yet — chat available once it's CREATED.</span>`; }
+}
+
+function playHls(url){
+  const v = $("video"); stopHls();
+  if (Hls.isSupported()){
+    hls = new Hls({
+      lowLatencyMode:true,
+      // Stay near the live edge, and auto catch-up — if the viewer drifts behind
+      // (after a pause / network stall) hls.js gently speeds playback up to 1.5x
+      // until it's back at the edge, instead of leaving them permanently behind.
+      liveSyncDurationCount:3,
+      maxLiveSyncPlaybackRate:1.5,
+    });
+    hls.loadSource(url); hls.attachMedia(v);
+    hls.on(Hls.Events.MANIFEST_PARSED, ()=>v.play().catch(()=>{}));
+    hls.on(Hls.Events.ERROR,(e,d)=>{ if(d.fatal) log("hls.js fatal: "+d.type+" / "+d.details,"e"); });
+    startLiveSync();
+  } else if (v.canPlayType("application/vnd.apple.mpegurl")){
+    v.src = url; v.play().catch(()=>{});
+    startLiveSync();   // native HLS (Safari) — live edge comes from video.seekable
+  } else { log("HLS not supported in this browser","e"); }
+  log("playing "+url);
+}
+function stopHls(){
+  if(hls){hls.destroy();hls=null;}
+  clearInterval(liveSyncTimer); liveSyncTimer = null;
+  const b=$("liveBtn"); b.className="live-btn"; b.textContent="● LIVE";
+  const v=$("video"); v.removeAttribute("src"); v.load();
+}
+
+// ─────────── live-edge sync ("● LIVE" button) ───────────
+// HLS playback always runs a few seconds behind the real broadcast, and a viewer
+// drifts further back every time they pause or the network stalls. `liveEdge()`
+// is the newest playable position; the button shows how far behind they are and
+// `seekToLive()` jumps them straight back to the edge.
+function liveEdge(){
+  const v = $("video");
+  if (hls && hls.liveSyncPosition != null) return hls.liveSyncPosition;            // hls.js
+  if (v.seekable && v.seekable.length)     return v.seekable.end(v.seekable.length-1); // native Safari
+  return null;
+}
+function startLiveSync(){
+  clearInterval(liveSyncTimer);
+  liveSyncTimer = setInterval(updateLiveBtn, 1000);
+  updateLiveBtn();
+}
+function updateLiveBtn(){
+  const btn = $("liveBtn"), v = $("video");
+  // Only meaningful for a live stream — recordings/replays don't have a live edge.
+  if (currentSession?.status !== "CREATED"){ btn.className = "live-btn"; return; }
+  const edge = liveEdge();
+  if (edge == null){ btn.className = "live-btn"; return; }
+  const drift = Math.max(0, edge - v.currentTime);
+  if (drift > 8){   // meaningfully behind → offer to catch up
+    btn.className = "live-btn show behind";
+    btn.textContent = `● GO LIVE (-${Math.round(drift)}s)`;
+  } else {          // at (or within a couple seconds of) the live edge
+    btn.className = "live-btn show at-edge";
+    btn.textContent = "● LIVE";
+  }
+}
+function seekToLive(){
+  const v = $("video"), edge = liveEdge();
+  if (edge == null) return;
+  v.currentTime = edge;
+  v.play().catch(()=>{});
+  log("jumped to live edge","o");
+  updateLiveBtn();
+}
+
+function startPreviewCutoff(s){
+  let left = s.previewSecondsRemaining || 0;
+  $("previewBar").innerHTML = `<span class="badge b-ylw">PREVIEW</span> stops in <b id="cd">${left}</b>s`;
+  previewTimer = setInterval(()=>{
+    left--; const cd=$("cd"); if(cd) cd.textContent = left;
+    if (left<=0){
+      clearPreview(); $("video").pause();
+      showPurchase(s, "Preview ended", "That's your 3-minute preview — subscribe to keep watching.");
+      log("preview cutoff reached — playback paused","o");
+    }
+  },1000);
+}
+function clearPreview(){ if(previewTimer){clearInterval(previewTimer);previewTimer=null;} }
+
+function showPurchase(s, title, text){
+  $("overlayTitle").textContent = title; $("overlayText").textContent = text;
+  const opts = s.purchaseOptions || [];
+  $("overlayPlans").innerHTML = opts.map(o =>
+    `<div style="margin:6px 0"><b>${esc(o.name)}</b><br>` +
+    (o.plans||[]).map(p=>`<span class="plan-pill" onclick="buy('${p.planId}')">${p.name||p.duration+"mo"} · ₹${p.price}</span>`).join("") +
+    `</div>`).join("") || `<span class="muted">no purchase options</span>`;
+  $("overlay").classList.add("show");
+}
+function hideOverlay(){ $("overlay").classList.remove("show"); }
+
+async function buy(planId){
+  log("create-order planId="+planId,"o");
+  const r = await api("/client/payment/create-order/live-course",{method:"POST",body:JSON.stringify({planId})});
+  if (r.ok){ log("order created: "+(r.body?.data?.razorpay?.orderId||"?")+" — ₹"+r.body?.data?.amountInRupees+" (open Razorpay checkout next)","s"); }
+  else { log("create-order failed: "+(r.body?.message||r.status),"e"); }
+  $("dump").textContent = JSON.stringify(r.body, null, 2);
+}
+
+// ─────────── chat / polls (Socket.IO) ───────────
+function connectChat(liveClassId){
+  if (socket){ socket.disconnect(); socket=null; }
+  $("chat").innerHTML = "";
+  socket = io(apiBase(), { auth:{token}, path:"/socket.io", transports:["websocket","polling"] });
+  socket.on("connect", ()=>{
+    $("sockBadge").textContent="connected"; $("sockBadge").className="badge b-grn";
+    log("socket connected — joining room "+liveClassId,"s");
+    socket.emit("join_live_chat", { liveClassId });
+  });
+  socket.on("connect_error", e=>{ $("sockBadge").textContent="error"; $("sockBadge").className="badge b-red"; log("socket connect_error: "+e.message,"e"); });
+  socket.on("disconnect", ()=>{ $("sockBadge").textContent="disconnected"; $("sockBadge").className="badge b-gray"; });
+  socket.on("chat_history", ({messages})=>{ (messages||[]).forEach(m=>renderMsg(m)); log(`chat history: ${(messages||[]).length} msgs`); });
+  socket.on("new_message", m=>renderMsg(m));
+  socket.on("active_poll", ({poll,myVote})=>renderPoll(poll,myVote));
+  // A poll the admin just created/edited mid-session (the join-time snapshot is
+  // `active_poll`; these keep the card in sync without rejoining the room).
+  socket.on("poll_created", ({poll})=>{ renderPoll(poll,null); log("⚑ poll_created","o"); sysMsg("a new poll was posted"); });
+  socket.on("poll_updated", ({poll})=>{ renderPoll(poll,null); log("⚑ poll_updated","o"); });
+  socket.on("poll_update", ({pollId,options,totalVotes})=>{ if(pollId===activePollId) renderPollBars(options,totalVotes); });
+  socket.on("poll_closed", ({pollId})=>{ if(pollId===activePollId){ $("poll").innerHTML = '<h2 style="margin-top:12px">Poll</h2><span class="muted">Poll closed by admin.</span>'; activePollId=null; log("⚑ poll_closed","o"); } });
+  socket.on("poll_deleted", ({pollId})=>{ if(pollId===activePollId){ renderPoll(null); log("⚑ poll_deleted","o"); } });
+  // ── presence ──
+  socket.on("viewer_count", ({count})=>{ $("viewerBadge").textContent = "👤 " + count; });
+  socket.on("user_joined", ({userName})=>{ sysMsg((userName||"Someone")+" joined"); log("⚑ user_joined: "+(userName||"?"),"o"); });
+  socket.on("user_left",  ({userName})=>{ sysMsg((userName||"Someone")+" left");  log("⚑ user_left: "+(userName||"?"),"o"); });
+  // ── stream ended ──
+  socket.on("live_session_ended", (d)=>{
+    log("⚑ live_session_ended — stopping playback","o");
+    clearPreview(); $("video").pause();
+    $("overlayTitle").textContent = "Live class ended";
+    $("overlayText").textContent = "The instructor has ended this live session.";
+    $("overlayPlans").innerHTML = "";
+    $("overlay").classList.add("show");
+    $("accessBadge").innerHTML = '<span class="badge b-gray">ENDED</span>';
+    sysMsg("the live class has ended");
+  });
+  socket.on("recordings_ready", ()=>{ log("⚑ recordings_ready received","o"); sysMsg("recording is now available"); });
+  socket.on("error", ({message})=>log("socket error: "+message,"e"));
+}
+function sysMsg(text){
+  const el=document.createElement("div"); el.className="msg";
+  el.innerHTML = `<span class="muted">— ${esc(text)}</span>`;
+  $("chat").appendChild(el); $("chat").scrollTop = $("chat").scrollHeight;
+}
+function renderMsg(m){
+  const el=document.createElement("div");
+  el.className = "msg"+(m.isAdmin?" admin":"");
+  el.innerHTML = `<span class="who">${esc(m.userName||"User")}${m.isAdmin?" (admin)":""}:</span> ${esc(m.message)}`;
+  $("chat").appendChild(el); $("chat").scrollTop = $("chat").scrollHeight;
+}
+function sendMsg(){
+  const t = $("chatInput").value.trim();
+  if(!t || !socket || !currentSession?.liveClassId) return;
+  socket.emit("send_message", { liveClassId: currentSession.liveClassId, message: t });
+  $("chatInput").value = "";
+}
+function renderPoll(poll, myVote){
+  if(!poll){ $("poll").innerHTML=""; activePollId=null; return; }
+  activePollId = poll._id;
+  $("poll").innerHTML = `<h2 style="margin-top:12px">Poll</h2><b>${esc(poll.question)}</b>` +
+    poll.options.map((o,i)=>`<div><button class="sec" style="margin:3px 0;width:100%;text-align:left" onclick="vote(${i})" ${myVote!=null?"disabled":""}>${esc(o.text)} <span class="muted">(${o.votes||0})</span></button></div>`).join("");
+}
+function renderPollBars(options,total){
+  $("poll").querySelectorAll("button").forEach((b,i)=>{
+    if(options[i]) b.querySelector(".muted").textContent = `(${options[i].votes||0})`;
+  });
+}
+function vote(i){ if(socket&&activePollId) socket.emit("submit_vote",{pollId:activePollId,optionIndex:i}); }
+
+// ─────────── misc ───────────
+async function dump(path,label){
+  const r = await api(path);
+  $("dump").textContent = `// ${label} — ${r.status}\n` + JSON.stringify(r.body?.data ?? r.body, null, 2);
+  log(`${label}: ${r.status}`);
+}
+function esc(s){ return String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+// ─────────── admin: go live ───────────
+let adminToken = "", liveStreamId = "";
+async function adminApi(path, opts={}){
+  const res = await fetch(apiBase()+"/api/v1"+path, {
+    ...opts,
+    headers:{ "Content-Type":"application/json", ...(adminToken?{Authorization:"Bearer "+adminToken}:{}), ...(opts.headers||{}) },
+  });
+  let body; try{ body = await res.json(); } catch { body = {}; }
+  return { ok:res.ok, status:res.status, body };
+}
+async function adminLogin(){
+  const r = await adminApi("/admin/auth/login",{method:"POST",body:JSON.stringify({email:$("admEmail").value.trim(),password:$("admPass").value})});
+  const t = r.body?.data?.accessToken;
+  if(t){
+    adminToken=t; $("admState").textContent="logged in"; $("admState").className="badge b-grn"; log("admin logged in","s");
+    loadAdminCourses();
+    loadAdminSessions("");
+  } else { log("admin login failed: "+(r.body?.message||r.status),"e"); }
+}
+async function loadAdminCourses(){
+  if(!adminToken){ log("admin: login first","e"); return; }
+  const r = await adminApi("/admin/live-courses?limit=100");
+  const rows = r.body?.data?.liveCourses || [];
+  $("admCourse").innerHTML = rows.length
+    ? rows.map(c=>`<option value="${c._id}">${esc(c.name)}</option>`).join("")
+    : `<option value="">— no live courses —</option>`;
+  // pre-select the course loaded in section 2, if it's in the list
+  if(cid() && rows.some(c=>String(c._id)===cid())) $("admCourse").value = cid();
+  log(`admin: loaded ${rows.length} courses`);
+}
+async function goLive(){
+  if(!adminToken){ log("admin: login first","e"); return; }
+  const courseId = $("admCourse").value;
+  if(!courseId){ log("admin: pick a course in the Go-Live panel first","e"); $("admOut").innerHTML='<span class="e">Select a course above.</span>'; return; }
+  log("admin: creating live session on Streamos…","o");
+  const r = await adminApi("/admin/live-sessions",{method:"POST",body:JSON.stringify({title:$("admTitle").value.trim()||"Live Class",liveCourseIds:[courseId]})});
+  const s = r.body?.data?.session;
+  if(r.ok && s){
+    liveStreamId = s.streamId || "";
+    $("admOut").innerHTML =
+      `<b class="s" style="color:#4ade80">● LIVE</b> — status <code>${esc(s.status)}</code> · streamId <code>${esc(s.streamId||"")}</code><br>`+
+      `<b>RTMP push URL</b> (point OBS / encoder here to broadcast video):<br>`+
+      `<code style="word-break:break-all">${esc(s.rtmpUrl||"")}</code><br>`+
+      `<span class="muted">Customers can join now — section 3 → “Live now” → the <b>Join Live</b> button is enabled.</span>`;
+    log("admin: stream created — streamId "+s.streamId,"s");
+    // Point the customer panel at the course that just went live, then refresh.
+    $("courseId").value = courseId;
+    loadSessions("CREATED");   // refresh the customer list so Join enables
+    await loadAdminSessions(""); // refresh the admin list + auto-select for chat/polls
+    selectAdminSession(s.id);
+  } else {
+    $("admOut").innerHTML = `<span class="e">${esc(r.body?.message||"go-live failed")}</span>`;
+    log("go-live failed: "+(r.body?.message||r.status),"e");
+  }
+}
+async function endLive(){
+  if(!adminToken || !liveStreamId){ log("admin: no live stream to end","e"); return; }
+  const r = await adminApi("/admin/live-sessions/end",{method:"POST",body:JSON.stringify({streamId:liveStreamId})});
+  if(r.ok){
+    $("admOut").innerHTML = `<span class="muted">stream ${esc(liveStreamId)} ended — viewers were notified via <code>live_session_ended</code>.</span>`;
+    log("admin: stream ended","s"); liveStreamId=""; loadSessions(""); loadAdminSessions("");
+  } else { log("end failed: "+(r.body?.message||r.status),"e"); }
+}
+
+// ─────────── admin: create / schedule a session ───────────
+async function createAdminSession(){
+  if(!adminToken){ log("admin: login first","e"); return; }
+  const courseId = $("admCourse").value;
+  if(!courseId){ log("admin: pick a course in the Go-Live panel first","e"); $("admOut").innerHTML='<span class="e">Select a course above.</span>'; return; }
+  const body = { title: $("admTitle").value.trim() || "Live Class", liveCourseIds:[courseId] };
+  const sched = $("admSchedule").value;          // datetime-local → local time
+  if(sched) body.scheduledAt = new Date(sched).toISOString();
+  log("admin: creating session"+(sched?" (scheduled)":"")+"…","o");
+  const r = await adminApi("/admin/live-sessions",{method:"POST",body:JSON.stringify(body)});
+  const s = r.body?.data?.session;
+  if(r.ok && s){
+    $("admOut").innerHTML =
+      `<b class="s" style="color:#4ade80">${esc(s.status)}</b> — id <code>${esc(s.id)}</code>` +
+      (s.streamId ? ` · streamId <code>${esc(s.streamId)}</code>` : "") +
+      (s.rtmpUrl ? `<br><b>RTMP push URL</b>: <code style="word-break:break-all">${esc(s.rtmpUrl)}</code>` : "") +
+      (s.scheduledAt ? `<br><span class="muted">scheduled for ${new Date(s.scheduledAt).toLocaleString()} — start it from 6b within 2 min of that time.</span>` : "");
+    log(`admin: session created — ${s.status} ${s.id}`,"s");
+    await loadAdminSessions("");
+    selectAdminSession(s.id);
+  } else {
+    $("admOut").innerHTML = `<span class="e">${esc(r.body?.message||"create failed")}</span>`;
+    log("admin create failed: "+(r.body?.message||r.status),"e");
+  }
+}
+
+// ─────────── admin: session list (scheduled + live) ───────────
+let admSessions = [], admSession = null, admChatTimer = null;
+
+async function loadAdminSessions(status){
+  if(!adminToken){ log("admin: login first","e"); return; }
+  const q = "?limit=100" + (status ? "&status="+status : "");
+  const r = await adminApi("/admin/live-sessions"+q);
+  admSessions = r.body?.data?.sessions || [];
+  $("admSessionList").innerHTML = admSessions.map(s => {
+    const b = s.status==="CREATED"?"b-red":s.status==="SCHEDULED"?"b-blue":s.status==="READY"?"b-grn":"b-gray";
+    const on = admSession && admSession.id===s.id ? " on" : "";
+    let act = "";
+    if(s.status==="SCHEDULED") act = `<button onclick="event.stopPropagation();startScheduled('${s.id}')">▶ Start</button>`;
+    else if(s.status==="CREATED") act = `<button class="sec" onclick="event.stopPropagation();endAdminSession('${esc(s.streamId)}')">■ End</button>`;
+    const when = s.scheduledAt ? ` <span class="muted">· ${esc(new Date(s.scheduledAt).toLocaleString())}</span>` : "";
+    return `<div class="item${on}" data-sid="${s.id}" onclick="selectAdminSession('${s.id}')">
+      <span>${esc(s.title)}${when}</span>
+      <span><span class="badge ${b}">${s.status}</span> ${act}</span></div>`;
+  }).join("") || `<span class="muted">no sessions</span>`;
+  log(`admin: loaded ${admSessions.length} sessions ${status?"("+status+")":""}`);
+}
+
+function selectAdminSession(id){
+  const s = admSessions.find(x=>x.id===id);
+  if(!s){ log("admin: session "+id+" not in current list — reload 6b","e"); return; }
+  admSession = { id:s.id, streamId:s.streamId, title:s.title, status:s.status };
+  document.querySelectorAll("#admSessionList .item").forEach(i=>i.classList.toggle("on", i.dataset.sid===id));
+  const hasRoom = !!s.streamId;
+  const tag = (hasRoom ? s.title : "no room").slice(0,22);
+  $("admChatTarget").textContent = $("admPollTarget").textContent = tag;
+  $("admChatTarget").className = $("admPollTarget").className = "badge " + (hasRoom?"b-grn":"b-gray");
+  if(hasRoom){
+    loadAdminChat(); loadAdminPolls();
+  } else {
+    $("admChat").innerHTML = `<span class="muted">Session is ${esc(s.status)} — no stream room yet. Start it (6b) to chat / poll.</span>`;
+    $("admPollList").innerHTML = `<span class="muted">Session is ${esc(s.status)} — start it (6b) to run polls.</span>`;
+  }
+  log(`admin: selected "${s.title}" (${s.status}${s.streamId?", room "+s.streamId:""})`);
+}
+
+async function startScheduled(id){
+  if(!adminToken) return;
+  log("admin: starting scheduled session "+id+"…","o");
+  const r = await adminApi("/admin/live-sessions/"+id+"/start",{method:"POST"});
+  if(r.ok){
+    const s = r.body?.data?.session;
+    log("admin: started — streamId "+(s?.streamId||"?"),"s");
+    await loadAdminSessions("");
+    if(s) selectAdminSession(s.id);
+  } else {
+    log("start failed: "+(r.body?.message||r.status),"e");
+    $("admOut").innerHTML = `<span class="e">${esc(r.body?.message||"start failed")}</span>`;
+  }
+}
+
+async function endAdminSession(streamId){
+  if(!adminToken || !streamId) return;
+  const r = await adminApi("/admin/live-sessions/end",{method:"POST",body:JSON.stringify({streamId})});
+  if(r.ok){
+    log("admin: ended stream "+streamId,"s");
+    await loadAdminSessions("");
+    loadSessions("");   // refresh the customer list too
+  } else { log("end failed: "+(r.body?.message||r.status),"e"); }
+}
+
+// ─────────── admin: chat (REST — admins aren't on the socket) ───────────
+async function loadAdminChat(){
+  if(!admSession?.streamId) return;
+  const r = await adminApi("/admin/live-chat/"+encodeURIComponent(admSession.streamId)+"/history?limit=100");
+  const msgs = r.body?.data?.messages || [];
+  $("admChat").innerHTML = msgs.map(m =>
+    `<div class="msg${m.isAdmin?" admin":""}"><span class="who">${esc(m.userName||"User")}${m.isAdmin?" (admin)":""}:</span> ${esc(m.message)}</div>`
+  ).join("") || `<span class="muted">no messages yet</span>`;
+  $("admChat").scrollTop = $("admChat").scrollHeight;
+}
+async function sendAdminChat(){
+  const t = $("admChatInput").value.trim();
+  if(!t){ return; }
+  if(!admSession?.streamId){ log("admin chat: select a live session in 6b first","e"); return; }
+  const r = await adminApi("/admin/live-chat/message",{method:"POST",body:JSON.stringify({liveClassId:admSession.streamId,message:t})});
+  if(r.ok){ $("admChatInput").value=""; loadAdminChat(); }
+  else log("admin chat send failed: "+(r.body?.message||r.status),"e");
+}
+function toggleAdminChatAuto(){
+  if($("admChatAuto").checked){
+    admChatTimer = setInterval(()=>{ loadAdminChat(); loadAdminPolls(); }, 3000);
+    log("admin: chat/poll auto-refresh ON (3s)");
+  } else if(admChatTimer){ clearInterval(admChatTimer); admChatTimer=null; log("admin: auto-refresh OFF"); }
+}
+
+// ─────────── admin: polls (REST — broadcast to the room over Socket.IO) ──────
+async function loadAdminPolls(){
+  if(!admSession?.streamId) return;
+  const r = await adminApi("/admin/live-polls/"+encodeURIComponent(admSession.streamId));
+  const polls = r.body?.data?.polls || [];
+  $("admPollList").innerHTML = polls.map(p => {
+    const opts = (p.options||[]).map(o=>`${esc(o.text)} — <b>${o.votes||0}</b>`).join(" &nbsp;·&nbsp; ");
+    const badge = p.isActive ? '<span class="badge b-grn">active</span>' : '<span class="badge b-gray">closed</span>';
+    const close = p.isActive ? `<button class="sec" onclick="closeAdminPoll('${p._id}')">Close</button> ` : "";
+    return `<div class="item" style="display:block;cursor:default">
+      <div><b>${esc(p.question)}</b> ${badge} <span class="muted">· ${p.totalVotes||0} votes</span></div>
+      <div class="muted" style="margin:4px 0">${opts||"<i>no options</i>"}</div>
+      <div>${close}<button class="sec" onclick="deleteAdminPoll('${p._id}')">Delete</button></div>
+    </div>`;
+  }).join("") || `<span class="muted">no polls yet</span>`;
+}
+async function createAdminPoll(){
+  if(!admSession?.streamId){ log("admin poll: select a live session in 6b first","e"); return; }
+  const question = $("admPollQ").value.trim();
+  const options = [$("admPollO1").value,$("admPollO2").value,$("admPollO3").value,$("admPollO4").value]
+    .map(s=>s.trim()).filter(Boolean);
+  if(!question || options.length < 2){ log("admin poll: need a question + at least 2 options","e"); return; }
+  const r = await adminApi("/admin/live-polls",{method:"POST",body:JSON.stringify({liveClassId:admSession.streamId,question,options})});
+  if(r.ok){
+    log("admin: poll created — pushed live to the room","s");
+    $("admPollQ").value=$("admPollO1").value=$("admPollO2").value=$("admPollO3").value=$("admPollO4").value="";
+    loadAdminPolls();
+  } else log("create poll failed: "+(r.body?.message||r.status),"e");
+}
+async function closeAdminPoll(id){
+  const r = await adminApi("/admin/live-polls/"+id+"/close",{method:"PATCH"});
+  if(r.ok){ log("admin: poll closed","s"); loadAdminPolls(); }
+  else log("close poll failed: "+(r.body?.message||r.status),"e");
+}
+async function deleteAdminPoll(id){
+  const r = await adminApi("/admin/live-polls/"+id,{method:"DELETE"});
+  if(r.ok){ log("admin: poll deleted","s"); loadAdminPolls(); }
+  else log("delete poll failed: "+(r.body?.message||r.status),"e");
+}
+
+// ─────────── admin: go live from the browser camera ───────────
+// Browser camera → MediaRecorder (WebM) → binary WS frames → server ffmpeg →
+// RTMP → Streamos. The server bridge lives in src/socket/camera-ingest.ts.
+let camStream = null, camRecorder = null, camWs = null, camStartWatchdog = null;
+
+function camSet(text, cls){ $("camStatus").innerHTML = `<span class="badge ${cls||"b-gray"}">${esc(text)}</span>`; }
+
+async function enableCamera(){
+  try {
+    if(camStream) camStream.getTracks().forEach(t=>t.stop());
+    camStream = await navigator.mediaDevices.getUserMedia({
+      video: { width:{ideal:1280}, height:{ideal:720}, frameRate:{ideal:30} },
+      audio: true,
+    });
+    $("camPreview").srcObject = camStream;
+    camSet("camera ready","b-grn");
+    log("camera enabled","s");
+  } catch(e){
+    camSet("camera blocked","b-red");
+    log("getUserMedia failed: "+e.message+" — use Chrome on localhost","e");
+  }
+}
+
+function camWsUrl(){
+  return apiBase().replace(/^http/,"ws") + "/ws/camera-ingest?token=" + encodeURIComponent(adminToken);
+}
+
+function startCamBroadcast(){
+  if(!adminToken){ log("camera: admin login first (section 6)","e"); return; }
+  if(!camStream){ log("camera: hit “Enable camera” first","e"); return; }
+  if(!admSession){ log("camera: select a session in 6b first","e"); return; }
+  if(admSession.status!=="CREATED" || !admSession.streamId){
+    log("camera: selected session isn’t live — Go Live now (6) or Start it (6b) first","e"); return;
+  }
+  if(camWs){ log("camera: already broadcasting","e"); return; }
+
+  const mime = ["video/webm;codecs=vp8,opus","video/webm;codecs=vp9,opus","video/webm"]
+    .find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+  if(!mime){ log("camera: this browser can’t record WebM — use Chrome","e"); return; }
+
+  camSet("connecting…","b-ylw");
+  log("camera: connecting to "+apiBase().replace(/^http/,"ws")+"/ws/camera-ingest","o");
+  camWs = new WebSocket(camWsUrl());
+  camWs.binaryType = "arraybuffer";
+
+  // Watchdog — if we never reach "started", surface why instead of sitting on
+  // "connecting…" forever.
+  camStartWatchdog = setTimeout(()=>{
+    log("camera: no response from server after 12s — check the server log / session status","e");
+    stopCamBroadcast(true);
+    camSet("no response — see log","b-red");
+  }, 12000);
+
+  camWs.onopen = ()=>{
+    camSet("ws open — starting…","b-ylw");
+    log("camera: WS connected — sending start (streamId "+admSession.streamId+")","o");
+    camWs.send(JSON.stringify({ type:"start", streamId: admSession.streamId }));
+  };
+  camWs.onmessage = (ev)=>{
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if(m.type==="ready"){
+      if(m.ffmpeg===false){ camSet("ffmpeg missing on server","b-red"); log("camera: ⚠ ffmpeg is NOT installed on the server","e"); }
+      else log("camera: server ready — "+(m.message||""),"i");
+    } else if(m.type==="started"){
+      if(camStartWatchdog){ clearTimeout(camStartWatchdog); camStartWatchdog=null; }
+      camSet("● BROADCASTING","b-red");
+      log("camera: broadcast started — ffmpeg is pushing to Streamos","s");
+      camRecorder = new MediaRecorder(camStream, { mimeType:mime, videoBitsPerSecond:2500000 });
+      camRecorder.ondataavailable = async (e)=>{
+        if(e.data && e.data.size>0 && camWs && camWs.readyState===WebSocket.OPEN){
+          camWs.send(await e.data.arrayBuffer());
+        }
+      };
+      camRecorder.onerror = (e)=>log("camera: MediaRecorder error — "+((e.error&&e.error.message)||e),"e");
+      camRecorder.start(500);   // emit a ~500ms WebM chunk at a time
+    } else if(m.type==="stopped"){
+      log("camera: server stopped the broadcast"+(m.message?" — "+m.message:""),"o");
+      stopCamBroadcast(true);
+    } else if(m.type==="error"){
+      log("camera: server error — "+m.message,"e");
+      stopCamBroadcast(true);
+      camSet("error — see log","b-red");
+    }
+  };
+  camWs.onerror = ()=>log("camera: WS error — is the server running on "+apiBase()+"?","e");
+  camWs.onclose = (ev)=>{
+    if(!camWs) return;   // already torn down via stopCamBroadcast
+    const clean = !!(ev && ev.wasClean);
+    log("camera: WS closed"+(ev?` (code ${ev.code}${ev.reason?" "+ev.reason:""})`:""), clean?"o":"e");
+    stopCamBroadcast(true);
+    if(!clean) camSet("disconnected — see log","b-red");
+  };
+}
+
+function stopCamBroadcast(fromServer){
+  if(camStartWatchdog){ clearTimeout(camStartWatchdog); camStartWatchdog=null; }
+  if(camRecorder && camRecorder.state!=="inactive"){ try{ camRecorder.stop(); }catch{} }
+  camRecorder = null;
+  const ws = camWs; camWs = null;   // null first so onclose doesn't re-enter
+  if(ws){
+    try { if(!fromServer && ws.readyState===WebSocket.OPEN) ws.send(JSON.stringify({type:"stop"})); } catch {}
+    try { ws.close(); } catch {}
+  }
+  if(!fromServer) log("camera: broadcast stopped","s");
+  camSet(camStream ? "camera ready" : "—", camStream ? "b-grn" : "b-gray");
+}
+</script>
+</body>
+</html>

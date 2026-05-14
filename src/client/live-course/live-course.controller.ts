@@ -148,6 +148,10 @@ export const listSessionsForCourseClient = async (req: Request, res: Response) =
       streamId: s.streamId ?? null,
       liveCourseIds: s.liveCourseIds ?? [],
       hasRecordings: Array.isArray(s.recordings) && s.recordings.length > 0,
+      // The session is joinable (the live room exists on Streamos) only while
+      // status is CREATED. The client should enable the "Join" button on this
+      // and disable it otherwise (SCHEDULED = not started, ENDED/READY = over).
+      canJoin: s.status === "CREATED",
       createdAt: s.createdAt,
       updatedAt: s.updatedAt,
     }));
@@ -209,7 +213,14 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
         priceType: v.priceType,
         order: v.order,
         locked: !canPlay,
+        // `videoUrl` is the unified playable source for `platform`. The
+        // platform-specific ids are also returned so the client can pick the
+        // right player — all gated identically to videoUrl (a youtube_id /
+        // aws_id can itself be a playable URL, so it must not leak when locked).
         videoUrl: canPlay ? videoSourceUrl(v) : null,
+        youtube_id: canPlay ? v.youtube_id ?? null : null,
+        aws_id: canPlay ? v.aws_id ?? null : null,
+        vimeo_id: canPlay ? v.vimeo_id ?? null : null,
       };
     };
 
@@ -276,6 +287,8 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
       }
     }
 
+    // Reached here only when entitled (or the lecture is free), so the source
+    // ids are safe to return alongside the unified `videoUrl`.
     return success(
       res,
       {
@@ -285,6 +298,9 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
         platform: video.platform,
         priceType: video.priceType,
         videoUrl: videoSourceUrl(video),
+        youtube_id: video.youtube_id ?? null,
+        aws_id: video.aws_id ?? null,
+        vimeo_id: video.vimeo_id ?? null,
       },
       "Lecture fetched."
     );

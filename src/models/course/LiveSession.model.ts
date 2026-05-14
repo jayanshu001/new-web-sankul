@@ -22,7 +22,10 @@ export interface ILiveSession extends Document {
   // only lives on this session and admin must promote it manually.
   recordingTargetFolderId?: Types.ObjectId | null;
   scheduledAt?: Date | null;
-  streamId?: number | null;
+  // Streamos stream id — a STRING (e.g. "T_17787583234029"), not a number.
+  // It's the canonical id (the part before any "?token" suffix) used for
+  // streamDetails / endStream lookups and as the Socket.IO room id.
+  streamId?: string | null;
   rtmpUrl?: string | null;
   hlsUrl?: string | null;
   hlsUrls?: Record<string, string> | null;
@@ -64,9 +67,10 @@ const LiveSessionSchema = new Schema<ILiveSession>(
     scheduledAt: { type: Date, default: null, index: true },
     // streamId/rtmpUrl/hlsUrl are only populated once the stream actually
     // starts on Streamos. SCHEDULED rows do not have them yet, so the field
-    // is optional. The unique index is declared below via partialFilterExpression
-    // (sparse would not help — it treats `null` as present).
-    streamId: { type: Number, default: null },
+    // is optional. Streamos returns it as a STRING. The unique index is
+    // declared below via partialFilterExpression (sparse would not help — it
+    // treats `null` as present).
+    streamId: { type: String, default: null },
     rtmpUrl:  { type: String, default: null },
     hlsUrl:   { type: String, default: null },
     // Per-quality HLS URLs ({ "240": "...", "360": "...", "480": "...", "720": "..." }).
@@ -82,12 +86,12 @@ const LiveSessionSchema = new Schema<ILiveSession>(
   { collection: "ws_live_sessions", timestamps: true }
 );
 
-// Enforce uniqueness only on rows that actually carry a numeric streamId.
+// Enforce uniqueness only on rows that actually carry a string streamId.
 // SCHEDULED sessions before they start have streamId: null and must not
 // collide with each other.
 LiveSessionSchema.index(
   { streamId: 1 },
-  { unique: true, partialFilterExpression: { streamId: { $type: "number" } } }
+  { unique: true, partialFilterExpression: { streamId: { $type: "string" } } }
 );
 
 export const LiveSession = model<ILiveSession>("LiveSession", LiveSessionSchema);

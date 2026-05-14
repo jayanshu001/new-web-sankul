@@ -150,6 +150,34 @@ Lifecycle: `SCHEDULED` → `CREATED` → `ENDED` → `READY`.
 - `ENDED` — admin called `/end`.
 - `READY` — Streamos posted recordings to the webhook.
 
+### Going live — the admin front-end flow
+1. **Go live now:** `POST /admin/live-sessions` with `{ title, liveCourseIds: [...] }`
+   and **no `scheduledAt`** → Streamos is called immediately, the session comes
+   back `status: CREATED` with `streamId` / `rtmpUrl` / `hlsUrl`.
+   *(Or: pre-create with a future `scheduledAt` → `SCHEDULED`, then
+   `POST /admin/live-sessions/:id/start` within 2 min of the scheduled time.)*
+2. Show the admin the **`rtmpUrl`** — they point an encoder (OBS, a mobile
+   streaming app, etc.) at it to actually broadcast video.
+3. The moment the session is `CREATED`, customers' **Join** button enables —
+   the client session endpoints return `canJoin: true` (status === CREATED).
+   Anyone can join; the per-viewer 3-minute preview gate applies inside.
+4. **End:** `POST /admin/live-sessions/end` `{ streamId }` → stops the Streamos
+   stream, flips status to `ENDED`, emits `live_session_ended` to the room, and
+   closes attendance. `canJoin` flips to `false`.
+
+### Testing it locally
+- **`docs/live-course-demo.html`** (served at `GET /demo/live-course`, dev only)
+  — a ready-to-run admin↔customer harness; section 6 ("Admin — Go Live") drives
+  the flow above against a running server.
+- **`scripts/go-live-from-camera.ts`** — one command to go live *and* broadcast
+  your laptop camera to the Streamos RTMP endpoint via `ffmpeg` (so there's real
+  video to watch). `npx tsx scripts/go-live-from-camera.ts [liveCourseId]`;
+  Ctrl+C ends the stream. Requires `ffmpeg` (`brew install ffmpeg`) + camera
+  permission for the terminal.
+- **`scripts/start-live-lecture.ts`** / **`scripts/end-live-lecture.ts`** —
+  start/end a real Streamos lecture from the CLI without an encoder (useful for
+  verifying the Streamos API itself).
+
 ### `POST /admin/live-sessions` — create or schedule
 Body: `{ title, liveCourseIds?: [...], subject?, educatorId?, endAt?, scheduledAt?, recordingTargetFolderId? }`
 - `scheduledAt` in the **future** → stored `SCHEDULED`, **no Streamos call**.
@@ -193,6 +221,34 @@ Body: `{ folderId, recordingIndex?/quality?, title?, priceType?, order? }`
   `alreadyExisted: true`) instead of duplicating.
 
 `data`: `{ video, alreadyExisted }` — `201` (new) or `200` (existing).
+
+### `GET /admin/live-sessions/:id/attendance`  — who watched
+One row per customer **join → leave** stint on the live class (rejoins produce
+multiple rows). `data`:
+```jsonc
+{
+  "attendance": [
+    {
+      "_id": "...", "streamId": "T_...", "liveSessionId": "...",
+      "customerId": { "firstName": "...", "lastName": "...", "phoneNumber": "..." },
+      "userName": "...",
+      "joinedAt": "2026-05-14T...", "leftAt": "2026-05-14T...",  // leftAt null = still watching
+      "durationSec": 540
+    }
+  ],
+  "summary": { "totalJoins": 12, "uniqueViewers": 8, "currentlyActive": 3 }
+}
+```
+Rows are written by the Socket.IO layer (open on join, closed on leave /
+disconnect) and bulk-closed when the stream is ended via `POST /live-sessions/end`.
+
+### Real-time events (Socket.IO)
+Ending a stream and viewer presence are pushed over Socket.IO to the live class
+room (`roomKey = live_chat:<streamId>`):
+- `live_session_ended` `{ streamId, liveClassId, status, endedAt }` — emitted by
+  `POST /live-sessions/end`; the client should close the player.
+- `user_joined` / `user_left` `{ liveClassId, customerId, userName, joinedAt|leftAt }`
+- `viewer_count` `{ liveClassId, count }` — distinct customers currently watching.
 
 ### Streamos passthrough
 | Method | Path | Purpose |
@@ -299,6 +355,7 @@ PATCH  /admin/live-sessions/:id
 DELETE /admin/live-sessions/:id
 POST   /admin/live-sessions/end
 POST   /admin/live-sessions/:id/promote-recording
+GET    /admin/live-sessions/:id/attendance
 GET    /admin/live-sessions/streamos/org
 GET    /admin/live-sessions/streamos/recordings/:recordingId
 POST   /admin/live-sessions/streamos/webhook

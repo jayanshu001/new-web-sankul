@@ -8,6 +8,7 @@ import getLocalIpAddress from "./utils/getLocalIp";
 import { pm2Ready } from "./utils/pm2Logger";
 import { initNotificationScheduler, shutdownNotificationScheduler } from "./admin/notification/scheduler";
 import { initLiveChatSocket } from "./socket/livechat.socket";
+import { initCameraIngest } from "./socket/camera-ingest";
 
 dotenv.config();
 const PORT = process.env.PORT || 5000;
@@ -38,6 +39,9 @@ const startServer = async () => {
 
     // Attach Socket.io for live class chat
     initLiveChatSocket(httpServer, allowedOrigins);
+
+    // Attach the camera-ingest WebSocket bridge (browser camera → ffmpeg → RTMP)
+    initCameraIngest(httpServer);
 
     httpServer.listen(PORT, async () => {
       logger.info(`API server running at http://localhost:${PORT}`);
