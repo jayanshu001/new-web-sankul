@@ -5,6 +5,11 @@ export type VideoPlatform = "youtube" | "aws" | "vimeo";
 
 export interface IVideo extends Document {
   videoCategoryId: mongoose.Types.ObjectId;
+  // Set when this Video was promoted from a Streamos live-session recording.
+  // Lets us trace a recorded lecture back to the session it came from (and
+  // list, per session, everywhere a recording has been filed). null for
+  // ordinary manually-added videos.
+  liveSessionId?: mongoose.Types.ObjectId | null;
   title?: string;
   topic?: string;
   slug?: string;
@@ -22,6 +27,7 @@ export interface IVideo extends Document {
 const videoSchema: Schema = new Schema(
   {
     videoCategoryId: { type: Schema.Types.ObjectId, ref: "VideoCategory", required: true },
+    liveSessionId: { type: Schema.Types.ObjectId, ref: "LiveSession", default: null, index: true },
     title: { type: String, default: "" },
     topic: { type: String, default: "" },
     slug: { type: String, default: "" },

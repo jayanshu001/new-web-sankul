@@ -1,7 +1,10 @@
 import { Request, Response } from "express";
+import crypto from "crypto";
 import { Types } from "mongoose";
 import { LiveSession, ILiveSession, ILiveSessionRecording } from "../../models/course/LiveSession.model";
 import { LiveCourse } from "../../models/course/LiveCourse.model";
+import { VideoCategory } from "../../models/course/VideoCategory.model";
+import { Video } from "../../models/course/Video.model";
 import {
   createStream as streamosCreateStream,
   getStreamDetails as streamosGetStreamDetails,
@@ -15,6 +18,8 @@ import { io, roomKey } from "../../socket/livechat.socket";
 import {
   maybeAutoPromoteRecording,
   validateRecordingTargetFolder,
+  resolveRecording,
+  promoteRecordingToFolder,
 } from "./recording.promote";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -22,6 +27,21 @@ import logger from "../../utils/logger";
 // Admin must wait until 2 minutes before scheduledAt to actually start the
 // Streamos stream. Late starts after scheduledAt remain allowed indefinitely.
 export const START_WINDOW_MS = 2 * 60 * 1000;
+
+// Shared secret guarding the public recording webhook. Streamos doesn't sign
+// its callbacks, so we register the webhook URL with `?key=<secret>` and
+// verify it here. When unset we log a warning but still accept — mirrors the
+// Razorpay webhook's "enforce only if configured" behaviour so dev isn't
+// blocked, but it MUST be set in production.
+const STREAMOS_WEBHOOK_SECRET = process.env.STREAMOS_WEBHOOK_SECRET || "";
+
+function secretMatches(provided: string): boolean {
+  if (provided.length !== STREAMOS_WEBHOOK_SECRET.length) return false;
+  return crypto.timingSafeEqual(
+    Buffer.from(provided),
+    Buffer.from(STREAMOS_WEBHOOK_SECRET)
+  );
+}
 
 function parseStreamIdParam(raw: unknown): number | null {
   if (raw === undefined || raw === null || raw === "") return null;
@@ -56,6 +76,10 @@ function publicView(session: ILiveSession) {
     id: String(session._id),
     title: session.title,
     liveCourseIds: session.liveCourseIds ?? [],
+    // Timetable metadata — feeds the Schedule tab.
+    subject: session.subject ?? "",
+    educatorId: session.educatorId ?? null,
+    endAt: session.endAt ?? null,
     recordingTargetFolderId: session.recordingTargetFolderId ?? null,
     status: session.status,
     scheduledAt: session.scheduledAt ?? null,
@@ -153,10 +177,31 @@ export const createLiveSession = async (req: Request, res: Response) => {
       recordingTargetFolderId = folderRef.id;
     }
 
+    // Optional timetable metadata — drives the Schedule tab.
+    const subject = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
+    const endAtParsed = parseScheduledAt(req.body?.endAt);
+    if (
+      req.body?.endAt !== undefined && req.body?.endAt !== null && req.body?.endAt !== "" &&
+      endAtParsed === undefined
+    ) {
+      return failure(res, "endAt must be a valid date.", 422);
+    }
+    const endAt = endAtParsed ?? null;
+    let educatorId: Types.ObjectId | null = null;
+    if (req.body?.educatorId) {
+      if (!/^[0-9a-fA-F]{24}$/.test(String(req.body.educatorId))) {
+        return failure(res, "educatorId must be a valid ObjectId.", 422);
+      }
+      educatorId = new Types.ObjectId(String(req.body.educatorId));
+    }
+
     if (scheduledAt && scheduledAt.getTime() > Date.now()) {
       const session = await LiveSession.create({
         title,
         liveCourseIds: courseRef.ids,
+        subject,
+        educatorId,
+        endAt,
         recordingTargetFolderId,
         scheduledAt,
         status: "SCHEDULED",
@@ -178,6 +223,9 @@ export const createLiveSession = async (req: Request, res: Response) => {
     const session = await LiveSession.create({
       title,
       liveCourseIds: courseRef.ids,
+      subject,
+      educatorId,
+      endAt,
       recordingTargetFolderId,
       streamId: created.streamId,
       rtmpUrl: created.rtmpUrl,
@@ -310,17 +358,129 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
       }
     }
 
+    // Every Video promoted from this session's recordings, across ALL folders
+    // (a recording can be filed into several). Lets the admin "live section"
+    // see at a glance where each recording has landed.
+    const promotedVideos = await Video.find({ liveSessionId: session._id })
+      .select("_id title videoCategoryId aws_id priceType order status createdAt")
+      .sort({ createdAt: 1 })
+      .lean();
+
     return success(
       res,
       {
         session: publicView(session),
         isLive,
+        promotedVideos,
       },
       "Stream status fetched."
     );
   } catch (err) {
     logger.error("LiveSession status failed", { error: getErrorMessage(err) });
     return failure(res, "Failed to fetch stream status.", 500);
+  }
+};
+
+// POST /api/v1/admin/live-sessions/:id/promote-recording
+// Promote one of this session's Streamos recordings into ANY video category
+// folder as a Video. The folder may belong to a live course OR a recorded
+// course — recordings can be filed wherever they're needed. Idempotent per
+// folder (re-promoting returns the existing Video). The created Video keeps a
+// `liveSessionId` back-link so it stays traceable.
+//
+// Body: { folderId, recordingIndex?, quality?, title?, priceType?, order? }
+//   - recordingIndex (0-based) OR quality ("720p" …) picks the recording;
+//     omit both for the best-quality recording.
+export const promoteSessionRecording = async (req: Request, res: Response) => {
+  try {
+    const session = await findSessionByAnyId(String(req.params.id));
+    if (!session) return failure(res, "Live session not found.", 404);
+    if (!session.recordings || session.recordings.length === 0) {
+      return failure(res, "This session has no recordings yet.", 409);
+    }
+
+    const folderId =
+      typeof req.body?.folderId === "string" ? req.body.folderId.trim() : "";
+    if (!Types.ObjectId.isValid(folderId)) {
+      return failure(res, "A valid folderId is required.", 422);
+    }
+    const folder = await VideoCategory.findById(folderId).select("_id").lean();
+    if (!folder) return failure(res, "Target folder not found.", 404);
+
+    const rawIndex = req.body?.recordingIndex;
+    const recordingIndex =
+      rawIndex === undefined || rawIndex === null || rawIndex === ""
+        ? undefined
+        : Number(rawIndex);
+    if (
+      recordingIndex !== undefined &&
+      (!Number.isInteger(recordingIndex) || recordingIndex < 0)
+    ) {
+      return failure(res, "recordingIndex must be a non-negative integer.", 422);
+    }
+
+    const quality =
+      typeof req.body?.quality === "string" && req.body.quality.trim()
+        ? req.body.quality.trim()
+        : undefined;
+
+    const recording = resolveRecording(session, { recordingIndex, quality });
+    if (!recording) {
+      return failure(
+        res,
+        quality
+          ? `No recording with quality "${quality}".`
+          : "No recording found at that index.",
+        404
+      );
+    }
+
+    const priceTypeRaw = req.body?.priceType;
+    const priceType =
+      priceTypeRaw === "free" || priceTypeRaw === "paid" ? priceTypeRaw : undefined;
+
+    const title =
+      typeof req.body?.title === "string" && req.body.title.trim()
+        ? req.body.title.trim()
+        : undefined;
+
+    const rawOrder = req.body?.order;
+    const order =
+      rawOrder === undefined || rawOrder === null || rawOrder === ""
+        ? undefined
+        : Number(rawOrder);
+    if (order !== undefined && !Number.isInteger(order)) {
+      return failure(res, "order must be an integer.", 422);
+    }
+
+    const { video, alreadyExisted } = await promoteRecordingToFolder({
+      session,
+      recording,
+      folderId,
+      title,
+      priceType,
+      order,
+    });
+
+    logger.info("LiveSession: recording promoted to folder", {
+      sessionId: session._id,
+      folderId,
+      quality: recording.quality,
+      videoId: video._id,
+      alreadyExisted,
+    });
+
+    return success(
+      res,
+      { video: video.toObject(), alreadyExisted },
+      alreadyExisted
+        ? "Recording already present in that folder."
+        : "Recording promoted to folder.",
+      alreadyExisted ? 200 : 201
+    );
+  } catch (err) {
+    logger.error("LiveSession promote recording failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to promote recording.", 500);
   }
 };
 
@@ -425,10 +585,33 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
       changed = true;
     }
 
+    // Timetable metadata.
+    if (req.body?.subject !== undefined) {
+      session.subject = typeof req.body.subject === "string" ? req.body.subject.trim() : "";
+      changed = true;
+    }
+    if (req.body?.endAt !== undefined) {
+      const parsed = parseScheduledAt(req.body.endAt);
+      if (parsed === undefined) return failure(res, "endAt must be a valid date.", 422);
+      session.endAt = parsed; // Date, or null to clear
+      changed = true;
+    }
+    if (req.body?.educatorId !== undefined) {
+      if (req.body.educatorId === null || req.body.educatorId === "") {
+        session.educatorId = null;
+      } else {
+        if (!/^[0-9a-fA-F]{24}$/.test(String(req.body.educatorId))) {
+          return failure(res, "educatorId must be a valid ObjectId.", 422);
+        }
+        session.educatorId = new Types.ObjectId(String(req.body.educatorId));
+      }
+      changed = true;
+    }
+
     if (!changed) {
       return failure(
         res,
-        "Provide title, scheduledAt, liveCourseIds, or recordingTargetFolderId to update.",
+        "Provide title, scheduledAt, liveCourseIds, recordingTargetFolderId, subject, endAt, or educatorId to update.",
         422
       );
     }
@@ -578,8 +761,28 @@ export const updateRecordingWebhook = async (req: Request, res: Response) => {
 };
 
 // POST /api/v1/client/webhook/recording  (public — called by Streamos)
+// Authenticated via the STREAMOS_WEBHOOK_SECRET shared secret, passed either
+// as `?key=` on the URL or in the `x-webhook-secret` header. Without this an
+// attacker who guesses a streamId could inject arbitrary recording URLs and
+// even auto-create Video records in a course folder.
 export const recordingWebhook = async (req: Request, res: Response) => {
   try {
+    if (STREAMOS_WEBHOOK_SECRET) {
+      const provided =
+        (typeof req.query.key === "string" ? req.query.key : "") ||
+        (typeof req.headers["x-webhook-secret"] === "string"
+          ? (req.headers["x-webhook-secret"] as string)
+          : "");
+      if (!provided || !secretMatches(provided)) {
+        logger.warn("Recording webhook: rejected — missing/invalid secret");
+        return res.status(401).json({ success: false, message: "Unauthorized." });
+      }
+    } else {
+      logger.warn(
+        "Recording webhook: STREAMOS_WEBHOOK_SECRET is not set — accepting request unauthenticated. Set it in production."
+      );
+    }
+
     const streamId = parseStreamIdParam(req.body?.streamId);
     const rawRecordings = req.body?.recordings;
 

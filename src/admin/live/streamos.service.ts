@@ -3,7 +3,12 @@ import logger from "../../utils/logger";
 
 const STREAMOS_BASE = "https://streamapi.streamos.co/streamos";
 
-const RETRY_STATUSES = new Set([429, 502, 503, 504]);
+// Only transient gateway blips are retried inline (fast, small backoff).
+// 429 is deliberately excluded: per the Streamos docs it means the org has
+// exceeded its stream capacity and they ask for a ~30s back-off — far too
+// long to hold an admin HTTP request open. We fail fast on 429 instead and
+// return an actionable error so the admin can retry shortly.
+const RETRY_STATUSES = new Set([502, 503, 504]);
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 500;
 
@@ -87,7 +92,13 @@ function mapHttpError(res: AxiosResponse): StreamosError {
     return new StreamosError("Streamos service unavailable (404).", 502, status, data);
   }
   if (status === 429) {
-    return new StreamosError("Streamos is rate limiting requests (429).", 429, status, data);
+    // Per Streamos docs: exceeded stream capacity / servers overloaded.
+    return new StreamosError(
+      "Streamos is at capacity or rate-limiting (429). Please wait ~30s and try again.",
+      429,
+      status,
+      data
+    );
   }
   return new StreamosError(
     `Streamos error (${status}).`,

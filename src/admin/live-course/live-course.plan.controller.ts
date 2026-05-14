@@ -12,6 +12,8 @@ const createPlanSchema = z
     name:      z.string().trim().max(200).optional(),
     duration:  z.number().int().positive("duration (months) must be a positive integer"),
     price:     z.number().nonnegative("price must be a non-negative number"),
+    // MRP shown struck-through next to `price`. Optional.
+    originalPrice: z.number().nonnegative("originalPrice must be a non-negative number").optional(),
     isDefault: z.boolean().optional().default(false),
     status:    z.boolean().optional().default(true),
   })

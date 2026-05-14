@@ -7,6 +7,13 @@ export interface ILiveCourseSubscription extends Document {
   startAt?: Date | null;
   endAt?: Date | null;
   status: boolean;
+  // Money trail. `originalAmount` is the plan price before any discount,
+  // `discountAmount` is what the promo code took off, and `paidAmount` is the
+  // amount actually charged (originalAmount - discountAmount). When no promo
+  // is used, originalAmount/discountAmount stay null and paidAmount === price.
+  promocodeId?: mongoose.Types.ObjectId | null;
+  originalAmount?: number | null;
+  discountAmount?: number | null;
   paidAmount?: number | null;
   paymentStatus: "pending" | "verified" | "failed";
   razorpayOrderId?: string | null;
@@ -24,6 +31,9 @@ const liveCourseSubscriptionSchema: Schema = new Schema(
     startAt:       { type: Date,    default: null },
     endAt:         { type: Date,    default: null },
     status:        { type: Boolean, default: true },
+    promocodeId:    { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
+    originalAmount: { type: Number, default: null },
+    discountAmount: { type: Number, default: null },
     paidAmount:    { type: Number,  default: null },
     paymentStatus: {
       type: String,

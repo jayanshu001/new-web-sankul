@@ -9,6 +9,7 @@ import {
   deleteLiveCourse,
   toggleLiveCoursePopular,
   listSessionsForLiveCourse,
+  updateTimetableFiles,
 } from "./live-course.controller";
 import {
   listFolders,
@@ -20,6 +21,9 @@ import {
   listVideosInFolder,
   createVideoInFolder,
   createVideoFromRecording,
+  getVideoInFolder,
+  updateVideoInFolder,
+  reorderVideosInFolder,
   deleteVideoInFolder,
 } from "./live-course.video.controller";
 import {
@@ -29,6 +33,13 @@ import {
   updateLiveCoursePlan,
   deleteLiveCoursePlan,
 } from "./live-course.plan.controller";
+import {
+  listLiveCourseSubscriptions,
+  getLiveCourseSubscription,
+  grantLiveCourseSubscription,
+  updateLiveCourseSubscription,
+  deleteLiveCourseSubscription,
+} from "./live-course.subscription.controller";
 
 const router = Router();
 
@@ -38,6 +49,12 @@ router.use(authenticate, requireRole("admin", "super_admin"));
 router.get("/plans/:planId",                 getLiveCoursePlan);
 router.put("/plans/:planId",                 updateLiveCoursePlan);
 router.delete("/plans/:planId",              deleteLiveCoursePlan);
+
+// --- Subscriptions (literal prefix — also declared before /:id patterns) ----
+router.get("/subscriptions",                 listLiveCourseSubscriptions);
+router.get("/subscriptions/:subscriptionId", getLiveCourseSubscription);
+router.put("/subscriptions/:subscriptionId", updateLiveCourseSubscription);
+router.delete("/subscriptions/:subscriptionId", deleteLiveCourseSubscription);
 
 // --- Live course CRUD -------------------------------------------------------
 router.get("/",                              listLiveCourses);
@@ -49,6 +66,9 @@ router.patch("/:id/popular",                 toggleLiveCoursePopular);
 router.get("/:id/sessions",                  listSessionsForLiveCourse);
 router.get("/:id/plans",                     listLiveCoursePlans);
 router.post("/:id/plans",                    createLiveCoursePlan);
+router.get("/:id/subscriptions",             listLiveCourseSubscriptions);
+router.post("/:id/grant",                    grantLiveCourseSubscription);
+router.patch("/:id/timetable-files",         updateTimetableFiles);
 
 // --- Folder CRUD (under a live course) --------------------------------------
 router.get("/:liveCourseId/folders",                       listFolders);
@@ -59,7 +79,10 @@ router.delete("/:liveCourseId/folders/:folderId",          deleteFolder);
 // --- Video CRUD (under a folder) --------------------------------------------
 router.get("/:liveCourseId/folders/:folderId/videos",                       listVideosInFolder);
 router.post("/:liveCourseId/folders/:folderId/videos",                      createVideoInFolder);
+router.post("/:liveCourseId/folders/:folderId/videos/reorder",              reorderVideosInFolder);
 router.post("/:liveCourseId/folders/:folderId/videos/from-recording",       createVideoFromRecording);
+router.get("/:liveCourseId/folders/:folderId/videos/:videoId",              getVideoInFolder);
+router.put("/:liveCourseId/folders/:folderId/videos/:videoId",              updateVideoInFolder);
 router.delete("/:liveCourseId/folders/:folderId/videos/:videoId",           deleteVideoInFolder);
 
 export default router;

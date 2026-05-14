@@ -5,6 +5,15 @@ export interface ILiveCourseCategoryRef {
   order: number;
 }
 
+export type LiveCourseClassType = "live" | "live_offline" | "offline";
+
+// A downloadable file shown in the "Time Table" file list on the Schedule tab.
+export interface ILiveCourseTimetableFile {
+  title: string;
+  fileUrl: string;
+  order: number;
+}
+
 export interface ILiveCourse extends Document {
   name: string;
   description: string;
@@ -14,6 +23,9 @@ export interface ILiveCourse extends Document {
   withMaterial?: string;
   withoutMaterial?: string;
   level: string;
+  // Drives the "Class Type" stat on the course header. "live_offline" renders
+  // as "Live + Offline" on the client.
+  classType: LiveCourseClassType;
   status: boolean;
   isPaid: boolean;
   isPopular: boolean;
@@ -26,6 +38,9 @@ export interface ILiveCourse extends Document {
   // Adjacent content (kept for parity with Course)
   materialCategories: ILiveCourseCategoryRef[];
   examCategories: ILiveCourseCategoryRef[];
+
+  // Timetable PDFs/files surfaced on the Schedule tab (the "Time Table" list).
+  timetableFiles: ILiveCourseTimetableFile[];
 
   // Audit
   createdBy?: mongoose.Types.ObjectId | null;
@@ -50,6 +65,15 @@ const examCategoryRefSchema = new Schema<ILiveCourseCategoryRef>(
   { _id: false }
 );
 
+const timetableFileSchema = new Schema<ILiveCourseTimetableFile>(
+  {
+    title:   { type: String, required: true },
+    fileUrl: { type: String, required: true },
+    order:   { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
 const liveCourseSchema = new Schema<ILiveCourse>(
   {
     name:          { type: String, required: true, unique: true },
@@ -60,6 +84,7 @@ const liveCourseSchema = new Schema<ILiveCourse>(
     withMaterial:    { type: String, default: "" },
     withoutMaterial: { type: String, default: "" },
     level:           { type: String, required: true },
+    classType:       { type: String, enum: ["live", "live_offline", "offline"], default: "live" },
     status:          { type: Boolean, required: true, default: true },
     isPaid:          { type: Boolean, default: true },
     isPopular:       { type: Boolean, default: false, index: true },
@@ -70,6 +95,7 @@ const liveCourseSchema = new Schema<ILiveCourse>(
 
     materialCategories: { type: [materialCategoryRefSchema], default: [] },
     examCategories:     { type: [examCategoryRefSchema],     default: [] },
+    timetableFiles:     { type: [timetableFileSchema],       default: [] },
 
     createdBy: { type: Schema.Types.ObjectId, ref: "AdminUser", default: null },
   },

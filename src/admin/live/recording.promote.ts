@@ -1,6 +1,6 @@
 import { Types } from "mongoose";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
-import { Video } from "../../models/course/Video.model";
+import { Video, IVideo } from "../../models/course/Video.model";
 import { ILiveSession, ILiveSessionRecording } from "../../models/course/LiveSession.model";
 import logger from "../../utils/logger";
 
@@ -20,10 +20,95 @@ function pickRecording(recordings: ILiveSessionRecording[]): ILiveSessionRecordi
   return recordings[0] ?? null;
 }
 
+// The subset of a LiveSession the promotion helpers actually read. Accepting
+// this shape (rather than the full ILiveSession Document) lets callers pass
+// either a hydrated doc or a .lean() result.
+export type RecordingSource = Pick<
+  ILiveSession,
+  "_id" | "title" | "recordings" | "liveCourseIds"
+>;
+
 /**
- * If the session has a recordingTargetFolderId set, create a Video record in
- * that folder pointing at the recording — but only if a Video for the same
- * url isn't already there (dedupe across webhook + recovery paths).
+ * Resolve a single recording on a session, by 0-based index or by quality
+ * label ("720p", "480p" …). When neither is given, falls back to the
+ * best-quality recording. Returns null if nothing matches.
+ */
+export function resolveRecording(
+  session: Pick<RecordingSource, "recordings">,
+  opts: { recordingIndex?: number; quality?: string }
+): ILiveSessionRecording | null {
+  const recordings = session.recordings ?? [];
+  if (recordings.length === 0) return null;
+
+  if (opts.quality) {
+    const q = opts.quality.toLowerCase();
+    return recordings.find((r) => r.quality?.toLowerCase() === q) ?? null;
+  }
+  if (typeof opts.recordingIndex === "number") {
+    return recordings[opts.recordingIndex] ?? null;
+  }
+  return pickRecording(recordings);
+}
+
+export interface PromoteResult {
+  video: IVideo;
+  // true when the recording was already present in the target folder — the
+  // existing Video is returned untouched rather than a duplicate created.
+  alreadyExisted: boolean;
+}
+
+/**
+ * Promote a single recording into ANY VideoCategory folder as a Video.
+ *
+ * The folder may belong to a live course OR a recorded course — recordings
+ * can be filed wherever they're needed, so this helper deliberately does NOT
+ * constrain the folder to the session's own courses. Callers that want a
+ * narrower scope validate the folder themselves first.
+ *
+ * Idempotent PER FOLDER: the same recording can be filed into several folders,
+ * but re-filing it into a folder it's already in returns the existing Video
+ * instead of creating a duplicate. The created Video carries `liveSessionId`
+ * so the recording can always be traced back to its source session.
+ */
+export async function promoteRecordingToFolder(params: {
+  session: Pick<RecordingSource, "_id" | "title">;
+  recording: ILiveSessionRecording;
+  folderId: Types.ObjectId | string;
+  title?: string;
+  priceType?: "free" | "paid";
+  order?: number;
+}): Promise<PromoteResult> {
+  const { session, recording, folderId } = params;
+  if (!recording?.path) {
+    throw new Error("Recording has no playable path.");
+  }
+
+  // Dedupe key: a recording is identified by its mp4 path, stored as aws_id.
+  const existing = await Video.findOne({
+    videoCategoryId: folderId,
+    aws_id: recording.path,
+  });
+  if (existing) return { video: existing, alreadyExisted: true };
+
+  const video = await Video.create({
+    videoCategoryId: new Types.ObjectId(String(folderId)),
+    liveSessionId: session._id,
+    title:
+      params.title ??
+      `${session.title}${recording.quality ? ` (${recording.quality})` : ""}`,
+    platform: "aws",
+    aws_id: recording.path,
+    priceType: params.priceType ?? "paid",
+    order: params.order ?? 0,
+    status: true,
+  });
+
+  return { video, alreadyExisted: false };
+}
+
+/**
+ * If the session has a recordingTargetFolderId set, file the best-quality
+ * recording into that folder automatically.
  *
  * Silent best-effort: never throws. The recording always remains accessible
  * on the LiveSession itself; this is purely an ergonomic auto-add.
@@ -53,28 +138,19 @@ export async function maybeAutoPromoteRecording(session: ILiveSession): Promise<
       return;
     }
 
-    // Dedupe: don't create a second Video pointing at the same recording.
-    const exists = await Video.exists({
-      videoCategoryId: folder._id,
-      aws_id: recording.path,
-    });
-    if (exists) return;
-
-    await Video.create({
-      videoCategoryId: folder._id,
-      title: `${session.title}${recording.quality ? ` (${recording.quality})` : ""}`,
-      platform: "aws",
-      aws_id: recording.path,
-      priceType: "paid",
-      order: 0,
-      status: true,
+    const { alreadyExisted } = await promoteRecordingToFolder({
+      session,
+      recording,
+      folderId: folder._id as Types.ObjectId,
     });
 
-    logger.info("LiveSession: recording auto-promoted into folder", {
-      sessionId: session._id,
-      folderId: folder._id,
-      quality: recording.quality,
-    });
+    if (!alreadyExisted) {
+      logger.info("LiveSession: recording auto-promoted into folder", {
+        sessionId: session._id,
+        folderId: folder._id,
+        quality: recording.quality,
+      });
+    }
   } catch (err) {
     logger.error("LiveSession: recording auto-promote failed (non-fatal)", {
       sessionId: session._id,

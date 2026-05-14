@@ -11,6 +11,12 @@ export interface ILiveSessionRecording {
 export interface ILiveSession extends Document {
   title: string;
   liveCourseIds: Types.ObjectId[];
+  // Timetable metadata — drives the "Schedule" tab, which is derived from the
+  // course's scheduled sessions. `subject`/`educatorId` describe the class;
+  // `scheduledAt`/`endAt` give the time slot.
+  subject?: string;
+  educatorId?: Types.ObjectId | null;
+  endAt?: Date | null;
   // If set at schedule time, the recording webhook will auto-create a Video
   // in this folder once Streamos delivers recordings. Otherwise the recording
   // only lives on this session and admin must promote it manually.
@@ -45,6 +51,11 @@ const LiveSessionSchema = new Schema<ILiveSession>(
       default: [],
       index: true,
     },
+    // Timetable metadata. Optional — a session can exist without being part of
+    // a published schedule, but the Schedule tab reads these when present.
+    subject:     { type: String, default: "", trim: true, maxlength: 300 },
+    educatorId:  { type: Schema.Types.ObjectId, ref: "CourseEducator", default: null },
+    endAt:       { type: Date, default: null },
     recordingTargetFolderId: {
       type: Schema.Types.ObjectId,
       ref: "VideoCategory",

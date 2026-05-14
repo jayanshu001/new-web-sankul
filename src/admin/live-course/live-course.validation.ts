@@ -12,6 +12,7 @@ export const createLiveCourseSchema = z
     withMaterial:    z.string().trim().optional(),
     withoutMaterial: z.string().trim().optional(),
     level:           z.string().trim().min(1, "Level is required"),
+    classType:       z.enum(["live", "live_offline", "offline"]).optional(),
     status:        z.boolean(),
     isPaid:        z.boolean().optional(),
     isPopular:     z.boolean().optional(),

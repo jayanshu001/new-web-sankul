@@ -352,3 +352,48 @@ export const listSessionsForLiveCourse = async (req: Request, res: Response) => 
     return failure(res, "Failed to list sessions.", 500);
   }
 };
+
+const timetableFilesSchema = z
+  .object({
+    files: z.array(
+      z.object({
+        title:   z.string().trim().min(1, "title is required").max(300),
+        fileUrl: z.string().url("fileUrl must be a valid URL"),
+        order:   z.number().int().optional().default(0),
+      })
+    ),
+  })
+  .strict();
+
+// PATCH /api/v1/admin/live-courses/:id/timetable-files
+// Replace the whole "Time Table" file list on a live course (the file list on
+// the Schedule tab). Upload the files via the generic upload endpoint first,
+// then send the resulting URLs here.
+export const updateTimetableFiles = async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id ?? "");
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return failure(res, "Invalid live course id.", 422);
+    }
+
+    let validated: z.infer<typeof timetableFilesSchema>;
+    try {
+      validated = timetableFilesSchema.parse(req.body);
+    } catch (err) {
+      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      throw err;
+    }
+
+    const doc = await LiveCourse.findByIdAndUpdate(
+      id,
+      { $set: { timetableFiles: validated.files } },
+      { new: true, runValidators: true }
+    );
+    if (!doc) return failure(res, "Live course not found.", 404);
+
+    return success(res, { timetableFiles: doc.timetableFiles }, "Timetable files updated.");
+  } catch (err) {
+    logger.error("LiveCourse updateTimetableFiles failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to update timetable files.", 500);
+  }
+};

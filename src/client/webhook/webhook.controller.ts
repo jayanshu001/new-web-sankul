@@ -6,6 +6,8 @@ import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
+import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
+import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import {
   PackageCourseEbookOrderStatus,
   PackageCourseEbookPaymentType,
@@ -90,6 +92,35 @@ export const paymentWebhook = async (req: Request, res: Response) => {
         await bookOrder.save();
       }
       return res.status(200).json({ success: true, message: "Book order verified." });
+    }
+
+    // Live course subscription — unlike PackageCourseSubscription, this row
+    // DOES carry razorpayOrderId, so the webhook can fulfill it directly as a
+    // safety net for when the client never calls /payment/verify. Idempotent:
+    // skips if already verified. Mirrors the verify.controller live branch.
+    const liveCourseSub = await LiveCourseSubscription.findOne({ razorpayOrderId });
+    if (liveCourseSub) {
+      if (liveCourseSub.paymentStatus !== "verified") {
+        // `duration` is stored as MONTHS. setMonth honours calendar-month length.
+        const plan = await LiveCoursePlan.findById(liveCourseSub.planId)
+          .select("duration")
+          .lean();
+        const durationMonths = plan?.duration ?? 0;
+
+        const now = new Date();
+        const endAt = new Date(now);
+        endAt.setMonth(endAt.getMonth() + durationMonths);
+
+        liveCourseSub.paymentStatus = "verified";
+        liveCourseSub.razorpayPaymentId = razorpayPaymentId;
+        liveCourseSub.paidAt = now;
+        liveCourseSub.startAt = now;
+        liveCourseSub.endAt = endAt;
+        await liveCourseSub.save();
+      }
+      return res
+        .status(200)
+        .json({ success: true, message: "Live course subscription activated." });
     }
 
     // Course/package subscription — matched by razorpayOrderId stored on payload

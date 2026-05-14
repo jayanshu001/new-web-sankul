@@ -1,15 +1,17 @@
 import { Request, Response } from "express";
 import { Types } from "mongoose";
 import { LiveSession } from "../../models/course/LiveSession.model";
-import { LiveCourse } from "../../models/course/LiveCourse.model";
-import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import {
   getStreamDetails as streamosGetStreamDetails,
   StreamosError,
 } from "../../admin/live/streamos.service";
 import { io, roomKey } from "../../socket/livechat.socket";
 import { maybeAutoPromoteRecording } from "../../admin/live/recording.promote";
-import { hasAccessToAnyLiveCourse, PREVIEW_SECONDS } from "../live-course/entitlement";
+import {
+  resolveLivePreviewState,
+  buildPurchaseOptions,
+  PREVIEW_SECONDS,
+} from "../live-course/entitlement";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 
@@ -98,49 +100,34 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
     // customer gets full access — matches the original behaviour before live
     // courses existed). A session attached to one or more courses requires
     // the customer to hold an active subscription to AT LEAST ONE of them;
-    // otherwise they get a preview window and a list of purchasable courses.
+    // otherwise they get a PER-VIEWER 3-minute trial.
+    //
+    // The trial clock only starts once there is something to watch, so we
+    // don't track SCHEDULED sessions — that would burn a non-subscriber's
+    // preview before the stream goes live.
     const liveCourseIds = (session.liveCourseIds ?? []).map(String);
-    let accessLevel: "full" | "preview" = "full";
-    let purchaseOptions: Array<{
-      liveCourseId: string;
-      name: string;
-      image: string;
-      plans: Array<{ planId: string; name: string | null; duration: number; price: number; isDefault: boolean }>;
-    }> = [];
+    const track = session.status !== "SCHEDULED";
+    const preview = await resolveLivePreviewState(
+      req.user?.id,
+      session._id as Types.ObjectId,
+      liveCourseIds,
+      track
+    );
 
-    if (liveCourseIds.length > 0) {
-      const subscribed = await hasAccessToAnyLiveCourse(req.user?.id, liveCourseIds);
-      if (!subscribed) {
-        accessLevel = "preview";
+    // Playback URLs go to full-access users and to preview users while their
+    // trial window is still open. Once it elapses ("preview_ended") we
+    // withhold hlsUrl/hlsUrls/recordings entirely — that is what makes the
+    // 3-minute cutoff server-enforced rather than client-trusted.
+    const exposePlayback =
+      preview.accessLevel === "full" || preview.accessLevel === "preview";
 
-        const [courses, plans] = await Promise.all([
-          LiveCourse.find({ _id: { $in: liveCourseIds }, status: true })
-            .select("_id name image")
-            .lean(),
-          LiveCoursePlan.find({ liveCourseId: { $in: liveCourseIds }, status: true })
-            .sort({ price: 1 })
-            .lean(),
-        ]);
-        const plansByCourse = new Map<string, typeof plans>();
-        for (const p of plans) {
-          const key = String(p.liveCourseId);
-          if (!plansByCourse.has(key)) plansByCourse.set(key, []);
-          plansByCourse.get(key)!.push(p);
-        }
-        purchaseOptions = courses.map((c) => ({
-          liveCourseId: String(c._id),
-          name: c.name,
-          image: c.image,
-          plans: (plansByCourse.get(String(c._id)) ?? []).map((p) => ({
-            planId: String(p._id),
-            name: p.name ?? null,
-            duration: p.duration,
-            price: p.price,
-            isDefault: p.isDefault,
-          })),
-        }));
-      }
-    }
+    // purchaseOptions drives the "buy to keep watching" popup. We send it for
+    // any non-full state (including while still in "preview") so the client
+    // already has the data when the timer hits zero — no extra round-trip.
+    const purchaseOptions =
+      preview.accessLevel === "full"
+        ? []
+        : await buildPurchaseOptions(liveCourseIds);
 
     return success(
       res,
@@ -152,19 +139,22 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
         streamId: session.streamId ?? null,
         liveCourseIds,
         isLive,
-        hlsUrl: session.hlsUrl ?? null,
-        hlsUrls: session.hlsUrls ?? null,
-        recordings: session.recordings ?? [],
+        hlsUrl: exposePlayback ? session.hlsUrl ?? null : null,
+        hlsUrls: exposePlayback ? session.hlsUrls ?? null : null,
+        recordings: exposePlayback ? session.recordings ?? [] : [],
         // Use this as the Socket.IO room id for chat/polls (only valid once
         // the session has a streamId — i.e. status is CREATED or later).
         liveClassId: session.streamId != null ? String(session.streamId) : null,
         // Entitlement:
-        //   - "full"    → no cutoff, play to the end.
-        //   - "preview" → client should cut playback at `previewSeconds` and
-        //     surface `purchaseOptions` so the user can buy any one of the
-        //     attached courses to unlock the rest.
-        accessLevel,
-        previewSeconds: accessLevel === "preview" ? PREVIEW_SECONDS : null,
+        //   - "full"          → no cutoff, play to the end.
+        //   - "preview"       → playback URLs included; client should cut at
+        //     `previewSecondsRemaining` (or `previewExpiresAt`) and then show
+        //     the purchase popup built from `purchaseOptions`.
+        //   - "preview_ended" → no playback URLs; show the purchase popup.
+        accessLevel: preview.accessLevel,
+        previewSeconds: preview.accessLevel === "full" ? null : PREVIEW_SECONDS,
+        previewExpiresAt: preview.previewExpiresAt,
+        previewSecondsRemaining: preview.previewSecondsRemaining,
         purchaseOptions,
       },
       "Live session fetched."
