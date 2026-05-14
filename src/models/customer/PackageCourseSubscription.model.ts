@@ -19,6 +19,9 @@ export interface IPackageCourseSubscription extends Document {
   customerPercentage?: number | null;
   promoterPercentage?: number | null;
   paymentStatus: "pending" | "verified" | "failed";
+  paymentMethod?: string | null;
+  withMaterial?: boolean;
+  remark?: string | null;
   razorpayOrderId?: string | null;
   razorpayPaymentId?: string | null;
   paidAt?: Date | null;
@@ -47,6 +50,9 @@ const packageCourseSubscriptionSchema: Schema = new Schema(
       enum: ["pending", "verified", "failed"],
       default: "verified",
     },
+    paymentMethod: { type: String, default: null, maxlength: 30 },
+    withMaterial: { type: Boolean, default: false },
+    remark: { type: String, default: null, maxlength: 1000 },
     razorpayOrderId: { type: String, default: null, maxlength: 100 },
     razorpayPaymentId: { type: String, default: null, maxlength: 100 },
     paidAt: { type: Date, default: null },

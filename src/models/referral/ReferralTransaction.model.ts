@@ -9,6 +9,10 @@ export interface IReferralTransaction extends Document {
   coin: number;
   type: RefferalTransactionType;
   status: RefferalTransactionStatus;
+  utr?: string;
+  failureReason?: string;
+  providerRef?: string;
+  providerPayload?: Record<string, any>;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -31,6 +35,10 @@ const ReferralTransactionSchema = new Schema<IReferralTransaction>(
       required: true,
       default: RefferalTransactionStatus.SUCCESSFUL,
     },
+    utr: { type: String },
+    failureReason: { type: String },
+    providerRef: { type: String, index: true },
+    providerPayload: { type: Schema.Types.Mixed },
   },
   { collection: "ws_referral_transactions", timestamps: true }
 );

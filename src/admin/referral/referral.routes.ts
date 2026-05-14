@@ -11,6 +11,7 @@ import {
   rejectWithdrawal,
   exportWithdrawalsCsv,
   adjustCustomerRewards,
+  getReferrers,
 } from "./referral.controller";
 import {
   listTerms,
@@ -35,6 +36,9 @@ router.post("/programs", createProgram);
 router.get("/programs/:id", getProgramById);
 router.put("/programs/:id", updateProgram);
 router.delete("/programs/:id", deleteProgram);
+
+// Referrers (all customers with a generated referral code + stats)
+router.get("/referrers", getReferrers);
 
 // Transactions
 router.get("/transactions", getTransactions);

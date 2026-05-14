@@ -61,15 +61,22 @@ Two ID conventions on live-session routes: `:id` accepts the Mongo `_id`
 `multipart/form-data` (upload `image` as a file) **or** JSON with an `image`
 URL. Creating a course **auto-creates its root `VideoCategory` folder**.
 
-Body fields: `name` (unique), `description`, `image`, `ordered` (int),
-`level`, `status` (bool), `classType` (`live`|`live_offline`|`offline`,
-default `live`), `isPaid?`, `isPopular?`, `shareableLink?`, `withMaterial?`,
-`withoutMaterial?`, `courseEducatorId?`, `courseSubjectCategoryId?`.
+**Required:** `name` (unique), `description`, `image`, `ordered` (int),
+`level`, `status` (bool — must be present, no default in schema).
+**Optional:** `classType` (`live`|`live_offline`|`offline`, default `live`),
+`isPaid?` (model default `true`), `isPopular?` (model default `false`),
+`shareableLink?`, `withMaterial?`, `withoutMaterial?`, `courseEducatorId?`,
+`courseSubjectCategoryId?`, `materialCategories?: [{ id, name? }]`,
+`examCategories?: [{ id, name? }]`.
+
+> `materialCategories` and `examCategories` are arrays of `{ id, name? }` refs
+> kept for parity with the regular `Course` model. They appear on
+> `liveCourse` responses even when empty.
 
 `data`: `{ liveCourse, rootFolder }` — `201`. Duplicate name → `409`.
 
 ### `GET /admin/live-courses` — list
-Query: `page`, `limit` (max 100), `search`, `status` (`true`/`false`).
+Query: `page`, `limit` (max 100), `search`, `status` (`true`/`false` — filters by `status` flag).
 `data`: `{ liveCourses, total, page, limit }`
 
 ### `GET /admin/live-courses/:id` — detail
@@ -97,15 +104,18 @@ Query: `status`, `upcoming=true`, `page`, `limit`. `data`: `{ sessions, total, p
 
 ## 4. Pricing plans
 
-`duration` is in **MONTHS**. One plan per course can be `isDefault`.
+`duration` is in **MONTHS**. One plan per course can be `isDefault` — when
+you set `isDefault: true` on any plan, the server transactionally unsets it
+on all other plans for that course. `name` is optional; if omitted, persists
+as `null`.
 
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `/admin/live-courses/:id/plans` | → `{ plans, total }` |
+| GET | `/admin/live-courses/:id/plans` | → `{ plans, total }` — sorted `isDefault desc, price asc, createdAt asc` |
 | POST | `/admin/live-courses/:id/plans` | `{ name?, duration, price, originalPrice?, isDefault?, status? }` → `{ plan }` `201` |
 | GET | `/admin/live-courses/plans/:planId` | → `{ plan }` |
 | PUT | `/admin/live-courses/plans/:planId` | any subset of the above → `{ plan }` |
-| DELETE | `/admin/live-courses/plans/:planId` | `409` if verified subscriptions reference it |
+| DELETE | `/admin/live-courses/plans/:planId` | `409` if any `paymentStatus: verified` subscription references it — `pending` / `failed` subs do **not** block deletion |
 
 `originalPrice` is the MRP shown struck-through on the client; the client
 computes `discountPercent` from it.
@@ -125,20 +135,26 @@ inside a folder.
 | PATCH | `/admin/live-courses/:liveCourseId/folders/:folderId` | `{ title?, image?, order_by?, educatorId?, status? }` → `{ folder }` |
 | DELETE | `/admin/live-courses/:liveCourseId/folders/:folderId` | refuses to delete the root folder; cascades videos + relations → `{ id, deletedVideos, deletedRelations }` |
 
+> Folder responses also include a server-generated `slug` (`<slugified-title>-<base36-timestamp>` — **not deterministic**, do not try to predict it client-side) and a `childCategoryId` legacy field (deprecated; the live tree uses `VideoCategoryRelation` rows in the `relations` array from the list endpoint).
+
 ### Videos
 | Method | Path | Body / notes |
 |---|---|---|
-| GET | `.../folders/:folderId/videos` | → `{ videos, total }` |
+| GET | `.../folders/:folderId/videos` | → `{ videos, total }` — `total` is the **length of the returned array**, not a paginated count. Endpoint is not paginated today. |
 | GET | `.../folders/:folderId/videos/:videoId` | → `{ video }` |
 | POST | `.../folders/:folderId/videos` | `{ title, topic?, platform, priceType?, youtube_id?/aws_id?/vimeo_id?, order?, status? }` → `{ video }` `201` |
 | POST | `.../folders/:folderId/videos/from-recording` | `{ liveSessionId, recordingIndex?/quality?, title?, priceType?, order? }` → `{ video, alreadyExisted }` |
 | PUT | `.../folders/:folderId/videos/:videoId` | any subset of video fields → `{ video }` |
-| POST | `.../folders/:folderId/videos/reorder` | `{ orders: [ { id, order } ] }` → `{ matched, modified }` |
+| POST | `.../folders/:folderId/videos/reorder` | `{ orders: [ { id, order } ] }` → `{ matched, modified }` (orders for videos not in this folder are silently ignored) |
 | DELETE | `.../folders/:folderId/videos/:videoId` | → `{ id }` |
 
 `platform` is `youtube` | `aws` | `vimeo` — supply the matching id field.
+`priceType` defaults to `"paid"` when omitted. **Create-time** the schema
+enforces `platform` ↔ `<platform>_id` pairing; **update-time** it does not,
+so you can `PUT` `{ title }` without re-sending the platform/id.
 Recordings promoted from a live session land as `platform: "aws"` with the
-mp4 URL in `aws_id`, and carry a `liveSessionId` back-link.
+mp4 URL in `aws_id`, and carry a `liveSessionId` back-link on the Video doc
+for traceability (visible in the response).
 
 ---
 
@@ -179,13 +195,12 @@ Lifecycle: `SCHEDULED` → `CREATED` → `ENDED` → `READY`.
   verifying the Streamos API itself).
 
 ### `POST /admin/live-sessions` — create or schedule
-Body: `{ title, liveCourseIds?: [...], subject?, educatorId?, endAt?, scheduledAt?, recordingTargetFolderId? }`
-- `scheduledAt` in the **future** → stored `SCHEDULED`, **no Streamos call**.
-- omitted / past → created on Streamos immediately, status `CREATED`.
-- `subject` / `educatorId` / `endAt` are **timetable metadata** — they feed the
-  customer **Schedule tab** (which is derived from scheduled sessions).
-- `recordingTargetFolderId` — when set, the recording webhook auto-promotes the
-  best-quality recording into that folder. Must belong to one of `liveCourseIds`.
+Body: `{ title, liveCourseIds?: [...] | liveCourseId?: "...", subject?, educatorId?, endAt?, scheduledAt?, recordingTargetFolderId? }`
+- Pass either `liveCourseIds` (array, preferred) **or** the single-string convenience `liveCourseId` — the controller accepts both.
+- `scheduledAt` in the **future** → stored `SCHEDULED`, **no Streamos call** (`streamId` / `rtmpUrl` / `hlsUrl` all `null`).
+- omitted / past → created on Streamos immediately, status `CREATED` (URLs populated).
+- `subject` / `educatorId` / `endAt` are **optional** timetable metadata — they feed the customer **Schedule tab** (which is derived from scheduled sessions).
+- `recordingTargetFolderId` — when set, the recording webhook auto-promotes the best-quality recording into that folder. Must belong to one of `liveCourseIds`.
 
 `data`: `{ session }` `201`.
 
@@ -195,7 +210,8 @@ Query: `status`, `upcoming=true`, `page`, `limit`. `data`: `{ sessions, total, p
 ### `GET /admin/live-sessions/:id` — detail + status
 Polls Streamos for `CREATED`/`ENDED` sessions (refreshes URLs, recovers missed
 recordings). `data`: `{ session, isLive, promotedVideos }` — `promotedVideos`
-lists every Video filed from this session's recordings (the "manage well" view).
+is `Video.find({ liveSessionId: <session._id> })` across **all folders and
+courses**, sorted by creation (not scoped to any single folder).
 
 ### `POST /admin/live-sessions/:id/start` — promote SCHEDULED → live
 Only allowed within 2 minutes of `scheduledAt` (late starts always allowed).
@@ -206,7 +222,7 @@ Body (any subset): `{ title?, scheduledAt?, liveCourseIds?, recordingTargetFolde
 Only `SCHEDULED` sessions are editable. `data`: `{ session }`.
 
 ### `DELETE /admin/live-sessions/:id`
-Refuses (`409`) a currently-live `CREATED` session — end it first. `data`: `{ id }`
+Refuses (`409`) a currently-live `CREATED` session — end it first. `SCHEDULED`, `ENDED`, and `READY` sessions can be deleted without restriction. `data`: `{ id }`
 
 ### `POST /admin/live-sessions/end`
 Body: `{ streamId }`. Ends the Streamos stream, flips status to `ENDED`,
@@ -253,9 +269,9 @@ room (`roomKey = live_chat:<streamId>`):
 ### Streamos passthrough
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/admin/live-sessions/streamos/org` | connected org + registered webhook URL |
-| GET | `/admin/live-sessions/streamos/recordings/:recordingId` | look up a past recording by id |
-| POST | `/admin/live-sessions/streamos/webhook` | register the recording webhook URL — body `{ webhook }` |
+| GET | `/admin/live-sessions/streamos/org` | connected org info — returns `{ name, accessKey, recordingWebhook }` (the `accessSecret` is intentionally **not** leaked) |
+| GET | `/admin/live-sessions/streamos/recordings/:recordingId` | passthrough — returns the raw Streamos uploaded-video response |
+| POST | `/admin/live-sessions/streamos/webhook` | register the recording webhook URL — body `{ webhook: "https://..." }` |
 
 > **Recording webhook security:** Streamos doesn't sign callbacks. Register the
 > webhook URL with `?key=<STREAMOS_WEBHOOK_SECRET>` appended; the public
@@ -269,7 +285,10 @@ room (`roomKey = live_chat:<streamId>`):
 Query (all optional): `customerId`, `liveCourseId`, `planId`,
 `paymentStatus` (`pending`|`verified`|`failed`), `status` (`true`/`false`),
 `page`, `limit`.
-`data`: `{ subscriptions, total, page, limit }` — customer / live course / plan populated.
+`data`: `{ subscriptions, total, page, limit }` with populated relations:
+- `customerId` → `{ firstName, middleName, lastName, phoneNumber, emailAddress }`
+- `liveCourseId` → `{ name, image }`
+- `planId` → `{ name, duration, price }`
 
 ### `GET /admin/live-courses/:id/subscriptions` — list for one course
 Same handler, pre-scoped by the path id.
@@ -281,11 +300,22 @@ Same handler, pre-scoped by the path id.
 Hand a customer an active, verified subscription with `paidAmount: 0`.
 
 Body: `{ customerId, planId, durationMonths?, startAt?, endAt? }`
-- Window comes from the plan's `duration` unless overridden by
-  `durationMonths` / `startAt` / `endAt`.
+- `durationMonths` must be a **positive** integer when provided.
+- `startAt` / `endAt` accept ISO date strings (parsed by `new Date(...)`).
+- Window precedence (highest wins):
+  1. explicit `endAt` →
+  2. `startAt` + `durationMonths` →
+  3. `startAt` + plan's `duration` →
+  4. `now` + plan's `duration` (default).
 - `409` if the customer already has an active subscription to this course —
-  the response `data` carries the existing `subscriptionId` so you can extend
-  it via the update endpoint instead.
+  the existing `subscriptionId` is returned in the error envelope at
+  **`messages.subscriptionId`** (not `data`). Use the update endpoint to
+  extend instead.
+
+The model also carries fields populated by other flows (not the grant endpoint):
+`promocodeId`, `originalAmount`, `discountAmount`, `paidAmount`,
+`razorpayOrderId`, `razorpayPaymentId`, `paidAt`. The grant endpoint sets
+`paidAmount: 0` and leaves the Razorpay/promo fields empty.
 
 `data`: `{ subscription }` `201`.
 
@@ -293,6 +323,7 @@ Body: `{ customerId, planId, durationMonths?, startAt?, endAt? }`
 Body (≥1 field): `{ status?, paymentStatus?, startAt?, endAt? }`.
 - Extend → set a later `endAt`.
 - Revoke → `status: false` (keeps the audit trail — preferred over delete).
+- `startAt` / `endAt` must be valid date strings; invalid input → `422 "must be a valid date"`.
 
 `data`: `{ subscription }`
 

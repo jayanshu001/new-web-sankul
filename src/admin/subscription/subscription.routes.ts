@@ -11,6 +11,9 @@ import {
   reportByCourse,
   reportByEbook,
   reportBookOrders,
+  listPlansForTarget,
+  listCustomerAddresses,
+  adminCreateCustomerAddress,
 } from "./subscription.controller";
 
 const router = Router();
@@ -25,6 +28,11 @@ router.get("/reports/book-orders", reportBookOrders);
 
 // Ebook subscriptions (listing)
 router.get("/ebook", listEbookSubscriptions);
+
+// Add-Subscription form helpers
+router.get("/plans", listPlansForTarget);
+router.get("/customer-addresses/:customerId", listCustomerAddresses);
+router.post("/customer-addresses", adminCreateCustomerAddress);
 
 // Course/package subscriptions CRUD
 router.get("/", listCourseSubscriptions);

@@ -13,7 +13,9 @@ import {
   createSubscriptionSchema,
   updateSubscriptionSchema,
   createEbookSubscriptionSchema,
+  adminCreateAddressSchema,
 } from "./subscription.validation";
+import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { PackageCourseEbookOrderStatus } from "../../models/enums";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
@@ -86,20 +88,130 @@ export const getCourseSubscriptionById = async (req: Request, res: Response) => 
 export const createCourseSubscription = async (req: Request, res: Response) => {
   try {
     const data = createSubscriptionSchema.parse(req.body);
+
+    // Validate customer exists
+    const customer = await Customer.findById(data.customerId).select("_id");
+    if (!customer) return res.status(404).json({ success: false, message: "Customer not found." });
+
+    // Validate plan and ensure it matches the chosen course/package
     const plan = await PackageCourseEbookPrice.findById(data.planId);
     if (!plan) return res.status(404).json({ success: false, message: "Plan not found." });
+
+    if (data.courseId && String(plan.courseId || "") !== String(data.courseId)) {
+      return res.status(400).json({ success: false, message: "Plan does not belong to the selected course." });
+    }
+    if (data.packageId && String(plan.packageId || "") !== String(data.packageId)) {
+      return res.status(400).json({ success: false, message: "Plan does not belong to the selected package." });
+    }
+
+    // Validate shipping address if material is requested
+    if (data.withMaterial && !data.customerShippingId) {
+      return res.status(400).json({
+        success: false,
+        message: "Shipping address (customerShippingId) is required when withMaterial is true.",
+      });
+    }
+    if (data.customerShippingId) {
+      const addr = await CustomerAddress.findOne({
+        _id: data.customerShippingId,
+        customerId: data.customerId,
+      }).select("_id");
+      if (!addr) {
+        return res.status(400).json({
+          success: false,
+          message: "Address does not belong to the selected customer.",
+        });
+      }
+    }
+
+    // Compute startAt / endAt
+    const startAt = data.startAt ? new Date(data.startAt) : new Date();
+    const endAt = new Date(startAt);
+    if (data.durationDays && data.durationDays > 0) {
+      endAt.setDate(endAt.getDate() + data.durationDays);
+    } else {
+      // Plan `duration` is months per project convention.
+      endAt.setMonth(endAt.getMonth() + (plan.duration || 0));
+    }
+
+    // Compute amount: explicit > plan.price (+ materialPrice if withMaterial)
+    const computedAmount =
+      typeof data.amount === "number"
+        ? data.amount
+        : (plan.price || 0) + (data.withMaterial ? (plan as any).materialPrice || 0 : 0);
 
     const sub = await PackageCourseSubscription.create({
       customerId: data.customerId,
       courseId: data.courseId || plan.courseId || null,
-      packageId: plan._id,
+      targetPackageId: data.packageId || plan.packageId || null,
+      packageId: plan._id, // plan row reference (historical field name)
       customerShippingId: data.customerShippingId || null,
-      startAt: new Date(data.startAt),
-      endAt: new Date(data.endAt),
-      status: true,
+      startAt,
+      endAt,
+      status: data.status ?? true,
+      paidAmount: computedAmount,
+      paymentStatus: "verified",
+      paymentMethod: data.paymentMethod,
+      withMaterial: !!data.withMaterial,
+      remark: data.remark || null,
+      paidAt: new Date(),
     });
 
     return res.status(201).json({ success: true, data: sub });
+  } catch (error: any) {
+    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── Helper endpoints for the Add-Subscription form ───────────────────────────
+
+// GET /admin/subscriptions/plans?courseId=...&packageId=...
+export const listPlansForTarget = async (req: Request, res: Response) => {
+  try {
+    const { courseId, packageId } = req.query as Record<string, string>;
+    const filter: any = { status: true };
+    if (courseId && isObjectId(courseId)) filter.courseId = courseId;
+    else if (packageId && isObjectId(packageId)) filter.packageId = packageId;
+    else
+      return res
+        .status(400)
+        .json({ success: false, message: "Provide courseId or packageId." });
+
+    const plans = await PackageCourseEbookPrice.find(filter).sort({ duration: 1 });
+    return res.status(200).json({ success: true, data: plans });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /admin/subscriptions/customer-addresses/:customerId
+export const listCustomerAddresses = async (req: Request, res: Response) => {
+  try {
+    const { customerId } = req.params as Record<string, string>;
+    if (!isObjectId(customerId))
+      return res.status(400).json({ success: false, message: "Invalid customerId." });
+
+    const addresses = await CustomerAddress.find({ customerId, status: true })
+      .populate("stateId", "_id name")
+      .populate("cityId", "_id name")
+      .sort({ createdAt: -1 });
+    return res.status(200).json({ success: true, data: addresses });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// POST /admin/subscriptions/customer-addresses
+export const adminCreateCustomerAddress = async (req: Request, res: Response) => {
+  try {
+    const data = adminCreateAddressSchema.parse(req.body);
+    const customer = await Customer.findById(data.customerId).select("_id");
+    if (!customer)
+      return res.status(404).json({ success: false, message: "Customer not found." });
+
+    const address = await CustomerAddress.create({ ...data });
+    return res.status(201).json({ success: true, data: address });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
@@ -116,6 +228,7 @@ export const updateCourseSubscription = async (req: Request, res: Response) => {
     const update: any = { ...data };
     if (data.startAt) update.startAt = new Date(data.startAt);
     if (data.endAt) update.endAt = new Date(data.endAt);
+    if (data.remark !== undefined) update.remark = data.remark;
 
     const sub = await PackageCourseSubscription.findByIdAndUpdate(id, { $set: update }, { new: true });
     if (!sub) return res.status(404).json({ success: false, message: "Subscription not found." });

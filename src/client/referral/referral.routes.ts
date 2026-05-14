@@ -3,6 +3,7 @@ import authenticate from "../../middlewares/authenticate";
 import {
   getRewardsOverview,
   getMyTransactions,
+  getTransactionById,
   requestWithdrawal,
   generateReferralCode,
   listBankAccounts,
@@ -19,6 +20,7 @@ router.use(authenticate);
 // Overview + ledger
 router.get("/rewards", getRewardsOverview);
 router.get("/transactions", getMyTransactions);
+router.get("/transactions/:id", getTransactionById);
 
 // Referral code (user-chosen, one-time)
 router.post("/code/generate", generateReferralCode);

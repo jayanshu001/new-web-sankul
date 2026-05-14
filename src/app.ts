@@ -20,6 +20,7 @@ import clientRoutes from "./client/client.routes";
 import adminRoutes from "./admin/admin.routes";
 import educatorRoutes from "./educator/educator.routes";
 import promoterRoutes from "./promoter/promoter.routes";
+import { razorpayPayoutWebhook } from "./webhooks/razorpay-payout.controller";
 
 const app = express();
 
@@ -100,6 +101,10 @@ app.use(
     },
     // Graceful JSON parse error -> let our middleware catch it
     strict: true,
+    // Stash raw body for routes that need HMAC signature verification (e.g. Razorpay payout webhook).
+    verify: (req, _res, buf) => {
+      (req as any).rawBody = buf;
+    },
   })
 );
 
@@ -167,6 +172,9 @@ app.use("/api/v1/educator", educatorRoutes);
 
 // Master Promoter Routes (Promoter Portal)
 app.use("/api/v1/promoter", promoterRoutes);
+
+// Inbound webhooks (HMAC-verified; no Bearer auth — request authenticity is proven by signature)
+app.post("/api/v1/webhooks/razorpay-payout", razorpayPayoutWebhook);
 
 
 // --- 400 on bad JSON (syntax) ----------------------------------------------

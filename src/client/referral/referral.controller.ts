@@ -13,6 +13,7 @@ import {
   BLACKLISTED_REFERRAL_WORDS,
 } from "./referral.validation";
 import { lookupIfsc } from "./ifsc";
+import { createContact, createFundAccount, createPayout } from "../payment/razorpayx";
 
 const MIN_WITHDRAWAL_AMOUNT = 500;
 
@@ -85,6 +86,29 @@ export const getMyTransactions = async (req: Request, res: Response) => {
   }
 };
 
+// ─── Transaction Detail ───────────────────────────────────────────────────────
+
+export const getTransactionById = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid transaction id." });
+    }
+
+    const transaction = await ReferralTransaction.findOne({ _id: id, customerId });
+    if (!transaction) {
+      return res.status(404).json({ success: false, message: "Transaction not found." });
+    }
+
+    return res.status(200).json({ success: true, data: transaction });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // ─── Withdrawal Request ───────────────────────────────────────────────────────
 
 export const requestWithdrawal = async (req: Request, res: Response) => {
@@ -149,6 +173,53 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
       );
       transaction = created;
     });
+
+    // Issue the Razorpay payout outside the Mongo transaction. If this fails,
+    // we refund coins and mark the local transaction as failed — the webhook
+    // is the only other place that can flip status, and it keys off providerRef.
+    try {
+      const contact = await createContact({
+        name:
+          bankAccount.accountHolderName ||
+          `${customer._id}`,
+        referenceId: `cust_${customer._id}`,
+      });
+      const fundAccount = await createFundAccount({
+        contactId: contact.id,
+        accountHolderName: bankAccount.accountHolderName,
+        ifsc: bankAccount.ifscCode,
+        accountNumber: bankAccount.accountNumber,
+      });
+      const payout = await createPayout({
+        fundAccountId: fundAccount.id,
+        amountInPaise: amount * 100,
+        referenceId: `txn_${transaction._id}`,
+        narration: "Reward withdrawal",
+      });
+
+      transaction.providerRef = payout.id;
+      await transaction.save();
+    } catch (payoutErr: any) {
+      const refundSession = await mongoose.startSession();
+      try {
+        await refundSession.withTransaction(async () => {
+          await Customer.updateOne(
+            { _id: customerId },
+            { $inc: { rewardPoints: amount } },
+            { session: refundSession }
+          );
+          transaction.status = RefferalTransactionStatus.FAILED;
+          transaction.failureReason = payoutErr.message ?? "Payout could not be initiated.";
+          await transaction.save({ session: refundSession });
+        });
+      } finally {
+        refundSession.endSession();
+      }
+      return res.status(502).json({
+        success: false,
+        message: "Withdrawal could not be initiated. Please try again.",
+      });
+    }
 
     return res.status(201).json({ success: true, data: transaction });
   } catch (error: any) {

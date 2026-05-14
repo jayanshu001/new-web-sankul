@@ -132,6 +132,7 @@ export type RefferalTransactionType =
 export const RefferalTransactionStatus = {
   PENDING: "pending",
   SUCCESSFUL: "successful",
+  FAILED: "failed",
 } as const;
 export type RefferalTransactionStatus =
   (typeof RefferalTransactionStatus)[keyof typeof RefferalTransactionStatus];
