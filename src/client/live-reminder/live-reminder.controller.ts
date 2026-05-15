@@ -86,21 +86,35 @@ export const setLiveSessionReminder = async (req: Request, res: Response) => {
   }
 };
 
-// GET /api/v1/client/live-reminders?upcoming=true
+// GET /api/v1/client/live-reminders?upcoming=true&limit=2
 // The caller's reminders, soonest first. ?upcoming=true → only still-scheduled
-// reminders whose session start time is still in the future.
+// reminders whose session start time is still in the future, sorted by the
+// session's scheduled start time so the next-to-start class is on top.
+// ?limit=N caps the response (default 50, max 100).
 export const listMyLiveSessionReminders = async (req: Request, res: Response) => {
   try {
     const customerId = req.user?.id;
     if (!customerId) return failure(res, "Unauthorized.", 401);
 
+    const upcomingOnly = req.query.upcoming === "true";
+
+    let limit = upcomingOnly ? 50 : 0;
+    const rawLimit = req.query.limit;
+    if (rawLimit !== undefined && rawLimit !== "") {
+      const n = Number(rawLimit);
+      if (!Number.isFinite(n) || n < 1) {
+        return failure(res, "limit must be a positive number.", 422);
+      }
+      limit = Math.min(Math.floor(n), 100);
+    }
+
     const rows = await LiveSessionReminder.find({ customerId: new Types.ObjectId(customerId) })
-      .sort({ remindAt: 1 })
       .populate("liveSessionId", SESSION_FIELDS)
       .lean();
 
     let reminders = rows.map(publicReminder);
-    if (req.query.upcoming === "true") {
+
+    if (upcomingOnly) {
       const now = Date.now();
       reminders = reminders.filter(
         (r) =>
@@ -108,9 +122,24 @@ export const listMyLiveSessionReminders = async (req: Request, res: Response) =>
           r.session?.scheduledAt &&
           new Date(r.session.scheduledAt).getTime() > now
       );
+      // Earliest session start first — so the next class to begin is on top.
+      reminders.sort(
+        (a, b) =>
+          new Date(a.session!.scheduledAt as any).getTime() -
+          new Date(b.session!.scheduledAt as any).getTime()
+      );
+    } else {
+      // Fallback ordering for the unfiltered list: by reminder fire time.
+      reminders.sort(
+        (a, b) =>
+          new Date(a.remindAt as any).getTime() - new Date(b.remindAt as any).getTime()
+      );
     }
 
-    return success(res, { reminders, total: reminders.length }, "Reminders fetched.");
+    const total = reminders.length;
+    if (limit > 0) reminders = reminders.slice(0, limit);
+
+    return success(res, { reminders, total, limit: limit || null }, "Reminders fetched.");
   } catch (err) {
     logger.error("List live reminders failed", { error: getErrorMessage(err) });
     return failure(res, "Failed to fetch reminders.", 500);

@@ -106,6 +106,10 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
 
 // GET /api/v1/client/live-courses/:id/sessions
 // Filter: upcoming=true → SCHEDULED + scheduledAt >= now.
+// Ordering:
+//   - upcoming=true → ascending scheduledAt (nearest-to-start at top).
+//   - otherwise    → future sessions first (nearest at top), then past sessions
+//     most-recent first. Sessions with no scheduledAt sink to the bottom.
 export const listSessionsForCourseClient = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id ?? "");
@@ -126,13 +130,49 @@ export const listSessionsForCourseClient = async (req: Request, res: Response) =
       query.scheduledAt = { $gte: new Date() };
     }
 
+    const now = new Date();
+    // 0 = upcoming (still in the future), 1 = past, 2 = unscheduled (null).
+    // Within each bucket we sort by proximity to "now" so the next-to-start
+    // session is on top and the most-recent past session leads the past group.
+    const sortStage = upcoming
+      ? { scheduledAt: 1 as 1, createdAt: -1 as -1 }
+      : { _bucket: 1 as 1, _proximity: 1 as 1, createdAt: -1 as -1 };
+
+    const pipeline: any[] = [{ $match: query }];
+    if (!upcoming) {
+      pipeline.push({
+        $addFields: {
+          _bucket: {
+            $switch: {
+              branches: [
+                { case: { $eq: ["$scheduledAt", null] }, then: 2 },
+                { case: { $gte: ["$scheduledAt", now] }, then: 0 },
+              ],
+              default: 1,
+            },
+          },
+          _proximity: {
+            $cond: [
+              { $eq: ["$scheduledAt", null] },
+              Number.MAX_SAFE_INTEGER,
+              { $abs: { $subtract: ["$scheduledAt", now] } },
+            ],
+          },
+        },
+      });
+    }
+    pipeline.push({ $sort: sortStage });
+    pipeline.push({ $skip: (page - 1) * limit });
+    pipeline.push({ $limit: limit });
+    pipeline.push({
+      $project: {
+        title: 1, status: 1, scheduledAt: 1, streamId: 1,
+        recordings: 1, liveCourseIds: 1, createdAt: 1, updatedAt: 1,
+      },
+    });
+
     const [rows, total] = await Promise.all([
-      LiveSession.find(query)
-        .sort({ scheduledAt: 1, createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .select("title status scheduledAt streamId recordings liveCourseIds createdAt updatedAt")
-        .lean(),
+      LiveSession.aggregate(pipeline),
       LiveSession.countDocuments(query),
     ]);
 
@@ -445,6 +485,277 @@ export const listMyLiveCourses = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/client/live-courses/my/upcoming-sessions
+// Upcoming SCHEDULED sessions across every live course the customer is
+// actively entitled to (verified subscription, status on, endAt not yet
+// crossed). One call returns the user's whole forward-looking timetable, in
+// ascending scheduledAt order, with the source course attached so the UI can
+// group or label by course.
+export const listMyUpcomingSessions = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+    if (!customerId) return failure(res, "Unauthorized.", 401);
+
+    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
+    const now = new Date();
+
+    // Only currently-active subscriptions feed the "my upcoming" view —
+    // expired ones shouldn't surface their courses' future sessions.
+    const subs = await LiveCourseSubscription.find({
+      customerId,
+      paymentStatus: "verified",
+      status: true,
+      $or: [{ endAt: null }, { endAt: { $gte: now } }],
+    })
+      .select("liveCourseId")
+      .lean();
+
+    if (subs.length === 0) {
+      return success(
+        res,
+        { sessions: [], total: 0, page, limit },
+        "Your upcoming sessions fetched."
+      );
+    }
+
+    const courseIds = subs.map((s) => s.liveCourseId);
+
+    const query = {
+      liveCourseIds: { $in: courseIds },
+      status: "SCHEDULED",
+      scheduledAt: { $ne: null, $gte: now },
+    };
+
+    const [rows, total] = await Promise.all([
+      LiveSession.find(query)
+        .sort({ scheduledAt: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .select("title subject educatorId scheduledAt endAt status streamId liveCourseIds")
+        .populate("educatorId", "name image")
+        .populate("liveCourseIds", "name image")
+        .lean(),
+      LiveSession.countDocuments(query),
+    ]);
+
+    const sessions = rows.map((s: any) => ({
+      sessionId: String(s._id),
+      title: s.title,
+      subject: s.subject || s.title,
+      educator: s.educatorId ?? null,
+      // A session can belong to multiple courses; surface them all so the UI
+      // can show "Course A / Course B" when overlapping.
+      liveCourses: Array.isArray(s.liveCourseIds) ? s.liveCourseIds : [],
+      scheduledAt: s.scheduledAt ?? null,
+      endAt: s.endAt ?? null,
+      status: s.status,
+      streamId: s.streamId ?? null,
+      canJoin: s.status === "CREATED",
+    }));
+
+    return success(
+      res,
+      { sessions, total, page, limit },
+      "Your upcoming sessions fetched."
+    );
+  } catch (err) {
+    logger.error("Client my upcoming sessions failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to fetch your upcoming sessions.", 500);
+  }
+};
+
+// GET /api/v1/client/live-courses/upcoming-sessions
+// Discovery feed: every upcoming SCHEDULED session across every active live
+// course on the platform — visible to non-purchasers too, so a student can
+// browse what's coming up before they buy. Each row carries `subscribed`
+// (true when the customer holds access to at least one of the session's
+// courses). Clicking a session opens GET /client/live-sessions/:id, which
+// already enforces the 3-minute preview gate and serves the purchase popup
+// once the free window is consumed.
+export const listAllUpcomingSessions = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+
+    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
+    const now = new Date();
+
+    // Only sessions whose source courses are still active should surface in the
+    // discovery feed — a disabled course shouldn't advertise classes.
+    const activeCourseIds = await LiveCourse.find({ status: true })
+      .select("_id")
+      .lean();
+    if (activeCourseIds.length === 0) {
+      return success(
+        res,
+        { sessions: [], total: 0, page, limit },
+        "Upcoming sessions fetched."
+      );
+    }
+    const courseIdList = activeCourseIds.map((c) => c._id);
+
+    const query = {
+      liveCourseIds: { $in: courseIdList },
+      status: "SCHEDULED",
+      scheduledAt: { $ne: null, $gte: now },
+    };
+
+    // Pull the customer's currently-active subscriptions in parallel so we can
+    // stamp each session row with `subscribed`. Anonymous viewers (no token /
+    // no subscriptions) just get `subscribed: false` everywhere.
+    const [rows, total, subs] = await Promise.all([
+      LiveSession.find(query)
+        .sort({ scheduledAt: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .select("title subject educatorId scheduledAt endAt status streamId liveCourseIds")
+        .populate("educatorId", "name image")
+        .populate("liveCourseIds", "name image")
+        .lean(),
+      LiveSession.countDocuments(query),
+      customerId
+        ? LiveCourseSubscription.find({
+            customerId,
+            paymentStatus: "verified",
+            status: true,
+            $or: [{ endAt: null }, { endAt: { $gte: now } }],
+          })
+            .select("liveCourseId")
+            .lean()
+        : Promise.resolve([] as Array<{ liveCourseId: mongoose.Types.ObjectId }>),
+    ]);
+
+    const ownedCourseIds = new Set(subs.map((s) => String(s.liveCourseId)));
+
+    const sessions = rows.map((s: any) => {
+      const courseList = Array.isArray(s.liveCourseIds) ? s.liveCourseIds : [];
+      // Subscribed to ANY of the session's courses is enough — multi-course
+      // sessions unlock as soon as the student owns one of them (same rule
+      // as `hasAccessToAnyLiveCourse`).
+      const subscribed = courseList.some(
+        (c: any) => c && ownedCourseIds.has(String(c._id ?? c))
+      );
+      return {
+        sessionId: String(s._id),
+        title: s.title,
+        subject: s.subject || s.title,
+        educator: s.educatorId ?? null,
+        liveCourses: courseList,
+        scheduledAt: s.scheduledAt ?? null,
+        endAt: s.endAt ?? null,
+        status: s.status,
+        streamId: s.streamId ?? null,
+        canJoin: s.status === "CREATED",
+        // UI uses this to label the row: paid users see "Join", others see
+        // "Preview 3 min / Buy". The actual gate runs on
+        // GET /api/v1/client/live-sessions/:id.
+        subscribed,
+      };
+    });
+
+    return success(
+      res,
+      { sessions, total, page, limit },
+      "Upcoming sessions fetched."
+    );
+  } catch (err) {
+    logger.error("Client all upcoming sessions failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to fetch upcoming sessions.", 500);
+  }
+};
+
+// GET /api/v1/client/live-courses/live-now-sessions
+// Discovery feed for what's airing RIGHT NOW: every session in status
+// CREATED across every active live course on the platform. Same shape as
+// /upcoming-sessions — each row carries `subscribed` so the UI can route a
+// non-purchaser into the 3-minute preview (via /client/live-sessions/:id).
+// SCHEDULED-but-not-yet-started sessions belong to /upcoming-sessions;
+// ENDED/READY ones belong to the per-course recordings list.
+export const listLiveNowSessions = async (req: Request, res: Response) => {
+  try {
+    const customerId = req.user?.id;
+
+    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
+    const now = new Date();
+
+    const activeCourseIds = await LiveCourse.find({ status: true })
+      .select("_id")
+      .lean();
+    if (activeCourseIds.length === 0) {
+      return success(
+        res,
+        { sessions: [], total: 0, page, limit },
+        "Live-now sessions fetched."
+      );
+    }
+    const courseIdList = activeCourseIds.map((c) => c._id);
+
+    const query = {
+      liveCourseIds: { $in: courseIdList },
+      status: "CREATED",
+    };
+
+    const [rows, total, subs] = await Promise.all([
+      LiveSession.find(query)
+        // Earliest-started first: a class that's been live longer floats up
+        // before one that just kicked off.
+        .sort({ scheduledAt: 1, createdAt: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .select("title subject educatorId scheduledAt endAt status streamId liveCourseIds")
+        .populate("educatorId", "name image")
+        .populate("liveCourseIds", "name image")
+        .lean(),
+      LiveSession.countDocuments(query),
+      customerId
+        ? LiveCourseSubscription.find({
+            customerId,
+            paymentStatus: "verified",
+            status: true,
+            $or: [{ endAt: null }, { endAt: { $gte: now } }],
+          })
+            .select("liveCourseId")
+            .lean()
+        : Promise.resolve([] as Array<{ liveCourseId: mongoose.Types.ObjectId }>),
+    ]);
+
+    const ownedCourseIds = new Set(subs.map((s) => String(s.liveCourseId)));
+
+    const sessions = rows.map((s: any) => {
+      const courseList = Array.isArray(s.liveCourseIds) ? s.liveCourseIds : [];
+      const subscribed = courseList.some(
+        (c: any) => c && ownedCourseIds.has(String(c._id ?? c))
+      );
+      return {
+        sessionId: String(s._id),
+        title: s.title,
+        subject: s.subject || s.title,
+        educator: s.educatorId ?? null,
+        liveCourses: courseList,
+        scheduledAt: s.scheduledAt ?? null,
+        endAt: s.endAt ?? null,
+        status: s.status,
+        streamId: s.streamId ?? null,
+        // status === CREATED guarantees this is true; keeping the flag for
+        // shape parity with /upcoming-sessions.
+        canJoin: true,
+        subscribed,
+      };
+    });
+
+    return success(
+      res,
+      { sessions, total, page, limit },
+      "Live-now sessions fetched."
+    );
+  } catch (err) {
+    logger.error("Client live-now sessions failed", { error: getErrorMessage(err) });
+    return failure(res, "Failed to fetch live-now sessions.", 500);
+  }
+};
+
 // GET /api/v1/client/live-courses/:id/schedule
 // The Schedule tab: a study timetable derived from the course's scheduled
 // LiveSessions (subject / educator / date / time slot), plus the course's
@@ -464,16 +775,51 @@ export const getLiveCourseSchedule = async (req: Request, res: Response) => {
     if (!course) return failure(res, "Live course not found.", 404);
 
     // Only sessions that carry a scheduledAt belong on a timetable.
+    const upcoming = req.query.upcoming === "true";
     const query: Record<string, any> = { liveCourseIds: id, scheduledAt: { $ne: null } };
-    if (req.query.upcoming === "true") {
+    if (upcoming) {
       query.scheduledAt = { $ne: null, $gte: new Date() };
     }
 
-    const sessions = await LiveSession.find(query)
-      .sort({ scheduledAt: 1 })
-      .select("title subject educatorId scheduledAt endAt status streamId")
-      .populate("educatorId", "name image")
-      .lean();
+    // upcoming=true → ascending scheduledAt puts the next-to-start class on top.
+    // Otherwise → future classes first (nearest at top), then past classes
+    // most-recent-first, so the timetable always opens on "what's next".
+    const now = new Date();
+    let sessions;
+    if (upcoming) {
+      sessions = await LiveSession.find(query)
+        .sort({ scheduledAt: 1 })
+        .select("title subject educatorId scheduledAt endAt status streamId")
+        .populate("educatorId", "name image")
+        .lean();
+    } else {
+      sessions = await LiveSession.aggregate([
+        { $match: query },
+        {
+          $addFields: {
+            _bucket: { $cond: [{ $gte: ["$scheduledAt", now] }, 0, 1] },
+            _proximity: { $abs: { $subtract: ["$scheduledAt", now] } },
+          },
+        },
+        { $sort: { _bucket: 1, _proximity: 1 } },
+        {
+          $project: {
+            title: 1, subject: 1, educatorId: 1,
+            scheduledAt: 1, endAt: 1, status: 1, streamId: 1,
+          },
+        },
+        {
+          $lookup: {
+            from: "ws_course_educators",
+            localField: "educatorId",
+            foreignField: "_id",
+            as: "educatorId",
+            pipeline: [{ $project: { name: 1, image: 1 } }],
+          },
+        },
+        { $addFields: { educatorId: { $ifNull: [{ $arrayElemAt: ["$educatorId", 0] }, null] } } },
+      ]);
+    }
 
     const timetable = sessions.map((s) => ({
       sessionId: String(s._id),

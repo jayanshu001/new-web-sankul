@@ -9,6 +9,9 @@ import {
   getLiveCourseLecture,
   getLiveCourseSchedule,
   listMyLiveCourses,
+  listMyUpcomingSessions,
+  listAllUpcomingSessions,
+  listLiveNowSessions,
 } from "./live-course.controller";
 
 const router = Router();
@@ -17,6 +20,9 @@ router.use(authenticate, requireRole("customer"));
 
 router.get("/",                     listLiveCoursesForClient);     // GET /api/v1/client/live-courses
 router.get("/my",                   listMyLiveCourses);            // GET /api/v1/client/live-courses/my
+router.get("/my/upcoming-sessions", listMyUpcomingSessions);       // GET /api/v1/client/live-courses/my/upcoming-sessions
+router.get("/upcoming-sessions",    listAllUpcomingSessions);      // GET /api/v1/client/live-courses/upcoming-sessions  (global discovery feed)
+router.get("/live-now-sessions",    listLiveNowSessions);          // GET /api/v1/client/live-courses/live-now-sessions  (currently-live across all courses)
 router.get("/:id",                  getLiveCourseForClient);       // GET /api/v1/client/live-courses/:id
 router.get("/:id/sessions",            listSessionsForCourseClient);       // GET /api/v1/client/live-courses/:id/sessions
 router.get("/:id/recordings",          listLiveCourseRecordings);          // GET /api/v1/client/live-courses/:id/recordings  (folder videos)

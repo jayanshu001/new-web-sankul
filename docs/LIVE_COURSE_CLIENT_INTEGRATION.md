@@ -47,6 +47,9 @@ On error: `success: false`, an HTTP 4xx/5xx status, and a human `message`. A
 | **Recorded live classes list** | `GET /client/live-courses/:id/session-recordings` → open with `GET /client/live-sessions/:id` |
 | **Schedule tab** | `GET /client/live-courses/:id/schedule` |
 | **My courses** | `GET /client/live-courses/my` |
+| **My next classes** (all my purchased courses) | `GET /client/live-courses/my/upcoming-sessions` |
+| **Discover → "Upcoming"** (all platform courses) | `GET /client/live-courses/upcoming-sessions` |
+| **Discover → "Live now"** (all platform courses) | `GET /client/live-courses/live-now-sessions` |
 | **Buy flow** | `POST /payment/apply-promo/live-course` → `POST /payment/create-order/live-course` → Razorpay checkout → `POST /payment/verify` |
 
 ---
@@ -140,6 +143,62 @@ Query: `status` = `active` | `expired` | `all` (default `all`).
   "total": 1
 }
 ```
+
+---
+
+### Cross-course session feeds
+
+Three list endpoints aggregate sessions **across courses** instead of being
+scoped to a single `:id` — use them for "My upcoming classes" and the
+platform-wide discovery feeds.
+
+All three share the same row shape:
+
+```jsonc
+{
+  "sessionId": "...",
+  "title": "Polity — Indian Constitution",
+  "subject": "Polity",                       // falls back to title
+  "educator": { "_id": "...", "name": "...", "image": "..." },
+  "liveCourses": [                            // every course this session is attached to
+    { "_id": "...", "name": "UPSC Mains 2026", "image": "..." }
+  ],
+  "scheduledAt": "2026-05-16T10:00:00.000Z",
+  "endAt": null,
+  "status": "SCHEDULED",                     // or "CREATED" for live-now
+  "streamId": null,
+  "canJoin": false,                          // true only when status === "CREATED"
+  "subscribed": true                         // ONLY on the two global feeds
+}
+```
+
+Common query params: `page` (default 1), `limit` (default 50, max 100).
+
+#### `GET /client/live-courses/my/upcoming-sessions`  ← My next classes
+Upcoming `SCHEDULED` sessions across every live course the customer currently
+has an **active verified** subscription to. Sorted ascending by `scheduledAt`
+(nearest-to-start first). Rows do **not** include a `subscribed` flag — they
+are all owned by definition.
+
+`data`: `{ sessions: [Row], total, page, limit }`
+
+#### `GET /client/live-courses/upcoming-sessions`  ← Discovery: upcoming
+Upcoming `SCHEDULED` sessions across **every active live course on the
+platform** — visible to non-purchasers too, so a student can browse what's
+coming up before buying. Each row carries `subscribed: true|false`. Sorted
+ascending by `scheduledAt`. Clicking a row opens
+`GET /client/live-sessions/:id`, which already serves the 3-min preview gate
+(section 3) — so non-subscribers can still tap through.
+
+`data`: `{ sessions: [Row & { subscribed }], total, page, limit }`
+
+#### `GET /client/live-courses/live-now-sessions`  ← Discovery: live now
+Every session currently airing (`status === "CREATED"`) across **every active
+live course on the platform**. Each row carries `subscribed: true|false`. Sorted
+ascending by `scheduledAt` so the earliest-started class is on top. Clicking
+through routes into the same 3-min preview gate.
+
+`data`: `{ sessions: [Row & { subscribed, canJoin: true }], total, page, limit }`
 
 ---
 
@@ -466,7 +525,10 @@ safety net if the app dies before this call.
 | GET | `/client/live-courses` | list courses |
 | GET | `/client/live-courses/:id` | detail header (stats + plans + subscribed) |
 | GET | `/client/live-courses/my` | my subscriptions |
-| GET | `/client/live-courses/:id/sessions` | live/upcoming session list |
+| GET | `/client/live-courses/my/upcoming-sessions` | upcoming sessions across my purchased courses |
+| GET | `/client/live-courses/upcoming-sessions` | upcoming sessions across **all** courses (discovery, `subscribed` flag) |
+| GET | `/client/live-courses/live-now-sessions` | currently-live sessions across **all** courses (discovery, `subscribed` flag) |
+| GET | `/client/live-courses/:id/sessions` | live/upcoming session list (per course) |
 | GET | `/client/live-sessions/:id` | watch a session (entitlement gate) |
 | GET | `/client/live-courses/:id/session-recordings` | recorded live classes list |
 | GET | `/client/live-courses/:id/recordings` | folder-grouped recorded lectures |

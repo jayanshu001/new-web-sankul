@@ -2459,6 +2459,133 @@
                     "description": "The customer's own live course subscriptions. `status` = active | expired | all (default all). Each row carries the live course, plan, start/end window and a computed `active` flag."
                   },
                   "response": []
+                },
+                {
+                  "name": "My Upcoming Sessions",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/live-courses/my/upcoming-sessions?page=1&limit=50",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "live-courses",
+                        "my",
+                        "upcoming-sessions"
+                      ],
+                      "query": [
+                        {
+                          "key": "page",
+                          "value": "1"
+                        },
+                        {
+                          "key": "limit",
+                          "value": "50"
+                        }
+                      ]
+                    },
+                    "auth": {
+                      "type": "bearer",
+                      "bearer": [
+                        {
+                          "key": "token",
+                          "value": "{{accessToken}}",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "description": "All upcoming SCHEDULED live sessions across every live course the customer currently has an active verified subscription to. Sorted ascending by `scheduledAt` so the nearest-to-start session is first. Pagination via `page` and `limit` (default 50, max 100). Each row carries the session, its educator, and the source `liveCourses` (with `name`+`image`)."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "All Upcoming Sessions",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/live-courses/upcoming-sessions?page=1&limit=50",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "live-courses",
+                        "upcoming-sessions"
+                      ],
+                      "query": [
+                        {
+                          "key": "page",
+                          "value": "1"
+                        },
+                        {
+                          "key": "limit",
+                          "value": "50"
+                        }
+                      ]
+                    },
+                    "auth": {
+                      "type": "bearer",
+                      "bearer": [
+                        {
+                          "key": "token",
+                          "value": "{{accessToken}}",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "description": "Discovery feed: every upcoming SCHEDULED live session across every active live course on the platform — visible to non-purchasers too. Sorted ascending by `scheduledAt`. Each row carries a `subscribed` flag indicating whether the current customer already owns access to at least one of the session's courses; non-subscribers can still tap a row to open the session detail endpoint, which serves a 3-minute free preview and then surfaces the purchase popup."
+                  },
+                  "response": []
+                },
+                {
+                  "name": "Live Now Sessions",
+                  "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                      "raw": "{{URL}}/api/v1/client/live-courses/live-now-sessions?page=1&limit=50",
+                      "host": [
+                        "{{URL}}"
+                      ],
+                      "path": [
+                        "api",
+                        "v1",
+                        "client",
+                        "live-courses",
+                        "live-now-sessions"
+                      ],
+                      "query": [
+                        {
+                          "key": "page",
+                          "value": "1"
+                        },
+                        {
+                          "key": "limit",
+                          "value": "50"
+                        }
+                      ]
+                    },
+                    "auth": {
+                      "type": "bearer",
+                      "bearer": [
+                        {
+                          "key": "token",
+                          "value": "{{accessToken}}",
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "description": "Discovery feed: every session currently airing (status `CREATED`) across every active live course on the platform — visible to non-purchasers too. Each row carries a `subscribed` flag; non-subscribers tapping a row open `/api/v1/client/live-sessions/:id`, which serves a 3-minute free preview and then surfaces the purchase popup."
+                  },
+                  "response": []
                 }
               ],
               "description": "Discover live courses and see what the customer already owns."
@@ -2488,7 +2615,7 @@
                         {
                           "key": "upcoming",
                           "value": "",
-                          "description": "true \u2192 SCHEDULED with scheduledAt >= now"
+                          "description": "true \u2192 SCHEDULED with scheduledAt >= now, sorted ascending by scheduledAt (nearest-to-start at top)."
                         },
                         {
                           "key": "status",
@@ -2514,7 +2641,8 @@
                           "type": "string"
                         }
                       ]
-                    }
+                    },
+                    "description": "Metadata-only list of a live course's sessions.\n\n**Ordering:**\n- `upcoming=true` \u2192 ascending `scheduledAt` (the next-to-start session is on top).\n- otherwise \u2192 future sessions first, nearest-to-start at the top, then past sessions most-recent-first. Sessions with no `scheduledAt` sink to the bottom. Opening the list always lands on \"what's next\".\n\nPlayback URLs / recordings are NOT included \u2014 use `GET /client/live-sessions/:id` for those (entitlement-gated). Each row carries a `canJoin` flag (true only while `status === \"CREATED\"`) and a `hasRecordings` flag."
                   },
                   "response": []
                 },
@@ -2793,7 +2921,8 @@
                       "query": [
                         {
                           "key": "upcoming",
-                          "value": ""
+                          "value": "",
+                          "description": "true \u2192 only classes with scheduledAt >= now, sorted ascending (nearest-to-start at top)."
                         }
                       ]
                     },
@@ -2807,7 +2936,7 @@
                         }
                       ]
                     },
-                    "description": "The Schedule tab. Returns `timetable` (rows derived from the course's scheduled live sessions \u2014 subject, educator, date, start/end time) and `files` (the uploaded 'Time Table' PDFs). Not entitlement-gated \u2014 it's course info shown to everyone. `?upcoming=true` limits the timetable to classes from now onward."
+                    "description": "The Schedule tab. Returns `timetable` (rows derived from the course's scheduled live sessions \u2014 subject, educator, date, start/end time) and `files` (the uploaded 'Time Table' PDFs). Not entitlement-gated \u2014 it's course info shown to everyone.\n\n**Ordering:**\n- `upcoming=true` \u2192 ascending `scheduledAt` (the next-to-start class is on top); the timetable is limited to classes from now onward.\n- otherwise \u2192 future classes first, nearest-to-start at the top, then past classes most-recent-first. Opening the timetable always lands on \"what's next\"."
                   },
                   "response": []
                 }
@@ -2868,7 +2997,7 @@
                     "method": "GET",
                     "header": [],
                     "url": {
-                      "raw": "{{URL}}/api/v1/client/live-reminders?upcoming=true",
+                      "raw": "{{URL}}/api/v1/client/live-reminders?upcoming=true&limit=2",
                       "host": [
                         "{{URL}}"
                       ],
@@ -2882,6 +3011,11 @@
                         {
                           "key": "upcoming",
                           "value": "true"
+                        },
+                        {
+                          "key": "limit",
+                          "value": "2",
+                          "description": "Optional. Positive integer, max 100. With `upcoming=true` the default cap is 50; omit on the full-history view for no cap. Use `limit=2` for the home-screen \"next 2 classes\" card."
                         }
                       ]
                     },
@@ -2895,7 +3029,7 @@
                         }
                       ]
                     },
-                    "description": "The caller's reminders, soonest first. `?upcoming=true` keeps only still-scheduled reminders whose session start is still in the future; omit it for ALL reminders (including fired / cancelled ones). Each row carries the populated `session` summary and a derived `fired` flag (the scheduled fire time has already passed)."
+                    "description": "The caller's reminders, soonest first. With `upcoming=true` the list is sorted by `session.scheduledAt` ascending (the class that starts next is on top) and keeps only still-scheduled reminders whose session start is in the future; without it the list is sorted by `remindAt` and includes fired / cancelled ones.\n\n`limit=N` caps the response after sort/filter (positive integer, max 100). When `upcoming=true` and no `limit` is sent, the response is capped at 50. The response carries `total` (count BEFORE the limit, for \"+N more\" labels) and `limit` (the applied cap, or `null`). 422 if `limit` is not a positive number.\n\nEach row carries the populated `session` summary and a derived `fired` flag (the scheduled fire time has already passed)."
                   },
                   "response": []
                 },

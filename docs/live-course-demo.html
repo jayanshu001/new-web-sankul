@@ -100,6 +100,22 @@
       <div id="sessionList" class="list"></div>
     </div>
 
+    <!-- Upcoming sessions across courses -->
+    <div class="card">
+      <h2>3b · Upcoming sessions <span class="badge b-gray">cross-course</span></h2>
+      <p class="muted">
+        <b>My upcoming</b> — next sessions across every course you've purchased (<code>/live-courses/my/upcoming-sessions</code>).
+        <b>All upcoming</b> — discovery feed across the whole platform, including courses you haven't bought (<code>/live-courses/upcoming-sessions</code>). Non-purchased rows still let you "Watch" — the player will run the 3-minute preview and then surface the purchase popup.
+      </p>
+      <div class="row">
+        <button class="sec" onclick="loadMyUpcomingSessions()">My upcoming</button>
+        <button class="sec" onclick="loadAllUpcomingSessions()">All upcoming</button>
+        <button class="sec" onclick="loadLiveNowSessions()">● Live now</button>
+        <span class="muted" id="upcomingMeta"></span>
+      </div>
+      <div id="upcomingList" class="list"><span class="muted">Pick a feed above.</span></div>
+    </div>
+
     <!-- Player -->
     <div class="card">
       <h2>4 · Player <span id="accessBadge"></span></h2>
@@ -134,9 +150,10 @@
       <p class="muted">Separate <b>admin</b> login. Leave <b>Schedule at</b> empty and hit <b>Go Live now</b> to create a Streamos stream immediately (the customer's <b>Join Live</b> in section 3 enables; point OBS at the RTMP URL below to broadcast video). Set a future time + <b>Create</b> to make a <b>SCHEDULED</b> session you can start from 6b.</p>
       <div class="row"><label>Email</label><input id="admEmail" placeholder="admin email"></div>
       <div class="row"><label>Password</label><input id="admPass" type="password" placeholder="admin password"><button onclick="adminLogin()">Login</button></div>
-      <div class="row"><label>Course</label>
-        <select id="admCourse" style="flex:1"><option value="">— login to load courses —</option></select>
+      <div class="row" style="align-items:flex-start"><label style="padding-top:4px">Course(s)</label>
+        <select id="admCourse" multiple size="4" style="flex:1;min-height:88px" title="Ctrl/Cmd-click to attach the session to multiple courses"><option value="">— login to load courses —</option></select>
         <button class="sec" onclick="loadAdminCourses()" title="reload courses">↻</button></div>
+      <p class="muted" style="margin:-2px 0 6px">Ctrl/Cmd-click to attach the session to multiple courses — anyone subscribed to <b>any</b> of them gets full access; everyone else gets the 3-min preview.</p>
       <div class="row"><label>Title</label><input id="admTitle" value="Live Class — Demo"></div>
       <div class="row"><label>Schedule at</label>
         <input id="admSchedule" type="datetime-local" style="flex:1">
@@ -298,21 +315,79 @@ async function loadSessions(status){
   const rows = r.body?.data?.sessions || [];
   $("sessionList").innerHTML = rows.map(s => {
     const b = s.status==="CREATED"?"b-red":s.status==="SCHEDULED"?"b-blue":s.status==="READY"?"b-grn":"b-gray";
-    const isRecording = s.status==="ENDED" || s.status==="READY";
+    // hasRecordings comes from the backend — true once Streamos finishes transcoding
+    // (status READY) OR the inline self-heal in /client/live-sessions/:id has
+    // recovered recordings on an ENDED session before the webhook arrived.
+    const ready      = s.status==="READY" || s.hasRecordings;
+    const processing = s.status==="ENDED" && !s.hasRecordings;
     // canJoin comes from the backend (true only while status === CREATED).
-    const label = s.canJoin ? "● Join Live" : isRecording ? "Watch recording" : "Not started";
-    const disabled = !s.canJoin && !isRecording;   // SCHEDULED → button disabled
+    const label = s.canJoin   ? "● Join Live"
+                : ready       ? "Watch recording"
+                : processing  ? "Processing… (up to 24h)"
+                              : "Not started";
+    const disabled = !s.canJoin && !ready;   // SCHEDULED + ENDED-processing → disabled
+    const procBadge = processing ? ` <span class="badge b-ylw">processing</span>` : "";
     return `<div class="item">
       <span>${esc(s.title)}</span>
-      <span><span class="badge ${b}">${s.status}</span>
+      <span><span class="badge ${b}">${s.status}</span>${procBadge}
         <button ${disabled?"disabled":""} onclick="watch('${s._id}',this)">${label}</button></span></div>`;
   }).join("") || `<span class="muted">no sessions</span>`;
   log(`loaded ${rows.length} sessions ${status?"("+status+")":""}`);
 }
 
+// ─────────── upcoming sessions (cross-course) ───────────
+// Renders a row with title, course label, scheduledAt, and a Watch button that
+// routes into the existing watch() flow. For the global feed, rows are tagged
+// `subscribed` or `not subscribed` so the demo visually shows who'll hit the
+// 3-minute preview cutoff when they click Watch.
+function renderUpcomingList(rows, showSubscribedBadge){
+  if (!rows.length){
+    $("upcomingList").innerHTML = `<span class="muted">no upcoming sessions</span>`;
+    return;
+  }
+  $("upcomingList").innerHTML = rows.map(s => {
+    const when = s.scheduledAt ? new Date(s.scheduledAt).toLocaleString() : "—";
+    const courses = (s.liveCourses||[]).map(c => esc(c.name||"")).filter(Boolean).join(" · ") || "—";
+    const subBadge = showSubscribedBadge
+      ? (s.subscribed
+          ? '<span class="badge b-grn">subscribed</span>'
+          : '<span class="badge b-ylw">3-min preview</span>')
+      : "";
+    const statusBadge = `<span class="badge ${s.status==="CREATED"?"b-red":s.status==="SCHEDULED"?"b-blue":"b-gray"}">${s.status}</span>`;
+    const btnLabel = s.canJoin ? "● Join Live" : "Watch";
+    return `<div class="item">
+      <span><b>${esc(s.title)}</b><br><span class="muted">${courses} · ${when}</span></span>
+      <span>${subBadge} ${statusBadge}
+        <button onclick="watch('${s.sessionId}',this)">${btnLabel}</button></span></div>`;
+  }).join("");
+}
+async function loadMyUpcomingSessions(){
+  const r = await api("/client/live-courses/my/upcoming-sessions?limit=50");
+  const rows = r.body?.data?.sessions || [];
+  $("upcomingMeta").textContent = `My upcoming — ${rows.length} session${rows.length===1?"":"s"}`;
+  renderUpcomingList(rows, /*showSubscribedBadge*/ false);
+  log(`my upcoming sessions: ${rows.length}`);
+}
+async function loadAllUpcomingSessions(){
+  const r = await api("/client/live-courses/upcoming-sessions?limit=50");
+  const rows = r.body?.data?.sessions || [];
+  const owned = rows.filter(s=>s.subscribed).length;
+  $("upcomingMeta").textContent = `All upcoming — ${rows.length} session${rows.length===1?"":"s"} (${owned} you own, ${rows.length-owned} preview-only)`;
+  renderUpcomingList(rows, /*showSubscribedBadge*/ true);
+  log(`all upcoming sessions: ${rows.length} (owned=${owned})`);
+}
+async function loadLiveNowSessions(){
+  const r = await api("/client/live-courses/live-now-sessions?limit=50");
+  const rows = r.body?.data?.sessions || [];
+  const owned = rows.filter(s=>s.subscribed).length;
+  $("upcomingMeta").textContent = `Live now — ${rows.length} session${rows.length===1?"":"s"} (${owned} you own, ${rows.length-owned} preview-only)`;
+  renderUpcomingList(rows, /*showSubscribedBadge*/ true);
+  log(`live-now sessions: ${rows.length} (owned=${owned})`);
+}
+
 // ─────────── watch / player ───────────
 async function watch(id, el){
-  document.querySelectorAll("#sessionList .item").forEach(i=>i.classList.remove("on"));
+  document.querySelectorAll("#sessionList .item, #upcomingList .item").forEach(i=>i.classList.remove("on"));
   if(el) el.closest(".item").classList.add("on");
   clearPreview(); hideOverlay();
   const r = await api("/client/live-sessions/"+id);
@@ -333,8 +408,18 @@ async function watch(id, el){
     else $("previewBar").textContent = "Full access — no cutoff.";
   } else {
     stopHls();
-    if (lvl==="preview_ended") showPurchase(s, "Preview ended", "Your free preview is over — subscribe to keep watching.");
-    else $("previewBar").innerHTML = `<span class="muted">No playable URL (status ${s.status}).</span>`;
+    if (lvl==="preview_ended") {
+      showPurchase(s, "Preview ended", "Your free preview is over — subscribe to keep watching.");
+    } else if (s.status==="ENDED" && (!s.recordings || s.recordings.length===0)) {
+      // The class has ended but Streamos hasn't returned the transcoded
+      // recordings yet (typically a few hours, can take up to 24h). The
+      // `recordings_ready` socket event below will flip this banner away
+      // automatically when the recording lands.
+      $("previewBar").innerHTML =
+        `<span class="muted">⏳ Recording is being processed — usually ready within a few hours, can take up to 24h. We'll notify you when it's ready.</span>`;
+    } else {
+      $("previewBar").innerHTML = `<span class="muted">No playable URL (status ${s.status}).</span>`;
+    }
   }
 
   // chat room
@@ -480,7 +565,14 @@ function connectChat(liveClassId){
     $("accessBadge").innerHTML = '<span class="badge b-gray">ENDED</span>';
     sysMsg("the live class has ended");
   });
-  socket.on("recordings_ready", ()=>{ log("⚑ recordings_ready received","o"); sysMsg("recording is now available"); });
+  socket.on("recordings_ready", ()=>{
+    log("⚑ recordings_ready received","o");
+    sysMsg("recording is now available");
+    // Reload the session detail so the processing banner is replaced with
+    // the player, and refresh the list so the row badge flips to READY.
+    if (currentSession?._id || currentSession?.id) watch(currentSession.id || currentSession._id);
+    if (cid()) loadSessions("READY");
+  });
   socket.on("error", ({message})=>log("socket error: "+message,"e"));
 }
 function sysMsg(text){
@@ -548,28 +640,36 @@ async function loadAdminCourses(){
     ? rows.map(c=>`<option value="${c._id}">${esc(c.name)}</option>`).join("")
     : `<option value="">— no live courses —</option>`;
   // pre-select the course loaded in section 2, if it's in the list
-  if(cid() && rows.some(c=>String(c._id)===cid())) $("admCourse").value = cid();
+  if(cid()){
+    const opt = $("admCourse").querySelector(`option[value="${cid()}"]`);
+    if(opt) opt.selected = true;
+  }
   log(`admin: loaded ${rows.length} courses`);
+}
+// Read every selected option out of the multi-select; empty array if none.
+function admSelectedCourseIds(){
+  return Array.from($("admCourse").selectedOptions).map(o=>o.value).filter(Boolean);
 }
 async function goLive(){
   if(!adminToken){ log("admin: login first","e"); return; }
-  const courseId = $("admCourse").value;
-  if(!courseId){ log("admin: pick a course in the Go-Live panel first","e"); $("admOut").innerHTML='<span class="e">Select a course above.</span>'; return; }
-  log("admin: creating live session on Streamos…","o");
-  const r = await adminApi("/admin/live-sessions",{method:"POST",body:JSON.stringify({title:$("admTitle").value.trim()||"Live Class",liveCourseIds:[courseId]})});
+  const courseIds = admSelectedCourseIds();
+  if(!courseIds.length){ log("admin: pick one or more courses in the Go-Live panel first","e"); $("admOut").innerHTML='<span class="e">Select at least one course above.</span>'; return; }
+  log(`admin: creating live session on Streamos (attached to ${courseIds.length} course${courseIds.length===1?"":"s"})…`,"o");
+  const r = await adminApi("/admin/live-sessions",{method:"POST",body:JSON.stringify({title:$("admTitle").value.trim()||"Live Class",liveCourseIds:courseIds})});
   const s = r.body?.data?.session;
   if(r.ok && s){
     liveStreamId = s.streamId || "";
+    const attachCount = (s.liveCourseIds||courseIds).length;
     $("admOut").innerHTML =
-      `<b class="s" style="color:#4ade80">● LIVE</b> — status <code>${esc(s.status)}</code> · streamId <code>${esc(s.streamId||"")}</code><br>`+
+      `<b class="s" style="color:#4ade80">● LIVE</b> — status <code>${esc(s.status)}</code> · streamId <code>${esc(s.streamId||"")}</code> · attached to <b>${attachCount}</b> course${attachCount===1?"":"s"}<br>`+
       `<b>RTMP push URL</b> (point OBS / encoder here to broadcast video):<br>`+
       `<code style="word-break:break-all">${esc(s.rtmpUrl||"")}</code><br>`+
-      `<span class="muted">Customers can join now — section 3 → “Live now” → the <b>Join Live</b> button is enabled.</span>`;
-    log("admin: stream created — streamId "+s.streamId,"s");
-    // Point the customer panel at the course that just went live, then refresh.
-    $("courseId").value = courseId;
-    loadSessions("CREATED");   // refresh the customer list so Join enables
-    await loadAdminSessions(""); // refresh the admin list + auto-select for chat/polls
+      `<span class="muted">Customers subscribed to <b>any</b> of the attached courses get full access; everyone else gets the 3-min preview. Section 3 → "Live now" enables for all of them.</span>`;
+    log("admin: stream created — streamId "+s.streamId+" — courses="+attachCount,"s");
+    // Point the customer panel at the first attached course so section 3 lists it.
+    $("courseId").value = courseIds[0];
+    loadSessions("CREATED");
+    await loadAdminSessions("");
     selectAdminSession(s.id);
   } else {
     $("admOut").innerHTML = `<span class="e">${esc(r.body?.message||"go-live failed")}</span>`;
@@ -588,21 +688,22 @@ async function endLive(){
 // ─────────── admin: create / schedule a session ───────────
 async function createAdminSession(){
   if(!adminToken){ log("admin: login first","e"); return; }
-  const courseId = $("admCourse").value;
-  if(!courseId){ log("admin: pick a course in the Go-Live panel first","e"); $("admOut").innerHTML='<span class="e">Select a course above.</span>'; return; }
-  const body = { title: $("admTitle").value.trim() || "Live Class", liveCourseIds:[courseId] };
+  const courseIds = admSelectedCourseIds();
+  if(!courseIds.length){ log("admin: pick one or more courses in the Go-Live panel first","e"); $("admOut").innerHTML='<span class="e">Select at least one course above.</span>'; return; }
+  const body = { title: $("admTitle").value.trim() || "Live Class", liveCourseIds: courseIds };
   const sched = $("admSchedule").value;          // datetime-local → local time
   if(sched) body.scheduledAt = new Date(sched).toISOString();
-  log("admin: creating session"+(sched?" (scheduled)":"")+"…","o");
+  log(`admin: creating session${sched?" (scheduled)":""} attached to ${courseIds.length} course${courseIds.length===1?"":"s"}…`,"o");
   const r = await adminApi("/admin/live-sessions",{method:"POST",body:JSON.stringify(body)});
   const s = r.body?.data?.session;
   if(r.ok && s){
+    const attachCount = (s.liveCourseIds||courseIds).length;
     $("admOut").innerHTML =
-      `<b class="s" style="color:#4ade80">${esc(s.status)}</b> — id <code>${esc(s.id)}</code>` +
+      `<b class="s" style="color:#4ade80">${esc(s.status)}</b> — id <code>${esc(s.id)}</code> · attached to <b>${attachCount}</b> course${attachCount===1?"":"s"}` +
       (s.streamId ? ` · streamId <code>${esc(s.streamId)}</code>` : "") +
       (s.rtmpUrl ? `<br><b>RTMP push URL</b>: <code style="word-break:break-all">${esc(s.rtmpUrl)}</code>` : "") +
       (s.scheduledAt ? `<br><span class="muted">scheduled for ${new Date(s.scheduledAt).toLocaleString()} — start it from 6b within 2 min of that time.</span>` : "");
-    log(`admin: session created — ${s.status} ${s.id}`,"s");
+    log(`admin: session created — ${s.status} ${s.id} — courses=${attachCount}`,"s");
     await loadAdminSessions("");
     selectAdminSession(s.id);
   } else {
@@ -622,13 +723,18 @@ async function loadAdminSessions(status){
   $("admSessionList").innerHTML = admSessions.map(s => {
     const b = s.status==="CREATED"?"b-red":s.status==="SCHEDULED"?"b-blue":s.status==="READY"?"b-grn":"b-gray";
     const on = admSession && admSession.id===s.id ? " on" : "";
+    // Admin payload returns the full `recordings` array — empty on ENDED until
+    // Streamos finishes transcoding (1–24h) and our webhook flips status to READY.
+    const processing = s.status==="ENDED" && (!s.recordings || s.recordings.length===0);
+    const procBadge  = processing ? ` <span class="badge b-ylw">processing</span>` : "";
     let act = "";
     if(s.status==="SCHEDULED") act = `<button onclick="event.stopPropagation();startScheduled('${s.id}')">▶ Start</button>`;
     else if(s.status==="CREATED") act = `<button class="sec" onclick="event.stopPropagation();endAdminSession('${esc(s.streamId)}')">■ End</button>`;
+    else if(processing) act = `<button class="sec" onclick="event.stopPropagation();recoverRecordings('${s.id}',this)" title="Poll Streamos for the transcoded recording and flip to READY if it's already done.">↻ Recover</button>`;
     const when = s.scheduledAt ? ` <span class="muted">· ${esc(new Date(s.scheduledAt).toLocaleString())}</span>` : "";
     return `<div class="item${on}" data-sid="${s.id}" onclick="selectAdminSession('${s.id}')">
       <span>${esc(s.title)}${when}</span>
-      <span><span class="badge ${b}">${s.status}</span> ${act}</span></div>`;
+      <span><span class="badge ${b}">${s.status}</span>${procBadge} ${act}</span></div>`;
   }).join("") || `<span class="muted">no sessions</span>`;
   log(`admin: loaded ${admSessions.length} sessions ${status?"("+status+")":""}`);
 }
@@ -649,6 +755,31 @@ function selectAdminSession(id){
     $("admPollList").innerHTML = `<span class="muted">Session is ${esc(s.status)} — start it (6b) to run polls.</span>`;
   }
   log(`admin: selected "${s.title}" (${s.status}${s.streamId?", room "+s.streamId:""})`);
+}
+
+// Manually trigger the inline self-heal on an ENDED session — hits the admin
+// detail endpoint, which re-queries Streamos and flips status to READY if
+// the transcoded recording is already available upstream. Useful when the
+// recording webhook URL isn't reachable from Streamos (e.g. localhost dev).
+async function recoverRecordings(id, btn){
+  if(!adminToken){ log("admin: login first","e"); return; }
+  if(btn){ btn.disabled = true; btn.textContent = "↻ Recovering…"; }
+  log("admin: polling Streamos for recordings on "+id+"…","o");
+  const r = await adminApi("/admin/live-sessions/"+id);
+  const s = r.body?.data?.session;
+  if(!r.ok || !s){
+    log("recover failed: "+(r.body?.message||r.status),"e");
+    if(btn){ btn.disabled = false; btn.textContent = "↻ Recover"; }
+    return;
+  }
+  const recCount = Array.isArray(s.recordings) ? s.recordings.length : 0;
+  if(s.status === "READY" && recCount > 0){
+    log(`recover: READY — ${recCount} recording${recCount===1?"":"s"} now available`,"s");
+  } else {
+    log("recover: Streamos still has nothing — transcoding may not be finished yet (can take up to 24h)","o");
+  }
+  await loadAdminSessions("");
+  if(cid()) loadSessions("");          // refresh customer side so the badge flips
 }
 
 async function startScheduled(id){

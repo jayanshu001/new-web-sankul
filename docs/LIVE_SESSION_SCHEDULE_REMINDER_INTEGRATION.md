@@ -77,6 +77,12 @@ Query:
 - `status` = `SCHEDULED` | `CREATED` | `ENDED` | `READY` (ignored when `upcoming=true`).
 - `page` (default 1), `limit` (default 50, max 100).
 
+**Ordering:**
+- `upcoming=true` → ascending `scheduledAt` — the next-to-start session is on top.
+- otherwise → **future sessions first, nearest-to-start at the top**, then past
+  sessions most-recent-first. Sessions with no `scheduledAt` sink to the bottom.
+  This mirrors a calendar feed: opening the list always lands on "what's next".
+
 `data`:
 ```jsonc
 {
@@ -110,6 +116,11 @@ The Schedule tab — the same scheduled sessions, shaped as a timetable, plus th
 course's uploaded "Time Table" files.
 
 Query: `upcoming=true` limits the `timetable` to classes from now onward.
+
+**Ordering** (same rule as the sessions list):
+- `upcoming=true` → ascending `scheduledAt` — the next-to-start class is on top.
+- otherwise → future classes first (nearest at the top), then past classes
+  most-recent-first. Opening the timetable always lands on "what's next".
 
 `data`:
 ```jsonc
@@ -234,19 +245,29 @@ Errors:
 
 ### `GET /client/live-reminders`  ← my reminders
 
-The caller's reminders, **soonest first** (`remindAt` ascending).
+The caller's reminders, **soonest first**. With `upcoming=true` the list is
+sorted by **`session.scheduledAt` ascending** (the class that starts next is on
+top); without it, the list is sorted by `remindAt` ascending.
 
-Query: `upcoming=true` → keep only `status: "scheduled"` reminders whose
-`session.scheduledAt` is still in the future. Omit it to get **all** reminders,
-including fired and cancelled ones (e.g. for a history view).
+Query:
+- `upcoming=true` → keep only `status: "scheduled"` reminders whose
+  `session.scheduledAt` is still in the future. Omit it to get **all** reminders,
+  including fired and cancelled ones (e.g. for a history view).
+- `limit=N` → cap the list to the first `N` rows after sort/filter. Positive
+  integer, max **100**. When `upcoming=true` and no `limit` is sent the response
+  is capped to **50**; without `upcoming` it's uncapped by default. Use
+  `?upcoming=true&limit=2` to mirror the home-screen "next 2 classes" card.
 
 `data`:
 ```jsonc
 {
   "reminders": [ /* same shape as POST's `reminder`, each with `session` populated */ ],
-  "total": 3
+  "total": 3,        // count BEFORE limit is applied — useful for "+N more" labels
+  "limit": 2         // the cap that was applied, or null when uncapped
 }
 ```
+
+Errors: `422` if `limit` is not a positive number.
 
 ### `GET /client/live-reminders/session/:liveSessionId`  ← per-session toggle state
 
@@ -311,7 +332,7 @@ it caches reminders locally.
 | GET | `/client/live-courses/:id/schedule?upcoming=true` | upcoming timetable + files |
 | GET | `/client/live-sessions/:id` | open / join a session (entitlement gate) |
 | POST | `/client/live-reminders` | set / replace a reminder |
-| GET | `/client/live-reminders?upcoming=true` | my reminders (soonest first) |
+| GET | `/client/live-reminders?upcoming=true&limit=N` | my reminders, soonest-starting first (limit ≤ 100) |
 | GET | `/client/live-reminders/session/:liveSessionId` | is a reminder set? (toggle state) |
 | DELETE | `/client/live-reminders/:liveSessionId` | remove a reminder |
 
