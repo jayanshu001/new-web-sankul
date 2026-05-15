@@ -37,6 +37,8 @@ import clientSearchRoutes from "./search/search.routes";
 import clientLiveSessionRoutes from "./live/live.routes";
 import clientLiveCourseRoutes from "./live-course/live-course.routes";
 import clientLiveReminderRoutes from "./live-reminder/live-reminder.routes";
+import clientLectureNoteRoutes from "./lecture-note/lecture-note.routes";
+import clientLectureAudioNoteRoutes from "./lecture-audio-note/lecture-audio-note.routes";
 
 const router = Router();
 
@@ -91,5 +93,7 @@ router.use("/search", clientSearchRoutes);                // -> /api/v1/client/s
 router.use("/live-sessions", clientLiveSessionRoutes);    // -> /api/v1/client/live-sessions/:streamId
 router.use("/live-courses",  clientLiveCourseRoutes);     // -> /api/v1/client/live-courses/*
 router.use("/live-reminders", clientLiveReminderRoutes);  // -> /api/v1/client/live-reminders/*
+router.use("/lecture-notes", clientLectureNoteRoutes);    // -> /api/v1/client/lecture-notes/*
+router.use("/lecture-audio-notes", clientLectureAudioNoteRoutes); // -> /api/v1/client/lecture-audio-notes/*
 
 export default router;

@@ -226,6 +226,46 @@
       </div>
       <div id="poll"></div>
     </div>
+    <!-- Notes (text + audio) — bound to the current session in section 4. -->
+    <div class="card">
+      <h2>Notes <span id="notesTarget" class="badge b-gray">no session</span></h2>
+      <p class="muted" style="margin-bottom:6px">
+        Pinned to the lecture timestamp at the moment you save. Subscriber-only —
+        if your access is <code>preview</code> / <code>preview_ended</code> the API
+        returns <code>403</code> until you subscribe. Backed by
+        <code>/client/lecture-notes</code> + <code>/client/lecture-audio-notes</code>.
+      </p>
+
+      <h2 style="margin-top:4px">Text note</h2>
+      <div class="row">
+        <label>At</label>
+        <input id="noteTs" placeholder="0" style="width:74px" title="lecture timestamp in seconds — autofilled from the player">
+        <button class="sec" onclick="syncNoteTs()" title="grab the current player time">⟳ now</button>
+        <span class="muted" id="noteTsLabel">—</span>
+      </div>
+      <div class="row">
+        <input id="noteText" placeholder="type your note…" style="flex:1" onkeydown="if(event.key==='Enter'&&(event.metaKey||event.ctrlKey))createTextNote()">
+        <button onclick="createTextNote()">＋ Save</button>
+        <button class="sec" onclick="loadNotes()" title="reload">↻</button>
+      </div>
+      <div id="notesList" class="list" style="margin-top:6px"><span class="muted">Watch a session to load your notes.</span></div>
+
+      <h2 style="margin-top:12px">Audio note</h2>
+      <div class="row">
+        <label>At</label>
+        <input id="audioTs" placeholder="0" style="width:74px" title="lecture timestamp in seconds — autofilled from the player">
+        <button class="sec" onclick="syncAudioTs()">⟳ now</button>
+        <input id="audioTitle" placeholder="optional title" style="flex:1">
+      </div>
+      <div class="row">
+        <button id="recBtn" onclick="toggleRecord()">● Record</button>
+        <span id="recMeta" class="muted">idle</span>
+        <button class="sec" onclick="loadAudioNotes()" title="reload">↻</button>
+      </div>
+      <audio id="audioPreview" controls style="width:100%;margin-top:6px;display:none"></audio>
+      <div id="audioList" class="list" style="margin-top:6px"></div>
+    </div>
+
     <div class="card">
       <h2>Event log</h2>
       <div id="log" class="log"></div>
@@ -425,6 +465,9 @@ async function watch(id, el){
   // chat room
   if (s.liveClassId) connectChat(s.liveClassId);
   else { $("chat").innerHTML = `<span class="muted">Session has no streamId yet — chat available once it's CREATED.</span>`; }
+
+  // notes panel — bound to the same session id
+  initNotesPanel(s);
 }
 
 function playHls(url){
@@ -977,6 +1020,249 @@ function stopCamBroadcast(fromServer){
   }
   if(!fromServer) log("camera: broadcast stopped","s");
   camSet(camStream ? "camera ready" : "—", camStream ? "b-grn" : "b-gray");
+}
+
+// ─────────── notes (text + audio) ───────────
+// The notes feature targets a **live session** in this harness (lectureType:"live").
+// `liveSessionId` is whatever the session detail returned — `id` or `_id` works.
+let recMediaRecorder = null, recChunks = [], recStartedAt = 0, recBlob = null, recMime = "";
+
+function noteLectureId(){
+  return currentSession?.id || currentSession?._id || "";
+}
+function fmtTs(sec){
+  sec = Math.max(0, Math.floor(Number(sec)||0));
+  const h = Math.floor(sec/3600), m = Math.floor((sec%3600)/60), s = sec%60;
+  return (h?String(h).padStart(2,"0")+":":"") + String(m).padStart(2,"0") + ":" + String(s).padStart(2,"0");
+}
+function playerCurrentSec(){
+  const v = $("video");
+  const t = (v && Number.isFinite(v.currentTime)) ? v.currentTime : 0;
+  return Math.max(0, Math.floor(t));
+}
+function syncNoteTs(){
+  const s = playerCurrentSec();
+  $("noteTs").value = s;
+  $("noteTsLabel").textContent = "= " + fmtTs(s);
+}
+function syncAudioTs(){
+  $("audioTs").value = playerCurrentSec();
+}
+function setNotesTargetBadge(){
+  const id = noteLectureId();
+  const lvl = currentSession?.accessLevel;
+  if (!id){
+    $("notesTarget").textContent = "no session"; $("notesTarget").className = "badge b-gray";
+  } else if (lvl === "full"){
+    $("notesTarget").textContent = "live · " + id.slice(-6); $("notesTarget").className = "badge b-grn";
+  } else if (lvl === "preview"){
+    $("notesTarget").textContent = "preview only — API will 403"; $("notesTarget").className = "badge b-ylw";
+  } else {
+    $("notesTarget").textContent = lvl || "—"; $("notesTarget").className = "badge b-red";
+  }
+}
+
+function initNotesPanel(s){
+  setNotesTargetBadge();
+  syncNoteTs(); syncAudioTs();
+  $("noteTs").oninput = ()=>{ $("noteTsLabel").textContent = "= " + fmtTs($("noteTs").value); };
+  const v = $("video");
+  if (!v.__notesBound){
+    // Track player position into the timestamp inputs, but only while the user
+    // isn't editing them — typing wins.
+    v.addEventListener("timeupdate", ()=>{
+      if (document.activeElement !== $("noteTs"))  syncNoteTs();
+      if (document.activeElement !== $("audioTs")) syncAudioTs();
+    });
+    v.__notesBound = true;
+  }
+  loadNotes(); loadAudioNotes();
+}
+
+// Text notes ───────────────────────────────────────────────────────────────
+async function loadNotes(){
+  const id = noteLectureId();
+  if (!id){ $("notesList").innerHTML = `<span class="muted">Watch a session to load your notes.</span>`; return; }
+  const r = await api(`/client/lecture-notes?lectureType=live&liveSessionId=${id}`);
+  if (!r.ok){
+    $("notesList").innerHTML = `<span class="e">${esc(r.body?.message||("HTTP "+r.status))}</span>`;
+    return;
+  }
+  const rows = r.body?.data?.notes || [];
+  $("notesList").innerHTML = rows.length
+    ? rows.map(renderNoteRow).join("")
+    : `<span class="muted">no notes yet — add one above.</span>`;
+  log(`notes: loaded ${rows.length}`);
+}
+function renderNoteRow(n){
+  return `<div class="item" data-note="${n._id}">
+    <span>
+      <span class="badge b-blue" onclick="seekTo(${n.timestampSec})" style="cursor:pointer" title="jump to ${fmtTs(n.timestampSec)}">${fmtTs(n.timestampSec)}</span>
+      <span style="margin-left:6px" data-content>${esc(n.content)}</span>
+    </span>
+    <span>
+      <button class="sec" onclick="editNoteInline('${n._id}')">✎</button>
+      <button class="sec" onclick="deleteTextNote('${n._id}')">🗑</button>
+    </span>
+  </div>`;
+}
+async function createTextNote(){
+  const id = noteLectureId();
+  if (!id){ log("notes: no session selected","e"); return; }
+  const content = $("noteText").value.trim();
+  if (!content){ log("notes: empty content","e"); return; }
+  const ts = Math.max(0, Math.floor(Number($("noteTs").value)||0));
+  const r = await api("/client/lecture-notes",{ method:"POST", body: JSON.stringify({
+    lectureType: "live", liveSessionId: id, timestampSec: ts, content,
+  }) });
+  if (!r.ok){ log("notes: create failed — "+(r.body?.message||r.status),"e"); return; }
+  $("noteText").value = "";
+  log(`notes: created at ${fmtTs(ts)}`,"s");
+  loadNotes();
+}
+function editNoteInline(noteId){
+  const row = document.querySelector(`#notesList .item[data-note="${noteId}"]`);
+  if (!row) return;
+  const span = row.querySelector("[data-content]");
+  const current = span.textContent;
+  const next = prompt("Edit note:", current);
+  if (next == null) return;
+  const trimmed = next.trim();
+  if (!trimmed){ log("notes: empty — not saved","e"); return; }
+  updateTextNote(noteId, { content: trimmed });
+}
+async function updateTextNote(noteId, patch){
+  const r = await api(`/client/lecture-notes/${noteId}`,{ method:"PATCH", body: JSON.stringify(patch) });
+  if (!r.ok){ log("notes: update failed — "+(r.body?.message||r.status),"e"); return; }
+  log("notes: updated","s"); loadNotes();
+}
+async function deleteTextNote(noteId){
+  if (!confirm("Delete this note?")) return;
+  const r = await api(`/client/lecture-notes/${noteId}`,{ method:"DELETE" });
+  if (!r.ok){ log("notes: delete failed — "+(r.body?.message||r.status),"e"); return; }
+  log("notes: deleted","s"); loadNotes();
+}
+function seekTo(sec){
+  const v = $("video");
+  if (!v) return;
+  v.currentTime = Math.max(0, Number(sec)||0);
+  v.play().catch(()=>{});
+}
+
+// Audio notes ──────────────────────────────────────────────────────────────
+async function toggleRecord(){
+  if (recMediaRecorder && recMediaRecorder.state === "recording"){
+    recMediaRecorder.stop();
+    return;
+  }
+  if (!noteLectureId()){ log("audio: no session selected","e"); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // webm/opus is universally accepted by the multer filter and tiny over the wire.
+    recMime = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
+      ? "audio/webm;codecs=opus"
+      : MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm"
+      : "audio/mp4";
+    recChunks = []; recBlob = null;
+    recMediaRecorder = new MediaRecorder(stream, { mimeType: recMime });
+    recMediaRecorder.ondataavailable = (e)=>{ if (e.data && e.data.size>0) recChunks.push(e.data); };
+    recMediaRecorder.onstop = async ()=>{
+      stream.getTracks().forEach(t=>t.stop());
+      const durationSec = Math.max(1, Math.round((Date.now() - recStartedAt) / 1000));
+      recBlob = new Blob(recChunks, { type: recMime });
+      $("audioPreview").src = URL.createObjectURL(recBlob);
+      $("audioPreview").style.display = "block";
+      $("recBtn").textContent = "● Record";
+      $("recBtn").style.background = "";
+      $("recMeta").textContent = `recorded ${durationSec}s · ${(recBlob.size/1024).toFixed(1)} KB · uploading…`;
+      await uploadAudioNote(recBlob, durationSec);
+    };
+    recStartedAt = Date.now();
+    recMediaRecorder.start();
+    $("recBtn").textContent = "■ Stop";
+    $("recBtn").style.background = "#dc2626";
+    $("recMeta").textContent = "recording…";
+  } catch (err){
+    log("audio: mic permission denied or unsupported — "+(err.message||err),"e");
+  }
+}
+async function uploadAudioNote(blob, durationSec){
+  const id = noteLectureId();
+  if (!id){ log("audio: no session selected","e"); return; }
+  const ts = Math.max(0, Math.floor(Number($("audioTs").value)||0));
+  const title = $("audioTitle").value.trim();
+  const ext = recMime.includes("mp4") ? "m4a" : "webm";
+  const form = new FormData();
+  form.append("audio", blob, `note-${Date.now()}.${ext}`);
+  form.append("lectureType", "live");
+  form.append("liveSessionId", id);
+  form.append("timestampSec", String(ts));
+  if (title) form.append("title", title);
+  form.append("durationSec", String(durationSec));
+  // The api() helper forces Content-Type: application/json which breaks
+  // multipart, so call fetch directly here.
+  const res = await fetch(apiBase()+"/api/v1/client/lecture-audio-notes", {
+    method: "POST",
+    headers: token ? { Authorization: "Bearer "+token } : {},
+    body: form,
+  });
+  let body; try { body = await res.json(); } catch { body = {}; }
+  if (!res.ok){
+    $("recMeta").textContent = "upload failed — see log";
+    log("audio: upload failed ("+res.status+") "+(body?.message||""),"e");
+    return;
+  }
+  $("recMeta").textContent = `uploaded at ${fmtTs(ts)} (${durationSec}s)`;
+  $("audioTitle").value = "";
+  log("audio: uploaded","s");
+  loadAudioNotes();
+}
+async function loadAudioNotes(){
+  const id = noteLectureId();
+  if (!id){ $("audioList").innerHTML = `<span class="muted">Watch a session to load your audio notes.</span>`; return; }
+  const r = await api(`/client/lecture-audio-notes?lectureType=live&liveSessionId=${id}`);
+  if (!r.ok){
+    $("audioList").innerHTML = `<span class="e">${esc(r.body?.message||("HTTP "+r.status))}</span>`;
+    return;
+  }
+  const rows = r.body?.data?.notes || [];
+  $("audioList").innerHTML = rows.length
+    ? rows.map(renderAudioRow).join("")
+    : `<span class="muted">no audio notes yet — hit Record above.</span>`;
+  log(`audio: loaded ${rows.length}`);
+}
+function renderAudioRow(n){
+  const title = n.title ? ` · ${esc(n.title)}` : "";
+  const dur = n.durationSec ? ` · ${n.durationSec}s` : "";
+  return `<div class="item" data-audio="${n._id}" style="flex-direction:column;align-items:stretch">
+    <div style="display:flex;justify-content:space-between;gap:8px;align-items:center">
+      <span>
+        <span class="badge b-blue" onclick="seekTo(${n.timestampSec})" style="cursor:pointer" title="jump to ${fmtTs(n.timestampSec)}">${fmtTs(n.timestampSec)}</span>
+        <span style="margin-left:6px" class="muted">${dur}${title}</span>
+      </span>
+      <span>
+        <button class="sec" onclick="renameAudioInline('${n._id}')">✎</button>
+        <button class="sec" onclick="deleteAudioNote('${n._id}')">🗑</button>
+      </span>
+    </div>
+    <audio controls preload="none" src="${esc(n.audioUrl)}" style="width:100%;margin-top:6px"></audio>
+  </div>`;
+}
+function renameAudioInline(noteId){
+  const next = prompt("Rename audio note (title):", "");
+  if (next == null) return;
+  updateAudioNote(noteId, { title: next.trim() });
+}
+async function updateAudioNote(noteId, patch){
+  const r = await api(`/client/lecture-audio-notes/${noteId}`,{ method:"PATCH", body: JSON.stringify(patch) });
+  if (!r.ok){ log("audio: update failed — "+(r.body?.message||r.status),"e"); return; }
+  log("audio: updated","s"); loadAudioNotes();
+}
+async function deleteAudioNote(noteId){
+  if (!confirm("Delete this audio note?")) return;
+  const r = await api(`/client/lecture-audio-notes/${noteId}`,{ method:"DELETE" });
+  if (!r.ok){ log("audio: delete failed — "+(r.body?.message||r.status),"e"); return; }
+  log("audio: deleted","s"); loadAudioNotes();
 }
 </script>
 </body>

@@ -253,6 +253,175 @@
             { "name": "My Attempts", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/exams/my/attempts", "host": ["{{URL}}"], "path": ["api","v1","client","exams","my","attempts"] } } },
             { "name": "My Analytics", "request": { "method": "GET", "url": { "raw": "{{URL}}/api/v1/client/exams/my/analytics", "host": ["{{URL}}"], "path": ["api","v1","client","exams","my","analytics"] } } }
           ]
+        },
+        {
+          "name": "24 Lecture Notes (text)",
+          "description": "Subscriber-only in-player notes pinned to a moment inside a recorded lecture or live session. See docs/LECTURE_NOTES_CLIENT.md.",
+          "item": [
+            {
+              "name": "Create Note — Recorded Lecture",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/lecture-notes", "host": ["{{URL}}"], "path": ["api","v1","client","lecture-notes"] },
+                "body": { "mode": "raw", "raw": "{\n  \"lectureType\": \"recorded\",\n  \"videoId\": \"{{video_id}}\",\n  \"timestampSec\": 742,\n  \"content\": \"Newton's second law starts here.\"\n}" }
+              },
+              "event": [
+                { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                  "const j = pm.response.json();",
+                  "if (j?.data?.note?._id) pm.collectionVariables.set('lecture_note_id', j.data.note._id);"
+                ] } }
+              ]
+            },
+            {
+              "name": "Create Note — Live Session",
+              "request": {
+                "method": "POST",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/lecture-notes", "host": ["{{URL}}"], "path": ["api","v1","client","lecture-notes"] },
+                "body": { "mode": "raw", "raw": "{\n  \"lectureType\": \"live\",\n  \"liveSessionId\": \"{{live_session_id}}\",\n  \"timestampSec\": 312,\n  \"content\": \"Doubt: clarify the derivation step at 5:12.\"\n}" }
+              }
+            },
+            {
+              "name": "List Notes — Recorded Lecture",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/lecture-notes?lectureType=recorded&videoId={{video_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api","v1","client","lecture-notes"],
+                  "query": [
+                    { "key": "lectureType", "value": "recorded" },
+                    { "key": "videoId", "value": "{{video_id}}" }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "List Notes — Live Session",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/lecture-notes?lectureType=live&liveSessionId={{live_session_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api","v1","client","lecture-notes"],
+                  "query": [
+                    { "key": "lectureType", "value": "live" },
+                    { "key": "liveSessionId", "value": "{{live_session_id}}" }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Update Note",
+              "request": {
+                "method": "PATCH",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/lecture-notes/{{lecture_note_id}}", "host": ["{{URL}}"], "path": ["api","v1","client","lecture-notes","{{lecture_note_id}}"] },
+                "body": { "mode": "raw", "raw": "{\n  \"content\": \"Cleaner phrasing.\",\n  \"timestampSec\": 745\n}" }
+              }
+            },
+            {
+              "name": "Delete Note",
+              "request": {
+                "method": "DELETE",
+                "url": { "raw": "{{URL}}/api/v1/client/lecture-notes/{{lecture_note_id}}", "host": ["{{URL}}"], "path": ["api","v1","client","lecture-notes","{{lecture_note_id}}"] }
+              }
+            }
+          ]
+        },
+        {
+          "name": "25 Lecture Audio Notes",
+          "description": "Subscriber-only audio recordings pinned to a moment inside a recorded lecture or live session. Multipart upload via the `audio` field (max 20 MB; mp3/m4a/aac/wav/webm/ogg/opus). See docs/LECTURE_NOTES_CLIENT.md.",
+          "item": [
+            {
+              "name": "Create Audio Note — Recorded Lecture",
+              "request": {
+                "method": "POST",
+                "url": { "raw": "{{URL}}/api/v1/client/lecture-audio-notes", "host": ["{{URL}}"], "path": ["api","v1","client","lecture-audio-notes"] },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    { "key": "audio", "type": "file", "src": [] },
+                    { "key": "lectureType", "type": "text", "value": "recorded" },
+                    { "key": "videoId", "type": "text", "value": "{{video_id}}" },
+                    { "key": "timestampSec", "type": "text", "value": "742" },
+                    { "key": "title", "type": "text", "value": "Doubt #3 — proof step" },
+                    { "key": "durationSec", "type": "text", "value": "18" }
+                  ]
+                }
+              },
+              "event": [
+                { "listen": "test", "script": { "type": "text/javascript", "exec": [
+                  "const j = pm.response.json();",
+                  "if (j?.data?.note?._id) pm.collectionVariables.set('lecture_audio_note_id', j.data.note._id);"
+                ] } }
+              ]
+            },
+            {
+              "name": "Create Audio Note — Live Session",
+              "request": {
+                "method": "POST",
+                "url": { "raw": "{{URL}}/api/v1/client/lecture-audio-notes", "host": ["{{URL}}"], "path": ["api","v1","client","lecture-audio-notes"] },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    { "key": "audio", "type": "file", "src": [] },
+                    { "key": "lectureType", "type": "text", "value": "live" },
+                    { "key": "liveSessionId", "type": "text", "value": "{{live_session_id}}" },
+                    { "key": "timestampSec", "type": "text", "value": "312" },
+                    { "key": "title", "type": "text", "value": "Doubt during Q&A" }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "List Audio Notes — Recorded Lecture",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/lecture-audio-notes?lectureType=recorded&videoId={{video_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api","v1","client","lecture-audio-notes"],
+                  "query": [
+                    { "key": "lectureType", "value": "recorded" },
+                    { "key": "videoId", "value": "{{video_id}}" }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "List Audio Notes — Live Session",
+              "request": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{URL}}/api/v1/client/lecture-audio-notes?lectureType=live&liveSessionId={{live_session_id}}",
+                  "host": ["{{URL}}"],
+                  "path": ["api","v1","client","lecture-audio-notes"],
+                  "query": [
+                    { "key": "lectureType", "value": "live" },
+                    { "key": "liveSessionId", "value": "{{live_session_id}}" }
+                  ]
+                }
+              }
+            },
+            {
+              "name": "Update Audio Note (metadata only)",
+              "request": {
+                "method": "PATCH",
+                "header": [{ "key": "Content-Type", "value": "application/json" }],
+                "url": { "raw": "{{URL}}/api/v1/client/lecture-audio-notes/{{lecture_audio_note_id}}", "host": ["{{URL}}"], "path": ["api","v1","client","lecture-audio-notes","{{lecture_audio_note_id}}"] },
+                "body": { "mode": "raw", "raw": "{\n  \"title\": \"Renamed clip\",\n  \"timestampSec\": 745\n}" }
+              }
+            },
+            {
+              "name": "Delete Audio Note",
+              "request": {
+                "method": "DELETE",
+                "url": { "raw": "{{URL}}/api/v1/client/lecture-audio-notes/{{lecture_audio_note_id}}", "host": ["{{URL}}"], "path": ["api","v1","client","lecture-audio-notes","{{lecture_audio_note_id}}"] }
+              }
+            }
+          ]
         }
       ]
     },
