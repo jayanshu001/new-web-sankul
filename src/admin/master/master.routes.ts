@@ -5,6 +5,7 @@ import { getEducators, createEducator, updateEducator, deleteEducator } from "./
 import { getSubjectCategories, createSubjectCategory, updateSubjectCategory, deleteSubjectCategory } from "./subjectCategory.controller";
 import { getMaterials, createMaterial, updateMaterial, deleteMaterial } from "./material.controller";
 import { getVideoCategories, createVideoCategory, updateVideoCategory, deleteVideoCategory } from "./videoCategory.controller";
+import { getPackageCategories, createPackageCategory, updatePackageCategory, deletePackageCategory } from "./packageCategory.controller";
 
 const router = Router();
 
@@ -34,5 +35,11 @@ router.get("/video-categories", getVideoCategories);
 router.post("/video-categories", uploadS3.single("image"), createVideoCategory);
 router.put("/video-categories/:id", uploadS3.single("image"), updateVideoCategory);
 router.delete("/video-categories/:id", deleteVideoCategory);
+
+// Package Category Master (parent = Package from /admin/packages listing)
+router.get("/package-categories", getPackageCategories);
+router.post("/package-categories", uploadS3.single("image"), createPackageCategory);
+router.put("/package-categories/:id", uploadS3.single("image"), updatePackageCategory);
+router.delete("/package-categories/:id", deletePackageCategory);
 
 export default router;

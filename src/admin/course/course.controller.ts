@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
+import mongoose, { Types } from "mongoose";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
@@ -14,6 +14,28 @@ import {
   createVideoCategorySchema,
   updateVideoCategorySchema,
 } from "../master/master.validation";
+
+// Accepts either a real array or a JSON-encoded string (multipart/form-data).
+const parseCategoryRefs = (
+  raw: any
+): Array<{ category: Types.ObjectId; order: number }> | undefined => {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  let items = raw;
+  if (typeof raw === "string") {
+    try {
+      items = JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!Array.isArray(items)) return undefined;
+  return items
+    .filter((i: any) => i && mongoose.Types.ObjectId.isValid(i.category))
+    .map((i: any) => ({
+      category: new Types.ObjectId(i.category),
+      order: typeof i.order === "number" ? i.order : Number(i.order) || 0,
+    }));
+};
 
 const mapPlanResponse = (plan: any) => ({
   id: plan._id,
@@ -94,6 +116,9 @@ export const getCourses = async (req: Request, res: Response) => {
         .populate("courseSubjectCategoryId", "_id title")
         .populate("videoCategoryId", "_id title")
         .populate("pcMaterialId", "_id title")
+        .populate("examCountdownCategoryId", "_id name colorHex")
+        .populate("materialCategories.category", "_id title image")
+        .populate("examCategories.category", "_id name image")
         .sort({ [sortBy]: sortDirection })
         .skip(skip)
         .limit(limitNum),
@@ -127,7 +152,10 @@ export const getCourseById = async (req: Request, res: Response) => {
         .populate("courseEducatorId", "_id name")
         .populate("courseSubjectCategoryId", "_id title")
         .populate("videoCategoryId", "_id title")
-        .populate("pcMaterialId", "_id title"),
+        .populate("pcMaterialId", "_id title")
+        .populate("examCountdownCategoryId", "_id name colorHex")
+        .populate("materialCategories.category", "_id title image")
+        .populate("examCategories.category", "_id name image"),
       PackageCourseEbookPrice.find({ courseId: id }).sort({ isDefault: -1, createdAt: -1 }),
     ]);
 
@@ -292,9 +320,19 @@ export const createCourse = async (req: Request, res: Response) => {
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
     if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
+    if (req.body.examCountdownCategoryId === "" || req.body.examCountdownCategoryId === "null") req.body.examCountdownCategoryId = null;
+    const materialCategoriesParsed = parseCategoryRefs(req.body.materialCategories);
+    const examCategoriesParsed = parseCategoryRefs(req.body.examCategories);
+    if (materialCategoriesParsed !== undefined) req.body.materialCategories = materialCategoriesParsed.map((r) => ({ category: r.category.toString(), order: r.order }));
+    if (examCategoriesParsed !== undefined) req.body.examCategories = examCategoriesParsed.map((r) => ({ category: r.category.toString(), order: r.order }));
     const validatedData = createCourseSchema.parse(req.body);
 
-    const newCourse = new Course(validatedData);
+    const newCourse = new Course({
+      ...validatedData,
+      examCountdownCategoryId: validatedData.examCountdownCategoryId || null,
+      materialCategories: materialCategoriesParsed ?? [],
+      examCategories: examCategoriesParsed ?? [],
+    });
     await newCourse.save({ session });
 
     // Automatically create a default Video Category for the course if requested
@@ -338,8 +376,17 @@ export const updateCourse = async (req: Request, res: Response) => {
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
     if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
+    if (req.body.examCountdownCategoryId === "" || req.body.examCountdownCategoryId === "null") req.body.examCountdownCategoryId = null;
+    const materialCategoriesParsed = parseCategoryRefs(req.body.materialCategories);
+    const examCategoriesParsed = parseCategoryRefs(req.body.examCategories);
+    if (materialCategoriesParsed !== undefined) req.body.materialCategories = materialCategoriesParsed.map((r) => ({ category: r.category.toString(), order: r.order }));
+    if (examCategoriesParsed !== undefined) req.body.examCategories = examCategoriesParsed.map((r) => ({ category: r.category.toString(), order: r.order }));
     const validatedData = createCourseSchema.partial().parse(req.body);
-    const course = await Course.findByIdAndUpdate(id, validatedData, { new: true });
+    const update: any = { ...validatedData };
+    if (validatedData.examCountdownCategoryId !== undefined) update.examCountdownCategoryId = validatedData.examCountdownCategoryId || null;
+    if (materialCategoriesParsed !== undefined) update.materialCategories = materialCategoriesParsed;
+    if (examCategoriesParsed !== undefined) update.examCategories = examCategoriesParsed;
+    const course = await Course.findByIdAndUpdate(id, update, { new: true });
     if (!course) return res.status(404).json({ success: false, message: "Course not found" });
     res.status(200).json({ success: true, data: course });
   } catch (error: any) {

@@ -9,6 +9,7 @@ import {
   deleteCategory,
   toggleCategoryStatus,
   reorderCategories,
+  duplicateCategory,
   getCategoryCourses,
   getCategoryMaterials,
   listMaterials,
@@ -34,6 +35,7 @@ router.get("/categories/:id", getCategoryById);
 router.put("/categories/:id", uploadS3.single("image"), updateCategory);
 router.delete("/categories/:id", deleteCategory);
 router.patch("/categories/:id/status", toggleCategoryStatus);
+router.post("/categories/:id/duplicate", duplicateCategory);
 router.get("/categories/:id/courses", getCategoryCourses);
 router.get("/categories/:id/materials", getCategoryMaterials);
 

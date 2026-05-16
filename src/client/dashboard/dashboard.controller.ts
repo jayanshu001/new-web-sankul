@@ -156,7 +156,7 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
   try {
     const [trendingFree, magazinePackages, freeCats] = await Promise.all([
       fetchTrendingBookItems({ type: "free", limit: FREE_DASHBOARD_LIMIT }),
-      Package.find({ active: true, isMagazine: true })
+      Package.find({ active: true, isMagazine: true, isPaid: false })
         .populate("packageTypeId", "_id name createdAt updatedAt")
         .sort({ order: 1, createdAt: -1 })
         .limit(FREE_DASHBOARD_LIMIT)

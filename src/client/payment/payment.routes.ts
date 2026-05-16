@@ -8,6 +8,10 @@ import {
   createLiveCourseOrderPayment,
   applyLiveCoursePromo,
 } from "./live-course-payment.controller";
+import {
+  createTestSeriesOrderPayment,
+  applyTestSeriesPromo,
+} from "./test-series-payment.controller";
 import { verifyPayment } from "./verify.controller";
 
 const router = Router();
@@ -40,6 +44,14 @@ router.post("/create-order/live-course", createLiveCourseOrderPayment);
 // breakdown so the UI can show the discounted total before checkout. The
 // discount is always re-validated inside create-order.
 router.post("/apply-promo/live-course", applyLiveCoursePromo);
+
+// Test series purchase — body: { planId, promocode? } (a TestSeriesPrice._id).
+// Same shape as live-course but writes TestSeriesOrder + TestSeriesSubscription.
+router.post("/create-order/test-series", createTestSeriesOrderPayment);
+
+// Test series promo preview — body: { planId, promocode }. Returns full GST +
+// handling-fee breakdown so the UI's Order Summary can show the final total.
+router.post("/apply-promo/test-series", applyTestSeriesPromo);
 
 // Verify — single endpoint for both book and course payments. Dispatches
 // fulfillment based on which local row holds the razorpay_order_id.

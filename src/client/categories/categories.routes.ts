@@ -6,6 +6,8 @@ import {
   listExamsByCategory,
   listPackagesByExamCountdownCategory,
   listBooksAndEbooksByExamCountdownCategory,
+  listPackageCategories,
+  listCategoriesByPackage,
 } from "./categories.controller";
 
 const router = Router();
@@ -17,5 +19,7 @@ router.get("/material-categories/:id/materials", listMaterialsByCategory);
 router.get("/exam-categories/:id/exams", listExamsByCategory);
 router.get("/exam-countdown-categories/:id/packages", listPackagesByExamCountdownCategory);
 router.get("/exam-countdown-categories/:id/books-ebooks", listBooksAndEbooksByExamCountdownCategory);
+router.get("/package-categories", listPackageCategories);
+router.get("/packages/:id/categories", listCategoriesByPackage);
 
 export default router;

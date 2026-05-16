@@ -9,6 +9,7 @@ import {
   updateVideoCategory,
   deleteVideoCategory,
   toggleVideoCategoryStatus,
+  duplicateVideoCategory,
 } from "./videoCategory.controller";
 
 const router = Router();
@@ -23,5 +24,6 @@ router.get("/:id", getVideoCategory);
 router.put("/:id", uploadS3.single("image"), updateVideoCategory);
 router.delete("/:id", deleteVideoCategory);
 router.patch("/:id/status", toggleVideoCategoryStatus);
+router.post("/:id/duplicate", duplicateVideoCategory);
 
 export default router;

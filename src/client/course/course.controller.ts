@@ -15,10 +15,12 @@ import {
 import { Course } from "../../models/course/Course.model";
 import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
+import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 
 async function paginateCoursesWithPlans(
   baseFilters: any,
-  query: Record<string, string>
+  query: Record<string, string>,
+  userId?: string
 ) {
   const {
     search = "",
@@ -79,8 +81,25 @@ async function paginateCoursesWithPlans(
     (p.withMaterial ? bucket.withMaterial : bucket.withoutMaterial).push(p);
   }
 
+  let purchasedSet = new Set<string>();
+  if (userId && courseIds.length) {
+    const now = new Date();
+    const subs = await PackageCourseSubscription.find({
+      customerId: userId,
+      courseId: { $in: courseIds },
+      paymentStatus: "verified",
+      status: true,
+      $or: [{ endAt: null }, { endAt: { $gt: now } }],
+    })
+      .select("courseId")
+      .lean();
+    purchasedSet = new Set(subs.map((s: any) => String(s.courseId)));
+  }
+
   const data = courses.map((c: any) => ({
     ...c,
+    isPaid: c.isPaid ?? true,
+    isPurchase: purchasedSet.has(String(c._id)),
     plans: plansByCourse.get(String(c._id)) ?? { withMaterial: [], withoutMaterial: [] },
   }));
 
@@ -100,7 +119,7 @@ export const listCoursesHandler = async (req: Request, res: Response) => {
   const userId = req.user?.id;
 
   try {
-    const result = await paginateCoursesWithPlans({ status: true }, req.query as Record<string, string>);
+    const result = await paginateCoursesWithPlans({ status: true }, req.query as Record<string, string>, userId);
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     logger.error("listCoursesHandler failed", {
@@ -161,7 +180,8 @@ export const listCoursesByCategoryHandler = async (req: Request, res: Response) 
     }
     const result = await paginateCoursesWithPlans(
       { status: true, courseSubjectCategoryId: new Types.ObjectId(categoryId) },
-      req.query as Record<string, string>
+      req.query as Record<string, string>,
+      userId
     );
     return res.status(200).json({ success: true, ...result });
   } catch (err) {

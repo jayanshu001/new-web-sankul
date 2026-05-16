@@ -24,24 +24,40 @@ export const globalSearch = async (req: Request, res: Response) => {
     const page = Math.max(parseInt(req.query.page as string, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 10, 1), 50);
 
-    if (!q || q.trim().length < 2) {
-      return res
-        .status(400)
-        .json({ success: false, message: "Query 'q' must be at least 2 characters." });
-    }
-    const Model = TYPE_TO_MODEL[type];
-    if (!Model) {
-      return res.status(400).json({
-        success: false,
-        message: "Query 'type' must be one of: courses, packages, books, ebooks.",
+    const filter = {
+      status: true,
+      name: { $regex: escapeRegex((q || "").trim()), $options: "i" },
+    };
+    const skip = (page - 1) * limit;
+
+    if (!type || !TYPE_TO_MODEL[type]) {
+      const entries = Object.entries(TYPE_TO_MODEL);
+      const results = await Promise.all(
+        entries.map(async ([key, M]) => {
+          const [items, total] = await Promise.all([
+            M.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+            M.countDocuments(filter),
+          ]);
+          return [key, { items, total, hasMore: skip + items.length < total }] as const;
+        })
+      );
+
+      const data = Object.fromEntries(results);
+      const grandTotal = results.reduce((sum, [, v]) => sum + v.total, 0);
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          type: "all",
+          page,
+          limit,
+          total: grandTotal,
+          results: data,
+        },
       });
     }
 
-    const filter = {
-      status: true,
-      name: { $regex: escapeRegex(q.trim()), $options: "i" },
-    };
-    const skip = (page - 1) * limit;
+    const Model = TYPE_TO_MODEL[type];
 
     const [items, total] = await Promise.all([
       Model.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),

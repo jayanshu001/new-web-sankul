@@ -347,3 +347,38 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ─── Package Categories ──────────────────────────────────────────────────────
+import { PackageCategory } from "../../models/course/PackageCategory.model";
+
+export const listPackageCategories = async (req: Request, res: Response) => {
+  try {
+    const { packageId } = req.query as { packageId?: string };
+    const filter: any = { status: true };
+    if (packageId) {
+      if (!mongoose.Types.ObjectId.isValid(packageId)) {
+        return res.status(400).json({ success: false, message: "Invalid packageId" });
+      }
+      filter.packageId = new mongoose.Types.ObjectId(packageId);
+    }
+    const categories = await PackageCategory.find(filter)
+      .populate("packageId", "_id name image")
+      .sort({ order: 1 });
+    return res.status(200).json({ success: true, data: categories });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const listCategoriesByPackage = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params as { id: string };
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid package id" });
+    }
+    const categories = await PackageCategory.find({ status: true, packageId: id }).sort({ order: 1 });
+    return res.status(200).json({ success: true, data: categories });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};

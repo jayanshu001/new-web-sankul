@@ -10,6 +10,9 @@ import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import { EbookOrder } from "../../models/ebook/EbookOrder.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
+import { TestSeriesOrder } from "../../models/testSeries/TestSeriesOrder.model";
+import { TestSeriesPrice } from "../../models/testSeries/TestSeriesPrice.model";
+import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
 import {
   BookOrderStatus,
   PackageCourseEbookOrderStatus,
@@ -63,7 +66,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
     // Find which local entity owns this Razorpay order. It's exactly one of
     // these — neither, multiple, or duplicates would be a bug worth surfacing.
-    const [bookOrder, courseSub, ebookOrder, liveCourseSub] = await Promise.all([
+    const [bookOrder, courseSub, ebookOrder, liveCourseSub, testSeriesOrder] = await Promise.all([
       BookOrder.findOne({ razorpayOrderId: razorpay_order_id, customerId: userId }),
       PackageCourseSubscription.findOne({
         razorpayOrderId: razorpay_order_id,
@@ -74,9 +77,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
         razorpayOrderId: razorpay_order_id,
         customerId: userId,
       }),
+      TestSeriesOrder.findOne({ razorpayOrderId: razorpay_order_id, customerId: userId }),
     ]);
 
-    if (!bookOrder && !courseSub && !ebookOrder && !liveCourseSub) {
+    if (!bookOrder && !courseSub && !ebookOrder && !liveCourseSub && !testSeriesOrder) {
       return res.status(404).json({
         success: false,
         message: "No local order found for this Razorpay order id.",
@@ -212,6 +216,48 @@ export const verifyPayment = async (req: Request, res: Response) => {
       return res.status(200).json({
         success: true,
         data: { kind: "ebook", order: ebookOrder },
+      });
+    }
+
+    if (testSeriesOrder) {
+      if (testSeriesOrder.status !== PackageCourseEbookOrderStatus.PENDING) {
+        return res.status(200).json({
+          success: true,
+          data: { kind: "test-series", order: testSeriesOrder },
+          message: "Already verified.",
+        });
+      }
+
+      // `durationDays` — TestSeries plans are validity in days (mockup shows
+      // "10 days" / "Valid until Sep 17, 2026"), so use setDate, not setMonth.
+      const plan = await TestSeriesPrice.findById(testSeriesOrder.planId)
+        .select("durationDays")
+        .lean();
+      const durationDays = plan?.durationDays ?? 0;
+
+      testSeriesOrder.status = PackageCourseEbookOrderStatus.COMPLETE;
+      testSeriesOrder.razorpayPaymentId = razorpay_payment_id;
+      await testSeriesOrder.save();
+
+      const startAt = new Date();
+      const endAt = new Date(startAt);
+      endAt.setDate(endAt.getDate() + durationDays);
+      const subscription = await TestSeriesSubscription.create({
+        orderId: testSeriesOrder._id,
+        customerId: testSeriesOrder.customerId,
+        testSeriesId: testSeriesOrder.testSeriesId,
+        planId: testSeriesOrder.planId ?? null,
+        price: testSeriesOrder.orderPrice,
+        startAt,
+        endAt,
+        paymentType: PackageCourseEbookPaymentType.ONLINE,
+        promocodeId: testSeriesOrder.promocodeId ?? null,
+        status: true,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: { kind: "test-series", order: testSeriesOrder, subscription },
       });
     }
 

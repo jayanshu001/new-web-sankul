@@ -291,6 +291,151 @@ export const deleteVideoCategory = async (req: Request, res: Response) => {
   }
 };
 
+const slugify = (s: string) =>
+  s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+async function nextAvailableUnassignedTitle(baseTitle: string): Promise<string> {
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const base = `${baseTitle} (Copy`;
+  const regex = new RegExp(`^${escape(base)}(?:\\s(\\d+))?\\)$`);
+  const existing = await VideoCategory.find({
+    courseId: null,
+    liveCourseId: null,
+    title: { $regex: `^${escape(base)}` },
+  })
+    .select("title")
+    .lean();
+  const taken = new Set<number>();
+  for (const e of existing) {
+    const m = (e.title || "").match(regex);
+    if (!m) continue;
+    taken.add(m[1] ? parseInt(m[1], 10) : 1);
+  }
+  if (!taken.has(1)) return `${baseTitle} (Copy)`;
+  let n = 2;
+  while (taken.has(n)) n++;
+  return `${baseTitle} (Copy ${n})`;
+}
+
+async function uniqueSlug(base: string, session: mongoose.ClientSession): Promise<string> {
+  let candidate = base || "category";
+  let n = 1;
+  while (await VideoCategory.exists({ slug: candidate }).session(session)) {
+    n += 1;
+    candidate = `${base}-${n}`;
+  }
+  return candidate;
+}
+
+// POST /:id/duplicate
+export const duplicateVideoCategory = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    }
+    const source = await VideoCategory.findById(id).lean();
+    if (!source) {
+      return res.status(404).json({ success: false, message: "Video Category not found" });
+    }
+
+    let rootId: mongoose.Types.ObjectId | null = null;
+    let rootTitle = "";
+    const counts = { subCategories: 0, videos: 0 };
+
+    await session.withTransaction(async () => {
+      // Walk the childCategoryId chain to collect the subtree (linked list).
+      const chain: any[] = [source];
+      const seen = new Set<string>([String(source._id)]);
+      let cursor: any = source;
+      while (cursor.childCategoryId) {
+        const childId = String(cursor.childCategoryId);
+        if (seen.has(childId)) break; // guard against cycles
+        const next = await VideoCategory.findById(childId).session(session).lean();
+        if (!next) break;
+        chain.push(next);
+        seen.add(childId);
+        cursor = next;
+      }
+
+      // Create clones bottom-up so each parent can reference its already-created child.
+      rootTitle = await nextAvailableUnassignedTitle(source.title);
+      const idMap = new Map<string, mongoose.Types.ObjectId>();
+
+      for (let i = chain.length - 1; i >= 0; i--) {
+        const node = chain[i];
+        const isRoot = i === 0;
+        const title = isRoot ? rootTitle : node.title;
+        const slugBase = slugify(title);
+        const slug = await uniqueSlug(slugBase, session);
+        const nextOldId = node.childCategoryId ? String(node.childCategoryId) : null;
+        const newChildId = nextOldId ? idMap.get(nextOldId) ?? null : null;
+
+        const [doc] = await VideoCategory.create(
+          [
+            {
+              title,
+              slug,
+              image: node.image,
+              courseId: null,
+              liveCourseId: null,
+              childCategoryId: newChildId,
+              educatorId: null,
+              order_by: node.order_by ?? 0,
+              status: node.status ?? true,
+            },
+          ],
+          { session }
+        );
+        idMap.set(String(node._id), doc._id as mongoose.Types.ObjectId);
+        if (isRoot) rootId = doc._id as mongoose.Types.ObjectId;
+        else counts.subCategories += 1;
+      }
+
+      // Clone videos across all mapped categories.
+      const oldIds = chain.map((c) => c._id);
+      const videos = await Video.find({ videoCategoryId: { $in: oldIds } })
+        .session(session)
+        .lean();
+      if (videos.length) {
+        const clones = videos.map((v: any) => ({
+          videoCategoryId: idMap.get(String(v.videoCategoryId))!,
+          liveSessionId: null,
+          title: v.title,
+          topic: v.topic,
+          slug: v.slug,
+          platform: v.platform,
+          priceType: v.priceType,
+          youtube_id: v.youtube_id,
+          aws_id: v.aws_id,
+          vimeo_id: v.vimeo_id,
+          order: v.order ?? 0,
+          status: v.status ?? true,
+        }));
+        await Video.insertMany(clones, { session });
+        counts.videos = clones.length;
+      }
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        id: rootId,
+        name: rootTitle,
+        courseId: null,
+        liveCourseId: null,
+        createdAt: new Date(),
+        itemsCloned: counts,
+      },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    await session.endSession();
+  }
+};
+
 // PATCH /:id/status
 export const toggleVideoCategoryStatus = async (req: Request, res: Response) => {
   try {

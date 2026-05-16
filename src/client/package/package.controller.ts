@@ -64,7 +64,7 @@ async function buildExamCategoryEntry(cat: any) {
   };
 }
 
-async function buildPackageDetail(packageId: string) {
+async function buildPackageDetail(packageId: string, customerId?: string) {
   const pkg = await Package.findOne({ _id: packageId, active: true })
     .populate("packageTypeId", "_id name")
     .populate("goalId", "_id title")
@@ -120,6 +120,10 @@ async function buildPackageDetail(packageId: string) {
     });
   }
 
+  const isPurchased = customerId
+    ? await hasActiveSubscription(customerId, String(pkg._id))
+    : false;
+
   return {
     package: {
       _id: pkg._id,
@@ -132,6 +136,8 @@ async function buildPackageDetail(packageId: string) {
       packageType: pkg.packageTypeId,
       goal: pkg.goalId,
       pcMaterial: pkg.pcMaterialId,
+      isPaid: pkg.isPaid,
+      isPurchased,
     },
     videos: videos.filter(Boolean),
     materials: materials.filter(Boolean),
@@ -160,7 +166,7 @@ export const getPackageDetail = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid package id." });
 
-    const detail = await buildPackageDetail(id);
+    const detail = await buildPackageDetail(id, req.user?.id);
     if (!detail) return res.status(404).json({ success: false, message: "Package not found." });
 
     return res.status(200).json({ success: true, data: detail });

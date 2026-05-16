@@ -23,6 +23,7 @@ export interface ICourse extends Document {
   courseSubjectCategoryId?: mongoose.Types.ObjectId;
   videoCategoryId?: mongoose.Types.ObjectId;
   pcMaterialId?: mongoose.Types.ObjectId;
+  examCountdownCategoryId?: mongoose.Types.ObjectId | null;
 
   // Embedded joins (replacement for SQL MaterialCategoryCourse / ExamCategoryCourse)
   materialCategories: ICourseCategoryRef[];
@@ -67,6 +68,7 @@ const courseSchema: Schema = new Schema(
     courseSubjectCategoryId: { type: Schema.Types.ObjectId, ref: "CourseSubjectCategory", default: null },
     videoCategoryId: { type: Schema.Types.ObjectId, ref: "VideoCategory", default: null },
     pcMaterialId: { type: Schema.Types.ObjectId, ref: "PackageCourseMaterial", default: null },
+    examCountdownCategoryId: { type: Schema.Types.ObjectId, ref: "ExamCountdownCategory", default: null },
 
     materialCategories: { type: [materialCategoryRefSchema], default: [] },
     examCategories: { type: [examCategoryRefSchema], default: [] },

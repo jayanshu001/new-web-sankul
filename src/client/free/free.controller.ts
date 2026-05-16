@@ -7,6 +7,7 @@ import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamStatus } from "../../models/enums";
 import { Material } from "../../models/course/Material.model";
+import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { Video } from "../../models/course/Video.model";
 
 // Resolve category ids reachable through any free package OR free course.
@@ -118,16 +119,26 @@ export const listFreeTests = async (req: Request, res: Response) => {
 };
 
 // GET /api/v1/client/free-materials
+// Optional query: materialCategoryId — when the client taps a category card,
+// it passes the id and only materials under that category are returned.
 export const listFreeMaterials = async (req: Request, res: Response) => {
   try {
-    const { search } = req.query as Record<string, string>;
+    const { search, materialCategoryId } = req.query as Record<string, string>;
     const { materialCategoryIds } = await resolveFreeCategoryIds();
     const { pageNum, limitNum, skip } = paginate(req);
 
-    const filter: any = { status: true, materialCategoryId: { $in: materialCategoryIds } };
+    // If client filtered to a single category, intersect it with the
+    // free-reachable set so a paid category id can't leak free materials.
+    let effectiveIds = materialCategoryIds;
+    if (materialCategoryId && Types.ObjectId.isValid(materialCategoryId)) {
+      const reqId = String(materialCategoryId);
+      effectiveIds = materialCategoryIds.filter((id) => String(id) === reqId);
+    }
+
+    const filter: any = { status: true, materialCategoryId: { $in: effectiveIds } };
     if (search) filter.title = { $regex: search, $options: "i" };
 
-    if (!materialCategoryIds.length) {
+    if (!effectiveIds.length) {
       return res.status(200).json({
         success: true,
         data: [],
@@ -150,6 +161,85 @@ export const listFreeMaterials = async (req: Request, res: Response) => {
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/client/free-materials/grouped
+// Two-level tree for the Free Materials screen: each free course/package
+// becomes a section, and inside it are the material categories the user can
+// open. lessonCount is the number of active materials in that category that
+// belong to this parent's free-reachable set.
+export const listFreeMaterialsGrouped = async (_req: Request, res: Response) => {
+  try {
+    const [freePackages, freeCourses] = await Promise.all([
+      Package.find({ active: true, isPaid: false })
+        .select("_id name materialCategories")
+        .lean(),
+      Course.find({ status: true, isPaid: false })
+        .select("_id name materialCategories")
+        .lean(),
+    ]);
+
+    type Parent = { _id: any; name: string; type: "course" | "package"; categoryIds: any[] };
+    const parents: Parent[] = [];
+
+    for (const p of freePackages as any[]) {
+      const ids = (p.materialCategories ?? [])
+        .filter((r: any) => r.status !== false && r.category)
+        .map((r: any) => r.category);
+      if (ids.length) parents.push({ _id: p._id, name: p.name, type: "package", categoryIds: ids });
+    }
+    for (const c of freeCourses as any[]) {
+      const ids = (c.materialCategories ?? [])
+        .filter((r: any) => r.category)
+        .map((r: any) => r.category);
+      if (ids.length) parents.push({ _id: c._id, name: c.name, type: "course", categoryIds: ids });
+    }
+
+    const allCategoryIds = Array.from(
+      new Set(parents.flatMap((p) => p.categoryIds.map((id: any) => String(id))))
+    ).map((id) => new Types.ObjectId(id));
+
+    if (!allCategoryIds.length) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
+    const [categories, counts] = await Promise.all([
+      MaterialCategory.find({ _id: { $in: allCategoryIds }, status: true })
+        .select("_id title image")
+        .lean(),
+      Material.aggregate([
+        { $match: { status: true, materialCategoryId: { $in: allCategoryIds } } },
+        { $group: { _id: "$materialCategoryId", n: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const categoryById = new Map<string, any>(categories.map((c: any) => [String(c._id), c]));
+    const countById = new Map<string, number>(counts.map((c: any) => [String(c._id), c.n]));
+
+    const data = parents
+      .map((p) => ({
+        _id: p._id,
+        name: p.name,
+        type: p.type,
+        materialCategories: p.categoryIds
+          .map((id: any) => {
+            const cat = categoryById.get(String(id));
+            if (!cat) return null;
+            return {
+              _id: cat._id,
+              title: cat.title,
+              image: cat.image,
+              lessonCount: countById.get(String(id)) ?? 0,
+            };
+          })
+          .filter(Boolean),
+      }))
+      .filter((p) => p.materialCategories.length);
+
+    return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }
