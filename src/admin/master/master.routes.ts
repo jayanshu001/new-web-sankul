@@ -6,6 +6,7 @@ import { getSubjectCategories, createSubjectCategory, updateSubjectCategory, del
 import { getMaterials, createMaterial, updateMaterial, deleteMaterial } from "./material.controller";
 import { getVideoCategories, createVideoCategory, updateVideoCategory, deleteVideoCategory } from "./videoCategory.controller";
 import { getPackageCategories, createPackageCategory, updatePackageCategory, deletePackageCategory } from "./packageCategory.controller";
+import { getLiveCourseCategories, createLiveCourseCategory, updateLiveCourseCategory, deleteLiveCourseCategory } from "./liveCourseCategory.controller";
 
 const router = Router();
 
@@ -41,5 +42,11 @@ router.get("/package-categories", getPackageCategories);
 router.post("/package-categories", uploadS3.single("image"), createPackageCategory);
 router.put("/package-categories/:id", uploadS3.single("image"), updatePackageCategory);
 router.delete("/package-categories/:id", deletePackageCategory);
+
+// Live Course Category Master (linked from LiveCourse.liveCourseCategoryId)
+router.get("/live-course-categories", getLiveCourseCategories);
+router.post("/live-course-categories", uploadS3.single("image"), createLiveCourseCategory);
+router.put("/live-course-categories/:id", uploadS3.single("image"), updateLiveCourseCategory);
+router.delete("/live-course-categories/:id", deleteLiveCourseCategory);
 
 export default router;

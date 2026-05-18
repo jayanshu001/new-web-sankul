@@ -41,7 +41,10 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
       });
     }
 
-    const { result, error } = await resolveLivePromo(promocode, plan.price);
+    const { result, error } = await resolveLivePromo(promocode, plan.price, {
+      type: "liveCourse",
+      id: String(plan.liveCourseId),
+    });
     if (error || !result) {
       return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
     }
@@ -122,7 +125,10 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
     let discountAmount: number | null = null;
 
     if (promocode) {
-      const { result, error } = await resolveLivePromo(promocode, plan.price);
+      const { result, error } = await resolveLivePromo(promocode, plan.price, {
+        type: "liveCourse",
+        id: String(plan.liveCourseId),
+      });
       if (error || !result) {
         return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
       }

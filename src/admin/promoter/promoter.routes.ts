@@ -10,6 +10,7 @@ import {
   togglePromoterStatus,
   getPromoterPromocodes,
   getPromoterSubscriptions,
+  getPromoterDashboard,
 } from "./promoter.controller";
 
 const router = Router();
@@ -24,5 +25,6 @@ router.delete("/:id", deletePromoter);
 router.patch("/:id/status", togglePromoterStatus);
 router.get("/:id/promocodes", getPromoterPromocodes);
 router.get("/:id/subscriptions", getPromoterSubscriptions);
+router.get("/:id/dashboard", getPromoterDashboard);
 
 export default router;

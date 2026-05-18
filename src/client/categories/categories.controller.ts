@@ -254,6 +254,130 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
   }
 };
 
+// ─── Category children (drill-down) ──────────────────────────────────────────
+// All three return { parent, list } where list[].category carries the same
+// shape used in the package detail: { ...categoryDoc, havingChildDirectory, count }.
+// Use `havingChildDirectory` on the client to decide whether tapping a card
+// should drill deeper or open the items list.
+
+// GET /client/video-categories/:id/children
+export const listVideoCategoryChildren = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid category id." });
+
+    const parent: any = await VideoCategory.findById(id).lean();
+    if (!parent)
+      return res.status(404).json({ success: false, message: "Video category not found." });
+
+    const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
+    const children = childIds.length
+      ? await VideoCategory.find({ _id: { $in: childIds }, status: true })
+          .sort({ order_by: 1 })
+          .lean()
+      : [];
+
+    const list = await Promise.all(
+      children.map(async (cat: any) => {
+        const count = await Video.countDocuments({
+          videoCategoryId: cat._id,
+          status: true,
+        });
+        return {
+          category: {
+            ...cat,
+            havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
+            count,
+          },
+        };
+      })
+    );
+
+    return res.status(200).json({ success: true, data: { parent, list } });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /client/material-categories/:id/children
+export const listMaterialCategoryChildren = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid category id." });
+
+    const parent: any = await MaterialCategory.findById(id).lean();
+    if (!parent)
+      return res.status(404).json({ success: false, message: "Material category not found." });
+
+    const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
+    const children = childIds.length
+      ? await MaterialCategory.find({ _id: { $in: childIds }, status: true })
+          .sort({ order: 1 })
+          .lean()
+      : [];
+
+    const list = await Promise.all(
+      children.map(async (cat: any) => {
+        const count = await Material.countDocuments({
+          materialCategoryId: cat._id,
+          status: true,
+        });
+        return {
+          category: {
+            ...cat,
+            havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
+            count,
+          },
+        };
+      })
+    );
+
+    return res.status(200).json({ success: true, data: { parent, list } });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /client/exam-categories/:id/children
+export const listExamCategoryChildren = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid category id." });
+
+    const parent: any = await ExamCategory.findById(id).lean();
+    if (!parent)
+      return res.status(404).json({ success: false, message: "Exam category not found." });
+
+    const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
+    const children = childIds.length
+      ? await ExamCategory.find({ _id: { $in: childIds }, status: true })
+          .sort({ orderBy: 1 })
+          .lean()
+      : [];
+
+    const list = await Promise.all(
+      children.map(async (cat: any) => {
+        const count = await Exam.countDocuments({ categoryId: cat._id });
+        return {
+          category: {
+            ...cat,
+            title: (cat as any).name,
+            havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
+            count,
+          },
+        };
+      })
+    );
+
+    return res.status(200).json({ success: true, data: { parent, list } });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // GET /client/exam-countdown-categories/:id/packages
 export const listPackagesByExamCountdownCategory = async (req: Request, res: Response) => {
   try {
@@ -350,34 +474,90 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
 
 // ─── Package Categories ──────────────────────────────────────────────────────
 import { PackageCategory } from "../../models/course/PackageCategory.model";
+import { LiveCourseCategory } from "../../models/course/LiveCourseCategory.model";
+import { LiveCourse } from "../../models/course/LiveCourse.model";
 
-export const listPackageCategories = async (req: Request, res: Response) => {
+export const listPackageCategories = async (_req: Request, res: Response) => {
   try {
-    const { packageId } = req.query as { packageId?: string };
-    const filter: any = { status: true };
-    if (packageId) {
-      if (!mongoose.Types.ObjectId.isValid(packageId)) {
-        return res.status(400).json({ success: false, message: "Invalid packageId" });
-      }
-      filter.packageId = new mongoose.Types.ObjectId(packageId);
-    }
-    const categories = await PackageCategory.find(filter)
-      .populate("packageId", "_id name image")
-      .sort({ order: 1 });
+    const categories = await PackageCategory.find({ status: true }).sort({ order: 1 });
     return res.status(200).json({ success: true, data: categories });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-export const listCategoriesByPackage = async (req: Request, res: Response) => {
+export const listPackagesByCategory = async (req: Request, res: Response) => {
   try {
     const { id } = req.params as { id: string };
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid package id" });
+      return res.status(400).json({ success: false, message: "Invalid package category id" });
     }
-    const categories = await PackageCategory.find({ status: true, packageId: id }).sort({ order: 1 });
+
+    const packages = await Package.find({ active: true, packageCategoryId: id })
+      .select(
+        "_id name description image shareableLink order isPaid isMagazine isSmartCourse isPlannerCourse withMaterialText withoutMaterialText packageTypeId goalId educatorId"
+      )
+      .sort({ order: 1 })
+      .lean();
+
+    const packageIds = packages.map((p) => p._id);
+    const plans = await PackageCourseEbookPrice.find({
+      packageId: { $in: packageIds },
+      status: true,
+    })
+      .select("_id packageId name duration price withMaterial materialPrice isDefault")
+      .lean();
+
+    const plansByPackage = new Map<string, typeof plans>();
+    for (const plan of plans) {
+      const key = String(plan.packageId);
+      if (!plansByPackage.has(key)) plansByPackage.set(key, []);
+      plansByPackage.get(key)!.push(plan);
+    }
+    for (const [, list] of plansByPackage) {
+      list.sort((a, b) => {
+        if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+        return (a.duration ?? 0) - (b.duration ?? 0);
+      });
+    }
+
+    const data = packages.map((p) => {
+      const pkgPlans = plansByPackage.get(String(p._id)) ?? [];
+      const defaultPlan = pkgPlans.find((pl) => pl.isDefault) ?? pkgPlans[0] ?? null;
+      return {
+        ...p,
+        plans: pkgPlans,
+        defaultPlan,
+        startingPrice: defaultPlan ? defaultPlan.price : null,
+      };
+    });
+
+    return res.status(200).json({ success: true, data });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── Live Course Categories ──────────────────────────────────────────────────
+export const listLiveCourseCategories = async (_req: Request, res: Response) => {
+  try {
+    const categories = await LiveCourseCategory.find({ status: true }).sort({ order: 1 });
     return res.status(200).json({ success: true, data: categories });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const listLiveCoursesByCategory = async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params as { id: string };
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid live course category id" });
+    }
+    const liveCourses = await LiveCourse.find({ status: true, liveCourseCategoryId: id })
+      .select("_id name image ordered isPaid isPopular classType")
+      .sort({ ordered: 1 });
+    return res.status(200).json({ success: true, data: liveCourses });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

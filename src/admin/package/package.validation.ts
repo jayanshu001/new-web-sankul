@@ -23,7 +23,7 @@ export const createPackageSchema = z.object({
   goalId: z.string().nullable().optional(),
   goalLabelId: z.string().nullable().optional(),
   examCountdownCategoryId: z.string().nullable().optional(),
-  pcMaterialId: z.string().nullable().optional(),
+  packageCategoryId: z.string().nullable().optional(),
   educatorId: z.string().nullable().optional(),
   specificSubjects: z.array(categoryRefSchema).optional(),
   materialCategories: z.array(categoryRefSchema).optional(),

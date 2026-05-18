@@ -115,7 +115,6 @@ export const getCourses = async (req: Request, res: Response) => {
         .populate("courseEducatorId", "_id name")
         .populate("courseSubjectCategoryId", "_id title")
         .populate("videoCategoryId", "_id title")
-        .populate("pcMaterialId", "_id title")
         .populate("examCountdownCategoryId", "_id name colorHex")
         .populate("materialCategories.category", "_id title image")
         .populate("examCategories.category", "_id name image")
@@ -152,7 +151,6 @@ export const getCourseById = async (req: Request, res: Response) => {
         .populate("courseEducatorId", "_id name")
         .populate("courseSubjectCategoryId", "_id title")
         .populate("videoCategoryId", "_id title")
-        .populate("pcMaterialId", "_id title")
         .populate("examCountdownCategoryId", "_id name colorHex")
         .populate("materialCategories.category", "_id title image")
         .populate("examCategories.category", "_id name image"),
@@ -232,14 +230,6 @@ export const deleteCourseMaterial = async (req: Request, res: Response) => {
     const materialId = req.params.materialId as string;
     if (!mongoose.Types.ObjectId.isValid(materialId)) {
       return res.status(400).json({ success: false, message: "Invalid Material ID" });
-    }
-
-    const isUsed = await Course.exists({ pcMaterialId: materialId });
-    if (isUsed) {
-      return res.status(409).json({
-        success: false,
-        message: "Material is linked with one or more courses. Remove mapping first.",
-      });
     }
 
     const material = await PackageCourseMaterial.findByIdAndDelete(materialId);

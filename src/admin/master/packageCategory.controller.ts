@@ -1,14 +1,11 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { PackageCategory } from "../../models/course/PackageCategory.model";
-import { Package } from "../../models/course/Package.model";
 import { createPackageCategorySchema, updatePackageCategorySchema } from "./master.validation";
 
 export const getPackageCategories = async (req: Request, res: Response) => {
   try {
-    const categories = await PackageCategory.find()
-      .populate("packageId", "_id name image")
-      .sort({ order: 1 });
+    const categories = await PackageCategory.find().sort({ order: 1 });
     res.status(200).json({ success: true, data: categories });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
@@ -22,10 +19,6 @@ export const createPackageCategory = async (req: Request, res: Response) => {
     if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = createPackageCategorySchema.parse(req.body);
-
-    const pkg = await Package.findById(validatedData.packageId).select("_id");
-    if (!pkg) return res.status(404).json({ success: false, message: "Parent package not found" });
-
     const category = new PackageCategory(validatedData);
     await category.save();
     res.status(201).json({ success: true, data: category });
@@ -46,12 +39,6 @@ export const updatePackageCategory = async (req: Request, res: Response) => {
     if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = updatePackageCategorySchema.parse(req.body);
-
-    if (validatedData.packageId) {
-      const pkg = await Package.findById(validatedData.packageId).select("_id");
-      if (!pkg) return res.status(404).json({ success: false, message: "Parent package not found" });
-    }
-
     const category = await PackageCategory.findByIdAndUpdate(id, validatedData, { new: true });
     if (!category) return res.status(404).json({ success: false, message: "Category not found" });
     res.status(200).json({ success: true, data: category });

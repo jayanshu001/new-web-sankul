@@ -52,7 +52,6 @@ async function paginateCoursesWithPlans(
       .populate("courseEducatorId", "_id name")
       .populate("courseSubjectCategoryId", "_id title")
       .populate("videoCategoryId", "_id title")
-      .populate("pcMaterialId", "_id title")
       .sort({ [sortBy]: sortDirection })
       .skip(skip)
       .limit(limitNum)

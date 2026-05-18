@@ -22,7 +22,6 @@ export const createCourseSchema = z.object({
   courseEducatorId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
   courseSubjectCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
   videoCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
-  pcMaterialId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
   examCountdownCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").nullable().optional(),
   materialCategories: z.array(categoryRefSchema).optional(),
   examCategories: z.array(categoryRefSchema).optional(),

@@ -5,6 +5,7 @@ import {
   listFaqTypes,
   getActivePopup,
   listBanners,
+  listLiveBanners,
   listTestimonials,
   listSocialLinks,
   listSocialLinkTypes,
@@ -21,6 +22,7 @@ router.get("/faqs", listFaqs);
 router.get("/faq-types", listFaqTypes);
 router.get("/popup", getActivePopup);
 router.get("/banners", listBanners);
+router.get("/live-banners", listLiveBanners);
 router.get("/testimonials", listTestimonials);
 router.get("/social-links", listSocialLinks);
 router.get("/social-link-types", listSocialLinkTypes);

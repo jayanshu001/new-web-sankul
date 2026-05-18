@@ -11,15 +11,18 @@ export const guardSchema = z.enum(GUARDS);
 export const createPermissionSchema = z.object({
   name: z.string().min(1, "Name is required").max(255),
   guard: guardSchema,
+  category_id: objectIdSchema,
 });
 
 export const updatePermissionSchema = z.object({
   name: z.string().min(1).max(255).optional(),
   guard: guardSchema.optional(),
+  category_id: objectIdSchema.optional(),
 });
 
 export const listQuerySchema = z.object({
   guard: guardSchema.optional(),
+  category_id: objectIdSchema.optional(),
   search: z.string().trim().optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
   per_page: z.coerce.number().int().min(1).max(200).optional().default(20),

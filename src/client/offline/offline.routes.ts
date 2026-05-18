@@ -4,6 +4,8 @@ import {
   getOfflineDashboard,
   // listCities,            // moved to /api/v1/client/address/cities
   // listCentersByCity,     // moved to /api/v1/client/address/cities/:cityId/centers
+  listCenters,
+  listBatches,
   getCenterDetail,
   getBatchDetail,
   submitEnquiry,
@@ -16,6 +18,8 @@ router.get("/", getOfflineDashboard);
 // Cities + centers-by-city moved to the address module — see address.routes.ts
 // router.get("/cities", listCities);
 // router.get("/cities/:cityId/centers", listCentersByCity);
+router.get("/centers", listCenters);
+router.get("/batches", listBatches);
 router.get("/centers/:id", getCenterDetail);
 router.get("/batches/:id", getBatchDetail);
 

@@ -1,11 +1,11 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { PromoCode } from "../../models/course/PromoCode.model";
-import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { Customer } from "../../models/customer/Customer.model";
 import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
 import { applyPromocodeSchema } from "./promocode.validation";
+import { promoCovers, computePromoDiscount } from "./applies-to";
 
 const isObjectId = (v?: string | null) => !!v && mongoose.Types.ObjectId.isValid(v);
 
@@ -63,10 +63,21 @@ export const applyPromocode = async (req: Request, res: Response) => {
     const ebookId = parsed.ebook || null;
 
     const planFilter: any = { status: true };
-    if (isObjectId(packageId)) planFilter.packageId = packageId;
-    else if (isObjectId(courseId)) planFilter.courseId = courseId;
-    else if (isObjectId(ebookId)) planFilter.ebookId = ebookId;
-    else
+    let cartType: "package" | "course" | null = null;
+    let cartId: string | null = null;
+    if (isObjectId(packageId)) {
+      planFilter.packageId = packageId;
+      cartType = "package";
+      cartId = packageId!;
+    } else if (isObjectId(courseId)) {
+      planFilter.courseId = courseId;
+      cartType = "course";
+      cartId = courseId!;
+    } else if (isObjectId(ebookId)) {
+      planFilter.ebookId = ebookId;
+      // Ebooks are not part of the new appliesTo model — promocode path will
+      // reject, only the referral-code path can discount ebook plans.
+    } else
       return res.status(400).json({ success: false, message: "Invalid course selection!" });
 
     const pricingPlans: PlanDoc[] = (
@@ -133,51 +144,38 @@ export const applyPromocode = async (req: Request, res: Response) => {
       });
     }
 
-    // Promocode path
-    const promotedPlans = await PromotedPackageCourseEbook.find({ promocodeId: promo!._id })
-      .populate({ path: "planId", model: "PackageCourseEbookPrice" })
-      .lean();
-
-    const validPromoted = promotedPlans.filter((pp: any) => {
-      if (!pp.planId) return false;
-      if (packageId) return String(pp.planId.packageId) === String(packageId) && pp.planId.status;
-      if (courseId) return String(pp.planId.courseId) === String(courseId) && pp.planId.status;
-      if (ebookId) return String(pp.planId.ebookId) === String(ebookId) && pp.planId.status;
-      return false;
-    });
-
-    if (!validPromoted.length) {
+    // Promocode path — uses the new `appliesTo` model: promocode applies to a
+    // top-level entity (package / course / liveCourse). If the cart entity is
+    // not covered, reject. The single `discountType`/`discountValue` on the
+    // promocode is used as the discount for every plan of that entity.
+    if (!cartType || !cartId) {
       return res
         .status(404)
         .json({ success: false, message: "This promocode is not valid for this course!" });
     }
 
-    const promoDiscountType = (promo as any)!.discountType as "flat" | "percentage" | undefined;
-    const promoDiscountValue = Number((promo as any)!.discountValue ?? 0);
-    const usePromoLevelDiscount = !!promoDiscountType && promoDiscountValue > 0;
+    if (!promoCovers(promo!, { type: cartType, id: cartId })) {
+      return res
+        .status(404)
+        .json({ success: false, message: "This promocode is not valid for this course!" });
+    }
+
+    const promoDiscountType = promo!.discountType;
+    const promoDiscountValue = Number(promo!.discountValue ?? 0);
+    if (!(promoDiscountValue > 0)) {
+      return res
+        .status(400)
+        .json({ success: false, message: "This promocode has no discount configured." });
+    }
 
     pricingPlans.forEach((plan) => {
-      plan.offerAvailable = false;
       plan.orginalPrice = plan.price;
-      const match = validPromoted.find(
-        (pp: any) => String(pp.planId._id) === String(plan._id)
-      );
-      if (!match) return;
-
       plan.offerAvailable = true;
-      if (usePromoLevelDiscount) {
-        plan.discountType = promoDiscountType;
-        plan.discountValue = promoDiscountValue;
-        if (promoDiscountType === "percentage") {
-          plan.offerPercentage = promoDiscountValue;
-          plan.price = plan.price - Math.round((plan.price * promoDiscountValue) / 100);
-        } else {
-          plan.price = Math.max(0, plan.price - promoDiscountValue);
-        }
-      } else {
-        plan.offerPercentage = match.customerPercentage;
-        plan.price = plan.price - Math.round((plan.price * match.customerPercentage) / 100);
-      }
+      plan.discountType = promoDiscountType;
+      plan.discountValue = promoDiscountValue;
+      const discount = computePromoDiscount(promo!, plan.price);
+      if (promoDiscountType === "percentage") plan.offerPercentage = promoDiscountValue;
+      plan.price = Math.max(0, plan.price - discount);
     });
 
     const first = pricingPlans[0];

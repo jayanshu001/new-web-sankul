@@ -6,6 +6,7 @@ export interface IMaterialCategory extends Document {
   image?: string;
   parent: mongoose.Types.ObjectId | null;
   ancestors: mongoose.Types.ObjectId[];
+  childCategoryIds: mongoose.Types.ObjectId[];
   order: number;
   status: boolean;
   createdAt: Date;
@@ -19,6 +20,11 @@ const materialCategorySchema: Schema = new Schema(
     image: { type: String, default: null },
     parent: { type: Schema.Types.ObjectId, ref: "MaterialCategory", default: null },
     ancestors: [{ type: Schema.Types.ObjectId, ref: "MaterialCategory" }],
+    childCategoryIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "MaterialCategory" }],
+      default: [],
+      index: true,
+    },
     order: { type: Number, default: 0 },
     status: { type: Boolean, default: true },
   },

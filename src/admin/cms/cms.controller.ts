@@ -3,7 +3,8 @@ import mongoose, { Model } from "mongoose";
 import { FAQ } from "../../models/system/FAQ.model";
 import { FaqType } from "../../models/system/FaqType.model";
 import { PopupNotification } from "../../models/system/PopupNotification.model";
-import { BannerSlider } from "../../models/system/BannerSlider.model";
+import { BannerSlider, BANNER_KEY_TO_MODEL, BannerKey } from "../../models/system/BannerSlider.model";
+import { LiveBannerSlider } from "../../models/system/LiveBannerSlider.model";
 import { Testimonial } from "../../models/system/Testimonial.model";
 import { TermsAndConditions } from "../../models/system/TermsAndConditions.model";
 import { Version } from "../../models/system/Version.model";
@@ -19,6 +20,8 @@ import {
   popupUpdateSchema,
   bannerCreateSchema,
   bannerUpdateSchema,
+  liveBannerCreateSchema,
+  liveBannerUpdateSchema,
   testimonialCreateSchema,
   testimonialUpdateSchema,
   termsCreateSchema,
@@ -141,10 +144,35 @@ export const updatePopup = genericUpdate(PopupNotification, popupUpdateSchema, (
 export const deletePopup = genericDelete(PopupNotification);
 
 // ─── Banner ──
-export const listBanners = genericList(BannerSlider, { orderBy: 1 });
-export const getBanner = genericGet(BannerSlider);
-export const createBanner = genericCreate(BannerSlider, bannerCreateSchema);
-export const updateBanner = genericUpdate(BannerSlider, bannerUpdateSchema);
+const bannerTransform = (d: any) => {
+  if (d.key) d.keyRef = BANNER_KEY_TO_MODEL[d.key as BannerKey];
+  return d;
+};
+
+export const listBanners = async (_req: Request, res: Response) => {
+  try {
+    const data = await BannerSlider.find()
+      .sort({ orderBy: 1 })
+      .populate("keyId")
+      .lean();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const getBanner = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const doc = await BannerSlider.findById(id).populate("keyId").lean();
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const createBanner = genericCreate(BannerSlider, bannerCreateSchema, bannerTransform);
+export const updateBanner = genericUpdate(BannerSlider, bannerUpdateSchema, bannerTransform);
 export const deleteBanner = genericDelete(BannerSlider);
 
 export const reorderBanners = async (req: Request, res: Response) => {
@@ -158,6 +186,50 @@ export const reorderBanners = async (req: Request, res: Response) => {
     if (!ops.length) return res.status(400).json({ success: false, message: "No valid ids." });
     await BannerSlider.bulkWrite(ops);
     return res.status(200).json({ success: true, message: "Banner order updated." });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// ─── Live Banner ──
+export const listLiveBanners = async (_req: Request, res: Response) => {
+  try {
+    const data = await LiveBannerSlider.find()
+      .sort({ orderBy: 1 })
+      .populate("liveCourseId")
+      .lean();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const getLiveBanner = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const doc = await LiveBannerSlider.findById(id).populate("liveCourseId").lean();
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const createLiveBanner = genericCreate(LiveBannerSlider, liveBannerCreateSchema);
+export const updateLiveBanner = genericUpdate(LiveBannerSlider, liveBannerUpdateSchema);
+export const deleteLiveBanner = genericDelete(LiveBannerSlider);
+
+export const reorderLiveBanners = async (req: Request, res: Response) => {
+  try {
+    const { orders } = reorderSchema.parse(req.body);
+    const ops = orders
+      .filter((o) => isObjectId(o.id))
+      .map((o) => ({
+        updateOne: { filter: { _id: o.id }, update: { $set: { orderBy: o.orderBy } } },
+      }));
+    if (!ops.length) return res.status(400).json({ success: false, message: "No valid ids." });
+    await LiveBannerSlider.bulkWrite(ops);
+    return res.status(200).json({ success: true, message: "Live banner order updated." });
   } catch (e: any) {
     if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
     return res.status(500).json({ success: false, message: e.message });

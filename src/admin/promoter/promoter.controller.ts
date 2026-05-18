@@ -5,6 +5,7 @@ import { Promoter } from "../../models/promoter/Promoter.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { createPromoterSchema, updatePromoterSchema } from "./promoter.validation";
+import { buildPromoterOverview } from "../../promoter/dashboard/overview.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 const SALT_ROUNDS = 10;
@@ -174,6 +175,26 @@ export const getPromoterSubscriptions = async (req: Request, res: Response) => {
       .populate({ path: "courseId", select: "name" })
       .sort({ createdAt: -1 })
       .lean();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/admin/promoters/:id/dashboard?range=today|week|month|year|all
+// Admin view of a specific promoter's dashboard — same shape as the promoter's
+// self-view at /api/v1/promoter/dashboard/overview.
+export const getPromoterDashboard = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!isObjectId(id))
+      return res.status(400).json({ success: false, message: "Invalid promoter id." });
+
+    const exists = await Promoter.exists({ _id: id, isDelete: false });
+    if (!exists)
+      return res.status(404).json({ success: false, message: "Promoter not found." });
+
+    const data = await buildPromoterOverview(id, req.query.range as string);
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });

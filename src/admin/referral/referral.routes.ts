@@ -10,6 +10,7 @@ import {
   updateWithdrawalStatus,
   rejectWithdrawal,
   exportWithdrawalsCsv,
+  getWithdrawalsReport,
   adjustCustomerRewards,
   getReferrers,
 } from "./referral.controller";
@@ -45,7 +46,8 @@ router.get("/transactions", getTransactions);
 router.patch("/transactions/:id/status", updateWithdrawalStatus);
 router.post("/transactions/:id/reject", rejectWithdrawal);
 
-// Withdrawals CSV
+// Withdrawal Report (listing + CSV)
+router.get("/withdrawals", getWithdrawalsReport);
 router.get("/withdrawals/csv", exportWithdrawalsCsv);
 
 // Manual reward adjustment

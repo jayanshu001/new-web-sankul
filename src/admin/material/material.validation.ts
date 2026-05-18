@@ -2,6 +2,22 @@ import { z } from "zod";
 
 // ─── Category ─────────────────────────────────────────────────────────────────
 
+const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+const objectIdSchema = z.string().regex(objectIdRegex, "Invalid id");
+
+const childCategoryIdsSchema = z
+  .union([
+    z.array(objectIdSchema),
+    objectIdSchema.transform((v) => [v]),
+    z.string().transform((s) =>
+      s
+        .split(",")
+        .map((t) => t.trim())
+        .filter(Boolean)
+    ),
+  ])
+  .pipe(z.array(objectIdSchema));
+
 export const createMaterialCategorySchema = z.object({
   title: z.string().min(1).max(255),
   slug: z.string().max(255).optional(),
@@ -9,6 +25,7 @@ export const createMaterialCategorySchema = z.object({
   parent: z.string().nullable().optional(),
   order: z.coerce.number().int().optional(),
   status: z.coerce.boolean().optional(),
+  childCategoryIds: childCategoryIdsSchema.optional(),
 });
 
 export const updateMaterialCategorySchema = createMaterialCategorySchema.partial();

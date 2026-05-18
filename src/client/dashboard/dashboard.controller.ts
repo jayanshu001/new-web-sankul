@@ -48,7 +48,7 @@ export const getDashboard = async (req: Request, res: Response) => {
   try {
     const userId = req.user?.id;
     const [banners, recentPackages, courses, trending, testimonial, courseCategories, examCountdownsRaw, unreadNotifications] = await Promise.all([
-      BannerSlider.find().sort({ orderBy: 1 }).lean(),
+      BannerSlider.find().sort({ orderBy: 1 }).populate("keyId").lean(),
       Package.find({ active: true })
         .populate("packageTypeId", "_id name createdAt updatedAt")
         .sort({ createdAt: -1 })

@@ -24,7 +24,9 @@ async function authorizeRecorded(
   userId: string,
   videoId: string
 ): Promise<{ courseId: Types.ObjectId } | { error: string; status: number }> {
-  const video = await Video.findById(videoId).select("videoCategoryId status").lean();
+  const video = await Video.findById(videoId)
+    .select("videoCategoryId status priceType")
+    .lean();
   if (!video || !video.status) return { error: "Lecture not found.", status: 404 };
 
   const category = await VideoCategory.findById(video.videoCategoryId)
@@ -32,6 +34,12 @@ async function authorizeRecorded(
     .lean();
   if (!category?.courseId) {
     return { error: "This lecture is not attached to a course.", status: 400 };
+  }
+
+  // Free lectures don't require a subscription — any authenticated user can
+  // record audio notes on them.
+  if (video.priceType === "free") {
+    return { courseId: category.courseId as Types.ObjectId };
   }
 
   const sub = await PackageCourseSubscription.findOne({

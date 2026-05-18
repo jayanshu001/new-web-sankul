@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { Types } from "mongoose";
 import { LectureNote } from "../../models/customer/LectureNote.model";
+import { LectureAudioNote } from "../../models/customer/LectureAudioNote.model";
 import { Video } from "../../models/course/Video.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { LiveSession } from "../../models/course/LiveSession.model";
@@ -24,7 +25,9 @@ async function authorizeRecorded(
   userId: string,
   videoId: string
 ): Promise<{ courseId: Types.ObjectId } | { error: string; status: number }> {
-  const video = await Video.findById(videoId).select("videoCategoryId status").lean();
+  const video = await Video.findById(videoId)
+    .select("videoCategoryId status priceType")
+    .lean();
   if (!video || !video.status) return { error: "Lecture not found.", status: 404 };
 
   const category = await VideoCategory.findById(video.videoCategoryId)
@@ -32,6 +35,12 @@ async function authorizeRecorded(
     .lean();
   if (!category?.courseId) {
     return { error: "This lecture is not attached to a course.", status: 400 };
+  }
+
+  // Free lectures don't require a subscription — any authenticated user can
+  // take notes on them.
+  if (video.priceType === "free") {
+    return { courseId: category.courseId as Types.ObjectId };
   }
 
   const sub = await PackageCourseSubscription.findOne({
@@ -153,6 +162,114 @@ export const listNotes = async (req: Request, res: Response) => {
     return success(res, { notes }, "Notes fetched.", 200);
   } catch (err) {
     logger.error("listNotes failed", { userId, error: getErrorMessage(err) });
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+// GET /api/v1/client/lecture-notes/saved-materials
+// Grouped "Saved Materials" listing — one row per **lecture** (the actual
+// video or live session the notes were taken on), showing that lecture's
+// title and the customer's note counts for it. Combines:
+//   - recorded notes  → grouped by `videoId`       (lecture: Video)
+//   - live notes      → grouped by `liveSessionId` (lecture: LiveSession)
+// Each row is tagged with `kind` so the client can deep-link to the right
+// player.
+export const listSavedMaterialNotes = async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  try {
+    if (!userId) return failure(res, "Unauthorized.", 401);
+
+    const customerId = new Types.ObjectId(userId);
+
+    type Bucket = { textNotesCount: number; voiceNotesCount: number; lastNoteAt: Date };
+    const recorded = new Map<string, Bucket>();
+    const live = new Map<string, Bucket>();
+
+    const bump = (
+      map: Map<string, Bucket>,
+      key: string,
+      field: "textNotesCount" | "voiceNotesCount",
+      count: number,
+      at: Date
+    ) => {
+      const existing = map.get(key);
+      if (existing) {
+        existing[field] += count;
+        if (at > existing.lastNoteAt) existing.lastNoteAt = at;
+      } else {
+        map.set(key, {
+          textNotesCount: field === "textNotesCount" ? count : 0,
+          voiceNotesCount: field === "voiceNotesCount" ? count : 0,
+          lastNoteAt: at,
+        });
+      }
+    };
+
+    type AggRow = { _id: Types.ObjectId; count: number; lastNoteAt: Date };
+
+    // Recorded — group by videoId (the lecture itself).
+    const recordedTextAgg = await LectureNote.aggregate<AggRow>([
+      { $match: { customerId, lectureType: "recorded", videoId: { $ne: null } } },
+      { $group: { _id: "$videoId", count: { $sum: 1 }, lastNoteAt: { $max: "$updatedAt" } } },
+    ]);
+    const recordedVoiceAgg = await LectureAudioNote.aggregate<AggRow>([
+      { $match: { customerId, lectureType: "recorded", videoId: { $ne: null } } },
+      { $group: { _id: "$videoId", count: { $sum: 1 }, lastNoteAt: { $max: "$updatedAt" } } },
+    ]);
+    for (const r of recordedTextAgg) bump(recorded, String(r._id), "textNotesCount", r.count, r.lastNoteAt);
+    for (const r of recordedVoiceAgg) bump(recorded, String(r._id), "voiceNotesCount", r.count, r.lastNoteAt);
+
+    // Live — group by liveSessionId (the session itself).
+    const liveTextAgg = await LectureNote.aggregate<AggRow>([
+      { $match: { customerId, lectureType: "live", liveSessionId: { $ne: null } } },
+      { $group: { _id: "$liveSessionId", count: { $sum: 1 }, lastNoteAt: { $max: "$updatedAt" } } },
+    ]);
+    const liveVoiceAgg = await LectureAudioNote.aggregate<AggRow>([
+      { $match: { customerId, lectureType: "live", liveSessionId: { $ne: null } } },
+      { $group: { _id: "$liveSessionId", count: { $sum: 1 }, lastNoteAt: { $max: "$updatedAt" } } },
+    ]);
+    for (const r of liveTextAgg) bump(live, String(r._id), "textNotesCount", r.count, r.lastNoteAt);
+    for (const r of liveVoiceAgg) bump(live, String(r._id), "voiceNotesCount", r.count, r.lastNoteAt);
+
+    const videoDocs = await Video.find({
+      _id: { $in: Array.from(recorded.keys()).map((id) => new Types.ObjectId(id)) },
+    })
+      .select("title")
+      .lean();
+    const liveSessionDocs = await LiveSession.find({
+      _id: { $in: Array.from(live.keys()).map((id) => new Types.ObjectId(id)) },
+    })
+      .select("title")
+      .lean();
+    const videoTitle = new Map(videoDocs.map((v) => [String(v._id), v.title]));
+    const liveSessionTitle = new Map(liveSessionDocs.map((s) => [String(s._id), s.title]));
+
+    const items = [
+      ...Array.from(recorded.entries()).map(([id, b]) => ({
+        kind: "recorded" as const,
+        videoId: id,
+        liveSessionId: null as string | null,
+        title: videoTitle.get(id) ?? null,
+        textNotesCount: b.textNotesCount,
+        voiceNotesCount: b.voiceNotesCount,
+        lastNoteAt: b.lastNoteAt,
+      })),
+      ...Array.from(live.entries()).map(([id, b]) => ({
+        kind: "live" as const,
+        videoId: null as string | null,
+        liveSessionId: id,
+        title: liveSessionTitle.get(id) ?? null,
+        textNotesCount: b.textNotesCount,
+        voiceNotesCount: b.voiceNotesCount,
+        lastNoteAt: b.lastNoteAt,
+      })),
+    ]
+      .filter((row) => row.title !== null && row.title !== "")
+      .sort((a, b) => b.lastNoteAt.getTime() - a.lastNoteAt.getTime());
+
+    return success(res, { items }, "Saved materials fetched.", 200);
+  } catch (err) {
+    logger.error("listSavedMaterialNotes failed", { userId, error: getErrorMessage(err) });
     return failure(res, getErrorMessage(err), 500);
   }
 };

@@ -23,11 +23,13 @@ const toItem = (c: any) => ({
   slug: c.slug,
   order: c.order_by,
   image: c.image,
-  child_category: c.childCategoryId
-    ? typeof c.childCategoryId === "object"
-      ? { id: c.childCategoryId._id, name: c.childCategoryId.title }
-      : c.childCategoryId
-    : null,
+  child_categories: Array.isArray(c.childCategoryIds)
+    ? c.childCategoryIds.map((cc: any) =>
+        cc && typeof cc === "object" && cc._id
+          ? { id: cc._id, name: cc.title }
+          : { id: cc, name: null }
+      )
+    : [],
   educator: c.educatorId
     ? typeof c.educatorId === "object"
       ? { id: c.educatorId._id, name: c.educatorId.name }
@@ -61,14 +63,14 @@ export const listVideoCategories = async (req: Request, res: Response) => {
     }
     if (status === "true" || status === "false") filter.status = status === "true";
     if (educatorId) filter.educatorId = educatorId;
-    if (childCategoryId) filter.childCategoryId = childCategoryId;
+    if (childCategoryId) filter.childCategoryIds = childCategoryId;
 
     const sort: any = { [sortFieldMap[sort_by]]: sort_dir === "asc" ? 1 : -1 };
     const skip = (page - 1) * per_page;
 
     const [items, total] = await Promise.all([
       VideoCategory.find(filter)
-        .populate("childCategoryId", "_id title")
+        .populate("childCategoryIds", "_id title")
         .populate("educatorId", "_id name")
         .sort(sort)
         .skip(skip)
@@ -113,7 +115,7 @@ export const getVideoCategory = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
     }
     const cat = await VideoCategory.findById(id)
-      .populate("childCategoryId", "_id title")
+      .populate("childCategoryIds", "_id title")
       .populate("educatorId", "_id name")
       .lean();
     if (!cat) return res.status(404).json({ success: false, message: "Video Category not found" });
@@ -156,9 +158,14 @@ export const createVideoCategory = async (req: Request, res: Response) => {
       const ok = await CourseEducator.exists({ _id: data.educatorId });
       if (!ok) return res.status(422).json({ success: false, message: "Invalid educatorId" });
     }
-    if (data.childCategoryId) {
-      const ok = await VideoCategory.exists({ _id: data.childCategoryId });
-      if (!ok) return res.status(422).json({ success: false, message: "Invalid childCategoryId" });
+    const uniqueChildIds = Array.from(new Set((data.childCategoryIds ?? []).map(String)));
+    if (uniqueChildIds.length) {
+      const count = await VideoCategory.countDocuments({ _id: { $in: uniqueChildIds } });
+      if (count !== uniqueChildIds.length) {
+        return res
+          .status(422)
+          .json({ success: false, message: "One or more childCategoryIds are invalid" });
+      }
     }
 
     const created = await VideoCategory.create({
@@ -167,12 +174,12 @@ export const createVideoCategory = async (req: Request, res: Response) => {
       image: data.image,
       order_by: data.order,
       status: data.status,
-      childCategoryId: data.childCategoryId ?? null,
+      childCategoryIds: uniqueChildIds,
       educatorId: data.educatorId ?? null,
     });
 
     const populated = await VideoCategory.findById(created._id)
-      .populate("childCategoryId", "_id title")
+      .populate("childCategoryIds", "_id title")
       .populate("educatorId", "_id name")
       .lean();
 
@@ -214,14 +221,22 @@ export const updateVideoCategory = async (req: Request, res: Response) => {
       const dupe = await VideoCategory.exists({ slug: data.slug, _id: { $ne: id } });
       if (dupe) return res.status(409).json({ success: false, message: "Slug already exists" });
     }
-    if (data.childCategoryId) {
-      if (String(data.childCategoryId) === String(id)) {
+    let nextChildIds: string[] | undefined;
+    if (data.childCategoryIds !== undefined) {
+      nextChildIds = Array.from(new Set(data.childCategoryIds.map(String)));
+      if (nextChildIds.includes(String(id))) {
         return res
           .status(422)
-          .json({ success: false, message: "childCategoryId cannot be itself" });
+          .json({ success: false, message: "childCategoryIds cannot include the category itself" });
       }
-      const ok = await VideoCategory.exists({ _id: data.childCategoryId });
-      if (!ok) return res.status(422).json({ success: false, message: "Invalid childCategoryId" });
+      if (nextChildIds.length) {
+        const count = await VideoCategory.countDocuments({ _id: { $in: nextChildIds } });
+        if (count !== nextChildIds.length) {
+          return res
+            .status(422)
+            .json({ success: false, message: "One or more childCategoryIds are invalid" });
+        }
+      }
     }
     if (data.educatorId) {
       const ok = await CourseEducator.exists({ _id: data.educatorId });
@@ -232,7 +247,7 @@ export const updateVideoCategory = async (req: Request, res: Response) => {
     if (data.slug !== undefined) cat.slug = data.slug;
     if (data.order !== undefined) cat.order_by = data.order;
     if (data.status !== undefined) cat.status = data.status;
-    if (data.childCategoryId !== undefined) cat.childCategoryId = (data.childCategoryId ?? null) as any;
+    if (nextChildIds !== undefined) cat.childCategoryIds = nextChildIds as any;
     if (data.educatorId !== undefined) cat.educatorId = (data.educatorId ?? null) as any;
     if (data.image !== undefined && data.image) {
       if (cat.image && cat.image !== data.image) {
@@ -244,7 +259,7 @@ export const updateVideoCategory = async (req: Request, res: Response) => {
     await cat.save();
 
     const populated = await VideoCategory.findById(cat._id)
-      .populate("childCategoryId", "_id title")
+      .populate("childCategoryIds", "_id title")
       .populate("educatorId", "_id name")
       .lean();
 
@@ -268,7 +283,7 @@ export const deleteVideoCategory = async (req: Request, res: Response) => {
 
     const [videoInUse, parentInUse] = await Promise.all([
       Video.exists({ videoCategoryId: id }),
-      VideoCategory.exists({ childCategoryId: id }),
+      VideoCategory.exists({ childCategoryIds: id }),
     ]);
     if (videoInUse || parentInUse) {
       return res.status(409).json({
@@ -345,33 +360,31 @@ export const duplicateVideoCategory = async (req: Request, res: Response) => {
     const counts = { subCategories: 0, videos: 0 };
 
     await session.withTransaction(async () => {
-      // Walk the childCategoryId chain to collect the subtree (linked list).
-      const chain: any[] = [source];
-      const seen = new Set<string>([String(source._id)]);
-      let cursor: any = source;
-      while (cursor.childCategoryId) {
-        const childId = String(cursor.childCategoryId);
-        if (seen.has(childId)) break; // guard against cycles
-        const next = await VideoCategory.findById(childId).session(session).lean();
-        if (!next) break;
-        chain.push(next);
-        seen.add(childId);
-        cursor = next;
+      // BFS the DAG of childCategoryIds, collecting every node once.
+      const nodesById = new Map<string, any>();
+      nodesById.set(String(source._id), source);
+      const queue: any[] = [source];
+      while (queue.length) {
+        const cur = queue.shift();
+        const childIds: string[] = (cur.childCategoryIds || []).map((x: any) => String(x));
+        for (const cid of childIds) {
+          if (nodesById.has(cid)) continue;
+          const next = await VideoCategory.findById(cid).session(session).lean();
+          if (!next) continue;
+          nodesById.set(cid, next);
+          queue.push(next);
+        }
       }
 
-      // Create clones bottom-up so each parent can reference its already-created child.
       rootTitle = await nextAvailableUnassignedTitle(source.title);
       const idMap = new Map<string, mongoose.Types.ObjectId>();
 
-      for (let i = chain.length - 1; i >= 0; i--) {
-        const node = chain[i];
-        const isRoot = i === 0;
+      // Pass 1: create clones without children (so all ids exist for rewiring).
+      for (const [oldId, node] of nodesById) {
+        const isRoot = oldId === String(source._id);
         const title = isRoot ? rootTitle : node.title;
         const slugBase = slugify(title);
         const slug = await uniqueSlug(slugBase, session);
-        const nextOldId = node.childCategoryId ? String(node.childCategoryId) : null;
-        const newChildId = nextOldId ? idMap.get(nextOldId) ?? null : null;
-
         const [doc] = await VideoCategory.create(
           [
             {
@@ -380,7 +393,7 @@ export const duplicateVideoCategory = async (req: Request, res: Response) => {
               image: node.image,
               courseId: null,
               liveCourseId: null,
-              childCategoryId: newChildId,
+              childCategoryIds: [],
               educatorId: null,
               order_by: node.order_by ?? 0,
               status: node.status ?? true,
@@ -388,13 +401,28 @@ export const duplicateVideoCategory = async (req: Request, res: Response) => {
           ],
           { session }
         );
-        idMap.set(String(node._id), doc._id as mongoose.Types.ObjectId);
+        idMap.set(oldId, doc._id as mongoose.Types.ObjectId);
         if (isRoot) rootId = doc._id as mongoose.Types.ObjectId;
         else counts.subCategories += 1;
       }
 
+      // Pass 2: rewire each clone's childCategoryIds to the new ids.
+      for (const [oldId, node] of nodesById) {
+        const newId = idMap.get(oldId)!;
+        const newChildIds = (node.childCategoryIds || [])
+          .map((c: any) => idMap.get(String(c)))
+          .filter(Boolean);
+        if (newChildIds.length) {
+          await VideoCategory.updateOne(
+            { _id: newId },
+            { $set: { childCategoryIds: newChildIds } },
+            { session }
+          );
+        }
+      }
+
       // Clone videos across all mapped categories.
-      const oldIds = chain.map((c) => c._id);
+      const oldIds = Array.from(nodesById.values()).map((c) => c._id);
       const videos = await Video.find({ videoCategoryId: { $in: oldIds } })
         .session(session)
         .lean();

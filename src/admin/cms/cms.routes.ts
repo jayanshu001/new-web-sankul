@@ -6,6 +6,7 @@ import {
   listFaqTypes, getFaqType, createFaqType, updateFaqType, deleteFaqType,
   listPopups, getPopup, createPopup, updatePopup, deletePopup,
   listBanners, getBanner, createBanner, updateBanner, deleteBanner, reorderBanners,
+  listLiveBanners, getLiveBanner, createLiveBanner, updateLiveBanner, deleteLiveBanner, reorderLiveBanners,
   listTestimonials, getTestimonial, createTestimonial, updateTestimonial, deleteTestimonial,
   listSocialLinkTypes, getSocialLinkType, createSocialLinkType, updateSocialLinkType, deleteSocialLinkType,
   listSocialLinks, getSocialLink, createSocialLink, updateSocialLink, deleteSocialLink,
@@ -28,7 +29,6 @@ const coercePopup = (req: Request, _res: Response, next: NextFunction) => {
 };
 
 const coerceBanner = (req: Request, _res: Response, next: NextFunction) => {
-  if (typeof req.body.keyId === "string") req.body.keyId = Number(req.body.keyId);
   if (typeof req.body.orderBy === "string") req.body.orderBy = Number(req.body.orderBy);
   next();
 };
@@ -75,6 +75,14 @@ router.post("/banners/reorder", reorderBanners);
 router.get("/banners/:id", getBanner);
 router.put("/banners/:id", uploadS3.single("image"), attachImage, coerceBanner, updateBanner);
 router.delete("/banners/:id", deleteBanner);
+
+// Live Banner — same flow as Banner, but `key` is implicit (always LiveCourse).
+router.get("/live-banners", listLiveBanners);
+router.post("/live-banners", uploadS3.single("image"), attachImage, coerceBanner, createLiveBanner);
+router.post("/live-banners/reorder", reorderLiveBanners);
+router.get("/live-banners/:id", getLiveBanner);
+router.put("/live-banners/:id", uploadS3.single("image"), attachImage, coerceBanner, updateLiveBanner);
+router.delete("/live-banners/:id", deleteLiveBanner);
 
 // Testimonials
 router.get("/testimonials", listTestimonials);

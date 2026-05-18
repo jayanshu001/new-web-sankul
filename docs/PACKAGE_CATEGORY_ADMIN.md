@@ -2,34 +2,17 @@
 
 Backend reference: `src/admin/master/packageCategory.controller.ts`, mounted at `/api/v1/admin/master/package-categories`.
 
-Mirrors the existing **Subject Categories** master (`/api/v1/admin/master/subject-categories`) exactly. The only structural difference: each Package Category is linked to a **parent Package** chosen from the Packages listing (`/api/v1/admin/packages`).
+Mirrors the existing **Subject Categories** master (`/api/v1/admin/master/subject-categories`) one-for-one. The link to Packages is **one-sided**, exactly like Course → SubjectCategory:
+
+- **PackageCategory** is standalone master data (title, slug, image, order, status).
+- **Package** stores the link via a new `packageCategoryId` field.
+- Updates flow only from Package → PackageCategory. The category never stores a list of its packages.
 
 ---
 
-## 1. Mental Model
+## 1. Endpoints — Package Categories
 
-- A **Package Category** is a master-data row that groups related items under one Package.
-- Parent is a single Package `_id` (picked from [/api/v1/admin/packages](http://localhost:4001/api/v1/admin/packages?limit=100&sortBy=updatedAt&sortOrder=desc)).
-- Same CRUD shape, same image upload (S3, multipart `image` field), same `order` + `status` toggles as Subject Categories.
-- Collection: `ws_package_categories`. Indexed on `{ packageId, status, order }`.
-
----
-
-## 2. Auth
-
-All four endpoints require:
-
-```
-Authorization: Bearer <admin token>
-```
-
-Roles: `admin` or `super_admin` (inherited from the master router).
-
----
-
-## 3. Endpoints
-
-Base URL: `/api/v1/admin/master/package-categories`
+Base URL: `/api/v1/admin/master/package-categories`. Auth: `Bearer <admin token>` (roles `admin` / `super_admin`).
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -38,11 +21,10 @@ Base URL: `/api/v1/admin/master/package-categories`
 | PUT | `/:id` | Update a package category |
 | DELETE | `/:id` | Delete a package category |
 
-### 3.1 List
+### 1.1 List
 
 ```
 GET /api/v1/admin/master/package-categories
-Authorization: Bearer <admin token>
 ```
 
 **200 OK**
@@ -52,14 +34,9 @@ Authorization: Bearer <admin token>
   "data": [
     {
       "_id": "67f3...",
-      "title": "UPSC Prelims Pack",
-      "slug": "upsc-prelims-pack",
-      "image": "https://cdn.../pkg-cat.png",
-      "packageId": {
-        "_id": "664a...",
-        "name": "UPSC 2026 Foundation",
-        "image": "https://cdn.../pkg.png"
-      },
+      "title": "NEET",
+      "slug": "neet",
+      "image": "https://cdn.../neet.png",
       "order": 0,
       "status": true,
       "createdAt": "2026-05-16T10:00:00.000Z",
@@ -69,77 +46,94 @@ Authorization: Bearer <admin token>
 }
 ```
 
-> The admin UI's listing URL form (`?limit=100&sortBy=updatedAt&sortOrder=desc`) is accepted; the backend currently returns the full list ordered by `order` asc — same as Subject Categories. If pagination/sort is needed, the admin should sort/filter client-side just as it does for `subject-categories`.
-
-### 3.2 Create
+### 1.2 Create
 
 ```
 POST /api/v1/admin/master/package-categories
-Authorization: Bearer <admin token>
 Content-Type: multipart/form-data
 ```
 
-**Form fields**
 | Field | Type | Required | Notes |
 |---|---|---|---|
 | `title` | string | ✔ | |
-| `slug` | string | ✔ | Must be globally unique |
-| `image` | file | ✔* | Multipart file under field name `image` (uploaded to S3). *Either a file OR an `image` string URL must be present. |
-| `packageId` | ObjectId string | ✔ | One Package `_id` from `/api/v1/admin/packages` |
+| `slug` | string | ✔ | Globally unique |
+| `image` | file or URL | ✔ | Multipart file under field name `image`, or a string URL |
 | `order` | number | – | Default `0` |
-| `status` | boolean | – | Default `true`. Accepts `"true"`/`"false"` strings from form-data |
+| `status` | boolean | – | Default `true`. Accepts `"true"`/`"false"` from form-data |
 
-**201 Created**
-```json
-{ "success": true, "data": { "_id": "...", "title": "...", "packageId": "664a...", ... } }
-```
+**201 Created** → `{ success: true, data: { ... } }`
 
-### 3.3 Update
+### 1.3 Update
 
 ```
 PUT /api/v1/admin/master/package-categories/:id
-Authorization: Bearer <admin token>
 Content-Type: multipart/form-data
 ```
 
-All fields are optional (PATCH-style merge). Uploading a new `image` file replaces the old URL.
+All fields optional (PATCH-style). Uploading a new `image` file replaces the URL.
 
-**200 OK**
-```json
-{ "success": true, "data": { /* updated row */ } }
-```
-
-### 3.4 Delete
+### 1.4 Delete
 
 ```
 DELETE /api/v1/admin/master/package-categories/:id
-Authorization: Bearer <admin token>
 ```
 
-**200 OK**
-```json
-{ "success": true, "message": "Category deleted successfully" }
-```
+**200 OK** → `{ success: true, message: "Category deleted successfully" }`
 
 ---
 
-## 4. Error Responses
+## 2. Linking a Package to a Package Category
+
+This is where the actual relation gets set — on the **Package** side, not on the category.
+
+### 2.1 Field added to Package
+
+`Package.packageCategoryId: ObjectId | null` (default `null`). One package belongs to at most one package category.
+
+### 2.2 Create / Update Package
+
+Existing endpoints (no path change):
+
+```
+POST /api/v1/admin/packages
+PUT  /api/v1/admin/packages/:id
+```
+
+Just add `packageCategoryId` to the payload:
+
+```json
+{
+  "name": "NEET 2026 Full Course",
+  "description": "...",
+  "packageCategoryId": "67f3..."
+}
+```
+
+- Send `null` (or an empty string) to detach the package from any category.
+- Send a valid PackageCategory `_id` to attach.
+- Validation mirrors `examCountdownCategoryId`: invalid ObjectId → `400 { success: false, message: "Invalid packageCategoryId." }`.
+
+### 2.3 Read Package
+
+`GET /api/v1/admin/packages/:id` now populates `packageCategoryId` to `{ _id, title, slug, image }` (same shape Course uses for its `courseSubjectCategoryId` populate).
+
+---
+
+## 3. UI Wiring Cheat-sheet
+
+1. **Package Categories listing page** — identical to Subject Categories. Columns: image, title, slug, order, status, actions.
+2. **Package Category create/edit drawer** — identical to Subject Categories drawer **minus** the (unused) Parent dropdown. Fields: title, slug, image, order, status.
+3. **Package create/edit form** — add a "Package Category" dropdown populated from `GET /api/v1/admin/master/package-categories`, bound to `packageCategoryId`. Allow "None" to send `null`.
+
+---
+
+## 4. Error Responses (Package Category endpoints)
 
 | Status | When | Body |
 |---|---|---|
 | 400 | Invalid `:id` ObjectId | `{ success: false, message: "Invalid Package Category ID" }` |
-| 400 | Validation failure | `{ success: false, errors: [ ...zod issues ] }` |
+| 400 | Zod validation failed | `{ success: false, errors: [ ...issues ] }` |
 | 401 | Missing / invalid Bearer | standard auth error |
 | 403 | Caller not admin/super_admin | standard role error |
-| 404 | Parent Package not found | `{ success: false, message: "Parent package not found" }` |
-| 404 | Row not found (update/delete) | `{ success: false, message: "Category not found" }` |
-| 500 | Other | `{ success: false, message: "<reason>" }` |
-
----
-
-## 5. UI Wiring Cheat-sheet
-
-1. **Listing page**: GET the endpoint above, render columns: image, title, slug, `packageId.name`, order, status, actions.
-2. **Create / Edit drawer**: identical to Subject Categories — add one extra field: a Package dropdown populated from `/api/v1/admin/packages?limit=100&sortBy=updatedAt&sortOrder=desc`, bound to `packageId`.
-3. **Image upload**: send as multipart `image`. The server returns the resolved S3 URL inside `data.image`.
-4. **Slug**: enforce uniqueness on submit by surfacing the 500 from the unique index (or pre-check via list).
+| 404 | Row not found | `{ success: false, message: "Category not found" }` |
+| 500 | Other (e.g. duplicate slug) | `{ success: false, message: "<reason>" }` |

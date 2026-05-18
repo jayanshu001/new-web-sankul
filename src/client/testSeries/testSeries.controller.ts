@@ -287,7 +287,10 @@ export const previewCheckout = async (req: Request, res: Response) => {
     let promocodeId: string | null = null;
     let promoMeta: any = null;
     if (body.promocode) {
-      const { result, error } = await resolveLivePromo(body.promocode, plan.price);
+      const { result, error } = await resolveLivePromo(body.promocode, plan.price, {
+        type: "liveCourse",
+        id: String(plan.testSeriesId),
+      });
       if (error || !result) return failure(res, error ?? "Invalid promo code.", 400);
       discountAmount = result.discountAmount;
       promocodeId = String(result.promo._id);

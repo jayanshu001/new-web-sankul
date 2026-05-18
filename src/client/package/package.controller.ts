@@ -5,28 +5,22 @@ import { PackageType } from "../../models/course/PackageType.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { PackageChat } from "../../models/course/PackageChat.model";
-import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
-import { MaterialCategory } from "../../models/course/MaterialCategory.model";
-import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { Video } from "../../models/course/Video.model";
 import { Material } from "../../models/course/Material.model";
 import { Exam } from "../../models/exam/Exam.model";
-import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
+import { PromoCode } from "../../models/course/PromoCode.model";
 import { Goal } from "../../models/Goal.model";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async function buildVideoCategoryGroup(cat: any) {
   if (!cat) return null;
-  const [count, childCount] = await Promise.all([
-    Video.countDocuments({ videoCategoryId: cat._id, status: true }),
-    VideoCategoryRelation.countDocuments({ parent: cat._id }),
-  ]);
+  const count = await Video.countDocuments({ videoCategoryId: cat._id, status: true });
   return {
     category: {
       ...cat,
       title: cat.title,
-      havingChildDirectory: childCount > 0,
+      havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
       count,
     },
   };
@@ -34,15 +28,12 @@ async function buildVideoCategoryGroup(cat: any) {
 
 async function buildMaterialCategoryGroup(cat: any) {
   if (!cat) return null;
-  const [count, childCount] = await Promise.all([
-    Material.countDocuments({ materialCategoryId: cat._id, status: true }),
-    MaterialCategory.countDocuments({ parent: cat._id, status: true }),
-  ]);
+  const count = await Material.countDocuments({ materialCategoryId: cat._id, status: true });
   return {
     category: {
       ...cat,
       title: cat.title,
-      havingChildDirectory: childCount > 0,
+      havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
       count,
     },
   };
@@ -50,15 +41,12 @@ async function buildMaterialCategoryGroup(cat: any) {
 
 async function buildExamCategoryEntry(cat: any) {
   if (!cat) return null;
-  const [count, childCount] = await Promise.all([
-    Exam.countDocuments({ categoryId: cat._id }),
-    ExamCategory.countDocuments({ parentId: cat._id, status: true }),
-  ]);
+  const count = await Exam.countDocuments({ categoryId: cat._id });
   return {
     category: {
       ...cat,
       title: cat.name,
-      havingChildDirectory: childCount > 0,
+      havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
       count,
     },
   };
@@ -68,7 +56,6 @@ async function buildPackageDetail(packageId: string, customerId?: string) {
   const pkg = await Package.findOne({ _id: packageId, active: true })
     .populate("packageTypeId", "_id name")
     .populate("goalId", "_id title")
-    .populate("pcMaterialId", "_id title")
     .populate({ path: "specificSubjects.category", model: "VideoCategory" })
     .populate({ path: "materialCategories.category", model: "MaterialCategory" })
     .populate({ path: "examCategories.category", model: "ExamCategory" })
@@ -97,28 +84,23 @@ async function buildPackageDetail(packageId: string, customerId?: string) {
     withoutMaterial: plans.filter((p) => !p.withMaterial),
   };
 
-  // Available promo codes for this package's plans
-  const planIds = plans.map((p) => p._id);
+  // Available public promo codes that target this package directly.
   const now = new Date();
-  const promoted = await PromotedPackageCourseEbook.find({ planId: { $in: planIds } })
-    .populate("promocodeId")
+  const codes = await PromoCode.find({
+    type: "public",
+    status: true,
+    promo_start_at: { $lte: now },
+    promo_expire_at: { $gte: now },
+    "appliesTo.type": "package",
+    "appliesTo.ids": pkg._id,
+  })
+    .select("promocode title description")
     .lean();
-  const availablePromoCode: any[] = [];
-  const seen = new Set<string>();
-  for (const promo of promoted) {
-    const code = promo.promocodeId as any;
-    if (!code || code.type !== "public" || code.status === false) continue;
-    if (code.promo_start_at && code.promo_start_at > now) continue;
-    if (code.promo_expire_at && code.promo_expire_at < now) continue;
-    const key = code.promocode ?? code._id.toString();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    availablePromoCode.push({
-      title: code.title ?? "",
-      promocode: code.promocode,
-      description: code.description ?? "",
-    });
-  }
+  const availablePromoCode: any[] = codes.map((c: any) => ({
+    title: c.title ?? "",
+    promocode: c.promocode,
+    description: c.description ?? "",
+  }));
 
   const isPurchased = customerId
     ? await hasActiveSubscription(customerId, String(pkg._id))
@@ -135,7 +117,6 @@ async function buildPackageDetail(packageId: string, customerId?: string) {
       withoutMaterialText: pkg.withoutMaterialText,
       packageType: pkg.packageTypeId,
       goal: pkg.goalId,
-      pcMaterial: pkg.pcMaterialId,
       isPaid: pkg.isPaid,
       isPurchased,
     },

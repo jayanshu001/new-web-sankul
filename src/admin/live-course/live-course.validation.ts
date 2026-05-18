@@ -18,6 +18,7 @@ export const createLiveCourseSchema = z
     isPopular:     z.boolean().optional(),
     courseEducatorId:        objectId.optional(),
     courseSubjectCategoryId: objectId.optional(),
+    liveCourseCategoryId:    objectId.optional(),
   })
   .strict();
 

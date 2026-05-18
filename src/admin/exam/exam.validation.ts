@@ -7,6 +7,7 @@ export const createCategorySchema = z.object({
   name: z.string().min(1).max(255),
   image: z.string().max(500).optional(),
   parentId: z.string().nullable().optional(),
+  childCategoryIds: z.array(z.string()).optional(),
   orderBy: z.coerce.number().int().optional(),
   status: z.coerce.boolean().optional(),
 });

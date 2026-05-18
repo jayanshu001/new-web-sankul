@@ -111,6 +111,51 @@ export const listCentersByCity = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/client/offline/centers
+export const listCenters = async (req: Request, res: Response) => {
+  try {
+    const { cityId, search } = req.query as Record<string, string>;
+    const filter: any = { status: true };
+    if (cityId && isObjectId(cityId)) filter.cityId = cityId;
+    if (search && search.trim()) filter.name = { $regex: search.trim(), $options: "i" };
+    const data = await OfflineCenter.find(filter)
+      .populate({ path: "cityId", model: OfflineCity, select: "_id name" })
+      .sort({ createdAt: -1 })
+      .lean();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/client/offline/batches
+export const listBatches = async (req: Request, res: Response) => {
+  try {
+    const { centerId, cityId, upcoming, search } = req.query as Record<string, string>;
+    const filter: any = { status: true };
+    if (centerId && isObjectId(centerId)) filter.centerId = centerId;
+    if (search && search.trim()) filter.name = { $regex: search.trim(), $options: "i" };
+    if (upcoming === "true") filter.startAt = { $gt: new Date() };
+
+    if (!centerId && cityId && isObjectId(cityId)) {
+      const centerIds = await OfflineCenter.find({ cityId, status: true }).distinct("_id");
+      filter.centerId = { $in: centerIds };
+    }
+
+    const data = await OfflineBatch.find(filter)
+      .populate({
+        path: "centerId",
+        model: OfflineCenter,
+        populate: { path: "cityId", model: OfflineCity, select: "_id name" },
+      })
+      .sort({ startAt: 1 })
+      .lean();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
 // GET /api/v1/client/offline/centers/:id
 export const getCenterDetail = async (req: Request, res: Response) => {
   try {

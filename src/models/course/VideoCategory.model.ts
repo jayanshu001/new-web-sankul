@@ -6,7 +6,7 @@ export interface IVideoCategory extends Document {
   image: string;
   courseId?: mongoose.Types.ObjectId;
   liveCourseId?: mongoose.Types.ObjectId;
-  childCategoryId?: mongoose.Types.ObjectId;
+  childCategoryIds: mongoose.Types.ObjectId[];
   educatorId?: mongoose.Types.ObjectId;
   order_by: number;
   status: boolean;
@@ -21,7 +21,11 @@ const videoCategorySchema: Schema = new Schema(
     image: { type: String, required: true },
     courseId: { type: Schema.Types.ObjectId, ref: "Course", default: null, index: true },
     liveCourseId: { type: Schema.Types.ObjectId, ref: "LiveCourse", default: null, index: true },
-    childCategoryId: { type: Schema.Types.ObjectId, ref: "VideoCategory", default: null },
+    childCategoryIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "VideoCategory" }],
+      default: [],
+      index: true,
+    },
     educatorId: { type: Schema.Types.ObjectId, ref: "CourseEducator", default: null },
     order_by: { type: Number, default: 0 },
     status: { type: Boolean, default: true },

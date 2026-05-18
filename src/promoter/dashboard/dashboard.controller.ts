@@ -1,9 +1,12 @@
 import { Request, Response } from "express";
+import mongoose from "mongoose";
 import { PromoCode } from "../../models/course/PromoCode.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { Course } from "../../models/course/Course.model";
 import { Customer } from "../../models/customer/Customer.model";
+
+import { buildPromoterOverview } from "./overview.service";
 
 // GET /api/v1/promoter/dashboard
 export const getDashboard = async (req: Request, res: Response) => {
@@ -39,15 +42,15 @@ export const getDashboard = async (req: Request, res: Response) => {
       }),
       EbookSubscription.countDocuments({ promoterId }),
       PackageCourseSubscription.aggregate([
-        { $match: { promoterId: (await import("mongoose")).default.Types.ObjectId.createFromHexString(promoterId) } },
+        { $match: { promoterId: mongoose.Types.ObjectId.createFromHexString(promoterId) } },
         { $group: { _id: null, total: { $sum: "$paidAmount" } } },
       ]),
       EbookSubscription.aggregate([
-        { $match: { promoterId: (await import("mongoose")).default.Types.ObjectId.createFromHexString(promoterId) } },
+        { $match: { promoterId: mongoose.Types.ObjectId.createFromHexString(promoterId) } },
         { $group: { _id: null, total: { $sum: "$price" } } },
       ]),
       PackageCourseSubscription.aggregate([
-        { $match: { promoterId: (await import("mongoose")).default.Types.ObjectId.createFromHexString(promoterId) } },
+        { $match: { promoterId: mongoose.Types.ObjectId.createFromHexString(promoterId) } },
         {
           $group: {
             _id: null,
@@ -95,6 +98,22 @@ export const getDashboard = async (req: Request, res: Response) => {
         recentSubscriptions,
       },
     });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/promoter/dashboard/overview?range=today|week|month|year|all
+// The logged-in promoter sees their own data. Admin views the same screen via
+// /api/v1/admin/promoters/:id/dashboard.
+export const getDashboardOverview = async (req: Request, res: Response) => {
+  try {
+    const promoterId = req.user?.id;
+    if (!promoterId)
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    const data = await buildPromoterOverview(promoterId, req.query.range as string);
+    return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }

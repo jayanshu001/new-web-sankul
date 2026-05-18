@@ -4,6 +4,7 @@ import { z } from "zod";
 import { LiveCourse, ILiveCourse } from "../../models/course/LiveCourse.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
+import { LiveCourseCategory } from "../../models/course/LiveCourseCategory.model";
 import { LiveSession } from "../../models/course/LiveSession.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
@@ -29,6 +30,7 @@ function coerceBody(body: Record<string, any>): Record<string, any> {
 async function assertRefsExist(input: {
   courseEducatorId?: string;
   courseSubjectCategoryId?: string;
+  liveCourseCategoryId?: string;
 }): Promise<string | null> {
   if (input.courseEducatorId) {
     const exists = await CourseEducator.exists({ _id: input.courseEducatorId });
@@ -37,6 +39,10 @@ async function assertRefsExist(input: {
   if (input.courseSubjectCategoryId) {
     const exists = await CourseSubjectCategory.exists({ _id: input.courseSubjectCategoryId });
     if (!exists) return "courseSubjectCategoryId does not reference an existing subject category.";
+  }
+  if (input.liveCourseCategoryId) {
+    const exists = await LiveCourseCategory.exists({ _id: input.liveCourseCategoryId });
+    if (!exists) return "liveCourseCategoryId does not reference an existing live course category.";
   }
   return null;
 }
@@ -141,6 +147,7 @@ export const listLiveCourses = async (req: Request, res: Response) => {
         .limit(limit)
         .populate("courseEducatorId", "name image")
         .populate("courseSubjectCategoryId", "title slug")
+        .populate("liveCourseCategoryId", "_id title slug image")
         .lean(),
       LiveCourse.countDocuments(query),
     ]);
@@ -167,6 +174,7 @@ export const getLiveCourseById = async (req: Request, res: Response) => {
     const doc = await LiveCourse.findById(id)
       .populate("courseEducatorId", "name image")
       .populate("courseSubjectCategoryId", "title slug")
+      .populate("liveCourseCategoryId", "_id title slug image")
       .lean();
     if (!doc) return failure(res, "Live course not found.", 404);
 

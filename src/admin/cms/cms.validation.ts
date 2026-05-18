@@ -28,13 +28,25 @@ export const popupCreateSchema = z.object({
 export const popupUpdateSchema = popupCreateSchema.partial();
 
 // ─── Banner ──
+const bannerObjectId = z
+  .string()
+  .regex(/^[a-fA-F0-9]{24}$/, "keyId must be a valid ObjectId");
+
 export const bannerCreateSchema = z.object({
   image: z.string().min(1).max(500),
-  key: z.string().max(100).optional(),
-  keyId: z.number().int().optional(),
+  key: z.enum(["Packages", "Courses", "Book", "EBook"]).optional(),
+  keyId: bannerObjectId.optional(),
   orderBy: z.number().int().default(0),
 });
 export const bannerUpdateSchema = bannerCreateSchema.partial();
+
+// ─── Live Banner ──
+export const liveBannerCreateSchema = z.object({
+  image: z.string().min(1).max(500),
+  liveCourseId: bannerObjectId,
+  orderBy: z.number().int().default(0),
+});
+export const liveBannerUpdateSchema = liveBannerCreateSchema.partial();
 
 // ─── Testimonial ──
 export const testimonialCreateSchema = z.object({

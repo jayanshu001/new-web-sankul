@@ -15,6 +15,7 @@ export interface IPackageCourseSubscription extends Document {
   status: boolean;
   promocodeId?: mongoose.Types.ObjectId | null;
   promoterId?: mongoose.Types.ObjectId | null;
+  referrerId?: mongoose.Types.ObjectId | null;
   paidAmount?: number | null;
   customerPercentage?: number | null;
   promoterPercentage?: number | null;
@@ -42,6 +43,7 @@ const packageCourseSubscriptionSchema: Schema = new Schema(
     status: { type: Boolean, default: true },
     promocodeId: { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
     promoterId: { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
+    referrerId: { type: Schema.Types.ObjectId, ref: "Customer", default: null },
     paidAmount: { type: Number, default: null },
     customerPercentage: { type: Number, default: null },
     promoterPercentage: { type: Number, default: null },

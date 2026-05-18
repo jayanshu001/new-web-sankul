@@ -23,7 +23,7 @@ export interface IPackage extends Document {
   goalId?: Types.ObjectId | null;
   goalLabelId?: Types.ObjectId | null;
   examCountdownCategoryId?: Types.ObjectId | null;
-  pcMaterialId?: Types.ObjectId | null;
+  packageCategoryId?: Types.ObjectId | null;
   educatorId?: Types.ObjectId | null;
   specificSubjects: IPackageCategoryRef[];
   materialCategories: IPackageCategoryRef[];
@@ -64,9 +64,9 @@ const packageSchema = new Schema<IPackage>(
       ref: "ExamCountdownCategory",
       default: null,
     },
-    pcMaterialId: {
+    packageCategoryId: {
       type: Schema.Types.ObjectId,
-      ref: "PackageCourseMaterial",
+      ref: "PackageCategory",
       default: null,
     },
     educatorId: { type: Schema.Types.ObjectId, ref: "CourseEducator", default: null },
@@ -83,6 +83,7 @@ packageSchema.index({ goalId: 1, active: 1 });
 packageSchema.index({ goalLabelId: 1, active: 1 });
 packageSchema.index({ packageTypeId: 1, active: 1 });
 packageSchema.index({ examCountdownCategoryId: 1, active: 1 });
+packageSchema.index({ packageCategoryId: 1, active: 1 });
 packageSchema.index({ isSmartCourse: 1, active: 1 });
 packageSchema.index({ isPlannerCourse: 1, active: 1 });
 packageSchema.index({ "specificSubjects.category": 1 });

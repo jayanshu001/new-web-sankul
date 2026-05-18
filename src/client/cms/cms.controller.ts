@@ -4,6 +4,7 @@ import { FAQ } from "../../models/system/FAQ.model";
 import { FaqType } from "../../models/system/FaqType.model";
 import { PopupNotification } from "../../models/system/PopupNotification.model";
 import { BannerSlider } from "../../models/system/BannerSlider.model";
+import { LiveBannerSlider } from "../../models/system/LiveBannerSlider.model";
 import { Testimonial } from "../../models/system/Testimonial.model";
 import { TermsAndConditions } from "../../models/system/TermsAndConditions.model";
 import { Version } from "../../models/system/Version.model";
@@ -59,7 +60,23 @@ export const listBanners = async (req: Request, res: Response) => {
     const { key } = req.query as Record<string, string>;
     const filter: any = {};
     if (key) filter.key = key;
-    const data = await BannerSlider.find(filter).sort({ orderBy: 1 }).lean();
+    const data = await BannerSlider.find(filter)
+      .sort({ orderBy: 1 })
+      .populate("keyId")
+      .lean();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/client/cms/live-banners
+export const listLiveBanners = async (_req: Request, res: Response) => {
+  try {
+    const data = await LiveBannerSlider.find()
+      .sort({ orderBy: 1 })
+      .populate("liveCourseId")
+      .lean();
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });

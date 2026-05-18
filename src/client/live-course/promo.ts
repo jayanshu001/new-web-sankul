@@ -1,4 +1,5 @@
-import { PromoCode, IPromoCode } from "../../models/course/PromoCode.model";
+import { PromoCode, IPromoCode, PromoAppliesToType } from "../../models/course/PromoCode.model";
+import { promoCovers, computePromoDiscount } from "../promocode/applies-to";
 
 export interface LivePromoResult {
   promo: IPromoCode;
@@ -10,25 +11,21 @@ export interface LivePromoResult {
 }
 
 /**
- * Validate a promo code and apply its promo-level discount to a base amount.
+ * Validate a promo code for a specific live course and apply its discount.
  *
- * Live courses have no per-plan promotion table — `PromotedPackageCourseEbook`
- * targets `PackageCourseEbookPrice`, not `LiveCoursePlan` — so here we use the
- * discount carried directly on the PromoCode (`discountType` + `discountValue`).
- * Any active code within its validity window therefore acts as a global
- * discount on live course plans. (Referral codes are intentionally NOT handled
- * here; that's a separate promoter-attribution flow.)
- *
- * Returns `{ error }` on any validation failure so the caller can map it to a
- * 4xx — it never throws for the "code is bad" case.
+ * Phase-2 model: the promocode must explicitly cover the live course via its
+ * `appliesTo` set. Discount comes from the promocode's own `discountType` /
+ * `discountValue`. Referral codes are intentionally NOT handled here.
  */
 export async function resolveLivePromo(
   rawCode: string,
-  baseAmount: number
+  baseAmount: number,
+  entity: { type: PromoAppliesToType; id: string }
 ): Promise<{ result?: LivePromoResult; error?: string }> {
   const code = typeof rawCode === "string" ? rawCode.trim().toUpperCase() : "";
   if (!code) return { error: "Promo code is required." };
   if (!(baseAmount > 0)) return { error: "Promo codes don't apply to a zero-priced plan." };
+  if (!entity?.id) return { error: "Entity context is required." };
 
   const now = new Date();
   const promo = await PromoCode.findOne({
@@ -39,18 +36,16 @@ export async function resolveLivePromo(
   });
   if (!promo) return { error: "Invalid or expired promo code." };
 
+  if (!promoCovers(promo, entity)) {
+    return { error: "This promo code is not valid for this item." };
+  }
+
   const discountValue = Number(promo.discountValue ?? 0);
   if (!(discountValue > 0)) {
     return { error: "This promo code has no discount configured." };
   }
 
-  let discountAmount =
-    promo.discountType === "percentage"
-      ? Math.round((baseAmount * discountValue) / 100)
-      : Math.round(discountValue);
-
-  // Never discount below zero or beyond the plan price.
-  discountAmount = Math.min(baseAmount, Math.max(0, discountAmount));
+  const discountAmount = computePromoDiscount(promo, baseAmount);
   const finalAmount = baseAmount - discountAmount;
 
   return {

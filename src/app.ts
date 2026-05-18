@@ -31,7 +31,7 @@ app.use(compression());
 // --- Crash Reporter ---------------------------------------------------------
 initCrashReporter({
   emailTo: "ranavinit6834@gmail.com",
-  appName: "AppNameUpdateHere",
+  appName: "WebSankulUpdate",
 }); 
 
 // --- CORS -------------------------------------------------------------------

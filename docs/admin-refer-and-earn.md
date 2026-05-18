@@ -57,13 +57,58 @@ Returns each row with `customerId` populated as `{ _id, firstName, lastName, pho
 
 > **Caveat:** `updateWithdrawalStatus` predates the Razorpay webhook. With Razorpay live, prefer letting the webhook drive status. Use this endpoint only for stuck rows that never received a webhook.
 
-### 1.3 CSV export
+### 1.3 Withdrawal Report (admin "Referral Report" screen)
 
-`GET /withdrawals/csv` — streams all debit transactions as CSV for accounting.
+`GET /withdrawals` — paginated listing shaped for the admin Referral Report table (Date, Account Holder Name, IFSC Code, Account Number, Coin, Referral Code, Customer Name, Customer Phone). Joins `ReferralTransaction` (type=DEBIT, has embedded `bankAccount`) with `Customer` in a single aggregation.
 
-Accepts the same date filters as `/transactions`.
+**Query params**
 
-### 1.4 Manual reward adjustment
+| Name       | Type     | Default | Notes                                                                              |
+|------------|----------|---------|------------------------------------------------------------------------------------|
+| `fromDate` | ISO date | —       | Inclusive lower bound on `createdAt`                                               |
+| `toDate`   | ISO date | —       | Inclusive upper bound (end-of-day applied server-side)                             |
+| `status`   | enum     | —       | `pending` \| `successful` \| `failed`                                              |
+| `search`   | string   | —       | Case-insensitive match on holder name, account number, IFSC, customer first/last name, phone, referral code |
+| `page`     | number   | `1`     | Page number                                                                        |
+| `limit`    | number   | `10`    | Page size (matches the screenshot's "Show 10 rows")                                |
+
+**Response 200**
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "_id": "txn_...",
+      "date": "2026-05-18T07:12:00Z",
+      "accountHolderName": "John Doe",
+      "ifscCode": "HDFC0001234",
+      "accountNumber": "123456789012",
+      "bankName": "HDFC Bank",
+      "branchName": "Andheri West",
+      "coin": 1500,
+      "status": "pending",
+      "providerRef": "pout_xxx",
+      "failureReason": null,
+      "referralCode": "JOHN1234",
+      "customerId": "cust_...",
+      "customerName": "John Doe",
+      "customerPhone": "9876543210"
+    }
+  ],
+  "pagination": { "total": 0, "page": 1, "limit": 10, "totalPages": 0 }
+}
+```
+
+> **Why this exists separate from `/transactions`:** `/transactions` returns the full ledger (credits + debits, with full Mongo docs). The Referral Report screen needs only **withdrawal rows** (DEBIT with bank account), flattened to one row per request with the customer's name/phone/referral-code joined in — matching the table columns 1:1. No client-side reshaping needed.
+
+### 1.4 CSV export
+
+`GET /withdrawals/csv` — streams all debit transactions as CSV for accounting. This is what the "Export to csv" button on the Referral Report screen calls.
+
+Accepts `fromDate`, `toDate`, `status` filters (same semantics as `/withdrawals`).
+
+### 1.5 Manual reward adjustment
 
 `POST /customers/:customerId/rewards` — adjust a single customer's `rewardPoints` balance, audit-logged as a `ReferralTransaction`.
 

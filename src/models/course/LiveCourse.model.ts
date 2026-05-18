@@ -33,6 +33,7 @@ export interface ILiveCourse extends Document {
   // Relations
   courseEducatorId?: mongoose.Types.ObjectId | null;
   courseSubjectCategoryId?: mongoose.Types.ObjectId | null;
+  liveCourseCategoryId?: mongoose.Types.ObjectId | null;
   videoCategoryId?: mongoose.Types.ObjectId | null; // root VideoCategory folder
 
   // Adjacent content (kept for parity with Course)
@@ -91,6 +92,7 @@ const liveCourseSchema = new Schema<ILiveCourse>(
 
     courseEducatorId:        { type: Schema.Types.ObjectId, ref: "CourseEducator",        default: null },
     courseSubjectCategoryId: { type: Schema.Types.ObjectId, ref: "CourseSubjectCategory", default: null },
+    liveCourseCategoryId:    { type: Schema.Types.ObjectId, ref: "LiveCourseCategory",    default: null },
     videoCategoryId:         { type: Schema.Types.ObjectId, ref: "VideoCategory",         default: null },
 
     materialCategories: { type: [materialCategoryRefSchema], default: [] },

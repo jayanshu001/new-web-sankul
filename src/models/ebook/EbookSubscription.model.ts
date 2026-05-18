@@ -13,6 +13,7 @@ export interface IEbookSubscription extends Document {
   status: boolean;
   promocodeId?: mongoose.Types.ObjectId | null;
   promoterId?: mongoose.Types.ObjectId | null;
+  referrerId?: mongoose.Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -30,6 +31,7 @@ const ebookSubscriptionSchema: Schema = new Schema(
     status: { type: Boolean, default: true },
     promocodeId: { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
     promoterId: { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
+    referrerId: { type: Schema.Types.ObjectId, ref: "Customer", default: null },
   },
   { timestamps: true }
 );

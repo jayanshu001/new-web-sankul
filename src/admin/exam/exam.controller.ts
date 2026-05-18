@@ -94,18 +94,109 @@ async function buildAncestors(parentId?: string | null): Promise<mongoose.Types.
   return [...(parent.ancestors || []), parent._id];
 }
 
+// Reparent a set of categories under `parentId`, keeping both `parentId`/`ancestors` on
+// each child AND `childCategoryIds[]` on the parent in sync.
+type AttachError = { status: number; message: string };
+async function attachExamChildren(
+  parentId: mongoose.Types.ObjectId,
+  rawChildIds: string[] | undefined
+): Promise<AttachError | null> {
+  if (!rawChildIds || rawChildIds.length === 0) return null;
+  const uniqueIds = Array.from(new Set(rawChildIds.map(String)));
+  const parentIdStr = String(parentId);
+  if (uniqueIds.some((id) => id === parentIdStr)) {
+    return { status: 422, message: "A category cannot be its own child" };
+  }
+  if (uniqueIds.some((id) => !isObjectId(id))) {
+    return { status: 422, message: "One or more childCategoryIds are invalid" };
+  }
+  const parent = await ExamCategory.findById(parentId).select("_id ancestors");
+  if (!parent) return { status: 404, message: "Parent category not found" };
+  const parentAncestors = (parent.ancestors || []).map((a) => String(a));
+  if (uniqueIds.some((id) => parentAncestors.includes(id))) {
+    return {
+      status: 422,
+      message: "Cycle detected: one of the selected categories is an ancestor of this category",
+    };
+  }
+
+  const children = await ExamCategory.find({ _id: { $in: uniqueIds } }).select(
+    "_id ancestors parentId"
+  );
+  if (children.length !== uniqueIds.length) {
+    return { status: 422, message: "One or more childCategoryIds are invalid" };
+  }
+
+  const newAncestorsForChild = [...(parent.ancestors || []), parent._id];
+
+  for (const child of children) {
+    // 0) Detach from previous parent.
+    if (child.parentId && String(child.parentId) !== parentIdStr) {
+      await ExamCategory.updateOne(
+        { _id: child.parentId },
+        { $pull: { childCategoryIds: child._id } }
+      );
+    }
+
+    const oldAncestors = (child.ancestors || []).map((a) => String(a));
+
+    // 1) Update the child itself.
+    await ExamCategory.updateOne(
+      { _id: child._id },
+      { $set: { parentId: parent._id, ancestors: newAncestorsForChild } }
+    );
+
+    // 1b) Mirror on the new parent's childCategoryIds.
+    await ExamCategory.updateOne(
+      { _id: parent._id },
+      { $addToSet: { childCategoryIds: child._id } }
+    );
+
+    // 2) Cascade ancestors[] on this child's descendants.
+    const descendants = await ExamCategory.find({ ancestors: child._id }).select("_id ancestors");
+    for (const d of descendants) {
+      const oldAnc = (d.ancestors || []).map((a) => String(a));
+      const idx = oldAnc.indexOf(String(child._id));
+      if (idx === -1) continue;
+      const tail = oldAnc.slice(idx + 1);
+      const rewritten = [
+        ...newAncestorsForChild.map((a) => String(a)),
+        String(child._id),
+        ...tail,
+      ].map((s) => new mongoose.Types.ObjectId(s));
+      await ExamCategory.updateOne({ _id: d._id }, { $set: { ancestors: rewritten } });
+    }
+  }
+
+  return null;
+}
+
 export const createCategory = async (req: Request, res: Response) => {
   try {
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     const data = createCategorySchema.parse(req.body);
-    const ancestors = await buildAncestors(data.parentId ?? null);
+    const { childCategoryIds, ...catFields } = data;
+    const ancestors = await buildAncestors(catFields.parentId ?? null);
     const cat = await ExamCategory.create({
-      ...data,
-      parentId: data.parentId ?? null,
+      ...catFields,
+      parentId: catFields.parentId ?? null,
       ancestors,
     });
-    return res.status(201).json({ success: true, data: cat });
+    // Mirror the relationship on the parent's childCategoryIds.
+    if (cat.parentId) {
+      await ExamCategory.updateOne(
+        { _id: cat.parentId },
+        { $addToSet: { childCategoryIds: cat._id } }
+      );
+    }
+    // Attach any pre-existing children passed in childCategoryIds[].
+    const attachErr = await attachExamChildren(cat._id, childCategoryIds);
+    if (attachErr) {
+      return res.status(attachErr.status).json({ success: false, message: attachErr.message });
+    }
+    const fresh = await ExamCategory.findById(cat._id);
+    return res.status(201).json({ success: true, data: fresh });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
@@ -120,17 +211,100 @@ export const updateCategory = async (req: Request, res: Response) => {
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     const data = updateCategorySchema.parse(req.body);
-    const update: any = { ...data };
-    if (data.parentId !== undefined) {
-      if (data.parentId === id) {
+    const { childCategoryIds, ...catFields } = data;
+    const update: any = { ...catFields };
+
+    let cascadeNeeded = false;
+    let oldAncestors: mongoose.Types.ObjectId[] = [];
+    let newAncestors: mongoose.Types.ObjectId[] = [];
+
+    if (catFields.parentId !== undefined) {
+      const newParentId = catFields.parentId || null;
+      if (newParentId === id) {
         return res.status(400).json({ success: false, message: "Category cannot be its own parent." });
       }
-      update.parentId = data.parentId || null;
-      update.ancestors = await buildAncestors(data.parentId);
+
+      // Reject cycles: the new parent must not be the category itself or any of its descendants.
+      if (newParentId) {
+        const newParent = await ExamCategory.findById(newParentId).select("_id ancestors");
+        if (!newParent) {
+          return res.status(400).json({ success: false, message: "Parent category not found." });
+        }
+        if (newParent.ancestors?.some((a) => a.toString() === id)) {
+          return res.status(400).json({
+            success: false,
+            message: "Cannot move a category under one of its own descendants.",
+          });
+        }
+      }
+
+      const current = await ExamCategory.findById(id).select("_id ancestors parentId");
+      if (!current) return res.status(404).json({ success: false, message: "Category not found." });
+
+      oldAncestors = current.ancestors || [];
+      newAncestors = await buildAncestors(newParentId);
+
+      update.parentId = newParentId;
+      update.ancestors = newAncestors;
+
+      // Keep both sides of the parent ↔ child relationship in sync.
+      const oldParentId = current.parentId ?? null;
+      const movedId = current._id;
+      if (String(oldParentId ?? "") !== String(newParentId ?? "")) {
+        if (oldParentId) {
+          await ExamCategory.updateOne(
+            { _id: oldParentId },
+            { $pull: { childCategoryIds: movedId } }
+          );
+        }
+        if (newParentId) {
+          await ExamCategory.updateOne(
+            { _id: newParentId },
+            { $addToSet: { childCategoryIds: movedId } }
+          );
+        }
+      }
+
+      // Cascade is only required when the ancestors chain actually changed.
+      const ancestorsChanged =
+        oldAncestors.length !== newAncestors.length ||
+        oldAncestors.some((a, i) => a.toString() !== newAncestors[i]?.toString());
+      cascadeNeeded = ancestorsChanged;
     }
+
     const cat = await ExamCategory.findByIdAndUpdate(id, { $set: update }, { new: true });
     if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
-    return res.status(200).json({ success: true, data: cat });
+
+    if (cascadeNeeded) {
+      // Every descendant had `oldAncestors + [id]` as the prefix of its ancestors[].
+      // Rewrite that prefix to `newAncestors + [id]`, preserving the intra-subtree tail.
+      const movedObjectId = new mongoose.Types.ObjectId(id);
+      const oldPrefixLen = oldAncestors.length + 1; // +1 for the moved category itself
+      const descendants = await ExamCategory.find({ ancestors: movedObjectId }).select(
+        "_id ancestors"
+      );
+      if (descendants.length) {
+        const ops = descendants.map((d) => {
+          const tail = (d.ancestors || []).slice(oldPrefixLen);
+          const rebuilt = [...newAncestors, movedObjectId, ...tail];
+          return {
+            updateOne: {
+              filter: { _id: d._id },
+              update: { $set: { ancestors: rebuilt } },
+            },
+          };
+        });
+        await ExamCategory.bulkWrite(ops);
+      }
+    }
+
+    const attachErr = await attachExamChildren(cat._id, childCategoryIds);
+    if (attachErr) {
+      return res.status(attachErr.status).json({ success: false, message: attachErr.message });
+    }
+
+    const fresh = childCategoryIds?.length ? await ExamCategory.findById(cat._id) : cat;
+    return res.status(200).json({ success: true, data: fresh });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
@@ -158,6 +332,12 @@ export const deleteCategory = async (req: Request, res: Response) => {
     }
     const cat = await ExamCategory.findByIdAndDelete(id);
     if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
+    if (cat.parentId) {
+      await ExamCategory.updateOne(
+        { _id: cat.parentId },
+        { $pull: { childCategoryIds: cat._id } }
+      );
+    }
     return res.status(200).json({ success: true, message: "Category deleted." });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

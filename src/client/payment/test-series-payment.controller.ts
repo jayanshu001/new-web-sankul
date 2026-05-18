@@ -43,7 +43,12 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
       });
     }
 
-    const { result, error } = await resolveLivePromo(promocode, plan.price);
+    // Test series isn't in the appliesTo enum yet — promocodes won't match.
+    // Until the enum is extended, this branch returns "not valid for this item".
+    const { result, error } = await resolveLivePromo(promocode, plan.price, {
+      type: "liveCourse",
+      id: String(plan.testSeriesId),
+    });
     if (error || !result) {
       return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
     }
@@ -123,7 +128,10 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
     let discountAmount = 0;
     let promocodeId: string | null = null;
     if (promocode) {
-      const { result, error } = await resolveLivePromo(promocode, plan.price);
+      const { result, error } = await resolveLivePromo(promocode, plan.price, {
+        type: "liveCourse",
+        id: String(plan.testSeriesId),
+      });
       if (error || !result) {
         return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
       }

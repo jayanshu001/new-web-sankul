@@ -10,7 +10,6 @@ import { Exam } from "../../models/exam/Exam.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
-import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { CustomerShipping } from "../../models/customer/CustomerShipping.model";
@@ -129,37 +128,23 @@ export async function buildCourseDetails(
     .sort({ duration: 1 })
     .lean();
 
-  const allPlanIds = AllPlans.map((p) => p._id);
-  const promotedPlans = await PromotedPackageCourseEbook.find({
-    planId: { $in: allPlanIds },
+  const now = new Date();
+  const promos = await PromoCode.find({
+    type: "public",
+    status: true,
+    promo_start_at: { $lte: now },
+    promo_expire_at: { $gte: now },
+    "appliesTo.type": "course",
+    "appliesTo.ids": courseDoc._id,
   })
-    .populate({
-      path: "promocodeId",
-      match: { type: "public" },
-      model: PromoCode,
-    })
+    .select("promocode title description")
     .lean();
 
-  const now = new Date();
-  const availablePromoCode: PromoCodeDTO[] = [];
-  for (const p of promotedPlans) {
-    const promo: any = (p as any).promocodeId;
-    if (!promo) continue;
-    if (
-      new Date(promo.promo_start_at) <= now &&
-      new Date(promo.promo_expire_at) >= now
-    ) {
-      if (
-        availablePromoCode.findIndex((x) => x.promocode === promo.promocode) < 0
-      ) {
-        availablePromoCode.push({
-          title: promo.title,
-          promocode: promo.promocode,
-          description: promo.description,
-        });
-      }
-    }
-  }
+  const availablePromoCode: PromoCodeDTO[] = promos.map((p: any) => ({
+    title: p.title ?? "",
+    promocode: p.promocode,
+    description: p.description ?? "",
+  }));
 
   const plans = {
     withMaterial: AllPlans.filter((p) => p.withMaterial === true),

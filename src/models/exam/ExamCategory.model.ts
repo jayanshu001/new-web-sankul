@@ -5,6 +5,7 @@ export interface IExamCategory extends Document {
   image?: string;
   parentId?: Types.ObjectId | null;
   ancestors: Types.ObjectId[];
+  childCategoryIds: Types.ObjectId[];
   orderBy: number;
   status: boolean;
   createdAt?: Date;
@@ -17,6 +18,11 @@ const ExamCategorySchema = new Schema<IExamCategory>(
     image: { type: String, maxlength: 500 },
     parentId: { type: Schema.Types.ObjectId, ref: "ExamCategory", default: null },
     ancestors: [{ type: Schema.Types.ObjectId, ref: "ExamCategory" }],
+    childCategoryIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "ExamCategory" }],
+      default: [],
+      index: true,
+    },
     orderBy: { type: Number, default: 0 },
     status: { type: Boolean, default: true },
   },

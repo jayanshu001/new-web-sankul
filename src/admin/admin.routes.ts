@@ -3,6 +3,7 @@ import adminAuthRoutes from "./auth/admin.auth.routes";
 import adminAdministratorRoutes from "./administrator/administrator.routes";
 import adminRoleRoutes from "./role/role.routes";
 import adminPermissionRoutes from "./permission/permission.routes";
+import adminPermissionCategoryRoutes from "./permissionCategory/permissionCategory.routes";
 import adminGuardsRoutes from "./guards/guards.routes";
 import adminVideoCategoryRoutes from "./videoCategory/videoCategory.routes";
 import adminVideoRoutes from "./video/video.routes";
@@ -49,6 +50,7 @@ router.use("/auth", adminAuthRoutes); // -> /api/v1/admin/auth/*
 router.use("/administrators", adminAdministratorRoutes); // -> /api/v1/admin/administrators/*
 router.use("/roles", adminRoleRoutes); // -> /api/v1/admin/roles/*
 router.use("/permissions", adminPermissionRoutes); // -> /api/v1/admin/permissions/*
+router.use("/permission-categories", adminPermissionCategoryRoutes); // -> /api/v1/admin/permission-categories/*
 router.use("/guards", adminGuardsRoutes); // -> /api/v1/admin/guards
 router.use("/video-categories", adminVideoCategoryRoutes); // -> /api/v1/admin/video-categories/*
 router.use("/videos", adminVideoRoutes); // -> /api/v1/admin/videos/*

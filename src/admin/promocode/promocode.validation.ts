@@ -21,19 +21,23 @@ const discountErr = {
   path: ["discountValue"],
 };
 
-const planLinkSchema = z.object({
-  planId: z.string().min(1),
-  customerPercentage: z.number().min(0).max(100).default(0),
-  promoterPercentage: z.number().min(0).max(100).default(0),
+export const APPLIES_TO_TYPES = ["package", "course", "liveCourse"] as const;
+export type AppliesToType = (typeof APPLIES_TO_TYPES)[number];
+
+export const appliesToSchema = z.object({
+  type: z.enum(APPLIES_TO_TYPES),
+  ids: z
+    .array(z.string().regex(/^[a-f0-9]{24}$/i, "Invalid id"))
+    .min(1, "Select at least one item"),
 });
 
 export const createPromocodeSchema = promocodeBase
-  .extend({ plans: z.array(planLinkSchema).optional().default([]) })
+  .extend({ appliesTo: appliesToSchema })
   .refine(validateDiscount, discountErr);
 
 export const updatePromocodeSchema = promocodeBase
   .partial()
-  .extend({ plans: z.array(planLinkSchema).optional() })
+  .extend({ appliesTo: appliesToSchema.optional() })
   .refine(validateDiscount, discountErr);
 
 export const togglePromocodeStatusSchema = z.object({

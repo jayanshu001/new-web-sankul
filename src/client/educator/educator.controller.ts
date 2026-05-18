@@ -46,7 +46,6 @@ export const getEducatorWithCoursesHandler = async (
       .populate("courseEducatorId", "_id name image")
       .populate("courseSubjectCategoryId", "_id title")
       .populate("videoCategoryId", "_id title")
-      .populate("pcMaterialId", "_id title")
       .sort({ createdAt: -1 })
       .lean();
 

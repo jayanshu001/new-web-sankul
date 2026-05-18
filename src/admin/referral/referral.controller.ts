@@ -216,6 +216,128 @@ export const rejectWithdrawal = async (req: Request, res: Response) => {
   }
 };
 
+// ─── Withdrawal Report (listing for admin "Referral Report" screen) ─────────
+
+export const getWithdrawalsReport = async (req: Request, res: Response) => {
+  try {
+    const {
+      fromDate,
+      toDate,
+      status,
+      search,
+      page = "1",
+      limit = "10",
+    } = req.query as Record<string, string>;
+
+    const filter: any = { type: RefferalTransactionType.DEBIT, bankAccount: { $ne: null } };
+    if (
+      status === RefferalTransactionStatus.PENDING ||
+      status === RefferalTransactionStatus.SUCCESSFUL ||
+      status === RefferalTransactionStatus.FAILED
+    )
+      filter.status = status;
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
+      if (toDate) {
+        const end = new Date(toDate);
+        end.setHours(23, 59, 59, 999);
+        filter.createdAt.$lte = end;
+      }
+    }
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 10, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const searchTrimmed = (search ?? "").trim();
+    const searchRx = searchTrimmed
+      ? new RegExp(searchTrimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
+      : null;
+
+    const pipeline: any[] = [
+      { $match: filter },
+      {
+        $lookup: {
+          from: "ws_customers",
+          localField: "customerId",
+          foreignField: "_id",
+          as: "customer",
+        },
+      },
+      { $unwind: { path: "$customer", preserveNullAndEmptyArrays: true } },
+      ...(searchRx
+        ? [
+            {
+              $match: {
+                $or: [
+                  { "bankAccount.accountHolderName": searchRx },
+                  { "bankAccount.accountNumber": searchRx },
+                  { "bankAccount.ifscCode": searchRx },
+                  { "customer.firstName": searchRx },
+                  { "customer.lastName": searchRx },
+                  { "customer.phoneNumber": searchRx },
+                  { "customer.referralCode": searchRx },
+                ],
+              },
+            },
+          ]
+        : []),
+      {
+        $facet: {
+          data: [
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: limitNum },
+            {
+              $project: {
+                _id: 1,
+                date: "$createdAt",
+                accountHolderName: "$bankAccount.accountHolderName",
+                ifscCode: "$bankAccount.ifscCode",
+                accountNumber: "$bankAccount.accountNumber",
+                bankName: "$bankAccount.bankName",
+                branchName: "$bankAccount.branchName",
+                coin: 1,
+                status: 1,
+                providerRef: 1,
+                failureReason: 1,
+                referralCode: "$customer.referralCode",
+                customerId: "$customer._id",
+                customerName: {
+                  $trim: {
+                    input: {
+                      $concat: [
+                        { $ifNull: ["$customer.firstName", ""] },
+                        " ",
+                        { $ifNull: ["$customer.lastName", ""] },
+                      ],
+                    },
+                  },
+                },
+                customerPhone: "$customer.phoneNumber",
+              },
+            },
+          ],
+          totalArr: [{ $count: "total" }],
+        },
+      },
+    ];
+
+    const [result] = await ReferralTransaction.aggregate(pipeline);
+    const data = result?.data ?? [];
+    const total = result?.totalArr?.[0]?.total ?? 0;
+
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // ─── Withdrawal CSV Export ────────────────────────────────────────────────────
 
 export const exportWithdrawalsCsv = async (req: Request, res: Response) => {

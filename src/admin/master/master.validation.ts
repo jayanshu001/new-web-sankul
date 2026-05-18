@@ -67,9 +67,19 @@ export const createPackageCategorySchema = z.object({
   title: z.string().min(1, "Title is required"),
   slug: z.string().min(1, "Slug is required"),
   image: z.string().url("Image must be a valid URL"),
-  packageId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid Package ObjectId"),
   order: z.number().int().optional().default(0),
   status: z.boolean().optional().default(true),
 });
 
 export const updatePackageCategorySchema = createPackageCategorySchema.partial();
+
+// Live Course Category Validation
+export const createLiveCourseCategorySchema = z.object({
+  title: z.string().min(1, "Title is required"),
+  slug: z.string().min(1, "Slug is required"),
+  image: z.string().url("Image must be a valid URL"),
+  order: z.number().int().optional().default(0),
+  status: z.boolean().optional().default(true),
+});
+
+export const updateLiveCourseCategorySchema = createLiveCourseCategorySchema.partial();

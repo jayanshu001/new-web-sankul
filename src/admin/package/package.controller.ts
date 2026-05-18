@@ -6,7 +6,7 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { PackageChat } from "../../models/course/PackageChat.model";
 import { PackageVideoCategoryRelation } from "../../models/course/PackageVideoCategoryRelation.model";
-import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
+import { PromoCode } from "../../models/course/PromoCode.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { Goal } from "../../models/Goal.model";
 import {
@@ -142,7 +142,6 @@ export const listPackages = async (req: Request, res: Response) => {
     const [data, total] = await Promise.all([
       Package.find(filter)
         .populate("packageTypeId", "_id name")
-        .populate("pcMaterialId", "_id title")
         .sort({ order: 1, createdAt: -1 })
         .skip(skip)
         .limit(limitNum),
@@ -167,7 +166,7 @@ export const getPackageById = async (req: Request, res: Response) => {
     const pkg = await Package.findById(id)
       .populate("packageTypeId", "_id name")
       .populate("examCountdownCategoryId", "_id name colorHex")
-      .populate("pcMaterialId", "_id title")
+      .populate("packageCategoryId", "_id title slug image")
       .populate("educatorId", "_id name")
       .populate("specificSubjects.category", "_id title image")
       .populate("materialCategories.category", "_id title image")
@@ -194,13 +193,15 @@ export const createPackage = async (req: Request, res: Response) => {
     if (goalErr) return res.status(400).json({ success: false, message: goalErr });
     if (data.examCountdownCategoryId && !mongoose.Types.ObjectId.isValid(data.examCountdownCategoryId))
       return res.status(400).json({ success: false, message: "Invalid examCountdownCategoryId." });
+    if (data.packageCategoryId && !mongoose.Types.ObjectId.isValid(data.packageCategoryId))
+      return res.status(400).json({ success: false, message: "Invalid packageCategoryId." });
     const payload: any = {
       ...data,
       packageTypeId: data.packageTypeId || null,
       goalId: data.goalId || null,
       goalLabelId: data.goalLabelId || null,
       examCountdownCategoryId: data.examCountdownCategoryId || null,
-      pcMaterialId: data.pcMaterialId || null,
+      packageCategoryId: data.packageCategoryId || null,
       educatorId: data.educatorId || null,
       specificSubjects: toCategoryRefs(data.specificSubjects) ?? [],
       materialCategories: toCategoryRefs(data.materialCategories) ?? [],
@@ -246,7 +247,11 @@ export const updatePackage = async (req: Request, res: Response) => {
         return res.status(400).json({ success: false, message: "Invalid examCountdownCategoryId." });
       update.examCountdownCategoryId = data.examCountdownCategoryId || null;
     }
-    if (data.pcMaterialId !== undefined) update.pcMaterialId = data.pcMaterialId || null;
+    if (data.packageCategoryId !== undefined) {
+      if (data.packageCategoryId && !mongoose.Types.ObjectId.isValid(data.packageCategoryId))
+        return res.status(400).json({ success: false, message: "Invalid packageCategoryId." });
+      update.packageCategoryId = data.packageCategoryId || null;
+    }
     if (data.educatorId !== undefined) update.educatorId = data.educatorId || null;
     if (data.specificSubjects) update.specificSubjects = toCategoryRefs(data.specificSubjects);
     if (data.materialCategories) update.materialCategories = toCategoryRefs(data.materialCategories);
@@ -480,12 +485,13 @@ export const listPromotedCodes = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid package id." });
 
-    const plans = await PackageCourseEbookPrice.find({ packageId: id }).select("_id");
-    const planIds = plans.map((p) => p._id);
-    const promoted = await PromotedPackageCourseEbook.find({ planId: { $in: planIds } })
-      .populate("promocodeId")
-      .populate("planId");
-    return res.status(200).json({ success: true, data: promoted });
+    // Phase-2 model: list promocodes that target this package directly via
+    // `appliesTo`. The legacy per-plan link table is no longer the source of truth.
+    const codes = await PromoCode.find({
+      "appliesTo.type": "package",
+      "appliesTo.ids": id,
+    }).sort({ createdAt: -1 });
+    return res.status(200).json({ success: true, data: codes });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

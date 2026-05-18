@@ -24,6 +24,104 @@ async function buildAncestors(parentId?: string | null): Promise<mongoose.Types.
   return [...(parent.ancestors || []), parent._id as mongoose.Types.ObjectId];
 }
 
+type AttachError = { status: number; message: string };
+
+async function attachChildrenToParent(
+  parentId: mongoose.Types.ObjectId,
+  rawChildIds: string[] | undefined,
+  session?: mongoose.ClientSession
+): Promise<AttachError | null> {
+  if (!rawChildIds || rawChildIds.length === 0) return null;
+
+  const uniqueIds = Array.from(new Set(rawChildIds.map(String)));
+  const parentIdStr = String(parentId);
+
+  if (uniqueIds.some((id) => id === parentIdStr)) {
+    return { status: 422, message: "A category cannot be its own child" };
+  }
+
+  const parent = await MaterialCategory.findById(parentId)
+    .select("_id ancestors")
+    .session(session ?? null)
+    .lean();
+  if (!parent) return { status: 404, message: "Parent category not found" };
+
+  const parentAncestors = (parent.ancestors || []).map((a) => String(a));
+  if (uniqueIds.some((id) => parentAncestors.includes(id))) {
+    return {
+      status: 422,
+      message: "Cycle detected: one of the selected categories is an ancestor of this category",
+    };
+  }
+
+  const children = await MaterialCategory.find({ _id: { $in: uniqueIds } })
+    .select("_id ancestors parent")
+    .session(session ?? null)
+    .lean();
+  if (children.length !== uniqueIds.length) {
+    return { status: 422, message: "One or more childCategoryIds are invalid" };
+  }
+
+  const newAncestorsForChild = [...(parent.ancestors || []), parent._id as mongoose.Types.ObjectId];
+  const newAncestorsStr = newAncestorsForChild.map((a) => String(a));
+
+  for (const child of children) {
+    const oldAncestors = (child.ancestors || []).map((a) => String(a));
+    const oldPrefixForDescendants = [...oldAncestors, String(child._id)];
+
+    // 0) Detach from the previous parent's childCategoryIds, if any.
+    if (child.parent && String(child.parent) !== parentIdStr) {
+      await MaterialCategory.updateOne(
+        { _id: child.parent },
+        { $pull: { childCategoryIds: child._id } },
+        { session }
+      );
+    }
+
+    // 1) Update the child itself.
+    await MaterialCategory.updateOne(
+      { _id: child._id },
+      { $set: { parent: parent._id, ancestors: newAncestorsForChild } },
+      { session }
+    );
+
+    // 1b) Mirror the relationship on the new parent's childCategoryIds.
+    await MaterialCategory.updateOne(
+      { _id: parent._id },
+      { $addToSet: { childCategoryIds: child._id } },
+      { session }
+    );
+
+    // 2) Rewrite ancestors on all descendants of this child.
+    // Descendants are documents whose `ancestors` starts with oldPrefixForDescendants.
+    const descendants = await MaterialCategory.find({ ancestors: child._id })
+      .select("_id ancestors")
+      .session(session ?? null)
+      .lean();
+
+    for (const d of descendants) {
+      const oldAnc = (d.ancestors || []).map((a) => String(a));
+      // Find the index of `child._id` and replace everything up to and including it
+      // with newAncestorsForChild + child._id.
+      const idx = oldAnc.indexOf(String(child._id));
+      if (idx === -1) continue;
+      const tail = oldAnc.slice(idx + 1);
+      const rewritten = [
+        ...newAncestorsStr,
+        String(child._id),
+        ...tail,
+      ].map((s) => new mongoose.Types.ObjectId(s));
+      await MaterialCategory.updateOne(
+        { _id: d._id },
+        { $set: { ancestors: rewritten } },
+        { session }
+      );
+    }
+  }
+
+  return null;
+}
+
 function slugify(input: string): string {
   return input
     .toLowerCase()
@@ -111,25 +209,63 @@ export const getCategoryById = async (req: Request, res: Response) => {
 };
 
 export const createCategory = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
   try {
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     const data = createMaterialCategorySchema.parse(req.body);
     const ancestors = await buildAncestors(data.parent ?? null);
-    const cat = await MaterialCategory.create({
-      ...data,
-      parent: data.parent ?? null,
-      slug: data.slug || slugify(data.title),
-      ancestors,
+
+    let createdId: mongoose.Types.ObjectId | null = null;
+    let attachErr: AttachError | null = null;
+
+    await session.withTransaction(async () => {
+      const { childCategoryIds, ...catFields } = data;
+      const [cat] = await MaterialCategory.create(
+        [
+          {
+            ...catFields,
+            parent: data.parent ?? null,
+            slug: data.slug || slugify(data.title),
+            ancestors,
+          },
+        ],
+        { session }
+      );
+      createdId = cat._id as mongoose.Types.ObjectId;
+
+      // Mirror the parent → child link.
+      if (cat.parent) {
+        await MaterialCategory.updateOne(
+          { _id: cat.parent },
+          { $addToSet: { childCategoryIds: cat._id } },
+          { session }
+        );
+      }
+
+      attachErr = await attachChildrenToParent(createdId, childCategoryIds, session);
+      if (attachErr) throw new Error("__attach_abort__");
     });
+
+    if (attachErr) {
+      return res.status(attachErr.status).json({ success: false, message: attachErr.message });
+    }
+
+    const cat = await MaterialCategory.findById(createdId);
     return res.status(201).json({ success: true, data: cat });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.message === "__attach_abort__") {
+      return res.status(500).json({ success: false, message: "Failed to attach child categories" });
+    }
     return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    await session.endSession();
   }
 };
 
 export const updateCategory = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
   try {
     const id = req.params.id as string;
     if (!mongoose.Types.ObjectId.isValid(id))
@@ -137,20 +273,80 @@ export const updateCategory = async (req: Request, res: Response) => {
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     const data = updateMaterialCategorySchema.parse(req.body);
-    const update: any = { ...data };
+    const { childCategoryIds, ...catFields } = data;
+    const update: any = { ...catFields };
+    let oldParentId: mongoose.Types.ObjectId | null = null;
+    let parentChanged = false;
     if (data.parent !== undefined) {
       if (data.parent === id)
         return res.status(400).json({ success: false, message: "Category cannot be its own parent." });
+      const existing = await MaterialCategory.findById(id).select("parent");
+      if (!existing) return res.status(404).json({ success: false, message: "Category not found." });
+      oldParentId = (existing.parent as mongoose.Types.ObjectId | null) ?? null;
       update.parent = data.parent || null;
       update.ancestors = await buildAncestors(data.parent);
+      parentChanged = String(oldParentId ?? "") !== String(update.parent ?? "");
     }
     if (data.title && !data.slug) update.slug = slugify(data.title);
-    const cat = await MaterialCategory.findByIdAndUpdate(id, { $set: update }, { new: true });
-    if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
-    return res.status(200).json({ success: true, data: cat });
+
+    let notFound = false;
+    let attachErr: AttachError | null = null;
+
+    await session.withTransaction(async () => {
+      const cat = await MaterialCategory.findByIdAndUpdate(
+        id,
+        { $set: update },
+        { new: true, session }
+      );
+      if (!cat) {
+        notFound = true;
+        throw new Error("__not_found__");
+      }
+
+      // Keep both sides of the relationship in sync when the parent changes.
+      if (parentChanged) {
+        if (oldParentId) {
+          await MaterialCategory.updateOne(
+            { _id: oldParentId },
+            { $pull: { childCategoryIds: cat._id } },
+            { session }
+          );
+        }
+        if (cat.parent) {
+          await MaterialCategory.updateOne(
+            { _id: cat.parent },
+            { $addToSet: { childCategoryIds: cat._id } },
+            { session }
+          );
+        }
+      }
+
+      attachErr = await attachChildrenToParent(
+        cat._id as mongoose.Types.ObjectId,
+        childCategoryIds,
+        session
+      );
+      if (attachErr) throw new Error("__attach_abort__");
+    });
+
+    if (notFound) return res.status(404).json({ success: false, message: "Category not found." });
+    if (attachErr) {
+      return res.status(attachErr.status).json({ success: false, message: attachErr.message });
+    }
+
+    const fresh = await MaterialCategory.findById(id);
+    return res.status(200).json({ success: true, data: fresh });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.message === "__not_found__") {
+      return res.status(404).json({ success: false, message: "Category not found." });
+    }
+    if (error.message === "__attach_abort__") {
+      return res.status(500).json({ success: false, message: "Failed to attach child categories" });
+    }
     return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    await session.endSession();
   }
 };
 
@@ -175,6 +371,12 @@ export const deleteCategory = async (req: Request, res: Response) => {
     }
     const cat = await MaterialCategory.findByIdAndDelete(id);
     if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
+    if (cat.parent) {
+      await MaterialCategory.updateOne(
+        { _id: cat.parent },
+        { $pull: { childCategoryIds: cat._id } }
+      );
+    }
     return res.status(200).json({ success: true, message: "Category deleted." });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

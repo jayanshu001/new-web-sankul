@@ -1,9 +1,28 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { PromoCode } from "../../models/course/PromoCode.model";
-import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
+import { Package } from "../../models/course/Package.model";
+import { Course } from "../../models/course/Course.model";
+import { LiveCourse } from "../../models/course/LiveCourse.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
+
+const APPLIES_TO_MODEL = {
+  package: Package,
+  course: Course,
+  liveCourse: LiveCourse,
+} as const;
+
+async function populateAppliesTo(promo: any) {
+  const at = promo?.appliesTo;
+  if (!at?.ids?.length) return promo;
+  const Model = APPLIES_TO_MODEL[at.type as keyof typeof APPLIES_TO_MODEL] as any;
+  if (!Model) return promo;
+  const records = await Model.find({ _id: { $in: at.ids } })
+    .select("_id name image")
+    .lean();
+  return { ...promo, appliesTo: { type: at.type, ids: records } };
+}
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -60,11 +79,8 @@ export const getMyPromocode = async (req: Request, res: Response) => {
     if (!promocode)
       return res.status(404).json({ success: false, message: "Promocode not found." });
 
-    const plans = await PromotedPackageCourseEbook.find({ promocodeId: id })
-      .populate({ path: "planId", model: "PackageCourseEbookPrice" })
-      .lean();
-
-    return res.status(200).json({ success: true, data: { promocode, plans } });
+    const populated = await populateAppliesTo(promocode);
+    return res.status(200).json({ success: true, data: { promocode: populated } });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }

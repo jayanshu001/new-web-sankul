@@ -3,9 +3,6 @@ import mongoose from "mongoose";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
-import { PromoCode } from "../../models/course/PromoCode.model";
-import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
-import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { generateEbookReceipt } from "../../libs/core/generate";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
@@ -149,37 +146,13 @@ export const getEbookDetail = async (req: Request, res: Response) => {
       if (sub) subscriptionEndAt = sub.endAt;
     }
 
-    // Public promocodes available for this ebook (via PackageCourseEbookPrice linkage)
-    const pceplans = await PackageCourseEbookPrice.find({ ebookId: id, status: true })
-      .select("_id")
-      .lean();
-    const pcePlanIds = pceplans.map((p) => p._id);
-
-    let availablePromoCode: Array<{ title: string; promocode: string; description: string }> = [];
-    if (pcePlanIds.length) {
-      const promoted = await PromotedPackageCourseEbook.find({ planId: { $in: pcePlanIds } })
-        .populate({
-          path: "promocodeId",
-          match: { type: "public" },
-        })
-        .lean();
-
-      const now = new Date();
-      const seen = new Set<string>();
-      promoted.forEach((p: any) => {
-        const pc = p.promocodeId;
-        if (!pc) return;
-        if (!pc.status) return;
-        if (pc.promo_start_at > now || pc.promo_expire_at < now) return;
-        if (seen.has(pc.promocode)) return;
-        seen.add(pc.promocode);
-        availablePromoCode.push({
-          title: pc.title,
-          promocode: pc.promocode,
-          description: pc.description,
-        });
-      });
-    }
+    // Ebooks aren't in the new `appliesTo` enum, so no promocode can target an
+    // ebook directly. List stays empty until the enum is extended.
+    const availablePromoCode: Array<{
+      title: string;
+      promocode: string;
+      description: string;
+    }> = [];
 
     return res.status(200).json({
       success: true,

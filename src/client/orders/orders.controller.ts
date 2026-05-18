@@ -7,7 +7,7 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
-import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
+import { promoCovers, computePromoDiscount } from "../promocode/applies-to";
 import { Customer } from "../../models/customer/Customer.model";
 import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
 import { Course } from "../../models/course/Course.model";
@@ -23,6 +23,7 @@ import {
   placeEbookOrderSchema,
   verifyPaymentSchema,
 } from "./orders.validation";
+import { creditReferrer } from "../referral/credit-referrer";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -30,23 +31,23 @@ interface PriceResolution {
   finalPrice: number;
   promocodeId: Types.ObjectId | null;
   promoterId: Types.ObjectId | null;
+  referrerId: Types.ObjectId | null;
   customerPercentage: number | null;
-  promoterPercentage: number | null;
 }
 
 async function resolveFinalPrice(opts: {
   basePrice: number;
-  planId: string;
+  cart: { type: "package" | "course" | "liveCourse"; id: string } | null;
   promocodeRaw?: string;
   userId?: string;
 }): Promise<PriceResolution> {
-  const { basePrice, planId, promocodeRaw, userId } = opts;
+  const { basePrice, cart, promocodeRaw, userId } = opts;
   const empty: PriceResolution = {
     finalPrice: basePrice,
     promocodeId: null,
     promoterId: null,
+    referrerId: null,
     customerPercentage: null,
-    promoterPercentage: null,
   };
   if (!promocodeRaw) return empty;
   const code = promocodeRaw.toUpperCase();
@@ -58,27 +59,22 @@ async function resolveFinalPrice(opts: {
       status: true,
       promo_start_at: { $lt: now },
       promo_expire_at: { $gt: now },
-    }).lean(),
+    }),
     Customer.findOne({ referralCode: code, isAccountDeleted: false, status: true }).lean(),
     ReferralProgram.findOne({ name: "student", status: true }).lean(),
   ]);
 
   if (promo) {
-    const promoted = await PromotedPackageCourseEbook.findOne({
-      promocodeId: promo._id,
-      planId,
-    }).lean();
-    if (promoted) {
-      const discount = Math.round((basePrice * promoted.customerPercentage) / 100);
-      return {
-        finalPrice: Math.max(0, basePrice - discount),
-        promocodeId: promo._id as Types.ObjectId,
-        promoterId: (promo.promoterId ?? null) as Types.ObjectId | null,
-        customerPercentage: promoted.customerPercentage,
-        promoterPercentage: promoted.promoterPercentage,
-      };
-    }
-    return empty;
+    if (!cart) return empty;
+    if (!promoCovers(promo, cart)) return empty;
+    const discount = computePromoDiscount(promo, basePrice);
+    return {
+      finalPrice: Math.max(0, basePrice - discount),
+      promocodeId: promo._id as Types.ObjectId,
+      promoterId: (promo.promoterId ?? null) as Types.ObjectId | null,
+      referrerId: null,
+      customerPercentage: promo.discountType === "percentage" ? promo.discountValue : null,
+    };
   }
 
   if (referralCustomer && referralProgram) {
@@ -90,9 +86,11 @@ async function resolveFinalPrice(opts: {
       return {
         ...empty,
         finalPrice: Math.max(0, basePrice - discount),
+        referrerId: referralCustomer._id as Types.ObjectId,
         customerPercentage: referralProgram.referralDiscount,
       };
     }
+    return { ...empty, referrerId: referralCustomer._id as Types.ObjectId };
   }
 
   return empty;
@@ -115,9 +113,18 @@ export const placeCourseOrder = async (req: Request, res: Response) => {
     if (data.packageId && String(plan.packageId) !== data.packageId)
       return res.status(400).json({ success: false, message: "Plan does not belong to this package." });
 
+    // Resolve the cart entity for appliesTo matching. Course id (if any)
+    // wins over package id — a plan can only belong to one parent.
+    const cartEntityId = data.courseId || data.packageId || null;
+    const cartType: "course" | "package" | null = data.courseId
+      ? "course"
+      : data.packageId
+      ? "package"
+      : null;
+
     const priceResolution = await resolveFinalPrice({
       basePrice: plan.price,
-      planId: data.planId,
+      cart: cartEntityId && cartType ? { type: cartType, id: String(cartEntityId) } : null,
       promocodeRaw: data.promocode,
       userId,
     });
@@ -147,10 +154,21 @@ export const placeCourseOrder = async (req: Request, res: Response) => {
       status: paymentDone,
       promocodeId: priceResolution.promocodeId,
       promoterId: priceResolution.promoterId,
+      referrerId: priceResolution.referrerId,
       paidAmount: finalPrice,
       customerPercentage: priceResolution.customerPercentage,
-      promoterPercentage: priceResolution.promoterPercentage,
+      promoterPercentage: 0,
     });
+
+    if (paymentDone && priceResolution.referrerId) {
+      await creditReferrer({
+        referrerId: priceResolution.referrerId,
+        buyerId: userId,
+        orderId: subscription._id as Types.ObjectId,
+        paidAmount: finalPrice,
+        source: data.courseId ? "course" : "package",
+      });
+    }
 
     return res.status(201).json({
       success: true,
@@ -182,13 +200,11 @@ export const placeEbookOrder = async (req: Request, res: Response) => {
     if (!plan || !plan.status || String(plan.ebookId) !== data.ebookId)
       return res.status(404).json({ success: false, message: "Plan not found for this ebook." });
 
-    // For ebook, check promocode via PackageCourseEbookPrice mirror if present — otherwise treat as no discount
-    const mirrored = await PackageCourseEbookPrice.findOne({ ebookId: data.ebookId, duration: plan.duration })
-      .select("_id")
-      .lean();
+    // Ebooks are not part of the new `appliesTo` enum — promocodes no longer
+    // discount ebooks. Referral codes still apply through their own branch.
     const priceResolution = await resolveFinalPrice({
       basePrice: plan.price,
-      planId: mirrored ? String(mirrored._id) : data.planId,
+      cart: null,
       promocodeRaw: data.promocode,
       userId,
     });
@@ -232,7 +248,18 @@ export const placeEbookOrder = async (req: Request, res: Response) => {
         status: true,
         promocodeId: priceResolution.promocodeId,
         promoterId: priceResolution.promoterId,
+        referrerId: priceResolution.referrerId,
       });
+
+      if (priceResolution.referrerId) {
+        await creditReferrer({
+          referrerId: priceResolution.referrerId,
+          buyerId: userId,
+          orderId: order._id as Types.ObjectId,
+          paidAmount: finalPrice,
+          source: "ebook",
+        });
+      }
     }
 
     return res.status(201).json({
@@ -275,16 +302,34 @@ export const verifyPayment = async (req: Request, res: Response) => {
       const startAt = new Date();
       const endAt = new Date(startAt.getTime() + plan.duration * 24 * 60 * 60 * 1000);
 
-      const sub = await EbookSubscription.create({
-        orderId: order._id,
-        customerId: userId,
-        ebookId: order.ebookId,
-        price: order.orderPrice,
-        startAt,
-        endAt,
-        paymentType: PackageCourseEbookPaymentType.ONLINE,
-        status: true,
-      });
+      // Reuse referrerId stamped on an existing subscription row if the order
+      // was placed via the `placeEbookOrder` path that already persisted one.
+      const existingSub = await EbookSubscription.findOne({ orderId: order._id }).lean();
+      const referrerId = existingSub?.referrerId ?? null;
+
+      const sub =
+        existingSub ??
+        (await EbookSubscription.create({
+          orderId: order._id,
+          customerId: userId,
+          ebookId: order.ebookId,
+          price: order.orderPrice,
+          startAt,
+          endAt,
+          paymentType: PackageCourseEbookPaymentType.ONLINE,
+          status: true,
+          referrerId,
+        }));
+
+      if (referrerId) {
+        await creditReferrer({
+          referrerId,
+          buyerId: userId,
+          orderId: order._id as Types.ObjectId,
+          paidAmount: order.orderPrice,
+          source: "ebook",
+        });
+      }
 
       return res.status(200).json({ success: true, data: { order, subscription: sub } });
     }
@@ -305,6 +350,16 @@ export const verifyPayment = async (req: Request, res: Response) => {
       sub.endAt = endAt;
       sub.status = true;
       await sub.save();
+
+      if (sub.referrerId) {
+        await creditReferrer({
+          referrerId: sub.referrerId,
+          buyerId: userId,
+          orderId: sub._id as Types.ObjectId,
+          paidAmount: sub.paidAmount ?? 0,
+          source: sub.courseId ? "course" : "package",
+        });
+      }
 
       return res.status(200).json({ success: true, data: { subscription: sub } });
     }
