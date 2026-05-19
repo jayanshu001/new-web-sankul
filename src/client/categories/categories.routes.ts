@@ -2,6 +2,7 @@ import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import {
   listVideosByCategory,
+  getVideoByCategory,
   listMaterialsByCategory,
   listExamsByCategory,
   listVideoCategoryChildren,
@@ -20,6 +21,7 @@ const router = Router();
 router.use(authenticate);
 
 router.get("/video-categories/:id/videos", listVideosByCategory);
+router.get("/video-categories/:id/videos/:videoId", getVideoByCategory);
 router.get("/video-categories/:id/children", listVideoCategoryChildren);
 router.get("/material-categories/:id/materials", listMaterialsByCategory);
 router.get("/material-categories/:id/children", listMaterialCategoryChildren);

@@ -30,7 +30,6 @@ import clientCategoriesRoutes from "./categories/categories.routes";
 import { videoFolderRouter, materialFolderRouter } from "./folder/folder.routes";
 import clientExamCountdownRoutes from "./examCountdown/examCountdown.routes";
 import clientEducatorRoutes from "./educator/educator.routes";
-import { youtubeStreamProxy } from "./categories/yt-proxy.controller";
 import clientLiveChatRoutes from "./livechat/livechat.routes";
 import clientLivePollRoutes from "./livepoll/livepoll.routes";
 import clientSearchRoutes from "./search/search.routes";
@@ -42,11 +41,6 @@ import clientLectureAudioNoteRoutes from "./lecture-audio-note/lecture-audio-not
 import clientTestSeriesRoutes from "./testSeries/testSeries.routes";
 
 const router = Router();
-
-// Public: HMAC token in the URL is the auth (short-lived, scoped to one
-// youtube_id+itag). Native players can't send Bearer headers, so this route
-// must be registered BEFORE any sub-router that applies `authenticate`.
-router.get("/yt-proxy", youtubeStreamProxy);
 
 /**
  * ==========================================

@@ -13,146 +13,57 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { Book } from "../../models/book/Book.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
-import { Innertube, Log } from "youtubei.js";
-import { signYoutubeStream } from "./yt-proxy.controller";
+import { resolveVideoSource } from "../../utils/videoResolver";
 
-Log.setLevel(Log.Level.ERROR);
-import { randomBytes } from "crypto";
-
-function proxyUrl(req: Request, youtubeId: string, itag: number): string {
-  const base = process.env.PUBLIC_BASE_URL?.replace(/\/$/, "") ?? `${req.protocol}://${req.get("host")}`;
-  return `${base}/api/v1/client/yt-proxy?t=${signYoutubeStream(youtubeId, itag)}`;
+// Metadata-only row shape. Resolved/playable URLs (ytdl-core / VideoCrypt
+// output) are NOT included here — a single category page can hold 20+ videos
+// and we don't want to pay 20+ upstream calls per page load. The FE calls the
+// detail endpoint (getVideoByCategory) on row tap to get the encrypted envelope.
+//
+// We DO include youtube_id / aws_id / vimeo_id on each row so the FE can show
+// the right thumbnail/label and pass the correct id to whatever native player
+// flow it uses. These are just identifiers, not directly-playable URLs.
+function shapeVideoForList(v: any) {
+  return v;
 }
 
-function uniqId(): string {
-  return randomBytes(8).toString("hex");
-}
-
-let cachedInnertube: Promise<InstanceType<typeof Innertube>> | undefined;
-function getInnertube() {
-  if (!cachedInnertube) cachedInnertube = Innertube.create();
-  return cachedInnertube;
-}
-
-function encryptFlat(v: any) {
-  const token = generateToken(16);
-  const key = generateKey(token);
-  const vector = generateVector(token);
-  const sourceId =
-    v.platform === "youtube" ? v.youtube_id
-    : v.platform === "aws" ? v.aws_id
-    : v.vimeo_id;
-  const videoURL = sourceId ? encrypt(String(sourceId), key, vector) : "";
-  const { youtube_id, aws_id, vimeo_id, ...rest } = v;
-  return { ...rest, token, videoURL };
-}
-
-function normalizeFormat(f: any) {
-  const mime: string = f.mime_type ?? "";
-  const isAudio = mime.startsWith("audio/");
-  const isVideo = mime.startsWith("video/");
-  const hasAudioInMux = isVideo && /,\s*mp4a|,\s*opus|,\s*vorbis/i.test(mime);
-  return {
-    url: f.url as string | undefined,
-    itag: f.itag,
-    mimeType: mime,
-    bitrate: f.bitrate,
-    hasAudio: isAudio || hasAudioInMux,
-    hasVideo: isVideo,
-    height: f.height,
-    width: f.width,
-    fps: f.fps,
-    contentLength: f.content_length,
-    audioBitrate: f.audio_quality === "AUDIO_QUALITY_HIGH" ? 192 : f.audio_quality === "AUDIO_QUALITY_MEDIUM" ? 128 : undefined,
-    audioCodec: isAudio ? mime.match(/codecs="([^"]+)"/)?.[1] : undefined,
-    videoCodec: isVideo ? mime.match(/codecs="([^"]+)"/)?.[1]?.split(",")[0]?.trim() : undefined,
-    container: mime.split(";")[0]?.split("/")[1],
-    approxDurationMs: f.approx_duration_ms,
-    qualityLabel: f.quality_label ?? null,
-  };
-}
-
-async function buildYoutubeItem(req: Request, v: any) {
-  const yt = await getInnertube();
-  const clientsToTry = ["IOS", "ANDROID", "WEB_EMBEDDED", "TV", "WEB"] as const;
-
-  let normalized: ReturnType<typeof normalizeFormat>[] = [];
-  for (const client of clientsToTry) {
-    const info = await yt.getInfo(String(v.youtube_id), client as any);
-    const sd: any = (info as any).streaming_data;
-    if (!sd) continue;
-    const raw = [...(sd.formats ?? []), ...(sd.adaptive_formats ?? [])];
-    if (raw.length > 0) {
-      normalized = raw.map(normalizeFormat);
-      break;
-    }
-  }
-
-  if (normalized.length === 0) throw new Error("No formats from YouTube");
-
-  const videoStreams = normalized
-    .filter((f) => f.hasVideo)
-    .sort((a, b) => (b.height ?? 0) - (a.height ?? 0));
-  const audioStreams = normalized
-    .filter((f) => f.hasAudio && !f.hasVideo)
-    .sort((a, b) => (b.audioBitrate ?? 0) - (a.audioBitrate ?? 0));
-
-  const ordered = [...videoStreams, ...audioStreams];
-  const defaultStream = videoStreams[0] ?? audioStreams[0];
-
+// Same envelope encryptLecture (live-course) produces, ported here so this
+// endpoint family also returns the shared {files:{token,hls,progressive}}
+// contract. Centralising this in a util later would be ideal, but the duplicated
+// copy keeps the two flows independent for now.
+async function encryptVideoEnvelope(v: {
+  platform: string;
+  youtube_id?: string | null;
+  aws_id?: string | null;
+  vimeo_id?: string | null;
+}) {
+  const resolved = await resolveVideoSource(v);
   const token = generateToken(16);
   const key = generateKey(token);
   const vector = generateVector(token);
 
-  const youtubeId = String(v.youtube_id);
-
-  const progressive = ordered.map((f) => {
-    const label = f.qualityLabel ?? (f.hasAudio && !f.hasVideo ? "audio" : undefined);
-    return {
-      ...f,
-      id: uniqId(),
-      quality: label,
-      qualityLabel: label,
-      url: encrypt(proxyUrl(req, youtubeId, Number(f.itag)), key, vector),
-    };
-  });
-
-  const hlsUrl = encrypt(proxyUrl(req, youtubeId, Number(defaultStream.itag)), key, vector);
-  const { youtube_id, aws_id, vimeo_id, ...rest } = v;
+  const progressive = resolved.progressive.map((p) => ({
+    qualityLabel: p.qualityLabel,
+    quality: p.quality,
+    height: p.height,
+    url: encrypt(p.url, key, vector),
+  }));
 
   return {
-    ...rest,
-    request: {
-      files: {
-        hls: {
-          default_cdn: "akfire_interconnect_quic",
-          cdns: { akfire_interconnect_quic: { url: hlsUrl } },
+    files: {
+      token,
+      hls: {
+        default_cdn: "primary",
+        cdns: {
+          primary: {
+            url: resolved.hlsUrl ? encrypt(resolved.hlsUrl, key, vector) : "",
+            allow720: resolved.allow720,
+          },
         },
-        progressive,
-        token,
       },
+      progressive,
     },
   };
-}
-
-async function shapeVideoForList(req: Request, v: any) {
-  if (v.platform === "youtube") {
-    if (!v.youtube_id) {
-      console.warn("[video-list] youtube item missing youtube_id", { _id: v._id });
-      return encryptFlat(v);
-    }
-    try {
-      return await buildYoutubeItem(req, v);
-    } catch (err: any) {
-      console.error("[video-list] ytdl.getInfo failed", {
-        _id: v._id,
-        youtube_id: v.youtube_id,
-        error: err?.message,
-      });
-      return encryptFlat(v);
-    }
-  }
-  return encryptFlat(v);
 }
 
 function parsePaging(req: Request) {
@@ -182,12 +93,61 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
       Video.countDocuments(filter),
     ]);
 
-    const list = await Promise.all(rawList.map((v) => shapeVideoForList(req, v)));
+    const list = rawList.map(shapeVideoForList);
 
     return res.status(200).json({
       success: true,
       data: { category, list },
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /client/video-categories/:id/videos/:videoId
+// Resolves a single recorded video through ytdl-core (YouTube) or VideoCrypt
+// (AWS) and returns the encrypted multi-resolution envelope. The list endpoint
+// stays metadata-only; this is the detail call the FE makes on row tap.
+export const getVideoByCategory = async (req: Request, res: Response) => {
+  try {
+    const id = String(req.params.id ?? "");
+    const videoId = String(req.params.videoId ?? "");
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(videoId)) {
+      return res.status(422).json({ success: false, message: "Invalid category or video id." });
+    }
+
+    const video = await Video.findOne({ _id: videoId, videoCategoryId: id, status: true }).lean();
+    if (!video) {
+      return res.status(404).json({ success: false, message: "Video not found in this category." });
+    }
+
+    let envelope;
+    try {
+      envelope = await encryptVideoEnvelope(video);
+    } catch (err: any) {
+      console.error("[video-detail] resolve/encrypt failed", {
+        videoId,
+        platform: video.platform,
+        error: err?.message,
+      });
+      return res.status(502).json({
+        success: false,
+        message: "Failed to resolve playable URLs for this video.",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        _id: String(video._id),
+        title: video.title ?? "",
+        topic: video.topic ?? "",
+        platform: video.platform,
+        priceType: video.priceType,
+        ...envelope,
+      },
+      message: "Video fetched.",
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

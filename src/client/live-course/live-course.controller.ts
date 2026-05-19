@@ -8,18 +8,57 @@ import { Video } from "../../models/course/Video.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { hasAccessToAnyLiveCourse, buildPurchaseOptions } from "./entitlement";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
+import { resolveVideoSource } from "../../utils/videoResolver";
 import logger from "../../utils/logger";
 
-// Pick the platform-specific playable id/url for a Video document.
-function videoSourceUrl(v: {
+// Builds the multi-resolution playback envelope a lecture detail endpoint
+// returns. The shape mirrors the legacy "encryptLecture" contract:
+//   { files: {
+//       hls:         { default_cdn, cdns: { primary: { url } } },
+//       progressive: [{ qualityLabel, quality, height, url }],
+//       token,
+//     } }
+// Every URL is AES-encrypted using the same {token, ciphertext} pattern as
+// /v1/lecture, so the FE decryption helper is unchanged.
+async function encryptLecture(v: {
   platform: string;
   youtube_id?: string | null;
-  vimeo_id?: string | null;
   aws_id?: string | null;
-}): string | null {
-  if (v.platform === "youtube") return v.youtube_id ?? null;
-  if (v.platform === "vimeo") return v.vimeo_id ?? null;
-  return v.aws_id ?? null; // "aws" — recordings promoted from live sessions land here
+  vimeo_id?: string | null;
+}) {
+  const resolved = await resolveVideoSource(v);
+  const token = generateToken(16);
+  const key = generateKey(token);
+  const vector = generateVector(token);
+
+  const encryptedProgressive = resolved.progressive.map((p) => ({
+    qualityLabel: p.qualityLabel,
+    quality: p.quality,
+    height: p.height,
+    url: encrypt(p.url, key, vector),
+  }));
+
+  // hlsUrl can be null (e.g. YouTube path has no real master playlist) — the
+  // FE picks the first progressive entry in that case. Keep the structure
+  // present either way so the FE doesn't branch on its existence.
+  const encryptedHls = resolved.hlsUrl ? encrypt(resolved.hlsUrl, key, vector) : "";
+
+  return {
+    files: {
+      token,
+      hls: {
+        default_cdn: "primary",
+        cdns: {
+          primary: {
+            url: encryptedHls,
+            allow720: resolved.allow720,
+          },
+        },
+      },
+      progressive: encryptedProgressive,
+    },
+  };
 }
 
 // GET /api/v1/client/live-courses
@@ -253,14 +292,12 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
         priceType: v.priceType,
         order: v.order,
         locked: !canPlay,
-        // `videoUrl` is the unified playable source for `platform`. The
-        // platform-specific ids are also returned so the client can pick the
-        // right player — all gated identically to videoUrl (a youtube_id /
-        // aws_id can itself be a playable URL, so it must not leak when locked).
-        videoUrl: canPlay ? videoSourceUrl(v) : null,
-        youtube_id: canPlay ? v.youtube_id ?? null : null,
-        aws_id: canPlay ? v.aws_id ?? null : null,
-        vimeo_id: canPlay ? v.vimeo_id ?? null : null,
+        // Raw platform identifiers are returned for UI purposes (thumbnails,
+        // labels). They're NOT directly playable — the FE must call
+        // GET /lecture/:videoId on tap to get the resolved+encrypted envelope.
+        youtube_id: v.youtube_id ?? null,
+        aws_id: v.aws_id ?? null,
+        vimeo_id: v.vimeo_id ?? null,
       };
     };
 
@@ -327,8 +364,22 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
       }
     }
 
-    // Reached here only when entitled (or the lecture is free), so the source
-    // ids are safe to return alongside the unified `videoUrl`.
+    // Reached here only when entitled (or the lecture is free). Resolve via
+    // the per-platform transcoder (ytdl-core for youtube, VideoCrypt for aws)
+    // and ship the AES-encrypted multi-resolution envelope. The resolver caches
+    // upstream responses in Redis so repeat hits don't re-pay the round-trip.
+    let envelope;
+    try {
+      envelope = await encryptLecture(video);
+    } catch (err) {
+      logger.error("Resolve/encrypt lecture failed", {
+        videoId: String(video._id),
+        platform: video.platform,
+        error: getErrorMessage(err),
+      });
+      return failure(res, "Failed to resolve playable URLs for this lecture.", 502);
+    }
+
     return success(
       res,
       {
@@ -337,10 +388,7 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
         topic: video.topic ?? "",
         platform: video.platform,
         priceType: video.priceType,
-        videoUrl: videoSourceUrl(video),
-        youtube_id: video.youtube_id ?? null,
-        aws_id: video.aws_id ?? null,
-        vimeo_id: video.vimeo_id ?? null,
+        ...envelope,
       },
       "Lecture fetched."
     );

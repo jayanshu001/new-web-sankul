@@ -44,6 +44,36 @@ app.use(
 // 2) Serve static uploads
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
+// 2b) Live-course demo harness — served same-origin to dodge the file:// CORS trap.
+// The page uses an inline <script> + two CDN scripts (hls.js, socket.io), both of
+// which violate Helmet's default CSP. Relax the policy on this single route only.
+app.get(
+  "/demo",
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: [
+          "'self'",
+          "'unsafe-inline'",
+          "https://cdn.jsdelivr.net",
+          "https://cdn.socket.io",
+        ],
+        // The HTML uses inline event handlers (onclick="…"); Helmet defaults
+        // this directive to 'none', which blocks them even when scriptSrc
+        // allows 'unsafe-inline'.
+        scriptSrcAttr: ["'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'"],
+        connectSrc: ["'self'", "ws:", "wss:", "http:", "https:"],
+        mediaSrc: ["'self'", "blob:", "data:", "http:", "https:"],
+        imgSrc: ["'self'", "data:", "blob:", "http:", "https:"],
+      },
+    },
+  }),
+  (_req, res) =>
+    res.sendFile(path.join(process.cwd(), "docs", "live-course-demo.html"))
+);
+
 // 3) Stricter API CORS (handles preflight)
 const allowedOrigins = (
   process.env.ALLOWED_ORIGINS ??

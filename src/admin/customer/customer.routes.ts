@@ -14,6 +14,7 @@ import {
   getCustomerCourseSubscriptions,
   getCustomerEbookSubscriptions,
   updateCourseSubscriptionDates,
+  getCustomerDetails,
 } from "./customer.controller";
 
 const router = Router();
@@ -26,6 +27,7 @@ router.get("/states/:stateId/districts", getDistrictsByState);
 router.get("/", getCustomers);
 router.post("/", uploadS3.single("profilePicture"), createCustomer);
 router.get("/:id", getCustomerById);
+router.get("/:id/details", getCustomerDetails);
 router.put("/:id", uploadS3.single("profilePicture"), updateCustomer);
 router.delete("/:id", deleteCustomer);
 router.patch("/:id/status", toggleCustomerStatus);

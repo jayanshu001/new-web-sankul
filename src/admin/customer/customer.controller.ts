@@ -6,7 +6,10 @@ import { CustomerState } from "../../models/customer/CustomerState.model";
 import { CustomerDistrict } from "../../models/customer/CustomerDistrict.model";
 import { CustomerEducation } from "../../models/customer/CustomerEducation.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
+import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
+import { BookOrder } from "../../models/book/BookOrder.model";
 import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSchema } from "./customer.validation";
 import { ensureDefaultFolders } from "../../client/folder/folder.controller";
 
@@ -346,6 +349,123 @@ export const getCustomerAddresses = async (req: Request, res: Response) => {
       .populate("stateId", "_id name stateCode")
       .sort({ createdAt: -1 });
     return res.status(200).json({ success: true, data: addresses });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── Customer Details (aggregate for admin detail page) ──────────────────────
+
+export const getCustomerDetails = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+    }
+
+    const customer = await Customer.findOne({ _id: id, isAccountDeleted: false })
+      .select("-password -otp")
+      .populate("stateId", "_id name stateCode")
+      .populate("districtId", "_id name")
+      .populate("educationId", "_id name");
+
+    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
+
+    const now = new Date();
+
+    const [
+      addresses,
+      coursePackageSubs,
+      liveCourseSubs,
+      testSeriesSubs,
+      ebookSubs,
+      bookOrders,
+    ] = await Promise.all([
+      CustomerAddress.find({ customerId: id })
+        .populate("stateId", "_id name stateCode")
+        .sort({ createdAt: -1 }),
+      PackageCourseSubscription.find({ customerId: id })
+        .populate("courseId", "_id name image level")
+        .populate("targetPackageId", "_id name image")
+        .populate("packageId", "_id name duration price withMaterial")
+        .sort({ createdAt: -1 }),
+      LiveCourseSubscription.find({ customerId: id })
+        .populate("liveCourseId", "_id name image level")
+        .populate("planId", "_id name duration price")
+        .sort({ createdAt: -1 }),
+      TestSeriesSubscription.find({ customerId: id })
+        .populate("testSeriesId", "_id name image")
+        .populate("planId", "_id name duration price")
+        .sort({ createdAt: -1 }),
+      EbookSubscription.find({ customerId: id })
+        .populate("ebookId", "_id name author publisher")
+        .populate("orderId", "_id paymentMethod orderPrice status createdAt")
+        .sort({ createdAt: -1 }),
+      BookOrder.find({ customerId: id })
+        .populate("items.bookId", "_id name image")
+        .sort({ createdAt: -1 }),
+    ]);
+
+    // Split combined model into courses vs packages
+    const courses = coursePackageSubs
+      .filter((s: any) => s.courseId)
+      .map((s: any) => ({ ...s.toObject(), isActive: !!(s.status && s.endAt && s.endAt > now) }));
+    const packages = coursePackageSubs
+      .filter((s: any) => s.targetPackageId)
+      .map((s: any) => ({ ...s.toObject(), isActive: !!(s.status && s.endAt && s.endAt > now) }));
+
+    const liveCourses = liveCourseSubs.map((s: any) => ({
+      ...s.toObject(),
+      isActive: !!(s.status && s.endAt && s.endAt > now),
+    }));
+    const testSeries = testSeriesSubs.map((s: any) => ({
+      ...s.toObject(),
+      isActive: !!(s.status && s.endAt && s.endAt > now),
+    }));
+    const ebooks = ebookSubs.map((s: any) => ({
+      ...s.toObject(),
+      isActive: !!(s.status && s.endAt && s.endAt > now),
+    }));
+    const physicalBooks = bookOrders.map((o: any) => o.toObject());
+
+    const sumPaid = (arr: any[], field: string) =>
+      arr.reduce((acc, x) => acc + (Number(x[field]) || 0), 0);
+
+    const summary = {
+      totals: {
+        courses: courses.length,
+        packages: packages.length,
+        liveCourses: liveCourses.length,
+        testSeries: testSeries.length,
+        ebooks: ebooks.length,
+        physicalBooks: physicalBooks.length,
+        addresses: addresses.length,
+      },
+      active: {
+        courses: courses.filter((x) => x.isActive).length,
+        packages: packages.filter((x) => x.isActive).length,
+        liveCourses: liveCourses.filter((x) => x.isActive).length,
+        testSeries: testSeries.filter((x) => x.isActive).length,
+        ebooks: ebooks.filter((x) => x.isActive).length,
+      },
+      lifetimeSpend:
+        sumPaid(courses, "paidAmount") +
+        sumPaid(packages, "paidAmount") +
+        sumPaid(liveCourses, "paidAmount") +
+        sumPaid(testSeries, "price") +
+        sumPaid(ebooks, "price") +
+        sumPaid(physicalBooks, "amount"),
+    };
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        profile: customer.toObject(),
+        addresses,
+        purchases: { courses, packages, liveCourses, testSeries, ebooks, physicalBooks },
+        summary,
+      },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

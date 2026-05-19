@@ -1,7 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
-import { getEducators, createEducator, updateEducator, deleteEducator } from "./educator.controller";
+import { getEducators, createEducator, updateEducator, deleteEducator, getEducatorDetails } from "./educator.controller";
 import { getSubjectCategories, createSubjectCategory, updateSubjectCategory, deleteSubjectCategory } from "./subjectCategory.controller";
 import { getMaterials, createMaterial, updateMaterial, deleteMaterial } from "./material.controller";
 import { getVideoCategories, createVideoCategory, updateVideoCategory, deleteVideoCategory } from "./videoCategory.controller";
@@ -15,6 +15,7 @@ router.use(authenticate, requireRole("admin", "super_admin"));
 
 // Educator Master
 router.get("/educators", getEducators);
+router.get("/educators/:id/details", getEducatorDetails);
 router.post("/educators", uploadS3.single("image"), createEducator);
 router.put("/educators/:id", uploadS3.single("image"), updateEducator);
 router.delete("/educators/:id", deleteEducator);
