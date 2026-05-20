@@ -83,22 +83,32 @@ async function paginateCoursesWithPlans(
   let purchasedSet = new Set<string>();
   if (userId && courseIds.length) {
     const now = new Date();
+    const planIds = (allPlans as any[]).map((p) => p._id);
     const subs = await PackageCourseSubscription.find({
       customerId: userId,
-      courseId: { $in: courseIds },
       paymentStatus: "verified",
       status: true,
-      $or: [{ endAt: null }, { endAt: { $gt: now } }],
+      $and: [
+        { $or: [{ endAt: null }, { endAt: { $gt: now } }] },
+        { $or: [{ courseId: { $in: courseIds } }, { packageId: { $in: planIds } }] },
+      ],
     })
-      .select("courseId")
+      .select("courseId packageId")
       .lean();
-    purchasedSet = new Set(subs.map((s: any) => String(s.courseId)));
+    const planToCourse = new Map<string, string>(
+      (allPlans as any[]).map((p) => [String(p._id), String(p.courseId)])
+    );
+    subs.forEach((s: any) => {
+      if (s.courseId) purchasedSet.add(String(s.courseId));
+      const viaPlan = planToCourse.get(String(s.packageId));
+      if (viaPlan) purchasedSet.add(viaPlan);
+    });
   }
 
   const data = courses.map((c: any) => ({
     ...c,
     isPaid: c.isPaid ?? true,
-    isPurchase: purchasedSet.has(String(c._id)),
+    isPurchased: purchasedSet.has(String(c._id)),
     plans: plansByCourse.get(String(c._id)) ?? { withMaterial: [], withoutMaterial: [] },
   }));
 
@@ -212,7 +222,7 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
       return failure(res, "Please select valid package", 400);
     }
 
-    const response = await buildCourseDetails(courseId);
+    const response = await buildCourseDetails(courseId, userId);
     if (!response) {
       return failure(res, "Please select valid package", 400);
     }

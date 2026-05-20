@@ -7,6 +7,7 @@ import { sendEmail } from "./utils/emailService";
 import getLocalIpAddress from "./utils/getLocalIp";
 import { pm2Ready } from "./utils/pm2Logger";
 import { initNotificationScheduler, shutdownNotificationScheduler } from "./admin/notification/scheduler";
+import { syncPermissionCatalog } from "./admin/permission/permissions.seeder";
 import { initLiveChatSocket } from "./socket/livechat.socket";
 import { initCameraIngest } from "./socket/camera-ingest";
 
@@ -24,6 +25,11 @@ const allowedOrigins = (
 const startServer = async () => {
   try {
     await connectDB();
+    try {
+      await syncPermissionCatalog();
+    } catch (err) {
+      logger.error("[permissions] catalog sync failed (continuing boot):", err);
+    }
     await initNotificationScheduler();
 
     const gracefulShutdown = async (signal: string) => {

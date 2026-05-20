@@ -2,6 +2,7 @@ import axios from "axios";
 import ytdl from "@distube/ytdl-core";
 import fs from "fs";
 import { redisClient } from "../config/redis";
+import { decrypt, generateKey, generateVector } from "./videoEncryption";
 import logger from "./logger";
 
 // YouTube rotates which "innertube clients" pass bot protection from minute to
@@ -30,11 +31,31 @@ function getYtAgent(): ReturnType<typeof ytdl.createAgent> | undefined {
 
 // A single quality variant the client can play directly. Shape mirrors the
 // old project's `progressive` entry so the FE contract stays familiar.
+//
+// `bitrate` / `hasAudio` / `hasVideo` are required by the FE download flow:
+// VideoScreen.mapLessonItem filters out entries that lack hasAudio+hasVideo, and
+// uses bitrate × duration / 8 to estimate file size. We populate sensible
+// defaults when upstream doesn't return them.
 export interface ResolvedQuality {
   qualityLabel: string; // "720p" | "480p" | ...
   quality: string;      // duplicate of qualityLabel — kept for parity with old shape
   height: number;       // 720, 480, ...
   url: string;          // raw, ready-to-play URL (mp4 or m3u8 variant)
+  bitrate: number;      // bits per second — best-effort, defaulted per height when unknown
+  hasAudio: boolean;
+  hasVideo: boolean;
+}
+
+// Rough bitrate (bits/sec) for a given video height when upstream doesn't tell
+// us. Used for FE size-estimate display only — picked to match common H.264
+// muxed encodes so the "≈ 250 MB" hint isn't wildly off.
+function estimateBitrateForHeight(height: number): number {
+  if (height >= 1080) return 4_500_000;
+  if (height >= 720)  return 2_500_000;
+  if (height >= 480)  return 1_200_000;
+  if (height >= 360)  return 700_000;
+  if (height >= 240)  return 400_000;
+  return 300_000;
 }
 
 // What the resolver hands back to encryptLecture. The HLS URL is optional
@@ -127,11 +148,18 @@ async function resolveYoutube(youtubeId: string): Promise<ResolvedSource> {
     .map((f) => {
       const heightNum = typeof f.height === "number" ? f.height : 0;
       const label = f.qualityLabel || (heightNum ? `${heightNum}p` : "auto");
+      // ytdl-core gives us real bitrate + audio/video flags per format — use
+      // them when present, fall back to estimates only when missing.
       return {
         qualityLabel: label,
         quality: label,
         height: heightNum,
         url: f.url as string,
+        bitrate: typeof f.bitrate === "number" && f.bitrate > 0
+          ? f.bitrate
+          : estimateBitrateForHeight(heightNum),
+        hasAudio: f.hasAudio !== false,
+        hasVideo: f.hasVideo !== false,
       };
     })
     // Highest resolution first so the FE's default-quality pick lands on the best.
@@ -183,14 +211,51 @@ async function resolveAws(awsId: string): Promise<ResolvedSource> {
     ? data.download_url
     : [];
 
+  // VideoCrypt encrypts each download URL with AES-128-CBC using a key/IV
+  // derived from THEIR per-response token (`data.token`) and the same alphabet
+  // scheme we use. They ship the ciphertext as `download_url[i].url`. We must
+  // unwrap that here — otherwise downstream consumers receive double-encrypted
+  // base64 (their layer + our layer) and decrypting once just yields the inner
+  // ciphertext, not the URL.
+  const vcToken = typeof data.token === "string" ? data.token : "";
+  const vcKey = vcToken ? generateKey(vcToken) : null;
+  const vcIv = vcToken ? generateVector(vcToken) : null;
+
   const progressive: ResolvedQuality[] = downloads
-    .filter((d) => (VIDEOCRYPT_ALLOW_720 ? true : d.title !== "720"))
-    .map((d) => ({
-      qualityLabel: `${d.title}p`,
-      quality: `${d.title}p`,
-      height: Number(d.title) || 0,
-      url: d.url,
-    }))
+    // VideoCrypt's `title` is height+fps mashed (e.g. "480p30"); we extract the
+    // leading digits to get the real height, and normalize the label to "480p"
+    // so the FE quality picker matches the documented contract.
+    .map((d) => {
+      const heightMatch = String(d.title).match(/^(\d+)/);
+      const height = heightMatch ? Number(heightMatch[1]) : 0;
+
+      let plainUrl = d.url;
+      if (vcKey && vcIv && d.url) {
+        try {
+          plainUrl = decrypt(d.url, vcKey, vcIv);
+        } catch (err) {
+          logger.warn("VideoCrypt URL decrypt failed; passing through ciphertext", {
+            title: d.title,
+            error: (err as Error).message,
+          });
+        }
+      }
+
+      return {
+        qualityLabel: `${height}p`,
+        quality: `${height}p`,
+        height,
+        url: plainUrl,
+        // VideoCrypt doesn't ship bitrate or codec flags on download_url[]; the
+        // MP4s are always muxed (audio+video) by the transcode pipeline, so we
+        // hardcode the flags true and estimate bitrate from height for the FE
+        // size hint.
+        bitrate: estimateBitrateForHeight(height),
+        hasAudio: true,
+        hasVideo: true,
+      };
+    })
+    .filter((p) => (VIDEOCRYPT_ALLOW_720 ? true : p.height !== 720))
     .sort((a, b) => b.height - a.height);
 
   const resolved: ResolvedSource = {
@@ -226,7 +291,15 @@ export async function resolveVideoSource(v: {
     if (!v.vimeo_id) throw new Error("Video is missing vimeo_id.");
     return {
       hlsUrl: null,
-      progressive: [{ qualityLabel: "auto", quality: "auto", height: 0, url: v.vimeo_id }],
+      progressive: [{
+        qualityLabel: "auto",
+        quality: "auto",
+        height: 0,
+        url: v.vimeo_id,
+        bitrate: 0,
+        hasAudio: true,
+        hasVideo: true,
+      }],
       allow720: true,
     };
   }

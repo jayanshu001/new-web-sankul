@@ -1,4 +1,4 @@
-import { createCipheriv } from "crypto";
+import { createCipheriv, createDecipheriv } from "crypto";
 
 // Staging (websankul-api-staging) alphabets; video-URL decrypt on the client
 // depends on this exact scheme: each digit 0..9 of the 16-digit numeric token
@@ -44,4 +44,19 @@ export function encrypt(plain: string, key: Buffer, vector: Buffer): string {
     cipher.final(),
   ]);
   return encrypted.toString("base64");
+}
+
+/**
+ * Inverse of `encrypt` — base64 ciphertext + same (key, iv) returns the
+ * original UTF-8 plaintext. Used server-side to unwrap VideoCrypt's per-quality
+ * MP4 URLs (their download_url[i].url is encrypted with their own data.token);
+ * we then re-encrypt with our own token before shipping the envelope.
+ */
+export function decrypt(ciphertextBase64: string, key: Buffer, vector: Buffer): string {
+  const decipher = createDecipheriv("aes-128-cbc", key, vector);
+  const decrypted = Buffer.concat([
+    decipher.update(ciphertextBase64, "base64"),
+    decipher.final(),
+  ]);
+  return decrypted.toString("utf8");
 }

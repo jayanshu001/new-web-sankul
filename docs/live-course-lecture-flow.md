@@ -46,7 +46,7 @@ The complete pipeline for any recorded video — whether it lives inside a live 
            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │ FRONTEND                                                    │
-│ 1. Read data.files.token                                    │
+│ 1. Read data.request.request.files.token                                    │
 │ 2. Decrypt every URL field (hls.cdns.primary.url +          │
 │    every progressive[i].url) with the SAME token            │
 │ 3. Pick a URL (HLS for adaptive, or a specific quality)     │
@@ -200,27 +200,38 @@ Authorization: Bearer <customer jwt>
     "topic": "",
     "platform": "youtube",
     "priceType": "free",
-    "files": {
-      "token": "3833730014538127",        // 16-digit numeric STRING — shared across all URLs below
-      "hls": {
-        "default_cdn": "primary",
-        "cdns": {
-          "primary": {
-            "url": "<AES-encrypted .m3u8 URL>",   // "" when no HLS master (YouTube path)
-            "allow720": false                    // FE quality-menu hint (AWS-driven)
+    "request": {
+      "files": {
+        "token": "3833730014538127",        // 16-digit numeric STRING — shared across all URLs below
+        "hls": {
+          "default_cdn": "primary",
+          "cdns": {
+            "primary": {
+              "url": "<AES-encrypted .m3u8 URL>",   // "" when no HLS master (YouTube path)
+              "allow720": false                    // FE quality-menu hint (AWS-driven)
+            }
           }
-        }
-      },
-      "progressive": [
-        {
-          "qualityLabel": "1080p",
-          "quality":      "1080p",
-          "height":       1080,
-          "url":          "<AES-encrypted mp4 URL>"
         },
-        { "qualityLabel": "480p", "quality": "480p", "height": 480, "url": "..." },
-        { "qualityLabel": "360p", "quality": "360p", "height": 360, "url": "..." }
-      ]
+        "progressive": [
+          {
+            "qualityLabel": "1080p",
+            "quality":      "1080p",
+            "height":       1080,
+            "bitrate":      4500000,
+            "hasAudio":     true,
+            "hasVideo":     true,
+            "url":          "<AES-encrypted mp4 URL>"
+          },
+          {
+            "qualityLabel": "480p", "quality": "480p", "height": 480,
+            "bitrate": 1200000, "hasAudio": true, "hasVideo": true, "url": "..."
+          },
+          {
+            "qualityLabel": "360p", "quality": "360p", "height": 360,
+            "bitrate": 700000,  "hasAudio": true, "hasVideo": true, "url": "..."
+          }
+        ]
+      }
     }
   },
   "message": "Lecture fetched.",
@@ -238,17 +249,21 @@ Authorization: Bearer <customer jwt>
 | 422 | `{ message: "Invalid live course or video id." }` / `{ message: "Invalid category or video id." }` | Bad ObjectId. | Should not happen. |
 | 502 | `{ message: "Failed to resolve playable URLs for this <lecture|video>." }` | ytdl-core / VideoCrypt failed. | "Try again later" + retry button. |
 
-### What's in `files`
+### What's in `request.files`
 
 | Field | Type | Meaning |
 |---|---|---|
-| `files.token` | string | 16-digit numeric. Single use. Don't cache. |
-| `files.hls.cdns.primary.url` | string | AES-encrypted `.m3u8` master URL. `""` when not available. |
-| `files.hls.cdns.primary.allow720` | boolean | When `false`, FE quality menu must hide 720p even if present in `progressive[]`. |
-| `files.progressive[]` | array | One entry per available quality, sorted **highest → lowest**. |
-| `files.progressive[].qualityLabel` | string | e.g. `"1080p"`. Use this in the menu. |
-| `files.progressive[].height` | number | e.g. `1080`. Use for filtering / sorting if needed. |
-| `files.progressive[].url` | string | AES-encrypted direct playable URL (HLS variant or MP4). |
+| `request.files.token` | string | 16-digit numeric. Single use. Don't cache. |
+| `request.files.hls.cdns.primary.url` | string | AES-encrypted `.m3u8` master URL. `""` when not available. |
+| `request.files.hls.cdns.primary.allow720` | boolean | When `false`, FE quality menu must hide 720p even if present in `progressive[]`. |
+| `request.files.progressive[]` | array | One entry per available quality, sorted **highest → lowest**. Used by the **download** flow (HLS isn't downloadable). |
+| `request.files.progressive[].qualityLabel` | string | Always height-only form, e.g. `"480p"` — no fps suffix. (VideoCrypt internally uses `"480p30"`; the resolver normalizes it server-side so the FE doesn't need to.) Use this directly in the menu. |
+| `request.files.progressive[].quality` | string | Duplicate of `qualityLabel`. Legacy parity. |
+| `request.files.progressive[].height` | number | e.g. `1080`. Use for filtering / sorting. |
+| `request.files.progressive[].bitrate` | number | Bits per second. Drives the FE size estimate (`bitrate × duration / 8`). VideoCrypt doesn't return real bitrate — AWS path uses a per-height estimate. |
+| `request.files.progressive[].hasAudio` | boolean | Always `true` for AWS/Vimeo. YouTube reflects the real format flag. The FE drops entries where this is false. |
+| `request.files.progressive[].hasVideo` | boolean | Same as above. |
+| `request.files.progressive[].url` | string | AES-encrypted direct playable URL (HLS variant or MP4). |
 
 ---
 
@@ -307,7 +322,7 @@ function decryptEnvelope(files: any) {
 
   const hlsUrl = decryptLiveLectureSource(token, files?.hls?.cdns?.primary?.url);
 
-  const progressive = (files.progressive ?? [])
+  const progressive = (request.files.progressive ?? [])
     .map((p: any) => ({
       qualityLabel: p.qualityLabel,
       height:       p.height,
@@ -339,7 +354,7 @@ function decryptEnvelope(files: any) {
 
 ### Pick a URL
 ```ts
-const env = decryptEnvelope(response.data.files);
+const env = decryptEnvelope(response.data.request.files);
 
 // Prefer HLS (adaptive bitrate); fall back to the highest progressive.
 const defaultUrl = env?.hlsUrl || env?.progressive?.[0]?.url;
@@ -474,9 +489,23 @@ Backend resolver threw. Check server logs for `Resolve/encrypt lecture failed`. 
 - Missing `enc.Utf8.parse` around key/iv → CryptoJS runs passphrase mode → garbage.
 - Missing `CipherParams.create({ ciphertext: enc.Base64.parse(ct) })` around the ciphertext → wrong input shape.
 
-### "Lecture fetched" but `data.files` is missing
+### Decrypted AWS `progressive[].url` looks like base64 instead of an https URL
 
-You're hitting an old build of the server. Restart `npm run dev`. The new shape is `data.files.{token,hls,progressive}` — NOT `data.{token,videoURL}` (that was the previous iteration).
+This was a server bug, **fixed**. VideoCrypt's `download_url[i].url` is itself AES-encrypted with their per-response token; we used to forward it as-is and re-encrypt with our token, so the FE was unwrapping only the outer layer and seeing ciphertext.
+
+Now `resolveAws` unwraps VideoCrypt's layer first (using `data.token` from their response) and re-encrypts the plaintext URL with our envelope token. Single decryption on the FE yields a direct CloudFront `*.mp4` URL.
+
+**If you're still seeing this after the fix:** old broken responses may be cached in Redis. Bust them:
+
+```bash
+redis-cli KEYS "video-resolve:aws:*" | xargs redis-cli DEL
+```
+
+Then restart and re-fetch. The HLS field was always correct because VideoCrypt ships `file_url_hls` as plaintext.
+
+### "Lecture fetched" but `data.request.files` is missing
+
+You're hitting an old build of the server. Restart `npm run dev`. The new shape is `data.request.files.{token,hls,progressive}` — NOT `data.{token,videoURL}` (that was the previous iteration).
 
 ---
 
@@ -502,7 +531,7 @@ curl -X GET \
   -H "Authorization: Bearer <customer jwt>" | jq .
 ```
 
-Expect: `data.files.token` (16-digit string), `data.files.hls.cdns.primary.url` (long base64), `data.files.progressive[]` with at least one entry.
+Expect: `data.request.request.files.token` (16-digit string), `data.request.request.files.hls.cdns.primary.url` (long base64), `data.request.request.files.progressive[]` with at least one entry.
 
 ### Client side
 Paste in browser console with CryptoJS loaded:
@@ -510,7 +539,7 @@ Paste in browser console with CryptoJS loaded:
 const KEY = '!*@#)($^%1fgv&C3';
 const IV  = '?\\:><{}@#Vjekl44';
 
-const token = '<files.token from response>';
+const token = '<request.files.token from response>';
 const ct    = '<any files.*.url from response>';
 
 let key = '', iv = '';

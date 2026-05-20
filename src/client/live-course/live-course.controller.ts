@@ -36,6 +36,9 @@ async function encryptLecture(v: {
     qualityLabel: p.qualityLabel,
     quality: p.quality,
     height: p.height,
+    bitrate: p.bitrate,
+    hasAudio: p.hasAudio,
+    hasVideo: p.hasVideo,
     url: encrypt(p.url, key, vector),
   }));
 
@@ -44,19 +47,24 @@ async function encryptLecture(v: {
   // present either way so the FE doesn't branch on its existence.
   const encryptedHls = resolved.hlsUrl ? encrypt(resolved.hlsUrl, key, vector) : "";
 
+  // Wrapped under `request.files` per the FE contract (mapLessonItem reads
+  // request.files.progressive / request.files.token). The extra nesting is
+  // load-bearing — don't flatten it.
   return {
-    files: {
-      token,
-      hls: {
-        default_cdn: "primary",
-        cdns: {
-          primary: {
-            url: encryptedHls,
-            allow720: resolved.allow720,
+    request: {
+      files: {
+        token,
+        hls: {
+          default_cdn: "primary",
+          cdns: {
+            primary: {
+              url: encryptedHls,
+              allow720: resolved.allow720,
+            },
           },
         },
+        progressive: encryptedProgressive,
       },
-      progressive: encryptedProgressive,
     },
   };
 }

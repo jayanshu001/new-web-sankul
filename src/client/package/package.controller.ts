@@ -130,11 +130,18 @@ async function buildPackageDetail(packageId: string, customerId?: string) {
 
 async function hasActiveSubscription(customerId: string, packageId: string): Promise<boolean> {
   const now = new Date();
+  // Subscriptions can reference the Package directly via `targetPackageId`
+  // (admin-created flow) or transitively via the plan row stored in `packageId`
+  // whose own `packageId` points to the Package.
+  const planIds = await PackageCourseEbookPrice.find({ packageId }).distinct("_id");
   const sub = await PackageCourseSubscription.findOne({
     customerId,
-    packageId,
     status: true,
-    $or: [{ endAt: null }, { endAt: { $gt: now } }],
+    paymentStatus: "verified",
+    $and: [
+      { $or: [{ endAt: null }, { endAt: { $gt: now } }] },
+      { $or: [{ targetPackageId: packageId }, { packageId: { $in: planIds } }] },
+    ],
   });
   return !!sub;
 }
@@ -196,7 +203,7 @@ export const listPackages = async (req: Request, res: Response) => {
       Package.countDocuments(filter),
     ]);
 
-    const data = await enrichPackages(packages);
+    const data = await enrichPackages(packages, req.user?.id);
 
     return res.status(200).json({
       success: true,
@@ -224,22 +231,7 @@ export const listPackagesByType = async (req: Request, res: Response) => {
       .populate("goalId", "_id title")
       .sort({ order: 1, createdAt: -1 });
 
-    const enriched = await Promise.all(
-      packages.map(async (p) => {
-        const [plans, subCount] = await Promise.all([
-          PackageCourseEbookPrice.find({ packageId: p._id, status: true }).sort({ duration: 1 }),
-          PackageCourseSubscription.countDocuments({ packageId: p._id, status: true }),
-        ]);
-        return {
-          ...p.toObject(),
-          plans: {
-            withMaterial: plans.filter((pl) => pl.withMaterial),
-            withoutMaterial: plans.filter((pl) => !pl.withMaterial),
-          },
-          subscriberCount: subCount,
-        };
-      })
-    );
+    const enriched = await enrichPackages(packages, req.user?.id);
 
     return res.status(200).json({ success: true, data: enriched });
   } catch (error: any) {
@@ -247,7 +239,41 @@ export const listPackagesByType = async (req: Request, res: Response) => {
   }
 };
 
-async function enrichPackages(packages: any[]) {
+async function purchasedPackageIdSet(customerId: string | undefined, packageIds: any[]): Promise<Set<string>> {
+  if (!customerId || packageIds.length === 0) return new Set();
+  const now = new Date();
+  const planIds = await PackageCourseEbookPrice.find({ packageId: { $in: packageIds } }).distinct("_id");
+  const subs = await PackageCourseSubscription.find({
+    customerId,
+    status: true,
+    paymentStatus: "verified",
+    $and: [
+      { $or: [{ endAt: null }, { endAt: { $gt: now } }] },
+      { $or: [{ targetPackageId: { $in: packageIds } }, { packageId: { $in: planIds } }] },
+    ],
+  })
+    .select("targetPackageId packageId")
+    .lean();
+
+  const planToPackage = new Map<string, string>();
+  if (subs.some((s: any) => s.packageId)) {
+    const plans = await PackageCourseEbookPrice.find({ _id: { $in: subs.map((s: any) => s.packageId) } })
+      .select("_id packageId")
+      .lean();
+    plans.forEach((pl: any) => planToPackage.set(String(pl._id), String(pl.packageId)));
+  }
+
+  const owned = new Set<string>();
+  subs.forEach((s: any) => {
+    if (s.targetPackageId) owned.add(String(s.targetPackageId));
+    const viaPlan = planToPackage.get(String(s.packageId));
+    if (viaPlan) owned.add(viaPlan);
+  });
+  return owned;
+}
+
+async function enrichPackages(packages: any[], customerId?: string) {
+  const ownedSet = await purchasedPackageIdSet(customerId, packages.map((p) => p._id));
   return Promise.all(
     packages.map(async (p) => {
       const [plans, subCount] = await Promise.all([
@@ -261,6 +287,7 @@ async function enrichPackages(packages: any[]) {
           withoutMaterial: plans.filter((pl) => !pl.withMaterial),
         },
         subscriberCount: subCount,
+        isPurchased: ownedSet.has(String(p._id)),
       };
     })
   );
@@ -312,7 +339,7 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
           .populate("goalId", "_id title")
           .sort({ order: 1, createdAt: -1 });
 
-        const enriched = await enrichPackages(packages);
+        const enriched = await enrichPackages(packages, req.user?.id);
         const meta = labelMeta.get(labelId);
 
         return {

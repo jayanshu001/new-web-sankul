@@ -41,7 +41,8 @@ export interface CourseDetailsResponse {
 }
 
 export async function buildCourseDetails(
-  courseId: string
+  courseId: string,
+  customerId?: string
 ): Promise<CourseDetailsResponse | null> {
   const courseDoc = await Course.findById(courseId)
     .populate({ path: "courseSubjectCategoryId", model: CourseSubjectCategory })
@@ -150,6 +151,25 @@ export async function buildCourseDetails(
     withMaterial: AllPlans.filter((p) => p.withMaterial === true),
     withoutMaterial: AllPlans.filter((p) => p.withMaterial === false),
   };
+
+  // Active subscription resolves via either the denormalized `courseId` on the
+  // sub row (admin/legacy flow) or the plan row stored in `packageId` whose own
+  // courseId points to this course.
+  let isPurchased = false;
+  if (customerId) {
+    const coursePlanIds = AllPlans.map((p: any) => p._id);
+    const sub = await PackageCourseSubscription.findOne({
+      customerId,
+      status: true,
+      paymentStatus: "verified",
+      $and: [
+        { $or: [{ endAt: null }, { endAt: { $gt: now } }] },
+        { $or: [{ courseId: courseDoc._id }, { packageId: { $in: coursePlanIds } }] },
+      ],
+    }).select("_id");
+    isPurchased = !!sub;
+  }
+  course.isPurchased = isPurchased;
 
   return { course, videos, materials, tests, plans, availablePromoCode };
 }
