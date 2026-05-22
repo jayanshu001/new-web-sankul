@@ -1,4 +1,5 @@
 import Razorpay from "razorpay";
+import { callOutbound } from "../../libs/outbound";
 
 let cached: Razorpay | null = null;
 
@@ -22,6 +23,30 @@ export const getRazorpay = (): Razorpay | null => {
   cached = new Razorpay({ key_id, key_secret });
   return cached;
 };
+
+/**
+ * Wrap Razorpay's `orders.create` (and any other outbound Razorpay call) in
+ * the standard timeout + retry + circuit-breaker. Centralized here so every
+ * payment controller picks up the protection without per-callsite plumbing.
+ *
+ * Why this matters: Razorpay's order-create occasionally times out under
+ * load; the legacy callers had no timeout, so a single hung create() would
+ * pin a request slot until Node's default 10-min socket timeout. With
+ * callOutbound we cap each attempt at 6s and back off on 429/5xx.
+ *
+ * Idempotency: Razorpay treats `receipt` as the idempotency key, so retries
+ * with the same receipt either return the existing order or create one —
+ * never duplicate. Callers should supply a stable `receipt` (most already do).
+ */
+export const createRazorpayOrder = async (
+  rp: Razorpay,
+  params: Parameters<Razorpay["orders"]["create"]>[0]
+) =>
+  callOutbound(() => rp.orders.create(params) as Promise<any>, {
+    label: "razorpay.orders.create",
+    timeoutMs: 6_000,
+    attempts: 3,
+  });
 
 // Build the response shape the mobile SDK expects, identical across purchase
 // types (book cart / course / ebook). Always paise. Currency hard-coded to INR

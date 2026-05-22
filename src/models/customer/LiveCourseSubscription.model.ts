@@ -44,7 +44,14 @@ const liveCourseSubscriptionSchema: Schema = new Schema(
     razorpayPaymentId: { type: String, default: null, maxlength: 100 },
     paidAt:            { type: Date,   default: null },
   },
-  { timestamps: true, collection: "ws_live_course_subscriptions" }
+  {
+    timestamps: true,
+    collection: "ws_live_course_subscriptions",
+    // Entitlement row — fail loud on unknown fields so a typo in the
+    // money-trail fields (originalAmount / discountAmount / paidAmount)
+    // doesn't silently zero them.
+    strict: "throw",
+  }
 );
 
 liveCourseSubscriptionSchema.index({ customerId: 1, liveCourseId: 1, paymentStatus: 1, endAt: 1 });

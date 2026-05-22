@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
+import { Customer } from "../../models/customer/Customer.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookOrder } from "../../models/ebook/EbookOrder.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
@@ -13,6 +14,9 @@ export const getEbookSubscriptions = async (req: Request, res: Response) => {
       customerId,
       ebookId,
       status,
+      search,
+      sortBy,
+      sortOrder,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
@@ -32,25 +36,62 @@ export const getEbookSubscriptions = async (req: Request, res: Response) => {
     }
     if (status === "true" || status === "false") filters.status = status === "true";
 
+    if (search) {
+      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const [matchedCustomers, matchedEbooks] = await Promise.all([
+        Customer.find({
+          $or: [{ firstName: rx }, { lastName: rx }, { phoneNumber: rx }],
+        }).select("_id").lean(),
+        Ebook.find({ name: rx }).select("_id").lean(),
+      ]);
+      filters.$or = [
+        { customerId: { $in: matchedCustomers.map((c) => c._id) } },
+        { ebookId: { $in: matchedEbooks.map((e) => e._id) } },
+      ];
+    }
+
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
-    const [data, total] = await Promise.all([
+    const sortField = sortBy || "createdAt";
+    const sortDir = sortOrder === "asc" ? 1 : -1;
+
+    const [rows, total] = await Promise.all([
       EbookSubscription.find(filters)
-        .populate("customerId", "_id full_name mobile email")
-        .populate("ebookId", "_id name author")
-        .populate("orderId", "_id paymentMethod orderPrice status")
-        .sort({ createdAt: -1 })
+        .populate({ path: "customerId", select: "_id firstName lastName phoneNumber" })
+        .populate({ path: "ebookId", select: "_id name image thumbnail" })
+        .populate({
+          path: "orderId",
+          select: "_id paymentMethod orderPrice status planId",
+          populate: { path: "planId", model: EbookPrice, select: "_id name duration price" },
+        })
+        .sort({ [sortField]: sortDir })
         .skip(skip)
-        .limit(limitNum),
+        .limit(limitNum)
+        .lean(),
       EbookSubscription.countDocuments(filters),
     ]);
 
+    const items = rows.map((r: any) => ({
+      _id: r._id,
+      customerId: r.customerId,
+      ebookId: r.ebookId,
+      planId: r.orderId?.planId || null,
+      orderId: r.orderId ? { _id: r.orderId._id, paymentMethod: r.orderId.paymentMethod, status: r.orderId.status } : null,
+      paidAmount: r.orderId?.orderPrice ?? r.price ?? 0,
+      startAt: r.startAt,
+      endAt: r.endAt,
+      status: r.status,
+      remarks: r.remarks ?? null,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
+
     return res.status(200).json({
       success: true,
-      data,
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      items,
+      pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

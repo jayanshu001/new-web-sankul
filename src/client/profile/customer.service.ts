@@ -370,10 +370,11 @@ export async function registerDeviceToken(
       firebaseToken,
       platform
     );
-    if (!customer) return { ok: false, message: "Customer not found." };
+    if (!customer) { logger.warn("registerDeviceToken service customer not found", { traceId, customerId }); return { ok: false, message: "Customer not found." }; }
+    logger.info("registerDeviceToken service completed", { traceId, customerId });
     return { ok: true, message: "Device token registered." };
   } catch (error) {
-    logger.error("registerDeviceToken service error", { traceId, customerId, error: (error as Error).message });
+    logger.error("registerDeviceToken service error", { traceId, customerId, error: (error as Error).message, stack: (error as Error).stack });
     return { ok: false, message: "An error occurred while registering device token." };
   }
 }
@@ -389,10 +390,11 @@ export async function unregisterDeviceToken(
       { _id: customerId, isAccountDeleted: false },
       { $pull: { firebaseTokens: { token: firebaseToken } } }
     );
-    if (!result.matchedCount) return { ok: false, message: "Customer not found." };
+    if (!result.matchedCount) { logger.warn("unregisterDeviceToken service customer not found", { traceId, customerId }); return { ok: false, message: "Customer not found." }; }
+    logger.info("unregisterDeviceToken service completed", { traceId, customerId });
     return { ok: true, message: "Device token unregistered." };
   } catch (error) {
-    logger.error("unregisterDeviceToken service error", { traceId, customerId, error: (error as Error).message });
+    logger.error("unregisterDeviceToken service error", { traceId, customerId, error: (error as Error).message, stack: (error as Error).stack });
     return { ok: false, message: "An error occurred while unregistering device token." };
   }
 }

@@ -13,6 +13,9 @@ import {
   PackageCourseEbookPaymentType,
   BookOrderStatus,
 } from "../../models/enums";
+import { computeEndAt } from "../../utils/planDuration";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || "";
 
@@ -28,12 +31,16 @@ function verifySignature(rawBody: string, signature: string): boolean {
 // POST /api/v1/client/webhook/payment
 // Razorpay webhook. Expects X-Razorpay-Signature header.
 export const paymentWebhook = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("paymentWebhook invoked", { traceId, path: req.originalUrl, event: req.body?.event });
+
   try {
     const signature = req.headers["x-razorpay-signature"] as string;
     const rawBody = JSON.stringify(req.body);
 
     if (RAZORPAY_WEBHOOK_SECRET) {
       if (!signature || !verifySignature(rawBody, signature)) {
+        logger.warn("paymentWebhook signature mismatch", { traceId });
         return res.status(401).json({ success: false, message: "Invalid signature." });
       }
     }
@@ -41,11 +48,13 @@ export const paymentWebhook = async (req: Request, res: Response) => {
     const event = req.body?.event as string;
     const payment = req.body?.payload?.payment?.entity;
     if (!event || !payment) {
+      logger.warn("paymentWebhook invalid payload", { traceId, event });
       return res.status(400).json({ success: false, message: "Invalid webhook payload." });
     }
 
     if (event !== "payment.captured" && event !== "order.paid") {
       // Acknowledge but skip — not a success event
+      logger.info("paymentWebhook ignored event", { traceId, event });
       return res.status(200).json({ success: true, message: "Ignored." });
     }
 
@@ -62,11 +71,10 @@ export const paymentWebhook = async (req: Request, res: Response) => {
 
         const plan = await EbookPrice.findById(ebookOrder.planId);
         if (plan) {
-          // `duration` is stored as MONTHS (matches admin plan UI). Use
-          // setMonth so calendar months are honoured.
+          // `duration` is stored as MONTHS — shared helper enforces the
+          // setMonth-honors-calendar-length contract uniformly.
           const startAt = new Date();
-          const endAt = new Date(startAt);
-          endAt.setMonth(endAt.getMonth() + plan.duration);
+          const endAt = computeEndAt({ startAt, durationMonths: plan.duration });
           await EbookSubscription.create({
             orderId: ebookOrder._id,
             customerId: ebookOrder.customerId,
@@ -79,6 +87,7 @@ export const paymentWebhook = async (req: Request, res: Response) => {
           });
         }
       }
+      logger.info("paymentWebhook ebook activated", { traceId, razorpayOrderId, orderId: ebookOrder._id });
       return res.status(200).json({ success: true, message: "Ebook order activated." });
     }
 
@@ -91,6 +100,7 @@ export const paymentWebhook = async (req: Request, res: Response) => {
         bookOrder.paidAt = new Date();
         await bookOrder.save();
       }
+      logger.info("paymentWebhook book verified", { traceId, razorpayOrderId, orderId: bookOrder._id });
       return res.status(200).json({ success: true, message: "Book order verified." });
     }
 
@@ -101,15 +111,15 @@ export const paymentWebhook = async (req: Request, res: Response) => {
     const liveCourseSub = await LiveCourseSubscription.findOne({ razorpayOrderId });
     if (liveCourseSub) {
       if (liveCourseSub.paymentStatus !== "verified") {
-        // `duration` is stored as MONTHS. setMonth honours calendar-month length.
+        // `duration` is stored as MONTHS — shared helper enforces the
+        // setMonth-honors-calendar-length contract uniformly.
         const plan = await LiveCoursePlan.findById(liveCourseSub.planId)
           .select("duration")
           .lean();
         const durationMonths = plan?.duration ?? 0;
 
         const now = new Date();
-        const endAt = new Date(now);
-        endAt.setMonth(endAt.getMonth() + durationMonths);
+        const endAt = computeEndAt({ startAt: now, durationMonths });
 
         liveCourseSub.paymentStatus = "verified";
         liveCourseSub.razorpayPaymentId = razorpayPaymentId;
@@ -118,6 +128,7 @@ export const paymentWebhook = async (req: Request, res: Response) => {
         liveCourseSub.endAt = endAt;
         await liveCourseSub.save();
       }
+      logger.info("paymentWebhook live course activated", { traceId, razorpayOrderId, subscriptionId: liveCourseSub._id });
       return res
         .status(200)
         .json({ success: true, message: "Live course subscription activated." });
@@ -126,10 +137,11 @@ export const paymentWebhook = async (req: Request, res: Response) => {
     // Course/package subscription — matched by razorpayOrderId stored on payload
     // Our PackageCourseSubscription doesn't carry razorpayOrderId; webhook relies on the client
     // calling /orders/verify-payment with the razorpay ids after checkout. We accept here but no-op.
+    logger.info("paymentWebhook no match", { traceId, razorpayOrderId });
     return res.status(200).json({ success: true, message: "No matching order — acknowledged." });
   } catch (e: any) {
     // Always return 200 to webhooks — razorpay treats non-2xx as retry. We log instead.
-    console.error("[paymentWebhook]", e);
+    logger.error("paymentWebhook failed", { traceId, error: getErrorMessage(e), stack: e?.stack });
     return res.status(200).json({ success: false, message: e.message });
   }
 };

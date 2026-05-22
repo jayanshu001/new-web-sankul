@@ -9,7 +9,9 @@ import {
   PackageCourseEbookOrderType,
   PaymentMethod,
 } from "../../models/enums";
-import { getRazorpay, razorpayResponseFor } from "./razorpay";
+import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -22,12 +24,16 @@ const createEbookOrderSchema = z.object({
 // Creates an EbookOrder in PENDING status and a Razorpay order. /verify (or the
 // webhook) flips status to COMPLETE and provisions the EbookSubscription.
 export const createEbookOrderPayment = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("createEbookOrderPayment invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) { logger.warn("createEbookOrderPayment unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const rp = getRazorpay();
     if (!rp) {
+      logger.error("createEbookOrderPayment razorpay not configured", { traceId, customerId });
       return res.status(500).json({
         success: false,
         message: "Razorpay credentials not configured on the server.",
@@ -37,10 +43,9 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
     const { planId } = createEbookOrderSchema.parse(req.body);
 
     const plan = await EbookPrice.findOne({ _id: planId, status: true });
-    if (!plan) {
-      return res.status(404).json({ success: false, message: "Plan not found or inactive." });
-    }
+    if (!plan) { logger.warn("createEbookOrderPayment plan not found", { traceId, customerId, planId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }
     if (!plan.price || plan.price <= 0) {
+      logger.warn("createEbookOrderPayment zero price", { traceId, customerId, planId });
       return res.status(400).json({
         success: false,
         message: "Plan amount is zero — use the free-grant flow instead.",
@@ -48,9 +53,7 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
     }
 
     const ebook = await Ebook.findOne({ _id: plan.ebookId, status: true });
-    if (!ebook) {
-      return res.status(404).json({ success: false, message: "Ebook not found or inactive." });
-    }
+    if (!ebook) { logger.warn("createEbookOrderPayment ebook not found", { traceId, customerId, ebookId: plan.ebookId }); return res.status(404).json({ success: false, message: "Ebook not found or inactive." }); }
 
     // Block double-buy: if the customer has an active (un-expired) subscription
     // to this ebook, refuse so they don't pay twice for overlapping access.
@@ -62,6 +65,7 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
       endAt: { $gt: now },
     });
     if (activeSub) {
+      logger.warn("createEbookOrderPayment already subscribed", { traceId, customerId, ebookId: plan.ebookId, existingId: activeSub._id });
       return res.status(409).json({
         success: false,
         message: "You already have an active subscription to this ebook.",
@@ -80,7 +84,7 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
 
     const receiptId = `ebook-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const rzpOrder = await rp.orders.create({
+    const rzpOrder = await createRazorpayOrder(rp, {
       amount: Math.round(plan.price * 100), // paise
       currency: "INR",
       receipt: receiptId,
@@ -96,6 +100,7 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
     order.razorpayOrderId = rzpOrder.id;
     await order.save();
 
+    logger.info("createEbookOrderPayment success", { traceId, customerId, orderId: order._id, razorpayOrderId: rzpOrder.id, amount: plan.price });
     return res.status(201).json({
       success: true,
       data: {
@@ -115,12 +120,12 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) { logger.warn("createEbookOrderPayment validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
     const message =
       e?.error?.description ||
       e?.message ||
       "Unknown error creating ebook payment order.";
-    console.error("[payment/create-order/ebook] failed:", e);
+    logger.error("createEbookOrderPayment failed", { traceId, customerId, error: message, stack: e?.stack });
     return res.status(500).json({ success: false, message });
   }
 };

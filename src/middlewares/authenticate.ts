@@ -1,8 +1,10 @@
 // src/middlewares/authenticate.ts
 import { Request, Response, NextFunction } from "express";
-import jwt from "jsonwebtoken";
 import { failure } from "../utils/httpResponse";
 import { redisClient } from "../config/redis";
+import { verifyAccessToken } from "../utils/jwtSigner";
+import { isRevoked, UserType } from "../libs/tokenRevocation";
+import { updateContext } from "../utils/requestContext";
 
 // Augment Request to carry the decoded token payload
 declare module "express-serve-static-core" {
@@ -17,12 +19,15 @@ declare module "express-serve-static-core" {
   }
 }
 
-const JWT_SECRET = process.env.JWT_ACCESS_SECRET as string;
-
 /**
  * Verifies the Bearer JWT and attaches decoded payload to req.user.
  * Works for both customer tokens (role: "customer") and admin tokens
  * (role: "admin" | "super_admin" | "editor").
+ *
+ * Verification consults the access-key ring (utils/jwtSigner.ts) so we can
+ * rotate JWT secrets without invalidating existing sessions. Tokens with a
+ * `kid` header are checked against the ring; legacy tokens (no kid) are
+ * verified with the ring's legacy secret (= JWT_ACCESS_SECRET).
  */
 const authenticate = async (req: Request, res: Response, next: NextFunction) => {
   // Let CORS preflight through
@@ -36,8 +41,18 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    const decoded = verifyAccessToken<any>(token);
     const role = decoded.role ?? "customer";
+
+    // Coarse revocation check: if the user has triggered "logout all devices"
+    // (or a password change / forced re-auth event), every token issued
+    // before the cutoff is rejected. See libs/tokenRevocation.ts. This is
+    // additive to the single-device session-pointer check below; either can
+    // independently invalidate a token.
+    const userType = (decoded.type ?? "customer") as UserType;
+    if (await isRevoked(userType, decoded.id, decoded.iat)) {
+      return failure(res, "Session was revoked. Please log in again.", 401);
+    }
 
     // Enforce 1 active device rule for customers
     if (decoded.type === "customer") {
@@ -78,6 +93,12 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
       role: role,
       ...decoded,
     };
+
+    // Surface the authenticated user into the per-request context so every
+    // downstream log line automatically carries `userId` + `userRole`
+    // without callers threading them through. See utils/requestContext.ts.
+    updateContext({ userId: decoded.id, userRole: role });
+
     return next();
   } catch {
     return failure(res, "Invalid or expired token.", 401);

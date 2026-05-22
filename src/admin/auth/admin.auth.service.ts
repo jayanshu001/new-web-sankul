@@ -1,13 +1,17 @@
 import logger from "../../utils/logger";
 import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
 import { AdminUser } from "../../models/admin/AdminUser.model";
 import { AdminAccessToken } from "../../models/admin/AdminAccessToken.model";
 import { redisClient } from "../../config/redis";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
+import {
+  signAccessToken,
+  signRefreshToken,
+  verifyRefreshToken,
+} from "../../utils/jwtSigner";
 
-const JWT_SECRET = process.env.JWT_ACCESS_SECRET as string;
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET as string;
+// JWT secrets now flow through config/jwtKeys.ts → utils/jwtSigner.ts so we
+// can rotate keys without invalidating active sessions.
 const JWT_ACCESS_TTL_DAYS = 1;
 const JWT_REFRESH_TTL_DAYS = 30;
 const SALT_ROUNDS = 10;
@@ -52,17 +56,18 @@ export async function adminLogin(
   admin.lastLoginDate = new Date();
   await admin.save();
 
-  const token = jwt.sign(
-    { id: admin._id.toString(), email: admin.email, role: admin.role, type: "admin" },
-    JWT_SECRET,
-    { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` }
-  );
-
-  const refreshToken = jwt.sign(
-    { id: admin._id.toString(), email: admin.email, role: admin.role, type: "admin" },
-    JWT_REFRESH_SECRET,
-    { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` }
-  );
+  const tokenPayload = {
+    id: admin._id.toString(),
+    email: admin.email,
+    role: admin.role,
+    type: "admin",
+  };
+  const token = signAccessToken(tokenPayload, {
+    expiresIn: `${JWT_ACCESS_TTL_DAYS}d`,
+  });
+  const refreshToken = signRefreshToken(tokenPayload, {
+    expiresIn: `${JWT_REFRESH_TTL_DAYS}d`,
+  });
 
   const expiresAt = addDays(JWT_REFRESH_TTL_DAYS);
   await AdminAccessToken.create({
@@ -118,6 +123,7 @@ export async function createAdminUser(data: {
   }
 
   if (data.password.length < 8) {
+    logger.warn("createAdminUser service weak password", { traceId, email: data.email });
     return { ok: false, message: "Password must be at least 8 characters." };
   }
 
@@ -166,7 +172,7 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
   }
 
   try {
-    const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as any;
+    const decoded = verifyRefreshToken<any>(refreshToken);
     const adminUserId = decoded.id;
 
     const dbToken = await AdminAccessToken.findOne({
@@ -189,17 +195,18 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
 
     await AdminAccessToken.updateOne({ _id: dbToken._id }, { active: false, deleted: true });
 
-    const newToken = jwt.sign(
-      { id: admin._id.toString(), email: admin.email, role: admin.role, type: "admin" },
-      JWT_SECRET,
-      { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` }
-    );
-
-    const newRefreshToken = jwt.sign(
-      { id: admin._id.toString(), email: admin.email, role: admin.role, type: "admin" },
-      JWT_REFRESH_SECRET,
-      { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` }
-    );
+    const refreshPayload = {
+      id: admin._id.toString(),
+      email: admin.email,
+      role: admin.role,
+      type: "admin",
+    };
+    const newToken = signAccessToken(refreshPayload, {
+      expiresIn: `${JWT_ACCESS_TTL_DAYS}d`,
+    });
+    const newRefreshToken = signRefreshToken(refreshPayload, {
+      expiresIn: `${JWT_REFRESH_TTL_DAYS}d`,
+    });
 
     const expiresAt = addDays(JWT_REFRESH_TTL_DAYS);
     await AdminAccessToken.create({
@@ -237,6 +244,7 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
       } 
     };
   } catch (err) {
+    logger.error("refreshAdminToken service error", { traceId, error: (err as Error).message, stack: (err as Error).stack });
     return { ok: false, message: "Invalid or expired refresh token." };
   }
 }

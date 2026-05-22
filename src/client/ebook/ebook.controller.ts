@@ -4,6 +4,8 @@ import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { generateEbookReceipt } from "../../libs/core/generate";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -12,8 +14,11 @@ const daysBetween = (from: Date, to: Date) =>
 
 // GET /api/v1/client/ebooks
 export const listEbooks = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = (req as any).user?.id;
+  logger.info("listEbooks invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = (req as any).user?.id;
     const { search, language } = req.query as Record<string, string>;
     const filter: any = { status: true };
     if (search) filter.$or = [
@@ -79,16 +84,21 @@ export const listEbooks = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listEbooks success", { traceId, customerId, count: data.length });
     return res.status(200).json({ success: true, data: { ebooks: data } });
   } catch (error: any) {
+    logger.error("listEbooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/client/ebooks/subscriptions
 export const listMySubscriptions = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = (req as any).user?.id || (req as any).user?._id;
+  logger.info("listMySubscriptions invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = (req as any).user?.id || (req as any).user?._id;
     const now = new Date();
 
     const subs = await EbookSubscription.find({
@@ -109,22 +119,32 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
         remainingDays: daysBetween(now, s.endAt),
       }));
 
+    logger.info("listMySubscriptions success", { traceId, customerId: userId, count: subscriptions.length });
     return res.status(200).json({ success: true, data: { subscriptions } });
   } catch (error: any) {
+    logger.error("listMySubscriptions failed", { traceId, customerId: userId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/client/ebooks/:id
 export const getEbookDetail = async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id as string;
-    if (!isObjectId(id))
-      return res.status(400).json({ success: false, message: "Please select valid ebook." });
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  const customerId = (req as any).user?.id;
+  logger.info("getEbookDetail invoked", { traceId, path: req.originalUrl, customerId, ebookId: id });
 
-    const customerId = (req as any).user?.id;
+  try {
+    if (!isObjectId(id)) {
+      logger.warn("getEbookDetail invalid id", { traceId, customerId, ebookId: id });
+      return res.status(400).json({ success: false, message: "Please select valid ebook." });
+    }
+
     const ebook = await Ebook.findOne({ _id: id, status: true }).lean();
-    if (!ebook) return res.status(404).json({ success: false, message: "Ebook not found." });
+    if (!ebook) {
+      logger.warn("getEbookDetail not found", { traceId, customerId, ebookId: id });
+      return res.status(404).json({ success: false, message: "Ebook not found." });
+    }
 
     const plans = await EbookPrice.find({ ebookId: id, status: true })
       .sort({ duration: 1 })
@@ -154,6 +174,7 @@ export const getEbookDetail = async (req: Request, res: Response) => {
       description: string;
     }> = [];
 
+    logger.info("getEbookDetail success", { traceId, customerId, ebookId: id, isPurchased: !!subscriptionEndAt });
     return res.status(200).json({
       success: true,
       data: {
@@ -168,29 +189,44 @@ export const getEbookDetail = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("getEbookDetail failed", { traceId, customerId, ebookId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/client/ebooks/orders/:orderId/invoice
 export const getEbookOrderInvoice = async (req: Request, res: Response) => {
-  try {
-    const customerId = (req as any).user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const customerId = (req as any).user?.id;
+  const orderId = req.params.orderId as string;
+  logger.info("getEbookOrderInvoice invoked", { traceId, path: req.originalUrl, customerId, orderId });
 
-    const orderId = req.params.orderId as string;
-    if (!isObjectId(orderId))
+  try {
+    if (!customerId) {
+      logger.warn("getEbookOrderInvoice unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (!isObjectId(orderId)) {
+      logger.warn("getEbookOrderInvoice invalid id", { traceId, customerId, orderId });
       return res.status(400).json({ success: false, message: "Invalid order id." });
+    }
 
     const pdf = await generateEbookReceipt(orderId, customerId);
     res.set({
       "Content-Type": "application/pdf",
       "Content-Length": String(pdf.length),
     });
+    logger.info("getEbookOrderInvoice success", { traceId, customerId, orderId, bytes: pdf.length });
     return res.send(pdf);
   } catch (error: any) {
     const msg = error?.message || "Failed to generate invoice.";
     const code = /not found|invalid|not been paid/i.test(msg) ? 404 : 500;
+    if (code === 500) {
+      logger.error("getEbookOrderInvoice failed", { traceId, customerId, orderId, error: getErrorMessage(error), stack: error.stack });
+    } else {
+      logger.warn("getEbookOrderInvoice client error", { traceId, customerId, orderId, msg });
+    }
     return res.status(code).json({ success: false, message: msg });
   }
 };

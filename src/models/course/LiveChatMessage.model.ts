@@ -7,6 +7,10 @@ export interface ILiveChatMessage extends Document {
   isAdmin: boolean;
   userName: string;
   message: string;
+  // Soft-delete: when an admin deletes a single message, we keep the row so the
+  // moderation history survives but hide it from chat history + live views.
+  deletedAt?: Date | null;
+  deletedBy?: Types.ObjectId | null;
   createdAt: Date;
 }
 
@@ -18,6 +22,8 @@ const LiveChatMessageSchema = new Schema<ILiveChatMessage>(
     isAdmin:     { type: Boolean, default: false, index: true },
     userName:    { type: String, required: true, maxlength: 200 },
     message:     { type: String, required: true, maxlength: 2000 },
+    deletedAt:   { type: Date,                    default: null },
+    deletedBy:   { type: Schema.Types.ObjectId, ref: "AdminUser", default: null },
   },
   { collection: "ws_live_chat_messages", timestamps: true }
 );

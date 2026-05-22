@@ -18,8 +18,8 @@
 import { Server as HttpServer } from "http";
 import { WebSocketServer, WebSocket, RawData } from "ws";
 import { spawn, spawnSync, ChildProcessWithoutNullStreams } from "child_process";
-import jwt from "jsonwebtoken";
 import { redisClient } from "../config/redis";
+import { verifyAccessToken } from "../utils/jwtSigner";
 import { LiveSession } from "../models/course/LiveSession.model";
 import logger from "../utils/logger";
 
@@ -42,7 +42,8 @@ function hasFfmpeg(): boolean {
 // session in Redis (the 1-active-device rule).
 async function verifyAdminToken(token: string): Promise<{ id: string; role: string } | null> {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET as string) as any;
+    // Keyring-aware verify so camera-ingest socket auth survives key rotation.
+    const decoded = verifyAccessToken<any>(token);
     if (decoded.type !== "admin" || !ADMIN_ROLES.has(decoded.role)) return null;
     const active = await redisClient.get(`admin_session:${decoded.id}`);
     if (!active || active !== token) return null;

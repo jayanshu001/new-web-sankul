@@ -4,6 +4,8 @@ import { Folder, FolderType } from "../../models/customer/Folder.model";
 import { FolderItem, FolderItemKind } from "../../models/customer/FolderItem.model";
 import { Material } from "../../models/course/Material.model";
 import { Video } from "../../models/course/Video.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const KIND_MODELS: Record<FolderItemKind, mongoose.Model<any>> = {
   material: Material,
@@ -46,9 +48,15 @@ function makeFolderController(type: FolderType) {
   const allowedKind = ALLOWED_KIND[type];
 
   const list = async (req: Request, res: Response) => {
+    const traceId = req.traceId;
+    const uid = userId(req);
+    logger.info(`${type}Folder list invoked`, { traceId, path: req.originalUrl, customerId: uid });
+
     try {
-      const uid = userId(req);
-      if (!uid) return res.status(401).json({ success: false, message: "Unauthorized." });
+      if (!uid) {
+        logger.warn(`${type}Folder list unauthorized`, { traceId });
+        return res.status(401).json({ success: false, message: "Unauthorized." });
+      }
 
       await ensureDefaultFolders(uid);
 
@@ -66,48 +74,64 @@ function makeFolderController(type: FolderType) {
         isDefaultFolder: !!f.isDefaultFolder,
         itemCount: countByFolder.get(String(f._id)) ?? 0,
       }));
+      logger.info(`${type}Folder list success`, { traceId, customerId: uid, count: data.length });
       return res.status(200).json({ success: true, data });
     } catch (error: any) {
+      logger.error(`${type}Folder list failed`, { traceId, customerId: uid, error: getErrorMessage(error), stack: error.stack });
       return res.status(500).json({ success: false, message: error.message });
     }
   };
 
   const create = async (req: Request, res: Response) => {
+    const traceId = req.traceId;
+    const uid = userId(req);
+    logger.info(`${type}Folder create invoked`, { traceId, path: req.originalUrl, customerId: uid });
+
     try {
-      const uid = userId(req);
-      if (!uid) return res.status(401).json({ success: false, message: "Unauthorized." });
+      if (!uid) {
+        logger.warn(`${type}Folder create unauthorized`, { traceId });
+        return res.status(401).json({ success: false, message: "Unauthorized." });
+      }
 
       const name = (req.body?.name ?? "").toString().trim();
-      if (!name) return res.status(400).json({ success: false, message: "name is required." });
-      if (name.length > 120)
-        return res.status(400).json({ success: false, message: "name too long (max 120)." });
+      if (!name) { logger.warn(`${type}Folder create missing name`, { traceId, customerId: uid }); return res.status(400).json({ success: false, message: "name is required." }); }
+      if (name.length > 120) { logger.warn(`${type}Folder create name too long`, { traceId, customerId: uid }); return res.status(400).json({ success: false, message: "name too long (max 120)." }); }
 
       try {
         const folder = await Folder.create({ customerId: uid, name, type, isDefaultFolder: false });
+        logger.info(`${type}Folder create success`, { traceId, customerId: uid, folderId: folder._id });
         return res.status(201).json({ success: true, data: folder });
       } catch (err: any) {
-        if (err?.code === 11000)
+        if (err?.code === 11000) {
+          logger.warn(`${type}Folder create duplicate`, { traceId, customerId: uid, name });
           return res
             .status(409)
             .json({ success: false, message: "A folder with this name already exists." });
+        }
         throw err;
       }
     } catch (error: any) {
+      logger.error(`${type}Folder create failed`, { traceId, customerId: uid, error: getErrorMessage(error), stack: error.stack });
       return res.status(500).json({ success: false, message: error.message });
     }
   };
 
   const detail = async (req: Request, res: Response) => {
-    try {
-      const uid = userId(req);
-      if (!uid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const traceId = req.traceId;
+    const uid = userId(req);
+    const id = req.params.id as string;
+    logger.info(`${type}Folder detail invoked`, { traceId, path: req.originalUrl, customerId: uid, folderId: id });
 
-      const id = req.params.id as string;
-      if (!mongoose.Types.ObjectId.isValid(id))
-        return res.status(400).json({ success: false, message: "Invalid folder id." });
+    try {
+      if (!uid) {
+        logger.warn(`${type}Folder detail unauthorized`, { traceId });
+        return res.status(401).json({ success: false, message: "Unauthorized." });
+      }
+
+      if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn(`${type}Folder detail invalid id`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "Invalid folder id." }); }
 
       const folder = await Folder.findOne({ _id: id, customerId: uid, type }).lean();
-      if (!folder) return res.status(404).json({ success: false, message: "Folder not found." });
+      if (!folder) { logger.warn(`${type}Folder detail not found`, { traceId, customerId: uid, folderId: id }); return res.status(404).json({ success: false, message: "Folder not found." }); }
 
       const { page = "1", limit = "20" } = req.query as Record<string, string>;
       const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -134,29 +158,32 @@ function makeFolderController(type: FolderType) {
         ref: refMap.get(String(it.refId)) ?? null,
       }));
 
+      logger.info(`${type}Folder detail success`, { traceId, customerId: uid, folderId: id, total });
       return res.status(200).json({
         success: true,
         data: { folder: { ...folder, isDefaultFolder: !!folder.isDefaultFolder }, list },
         pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
       });
     } catch (error: any) {
+      logger.error(`${type}Folder detail failed`, { traceId, customerId: uid, folderId: id, error: getErrorMessage(error), stack: error.stack });
       return res.status(500).json({ success: false, message: error.message });
     }
   };
 
   const update = async (req: Request, res: Response) => {
-    try {
-      const uid = userId(req);
-      if (!uid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const traceId = req.traceId;
+    const uid = userId(req);
+    const id = req.params.id as string;
+    logger.info(`${type}Folder update invoked`, { traceId, path: req.originalUrl, customerId: uid, folderId: id });
 
-      const id = req.params.id as string;
-      if (!mongoose.Types.ObjectId.isValid(id))
-        return res.status(400).json({ success: false, message: "Invalid folder id." });
+    try {
+      if (!uid) { logger.warn(`${type}Folder update unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+      if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn(`${type}Folder update invalid id`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "Invalid folder id." }); }
 
       const name = (req.body?.name ?? "").toString().trim();
-      if (!name) return res.status(400).json({ success: false, message: "name is required." });
-      if (name.length > 120)
-        return res.status(400).json({ success: false, message: "name too long (max 120)." });
+      if (!name) { logger.warn(`${type}Folder update missing name`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "name is required." }); }
+      if (name.length > 120) { logger.warn(`${type}Folder update name too long`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "name too long (max 120)." }); }
 
       try {
         const folder = await Folder.findOneAndUpdate(
@@ -164,32 +191,38 @@ function makeFolderController(type: FolderType) {
           { $set: { name } },
           { new: true }
         ).lean();
-        if (!folder) return res.status(404).json({ success: false, message: "Folder not found." });
+        if (!folder) { logger.warn(`${type}Folder update not found`, { traceId, customerId: uid, folderId: id }); return res.status(404).json({ success: false, message: "Folder not found." }); }
+        logger.info(`${type}Folder update success`, { traceId, customerId: uid, folderId: id });
         return res.status(200).json({ success: true, data: folder });
       } catch (err: any) {
-        if (err?.code === 11000)
+        if (err?.code === 11000) {
+          logger.warn(`${type}Folder update duplicate`, { traceId, customerId: uid, folderId: id, name });
           return res
             .status(409)
             .json({ success: false, message: "A folder with this name already exists." });
+        }
         throw err;
       }
     } catch (error: any) {
+      logger.error(`${type}Folder update failed`, { traceId, customerId: uid, folderId: id, error: getErrorMessage(error), stack: error.stack });
       return res.status(500).json({ success: false, message: error.message });
     }
   };
 
   const remove = async (req: Request, res: Response) => {
+    const traceId = req.traceId;
+    const uid = userId(req);
+    const id = req.params.id as string;
+    logger.info(`${type}Folder remove invoked`, { traceId, path: req.originalUrl, customerId: uid, folderId: id });
+
     const session = await mongoose.startSession();
     try {
-      const uid = userId(req);
-      if (!uid) return res.status(401).json({ success: false, message: "Unauthorized." });
+      if (!uid) { logger.warn(`${type}Folder remove unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-      const id = req.params.id as string;
-      if (!mongoose.Types.ObjectId.isValid(id))
-        return res.status(400).json({ success: false, message: "Invalid folder id." });
+      if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn(`${type}Folder remove invalid id`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "Invalid folder id." }); }
 
       const existing = await Folder.findOne({ _id: id, customerId: uid, type }).select("isDefaultFolder").lean();
-      if (!existing) return res.status(404).json({ success: false, message: "Folder not found." });
+      if (!existing) { logger.warn(`${type}Folder remove not found`, { traceId, customerId: uid, folderId: id }); return res.status(404).json({ success: false, message: "Folder not found." }); }
 
       await session.withTransaction(async () => {
         await FolderItem.deleteMany({ folderId: id, customerId: uid }, { session });
@@ -198,11 +231,13 @@ function makeFolderController(type: FolderType) {
         }
       });
 
+      logger.info(`${type}Folder remove success`, { traceId, customerId: uid, folderId: id, wasDefault: !!existing.isDefaultFolder });
       return res.status(200).json({
         success: true,
         message: existing.isDefaultFolder ? "Folder emptied." : "Folder deleted.",
       });
     } catch (error: any) {
+      logger.error(`${type}Folder remove failed`, { traceId, customerId: uid, folderId: id, error: getErrorMessage(error), stack: error.stack });
       return res.status(500).json({ success: false, message: error.message });
     } finally {
       session.endSession();
@@ -210,29 +245,33 @@ function makeFolderController(type: FolderType) {
   };
 
   const addItem = async (req: Request, res: Response) => {
-    try {
-      const uid = userId(req);
-      if (!uid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const traceId = req.traceId;
+    const uid = userId(req);
+    const id = req.params.id as string;
+    logger.info(`${type}Folder addItem invoked`, { traceId, path: req.originalUrl, customerId: uid, folderId: id, refId: req.body?.refId });
 
-      const id = req.params.id as string;
-      if (!mongoose.Types.ObjectId.isValid(id))
-        return res.status(400).json({ success: false, message: "Invalid folder id." });
+    try {
+      if (!uid) { logger.warn(`${type}Folder addItem unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+      if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn(`${type}Folder addItem invalid folderId`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "Invalid folder id." }); }
 
       const refId = req.body?.refId as string;
-      if (!refId || !mongoose.Types.ObjectId.isValid(refId))
-        return res.status(400).json({ success: false, message: "Invalid refId." });
+      if (!refId || !mongoose.Types.ObjectId.isValid(refId)) { logger.warn(`${type}Folder addItem invalid refId`, { traceId, refId }); return res.status(400).json({ success: false, message: "Invalid refId." }); }
 
       const folder = await Folder.findOne({ _id: id, customerId: uid, type }).select("_id");
-      if (!folder) return res.status(404).json({ success: false, message: "Folder not found." });
+      if (!folder) { logger.warn(`${type}Folder addItem folder not found`, { traceId, customerId: uid, folderId: id }); return res.status(404).json({ success: false, message: "Folder not found." }); }
 
       const refExists = await KIND_MODELS[allowedKind].exists({ _id: refId });
-      if (!refExists)
-        return res.status(404).json({ success: false, message: `${allowedKind} not found.` });
+      if (!refExists) { logger.warn(`${type}Folder addItem ref not found`, { traceId, refId, kind: allowedKind }); return res.status(404).json({ success: false, message: `${allowedKind} not found.` }); }
 
       const existing = await FolderItem.findOne({ folderId: id, kind: allowedKind, refId });
-      if (existing) return res.status(200).json({ success: true, data: existing, deduped: true });
+      if (existing) {
+        logger.info(`${type}Folder addItem deduped`, { traceId, customerId: uid, folderId: id, refId });
+        return res.status(200).json({ success: true, data: existing, deduped: true });
+      }
 
       const item = await FolderItem.create({ folderId: id, customerId: uid, kind: allowedKind, refId });
+      logger.info(`${type}Folder addItem success`, { traceId, customerId: uid, folderId: id, itemId: item._id });
       return res.status(201).json({ success: true, data: item });
     } catch (error: any) {
       if (error?.code === 11000) {
@@ -241,23 +280,27 @@ function makeFolderController(type: FolderType) {
           kind: allowedKind,
           refId: req.body?.refId,
         });
+        logger.info(`${type}Folder addItem deduped race`, { traceId, customerId: uid, folderId: id });
         return res.status(200).json({ success: true, data: existing, deduped: true });
       }
+      logger.error(`${type}Folder addItem failed`, { traceId, customerId: uid, folderId: id, error: getErrorMessage(error), stack: error.stack });
       return res.status(500).json({ success: false, message: error.message });
     }
   };
 
   const removeItem = async (req: Request, res: Response) => {
-    try {
-      const uid = userId(req);
-      if (!uid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const traceId = req.traceId;
+    const uid = userId(req);
+    const { id, itemId } = req.params as { id: string; itemId: string };
+    logger.info(`${type}Folder removeItem invoked`, { traceId, path: req.originalUrl, customerId: uid, folderId: id, itemId });
 
-      const { id, itemId } = req.params as { id: string; itemId: string };
-      if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(itemId))
-        return res.status(400).json({ success: false, message: "Invalid id(s)." });
+    try {
+      if (!uid) { logger.warn(`${type}Folder removeItem unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+      if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(itemId)) { logger.warn(`${type}Folder removeItem invalid ids`, { traceId, folderId: id, itemId }); return res.status(400).json({ success: false, message: "Invalid id(s)." }); }
 
       const folder = await Folder.findOne({ _id: id, customerId: uid, type }).select("_id");
-      if (!folder) return res.status(404).json({ success: false, message: "Folder not found." });
+      if (!folder) { logger.warn(`${type}Folder removeItem folder not found`, { traceId, customerId: uid, folderId: id }); return res.status(404).json({ success: false, message: "Folder not found." }); }
 
       const removed = await FolderItem.findOneAndDelete({
         _id: itemId,
@@ -265,9 +308,11 @@ function makeFolderController(type: FolderType) {
         customerId: uid,
         kind: allowedKind,
       });
-      if (!removed) return res.status(404).json({ success: false, message: "Item not found." });
+      if (!removed) { logger.warn(`${type}Folder removeItem item not found`, { traceId, customerId: uid, folderId: id, itemId }); return res.status(404).json({ success: false, message: "Item not found." }); }
+      logger.info(`${type}Folder removeItem success`, { traceId, customerId: uid, folderId: id, itemId });
       return res.status(200).json({ success: true, message: "Item removed." });
     } catch (error: any) {
+      logger.error(`${type}Folder removeItem failed`, { traceId, customerId: uid, folderId: id, itemId, error: getErrorMessage(error), stack: error.stack });
       return res.status(500).json({ success: false, message: error.message });
     }
   };
@@ -277,9 +322,12 @@ function makeFolderController(type: FolderType) {
   // Mirrors the per-folder `detail` shape but in one call, and only counts items whose
   // underlying Material/Video still exists — so list length matches the dashboard count.
   const allItems = async (req: Request, res: Response) => {
+    const traceId = req.traceId;
+    const uid = userId(req);
+    logger.info(`${type}Folder allItems invoked`, { traceId, path: req.originalUrl, customerId: uid });
+
     try {
-      const uid = userId(req);
-      if (!uid) return res.status(401).json({ success: false, message: "Unauthorized." });
+      if (!uid) { logger.warn(`${type}Folder allItems unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
       await ensureDefaultFolders(uid);
 
@@ -320,8 +368,10 @@ function makeFolderController(type: FolderType) {
         list: itemsByFolder.get(String(f._id)) ?? [],
       }));
 
+      logger.info(`${type}Folder allItems success`, { traceId, customerId: uid, folderCount: data.length });
       return res.status(200).json({ success: true, data });
     } catch (error: any) {
+      logger.error(`${type}Folder allItems failed`, { traceId, customerId: uid, error: getErrorMessage(error), stack: error.stack });
       return res.status(500).json({ success: false, message: error.message });
     }
   };

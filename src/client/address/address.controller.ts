@@ -10,59 +10,89 @@ import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
 import { CustomerEducation } from "../../models/customer/CustomerEducation.model";
 import { Goal } from "../../models/Goal.model";
 import { createAddressSchema, updateAddressSchema } from "./address.validation";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 // ─── Addresses ────────────────────────────────────────────────────────────────
 
 export const getMyAddresses = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("getMyAddresses invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
     const addresses = await CustomerAddress.find({ customerId, status: true })
       .populate("stateId")
       .populate("cityId")
       .sort({ createdAt: -1 });
+    logger.info("getMyAddresses success", { traceId, customerId, count: addresses.length });
     return res.status(200).json({ success: true, data: addresses });
   } catch (error: any) {
+    logger.error("getMyAddresses failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const getAddressById = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getAddressById invoked", { traceId, path: req.originalUrl, customerId, id });
+
   try {
-    const customerId = req.user?.id;
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("getAddressById invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
+    }
 
     const address = await CustomerAddress.findOne({ _id: id, customerId })
       .populate("stateId", "_id name stateCode")
       .populate("cityId", "_id name");
 
-    if (!address) return res.status(404).json({ success: false, message: "Address not found" });
+    if (!address) {
+      logger.warn("getAddressById not found", { traceId, customerId, id });
+      return res.status(404).json({ success: false, message: "Address not found" });
+    }
+    logger.info("getAddressById success", { traceId, customerId, id });
     return res.status(200).json({ success: true, data: address });
   } catch (error: any) {
+    logger.error("getAddressById failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const createAddress = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("createAddress invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
     const data = createAddressSchema.parse(req.body);
     const address = new CustomerAddress({ ...data, customerId });
     await address.save();
+    logger.info("createAddress success", { traceId, customerId, addressId: address._id });
     return res.status(201).json({ success: true, data: address });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) {
+      logger.warn("createAddress validation failed", { traceId, customerId, issues: error.issues });
+      return res.status(400).json({ success: false, errors: error.issues });
+    }
+    logger.error("createAddress failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const updateAddress = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("updateAddress invoked", { traceId, path: req.originalUrl, customerId, id });
+
   try {
-    const customerId = req.user?.id;
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("updateAddress invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
+    }
 
     const data = updateAddressSchema.parse(req.body);
     const address = await CustomerAddress.findOneAndUpdate(
@@ -71,24 +101,40 @@ export const updateAddress = async (req: Request, res: Response) => {
       { new: true }
     ).populate("stateId", "_id name stateCode");
 
-    if (!address) return res.status(404).json({ success: false, message: "Address not found" });
+    if (!address) {
+      logger.warn("updateAddress not found", { traceId, customerId, id });
+      return res.status(404).json({ success: false, message: "Address not found" });
+    }
+    logger.info("updateAddress success", { traceId, customerId, id });
     return res.status(200).json({ success: true, data: address });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) {
+      logger.warn("updateAddress validation failed", { traceId, customerId, id, issues: error.issues });
+      return res.status(400).json({ success: false, errors: error.issues });
+    }
+    logger.error("updateAddress failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // PATCH /api/v1/client/address/:id/default
 export const setDefaultAddress = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("setDefaultAddress invoked", { traceId, path: req.originalUrl, customerId, id });
+
   try {
-    const customerId = req.user?.id;
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("setDefaultAddress invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
+    }
 
     const target = await CustomerAddress.findOne({ _id: id, customerId, status: true });
-    if (!target) return res.status(404).json({ success: false, message: "Address not found" });
+    if (!target) {
+      logger.warn("setDefaultAddress not found", { traceId, customerId, id });
+      return res.status(404).json({ success: false, message: "Address not found" });
+    }
 
     await CustomerAddress.updateMany(
       { customerId, _id: { $ne: id } },
@@ -97,30 +143,42 @@ export const setDefaultAddress = async (req: Request, res: Response) => {
     target.isDefault = true;
     await target.save();
 
+    logger.info("setDefaultAddress success", { traceId, customerId, id });
     return res.status(200).json({
       success: true,
       message: "Default address updated.",
     });
   } catch (error: any) {
+    logger.error("setDefaultAddress failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const deleteAddress = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("deleteAddress invoked", { traceId, path: req.originalUrl, customerId, id });
+
   try {
-    const customerId = req.user?.id;
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("deleteAddress invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
+    }
 
     const address = await CustomerAddress.findOneAndUpdate(
       { _id: id, customerId },
       { $set: { status: false } },
       { new: true }
     );
-    if (!address) return res.status(404).json({ success: false, message: "Address not found" });
+    if (!address) {
+      logger.warn("deleteAddress not found", { traceId, customerId, id });
+      return res.status(404).json({ success: false, message: "Address not found" });
+    }
+    logger.info("deleteAddress success", { traceId, customerId, id });
     return res.status(200).json({ success: true, message: "Address removed successfully" });
   } catch (error: any) {
+    logger.error("deleteAddress failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -128,6 +186,9 @@ export const deleteAddress = async (req: Request, res: Response) => {
 // ─── Location Dropdowns ───────────────────────────────────────────────────────
 
 export const getStates = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("getStates invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const { search } = req.query as Record<string, string>;
     const filter: any = { active: true };
@@ -135,8 +196,10 @@ export const getStates = async (req: Request, res: Response) => {
     const states = await CustomerState.find(filter)
       .select("_id name stateCode")
       .sort({ name: 1 });
+    logger.info("getStates success", { traceId, count: states.length });
     return res.status(200).json({ success: true, data: states });
   } catch (error: any) {
+    logger.error("getStates failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -159,22 +222,32 @@ export const getStates = async (req: Request, res: Response) => {
 // ─── Cities (moved from /offline) ─────────────────────────────────────────────
 
 export const listCities = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listCities invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const { search } = req.query as Record<string, string>;
     const filter: any = { status: true };
     if (search && search.trim()) filter.name = { $regex: search.trim(), $options: "i" };
     const data = await OfflineCity.find(filter).sort({ order: 1, name: 1 }).lean();
+    logger.info("listCities success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
+    logger.error("listCities failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
 export const listCentersByCity = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const cityId = req.params.cityId as string;
+  logger.info("listCentersByCity invoked", { traceId, path: req.originalUrl, cityId, userId: req.user?.id });
+
   try {
-    const cityId = req.params.cityId as string;
-    if (!mongoose.Types.ObjectId.isValid(cityId))
+    if (!mongoose.Types.ObjectId.isValid(cityId)) {
+      logger.warn("listCentersByCity invalid id", { traceId, cityId });
       return res.status(400).json({ success: false, message: "Invalid city id." });
+    }
 
     const centers = await OfflineCenter.find({ cityId, status: true }).lean();
     const centerIds = centers.map((c) => c._id);
@@ -192,19 +265,26 @@ export const listCentersByCity = async (req: Request, res: Response) => {
       batches: batchesByCenter[String(c._id)] || [],
     }));
 
+    logger.info("listCentersByCity success", { traceId, cityId, centerCount: centers.length, batchCount: batches.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
+    logger.error("listCentersByCity failed", { traceId, cityId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
 export const getEducations = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  logger.info("getEducations invoked", { traceId, path: _req.originalUrl });
+
   try {
     const educations = await CustomerEducation.find({ status: true })
       .select("_id name")
       .sort({ name: 1 });
+    logger.info("getEducations success", { traceId, count: educations.length });
     return res.status(200).json({ success: true, data: educations });
   } catch (error: any) {
+    logger.error("getEducations failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -214,13 +294,18 @@ export const getEducations = async (_req: Request, res: Response) => {
  * Returns educations + active goals for onboarding screens. No auth.
  */
 export const getCharacteristic = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  logger.info("getCharacteristic invoked", { traceId, path: _req.originalUrl });
+
   try {
     const [educations, goals] = await Promise.all([
       CustomerEducation.find({ status: true }).select("_id name").sort({ name: 1 }),
       Goal.find({ isActive: true }).select("title image labels").sort({ createdAt: 1 }),
     ]);
+    logger.info("getCharacteristic success", { traceId, educations: educations.length, goals: goals.length });
     return res.status(200).json({ success: true, data: { educations, goals } });
   } catch (error: any) {
+    logger.error("getCharacteristic failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

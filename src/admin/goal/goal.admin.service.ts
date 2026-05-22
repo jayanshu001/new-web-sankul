@@ -142,7 +142,7 @@ export const updateGoal = async (
     if (goal.image && goal.image !== data.image) {
       // Trigger background cleanup of the old icon from DO Spaces
       deleteFromS3FileUrl(goal.image).catch((err) =>
-        console.error("[updateGoal] Failed to delete old goal icon:", err)
+        logger.error("updateGoal service failed deleting old image", { traceId, id, error: (err as Error).message })
       );
     }
     goal.image = data.image;

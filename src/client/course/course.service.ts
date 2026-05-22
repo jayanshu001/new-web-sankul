@@ -15,8 +15,10 @@ import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { CustomerShipping } from "../../models/customer/CustomerShipping.model";
 import { CustomerState } from "../../models/customer/CustomerState.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { ShippingBody } from "./course.validation";
 import { COURIER } from "../../config/courier";
+import logger from "../../utils/logger";
 
 export interface PromoCodeDTO {
   title: string;
@@ -28,9 +30,13 @@ export interface CategoryGroupDTO {
   category: any;
 }
 
+export interface VideoCategoryGroupDTO extends CategoryGroupDTO {
+  list: any[];
+}
+
 export interface CourseDetailsResponse {
   course: any;
-  videos: CategoryGroupDTO[];
+  videos: VideoCategoryGroupDTO[];
   materials: CategoryGroupDTO[];
   tests: CategoryGroupDTO[];
   plans: {
@@ -42,8 +48,11 @@ export interface CourseDetailsResponse {
 
 export async function buildCourseDetails(
   courseId: string,
-  customerId?: string
+  customerId?: string,
+  traceId?: string
 ): Promise<CourseDetailsResponse | null> {
+  logger.info("buildCourseDetails service invoked", { traceId, courseId, customerId });
+
   const courseDoc = await Course.findById(courseId)
     .populate({ path: "courseSubjectCategoryId", model: CourseSubjectCategory })
     .populate({ path: "courseEducatorId", model: CourseEducator })
@@ -51,7 +60,10 @@ export async function buildCourseDetails(
     .populate({ path: "examCategories.category", model: ExamCategory })
     .lean();
 
-  if (!courseDoc) return null;
+  if (!courseDoc) {
+    logger.warn("buildCourseDetails service course not found", { traceId, courseId });
+    return null;
+  }
 
   // Keep the populated relations and expose friendly aliases for the client.
   const course: any = {
@@ -64,20 +76,58 @@ export async function buildCourseDetails(
   delete course.examCategories;
 
   // Videos — Course has a single videoCategoryId; expose as one-entry videos[]
-  const videos: CategoryGroupDTO[] = [];
+  // with the category's active videos inlined so the FE can render the Videos
+  // tab from this single call. Video rows are metadata-only; playable URLs
+  // come from the dedicated detail endpoint per the shared video URL contract.
+  const videos: (CategoryGroupDTO & { list: any[] })[] = [];
   if (courseDoc.videoCategoryId) {
     const videoCat: any = await VideoCategory.findById(courseDoc.videoCategoryId).lean();
     if (videoCat) {
-      const [count, childCount] = await Promise.all([
+      const [count, childCount, list] = await Promise.all([
         Video.countDocuments({ videoCategoryId: videoCat._id, status: true }),
         VideoCategoryRelation.countDocuments({ parent: videoCat._id }),
+        Video.find({ videoCategoryId: videoCat._id, status: true })
+          .sort({ order: 1, createdAt: -1 })
+          .lean(),
       ]);
+      // Inline per-video resume state so the FE can show "Continue" badges
+      // and seek to the right position when a user opens the course directly
+      // (without going through /learning/progress/my first).
+      let progressByVideo = new Map<string, any>();
+      if (customerId && list.length) {
+        const progressRows = await LectureProgress.find({
+          customerId: new Types.ObjectId(customerId),
+          videoId: { $in: list.map((v: any) => v._id) },
+        })
+          .select("videoId positionSec durationSec completed completedAt lastWatchedAt")
+          .lean();
+        progressByVideo = new Map(
+          progressRows.map((r: any) => [String(r.videoId), r])
+        );
+      }
+      const listWithProgress = list.map((v: any) => {
+        const p = progressByVideo.get(String(v._id));
+        return {
+          ...v,
+          progress: p
+            ? {
+                positionSec: p.positionSec ?? 0,
+                durationSec: p.durationSec ?? 0,
+                completed: !!p.completed,
+                completedAt: p.completedAt ?? null,
+                lastWatchedAt: p.lastWatchedAt ?? null,
+              }
+            : null,
+        };
+      });
+
       videos.push({
         category: {
           ...videoCat,
           havingChildDirectory: childCount > 0,
           count,
         },
+        list: listWithProgress,
       });
     }
   }
@@ -171,6 +221,7 @@ export async function buildCourseDetails(
   }
   course.isPurchased = isPurchased;
 
+  logger.info("buildCourseDetails service completed", { traceId, courseId, isPurchased, videoGroups: videos.length, materialGroups: materials.length, testGroups: tests.length });
   return { course, videos, materials, tests, plans, availablePromoCode };
 }
 
@@ -214,8 +265,10 @@ function normalizeShipping(userId: string, body: ShippingBody): NormalizedShippi
 
 export async function upsertCourseOrderShipping(
   userId: string,
-  body: ShippingBody
+  body: ShippingBody,
+  traceId?: string
 ) {
+  logger.info("upsertCourseOrderShipping service invoked", { traceId, userId });
   const normalized = normalizeShipping(userId, body);
 
   // Mongoose's "alternatePhone: null" needs a conditional query — omit the key
@@ -243,7 +296,10 @@ export async function upsertCourseOrderShipping(
     .populate({ path: "stateId", model: CustomerState })
     .lean();
 
-  if (!populated) return null;
+  if (!populated) {
+    logger.warn("upsertCourseOrderShipping service populate missing", { traceId, userId, shippingId: shipping._id });
+    return null;
+  }
 
   // Match source response: `state` object, stringified numeric fields.
   populated.state = populated.stateId ?? null;
@@ -252,6 +308,7 @@ export async function upsertCourseOrderShipping(
   populated.pincode = `${populated.pincode ?? ""}`;
   delete populated.stateId;
   delete populated.alternatePhone;
+  logger.info("upsertCourseOrderShipping service completed", { traceId, userId, shippingId: shipping._id });
   return populated;
 }
 
@@ -259,7 +316,8 @@ export async function upsertCourseOrderShipping(
 // Order details / invoice
 // ───────────────────────────────────────────────────────────────────────────
 
-export async function getOrderDetailsForUser(orderId: string, userId: string) {
+export async function getOrderDetailsForUser(orderId: string, userId: string, traceId?: string) {
+  logger.info("getOrderDetailsForUser service invoked", { traceId, orderId, userId });
   const subscription: any = await PackageCourseSubscription.findOne({
     _id: orderId,
     customerId: userId,
@@ -269,7 +327,10 @@ export async function getOrderDetailsForUser(orderId: string, userId: string) {
     .populate({ path: "customerShippingId", model: CustomerShipping })
     .lean();
 
-  if (!subscription) return null;
+  if (!subscription) {
+    logger.warn("getOrderDetailsForUser service not found", { traceId, orderId, userId });
+    return null;
+  }
 
   // Rename populated refs to source contract names
   subscription.package = subscription.packageId ?? null;
@@ -289,12 +350,16 @@ export async function getOrderDetailsForUser(orderId: string, userId: string) {
     subscription.tracking_id = subscription.trackingId;
   }
   delete subscription.trackingId;
+  logger.info("getOrderDetailsForUser service completed", { traceId, orderId, userId });
   return subscription;
 }
 
-export async function getOrderForInvoice(orderId: string, userId: string) {
-  return PackageCourseSubscription.findOne({
+export async function getOrderForInvoice(orderId: string, userId: string, traceId?: string) {
+  logger.info("getOrderForInvoice service invoked", { traceId, orderId, userId });
+  const sub = await PackageCourseSubscription.findOne({
     _id: orderId,
     customerId: userId,
   }).lean();
+  if (!sub) logger.warn("getOrderForInvoice service not found", { traceId, orderId, userId });
+  return sub;
 }

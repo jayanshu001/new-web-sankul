@@ -98,15 +98,20 @@ async function deprovisionNotification(
 export async function upsertReminder(
   customerId: string,
   liveSessionId: string,
-  minutesBefore: number
+  minutesBefore: number,
+  traceId?: string
 ): Promise<UpsertReminderResult> {
+  logger.info("upsertReminder service invoked", { traceId, customerId, liveSessionId, minutesBefore });
+
   if (!Types.ObjectId.isValid(liveSessionId)) {
+    logger.warn("upsertReminder service invalid id", { traceId, customerId, liveSessionId });
     return { ok: false, status: 422, message: "Invalid liveSessionId." };
   }
 
   const session = await LiveSession.findById(liveSessionId);
-  if (!session) return { ok: false, status: 404, message: "Live session not found." };
+  if (!session) { logger.warn("upsertReminder service session not found", { traceId, liveSessionId }); return { ok: false, status: 404, message: "Live session not found." }; }
   if (session.status !== "SCHEDULED") {
+    logger.warn("upsertReminder service session not schedulable", { traceId, liveSessionId, status: session.status });
     return {
       ok: false,
       status: 409,
@@ -114,6 +119,7 @@ export async function upsertReminder(
     };
   }
   if (!session.scheduledAt || session.scheduledAt.getTime() <= Date.now()) {
+    logger.warn("upsertReminder service session has no upcoming time", { traceId, liveSessionId });
     return { ok: false, status: 409, message: "This session has no upcoming scheduled time." };
   }
 
@@ -144,7 +150,7 @@ export async function upsertReminder(
     { new: true, upsert: true }
   );
 
-  logger.info("Live reminder: set", { customerId, liveSessionId, remindAt, minutesBefore });
+  logger.info("upsertReminder service completed", { traceId, customerId, liveSessionId, remindAt, minutesBefore });
   return { ok: true, reminder: reminder as ILiveSessionReminder, session };
 }
 
@@ -154,16 +160,21 @@ export async function upsertReminder(
  */
 export async function removeReminder(
   customerId: string,
-  liveSessionId: string
+  liveSessionId: string,
+  traceId?: string
 ): Promise<ILiveSessionReminder | null> {
-  if (!Types.ObjectId.isValid(liveSessionId)) return null;
+  logger.info("removeReminder service invoked", { traceId, customerId, liveSessionId });
+  if (!Types.ObjectId.isValid(liveSessionId)) {
+    logger.warn("removeReminder service invalid id", { traceId, customerId, liveSessionId });
+    return null;
+  }
   const reminder = await LiveSessionReminder.findOneAndDelete({
     customerId: new Types.ObjectId(customerId),
     liveSessionId,
   });
-  if (!reminder) return null;
+  if (!reminder) { logger.info("removeReminder service no reminder", { traceId, customerId, liveSessionId }); return null; }
   await deprovisionNotification(reminder.notificationId);
-  logger.info("Live reminder: removed", { customerId, liveSessionId });
+  logger.info("removeReminder service completed", { traceId, customerId, liveSessionId });
   return reminder;
 }
 
@@ -204,7 +215,7 @@ export async function syncRemindersForSession(
     await reminder.save();
   }
 
-  logger.info("Live reminder: synced reminders for session", {
+  logger.info("syncRemindersForSession service completed", {
     liveSessionId: String(liveSessionId),
     count: reminders.length,
     cancelled: !stillSchedulable,
@@ -224,7 +235,7 @@ export async function cancelRemindersForSession(
     await deprovisionNotification(reminder.notificationId);
   }
   await LiveSessionReminder.deleteMany({ liveSessionId });
-  logger.info("Live reminder: cancelled all reminders for session", {
+  logger.info("cancelRemindersForSession service completed", {
     liveSessionId: String(liveSessionId),
     count: reminders.length,
   });

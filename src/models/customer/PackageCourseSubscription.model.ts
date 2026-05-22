@@ -59,7 +59,14 @@ const packageCourseSubscriptionSchema: Schema = new Schema(
     razorpayPaymentId: { type: String, default: null, maxlength: 100 },
     paidAt: { type: Date, default: null },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // Subscription rows are the entitlement source of truth — silent field
+    // drops on an unknown key (e.g. a typo of `endAt`) would silently
+    // un-entitle a paying customer. Throw on unknown fields to surface bugs
+    // immediately.
+    strict: "throw",
+  }
 );
 
 packageCourseSubscriptionSchema.index({ promoterId: 1, createdAt: -1 });

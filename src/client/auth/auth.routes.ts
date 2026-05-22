@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpHandler, logoutHandler } from "./auth.controller";
 import authenticate from "../../middlewares/authenticate";
+import { logoutAllDevicesHandler } from "../../middlewares/logoutAllDevices";
+import { CustomerAccessToken } from "../../models/customer/CustomerAccessToken.model";
 // TEMP (testing): otpLimiter disabled so repeated OTP requests don't hit the
 // 15-min / 5-request 429. RESTORE before merging — re-add it to the two
 // /otp routes below and uncomment this import.
@@ -42,5 +44,25 @@ router.post("/token/refresh", refreshTokenHandler);
  * @access Private (Customer)
  */
 router.delete("/logout", authenticate, logoutHandler);
+
+/**
+ * @route  POST /api/v1/client/auth/logout-all-devices
+ * @desc   Revoke every outstanding token for this customer (e.g. after a
+ *         suspected compromise). See libs/tokenRevocation.ts.
+ * @access Private (Customer)
+ */
+router.post(
+  "/logout-all-devices",
+  authenticate,
+  logoutAllDevicesHandler({
+    type: "customer",
+    extraTeardown: async (customerId) => {
+      await CustomerAccessToken.updateMany(
+        { customerId, active: true },
+        { active: false, deleted: true }
+      );
+    },
+  })
+);
 
 export default router;

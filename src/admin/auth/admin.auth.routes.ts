@@ -10,7 +10,9 @@ import {
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
 import { AdminUser } from "../../models/admin/AdminUser.model";
+import { AdminAccessToken } from "../../models/admin/AdminAccessToken.model";
 import { failure } from "../../utils/httpResponse";
+import { logoutAllDevicesHandler } from "../../middlewares/logoutAllDevices";
 
 const router = Router();
 
@@ -74,6 +76,30 @@ router.post("/refresh", adminRefreshHandler);
  * @access Protected
  */
 router.delete("/logout", authenticate, adminLogoutHandler);
+
+/**
+ * @route  POST /api/v1/admin/auth/logout-all-devices
+ * @desc   Revoke every outstanding token for this admin. Useful after a
+ *         password change, suspicious activity, or a "log out everywhere"
+ *         action. See libs/tokenRevocation.ts for the cutoff semantics.
+ * @access Protected
+ */
+router.post(
+  "/logout-all-devices",
+  authenticate,
+  logoutAllDevicesHandler({
+    type: "admin",
+    extraTeardown: async (adminId) => {
+      // Mark every stored access-token row inactive so refresh attempts also
+      // fail at the DB layer, not just the Redis cutoff. Matches what the
+      // existing logout endpoint does for a single device.
+      await AdminAccessToken.updateMany(
+        { adminUserId: adminId, active: true },
+        { active: false, deleted: true }
+      );
+    },
+  })
+);
 
 /**
  * @route  PUT /api/v1/admin/auth/profile

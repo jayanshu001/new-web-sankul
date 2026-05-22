@@ -13,6 +13,8 @@ import {
   BookOrderStatus,
   PackageCourseEbookOrderStatus,
 } from "../../models/enums";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const parsePagination = (q: Record<string, string>) => {
   const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
@@ -28,9 +30,12 @@ const parsePagination = (q: Record<string, string>) => {
 // Each row carries the package-type badge ("Live" / "Recorded" / "Test Series")
 // resolved through PackageCourseEbookPrice → Package → PackageType.
 export const listSubscriptionsHistory = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("listSubscriptionsHistory invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("listSubscriptionsHistory unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { pageNum, limitNum, skip } = parsePagination(req.query as Record<string, string>);
 
@@ -121,6 +126,7 @@ export const listSubscriptionsHistory = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listSubscriptionsHistory success", { traceId, customerId: userId, total, returned: data.length });
     return res.status(200).json({
       success: true,
       data,
@@ -132,6 +138,7 @@ export const listSubscriptionsHistory = async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
+    logger.error("listSubscriptionsHistory failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -147,9 +154,12 @@ const BOOK_SUCCESS_STATUSES = [
 ];
 
 export const listBooksHistory = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("listBooksHistory invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("listBooksHistory unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { pageNum, limitNum, skip } = parsePagination(req.query as Record<string, string>);
 
@@ -211,6 +221,7 @@ export const listBooksHistory = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listBooksHistory success", { traceId, customerId: userId, total, returned: data.length });
     return res.status(200).json({
       success: true,
       data,
@@ -222,6 +233,7 @@ export const listBooksHistory = async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
+    logger.error("listBooksHistory failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -229,9 +241,12 @@ export const listBooksHistory = async (req: Request, res: Response) => {
 // GET /api/v1/client/purchase-history/ebooks
 // Drives the "E-Book" tab. Returns EbookOrders in COMPLETE status only.
 export const listEbooksHistory = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("listEbooksHistory invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("listEbooksHistory unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { pageNum, limitNum, skip } = parsePagination(req.query as Record<string, string>);
 
@@ -275,6 +290,7 @@ export const listEbooksHistory = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listEbooksHistory success", { traceId, customerId: userId, total, returned: data.length });
     return res.status(200).json({
       success: true,
       data,
@@ -286,6 +302,7 @@ export const listEbooksHistory = async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
+    logger.error("listEbooksHistory failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

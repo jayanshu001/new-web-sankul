@@ -7,6 +7,8 @@ import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { CustomerShipping } from "../../models/customer/CustomerShipping.model";
 import { Customer } from "../../models/customer/Customer.model";
 import { OfflineCity } from "../../models/offline/OfflineCity.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -22,14 +24,23 @@ const updateQtySchema = z.object({
 // POST /api/v1/client/cart
 // Adds a book to the active cart. If the book is already in the cart, increments qty.
 export const addToCart = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("addToCart invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) {
+      logger.warn("addToCart unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const { bookId, qty } = addSchema.parse(req.body);
 
     const bookExists = await Book.exists({ _id: bookId });
-    if (!bookExists) return res.status(404).json({ success: false, message: "Book not found." });
+    if (!bookExists) {
+      logger.warn("addToCart book not found", { traceId, customerId: userId, bookId });
+      return res.status(404).json({ success: false, message: "Book not found." });
+    }
 
     const bookObjectId = new mongoose.Types.ObjectId(bookId);
 
@@ -40,6 +51,7 @@ export const addToCart = async (req: Request, res: Response) => {
     );
 
     if (incremented) {
+      logger.info("addToCart qty incremented", { traceId, customerId: userId, bookId, qty });
       return res.status(200).json({ success: true, data: incremented, message: "Quantity updated." });
     }
 
@@ -49,9 +61,14 @@ export const addToCart = async (req: Request, res: Response) => {
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
+    logger.info("addToCart success", { traceId, customerId: userId, bookId, qty, cartId: cart?._id });
     return res.status(201).json({ success: true, data: cart, message: "Added to cart." });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) {
+      logger.warn("addToCart validation failed", { traceId, customerId: userId, issues: e.issues });
+      return res.status(400).json({ success: false, errors: e.issues });
+    }
+    logger.error("addToCart failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -59,9 +76,15 @@ export const addToCart = async (req: Request, res: Response) => {
 // PATCH /api/v1/client/cart/items/:bookId
 // Sets the line's qty to an absolute value (1..99). Use DELETE to remove a line.
 export const updateCartItemQty = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("updateCartItemQty invoked", { traceId, path: req.originalUrl, customerId: userId, bookId: req.params.bookId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) {
+      logger.warn("updateCartItemQty unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const bookId = objectId.parse(req.params.bookId);
     const { qty } = updateQtySchema.parse(req.body);
@@ -73,11 +96,17 @@ export const updateCartItemQty = async (req: Request, res: Response) => {
     );
 
     if (!updated) {
+      logger.warn("updateCartItemQty item not in cart", { traceId, customerId: userId, bookId });
       return res.status(404).json({ success: false, message: "Item not in cart." });
     }
+    logger.info("updateCartItemQty success", { traceId, customerId: userId, bookId, qty });
     return res.status(200).json({ success: true, data: updated, message: "Quantity updated." });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) {
+      logger.warn("updateCartItemQty validation failed", { traceId, customerId: userId, issues: e.issues });
+      return res.status(400).json({ success: false, errors: e.issues });
+    }
+    logger.error("updateCartItemQty failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -85,9 +114,15 @@ export const updateCartItemQty = async (req: Request, res: Response) => {
 // DELETE /api/v1/client/cart/items/:bookId
 // Removes a single line from the active cart.
 export const removeCartItem = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("removeCartItem invoked", { traceId, path: req.originalUrl, customerId: userId, bookId: req.params.bookId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) {
+      logger.warn("removeCartItem unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const bookId = objectId.parse(req.params.bookId);
 
@@ -98,11 +133,17 @@ export const removeCartItem = async (req: Request, res: Response) => {
     );
 
     if (!updated) {
+      logger.warn("removeCartItem item not in cart", { traceId, customerId: userId, bookId });
       return res.status(404).json({ success: false, message: "Item not in cart." });
     }
+    logger.info("removeCartItem success", { traceId, customerId: userId, bookId });
     return res.status(200).json({ success: true, data: updated, message: "Removed from cart." });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) {
+      logger.warn("removeCartItem validation failed", { traceId, customerId: userId, issues: e.issues });
+      return res.status(400).json({ success: false, errors: e.issues });
+    }
+    logger.error("removeCartItem failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -117,9 +158,15 @@ const attachShippingSchema = z.object({
 // BookCart.shippingId / BookOrder.shippingId reference) and stamp the
 // resulting id onto the cart.
 export const attachShippingToCart = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("attachShippingToCart invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) {
+      logger.warn("attachShippingToCart unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const { addressId } = attachShippingSchema.parse(req.body);
 
@@ -129,6 +176,7 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
       status: true,
     });
     if (!address) {
+      logger.warn("attachShippingToCart address not found", { traceId, customerId: userId, addressId });
       return res.status(404).json({ success: false, message: "Address not found." });
     }
 
@@ -143,6 +191,7 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
       email = email || customer?.emailAddress || "";
     }
     if (!phone) {
+      logger.warn("attachShippingToCart missing phone", { traceId, customerId: userId, addressId });
       return res.status(400).json({
         success: false,
         message: "No phone number on file. Please update your profile before using this address for delivery.",
@@ -155,6 +204,7 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
       cityName = city?.name ?? "";
     }
     if (!cityName) {
+      logger.warn("attachShippingToCart missing city", { traceId, customerId: userId, addressId });
       return res.status(400).json({
         success: false,
         message: "Address is missing a city. Please update the address before using it for delivery.",
@@ -196,13 +246,18 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
+    logger.info("attachShippingToCart success", { traceId, customerId: userId, addressId, shippingId: shipping._id, cartId: cart?._id });
     return res.status(200).json({
       success: true,
       data: { cart, shipping },
       message: "Shipping address attached.",
     });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) {
+      logger.warn("attachShippingToCart validation failed", { traceId, customerId: userId, issues: e.issues });
+      return res.status(400).json({ success: false, errors: e.issues });
+    }
+    logger.error("attachShippingToCart failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -210,13 +265,20 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
 // GET /api/v1/client/cart
 // Returns the customer's active cart with each item populated and a total summary.
 export const getCart = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("getCart invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) {
+      logger.warn("getCart unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const cart = await BookCart.findOne({ customerId: userId, status: true }).lean();
 
     if (!cart || cart.items.length === 0) {
+      logger.info("getCart empty", { traceId, customerId: userId });
       return res.status(200).json({
         success: true,
         data: {
@@ -260,6 +322,7 @@ export const getCart = async (req: Request, res: Response) => {
     const shippingWaived = shipping === 0;
     const total = shippingWaived ? subtotal : subtotal + shipping;
 
+    logger.info("getCart success", { traceId, customerId: userId, itemCount, subtotal, total });
     return res.status(200).json({
       success: true,
       data: {
@@ -277,6 +340,7 @@ export const getCart = async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
+    logger.error("getCart failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

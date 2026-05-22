@@ -126,9 +126,11 @@ async function paginateCoursesWithPlans(
 export const listCoursesHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
+  logger.info("listCoursesHandler invoked", { traceId, path: req.originalUrl, userId });
 
   try {
     const result = await paginateCoursesWithPlans({ status: true }, req.query as Record<string, string>, userId);
+    logger.info("listCoursesHandler success", { traceId, userId, total: result.pagination.total });
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     logger.error("listCoursesHandler failed", {
@@ -145,6 +147,8 @@ export const listCoursesHandler = async (req: Request, res: Response) => {
 // Lists active course subject categories with the count of active courses in each.
 export const listCourseCategoriesHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
+  logger.info("listCourseCategoriesHandler invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const categories = await CourseSubjectCategory.find({ status: true })
       .sort({ order: 1, title: 1 })
@@ -165,6 +169,7 @@ export const listCourseCategoriesHandler = async (req: Request, res: Response) =
       courseCount: countByCategory.get(String(c._id)) ?? 0,
     }));
 
+    logger.info("listCourseCategoriesHandler success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (err) {
     logger.error("listCourseCategoriesHandler failed", {
@@ -182,9 +187,11 @@ export const listCoursesByCategoryHandler = async (req: Request, res: Response) 
   const traceId = req.traceId;
   const userId = req.user?.id;
   const { categoryId } = req.params as { categoryId: string };
+  logger.info("listCoursesByCategoryHandler invoked", { traceId, path: req.originalUrl, userId, categoryId });
 
   try {
     if (!Types.ObjectId.isValid(categoryId)) {
+      logger.warn("listCoursesByCategoryHandler invalid id", { traceId, categoryId });
       return failure(res, "Invalid categoryId.", 400);
     }
     const result = await paginateCoursesWithPlans(
@@ -192,6 +199,7 @@ export const listCoursesByCategoryHandler = async (req: Request, res: Response) 
       req.query as Record<string, string>,
       userId
     );
+    logger.info("listCoursesByCategoryHandler success", { traceId, userId, categoryId, total: result.pagination.total });
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     logger.error("listCoursesByCategoryHandler failed", {
@@ -222,7 +230,7 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
       return failure(res, "Please select valid package", 400);
     }
 
-    const response = await buildCourseDetails(courseId, userId);
+    const response = await buildCourseDetails(courseId, userId, traceId);
     if (!response) {
       return failure(res, "Please select valid package", 400);
     }
@@ -284,7 +292,7 @@ export const addCourseOrderShippingHandler = async (
       );
     }
 
-    const shipping = await upsertCourseOrderShipping(userId, parsed.data);
+    const shipping = await upsertCourseOrderShipping(userId, parsed.data, traceId);
     if (!shipping) {
       return failure(res, "Unable to save shipping", 400);
     }
@@ -319,7 +327,7 @@ export const getOrderDetailsHandler = async (req: Request, res: Response) => {
       return failure(res, "Please select valid package", 400);
     }
 
-    const subscription = await getOrderDetailsForUser(orderId, userId);
+    const subscription = await getOrderDetailsForUser(orderId, userId, traceId);
     if (!subscription) {
       return failure(res, "Invalid Subscription Order!", 400);
     }
@@ -355,7 +363,7 @@ export const getOrderInvoiceHandler = async (req: Request, res: Response) => {
       return failure(res, "Please select valid package", 400);
     }
 
-    const sub = await getOrderForInvoice(orderId, userId);
+    const sub = await getOrderForInvoice(orderId, userId, traceId);
     if (!sub) {
       return failure(res, "Invalid Package / Course Order!", 400);
     }

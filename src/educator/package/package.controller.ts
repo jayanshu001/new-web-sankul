@@ -4,14 +4,19 @@ import { Package } from "../../models/course/Package.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { Customer } from "../../models/customer/Customer.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
 // GET /api/v1/educator/packages
 export const listMyPackages = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const educatorId = req.user?.id;
+  logger.info("listMyPackages invoked", { traceId, path: req.originalUrl, educatorId });
+
   try {
-    const educatorId = req.user?.id;
-    if (!educatorId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!educatorId) { logger.warn("listMyPackages unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const packages = await Package.find({ educatorId })
       .sort({ order: 1 })
@@ -65,45 +70,53 @@ export const listMyPackages = async (req: Request, res: Response) => {
       activeSubscriptions: countByPackage[String(p._id)]?.active || 0,
     }));
 
+    logger.info("listMyPackages success", { traceId, educatorId, count: data.length });
     return res.status(200).json({ success: true, data: { packages: data } });
   } catch (error: any) {
+    logger.error("listMyPackages failed", { traceId, educatorId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/educator/packages/:id
 export const getMyPackageDetail = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const educatorId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getMyPackageDetail invoked", { traceId, path: req.originalUrl, educatorId, packageId: id });
+
   try {
-    const educatorId = req.user?.id;
-    if (!educatorId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const id = req.params.id as string;
-    if (!isObjectId(id))
-      return res.status(400).json({ success: false, message: "Invalid package id." });
+    if (!educatorId) { logger.warn("getMyPackageDetail unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!isObjectId(id)) { logger.warn("getMyPackageDetail invalid id", { traceId, educatorId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 
     const pkg = await Package.findOne({ _id: id, educatorId }).lean();
-    if (!pkg) return res.status(404).json({ success: false, message: "Package not found or not yours." });
+    if (!pkg) { logger.warn("getMyPackageDetail not found", { traceId, educatorId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found or not yours." }); }
 
     const plans = await PackageCourseEbookPrice.find({ packageId: id, status: true })
       .sort({ duration: 1 })
       .lean();
 
+    logger.info("getMyPackageDetail success", { traceId, educatorId, packageId: id, planCount: plans.length });
     return res.status(200).json({ success: true, data: { ...pkg, plans } });
   } catch (error: any) {
+    logger.error("getMyPackageDetail failed", { traceId, educatorId, packageId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/educator/packages/:id/dashboard
 export const getPackageDashboard = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const educatorId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getPackageDashboard invoked", { traceId, path: req.originalUrl, educatorId, packageId: id });
+
   try {
-    const educatorId = req.user?.id;
-    if (!educatorId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const id = req.params.id as string;
-    if (!isObjectId(id))
-      return res.status(400).json({ success: false, message: "Invalid package id." });
+    if (!educatorId) { logger.warn("getPackageDashboard unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!isObjectId(id)) { logger.warn("getPackageDashboard invalid id", { traceId, educatorId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 
     const pkg = await Package.findOne({ _id: id, educatorId });
-    if (!pkg) return res.status(404).json({ success: false, message: "Package not found or not yours." });
+    if (!pkg) { logger.warn("getPackageDashboard not found", { traceId, educatorId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found or not yours." }); }
 
     const plans = await PackageCourseEbookPrice.find({ packageId: id }).select("_id").lean();
     const planIds = plans.map((p) => p._id);
@@ -127,6 +140,7 @@ export const getPackageDashboard = async (req: Request, res: Response) => {
         .lean(),
     ]);
 
+    logger.info("getPackageDashboard success", { traceId, educatorId, packageId: id, totalSubs, activeSubs });
     return res.status(200).json({
       success: true,
       data: {
@@ -138,21 +152,24 @@ export const getPackageDashboard = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("getPackageDashboard failed", { traceId, educatorId, packageId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/educator/packages/:id/subscribers
 export const getPackageSubscribers = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const educatorId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getPackageSubscribers invoked", { traceId, path: req.originalUrl, educatorId, packageId: id });
+
   try {
-    const educatorId = req.user?.id;
-    if (!educatorId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const id = req.params.id as string;
-    if (!isObjectId(id))
-      return res.status(400).json({ success: false, message: "Invalid package id." });
+    if (!educatorId) { logger.warn("getPackageSubscribers unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!isObjectId(id)) { logger.warn("getPackageSubscribers invalid id", { traceId, educatorId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 
     const pkg = await Package.findOne({ _id: id, educatorId }).select("_id");
-    if (!pkg) return res.status(404).json({ success: false, message: "Package not found or not yours." });
+    if (!pkg) { logger.warn("getPackageSubscribers not found", { traceId, educatorId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found or not yours." }); }
 
     const plans = await PackageCourseEbookPrice.find({ packageId: id }).select("_id").lean();
     const planIds = plans.map((p) => p._id);
@@ -171,12 +188,14 @@ export const getPackageSubscribers = async (req: Request, res: Response) => {
       PackageCourseSubscription.countDocuments({ packageId: { $in: planIds } }),
     ]);
 
+    logger.info("getPackageSubscribers success", { traceId, educatorId, packageId: id, total });
     return res.status(200).json({
       success: true,
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
+    logger.error("getPackageSubscribers failed", { traceId, educatorId, packageId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

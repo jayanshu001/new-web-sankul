@@ -14,7 +14,8 @@ import {
   PackageCourseEbookOrderType,
   PaymentMethod,
 } from "../../models/enums";
-import { success, failure } from "../../utils/httpResponse";
+import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import logger from "../../utils/logger";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
@@ -53,9 +54,12 @@ function computeBreakdown(basePrice: number, discountAmount = 0, promocodeId: st
 
 // GET /api/v1/client/test-series
 export const listTestSeries = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listTestSeries invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
     const { search, page = "1", limit = "20" } = req.query as Record<string, string>;
-    const customerId = req.user?.id;
     const filter: any = { status: true };
     if (search) filter.title = { $regex: search, $options: "i" };
 
@@ -120,21 +124,26 @@ export const listTestSeries = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listTestSeries success", { traceId, customerId, total });
     return success(res, { data: decorated, total, page: p, limit: l }, "Fetched.");
   } catch (e: any) {
+    logger.error("listTestSeries failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed to fetch test series.", 500);
   }
 };
 
 // GET /api/v1/client/test-series/:id
 export const getTestSeriesDetail = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.id);
+  const customerId = req.user?.id;
+  logger.info("getTestSeriesDetail invoked", { traceId, path: req.originalUrl, customerId, id });
+
   try {
-    const id = String(req.params.id);
-    if (!isObjectId(id)) return failure(res, "Invalid test series id.", 422);
-    const customerId = req.user?.id;
+    if (!isObjectId(id)) { logger.warn("getTestSeriesDetail invalid id", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
 
     const series = await TestSeries.findOne({ _id: id, status: true }).lean();
-    if (!series) return failure(res, "Test series not found.", 404);
+    if (!series) { logger.warn("getTestSeriesDetail not found", { traceId, id }); return failure(res, "Test series not found.", 404); }
 
     const [contentCategories, prices] = await Promise.all([
       TestSeriesContentCategory.find({ testSeriesId: id, status: true })
@@ -159,12 +168,14 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
       isPurchased = !!activeSubscription;
     }
 
+    logger.info("getTestSeriesDetail success", { traceId, customerId, id, isPurchased });
     return success(
       res,
       { series, contentCategories, prices, isPurchased, activeSubscription },
       "Fetched."
     );
   } catch (e: any) {
+    logger.error("getTestSeriesDetail failed", { traceId, customerId, id, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed.", 500);
   }
 };
@@ -173,13 +184,15 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
 // Returns the papers grouped by content category. Each paper carries the
 // customer's attempt state (`Start` vs `Retake`).
 export const listSeriesPapers = async (req: Request, res: Response) => {
-  try {
-    const id = String(req.params.id);
-    if (!isObjectId(id)) return failure(res, "Invalid test series id.", 422);
-    const customerId = req.user?.id;
+  const traceId = req.traceId;
+  const id = String(req.params.id);
+  const customerId = req.user?.id;
+  logger.info("listSeriesPapers invoked", { traceId, path: req.originalUrl, customerId, id });
 
-    if (!(await TestSeries.exists({ _id: id, status: true })))
-      return failure(res, "Test series not found.", 404);
+  try {
+    if (!isObjectId(id)) { logger.warn("listSeriesPapers invalid id", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
+
+    if (!(await TestSeries.exists({ _id: id, status: true }))) { logger.warn("listSeriesPapers not found", { traceId, id }); return failure(res, "Test series not found.", 404); }
 
     // Check access — series-level subscription gates the "Start" buttons.
     let hasAccess = false;
@@ -252,8 +265,10 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listSeriesPapers success", { traceId, customerId, id, hasAccess, categoryCount: grouped.length });
     return success(res, { hasAccess, categories: grouped }, "Fetched.");
   } catch (e: any) {
+    logger.error("listSeriesPapers failed", { traceId, customerId, id, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed.", 500);
   }
 };
@@ -269,19 +284,23 @@ const previewSchema = z.object({
 // Returns the price breakdown (matches the "Order Summary" card in the mockup).
 // Does not create any rows. Promo is re-validated server-side at create-order.
 export const previewCheckout = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("previewCheckout invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return failure(res, "Unauthorized.", 401);
+    if (!customerId) { logger.warn("previewCheckout unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
     let body: z.infer<typeof previewSchema>;
     try {
       body = previewSchema.parse(req.body);
     } catch (e: any) {
+      logger.warn("previewCheckout validation failed", { traceId, customerId, issues: e.issues });
       return failure(res, "Validation failed.", 422, { errors: e.issues });
     }
 
     const plan = await TestSeriesPrice.findOne({ _id: body.planId, status: true });
-    if (!plan) return failure(res, "Plan not found or inactive.", 404);
+    if (!plan) { logger.warn("previewCheckout plan not found", { traceId, customerId, planId: body.planId }); return failure(res, "Plan not found or inactive.", 404); }
 
     let discountAmount = 0;
     let promocodeId: string | null = null;
@@ -291,7 +310,7 @@ export const previewCheckout = async (req: Request, res: Response) => {
         type: "liveCourse",
         id: String(plan.testSeriesId),
       });
-      if (error || !result) return failure(res, error ?? "Invalid promo code.", 400);
+      if (error || !result) { logger.warn("previewCheckout promo rejected", { traceId, customerId, promocode: body.promocode, error }); return failure(res, error ?? "Invalid promo code.", 400); }
       discountAmount = result.discountAmount;
       promocodeId = String(result.promo._id);
       promoMeta = {
@@ -306,6 +325,7 @@ export const previewCheckout = async (req: Request, res: Response) => {
     const validUntil = new Date(startAt);
     validUntil.setDate(validUntil.getDate() + plan.durationDays);
 
+    logger.info("previewCheckout success", { traceId, customerId, planId: body.planId, total: bd.totalAmount });
     return success(
       res,
       {
@@ -323,6 +343,7 @@ export const previewCheckout = async (req: Request, res: Response) => {
       "Preview computed."
     );
   } catch (e: any) {
+    logger.error("previewCheckout failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed to preview checkout.", 500);
   }
 };
@@ -331,9 +352,12 @@ export const previewCheckout = async (req: Request, res: Response) => {
 
 // GET /api/v1/client/test-series/my/subscriptions
 export const listMySubscriptions = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listMySubscriptions invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return failure(res, "Unauthorized.", 401);
+    if (!customerId) { logger.warn("listMySubscriptions unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
     const subs = await TestSeriesSubscription.find({ customerId, status: true })
       .sort({ endAt: -1 })
       .populate("testSeriesId", "title thumbnail paperCount")
@@ -343,8 +367,10 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       ...s,
       isActive: s.endAt && new Date(s.endAt) > now,
     }));
+    logger.info("listMySubscriptions success", { traceId, customerId, count: data.length });
     return success(res, { data, total: data.length }, "Fetched.");
   } catch (e: any) {
+    logger.error("listMySubscriptions failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed.", 500);
   }
 };

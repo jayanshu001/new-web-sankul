@@ -78,11 +78,20 @@ async function findSessionByAnyId(id: string) {
   return null;
 }
 
-function publicView(session: ILiveSession) {
+function publicView(session: ILiveSession | any) {
+  const ids: any[] = Array.isArray(session.liveCourseIds) ? session.liveCourseIds : [];
+  // When populated, liveCourseIds is an array of course docs; extract the id list
+  // for the canonical field and expose the populated docs under `liveCourses`.
+  const isPopulated = ids.length > 0 && typeof ids[0] === "object" && ids[0] && "_id" in ids[0];
+  const idList = isPopulated ? ids.map((c: any) => c._id) : ids;
   return {
     id: String(session._id),
     title: session.title,
-    liveCourseIds: session.liveCourseIds ?? [],
+    liveCourseIds: idList,
+    // Legacy single-id field — first/primary linked course. Kept for backwards
+    // compatibility with clients reading the old shape.
+    liveCourseId: idList[0] ?? null,
+    liveCourses: isPopulated ? ids : undefined,
     // Timetable metadata — feeds the Schedule tab.
     subject: session.subject ?? "",
     educatorId: session.educatorId ?? null,
@@ -104,6 +113,8 @@ function publicView(session: ILiveSession) {
 // per session) or `liveCourseId: "..."` (single-id convenience). Returns
 // `provided: false` when the caller didn't include either field, so update
 // handlers can distinguish "unchanged" from "set to empty".
+const MAX_LIVE_COURSES_PER_SESSION = 20;
+
 async function resolveLiveCourseIds(
   body: any
 ): Promise<{ provided: boolean; ids: Types.ObjectId[]; error?: string }> {
@@ -137,6 +148,13 @@ async function resolveLiveCourseIds(
   }
 
   if (ids.length === 0) return { provided: true, ids: [] };
+  if (ids.length > MAX_LIVE_COURSES_PER_SESSION) {
+    return {
+      provided: true,
+      ids: [],
+      error: `A live session can be linked to at most ${MAX_LIVE_COURSES_PER_SESSION} live courses.`,
+    };
+  }
 
   const found = await LiveCourse.find({ _id: { $in: ids } }).select("_id").lean();
   if (found.length !== ids.length) {
@@ -157,6 +175,9 @@ async function resolveLiveCourseIds(
 //  - `scheduledAt` in the future → store as SCHEDULED, no Streamos call yet.
 //  - otherwise → create on Streamos immediately, status = CREATED.
 export const createLiveSession = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("createLiveSession invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const titleRaw = req.body?.title;
     const title = typeof titleRaw === "string" ? titleRaw.trim() : "";
@@ -170,6 +191,9 @@ export const createLiveSession = async (req: Request, res: Response) => {
 
     const courseRef = await resolveLiveCourseIds(req.body);
     if (courseRef.error) return failure(res, courseRef.error, 422);
+    if (courseRef.ids.length === 0) {
+      return failure(res, "liveCourseIds is required (provide at least one live course).", 400);
+    }
 
     // Optional recording target folder. Only valid when the session is
     // attached to at least one liveCourseId AND the folder belongs to one
@@ -215,7 +239,8 @@ export const createLiveSession = async (req: Request, res: Response) => {
         recordings: [],
       });
 
-      logger.info("LiveSession scheduled", {
+      logger.info("createLiveSession scheduled", {
+        traceId,
         sessionId: session._id,
         scheduledAt,
         liveCourseIds: courseRef.ids,
@@ -242,17 +267,18 @@ export const createLiveSession = async (req: Request, res: Response) => {
       recordings: [],
     });
 
-    logger.info("LiveSession created", { streamId: session.streamId, sessionId: session._id });
+    logger.info("createLiveSession success", { traceId, streamId: session.streamId, sessionId: session._id });
     return success(res, { session: publicView(session) }, "Live stream created.", 201);
   } catch (err) {
     if (err instanceof StreamosError) {
-      logger.error("LiveSession create: Streamos error", {
+      logger.error("createLiveSession streamos error", {
+        traceId,
         message: err.message,
         upstreamStatus: err.upstreamStatus,
       });
       return failure(res, err.message, err.status);
     }
-    logger.error("LiveSession create failed", { error: getErrorMessage(err) });
+    logger.error("createLiveSession failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to create live stream.", 500);
   }
 };
@@ -260,6 +286,9 @@ export const createLiveSession = async (req: Request, res: Response) => {
 // GET /api/v1/admin/live-sessions
 // Optional list. Filters: status, upcoming=true (SCHEDULED + scheduledAt>=now).
 export const listLiveSessions = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listLiveSessions invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     const upcoming = req.query.upcoming === "true";
@@ -273,8 +302,30 @@ export const listLiveSessions = async (req: Request, res: Response) => {
       query.scheduledAt = { $gte: new Date() };
     }
 
+    // Course-scoped filtering. `liveCourseId=X` matches sessions where X is in
+    // liveCourseIds (multi-course memberships included). `liveCourseIds=X,Y,Z`
+    // matches sessions belonging to ANY of the listed courses.
+    const courseIdFilters: string[] = [];
+    if (typeof req.query.liveCourseId === "string" && req.query.liveCourseId.trim()) {
+      courseIdFilters.push(req.query.liveCourseId.trim());
+    }
+    if (typeof req.query.liveCourseIds === "string" && req.query.liveCourseIds.trim()) {
+      for (const part of req.query.liveCourseIds.split(",")) {
+        const t = part.trim();
+        if (t) courseIdFilters.push(t);
+      }
+    }
+    if (courseIdFilters.length > 0) {
+      const valid = courseIdFilters.filter((id) => /^[0-9a-fA-F]{24}$/.test(id));
+      if (valid.length === 0) {
+        return failure(res, "liveCourseId/liveCourseIds must be valid ObjectIds.", 422);
+      }
+      query.liveCourseIds = { $in: valid.map((id) => new Types.ObjectId(id)) };
+    }
+
     const [rows, total] = await Promise.all([
       LiveSession.find(query)
+        .populate("liveCourseIds", "_id name image thumbnail")
         .sort({ scheduledAt: 1, createdAt: -1 })
         .skip((page - 1) * limit)
         .limit(limit),
@@ -287,7 +338,7 @@ export const listLiveSessions = async (req: Request, res: Response) => {
       "Live sessions fetched."
     );
   } catch (err) {
-    logger.error("LiveSession list failed", { error: getErrorMessage(err) });
+    logger.error("listLiveSessions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list live sessions.", 500);
   }
 };
@@ -298,10 +349,14 @@ export const listLiveSessions = async (req: Request, res: Response) => {
 //  - ENDED:   may already contain recordings — used as a recovery path if the
 //             recording webhook was missed. We persist + flip status to READY.
 export const getLiveSessionStatus = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("getLiveSessionStatus invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
+
   try {
     const id = String(req.params.id ?? req.params.streamId ?? "");
     const session = await findSessionByAnyId(id);
     if (!session) return failure(res, "Live session not found.", 404);
+    await session.populate("liveCourseIds", "_id name image thumbnail");
 
     let isLive = false;
 
@@ -330,7 +385,7 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
           session.recordings = details.recordings;
           session.status = "READY";
           dirty = true;
-          logger.info("LiveSession: recordings recovered from streamDetails", {
+          logger.info("getLiveSessionStatus recordings recovered", { traceId,
             sessionId: session._id,
             streamId: session.streamId,
             count: details.recordings.length,
@@ -351,13 +406,13 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
         if (dirty) await session.save();
       } catch (err) {
         if (err instanceof StreamosError) {
-          logger.warn("LiveSession status: Streamos error", {
+          logger.warn("getLiveSessionStatus streamos error", { traceId,
             sessionId: session._id,
             message: err.message,
             upstreamStatus: err.upstreamStatus,
           });
         } else {
-          logger.warn("LiveSession status: Streamos error", {
+          logger.warn("getLiveSessionStatus streamos error", { traceId,
             sessionId: session._id,
             error: getErrorMessage(err),
           });
@@ -383,7 +438,7 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
       "Stream status fetched."
     );
   } catch (err) {
-    logger.error("LiveSession status failed", { error: getErrorMessage(err) });
+    logger.error("getLiveSessionStatus failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch stream status.", 500);
   }
 };
@@ -399,6 +454,9 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
 //   - recordingIndex (0-based) OR quality ("720p" …) picks the recording;
 //     omit both for the best-quality recording.
 export const promoteSessionRecording = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("promoteSessionRecording invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
+
   try {
     const session = await findSessionByAnyId(String(req.params.id));
     if (!session) return failure(res, "Live session not found.", 404);
@@ -469,7 +527,7 @@ export const promoteSessionRecording = async (req: Request, res: Response) => {
       order,
     });
 
-    logger.info("LiveSession: recording promoted to folder", {
+    logger.info("promoteSessionRecording success", { traceId,
       sessionId: session._id,
       folderId,
       quality: recording.quality,
@@ -486,7 +544,7 @@ export const promoteSessionRecording = async (req: Request, res: Response) => {
       alreadyExisted ? 200 : 201
     );
   } catch (err) {
-    logger.error("LiveSession promote recording failed", { error: getErrorMessage(err) });
+    logger.error("promoteSessionRecording failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to promote recording.", 500);
   }
 };
@@ -495,6 +553,9 @@ export const promoteSessionRecording = async (req: Request, res: Response) => {
 // Who joined this live class, when, and for how long — one row per join→leave
 // stint — plus a summary. Rows with leftAt: null are viewers still connected.
 export const getLiveSessionAttendance = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("getLiveSessionAttendance invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
+
   try {
     const session = await findSessionByAnyId(String(req.params.id));
     if (!session) return failure(res, "Live session not found.", 404);
@@ -526,7 +587,7 @@ export const getLiveSessionAttendance = async (req: Request, res: Response) => {
       "Attendance fetched."
     );
   } catch (err) {
-    logger.error("LiveSession attendance failed", { error: getErrorMessage(err) });
+    logger.error("getLiveSessionAttendance failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch attendance.", 500);
   }
 };
@@ -535,6 +596,9 @@ export const getLiveSessionAttendance = async (req: Request, res: Response) => {
 // Promotes a SCHEDULED session to CREATED by calling Streamos. Only allowed
 // when current time is within 2 minutes of scheduledAt; late starts are fine.
 export const startScheduledLiveSession = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("startScheduledLiveSession invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
+
   try {
     const session = await findSessionByAnyId(String(req.params.id));
     if (!session) return failure(res, "Live session not found.", 404);
@@ -565,17 +629,17 @@ export const startScheduledLiveSession = async (req: Request, res: Response) => 
     session.status = "CREATED";
     await session.save();
 
-    logger.info("LiveSession started", { sessionId: session._id, streamId: session.streamId });
+    logger.info("startScheduledLiveSession success", { traceId, sessionId: session._id, streamId: session.streamId });
     return success(res, { session: publicView(session) }, "Live stream started.");
   } catch (err) {
     if (err instanceof StreamosError) {
-      logger.error("LiveSession start: Streamos error", {
+      logger.error("startScheduledLiveSession streamos error", { traceId,
         message: err.message,
         upstreamStatus: err.upstreamStatus,
       });
       return failure(res, err.message, err.status);
     }
-    logger.error("LiveSession start failed", { error: getErrorMessage(err) });
+    logger.error("startScheduledLiveSession failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to start live stream.", 500);
   }
 };
@@ -583,6 +647,9 @@ export const startScheduledLiveSession = async (req: Request, res: Response) => 
 // PATCH /api/v1/admin/live-sessions/:id
 // Allowed only while SCHEDULED. Editable fields: title, scheduledAt.
 export const updateScheduledLiveSession = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("updateScheduledLiveSession invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
+
   try {
     const session = await findSessionByAnyId(String(req.params.id));
     if (!session) return failure(res, "Live session not found.", 404);
@@ -615,6 +682,9 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
     const courseRef = await resolveLiveCourseIds(req.body);
     if (courseRef.error) return failure(res, courseRef.error, 422);
     if (courseRef.provided) {
+      if (courseRef.ids.length === 0) {
+        return failure(res, "liveCourseIds cannot be empty — a session must remain linked to at least one live course.", 400);
+      }
       session.liveCourseIds = courseRef.ids;
       changed = true;
     }
@@ -671,13 +741,13 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
       // A reschedule must re-point every reminder's fire time + job so users
       // are still notified relative to the *new* start time.
       await syncRemindersForSession(String(session._id)).catch((e) =>
-        logger.error("Live reminder sync after reschedule failed", { error: getErrorMessage(e) })
+        logger.error("updateScheduledLiveSession reminder sync failed", { traceId, error: getErrorMessage(e) })
       );
     }
-    logger.info("LiveSession updated", { sessionId: session._id });
+    logger.info("updateScheduledLiveSession success", { traceId, sessionId: session._id });
     return success(res, { session: publicView(session) }, "Live session updated.");
   } catch (err) {
-    logger.error("LiveSession update failed", { error: getErrorMessage(err) });
+    logger.error("updateScheduledLiveSession failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to update live session.", 500);
   }
 };
@@ -685,6 +755,9 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
 // DELETE /api/v1/admin/live-sessions/:id
 // CREATED (currently live on Streamos) must be ended first.
 export const deleteLiveSession = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("deleteLiveSession invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
+
   try {
     const session = await findSessionByAnyId(String(req.params.id));
     if (!session) return failure(res, "Live session not found.", 404);
@@ -696,18 +769,21 @@ export const deleteLiveSession = async (req: Request, res: Response) => {
     await LiveSession.deleteOne({ _id: session._id });
     // Drop any user reminders + their pending notifications for this session.
     await cancelRemindersForSession(String(session._id)).catch((e) =>
-      logger.error("Live reminder cleanup after session delete failed", { error: getErrorMessage(e) })
+      logger.error("deleteLiveSession reminder cleanup failed", { traceId, error: getErrorMessage(e) })
     );
-    logger.info("LiveSession deleted", { sessionId: session._id, status: session.status });
+    logger.info("deleteLiveSession success", { traceId, sessionId: session._id, status: session.status });
     return success(res, { id: String(session._id) }, "Live session deleted.");
   } catch (err) {
-    logger.error("LiveSession delete failed", { error: getErrorMessage(err) });
+    logger.error("deleteLiveSession failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to delete live session.", 500);
   }
 };
 
 // POST /api/v1/admin/live-sessions/end
 export const endLiveSession = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("endLiveSession invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
+
   try {
     const streamId = parseStreamIdParam(req.body?.streamId);
     if (!streamId) return failure(res, "Valid streamId is required.", 422);
@@ -750,7 +826,7 @@ export const endLiveSession = async (req: Request, res: Response) => {
       ]
     );
 
-    logger.info("LiveSession ended", {
+    logger.info("endLiveSession success", { traceId,
       streamId,
       found: Boolean(updated),
       attendanceClosed: closed.modifiedCount,
@@ -763,13 +839,13 @@ export const endLiveSession = async (req: Request, res: Response) => {
     );
   } catch (err) {
     if (err instanceof StreamosError) {
-      logger.error("LiveSession end: Streamos error", {
+      logger.error("endLiveSession streamos error", { traceId,
         message: err.message,
         upstreamStatus: err.upstreamStatus,
       });
       return failure(res, err.message, err.status);
     }
-    logger.error("LiveSession end failed", { error: getErrorMessage(err) });
+    logger.error("endLiveSession failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to end live stream.", 500);
   }
 };
@@ -778,6 +854,9 @@ export const endLiveSession = async (req: Request, res: Response) => {
 // Wraps Streamos `uploadedVideoDetails` — used to look up a single past
 // recording by its id (from the Streamos dashboard).
 export const getUploadedVideoDetails = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("getUploadedVideoDetails invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const recordingId = String(req.params.recordingId ?? "").trim();
     if (!recordingId) return failure(res, "recordingId is required.", 422);
@@ -788,7 +867,7 @@ export const getUploadedVideoDetails = async (req: Request, res: Response) => {
     if (err instanceof StreamosError) {
       return failure(res, err.message, err.status);
     }
-    logger.error("Uploaded video details failed", { error: getErrorMessage(err) });
+    logger.error("getUploadedVideoDetails failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch uploaded video details.", 500);
   }
 };
@@ -797,6 +876,9 @@ export const getUploadedVideoDetails = async (req: Request, res: Response) => {
 // Returns the connected Streamos org — handy to verify accessKey + which
 // webhook URL Streamos thinks it should post to.
 export const getOrgDetails = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  logger.info("getOrgDetails invoked", { traceId, userId: _req.user?.id });
+
   try {
     const details = await streamosGetOrgDetails();
     // Don't leak accessSecret even though Streamos echoes it back.
@@ -813,7 +895,7 @@ export const getOrgDetails = async (_req: Request, res: Response) => {
     if (err instanceof StreamosError) {
       return failure(res, err.message, err.status);
     }
-    logger.error("Org details failed", { error: getErrorMessage(err) });
+    logger.error("getOrgDetails failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch org details.", 500);
   }
 };
@@ -822,6 +904,9 @@ export const getOrgDetails = async (_req: Request, res: Response) => {
 // Registers (or updates) the recording webhook URL Streamos will POST to.
 // Body: { webhook: "https://your-host/api/v1/client/webhook/recording" }
 export const updateRecordingWebhook = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("updateRecordingWebhook invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const webhook = typeof req.body?.webhook === "string" ? req.body.webhook.trim() : "";
     if (!webhook) return failure(res, "webhook URL is required.", 422);
@@ -834,13 +919,13 @@ export const updateRecordingWebhook = async (req: Request, res: Response) => {
     }
 
     const result = await streamosUpdateWebhook(webhook);
-    logger.info("Streamos webhook updated", { webhook });
+    logger.info("updateRecordingWebhook success", { traceId, webhook });
     return success(res, { webhook, upstream: result }, "Webhook updated.");
   } catch (err) {
     if (err instanceof StreamosError) {
       return failure(res, err.message, err.status);
     }
-    logger.error("Update webhook failed", { error: getErrorMessage(err) });
+    logger.error("updateRecordingWebhook failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to update webhook.", 500);
   }
 };
@@ -851,6 +936,9 @@ export const updateRecordingWebhook = async (req: Request, res: Response) => {
 // attacker who guesses a streamId could inject arbitrary recording URLs and
 // even auto-create Video records in a course folder.
 export const recordingWebhook = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("recordingWebhook invoked", { traceId, path: req.originalUrl });
+
   try {
     if (STREAMOS_WEBHOOK_SECRET) {
       const provided =
@@ -859,7 +947,7 @@ export const recordingWebhook = async (req: Request, res: Response) => {
           ? (req.headers["x-webhook-secret"] as string)
           : "");
       if (!provided || !secretMatches(provided)) {
-        logger.warn("Recording webhook: rejected — missing/invalid secret");
+        logger.warn("recordingWebhook rejected missing secret", { traceId });
         return res.status(401).json({ success: false, message: "Unauthorized." });
       }
     } else {
@@ -872,11 +960,11 @@ export const recordingWebhook = async (req: Request, res: Response) => {
     const rawRecordings = req.body?.recordings;
 
     if (!streamId) {
-      logger.warn("Recording webhook: invalid streamId", { body: req.body });
+      logger.warn("recordingWebhook invalid streamId", { traceId, body: req.body });
       return res.status(400).json({ success: false, message: "Invalid streamId." });
     }
     if (!Array.isArray(rawRecordings)) {
-      logger.warn("Recording webhook: recordings must be an array", { streamId });
+      logger.warn("recordingWebhook recordings not array", { traceId, streamId });
       return res.status(400).json({ success: false, message: "recordings must be an array." });
     }
 
@@ -895,7 +983,7 @@ export const recordingWebhook = async (req: Request, res: Response) => {
     );
 
     if (!updated) {
-      logger.warn("Recording webhook: stream not found", { streamId });
+      logger.warn("recordingWebhook stream not found", { traceId, streamId });
       return res.status(200).json({ success: true, message: "Acknowledged (no matching stream)." });
     }
 
@@ -915,14 +1003,14 @@ export const recordingWebhook = async (req: Request, res: Response) => {
       recordings,
     });
 
-    logger.info("Recording webhook processed", {
+    logger.info("recordingWebhook success", { traceId,
       streamId,
       recordingCount: recordings.length,
     });
 
     return res.status(200).json({ success: true, message: "Recording saved." });
   } catch (err) {
-    logger.error("Recording webhook failed", { error: getErrorMessage(err) });
+    logger.error("recordingWebhook failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return res.status(200).json({ success: false, message: "Internal error logged." });
   }
 };

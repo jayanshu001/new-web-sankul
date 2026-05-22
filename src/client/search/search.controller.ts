@@ -4,6 +4,8 @@ import { Course } from "../../models/course/Course.model";
 import { Package } from "../../models/course/Package.model";
 import { Book } from "../../models/book/Book.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const TYPE_TO_MODEL: Record<string, Model<any>> = {
   courses: Course,
@@ -19,6 +21,9 @@ function escapeRegex(input: string) {
 
 // GET /api/v1/client/search?q=&type=courses|packages|books|ebooks&page=&limit=
 export const globalSearch = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("globalSearch invoked", { traceId, path: req.originalUrl, userId: req.user?.id, q: req.query.q, type: req.query.type });
+
   try {
     const { q, type } = req.query as Record<string, string>;
     const page = Math.max(parseInt(req.query.page as string, 10) || 1, 1);
@@ -45,6 +50,7 @@ export const globalSearch = async (req: Request, res: Response) => {
       const data = Object.fromEntries(results);
       const grandTotal = results.reduce((sum, [, v]) => sum + v.total, 0);
 
+      logger.info("globalSearch success (all)", { traceId, q, total: grandTotal });
       return res.status(200).json({
         success: true,
         data: {
@@ -64,6 +70,7 @@ export const globalSearch = async (req: Request, res: Response) => {
       Model.countDocuments(filter),
     ]);
 
+    logger.info("globalSearch success", { traceId, type, q, total, returned: items.length });
     return res.status(200).json({
       success: true,
       data: {
@@ -76,6 +83,7 @@ export const globalSearch = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("globalSearch failed", { traceId, q: req.query.q, type: req.query.type, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

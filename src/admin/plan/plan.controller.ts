@@ -26,11 +26,13 @@ function resolveEntityKey(
 async function enforceSingleDefault(
   planId: string,
   entityKey: EntityKey,
-  entityId: mongoose.Types.ObjectId
+  entityId: mongoose.Types.ObjectId,
+  session?: mongoose.ClientSession
 ) {
   await PackageCourseEbookPrice.updateMany(
     { [entityKey]: entityId, _id: { $ne: planId } },
-    { $set: { isDefault: false } }
+    { $set: { isDefault: false } },
+    session ? { session } : undefined
   );
 }
 
@@ -118,6 +120,10 @@ export const getPlanById = async (req: Request, res: Response) => {
 };
 
 export const createPlan = async (req: Request, res: Response) => {
+  // Audit P0 fix: wrap the plan insert + sibling default-flip in a single
+  // transaction so two `isDefault: true` rows for the same entity can't
+  // exist between writes.
+  const session = await mongoose.startSession();
   try {
     const data = createPlanSchema.parse(req.body);
     const payload: any = {
@@ -129,43 +135,64 @@ export const createPlan = async (req: Request, res: Response) => {
       ebookId: data.ebookId || null,
     };
 
-    const plan = await PackageCourseEbookPrice.create(payload);
+    let createdPlan: any;
+    await session.withTransaction(async () => {
+      const [plan] = await PackageCourseEbookPrice.create([payload], { session });
+      createdPlan = plan;
+      if (plan.isDefault) {
+        const key = resolveEntityKey(plan)!;
+        const entityId = plan[key] as mongoose.Types.ObjectId;
+        await enforceSingleDefault(plan._id.toString(), key, entityId, session);
+      }
+    });
 
-    if (plan.isDefault) {
-      const key = resolveEntityKey(plan)!;
-      const entityId = plan[key] as mongoose.Types.ObjectId;
-      await enforceSingleDefault(plan._id.toString(), key, entityId);
-    }
-
-    return res.status(201).json({ success: true, data: plan });
+    return res.status(201).json({ success: true, data: createdPlan });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
 export const updatePlan = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  if (!mongoose.Types.ObjectId.isValid(id))
+    return res.status(400).json({ success: false, message: "Invalid plan id." });
+
+  const session = await mongoose.startSession();
   try {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid plan id." });
     const data = updatePlanSchema.parse(req.body);
 
-    const plan = await PackageCourseEbookPrice.findByIdAndUpdate(id, { $set: data }, { new: true });
-    if (!plan) return res.status(404).json({ success: false, message: "Plan not found." });
-
-    if (plan.isDefault) {
-      const key = resolveEntityKey(plan);
-      if (key) {
-        const entityId = plan[key] as mongoose.Types.ObjectId;
-        await enforceSingleDefault(plan._id.toString(), key, entityId);
+    let updated: any;
+    let notFound = false;
+    await session.withTransaction(async () => {
+      const plan = await PackageCourseEbookPrice.findByIdAndUpdate(
+        id,
+        { $set: data },
+        { new: true, session }
+      );
+      if (!plan) {
+        notFound = true;
+        return;
       }
-    }
+      updated = plan;
+      if (plan.isDefault) {
+        const key = resolveEntityKey(plan);
+        if (key) {
+          const entityId = plan[key] as mongoose.Types.ObjectId;
+          await enforceSingleDefault(plan._id.toString(), key, entityId, session);
+        }
+      }
+    });
 
-    return res.status(200).json({ success: true, data: plan });
+    if (notFound) return res.status(404).json({ success: false, message: "Plan not found." });
+    return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 
@@ -209,32 +236,49 @@ export const togglePlanStatus = async (req: Request, res: Response) => {
 };
 
 export const markAsDefault = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  if (!mongoose.Types.ObjectId.isValid(id))
+    return res.status(400).json({ success: false, message: "Invalid plan id." });
+
+  const session = await mongoose.startSession();
   try {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid plan id." });
+    let notFound = false;
+    let invalidEntity = false;
+    let result: any;
 
-    const plan = await PackageCourseEbookPrice.findById(id);
-    if (!plan) return res.status(404).json({ success: false, message: "Plan not found." });
+    await session.withTransaction(async () => {
+      const plan = await PackageCourseEbookPrice.findById(id).session(session);
+      if (!plan) {
+        notFound = true;
+        return;
+      }
+      const key = resolveEntityKey(plan);
+      if (!key) {
+        invalidEntity = true;
+        return;
+      }
+      plan.isDefault = true;
+      await plan.save({ session });
+      await enforceSingleDefault(
+        plan._id.toString(),
+        key,
+        plan[key] as mongoose.Types.ObjectId,
+        session
+      );
+      result = plan;
+    });
 
-    const key = resolveEntityKey(plan);
-    if (!key)
+    if (notFound) return res.status(404).json({ success: false, message: "Plan not found." });
+    if (invalidEntity)
       return res.status(400).json({
         success: false,
         message: "Plan is not attached to any course/package/ebook.",
       });
-
-    plan.isDefault = true;
-    await plan.save();
-    await enforceSingleDefault(
-      plan._id.toString(),
-      key,
-      plan[key] as mongoose.Types.ObjectId
-    );
-
-    return res.status(200).json({ success: true, data: plan });
+    return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
+  } finally {
+    session.endSession();
   }
 };
 

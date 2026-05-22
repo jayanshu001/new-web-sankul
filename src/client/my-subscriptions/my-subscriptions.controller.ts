@@ -5,6 +5,8 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { Package } from "../../models/course/Package.model";
 import { PackageType } from "../../models/course/PackageType.model";
 import { Course } from "../../models/course/Course.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const parsePagination = (q: Record<string, string>) => {
   const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
@@ -21,9 +23,12 @@ const parsePagination = (q: Record<string, string>) => {
 // diverges on filter (active-only), sort, and per-card payload (daysLeft +
 // action target instead of amount + receiptUrl).
 export const listMySubscriptions = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("listMySubscriptions invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("listMySubscriptions unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { pageNum, limitNum, skip } = parsePagination(req.query as Record<string, string>);
 
@@ -45,6 +50,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
     ]);
 
     if (subs.length === 0) {
+      logger.info("listMySubscriptions empty", { traceId, customerId: userId });
       return res.status(200).json({
         success: true,
         data: [],
@@ -135,6 +141,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listMySubscriptions success", { traceId, customerId: userId, total, returned: data.length });
     return res.status(200).json({
       success: true,
       data,
@@ -146,6 +153,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
+    logger.error("listMySubscriptions failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

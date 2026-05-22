@@ -90,14 +90,15 @@ async function authorizeLive(
 
 // POST /api/v1/client/lecture-notes
 export const createNote = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
   const userId = req.user?.id;
+  logger.info("createNote invoked", { traceId, path: req.originalUrl, userId });
+
   try {
-    if (!userId) return failure(res, "Unauthorized.", 401);
+    if (!userId) { logger.warn("createNote unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
     const parsed = createNoteSchema.safeParse(req.body);
-    if (!parsed.success) {
-      return failure(res, parsed.error.issues[0]?.message ?? "Invalid request", 400);
-    }
+    if (!parsed.success) { logger.warn("createNote validation failed", { traceId, userId, issues: parsed.error.issues }); return failure(res, parsed.error.issues[0]?.message ?? "Invalid request", 400); }
     const { lectureType, videoId, liveSessionId, timestampSec, content } = parsed.data;
 
     const doc: any = {
@@ -109,20 +110,21 @@ export const createNote = async (req: Request, res: Response) => {
 
     if (lectureType === "recorded") {
       const guard = await authorizeRecorded(userId, videoId!);
-      if ("error" in guard) return failure(res, guard.error, guard.status);
+      if ("error" in guard) { logger.warn("createNote auth failed (recorded)", { traceId, userId, videoId, message: guard.error }); return failure(res, guard.error, guard.status); }
       doc.videoId = new Types.ObjectId(videoId!);
       doc.courseId = guard.courseId;
     } else {
       const guard = await authorizeLive(userId, liveSessionId!);
-      if ("error" in guard) return failure(res, guard.error, guard.status);
+      if ("error" in guard) { logger.warn("createNote auth failed (live)", { traceId, userId, liveSessionId, message: guard.error }); return failure(res, guard.error, guard.status); }
       doc.liveSessionId = new Types.ObjectId(liveSessionId!);
       doc.liveCourseIds = guard.liveCourseIds;
     }
 
     const note = await LectureNote.create(doc);
+    logger.info("createNote success", { traceId, userId, noteId: note._id, lectureType });
     return success(res, { note }, "Note created.", 201);
   } catch (err) {
-    logger.error("createNote failed", { userId, error: getErrorMessage(err) });
+    logger.error("createNote failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
   }
 };
@@ -130,14 +132,15 @@ export const createNote = async (req: Request, res: Response) => {
 // GET /api/v1/client/lecture-notes?lectureType=recorded&videoId=...
 //                                  | lectureType=live&liveSessionId=...
 export const listNotes = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
   const userId = req.user?.id;
+  logger.info("listNotes invoked", { traceId, path: req.originalUrl, userId });
+
   try {
-    if (!userId) return failure(res, "Unauthorized.", 401);
+    if (!userId) { logger.warn("listNotes unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
     const parsed = listNotesQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      return failure(res, parsed.error.issues[0]?.message ?? "Invalid request", 400);
-    }
+    if (!parsed.success) { logger.warn("listNotes validation failed", { traceId, userId, issues: parsed.error.issues }); return failure(res, parsed.error.issues[0]?.message ?? "Invalid request", 400); }
     const { lectureType, videoId, liveSessionId } = parsed.data;
 
     const filter: any = {
@@ -147,11 +150,11 @@ export const listNotes = async (req: Request, res: Response) => {
 
     if (lectureType === "recorded") {
       const guard = await authorizeRecorded(userId, videoId!);
-      if ("error" in guard) return failure(res, guard.error, guard.status);
+      if ("error" in guard) { logger.warn("listNotes auth failed (recorded)", { traceId, userId, videoId, message: guard.error }); return failure(res, guard.error, guard.status); }
       filter.videoId = new Types.ObjectId(videoId!);
     } else {
       const guard = await authorizeLive(userId, liveSessionId!);
-      if ("error" in guard) return failure(res, guard.error, guard.status);
+      if ("error" in guard) { logger.warn("listNotes auth failed (live)", { traceId, userId, liveSessionId, message: guard.error }); return failure(res, guard.error, guard.status); }
       filter.liveSessionId = new Types.ObjectId(liveSessionId!);
     }
 
@@ -159,9 +162,10 @@ export const listNotes = async (req: Request, res: Response) => {
       .sort({ timestampSec: 1, createdAt: 1 })
       .lean();
 
+    logger.info("listNotes success", { traceId, userId, lectureType, count: notes.length });
     return success(res, { notes }, "Notes fetched.", 200);
   } catch (err) {
-    logger.error("listNotes failed", { userId, error: getErrorMessage(err) });
+    logger.error("listNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
   }
 };
@@ -175,9 +179,12 @@ export const listNotes = async (req: Request, res: Response) => {
 // Each row is tagged with `kind` so the client can deep-link to the right
 // player.
 export const listSavedMaterialNotes = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
   const userId = req.user?.id;
+  logger.info("listSavedMaterialNotes invoked", { traceId, path: req.originalUrl, userId });
+
   try {
-    if (!userId) return failure(res, "Unauthorized.", 401);
+    if (!userId) { logger.warn("listSavedMaterialNotes unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
     const customerId = new Types.ObjectId(userId);
 
@@ -267,75 +274,78 @@ export const listSavedMaterialNotes = async (req: Request, res: Response) => {
       .filter((row) => row.title !== null && row.title !== "")
       .sort((a, b) => b.lastNoteAt.getTime() - a.lastNoteAt.getTime());
 
+    logger.info("listSavedMaterialNotes success", { traceId, userId, count: items.length });
     return success(res, { items }, "Saved materials fetched.", 200);
   } catch (err) {
-    logger.error("listSavedMaterialNotes failed", { userId, error: getErrorMessage(err) });
+    logger.error("listSavedMaterialNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
   }
 };
 
 // PATCH /api/v1/client/lecture-notes/:id
 export const updateNote = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
   const userId = req.user?.id;
+  logger.info("updateNote invoked", { traceId, path: req.originalUrl, userId, noteId: req.params.id });
+
   try {
-    if (!userId) return failure(res, "Unauthorized.", 401);
+    if (!userId) { logger.warn("updateNote unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
     const params = noteIdParamSchema.safeParse(req.params);
-    if (!params.success) {
-      return failure(res, params.error.issues[0]?.message ?? "Invalid id", 400);
-    }
+    if (!params.success) { logger.warn("updateNote invalid id", { traceId, userId, issues: params.error.issues }); return failure(res, params.error.issues[0]?.message ?? "Invalid id", 400); }
     const body = updateNoteSchema.safeParse(req.body);
-    if (!body.success) {
-      return failure(res, body.error.issues[0]?.message ?? "Invalid request", 400);
-    }
+    if (!body.success) { logger.warn("updateNote validation failed", { traceId, userId, issues: body.error.issues }); return failure(res, body.error.issues[0]?.message ?? "Invalid request", 400); }
 
     const note = await LectureNote.findOne({
       _id: params.data.id,
       customerId: new Types.ObjectId(userId),
     });
-    if (!note) return failure(res, "Note not found.", 404);
+    if (!note) { logger.warn("updateNote not found", { traceId, userId, noteId: params.data.id }); return failure(res, "Note not found.", 404); }
 
     // Re-check entitlement on every write — a lapsed subscription must lock
     // editing too, not just creation.
     if (note.lectureType === "recorded" && note.videoId) {
       const guard = await authorizeRecorded(userId, String(note.videoId));
-      if ("error" in guard) return failure(res, guard.error, guard.status);
+      if ("error" in guard) { logger.warn("updateNote auth failed (recorded)", { traceId, userId, message: guard.error }); return failure(res, guard.error, guard.status); }
     } else if (note.lectureType === "live" && note.liveSessionId) {
       const guard = await authorizeLive(userId, String(note.liveSessionId));
-      if ("error" in guard) return failure(res, guard.error, guard.status);
+      if ("error" in guard) { logger.warn("updateNote auth failed (live)", { traceId, userId, message: guard.error }); return failure(res, guard.error, guard.status); }
     }
 
     if (body.data.content !== undefined) note.content = body.data.content;
     if (body.data.timestampSec !== undefined) note.timestampSec = body.data.timestampSec;
     await note.save();
 
+    logger.info("updateNote success", { traceId, userId, noteId: note._id });
     return success(res, { note }, "Note updated.", 200);
   } catch (err) {
-    logger.error("updateNote failed", { userId, error: getErrorMessage(err) });
+    logger.error("updateNote failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
   }
 };
 
 // DELETE /api/v1/client/lecture-notes/:id
 export const deleteNote = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
   const userId = req.user?.id;
+  logger.info("deleteNote invoked", { traceId, path: req.originalUrl, userId, noteId: req.params.id });
+
   try {
-    if (!userId) return failure(res, "Unauthorized.", 401);
+    if (!userId) { logger.warn("deleteNote unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
     const params = noteIdParamSchema.safeParse(req.params);
-    if (!params.success) {
-      return failure(res, params.error.issues[0]?.message ?? "Invalid id", 400);
-    }
+    if (!params.success) { logger.warn("deleteNote invalid id", { traceId, userId, issues: params.error.issues }); return failure(res, params.error.issues[0]?.message ?? "Invalid id", 400); }
 
     const result = await LectureNote.findOneAndDelete({
       _id: params.data.id,
       customerId: new Types.ObjectId(userId),
     });
-    if (!result) return failure(res, "Note not found.", 404);
+    if (!result) { logger.warn("deleteNote not found", { traceId, userId, noteId: params.data.id }); return failure(res, "Note not found.", 404); }
 
+    logger.info("deleteNote success", { traceId, userId, noteId: result._id });
     return success(res, {}, "Note deleted.", 200);
   } catch (err) {
-    logger.error("deleteNote failed", { userId, error: getErrorMessage(err) });
+    logger.error("deleteNote failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
   }
 };

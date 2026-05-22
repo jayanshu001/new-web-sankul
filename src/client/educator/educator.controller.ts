@@ -25,6 +25,7 @@ export const getEducatorWithCoursesHandler = async (
 
   try {
     if (!Types.ObjectId.isValid(educatorId)) {
+      logger.warn("getEducatorWithCoursesHandler invalid id", { traceId, userId, educatorId });
       return failure(res, "Please select valid educator", 400);
     }
 
@@ -36,6 +37,7 @@ export const getEducatorWithCoursesHandler = async (
       .lean();
 
     if (!educator) {
+      logger.warn("getEducatorWithCoursesHandler not found", { traceId, userId, educatorId });
       return failure(res, "Educator not found", 404);
     }
 

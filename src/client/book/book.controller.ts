@@ -7,6 +7,8 @@ import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { BookOrderStatus, BookCourier } from "../../models/enums";
 import { generateBookReceipt } from "../../libs/core/generate";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -24,8 +26,11 @@ function buildTrackingUrl(courier?: string, trackingId?: string): string | null 
 // ─── Catalogue ────────────────────────────────────────────────────────────────
 
 export const listBooks = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listBooks invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
     const { search, language } = req.query as Record<string, string>;
 
     const filter: any = { status: true };
@@ -70,8 +75,10 @@ export const listBooks = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listBooks success", { traceId, customerId, count: decorated.length });
     return res.status(200).json({ success: true, data: { cartId, books: decorated } });
   } catch (error: any) {
+    logger.error("listBooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -175,6 +182,9 @@ export async function fetchTrendingBookItems(opts: TrendingOpts = {}) {
 
 // GET /api/v1/client/books/trending?type=paid|free&language=&search=&limit=
 export const listTrendingBooks = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listTrendingBooks invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const { type, search, language, limit } = req.query as Record<string, string>;
     const wantFree = type === "free";
@@ -270,23 +280,33 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
       .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
       .slice(0, limitNum);
 
+    logger.info("listTrendingBooks success", { traceId, type: wantFree ? "free" : "paid", count: merged.length });
     return res.status(200).json({
       success: true,
       data: { type: wantFree ? "free" : "paid", items: merged, total: merged.length },
     });
   } catch (error: any) {
+    logger.error("listTrendingBooks failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const getBookDetail = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getBookDetail invoked", { traceId, path: req.originalUrl, customerId, id });
+
   try {
-    const customerId = req.user?.id;
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("getBookDetail invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid book id." });
+    }
     const book = await Book.findOne({ _id: id, status: true }).lean();
-    if (!book) return res.status(404).json({ success: false, message: "Book not found." });
+    if (!book) {
+      logger.warn("getBookDetail not found", { traceId, customerId, id });
+      return res.status(404).json({ success: false, message: "Book not found." });
+    }
 
     let isPurchased = false;
     if (customerId) {
@@ -300,6 +320,7 @@ export const getBookDetail = async (req: Request, res: Response) => {
       isPurchased = !!owned;
     }
 
+    logger.info("getBookDetail success", { traceId, customerId, id, isPurchased });
     return res.status(200).json({
       success: true,
       data: {
@@ -309,6 +330,7 @@ export const getBookDetail = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("getBookDetail failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -320,9 +342,15 @@ export const getBookDetail = async (req: Request, res: Response) => {
 // ─── Orders (customer view) ───────────────────────────────────────────────────
 
 export const listMyOrders = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listMyOrders invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) {
+      logger.warn("listMyOrders unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const { status, page = "1", limit = "20" } = req.query as Record<string, string>;
     const filter: any = { customerId };
@@ -346,53 +374,81 @@ export const listMyOrders = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listMyOrders success", { traceId, customerId, total, returned: decorated.length });
     return res.status(200).json({
       success: true,
       data: decorated,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
+    logger.error("listMyOrders failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const getMyOrderInvoice = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getMyOrderInvoice invoked", { traceId, path: req.originalUrl, customerId, orderId: id });
 
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+  try {
+    if (!customerId) {
+      logger.warn("getMyOrderInvoice unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("getMyOrderInvoice invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid order id." });
+    }
 
     const pdf = await generateBookReceipt(id, customerId);
     res.set({
       "Content-Type": "application/pdf",
       "Content-Length": String(pdf.length),
     });
+    logger.info("getMyOrderInvoice success", { traceId, customerId, orderId: id, bytes: pdf.length });
     return res.send(pdf);
   } catch (error: any) {
     const msg = error?.message || "Failed to generate invoice.";
     const code = /not found|invalid|not been paid/i.test(msg) ? 404 : 500;
+    if (code === 500) {
+      logger.error("getMyOrderInvoice failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });
+    } else {
+      logger.warn("getMyOrderInvoice client error", { traceId, customerId, orderId: id, msg });
+    }
     return res.status(code).json({ success: false, message: msg });
   }
 };
 
 export const getMyOrderById = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getMyOrderById invoked", { traceId, path: req.originalUrl, customerId, orderId: id });
 
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+  try {
+    if (!customerId) {
+      logger.warn("getMyOrderById unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("getMyOrderById invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid order id." });
+    }
 
     const order = await BookOrder.findOne({ _id: id, customerId })
       .populate("shippingId")
       .populate("items.bookId", "_id name thumbnail author");
-    if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+    if (!order) {
+      logger.warn("getMyOrderById not found", { traceId, customerId, id });
+      return res.status(404).json({ success: false, message: "Order not found." });
+    }
 
     const obj = order.toObject();
+    logger.info("getMyOrderById success", { traceId, customerId, orderId: id });
     return res.status(200).json({
       success: true,
       data: {
@@ -401,6 +457,7 @@ export const getMyOrderById = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("getMyOrderById failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

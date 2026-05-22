@@ -85,19 +85,24 @@ async function assertFolderBelongsToCourse(folderId: string, liveCourseId: strin
 
 // GET /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos
 export const listVideosInFolder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  logger.info("listVideosInFolder invoked", { traceId, path: req.originalUrl, liveCourseId, folderId, userId: req.user?.id });
+
   try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
-    const folderId = String(req.params.folderId ?? "");
     if (!(await assertFolderBelongsToCourse(folderId, liveCourseId))) {
+      logger.warn("listVideosInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
 
     const videos = await Video.find({ videoCategoryId: folderId })
       .sort({ order: 1, createdAt: 1 })
       .lean();
+    logger.info("listVideosInFolder success", { traceId, liveCourseId, folderId, count: videos.length });
     return success(res, { videos, total: videos.length }, "Videos fetched.");
   } catch (err) {
-    logger.error("LiveCourse listVideosInFolder failed", { error: getErrorMessage(err) });
+    logger.error("listVideosInFolder failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list videos.", 500);
   }
 };
@@ -105,10 +110,14 @@ export const listVideosInFolder = async (req: Request, res: Response) => {
 // POST /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos
 // Add a manual video — youtube link, vimeo id, or any URL via the "aws" channel.
 export const createVideoInFolder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  logger.info("createVideoInFolder invoked", { traceId, path: req.originalUrl, liveCourseId, folderId, userId: req.user?.id });
+
   try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
-    const folderId = String(req.params.folderId ?? "");
     if (!(await assertFolderBelongsToCourse(folderId, liveCourseId))) {
+      logger.warn("createVideoInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
 
@@ -116,7 +125,7 @@ export const createVideoInFolder = async (req: Request, res: Response) => {
     try {
       validated = createVideoSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      if (err instanceof z.ZodError) { logger.warn("createVideoInFolder validation failed", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
       throw err;
     }
 
@@ -128,9 +137,10 @@ export const createVideoInFolder = async (req: Request, res: Response) => {
       status: validated.status ?? true,
     });
 
+    logger.info("createVideoInFolder success", { traceId, liveCourseId, folderId, videoId: video._id });
     return success(res, { video: video.toObject() }, "Video added.", 201);
   } catch (err) {
-    logger.error("LiveCourse createVideoInFolder failed", { error: getErrorMessage(err) });
+    logger.error("createVideoInFolder failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to add video.", 500);
   }
 };
@@ -141,10 +151,14 @@ export const createVideoInFolder = async (req: Request, res: Response) => {
 // stored on the Video as `aws_id` with `platform="aws"` — the frontend just
 // receives a playable URL.
 export const createVideoFromRecording = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  logger.info("createVideoFromRecording invoked", { traceId, path: req.originalUrl, liveCourseId, folderId, userId: req.user?.id });
+
   try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
-    const folderId = String(req.params.folderId ?? "");
     if (!(await assertFolderBelongsToCourse(folderId, liveCourseId))) {
+      logger.warn("createVideoFromRecording folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
 
@@ -152,13 +166,14 @@ export const createVideoFromRecording = async (req: Request, res: Response) => {
     try {
       validated = fromRecordingSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      if (err instanceof z.ZodError) { logger.warn("createVideoFromRecording validation failed", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
       throw err;
     }
 
     const liveSession = await LiveSession.findById(validated.liveSessionId);
-    if (!liveSession) return failure(res, "Live session not found.", 404);
+    if (!liveSession) { logger.warn("createVideoFromRecording session not found", { traceId, liveSessionId: validated.liveSessionId }); return failure(res, "Live session not found.", 404); }
     if (!liveSession.recordings || liveSession.recordings.length === 0) {
+      logger.warn("createVideoFromRecording no recordings", { traceId, liveSessionId: validated.liveSessionId });
       return failure(res, "Live session has no recordings yet.", 409);
     }
 
@@ -167,6 +182,7 @@ export const createVideoFromRecording = async (req: Request, res: Response) => {
       quality: validated.quality,
     });
     if (!recording) {
+      logger.warn("createVideoFromRecording recording not found", { traceId, liveSessionId: validated.liveSessionId, quality: validated.quality, index: validated.recordingIndex });
       return failure(
         res,
         validated.quality
@@ -187,7 +203,8 @@ export const createVideoFromRecording = async (req: Request, res: Response) => {
       order: validated.order,
     });
 
-    logger.info("LiveCourse: video added from recording", {
+    logger.info("createVideoFromRecording success", {
+      traceId,
       liveCourseId,
       folderId,
       liveSessionId: validated.liveSessionId,
@@ -205,70 +222,87 @@ export const createVideoFromRecording = async (req: Request, res: Response) => {
       alreadyExisted ? 200 : 201
     );
   } catch (err) {
-    logger.error("LiveCourse createVideoFromRecording failed", { error: getErrorMessage(err) });
+    logger.error("createVideoFromRecording failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to add video from recording.", 500);
   }
 };
 
 // DELETE /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos/:videoId
 export const deleteVideoInFolder = async (req: Request, res: Response) => {
-  try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
-    const folderId = String(req.params.folderId ?? "");
-    const videoId = String(req.params.videoId ?? "");
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  const videoId = String(req.params.videoId ?? "");
+  logger.info("deleteVideoInFolder invoked", { traceId, path: req.originalUrl, liveCourseId, folderId, videoId, userId: req.user?.id });
 
+  try {
     if (!(await assertFolderBelongsToCourse(folderId, liveCourseId))) {
+      logger.warn("deleteVideoInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     if (!mongoose.Types.ObjectId.isValid(videoId)) {
+      logger.warn("deleteVideoInFolder invalid videoId", { traceId, videoId });
       return failure(res, "Invalid video id.", 422);
     }
 
     const result = await Video.deleteOne({ _id: videoId, videoCategoryId: folderId });
     if (result.deletedCount === 0) {
+      logger.warn("deleteVideoInFolder not found", { traceId, videoId, folderId });
       return failure(res, "Video not found in this folder.", 404);
     }
 
+    logger.info("deleteVideoInFolder success", { traceId, videoId, folderId });
     return success(res, { id: videoId }, "Video deleted.");
   } catch (err) {
-    logger.error("LiveCourse deleteVideoInFolder failed", { error: getErrorMessage(err) });
+    logger.error("deleteVideoInFolder failed", { traceId, liveCourseId, folderId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to delete video.", 500);
   }
 };
 
 // GET /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos/:videoId
 export const getVideoInFolder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  const videoId = String(req.params.videoId ?? "");
+  logger.info("getVideoInFolder invoked", { traceId, path: req.originalUrl, liveCourseId, folderId, videoId, userId: req.user?.id });
+
   try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
-    const folderId = String(req.params.folderId ?? "");
-    const videoId = String(req.params.videoId ?? "");
     if (!(await assertFolderBelongsToCourse(folderId, liveCourseId))) {
+      logger.warn("getVideoInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     if (!mongoose.Types.ObjectId.isValid(videoId)) {
+      logger.warn("getVideoInFolder invalid videoId", { traceId, videoId });
       return failure(res, "Invalid video id.", 422);
     }
 
     const video = await Video.findOne({ _id: videoId, videoCategoryId: folderId }).lean();
-    if (!video) return failure(res, "Video not found in this folder.", 404);
+    if (!video) { logger.warn("getVideoInFolder not found", { traceId, videoId, folderId }); return failure(res, "Video not found in this folder.", 404); }
 
+    logger.info("getVideoInFolder success", { traceId, videoId });
     return success(res, { video }, "Video fetched.");
   } catch (err) {
-    logger.error("LiveCourse getVideoInFolder failed", { error: getErrorMessage(err) });
+    logger.error("getVideoInFolder failed", { traceId, liveCourseId, folderId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch video.", 500);
   }
 };
 
 // PUT /api/v1/admin/live-courses/:liveCourseId/folders/:folderId/videos/:videoId
 export const updateVideoInFolder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  const videoId = String(req.params.videoId ?? "");
+  logger.info("updateVideoInFolder invoked", { traceId, path: req.originalUrl, liveCourseId, folderId, videoId, userId: req.user?.id });
+
   try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
-    const folderId = String(req.params.folderId ?? "");
-    const videoId = String(req.params.videoId ?? "");
     if (!(await assertFolderBelongsToCourse(folderId, liveCourseId))) {
+      logger.warn("updateVideoInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
     if (!mongoose.Types.ObjectId.isValid(videoId)) {
+      logger.warn("updateVideoInFolder invalid videoId", { traceId, videoId });
       return failure(res, "Invalid video id.", 422);
     }
 
@@ -276,7 +310,7 @@ export const updateVideoInFolder = async (req: Request, res: Response) => {
     try {
       validated = updateVideoSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      if (err instanceof z.ZodError) { logger.warn("updateVideoInFolder validation failed", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
       throw err;
     }
 
@@ -287,11 +321,12 @@ export const updateVideoInFolder = async (req: Request, res: Response) => {
       { $set: validated },
       { new: true, runValidators: true }
     );
-    if (!video) return failure(res, "Video not found in this folder.", 404);
+    if (!video) { logger.warn("updateVideoInFolder not found", { traceId, videoId, folderId }); return failure(res, "Video not found in this folder.", 404); }
 
+    logger.info("updateVideoInFolder success", { traceId, videoId, folderId });
     return success(res, { video: video.toObject() }, "Video updated.");
   } catch (err) {
-    logger.error("LiveCourse updateVideoInFolder failed", { error: getErrorMessage(err) });
+    logger.error("updateVideoInFolder failed", { traceId, liveCourseId, folderId, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to update video.", 500);
   }
 };
@@ -300,10 +335,14 @@ export const updateVideoInFolder = async (req: Request, res: Response) => {
 // Body: { orders: [{ id, order }] }. Only videos that actually live in this
 // folder are touched — ids from elsewhere are silently ignored.
 export const reorderVideosInFolder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  logger.info("reorderVideosInFolder invoked", { traceId, path: req.originalUrl, liveCourseId, folderId, userId: req.user?.id });
+
   try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
-    const folderId = String(req.params.folderId ?? "");
     if (!(await assertFolderBelongsToCourse(folderId, liveCourseId))) {
+      logger.warn("reorderVideosInFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
 
@@ -311,7 +350,7 @@ export const reorderVideosInFolder = async (req: Request, res: Response) => {
     try {
       validated = reorderVideosSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      if (err instanceof z.ZodError) { logger.warn("reorderVideosInFolder validation failed", { traceId, issues: err.issues }); return zodIssueResponse(res, err); }
       throw err;
     }
 
@@ -324,6 +363,7 @@ export const reorderVideosInFolder = async (req: Request, res: Response) => {
       }))
     );
 
+    logger.info("reorderVideosInFolder success", { traceId, liveCourseId, folderId, matched: result.matchedCount, modified: result.modifiedCount });
     return success(
       res,
       {
@@ -333,7 +373,7 @@ export const reorderVideosInFolder = async (req: Request, res: Response) => {
       "Videos reordered."
     );
   } catch (err) {
-    logger.error("LiveCourse reorderVideosInFolder failed", { error: getErrorMessage(err) });
+    logger.error("reorderVideosInFolder failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to reorder videos.", 500);
   }
 };

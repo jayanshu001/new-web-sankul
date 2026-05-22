@@ -55,12 +55,17 @@ function encryptVideoSource(video: {
 export const getLectureHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
+  logger.info("getLectureHandler invoked", { traceId, path: req.originalUrl, userId });
 
   try {
-    if (!userId) return failure(res, "Unauthorized request.", 401);
+    if (!userId) {
+      logger.warn("getLectureHandler unauthorized", { traceId });
+      return failure(res, "Unauthorized request.", 401);
+    }
 
     const parsed = lectureQuerySchema.safeParse(req.query);
     if (!parsed.success) {
+      logger.warn("getLectureHandler validation failed", { traceId, userId, issues: parsed.error.issues });
       return failure(res, parsed.error.issues[0]?.message ?? "Invalid request", 400);
     }
 
@@ -69,17 +74,21 @@ export const getLectureHandler = async (req: Request, res: Response) => {
     const packageId = parsed.data.package;
 
     if (type === "course" && !courseId) {
+      logger.warn("getLectureHandler missing courseId", { traceId, userId, videoId });
       return failure(res, "course param is required when type is course", 400);
     }
     if (type === "package" && !packageId) {
+      logger.warn("getLectureHandler missing packageId", { traceId, userId, videoId });
       return failure(res, "package param is required when type is package", 400);
     }
 
     const video = await Video.findById(videoId).lean();
     if (!video) {
+      logger.warn("getLectureHandler video not found", { traceId, userId, videoId });
       return failure(res, "Lecture not found", 404);
     }
     if (!video.status) {
+      logger.warn("getLectureHandler video disabled", { traceId, userId, videoId });
       return failure(res, "Lecture is not available", 403);
     }
 
@@ -87,6 +96,7 @@ export const getLectureHandler = async (req: Request, res: Response) => {
     if (type === "course" && courseId) {
       const category = await VideoCategory.findById(video.videoCategoryId).select("courseId").lean();
       if (!category || String(category.courseId) !== courseId) {
+        logger.warn("getLectureHandler course mismatch", { traceId, userId, videoId, courseId });
         return failure(res, "Lecture does not belong to this course", 403);
       }
     }

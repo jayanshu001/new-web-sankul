@@ -1,6 +1,7 @@
 import admin from "firebase-admin";
 import logger from "./logger";
 import { Customer } from "../models/customer/Customer.model";
+import { callOutbound } from "../libs/outbound";
 
 const FCM_BATCH_SIZE = 500;
 
@@ -98,11 +99,19 @@ export async function sendPush(
   for (let i = 0; i < unique.length; i += FCM_BATCH_SIZE) {
     const batch = unique.slice(i, i + FCM_BATCH_SIZE);
     try {
-      const resp = await messaging.sendEachForMulticast({
-        tokens: batch,
-        notification,
-        data,
-      });
+      // Wrapped in callOutbound: per-batch 10s timeout, 3 attempts on
+      // network/5xx. Per-device invalid-token errors come back INSIDE a
+      // successful response (handled below) — they don't trigger a retry,
+      // which is correct: retrying with the same dead tokens won't help.
+      const resp = await callOutbound(
+        () =>
+          messaging.sendEachForMulticast({
+            tokens: batch,
+            notification,
+            data,
+          }),
+        { label: "fcm.sendMulticast", timeoutMs: 10_000, attempts: 3 }
+      );
       successCount += resp.successCount;
       failureCount += resp.failureCount;
       resp.responses.forEach((r, idx) => {
@@ -112,7 +121,7 @@ export async function sendPush(
       });
     } catch (err) {
       failureCount += batch.length;
-      logger.error("FCM batch send failed", {
+      logger.error("FCM batch send failed after retries", {
         error: (err as Error).message,
         batchSize: batch.length,
       });

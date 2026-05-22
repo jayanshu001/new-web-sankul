@@ -9,6 +9,8 @@ import { Course } from "../../models/course/Course.model";
 import { EbookOrder } from "../../models/ebook/EbookOrder.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const isObjectId = (s?: string): boolean => !!s && /^[0-9a-fA-F]{24}$/.test(s);
 
@@ -45,14 +47,17 @@ type ReceiptResponse = {
 
 // GET /api/v1/client/purchase-history/books/:id/receipt
 export const getBookReceipt = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  const id = String(req.params.id || "");
+  logger.info("getBookReceipt invoked", { traceId, path: req.originalUrl, customerId: userId, orderId: id });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const id = String(req.params.id || "");
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    if (!userId) { logger.warn("getBookReceipt unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!isObjectId(id)) { logger.warn("getBookReceipt invalid id", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
 
     const order: any = await BookOrder.findOne({ _id: id, customerId: userId }).lean();
-    if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+    if (!order) { logger.warn("getBookReceipt not found", { traceId, customerId: userId, orderId: id }); return res.status(404).json({ success: false, message: "Order not found." }); }
 
     const items = (order.items || []).map((it: any) => ({
       name: it.name,
@@ -86,26 +91,31 @@ export const getBookReceipt = async (req: Request, res: Response) => {
         tracking: order.tracking,
       },
     };
+    logger.info("getBookReceipt success", { traceId, customerId: userId, orderId: id });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
+    logger.error("getBookReceipt failed", { traceId, customerId: userId, orderId: id, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
 // GET /api/v1/client/purchase-history/subscriptions/:id/receipt
 export const getCourseReceipt = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  const id = String(req.params.id || "");
+  logger.info("getCourseReceipt invoked", { traceId, path: req.originalUrl, customerId: userId, subscriptionId: id });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const id = String(req.params.id || "");
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    if (!userId) { logger.warn("getCourseReceipt unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!isObjectId(id)) { logger.warn("getCourseReceipt invalid id", { traceId, customerId: userId, subscriptionId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
 
     const sub: any = await PackageCourseSubscription.findOne({
       _id: id,
       customerId: userId,
       paymentStatus: "verified",
     }).lean();
-    if (!sub) return res.status(404).json({ success: false, message: "Subscription not found." });
+    if (!sub) { logger.warn("getCourseReceipt not found", { traceId, customerId: userId, subscriptionId: id }); return res.status(404).json({ success: false, message: "Subscription not found." }); }
 
     const [price, course] = await Promise.all([
       PackageCourseEbookPrice.findById(sub.packageId).lean<any>(),
@@ -162,22 +172,27 @@ export const getCourseReceipt = async (req: Request, res: Response) => {
         endAt: sub.endAt,
       },
     };
+    logger.info("getCourseReceipt success", { traceId, customerId: userId, subscriptionId: id });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
+    logger.error("getCourseReceipt failed", { traceId, customerId: userId, subscriptionId: id, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
 // GET /api/v1/client/purchase-history/ebooks/:id/receipt
 export const getEbookReceipt = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  const id = String(req.params.id || "");
+  logger.info("getEbookReceipt invoked", { traceId, path: req.originalUrl, customerId: userId, orderId: id });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const id = String(req.params.id || "");
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    if (!userId) { logger.warn("getEbookReceipt unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!isObjectId(id)) { logger.warn("getEbookReceipt invalid id", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
 
     const order: any = await EbookOrder.findOne({ _id: id, customerId: userId }).lean();
-    if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+    if (!order) { logger.warn("getEbookReceipt not found", { traceId, customerId: userId, orderId: id }); return res.status(404).json({ success: false, message: "Order not found." }); }
 
     const [ebook, plan] = await Promise.all([
       Ebook.findById(order.ebookId).select("_id name author").lean<any>(),
@@ -216,8 +231,10 @@ export const getEbookReceipt = async (req: Request, res: Response) => {
         transactionId: order.transactionId ?? null,
       },
     };
+    logger.info("getEbookReceipt success", { traceId, customerId: userId, orderId: id });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
+    logger.error("getEbookReceipt failed", { traceId, customerId: userId, orderId: id, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

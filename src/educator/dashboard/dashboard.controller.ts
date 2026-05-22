@@ -4,12 +4,17 @@ import { Package } from "../../models/course/Package.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { Customer } from "../../models/customer/Customer.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 // GET /api/v1/educator/dashboard
 export const getDashboard = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const educatorId = req.user?.id;
+  logger.info("getDashboard invoked", { traceId, path: req.originalUrl, educatorId });
+
   try {
-    const educatorId = req.user?.id;
-    if (!educatorId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!educatorId) { logger.warn("getDashboard unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const [courses, packages] = await Promise.all([
       Course.find({ courseEducatorId: educatorId }).select("_id name ordered").lean(),
@@ -84,6 +89,7 @@ export const getDashboard = async (req: Request, res: Response) => {
         .lean(),
     ]);
 
+    logger.info("getDashboard success", { traceId, educatorId, coursesCount: courses.length, packagesCount: packages.length, totalSubs: courseTotalSubs + packageTotalSubs });
     return res.status(200).json({
       success: true,
       data: {
@@ -103,6 +109,7 @@ export const getDashboard = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("getDashboard failed", { traceId, educatorId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -10,6 +10,8 @@ import { Material } from "../../models/course/Material.model";
 import { Exam } from "../../models/exam/Exam.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
 import { Goal } from "../../models/Goal.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -149,16 +151,20 @@ async function hasActiveSubscription(customerId: string, packageId: string): Pro
 // ─── Endpoints ────────────────────────────────────────────────────────────────
 
 export const getPackageDetail = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  logger.info("getPackageDetail invoked", { traceId, path: req.originalUrl, userId: req.user?.id, packageId: id });
+
   try {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid package id." });
+    if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("getPackageDetail invalid id", { traceId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 
     const detail = await buildPackageDetail(id, req.user?.id);
-    if (!detail) return res.status(404).json({ success: false, message: "Package not found." });
+    if (!detail) { logger.warn("getPackageDetail not found", { traceId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found." }); }
 
+    logger.info("getPackageDetail success", { traceId, packageId: id });
     return res.status(200).json({ success: true, data: detail });
   } catch (error: any) {
+    logger.error("getPackageDetail failed", { traceId, packageId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -166,6 +172,9 @@ export const getPackageDetail = async (req: Request, res: Response) => {
 // GET /api/v1/client/packages
 // Flat paginated listing of active packages, with optional filters.
 export const listPackages = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listPackages invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const {
       search,
@@ -205,6 +214,7 @@ export const listPackages = async (req: Request, res: Response) => {
 
     const data = await enrichPackages(packages, req.user?.id);
 
+    logger.info("listPackages success", { traceId, total, returned: data.length });
     return res.status(200).json({
       success: true,
       data,
@@ -216,15 +226,18 @@ export const listPackages = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("listPackages failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const listPackagesByType = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const typeId = req.params.typeId as string;
+  logger.info("listPackagesByType invoked", { traceId, path: req.originalUrl, userId: req.user?.id, typeId });
+
   try {
-    const typeId = req.params.typeId as string;
-    if (!mongoose.Types.ObjectId.isValid(typeId))
-      return res.status(400).json({ success: false, message: "Invalid type id." });
+    if (!mongoose.Types.ObjectId.isValid(typeId)) { logger.warn("listPackagesByType invalid id", { traceId, typeId }); return res.status(400).json({ success: false, message: "Invalid type id." }); }
 
     const packages = await Package.find({ packageTypeId: typeId, active: true })
       .populate("packageTypeId", "_id name")
@@ -233,8 +246,10 @@ export const listPackagesByType = async (req: Request, res: Response) => {
 
     const enriched = await enrichPackages(packages, req.user?.id);
 
+    logger.info("listPackagesByType success", { traceId, typeId, count: enriched.length });
     return res.status(200).json({ success: true, data: enriched });
   } catch (error: any) {
+    logger.error("listPackagesByType failed", { traceId, typeId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -297,6 +312,9 @@ async function enrichPackages(packages: any[], customerId?: string) {
 // Returns one entry per requested goal-label, with that label's packages
 // nested inside the `label` object. Driven by labels from /client/goals/my-goals.
 export const listPackagesByGoal = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listPackagesByGoal invoked", { traceId, path: req.originalUrl, userId: req.user?.id, labelIds: req.query.labelIds });
+
   try {
     const raw = (req.query.labelIds as string) || "";
     const ids = raw
@@ -305,6 +323,7 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
       .filter(Boolean);
 
     if (!ids.length) {
+      logger.warn("listPackagesByGoal missing labelIds", { traceId });
       return res.status(400).json({
         success: false,
         message: "labelIds query param is required (comma-separated).",
@@ -313,6 +332,7 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
 
     const validIds = ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
     if (!validIds.length) {
+      logger.warn("listPackagesByGoal no valid labelIds", { traceId, ids });
       return res.status(400).json({ success: false, message: "No valid label ids supplied." });
     }
 
@@ -354,25 +374,35 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
       })
     );
 
+    logger.info("listPackagesByGoal success", { traceId, labelCount: result.length });
     return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
+    logger.error("listPackagesByGoal failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const listPackageTypes = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  logger.info("listPackageTypes invoked", { traceId, path: _req.originalUrl });
+
   try {
     const types = await PackageType.find({ active: true }).sort({ order: 1, name: 1 });
+    logger.info("listPackageTypes success", { traceId, count: types.length });
     return res.status(200).json({ success: true, data: types });
   } catch (error: any) {
+    logger.error("listPackageTypes failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const listMyPackages = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listMyPackages invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) { logger.warn("listMyPackages unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
     const now = new Date();
 
     const subs = await PackageCourseSubscription.find({
@@ -384,8 +414,10 @@ export const listMyPackages = async (req: Request, res: Response) => {
       .populate({ path: "packageId", populate: { path: "packageTypeId goalId" } })
       .sort({ createdAt: -1 });
 
+    logger.info("listMyPackages success", { traceId, customerId, count: subs.length });
     return res.status(200).json({ success: true, data: subs });
   } catch (error: any) {
+    logger.error("listMyPackages failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -393,16 +425,19 @@ export const listMyPackages = async (req: Request, res: Response) => {
 // ─── Chat ─────────────────────────────────────────────────────────────────────
 
 export const getChatMessages = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const packageId = req.params.packageId as string;
+  logger.info("getChatMessages invoked", { traceId, path: req.originalUrl, customerId, packageId });
 
-    const packageId = req.params.packageId as string;
-    if (!mongoose.Types.ObjectId.isValid(packageId))
-      return res.status(400).json({ success: false, message: "Invalid package id." });
+  try {
+    if (!customerId) { logger.warn("getChatMessages unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    if (!mongoose.Types.ObjectId.isValid(packageId)) { logger.warn("getChatMessages invalid id", { traceId, customerId, packageId }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 
     const active = await hasActiveSubscription(customerId, packageId);
     if (!active) {
+      logger.warn("getChatMessages no active subscription", { traceId, customerId, packageId });
       return res.status(403).json({
         success: false,
         message: "You must have an active subscription to view package chat.",
@@ -419,12 +454,14 @@ export const getChatMessages = async (req: Request, res: Response) => {
       PackageChat.countDocuments({ packageId }),
     ]);
 
+    logger.info("getChatMessages success", { traceId, customerId, packageId, total });
     return res.status(200).json({
       success: true,
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
+    logger.error("getChatMessages failed", { traceId, customerId, packageId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

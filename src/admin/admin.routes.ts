@@ -35,6 +35,8 @@ import adminLiveChatRoutes from "./livechat/livechat.routes";
 import adminLiveSessionRoutes from "./live/live.routes";
 import adminLiveCourseRoutes from "./live-course/live-course.routes";
 import adminTestSeriesRoutes from "./testSeries/testSeries.routes";
+import authenticate from "../middlewares/authenticate";
+import { adminLimiter } from "../config/rateLimiter";
 
 const router = Router();
 
@@ -44,9 +46,27 @@ const router = Router();
  * ==========================================
  * All traffic originating from the Admin React
  * Dashboard is channeled here.
+ *
+ * Auth contract:
+ *   - /auth/login and /auth/refresh are public by design and live on
+ *     adminAuthRoutes, which is mounted BEFORE the master `authenticate`
+ *     middleware below. The auth router itself applies `authenticate` to
+ *     its protected endpoints (change-password, profile, logout).
+ *   - Every other subtree mounted after the `router.use(authenticate, ...)`
+ *     line below is guaranteed to require a valid Bearer token. Per-domain
+ *     routers still apply `requireRole(...)` for finer authorization, but
+ *     this hoist removes the "forgot authenticate on a new router" footgun
+ *     called out in the production-readiness audit.
  */
 
+// Public auth endpoints first (login / refresh). The router enforces
+// authenticate internally for its protected handlers.
 router.use("/auth", adminAuthRoutes); // -> /api/v1/admin/auth/*
+
+// From here on, every admin route requires a valid Bearer token AND is
+// metered by the admin-tier rate limiter (per-admin-id when authenticated).
+router.use(authenticate, adminLimiter);
+
 router.use("/administrators", adminAdministratorRoutes); // -> /api/v1/admin/administrators/*
 router.use("/roles", adminRoleRoutes); // -> /api/v1/admin/roles/*
 router.use("/permissions", adminPermissionRoutes); // -> /api/v1/admin/permissions/*

@@ -6,6 +6,7 @@ import { LiveSession } from "../../models/course/LiveSession.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { Video } from "../../models/course/Video.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
+import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { hasAccessToAnyLiveCourse, buildPurchaseOptions } from "./entitlement";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
@@ -71,6 +72,9 @@ async function encryptLecture(v: {
 
 // GET /api/v1/client/live-courses
 export const listLiveCoursesForClient = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listLiveCoursesForClient invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(50, parseInt(req.query.limit as string) || 20);
@@ -90,9 +94,10 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
       LiveCourse.countDocuments(query),
     ]);
 
+    logger.info("listLiveCoursesForClient success", { traceId, total, returned: rows.length });
     return success(res, { liveCourses: rows, total, page, limit }, "Live courses fetched.");
   } catch (err) {
-    logger.error("Client live-courses list failed", { error: getErrorMessage(err) });
+    logger.error("listLiveCoursesForClient failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list live courses.", 500);
   }
 };
@@ -100,9 +105,16 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
 // GET /api/v1/client/live-courses/:id
 // Includes plans + whether the current customer already has access.
 export const getLiveCourseForClient = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  const id = String(req.params.id ?? "");
+  logger.info("getLiveCourseForClient invoked", { traceId, path: req.originalUrl, userId, id });
+
   try {
-    const id = String(req.params.id ?? "");
-    if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid live course id.", 422);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("getLiveCourseForClient invalid id", { traceId, id });
+      return failure(res, "Invalid live course id.", 422);
+    }
 
     const [course, plans] = await Promise.all([
       LiveCourse.findOne({ _id: id, status: true })
@@ -113,7 +125,10 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
         .sort({ price: 1 })
         .lean(),
     ]);
-    if (!course) return failure(res, "Live course not found.", 404);
+    if (!course) {
+      logger.warn("getLiveCourseForClient not found", { traceId, id });
+      return failure(res, "Live course not found.", 404);
+    }
 
     const [subscribed, subjectsCount] = await Promise.all([
       hasAccessToAnyLiveCourse(req.user?.id, [id]),
@@ -140,13 +155,14 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
       return { ...p, originalPrice: original, discountPercent };
     });
 
+    logger.info("getLiveCourseForClient success", { traceId, userId, id, subscribed });
     return success(
       res,
       { liveCourse: course, stats, plans: plansOut, subscribed },
       "Live course fetched."
     );
   } catch (err) {
-    logger.error("Client live-course detail failed", { error: getErrorMessage(err) });
+    logger.error("getLiveCourseForClient failed", { traceId, userId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch live course.", 500);
   }
 };
@@ -158,12 +174,21 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
 //   - otherwise    → future sessions first (nearest at top), then past sessions
 //     most-recent first. Sessions with no scheduledAt sink to the bottom.
 export const listSessionsForCourseClient = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.id ?? "");
+  logger.info("listSessionsForCourseClient invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
+
   try {
-    const id = String(req.params.id ?? "");
-    if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid live course id.", 422);
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("listSessionsForCourseClient invalid id", { traceId, id });
+      return failure(res, "Invalid live course id.", 422);
+    }
 
     const exists = await LiveCourse.exists({ _id: id, status: true });
-    if (!exists) return failure(res, "Live course not found.", 404);
+    if (!exists) {
+      logger.warn("listSessionsForCourseClient course not found", { traceId, id });
+      return failure(res, "Live course not found.", 404);
+    }
 
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
     const upcoming = req.query.upcoming === "true";
@@ -243,9 +268,10 @@ export const listSessionsForCourseClient = async (req: Request, res: Response) =
       updatedAt: s.updatedAt,
     }));
 
+    logger.info("listSessionsForCourseClient success", { traceId, id, total, returned: sessions.length });
     return success(res, { sessions, total, page, limit }, "Sessions fetched.");
   } catch (err) {
-    logger.error("Client live-course sessions list failed", { error: getErrorMessage(err) });
+    logger.error("listSessionsForCourseClient failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list sessions.", 500);
   }
 };
@@ -258,16 +284,23 @@ export const listSessionsForCourseClient = async (req: Request, res: Response) =
 // included when the customer is entitled (active subscription) or the lecture
 // is explicitly free. Non-subscribers also get `purchaseOptions` for the popup.
 export const listLiveCourseRecordings = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.id ?? "");
+  logger.info("listLiveCourseRecordings invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
+
   try {
-    const id = String(req.params.id ?? "");
     if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("listLiveCourseRecordings invalid id", { traceId, id });
       return failure(res, "Invalid live course id.", 422);
     }
 
     const course = await LiveCourse.findOne({ _id: id, status: true })
       .select("_id name image")
       .lean();
-    if (!course) return failure(res, "Live course not found.", 404);
+    if (!course) {
+      logger.warn("listLiveCourseRecordings course not found", { traceId, id });
+      return failure(res, "Live course not found.", 404);
+    }
 
     const folders = await VideoCategory.find({ liveCourseId: id, status: true })
       .sort({ order_by: 1, createdAt: 1 })
@@ -290,8 +323,24 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
       videosByFolder.get(key)!.push(v);
     }
 
+    // Per-video resume state — drives the red progress sliver / completed
+    // checkmark on each lecture row. Null when the user has never started
+    // that video (or isn't logged in).
+    const userId = req.user?.id;
+    let progressByVideo = new Map<string, any>();
+    if (userId && videos.length) {
+      const progressRows = await LectureProgress.find({
+        customerId: new mongoose.Types.ObjectId(userId),
+        videoId: { $in: videos.map((v: any) => v._id) },
+      })
+        .select("videoId positionSec durationSec completed completedAt lastWatchedAt")
+        .lean();
+      progressByVideo = new Map(progressRows.map((r: any) => [String(r.videoId), r]));
+    }
+
     const shapeLecture = (v: (typeof videos)[number]) => {
       const canPlay = subscribed || v.priceType === "free";
+      const p = progressByVideo.get(String(v._id));
       return {
         _id: String(v._id),
         title: v.title ?? "",
@@ -306,6 +355,15 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
         youtube_id: v.youtube_id ?? null,
         aws_id: v.aws_id ?? null,
         vimeo_id: v.vimeo_id ?? null,
+        progress: p
+          ? {
+              positionSec: p.positionSec ?? 0,
+              durationSec: p.durationSec ?? 0,
+              completed: !!p.completed,
+              completedAt: p.completedAt ?? null,
+              lastWatchedAt: p.lastWatchedAt ?? null,
+            }
+          : null,
       };
     };
 
@@ -317,6 +375,7 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
       lectures: (videosByFolder.get(String(f._id)) ?? []).map(shapeLecture),
     }));
 
+    logger.info("listLiveCourseRecordings success", { traceId, id, subscribed, totalLectures: videos.length, folderCount: folderPayload.length });
     return success(
       res,
       {
@@ -329,7 +388,7 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
       "Recorded lectures fetched."
     );
   } catch (err) {
-    logger.error("Client live-course recordings list failed", { error: getErrorMessage(err) });
+    logger.error("listLiveCourseRecordings failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list recorded lectures.", 500);
   }
 };
@@ -340,15 +399,20 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
 // folder of this course, then requires an active subscription unless the
 // lecture is free. On 403 the purchase popup data rides along in `data`.
 export const getLiveCourseLecture = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  const id = String(req.params.id ?? "");
+  const videoId = String(req.params.videoId ?? "");
+  logger.info("getLiveCourseLecture invoked", { traceId, path: req.originalUrl, userId, id, videoId });
+
   try {
-    const id = String(req.params.id ?? "");
-    const videoId = String(req.params.videoId ?? "");
     if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(videoId)) {
+      logger.warn("getLiveCourseLecture invalid ids", { traceId, id, videoId });
       return failure(res, "Invalid live course or video id.", 422);
     }
 
     const video = await Video.findById(videoId).lean();
-    if (!video || !video.status) return failure(res, "Lecture not found.", 404);
+    if (!video || !video.status) { logger.warn("getLiveCourseLecture video not found", { traceId, userId, videoId }); return failure(res, "Lecture not found.", 404); }
 
     // The video must belong to a folder owned by THIS live course.
     const folder = await VideoCategory.findOne({
@@ -357,11 +421,12 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
     })
       .select("_id")
       .lean();
-    if (!folder) return failure(res, "Lecture does not belong to this live course.", 404);
+    if (!folder) { logger.warn("getLiveCourseLecture course mismatch", { traceId, userId, id, videoId }); return failure(res, "Lecture does not belong to this live course.", 404); }
 
     if (video.priceType !== "free") {
       const subscribed = await hasAccessToAnyLiveCourse(req.user?.id, [id]);
       if (!subscribed) {
+        logger.warn("getLiveCourseLecture not subscribed", { traceId, userId, id, videoId });
         return failure(
           res,
           "Subscribe to this live course to watch this lecture.",
@@ -380,7 +445,8 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
     try {
       envelope = await encryptLecture(video);
     } catch (err) {
-      logger.error("Resolve/encrypt lecture failed", {
+      logger.error("getLiveCourseLecture resolve/encrypt failed", {
+        traceId,
         videoId: String(video._id),
         platform: video.platform,
         error: getErrorMessage(err),
@@ -388,6 +454,7 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
       return failure(res, "Failed to resolve playable URLs for this lecture.", 502);
     }
 
+    logger.info("getLiveCourseLecture success", { traceId, userId, id, videoId, platform: video.platform });
     return success(
       res,
       {
@@ -401,50 +468,55 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
       "Lecture fetched."
     );
   } catch (err) {
-    logger.error("Client live-course lecture fetch failed", { error: getErrorMessage(err) });
+    logger.error("getLiveCourseLecture failed", { traceId, userId, id, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch lecture.", 500);
   }
 };
 
 // GET /api/v1/client/live-courses/:id/session-recordings
-// The flat list of recorded live classes for a course — every ENDED/READY
-// LiveSession that carries Streamos-delivered recordings. This is distinct
-// from GET /:id/recordings, which lists Videos an admin promoted into folders;
-// here we surface the raw Streamos recordings straight off the session, so a
-// recorded class shows up even before anyone files it into a folder.
+// Live / upcoming classes for a course — every SCHEDULED or CREATED
+// LiveSession. Finished classes (ENDED/READY) are intentionally excluded:
+// once a session ends and its recording is promoted into a folder Video, it
+// surfaces through GET /:id/recordings instead.
 //
-// Metadata only — the mp4 URLs are NOT in this list. To watch one, open
-// GET /api/v1/client/live-sessions/:sessionId, which applies the per-viewer
-// preview / subscription gate.
+// Metadata only — playback URLs (hlsUrl / mp4) come from the gated
+// GET /api/v1/client/live-sessions/:sessionId endpoint on tap.
 export const listLiveCourseSessionRecordings = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.id ?? "");
+  logger.info("listLiveCourseSessionRecordings invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
+
   try {
-    const id = String(req.params.id ?? "");
     if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("listLiveCourseSessionRecordings invalid id", { traceId, id });
       return failure(res, "Invalid live course id.", 422);
     }
 
     const course = await LiveCourse.findOne({ _id: id, status: true })
       .select("_id name image")
       .lean();
-    if (!course) return failure(res, "Live course not found.", 404);
+    if (!course) {
+      logger.warn("listLiveCourseSessionRecordings course not found", { traceId, id });
+      return failure(res, "Live course not found.", 404);
+    }
 
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
 
-    // Sessions of this course that actually carry recordings. Recordings only
-    // arrive after the stream ends, so ENDED (recovered) or READY (webhook).
+    // Upcoming + currently-live only. CREATED = stream provisioned (live or
+    // ready to go), SCHEDULED = on the timetable but stream not yet started.
     const query = {
       liveCourseIds: id,
-      status: { $in: ["ENDED", "READY"] },
-      "recordings.0": { $exists: true },
+      status: { $in: ["SCHEDULED", "CREATED"] },
     };
 
     const [sessions, total] = await Promise.all([
       LiveSession.find(query)
-        .sort({ scheduledAt: -1, createdAt: -1 })
+        // Ascending — soonest first, ongoing live classes float to the top.
+        .sort({ scheduledAt: 1, createdAt: 1 })
         .skip((page - 1) * limit)
         .limit(limit)
-        .select("title status scheduledAt streamId recordings createdAt updatedAt")
+        .select("title status scheduledAt endAt subject streamId hlsUrl createdAt updatedAt")
         .lean(),
       LiveSession.countDocuments(query),
     ]);
@@ -454,20 +526,18 @@ export const listLiveCourseSessionRecordings = async (req: Request, res: Respons
     const lectures = sessions.map((s) => ({
       sessionId: String(s._id),
       title: s.title,
+      // CREATED with an hlsUrl means the stream is live right now; the FE can
+      // also infer this from streamId being present.
       status: s.status,
+      isLive: s.status === "CREATED" && !!s.hlsUrl,
+      subject: s.subject ?? null,
       streamId: s.streamId ?? null,
       scheduledAt: s.scheduledAt ?? null,
-      // When the recording became available (session went READY / was updated).
-      recordedAt: s.updatedAt ?? s.createdAt ?? null,
-      // Available qualities only — never the mp4 paths. Playback URLs come
-      // from the gated session-detail endpoint.
-      qualities: Array.isArray(s.recordings)
-        ? s.recordings.map((r) => r.quality).filter(Boolean)
-        : [],
-      recordingCount: Array.isArray(s.recordings) ? s.recordings.length : 0,
+      endAt: s.endAt ?? null,
       locked: !subscribed,
     }));
 
+    logger.info("listLiveCourseSessionRecordings success", { traceId, id, subscribed, total, returned: lectures.length });
     return success(
       res,
       {
@@ -479,11 +549,11 @@ export const listLiveCourseSessionRecordings = async (req: Request, res: Respons
         lectures,
         purchaseOptions: subscribed ? [] : await buildPurchaseOptions([id]),
       },
-      "Recorded live classes fetched."
+      "Live classes fetched."
     );
   } catch (err) {
-    logger.error("Client live-course session recordings failed", { error: getErrorMessage(err) });
-    return failure(res, "Failed to list recorded live classes.", 500);
+    logger.error("listLiveCourseSessionRecordings failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to list live classes.", 500);
   }
 };
 
@@ -492,9 +562,15 @@ export const listLiveCourseSessionRecordings = async (req: Request, res: Respons
 // (default all). Only verified subscriptions are returned — pending/failed
 // payment attempts are an internal concern, not "my courses".
 export const listMyLiveCourses = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listMyLiveCourses invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return failure(res, "Unauthorized.", 401);
+    if (!customerId) {
+      logger.warn("listMyLiveCourses unauthorized", { traceId });
+      return failure(res, "Unauthorized.", 401);
+    }
 
     const filterStatus =
       typeof req.query.status === "string" ? req.query.status : "all";
@@ -530,13 +606,14 @@ export const listMyLiveCourses = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listMyLiveCourses success", { traceId, customerId, count: liveCourses.length });
     return success(
       res,
       { liveCourses, total: liveCourses.length },
       "Your live courses fetched."
     );
   } catch (err) {
-    logger.error("Client my-live-courses failed", { error: getErrorMessage(err) });
+    logger.error("listMyLiveCourses failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch your live courses.", 500);
   }
 };
@@ -548,9 +625,15 @@ export const listMyLiveCourses = async (req: Request, res: Response) => {
 // ascending scheduledAt order, with the source course attached so the UI can
 // group or label by course.
 export const listMyUpcomingSessions = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listMyUpcomingSessions invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return failure(res, "Unauthorized.", 401);
+    if (!customerId) {
+      logger.warn("listMyUpcomingSessions unauthorized", { traceId });
+      return failure(res, "Unauthorized.", 401);
+    }
 
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
@@ -610,13 +693,14 @@ export const listMyUpcomingSessions = async (req: Request, res: Response) => {
       canJoin: s.status === "CREATED",
     }));
 
+    logger.info("listMyUpcomingSessions success", { traceId, customerId, total, returned: sessions.length });
     return success(
       res,
       { sessions, total, page, limit },
       "Your upcoming sessions fetched."
     );
   } catch (err) {
-    logger.error("Client my upcoming sessions failed", { error: getErrorMessage(err) });
+    logger.error("listMyUpcomingSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch your upcoming sessions.", 500);
   }
 };
@@ -630,9 +714,11 @@ export const listMyUpcomingSessions = async (req: Request, res: Response) => {
 // already enforces the 3-minute preview gate and serves the purchase popup
 // once the free window is consumed.
 export const listAllUpcomingSessions = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listAllUpcomingSessions invoked", { traceId, path: req.originalUrl, customerId });
 
+  try {
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
     const now = new Date();
@@ -710,13 +796,14 @@ export const listAllUpcomingSessions = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listAllUpcomingSessions success", { traceId, customerId, total, returned: sessions.length });
     return success(
       res,
       { sessions, total, page, limit },
       "Upcoming sessions fetched."
     );
   } catch (err) {
-    logger.error("Client all upcoming sessions failed", { error: getErrorMessage(err) });
+    logger.error("listAllUpcomingSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch upcoming sessions.", 500);
   }
 };
@@ -729,9 +816,11 @@ export const listAllUpcomingSessions = async (req: Request, res: Response) => {
 // SCHEDULED-but-not-yet-started sessions belong to /upcoming-sessions;
 // ENDED/READY ones belong to the per-course recordings list.
 export const listLiveNowSessions = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listLiveNowSessions invoked", { traceId, path: req.originalUrl, customerId });
 
+  try {
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
     const now = new Date();
@@ -801,13 +890,14 @@ export const listLiveNowSessions = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listLiveNowSessions success", { traceId, customerId, total, returned: sessions.length });
     return success(
       res,
       { sessions, total, page, limit },
       "Live-now sessions fetched."
     );
   } catch (err) {
-    logger.error("Client live-now sessions failed", { error: getErrorMessage(err) });
+    logger.error("listLiveNowSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch live-now sessions.", 500);
   }
 };
@@ -819,16 +909,23 @@ export const listLiveNowSessions = async (req: Request, res: Response) => {
 // to everyone so they can see what the course covers. ?upcoming=true limits
 // to classes from now onward.
 export const getLiveCourseSchedule = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.id ?? "");
+  logger.info("getLiveCourseSchedule invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
+
   try {
-    const id = String(req.params.id ?? "");
     if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("getLiveCourseSchedule invalid id", { traceId, id });
       return failure(res, "Invalid live course id.", 422);
     }
 
     const course = await LiveCourse.findOne({ _id: id, status: true })
-      .select("_id name timetableFiles")
+      .select("_id name scheduleFolders")
       .lean();
-    if (!course) return failure(res, "Live course not found.", 404);
+    if (!course) {
+      logger.warn("getLiveCourseSchedule course not found", { traceId, id });
+      return failure(res, "Live course not found.", 404);
+    }
 
     // Only sessions that carry a scheduledAt belong on a timetable.
     const upcoming = req.query.upcoming === "true";
@@ -890,22 +987,208 @@ export const getLiveCourseSchedule = async (req: Request, res: Response) => {
       streamId: s.streamId ?? null,
     }));
 
-    const files = (course.timetableFiles ?? [])
+    const scheduleFolders = ((course as any).scheduleFolders ?? [])
       .slice()
-      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0));
+      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+      .map((f: any) => ({
+        _id: f._id,
+        title: f.title,
+        image: f.image ?? null,
+        order: f.order ?? 0,
+        status: f.status !== false,
+        entries: (f.entries ?? [])
+          .slice()
+          .sort(
+            (a: any, b: any) =>
+              ((a.order ?? 0) - (b.order ?? 0)) ||
+              (new Date(a.date).getTime() - new Date(b.date).getTime())
+          ),
+      }))
+      // Clients only see active folders.
+      .filter((f: any) => f.status);
 
+    logger.info("getLiveCourseSchedule success", { traceId, id, timetableCount: timetable.length, folderCount: scheduleFolders.length });
     return success(
       res,
       {
         liveCourse: { _id: String(course._id), name: course.name },
-        files,
         timetable,
+        scheduleFolders,
         total: timetable.length,
       },
       "Schedule fetched."
     );
   } catch (err) {
-    logger.error("Client live-course schedule failed", { error: getErrorMessage(err) });
+    logger.error("getLiveCourseSchedule failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch schedule.", 500);
+  }
+};
+
+// GET /api/v1/client/live-courses/my/schedule
+// Powers the home-screen Schedule list. For every Live Course the customer
+// owns (verified + active subscription), returns the course's admin-curated
+// schedule folders. The UI renders each owned course as a section header with
+// its folders listed underneath; tapping a folder opens GET /:id/schedule-folders/:folderId.
+//
+// Only active folders are returned (hidden folders are admin-only).
+export const listMyScheduleByCategory = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listMyScheduleByCategory invoked", { traceId, path: req.originalUrl, customerId });
+
+  try {
+    if (!customerId) {
+      logger.warn("listMyScheduleByCategory unauthorized", { traceId });
+      return failure(res, "Unauthorized.", 401);
+    }
+
+    const now = new Date();
+
+    const subs = await LiveCourseSubscription.find({
+      customerId,
+      paymentStatus: "verified",
+      status: true,
+      $or: [{ endAt: null }, { endAt: { $gte: now } }],
+    })
+      .sort({ createdAt: -1 })
+      .populate({
+        path: "liveCourseId",
+        select: "name image level status scheduleFolders",
+        match: { status: true },
+      })
+      .lean();
+
+    type PopulatedCourse = {
+      _id: any;
+      name: string;
+      image: string;
+      level: string;
+      scheduleFolders?: any[];
+    };
+    const populated = (subs
+      .map((s) => s.liveCourseId)
+      .filter(Boolean) as unknown) as PopulatedCourse[];
+
+    // De-dup: extension subs can populate the same course twice.
+    const uniqueById = new Map<string, PopulatedCourse>();
+    for (const c of populated) {
+      const key = String(c._id);
+      if (!uniqueById.has(key)) uniqueById.set(key, c);
+    }
+
+    const liveCourses = Array.from(uniqueById.values()).map((c) => {
+      const folders = (c.scheduleFolders ?? [])
+        .filter((f: any) => f.status !== false)
+        .slice()
+        .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+        .map((f: any) => ({
+          _id: String(f._id),
+          title: f.title,
+          image: f.image ?? null,
+          order: f.order ?? 0,
+          entryCount: Array.isArray(f.entries) ? f.entries.length : 0,
+        }));
+
+      return {
+        _id: String(c._id),
+        name: c.name,
+        image: c.image,
+        level: c.level,
+        scheduleFolders: folders,
+      };
+    });
+
+    logger.info("listMyScheduleByCategory success", {
+      traceId,
+      customerId,
+      totalLiveCourses: liveCourses.length,
+      totalFolders: liveCourses.reduce((n, c) => n + c.scheduleFolders.length, 0),
+    });
+    return success(
+      res,
+      {
+        liveCourses,
+        totalLiveCourses: liveCourses.length,
+      },
+      "Your schedule fetched."
+    );
+  } catch (err) {
+    logger.error("listMyScheduleByCategory failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to fetch your schedule.", 500);
+  }
+};
+
+// GET /api/v1/client/live-courses/:id/schedule-folders/:folderId
+// Returns one folder's entries for screen 2 (Date / Subject / Time list).
+// Requires the customer to hold a verified + active subscription to the
+// course. Hidden folders (status=false) return 404 — they're admin-only.
+export const getMyScheduleFolder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = String(req.params.id ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  logger.info("getMyScheduleFolder invoked", { traceId, path: req.originalUrl, customerId, id, folderId });
+
+  try {
+    if (!customerId) return failure(res, "Unauthorized.", 401);
+    if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid live course id.", 422);
+    if (!mongoose.Types.ObjectId.isValid(folderId)) return failure(res, "Invalid folder id.", 422);
+
+    const now = new Date();
+    const owned = await LiveCourseSubscription.exists({
+      customerId,
+      liveCourseId: id,
+      paymentStatus: "verified",
+      status: true,
+      $or: [{ endAt: null }, { endAt: { $gte: now } }],
+    });
+    if (!owned) {
+      logger.warn("getMyScheduleFolder forbidden", { traceId, customerId, id });
+      return failure(res, "You don't have access to this live course.", 403);
+    }
+
+    const course = await LiveCourse.findOne({ _id: id, status: true })
+      .select("_id name scheduleFolders")
+      .lean();
+    if (!course) return failure(res, "Live course not found.", 404);
+
+    const folder = ((course as any).scheduleFolders ?? []).find(
+      (f: any) => String(f._id) === folderId && f.status !== false
+    );
+    if (!folder) return failure(res, "Schedule folder not found.", 404);
+
+    const entries = (folder.entries ?? [])
+      .slice()
+      .sort(
+        (a: any, b: any) =>
+          ((a.order ?? 0) - (b.order ?? 0)) ||
+          (new Date(a.date).getTime() - new Date(b.date).getTime())
+      )
+      .map((e: any) => ({
+        _id: String(e._id),
+        date: e.date,
+        subject: e.subject,
+        time: e.time,
+        order: e.order ?? 0,
+      }));
+
+    return success(
+      res,
+      {
+        liveCourse: { _id: String(course._id), name: course.name },
+        scheduleFolder: {
+          _id: String(folder._id),
+          title: folder.title,
+          image: folder.image ?? null,
+          order: folder.order ?? 0,
+        },
+        entries,
+        total: entries.length,
+      },
+      "Schedule folder fetched."
+    );
+  } catch (err) {
+    logger.error("getMyScheduleFolder failed", { traceId, customerId, id, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to fetch schedule folder.", 500);
   }
 };

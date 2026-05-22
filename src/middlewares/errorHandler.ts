@@ -2,6 +2,8 @@
 import type { ErrorRequestHandler } from "express";
 import { sendEmail } from "../utils/emailService";
 import logger from "../utils/logger";
+import { scrub } from "../utils/scrub";
+import { redisClient, isRedisReady } from "../config/redis";
 
 /** Shape of errors you throw from your code */
 export interface AppError extends Error {
@@ -26,9 +28,38 @@ export class HttpError extends Error implements AppError {
   }
 }
 
-// Prevent email floods — max one notification per unique error message per minute
-const _errorEmailCooldown = new Map<string, number>();
-const ERROR_EMAIL_COOLDOWN_MS = 60_000;
+// Prevent email floods — max one notification per unique error message per minute.
+// Backed by Redis so the cooldown is shared across pods. With the old
+// in-memory Map, every pod would send its own email per minute, so a 5-pod
+// deployment emitted 5x the alert volume for the same recurring error. The
+// `SET ... NX EX 60` is atomic — first pod wins, others get no-op.
+const ERROR_EMAIL_COOLDOWN_SECONDS = 60;
+const errorEmailCooldownKey = (statusCode: number, message: string) =>
+  `err-email-cooldown:${statusCode}:${message}`;
+
+/**
+ * Returns true if THIS pod won the right to send the email for the given
+ * error signature within the cooldown window. Fail-open: if Redis is down,
+ * permits the email (better one alert per pod than none at all).
+ */
+const acquireEmailCooldown = async (
+  statusCode: number,
+  message: string
+): Promise<boolean> => {
+  if (!isRedisReady()) return true;
+  try {
+    const result = await redisClient.set(
+      errorEmailCooldownKey(statusCode, message),
+      String(Date.now()),
+      "EX",
+      ERROR_EMAIL_COOLDOWN_SECONDS,
+      "NX"
+    );
+    return result === "OK";
+  } catch {
+    return true; // fail-open
+  }
+};
 
 const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
   const appErr = err as AppError;
@@ -51,9 +82,12 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
       ip: req.ip,
       userAgent: req.get("user-agent"),
       stack: appErr.stack,
-      body: req.body,
-      query: req.query,
-      params: req.params,
+      // Scrubbed: error logs frequently include payload context for triage
+      // (e.g. /verify-otp failures), but raw OTPs/passwords must not land in
+      // the log file or the 5xx alert email.
+      body: scrub(req.body),
+      query: scrub(req.query),
+      params: scrub(req.params),
     });
   } catch {
     // Avoid logger crashes from non‑serializable req.body etc.
@@ -67,12 +101,10 @@ const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
     });
   }
 
-  // Fire-and-forget email for 5xx only — debounced to 1 per unique error per minute
+  // Fire-and-forget email for 5xx only — debounced to 1 per unique error per
+  // minute, cluster-wide via Redis SET NX EX.
   if (statusCode >= 500) {
-    const cooldownKey = `${statusCode}:${message}`;
-    const lastSent = _errorEmailCooldown.get(cooldownKey) ?? 0;
-    const shouldSend = Date.now() - lastSent > ERROR_EMAIL_COOLDOWN_MS;
-    if (shouldSend) _errorEmailCooldown.set(cooldownKey, Date.now());
+    const shouldSend = await acquireEmailCooldown(statusCode, message);
     if (!shouldSend) return;
 
     const emailTo = "ranavinit6834@gmail.com";

@@ -7,6 +7,7 @@ import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscrip
 import { Customer } from "../../models/customer/Customer.model";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
+import { computeEndAt } from "../../utils/planDuration";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId");
 
@@ -44,6 +45,9 @@ const POPULATE_CUSTOMER = "firstName middleName lastName phoneNumber emailAddres
 // GET /api/v1/admin/live-courses/:id/subscriptions   (:id → liveCourseId filter)
 // Filters: customerId, liveCourseId, planId, paymentStatus, status, page, limit.
 export const listLiveCourseSubscriptions = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listLiveCourseSubscriptions invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, parseInt(req.query.limit as string) || 20);
@@ -88,18 +92,23 @@ export const listLiveCourseSubscriptions = async (req: Request, res: Response) =
       LiveCourseSubscription.countDocuments(query),
     ]);
 
+    logger.info("listLiveCourseSubscriptions success", { traceId, total, returned: rows.length });
     return success(res, { subscriptions: rows, total, page, limit }, "Subscriptions fetched.");
   } catch (err) {
-    logger.error("LiveCourseSubscription list failed", { error: getErrorMessage(err) });
+    logger.error("listLiveCourseSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list subscriptions.", 500);
   }
 };
 
 // GET /api/v1/admin/live-courses/subscriptions/:subscriptionId
 export const getLiveCourseSubscription = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.subscriptionId ?? "");
+  logger.info("getLiveCourseSubscription invoked", { traceId, path: req.originalUrl, subscriptionId: id, userId: req.user?.id });
+
   try {
-    const id = String(req.params.subscriptionId ?? "");
     if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("getLiveCourseSubscription invalid id", { traceId, subscriptionId: id });
       return failure(res, "Invalid subscription id.", 422);
     }
 
@@ -108,11 +117,15 @@ export const getLiveCourseSubscription = async (req: Request, res: Response) => 
       .populate("liveCourseId", "name image")
       .populate("planId", "name duration price")
       .lean();
-    if (!sub) return failure(res, "Subscription not found.", 404);
+    if (!sub) {
+      logger.warn("getLiveCourseSubscription not found", { traceId, subscriptionId: id });
+      return failure(res, "Subscription not found.", 404);
+    }
 
+    logger.info("getLiveCourseSubscription success", { traceId, subscriptionId: id });
     return success(res, { subscription: sub }, "Subscription fetched.");
   } catch (err) {
-    logger.error("LiveCourseSubscription get failed", { error: getErrorMessage(err) });
+    logger.error("getLiveCourseSubscription failed", { traceId, subscriptionId: id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch subscription.", 500);
   }
 };
@@ -121,9 +134,13 @@ export const getLiveCourseSubscription = async (req: Request, res: Response) => 
 // The "free-grant" flow: hand a customer an active, verified subscription with
 // no payment. Window comes from the plan unless overridden.
 export const grantLiveCourseSubscription = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.id ?? "");
+  logger.info("grantLiveCourseSubscription invoked", { traceId, path: req.originalUrl, liveCourseId, userId: req.user?.id });
+
   try {
-    const liveCourseId = String(req.params.id ?? "");
     if (!mongoose.Types.ObjectId.isValid(liveCourseId)) {
+      logger.warn("grantLiveCourseSubscription invalid id", { traceId, liveCourseId });
       return failure(res, "Invalid live course id.", 422);
     }
 
@@ -131,7 +148,10 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
     try {
       validated = grantSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      if (err instanceof z.ZodError) {
+        logger.warn("grantLiveCourseSubscription validation failed", { traceId, liveCourseId, issues: err.issues });
+        return zodIssueResponse(res, err);
+      }
       throw err;
     }
 
@@ -144,11 +164,12 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
         .select("_id liveCourseId duration")
         .lean(),
     ]);
-    if (!course) return failure(res, "Live course not found.", 404);
-    if (!customer) return failure(res, "Customer not found.", 404);
-    if (customer.isAccountDeleted) return failure(res, "Customer account is deleted.", 422);
-    if (!plan) return failure(res, "Plan not found.", 404);
+    if (!course) { logger.warn("grantLiveCourseSubscription course not found", { traceId, liveCourseId }); return failure(res, "Live course not found.", 404); }
+    if (!customer) { logger.warn("grantLiveCourseSubscription customer not found", { traceId, customerId: validated.customerId }); return failure(res, "Customer not found.", 404); }
+    if (customer.isAccountDeleted) { logger.warn("grantLiveCourseSubscription customer deleted", { traceId, customerId: validated.customerId }); return failure(res, "Customer account is deleted.", 422); }
+    if (!plan) { logger.warn("grantLiveCourseSubscription plan not found", { traceId, planId: validated.planId }); return failure(res, "Plan not found.", 404); }
     if (String(plan.liveCourseId) !== liveCourseId) {
+      logger.warn("grantLiveCourseSubscription plan mismatch", { traceId, liveCourseId, planId: validated.planId });
       return failure(res, "Plan does not belong to this live course.", 422);
     }
 
@@ -157,22 +178,23 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
     let startAt = now;
     if (validated.startAt) {
       const d = new Date(validated.startAt);
-      if (isNaN(d.getTime())) return failure(res, "startAt must be a valid date.", 422);
+      if (isNaN(d.getTime())) { logger.warn("grantLiveCourseSubscription invalid startAt", { traceId, startAt: validated.startAt }); return failure(res, "startAt must be a valid date.", 422); }
       startAt = d;
     }
 
     let endAt: Date;
     if (validated.endAt) {
       const d = new Date(validated.endAt);
-      if (isNaN(d.getTime())) return failure(res, "endAt must be a valid date.", 422);
+      if (isNaN(d.getTime())) { logger.warn("grantLiveCourseSubscription invalid endAt", { traceId, endAt: validated.endAt }); return failure(res, "endAt must be a valid date.", 422); }
       endAt = d;
     } else {
-      // `duration` is stored as MONTHS. setMonth honours calendar-month length.
+      // `duration` is stored as MONTHS — delegate to shared helper that honours
+      // calendar-month length via setMonth (matches webhook/verify/subscription).
       const months = validated.durationMonths ?? plan.duration;
-      endAt = new Date(startAt);
-      endAt.setMonth(endAt.getMonth() + months);
+      endAt = computeEndAt({ startAt, durationMonths: months });
     }
     if (endAt.getTime() <= startAt.getTime()) {
+      logger.warn("grantLiveCourseSubscription endAt before startAt", { traceId, startAt, endAt });
       return failure(res, "endAt must be after startAt.", 422);
     }
 
@@ -188,6 +210,7 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
       .select("_id endAt")
       .lean();
     if (existing) {
+      logger.warn("grantLiveCourseSubscription duplicate active sub", { traceId, customerId: validated.customerId, liveCourseId, existingId: existing._id });
       return failure(
         res,
         "Customer already has an active subscription to this live course. Use the update endpoint to extend it.",
@@ -209,7 +232,8 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
       paidAt: now,
     });
 
-    logger.info("LiveCourseSubscription granted", {
+    logger.info("grantLiveCourseSubscription success", {
+      traceId,
       subscriptionId: sub._id,
       customerId: validated.customerId,
       liveCourseId,
@@ -218,7 +242,7 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
 
     return success(res, { subscription: sub.toObject() }, "Subscription granted.", 201);
   } catch (err) {
-    logger.error("LiveCourseSubscription grant failed", { error: getErrorMessage(err) });
+    logger.error("grantLiveCourseSubscription failed", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to grant subscription.", 500);
   }
 };
@@ -226,9 +250,13 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
 // PUT /api/v1/admin/live-courses/subscriptions/:subscriptionId
 // Extend (endAt), revoke (status:false), or correct payment state.
 export const updateLiveCourseSubscription = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.subscriptionId ?? "");
+  logger.info("updateLiveCourseSubscription invoked", { traceId, path: req.originalUrl, subscriptionId: id, userId: req.user?.id });
+
   try {
-    const id = String(req.params.subscriptionId ?? "");
     if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("updateLiveCourseSubscription invalid id", { traceId, subscriptionId: id });
       return failure(res, "Invalid subscription id.", 422);
     }
 
@@ -236,7 +264,10 @@ export const updateLiveCourseSubscription = async (req: Request, res: Response) 
     try {
       validated = updateSubscriptionSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      if (err instanceof z.ZodError) {
+        logger.warn("updateLiveCourseSubscription validation failed", { traceId, subscriptionId: id, issues: err.issues });
+        return zodIssueResponse(res, err);
+      }
       throw err;
     }
 
@@ -245,12 +276,12 @@ export const updateLiveCourseSubscription = async (req: Request, res: Response) 
     if (validated.paymentStatus !== undefined) update.paymentStatus = validated.paymentStatus;
     if (validated.startAt !== undefined) {
       const d = new Date(validated.startAt);
-      if (isNaN(d.getTime())) return failure(res, "startAt must be a valid date.", 422);
+      if (isNaN(d.getTime())) { logger.warn("updateLiveCourseSubscription invalid startAt", { traceId, subscriptionId: id }); return failure(res, "startAt must be a valid date.", 422); }
       update.startAt = d;
     }
     if (validated.endAt !== undefined) {
       const d = new Date(validated.endAt);
-      if (isNaN(d.getTime())) return failure(res, "endAt must be a valid date.", 422);
+      if (isNaN(d.getTime())) { logger.warn("updateLiveCourseSubscription invalid endAt", { traceId, subscriptionId: id }); return failure(res, "endAt must be a valid date.", 422); }
       update.endAt = d;
     }
 
@@ -259,9 +290,13 @@ export const updateLiveCourseSubscription = async (req: Request, res: Response) 
       { $set: update },
       { new: true, runValidators: true }
     );
-    if (!sub) return failure(res, "Subscription not found.", 404);
+    if (!sub) {
+      logger.warn("updateLiveCourseSubscription not found", { traceId, subscriptionId: id });
+      return failure(res, "Subscription not found.", 404);
+    }
 
-    logger.info("LiveCourseSubscription updated", {
+    logger.info("updateLiveCourseSubscription success", {
+      traceId,
       subscriptionId: id,
       fields: Object.keys(update),
       by: req.user?.id,
@@ -269,7 +304,7 @@ export const updateLiveCourseSubscription = async (req: Request, res: Response) 
 
     return success(res, { subscription: sub.toObject() }, "Subscription updated.");
   } catch (err) {
-    logger.error("LiveCourseSubscription update failed", { error: getErrorMessage(err) });
+    logger.error("updateLiveCourseSubscription failed", { traceId, subscriptionId: id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to update subscription.", 500);
   }
 };
@@ -278,19 +313,26 @@ export const updateLiveCourseSubscription = async (req: Request, res: Response) 
 // Hard delete — for cleaning up test/erroneous rows. To revoke a real
 // customer's access prefer PUT { status: false }, which keeps the audit trail.
 export const deleteLiveCourseSubscription = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.subscriptionId ?? "");
+  logger.info("deleteLiveCourseSubscription invoked", { traceId, path: req.originalUrl, subscriptionId: id, userId: req.user?.id });
+
   try {
-    const id = String(req.params.subscriptionId ?? "");
     if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("deleteLiveCourseSubscription invalid id", { traceId, subscriptionId: id });
       return failure(res, "Invalid subscription id.", 422);
     }
 
     const out = await LiveCourseSubscription.findByIdAndDelete(id);
-    if (!out) return failure(res, "Subscription not found.", 404);
+    if (!out) {
+      logger.warn("deleteLiveCourseSubscription not found", { traceId, subscriptionId: id });
+      return failure(res, "Subscription not found.", 404);
+    }
 
-    logger.info("LiveCourseSubscription deleted", { subscriptionId: id, by: req.user?.id });
+    logger.info("deleteLiveCourseSubscription success", { traceId, subscriptionId: id, by: req.user?.id });
     return success(res, { id }, "Subscription deleted.");
   } catch (err) {
-    logger.error("LiveCourseSubscription delete failed", { error: getErrorMessage(err) });
+    logger.error("deleteLiveCourseSubscription failed", { traceId, subscriptionId: id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to delete subscription.", 500);
   }
 };

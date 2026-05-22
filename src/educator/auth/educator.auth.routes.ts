@@ -9,6 +9,8 @@ import {
   updateProfileHandler,
   changePasswordHandler,
 } from "./educator.auth.controller";
+import { logoutAllDevicesHandler } from "../../middlewares/logoutAllDevices";
+import { EducatorAccessToken } from "../../models/educator/EducatorAccessToken.model";
 
 const router = Router();
 
@@ -18,6 +20,18 @@ router.post("/token/refresh", refreshHandler);
 router.use(authenticate, requireRole("educator"));
 
 router.delete("/logout", logoutHandler);
+router.post(
+  "/logout-all-devices",
+  logoutAllDevicesHandler({
+    type: "educator",
+    extraTeardown: async (educatorId) => {
+      await EducatorAccessToken.updateMany(
+        { educatorId, active: true },
+        { active: false, deleted: true }
+      );
+    },
+  })
+);
 router.get("/me", meHandler);
 router.put("/me", uploadS3.single("image"), updateProfileHandler);
 router.post("/change-password", changePasswordHandler);

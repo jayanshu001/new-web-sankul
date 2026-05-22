@@ -85,8 +85,8 @@ export const getEducatorDetails = async (req: Request, res: Response) => {
         .populate("liveCourseId", "_id name")
         .sort({ createdAt: -1 }),
       LiveSession.find({ educatorId: educatorObjectId })
-        .select("_id title subject status scheduledAt endAt liveCourseId createdAt")
-        .populate("liveCourseId", "_id name")
+        .select("_id title subject status scheduledAt endAt liveCourseIds createdAt")
+        .populate("liveCourseIds", "_id name")
         .sort({ createdAt: -1 }),
       Package.find({ educatorId: educatorObjectId })
         .select("_id name image isPaid status active order createdAt")

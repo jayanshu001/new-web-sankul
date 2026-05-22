@@ -14,6 +14,10 @@ import {
   initCrashReporter,
   captureCrashContextMiddleware,
 } from "./utils/crashReporter";
+import { metricsMiddleware } from "./middlewares/metricsMiddleware";
+import { renderMetrics } from "./utils/metrics";
+import { livenessHandler, readinessHandler } from "./middlewares/health";
+import { requestContextMiddleware } from "./middlewares/requestContext";
 
 // ─── Route modules ──────────────────────────────────────────────────────────
 import clientRoutes from "./client/client.routes";
@@ -75,9 +79,22 @@ app.get(
 );
 
 // 3) Stricter API CORS (handles preflight)
+//
+// Allowlist is read from ALLOWED_ORIGINS (CSV). In production this env var
+// MUST be set — env validation at boot already fails the process if it's
+// missing, but as a defense-in-depth we also refuse to fall back to localhost
+// origins here when NODE_ENV=production.
+const allowedOriginsRaw = process.env.ALLOWED_ORIGINS;
+const isProd = process.env.NODE_ENV === "production";
+
+if (isProd && (!allowedOriginsRaw || allowedOriginsRaw.trim() === "")) {
+  // eslint-disable-next-line no-console
+  console.error("[cors] FATAL: ALLOWED_ORIGINS is unset in production.");
+  process.exit(1);
+}
+
 const allowedOrigins = (
-  process.env.ALLOWED_ORIGINS ??
-  "http://localhost:3000,http://localhost:5173,http://localhost:5174"
+  allowedOriginsRaw ?? "http://localhost:3000,http://localhost:5173,http://localhost:5174"
 )
   .split(",")
   .map((o) => o.trim())
@@ -108,6 +125,12 @@ app.use(
 // --- Logging ---------------------------------------------------------------
 app.use(morgan("dev"));
 app.use(requestLogger);
+// Open the AsyncLocalStorage scope immediately after requestLogger seeds the
+// traceId — every downstream middleware, route handler, mongoose hook, and
+// cache call now sees the same per-request context object. See
+// utils/requestContext.ts for what flows through it.
+app.use(requestContextMiddleware);
+app.use(metricsMiddleware);
 
 // --- Body Parsers (order matters) ------------------------------------------
 // A) RAW routes FIRST (e.g., Stripe webhooks need raw body). Example:
@@ -186,6 +209,38 @@ if (process.env.NODE_ENV !== "production") {
     res.sendFile(path.join(process.cwd(), "docs", "live-course-demo.html"));
   });
 }
+
+// --- Health probes ---------------------------------------------------------
+//
+// Mounted BEFORE the global rate limiter so health-check storms (k8s default
+// is 1Hz per pod) don't get 429d. Both endpoints are public — they leak only
+// the pre-existing readyState + a boolean per dependency, nothing sensitive.
+app.get("/healthz", livenessHandler);
+app.get("/readyz", readinessHandler);
+
+// --- Metrics endpoint ------------------------------------------------------
+//
+// Token-gated Prometheus scrape endpoint. Mounted BEFORE the global rate
+// limiter so a scrape storm doesn't get throttled like user traffic. Auth
+// is a single static bearer token in METRICS_TOKEN — sufficient because
+// the value is a long random string set in the env, never logged, and
+// only consumed by your Prometheus scrape config.
+//
+// If METRICS_TOKEN is unset, the endpoint refuses to render (503) — better
+// than exposing internal RPS/error rates publicly by accident.
+app.get("/metrics", (req, res) => {
+  const expected = process.env.METRICS_TOKEN;
+  if (!expected) {
+    return res.status(503).send("# METRICS_TOKEN not configured\n");
+  }
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (token !== expected) {
+    return res.status(401).send("# unauthorized\n");
+  }
+  res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+  return res.status(200).send(renderMetrics() + "\n");
+});
 
 // --- Global Rate Limiter ---------------------------------------------------
 app.use(globalLimiter);

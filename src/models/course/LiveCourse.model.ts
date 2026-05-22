@@ -7,11 +7,25 @@ export interface ILiveCourseCategoryRef {
 
 export type LiveCourseClassType = "live" | "live_offline" | "offline";
 
-// A downloadable file shown in the "Time Table" file list on the Schedule tab.
-export interface ILiveCourseTimetableFile {
-  title: string;
-  fileUrl: string;
+// One row in the admin-curated Schedule (Date / Subject / Time). `time` is a
+// free-text slot label exactly as entered, e.g. "09:00-10:00 AM" — we don't
+// parse it. Lives inside a ScheduleFolder.
+export interface ILiveCourseScheduleEntry {
+  _id: mongoose.Types.ObjectId;
+  date: Date;
+  subject: string;
+  time: string;
   order: number;
+}
+
+// A folder grouping schedule entries. Top-to-bottom order via `order`.
+export interface ILiveCourseScheduleFolder {
+  _id: mongoose.Types.ObjectId;
+  title: string;
+  image?: string | null;
+  order: number;
+  status: boolean;
+  entries: ILiveCourseScheduleEntry[];
 }
 
 export interface ILiveCourse extends Document {
@@ -40,8 +54,9 @@ export interface ILiveCourse extends Document {
   materialCategories: ILiveCourseCategoryRef[];
   examCategories: ILiveCourseCategoryRef[];
 
-  // Timetable PDFs/files surfaced on the Schedule tab (the "Time Table" list).
-  timetableFiles: ILiveCourseTimetableFile[];
+  // Admin-curated schedule, grouped into folders. Folders order top-to-bottom,
+  // entries order within their folder.
+  scheduleFolders: ILiveCourseScheduleFolder[];
 
   // Audit
   createdBy?: mongoose.Types.ObjectId | null;
@@ -66,13 +81,25 @@ const examCategoryRefSchema = new Schema<ILiveCourseCategoryRef>(
   { _id: false }
 );
 
-const timetableFileSchema = new Schema<ILiveCourseTimetableFile>(
+const scheduleEntrySchema = new Schema<ILiveCourseScheduleEntry>(
   {
-    title:   { type: String, required: true },
-    fileUrl: { type: String, required: true },
-    order:   { type: Number, default: 0 },
+    date:    { type: Date,   required: true },
+    subject: { type: String, required: true, trim: true, maxlength: 120 },
+    time:    { type: String, required: true, trim: true, maxlength: 40 },
+    order:   { type: Number, default: 0, min: 0 },
   },
-  { _id: false }
+  { _id: true }
+);
+
+const scheduleFolderSchema = new Schema<ILiveCourseScheduleFolder>(
+  {
+    title:   { type: String,  required: true, trim: true, maxlength: 80 },
+    image:   { type: String,  default: null },
+    order:   { type: Number,  default: 0, min: 0 },
+    status:  { type: Boolean, default: true },
+    entries: { type: [scheduleEntrySchema], default: [] },
+  },
+  { _id: true }
 );
 
 const liveCourseSchema = new Schema<ILiveCourse>(
@@ -97,7 +124,7 @@ const liveCourseSchema = new Schema<ILiveCourse>(
 
     materialCategories: { type: [materialCategoryRefSchema], default: [] },
     examCategories:     { type: [examCategoryRefSchema],     default: [] },
-    timetableFiles:     { type: [timetableFileSchema],       default: [] },
+    scheduleFolders:    { type: [scheduleFolderSchema],      default: [] },
 
     createdBy: { type: Schema.Types.ObjectId, ref: "AdminUser", default: null },
   },

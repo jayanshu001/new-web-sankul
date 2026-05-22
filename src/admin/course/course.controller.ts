@@ -1,664 +1,263 @@
+// src/admin/course/course.controller.ts
+//
+// Thin controllers: parse + coerce request → validate → call service → respond.
+// All error paths route through the global error middleware via `asyncHandler`;
+// services throw `HttpError(code, message)` for predictable status codes.
+//
+// This file replaces the legacy inline-try/catch handlers (audit Module 2 P1)
+// and consumes:
+//   - middlewares/asyncHandler       — error forwarding
+//   - admin/course/course.service.ts — domain logic, caching, transactions
+//   - utils/httpResponse             — standard `{ success, code, data, ... }` envelope
+
 import { Request, Response } from "express";
-import mongoose, { Types } from "mongoose";
-import { CourseEducator } from "../../models/course/CourseEducator.model";
-import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
-import { VideoCategory } from "../../models/course/VideoCategory.model";
-import { PackageCourseMaterial } from "../../models/course/PackageCourseMaterial.model";
-import { Course } from "../../models/course/Course.model";
-import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
-import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
-import { createCourseSchema, createCoursePlanSchema, updateCoursePlanSchema } from "./course.validation";
+import { asyncHandler } from "../../middlewares/asyncHandler";
+import { success } from "../../utils/httpResponse";
+import {
+  createCourseSchema,
+  createCoursePlanSchema,
+  updateCoursePlanSchema,
+} from "./course.validation";
 import {
   createMaterialSchema,
   updateMaterialSchema,
   createVideoCategorySchema,
   updateVideoCategorySchema,
 } from "../master/master.validation";
+import * as courseService from "./course.service";
 
-// Accepts either a real array or a JSON-encoded string (multipart/form-data).
-const parseCategoryRefs = (
-  raw: any
-): Array<{ category: Types.ObjectId; order: number }> | undefined => {
-  if (raw === undefined || raw === null || raw === "") return undefined;
-  let items = raw;
-  if (typeof raw === "string") {
-    try {
-      items = JSON.parse(raw);
-    } catch {
-      return undefined;
-    }
+// ──────────────────────────────────────────────────────────────────────────────
+// Multipart coercion helpers
+// Forms posted by the admin UI send everything as strings; normalize before
+// handing the payload to Zod.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const coerceCourseBody = (req: Request) => {
+  const file = req.file as any;
+  if (file?.location) req.body.image = file.location;
+  if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
+  if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+  if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
+  if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
+  if (
+    req.body.examCountdownCategoryId === "" ||
+    req.body.examCountdownCategoryId === "null"
+  ) {
+    req.body.examCountdownCategoryId = null;
   }
-  if (!Array.isArray(items)) return undefined;
-  return items
-    .filter((i: any) => i && mongoose.Types.ObjectId.isValid(i.category))
-    .map((i: any) => ({
-      category: new Types.ObjectId(i.category),
-      order: typeof i.order === "number" ? i.order : Number(i.order) || 0,
+  const materialCategories = courseService.parseCategoryRefs(req.body.materialCategories);
+  const examCategories = courseService.parseCategoryRefs(req.body.examCategories);
+  // Zod accepts ObjectId strings; pass the string form for schema validation
+  // but keep the typed form for the service.
+  if (materialCategories !== undefined) {
+    req.body.materialCategories = materialCategories.map((r) => ({
+      category: r.category.toString(),
+      order: r.order,
     }));
+  }
+  if (examCategories !== undefined) {
+    req.body.examCategories = examCategories.map((r) => ({
+      category: r.category.toString(),
+      order: r.order,
+    }));
+  }
+  return { materialCategories, examCategories };
 };
 
-const mapPlanResponse = (plan: any) => ({
-  id: plan._id,
-  name: plan.name ?? null,
-  duration: plan.duration,
-  price: plan.price,
-  withMaterial: plan.withMaterial,
-  materialPrice: plan.materialPrice ?? 0,
-  isDefault: plan.isDefault,
-  status: plan.status,
-  courseId: plan.courseId,
-  createdAt: plan.createdAt,
-  updatedAt: plan.updatedAt,
+// ──────────────────────────────────────────────────────────────────────────────
+// Pre-requisites / list / detail
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const getPreRequisites = asyncHandler(async (_req: Request, res: Response) => {
+  const data = await courseService.getPreRequisites();
+  return success(res, data);
 });
 
-export const getPreRequisites = async (req: Request, res: Response) => {
-  try {
-    const [educators, subjectCategories, videoCategories, materials] = await Promise.all([
-      // Some masters use `status`, while materials use `isActive`.
-      CourseEducator.find({ status: true }).select("_id name"),
-      CourseSubjectCategory.find({ status: true }).select("_id title"),
-      VideoCategory.find({ status: true }).select("_id title"),
-      PackageCourseMaterial.find({ isActive: true }).select("_id title"),
-    ]);
+export const getCourses = asyncHandler(async (req: Request, res: Response) => {
+  const { data, pagination } = await courseService.listCourses(
+    req.query as courseService.ListCoursesQuery
+  );
+  return res.status(200).json({ success: true, data, pagination });
+});
 
-    res.status(200).json({
-      success: true,
-      data: {
-        educators: educators.map((e: any) => ({ _id: e._id, name: e.name })),
-        subjectCategories: subjectCategories.map((s: any) => ({ _id: s._id, name: s.title })),
-        videoCategories: videoCategories.map((v: any) => ({ _id: v._id, name: v.title })),
-        materials: materials.map((m: any) => ({ _id: m._id, name: m.title })),
-      },
-    });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
+export const getCourseById = asyncHandler(async (req: Request, res: Response) => {
+  const result = await courseService.getCourseById(req.params.id as string);
+  return success(res, result);
+});
 
-export const getCourses = async (req: Request, res: Response) => {
-  try {
-    const {
-      search = "",
-      status,
-      isPaid,
-      isPopular,
-      page = "1",
-      limit = "10",
-      sortBy = "createdAt",
-      sortOrder = "desc",
-    } = req.query as Record<string, string>;
+// ──────────────────────────────────────────────────────────────────────────────
+// Video categories / materials masters
+// ──────────────────────────────────────────────────────────────────────────────
 
-    const filters: any = {};
-    if (search) {
-      filters.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { description: { $regex: search, $options: "i" } },
-      ];
-    }
-    if (status === "true" || status === "false") {
-      filters.status = status === "true";
-    }
-    if (isPaid === "true" || isPaid === "false") {
-      filters.isPaid = isPaid === "true";
-    }
-    if (isPopular === "true" || isPopular === "false") {
-      filters.isPopular = isPopular === "true";
-    }
-
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 10, 1);
-    const skip = (pageNum - 1) * limitNum;
-    const sortDirection = sortOrder === "asc" ? 1 : -1;
-
-    const [data, total] = await Promise.all([
-      Course.find(filters)
-        .populate("courseEducatorId", "_id name")
-        .populate("courseSubjectCategoryId", "_id title")
-        .populate("videoCategoryId", "_id title")
-        .populate("examCountdownCategoryId", "_id name colorHex")
-        .populate("materialCategories.category", "_id title image")
-        .populate("examCategories.category", "_id name image")
-        .sort({ [sortBy]: sortDirection })
-        .skip(skip)
-        .limit(limitNum),
-      Course.countDocuments(filters),
-    ]);
-
-    return res.status(200).json({
-      success: true,
-      data,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
-      },
-    });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const getCourseById = async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Course ID" });
-    }
-
-    const [course, plans] = await Promise.all([
-      Course.findById(id)
-        .populate("courseEducatorId", "_id name")
-        .populate("courseSubjectCategoryId", "_id title")
-        .populate("videoCategoryId", "_id title")
-        .populate("examCountdownCategoryId", "_id name colorHex")
-        .populate("materialCategories.category", "_id title image")
-        .populate("examCategories.category", "_id name image"),
-      PackageCourseEbookPrice.find({ courseId: id }).sort({ isDefault: -1, createdAt: -1 }),
-    ]);
-
-    if (!course) {
-      return res.status(404).json({ success: false, message: "Course not found" });
-    }
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        course,
-        plans: plans.map(mapPlanResponse),
-      },
-    });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const getCourseVideoCategories = async (_req: Request, res: Response) => {
-  try {
-    const videoCategories = await VideoCategory.find({ status: true })
-      .select("_id title slug image courseId order_by status")
-      .sort({ order_by: 1, createdAt: -1 });
-
-    return res.status(200).json({ success: true, data: videoCategories });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const getCourseMaterials = async (_req: Request, res: Response) => {
-  try {
-    const materials = await PackageCourseMaterial.find()
-      .select("_id title image isActive")
-      .sort({ createdAt: -1 });
-
-    return res.status(200).json({ success: true, data: materials });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const createCourseMaterial = async (req: Request, res: Response) => {
-  try {
-    const validatedData = createMaterialSchema.parse(req.body);
-    const material = new PackageCourseMaterial(validatedData);
-    await material.save();
-    return res.status(201).json({ success: true, data: material });
-  } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const updateCourseMaterial = async (req: Request, res: Response) => {
-  try {
-    const materialId = req.params.materialId as string;
-    if (!mongoose.Types.ObjectId.isValid(materialId)) {
-      return res.status(400).json({ success: false, message: "Invalid Material ID" });
-    }
-    const validatedData = updateMaterialSchema.parse(req.body);
-    const material = await PackageCourseMaterial.findByIdAndUpdate(materialId, validatedData, { new: true });
-    if (!material) return res.status(404).json({ success: false, message: "Material not found" });
-    return res.status(200).json({ success: true, data: material });
-  } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const deleteCourseMaterial = async (req: Request, res: Response) => {
-  try {
-    const materialId = req.params.materialId as string;
-    if (!mongoose.Types.ObjectId.isValid(materialId)) {
-      return res.status(400).json({ success: false, message: "Invalid Material ID" });
-    }
-
-    const material = await PackageCourseMaterial.findByIdAndDelete(materialId);
-    if (!material) return res.status(404).json({ success: false, message: "Material not found" });
-    return res.status(200).json({ success: true, message: "Material deleted successfully" });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const createCourseVideoCategory = async (req: Request, res: Response) => {
-  try {
-    const validatedData = createVideoCategorySchema.parse(req.body);
-    const category = new VideoCategory(validatedData);
-    await category.save();
-    return res.status(201).json({ success: true, data: category });
-  } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const updateCourseVideoCategory = async (req: Request, res: Response) => {
-  try {
-    const videoCategoryId = req.params.videoCategoryId as string;
-    if (!mongoose.Types.ObjectId.isValid(videoCategoryId)) {
-      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    }
-    const validatedData = updateVideoCategorySchema.parse(req.body);
-    const category = await VideoCategory.findByIdAndUpdate(videoCategoryId, validatedData, { new: true });
-    if (!category) return res.status(404).json({ success: false, message: "Video Category not found" });
-    return res.status(200).json({ success: true, data: category });
-  } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const deleteCourseVideoCategory = async (req: Request, res: Response) => {
-  try {
-    const videoCategoryId = req.params.videoCategoryId as string;
-    if (!mongoose.Types.ObjectId.isValid(videoCategoryId)) {
-      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    }
-
-    const isUsed = await Course.exists({ videoCategoryId });
-    if (isUsed) {
-      return res.status(409).json({
-        success: false,
-        message: "Video category is linked with one or more courses. Remove mapping first.",
-      });
-    }
-
-    const category = await VideoCategory.findByIdAndDelete(videoCategoryId);
-    if (!category) return res.status(404).json({ success: false, message: "Video Category not found" });
-    const rel = await VideoCategoryRelation.deleteMany({
-      $or: [{ parent: videoCategoryId }, { child: videoCategoryId }],
-    });
-    return res.status(200).json({
-      success: true,
-      message: "Video Category deleted successfully",
-      data: { deletedRelations: rel.deletedCount ?? 0 },
-    });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const createCourse = async (req: Request, res: Response) => {
-  let session = null;
-  try {
-    session = await mongoose.startSession();
-    session.startTransaction();
-
-    const file = req.file as any;
-    if (file?.location) req.body.image = file.location;
-    if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
-    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
-    if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
-    if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
-    if (req.body.examCountdownCategoryId === "" || req.body.examCountdownCategoryId === "null") req.body.examCountdownCategoryId = null;
-    const materialCategoriesParsed = parseCategoryRefs(req.body.materialCategories);
-    const examCategoriesParsed = parseCategoryRefs(req.body.examCategories);
-    if (materialCategoriesParsed !== undefined) req.body.materialCategories = materialCategoriesParsed.map((r) => ({ category: r.category.toString(), order: r.order }));
-    if (examCategoriesParsed !== undefined) req.body.examCategories = examCategoriesParsed.map((r) => ({ category: r.category.toString(), order: r.order }));
-    const validatedData = createCourseSchema.parse(req.body);
-
-    const newCourse = new Course({
-      ...validatedData,
-      examCountdownCategoryId: validatedData.examCountdownCategoryId || null,
-      materialCategories: materialCategoriesParsed ?? [],
-      examCategories: examCategoriesParsed ?? [],
-    });
-    await newCourse.save({ session });
-
-    // Automatically create a default Video Category for the course if requested
-    // This replicates the "Nested Folder Automation" from the plan
-    const defaultFolder = new VideoCategory({
-      title: `${newCourse.name} - Root`,
-      slug: `${newCourse.name.toLowerCase().replace(/ /g, "-")}-root`,
-      image: newCourse.image,
-      courseId: newCourse._id,
-      order_by: 0,
-    });
-    await defaultFolder.save({ session });
-
-    await session.commitTransaction();
-    session.endSession();
-
-    res.status(201).json({
-      success: true,
-      message: "Course created successfully with default folder",
-      data: { course: newCourse, folder: defaultFolder },
-    });
-  } catch (error: any) {
-    if (session) {
-      await session.abortTransaction();
-      session.endSession();
-    }
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const updateCourse = async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Course ID" });
-    }
-    const file = req.file as any;
-    if (file?.location) req.body.image = file.location;
-    if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
-    if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
-    if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
-    if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
-    if (req.body.examCountdownCategoryId === "" || req.body.examCountdownCategoryId === "null") req.body.examCountdownCategoryId = null;
-    const materialCategoriesParsed = parseCategoryRefs(req.body.materialCategories);
-    const examCategoriesParsed = parseCategoryRefs(req.body.examCategories);
-    if (materialCategoriesParsed !== undefined) req.body.materialCategories = materialCategoriesParsed.map((r) => ({ category: r.category.toString(), order: r.order }));
-    if (examCategoriesParsed !== undefined) req.body.examCategories = examCategoriesParsed.map((r) => ({ category: r.category.toString(), order: r.order }));
-    const validatedData = createCourseSchema.partial().parse(req.body);
-    const update: any = { ...validatedData };
-    if (validatedData.examCountdownCategoryId !== undefined) update.examCountdownCategoryId = validatedData.examCountdownCategoryId || null;
-    if (materialCategoriesParsed !== undefined) update.materialCategories = materialCategoriesParsed;
-    if (examCategoriesParsed !== undefined) update.examCategories = examCategoriesParsed;
-    const course = await Course.findByIdAndUpdate(id, update, { new: true });
-    if (!course) return res.status(404).json({ success: false, message: "Course not found" });
-    res.status(200).json({ success: true, data: course });
-  } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const deleteCourse = async (req: Request, res: Response) => {
-  let session = null;
-  try {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Course ID" });
-    }
-
-    session = await mongoose.startSession();
-    session.startTransaction();
-
-    const course = await Course.findByIdAndDelete(id, { session });
-    if (!course) return res.status(404).json({ success: false, message: "Course not found" });
-
-    // Collect the ids of course-scoped video folders first so we can also
-    // sweep any VideoCategoryRelation rows that reference them.
-    const scopedFolders = await VideoCategory.find({ courseId: id }, { _id: 1 }, { session });
-    const scopedIds = scopedFolders.map((f) => f._id);
-
-    const [plansResult, foldersResult, relationsResult] = await Promise.all([
-      PackageCourseEbookPrice.deleteMany({ courseId: id }, { session }),
-      VideoCategory.deleteMany({ courseId: id }, { session }),
-      scopedIds.length
-        ? VideoCategoryRelation.deleteMany(
-            { $or: [{ parent: { $in: scopedIds } }, { child: { $in: scopedIds } }] },
-            { session }
-          )
-        : Promise.resolve({ deletedCount: 0 }),
-    ]);
-
-    await session.commitTransaction();
-    session.endSession();
-
-    return res.status(200).json({
-      success: true,
-      message: "Course deleted successfully.",
-      data: {
-        deletedCourseId: id,
-        deletedPlans: plansResult.deletedCount ?? 0,
-        deletedCourseVideoCategories: foldersResult.deletedCount ?? 0,
-        deletedVideoRelations: relationsResult.deletedCount ?? 0,
-      },
-    });
-  } catch (error: any) {
-    if (session) {
-      await session.abortTransaction();
-      session.endSession();
-    }
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const toggleCoursePopular = async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Course ID" });
-    }
-
-    const course = await Course.findById(id).select("_id isPopular");
-    if (!course) {
-      return res.status(404).json({ success: false, message: "Course not found" });
-    }
-
-    let nextValue: boolean;
-    if (typeof req.body?.isPopular === "boolean") {
-      nextValue = req.body.isPopular;
-    } else if (req.body?.isPopular === "true" || req.body?.isPopular === "false") {
-      nextValue = req.body.isPopular === "true";
-    } else {
-      nextValue = !course.isPopular;
-    }
-
-    course.isPopular = nextValue;
-    await course.save();
-
-    return res.status(200).json({
-      success: true,
-      message: `Course marked as ${nextValue ? "popular" : "not popular"}`,
-      data: { _id: course._id, isPopular: course.isPopular },
-    });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const createCoursePlan = async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id as string;
-    
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Course ID" });
-    }
-
-    const courseExists = await Course.findById(id);
-    if (!courseExists) {
-      return res.status(404).json({ success: false, message: "Course not found" });
-    }
-
-    const validatedData = createCoursePlanSchema.parse(req.body);
-    const normalizedPayload = {
-      ...validatedData,
-      duration: validatedData.duration ?? validatedData.subscriptionDurationMonths,
-    };
-
-    const newPlan = new PackageCourseEbookPrice({
-      courseId: courseExists._id,
-      ...normalizedPayload
-    });
-    
-    await newPlan.save();
-
-    res.status(201).json({
-      success: true,
-      message: "Pricing plan created successfully",
-      data: mapPlanResponse(newPlan),
-    });
-  } catch (error: any) {
-    if (error.issues) {
-      return res.status(400).json({ success: false, errors: error.issues });
-    }
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const getCoursePlans = async (req: Request, res: Response) => {
-  try {
-    const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Course ID" });
-    }
-
-    const courseExists = await Course.findById(id).select("_id");
-    if (!courseExists) {
-      return res.status(404).json({ success: false, message: "Course not found" });
-    }
-
-    const plans = await PackageCourseEbookPrice.find({ courseId: id }).sort({ isDefault: -1, createdAt: -1 });
-    return res.status(200).json({ success: true, data: plans.map(mapPlanResponse) });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const getCoursePlanById = async (req: Request, res: Response) => {
-  try {
-    const id = req.params.planId as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Plan ID" });
-    }
-
-    const plan = await PackageCourseEbookPrice.findById(id);
-    if (!plan) {
-      return res.status(404).json({ success: false, message: "Pricing plan not found" });
-    }
-
-    return res.status(200).json({ success: true, data: mapPlanResponse(plan) });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-export const updateCoursePlan = async (req: Request, res: Response) => {
-  try {
-    const id = req.params.planId as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Plan ID" });
-    }
-    const validatedData = updateCoursePlanSchema.parse(req.body);
-    const normalizedPayload = {
-      ...validatedData,
-      duration: validatedData.duration ?? validatedData.subscriptionDurationMonths,
-    };
-    const plan = await PackageCourseEbookPrice.findByIdAndUpdate(id, normalizedPayload, { new: true });
-    if (!plan) return res.status(404).json({ success: false, message: "Pricing plan not found" });
-    res.status(200).json({ success: true, data: mapPlanResponse(plan) });
-  } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const deleteCoursePlan = async (req: Request, res: Response) => {
-  try {
-    const id = req.params.planId as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Plan ID" });
-    }
-    const plan = await PackageCourseEbookPrice.findByIdAndDelete(id);
-    if (!plan) return res.status(404).json({ success: false, message: "Pricing plan not found" });
-    res.status(200).json({ success: true, message: "Pricing plan deleted successfully" });
-  } catch (error: any) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const getVideoCategoryRelations = async (_req: Request, res: Response) => {
-  try {
-    const relations = await VideoCategoryRelation.find()
-      .populate("parent", "_id title slug")
-      .populate("child", "_id title slug")
-      .sort({ order: 1, createdAt: -1 });
-
-    return res.status(200).json({ success: true, data: relations });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const createVideoCategoryRelation = async (req: Request, res: Response) => {
-  try {
-    const { parent, child, order = 0 } = req.body || {};
-    if (!parent || !child) {
-      return res.status(422).json({ success: false, message: "parent and child are required." });
-    }
-    if (!mongoose.Types.ObjectId.isValid(parent) || !mongoose.Types.ObjectId.isValid(child)) {
-      return res.status(400).json({ success: false, message: "Invalid parent/child ID." });
-    }
-    if (String(parent) === String(child)) {
-      return res.status(400).json({ success: false, message: "parent and child cannot be same." });
-    }
-
-    const [parentCategory, childCategory] = await Promise.all([
-      VideoCategory.findById(parent).select("_id"),
-      VideoCategory.findById(child).select("_id"),
-    ]);
-    if (!parentCategory || !childCategory) {
-      return res.status(404).json({ success: false, message: "Parent or child category not found." });
-    }
-
-    const relation = await VideoCategoryRelation.create({ parent, child, order });
-    return res.status(201).json({ success: true, data: relation });
-  } catch (error: any) {
-    if (error?.code === 11000) {
-      return res.status(409).json({ success: false, message: "Relation already exists." });
-    }
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const updateVideoCategoryRelation = async (req: Request, res: Response) => {
-  try {
-    const relationId = req.params.relationId as string;
-    if (!mongoose.Types.ObjectId.isValid(relationId)) {
-      return res.status(400).json({ success: false, message: "Invalid relation ID." });
-    }
-
-    const { order } = req.body || {};
-    const relation = await VideoCategoryRelation.findByIdAndUpdate(
-      relationId,
-      { order },
-      { new: true }
+export const getCourseVideoCategories = asyncHandler(
+  async (req: Request, res: Response) => {
+    const { data, pagination } = await courseService.listCourseVideoCategories(
+      req.query as courseService.ListVideoCategoriesQuery
     );
-    if (!relation) {
-      return res.status(404).json({ success: false, message: "Relation not found." });
-    }
-    return res.status(200).json({ success: true, data: relation });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(200).json({ success: true, data, pagination });
   }
-};
+);
 
-export const deleteVideoCategoryRelation = async (req: Request, res: Response) => {
-  try {
-    const relationId = req.params.relationId as string;
-    if (!mongoose.Types.ObjectId.isValid(relationId)) {
-      return res.status(400).json({ success: false, message: "Invalid relation ID." });
-    }
+export const getCourseMaterials = asyncHandler(async (req: Request, res: Response) => {
+  const { data, pagination } = await courseService.listCourseMaterials(
+    req.query as courseService.ListVideoCategoriesQuery
+  );
+  return res.status(200).json({ success: true, data, pagination });
+});
 
-    const relation = await VideoCategoryRelation.findByIdAndDelete(relationId);
-    if (!relation) {
-      return res.status(404).json({ success: false, message: "Relation not found." });
-    }
-    return res.status(200).json({ success: true, message: "Relation deleted successfully." });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
+export const createCourseMaterial = asyncHandler(async (req: Request, res: Response) => {
+  const validated = createMaterialSchema.parse(req.body);
+  const data = await courseService.createCourseMaterial(validated);
+  return res.status(201).json({ success: true, data });
+});
+
+export const updateCourseMaterial = asyncHandler(async (req: Request, res: Response) => {
+  const validated = updateMaterialSchema.parse(req.body);
+  const data = await courseService.updateCourseMaterial(req.params.materialId as string, validated);
+  return success(res, data as any);
+});
+
+export const deleteCourseMaterial = asyncHandler(async (req: Request, res: Response) => {
+  await courseService.deleteCourseMaterial(req.params.materialId as string);
+  return success(res, {}, "Material deleted successfully");
+});
+
+export const createCourseVideoCategory = asyncHandler(
+  async (req: Request, res: Response) => {
+    const validated = createVideoCategorySchema.parse(req.body);
+    const data = await courseService.createCourseVideoCategory(validated);
+    return res.status(201).json({ success: true, data });
   }
-};
+);
+
+export const updateCourseVideoCategory = asyncHandler(
+  async (req: Request, res: Response) => {
+    const validated = updateVideoCategorySchema.parse(req.body);
+    const data = await courseService.updateCourseVideoCategory(
+      req.params.videoCategoryId as string,
+      validated
+    );
+    return success(res, data as any);
+  }
+);
+
+export const deleteCourseVideoCategory = asyncHandler(
+  async (req: Request, res: Response) => {
+    const data = await courseService.deleteCourseVideoCategory(req.params.videoCategoryId as string);
+    return success(res, data, "Video Category deleted successfully");
+  }
+);
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Course CRUD + popular toggle
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const createCourse = asyncHandler(async (req: Request, res: Response) => {
+  const { materialCategories, examCategories } = coerceCourseBody(req);
+  const validated = createCourseSchema.parse(req.body);
+  const data = await courseService.createCourse({
+    validated,
+    materialCategories,
+    examCategories,
+  });
+  return res
+    .status(201)
+    .json({ success: true, message: "Course created successfully with default folder", data });
+});
+
+export const updateCourse = asyncHandler(async (req: Request, res: Response) => {
+  const { materialCategories, examCategories } = coerceCourseBody(req);
+  const validated = createCourseSchema.partial().parse(req.body);
+  const data = await courseService.updateCourse({
+    id: req.params.id as string,
+    validated,
+    materialCategories,
+    examCategories,
+  });
+  return success(res, data as any);
+});
+
+export const deleteCourse = asyncHandler(async (req: Request, res: Response) => {
+  const data = await courseService.deleteCourse(req.params.id as string);
+  return success(res, data, "Course deleted successfully.");
+});
+
+export const toggleCoursePopular = asyncHandler(async (req: Request, res: Response) => {
+  const data = await courseService.toggleCoursePopular(req.params.id as string, req.body?.isPopular);
+  return success(
+    res,
+    data,
+    `Course marked as ${data.isPopular ? "popular" : "not popular"}`
+  );
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Plans (course-scoped)
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const createCoursePlan = asyncHandler(async (req: Request, res: Response) => {
+  const validated = createCoursePlanSchema.parse(req.body);
+  const data = await courseService.createCoursePlan(req.params.id as string, validated);
+  return res
+    .status(201)
+    .json({ success: true, message: "Pricing plan created successfully", data });
+});
+
+export const getCoursePlans = asyncHandler(async (req: Request, res: Response) => {
+  const data = await courseService.listCoursePlans(req.params.id as string);
+  return res.status(200).json({ success: true, data });
+});
+
+export const getCoursePlanById = asyncHandler(async (req: Request, res: Response) => {
+  const data = await courseService.getCoursePlanById(req.params.planId as string);
+  return success(res, data);
+});
+
+export const updateCoursePlan = asyncHandler(async (req: Request, res: Response) => {
+  const validated = updateCoursePlanSchema.parse(req.body);
+  const data = await courseService.updateCoursePlan(req.params.planId as string, validated);
+  return success(res, data);
+});
+
+export const deleteCoursePlan = asyncHandler(async (req: Request, res: Response) => {
+  await courseService.deleteCoursePlan(req.params.planId as string);
+  return success(res, {}, "Pricing plan deleted successfully");
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Video category relations
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const getVideoCategoryRelations = asyncHandler(
+  async (req: Request, res: Response) => {
+    const { data, pagination } = await courseService.listVideoCategoryRelations(
+      req.query as courseService.ListVideoCategoryRelationsQuery
+    );
+    return res.status(200).json({ success: true, data, pagination });
+  }
+);
+
+export const createVideoCategoryRelation = asyncHandler(
+  async (req: Request, res: Response) => {
+    const data = await courseService.createVideoCategoryRelation(req.body || {});
+    return res.status(201).json({ success: true, data });
+  }
+);
+
+export const updateVideoCategoryRelation = asyncHandler(
+  async (req: Request, res: Response) => {
+    const order = Number(req.body?.order ?? 0);
+    const data = await courseService.updateVideoCategoryRelation(
+      req.params.relationId as string,
+      order
+    );
+    return success(res, data as any);
+  }
+);
+
+export const deleteVideoCategoryRelation = asyncHandler(
+  async (req: Request, res: Response) => {
+    await courseService.deleteVideoCategoryRelation(req.params.relationId as string);
+    return success(res, {}, "Relation deleted successfully.");
+  }
+);

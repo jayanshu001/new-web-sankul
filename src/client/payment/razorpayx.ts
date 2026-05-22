@@ -2,6 +2,8 @@
 // the standard Payments product; Contacts / Fund Accounts / Payouts live
 // on the X API and must be called over HTTP with Basic Auth.
 
+import { callOutbound } from "../../libs/outbound";
+
 const X_BASE_URL = "https://api.razorpay.com/v1";
 
 const auth = () => {
@@ -18,17 +20,30 @@ const accountNumber = () => {
 };
 
 async function xPost<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${X_BASE_URL}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: auth() },
-    body: JSON.stringify(body),
-  });
-  const data = (await res.json().catch(() => ({}))) as any;
-  if (!res.ok) {
-    const msg = data?.error?.description || `RazorpayX ${path} failed with ${res.status}.`;
-    throw new Error(msg);
-  }
-  return data as T;
+  // Wrapped in callOutbound: 6s per attempt, 3 attempts on network/5xx/429.
+  // Note RazorpayX is idempotent on `reference_id` (we pass one for payouts),
+  // so a retried POST either creates the resource or returns the existing one
+  // — never a duplicate. The label is path-scoped so a payout outage doesn't
+  // open the breaker on contact-creation calls.
+  return callOutbound(
+    async () => {
+      const res = await fetch(`${X_BASE_URL}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: auth() },
+        body: JSON.stringify(body),
+      });
+      const data = (await res.json().catch(() => ({}))) as any;
+      if (!res.ok) {
+        const err: any = new Error(
+          data?.error?.description || `RazorpayX ${path} failed with ${res.status}.`
+        );
+        err.status = res.status; // lets the wrapper's retry predicate see HTTP status
+        throw err;
+      }
+      return data as T;
+    },
+    { label: `razorpayx${path}`, timeoutMs: 6_000, attempts: 3 }
+  );
 }
 
 export type RzpContact = { id: string };

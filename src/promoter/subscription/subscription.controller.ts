@@ -4,12 +4,17 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { Customer } from "../../models/customer/Customer.model";
 import { Course } from "../../models/course/Course.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 // GET /api/v1/promoter/subscriptions — course/package + ebook subscriptions attributed to this promoter
 export const listMySubscriptions = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const promoterId = req.user?.id;
+  logger.info("listMySubscriptions invoked", { traceId, path: req.originalUrl, promoterId, type: req.query.type });
+
   try {
-    const promoterId = req.user?.id;
-    if (!promoterId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!promoterId) { logger.warn("listMySubscriptions unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { type = "course", fromDate, toDate, page = "1", limit = "20" } =
       req.query as Record<string, string>;
@@ -37,6 +42,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
           .lean(),
         EbookSubscription.countDocuments(filter),
       ]);
+      logger.info("listMySubscriptions success (ebook)", { traceId, promoterId, total });
       return res.status(200).json({
         success: true,
         data,
@@ -57,21 +63,26 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       PackageCourseSubscription.countDocuments(filter),
     ]);
 
+    logger.info("listMySubscriptions success (course)", { traceId, promoterId, total });
     return res.status(200).json({
       success: true,
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {
+    logger.error("listMySubscriptions failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
 // GET /api/v1/promoter/subscriptions/report — aggregate (by course/package/month)
 export const subscriptionReport = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const promoterId = req.user?.id;
+  logger.info("subscriptionReport invoked", { traceId, path: req.originalUrl, promoterId });
+
   try {
-    const promoterId = req.user?.id;
-    if (!promoterId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!promoterId) { logger.warn("subscriptionReport unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
     const mongoose = await import("mongoose");
     const oid = mongoose.default.Types.ObjectId.createFromHexString(promoterId);
 
@@ -129,8 +140,10 @@ export const subscriptionReport = async (req: Request, res: Response) => {
       ]),
     ]);
 
+    logger.info("subscriptionReport success", { traceId, promoterId, courseCount: byCourse.length, monthCount: byMonth.length });
     return res.status(200).json({ success: true, data: { byCourse, byMonth } });
   } catch (e: any) {
+    logger.error("subscriptionReport failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

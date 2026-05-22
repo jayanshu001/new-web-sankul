@@ -9,7 +9,17 @@ import {
   deleteLiveCourse,
   toggleLiveCoursePopular,
   listSessionsForLiveCourse,
-  updateTimetableFiles,
+  updateScheduleEntriesDeprecated,
+  listScheduleFolders,
+  createScheduleFolder,
+  updateScheduleFolder,
+  deleteScheduleFolder,
+  reorderScheduleFolders,
+  listScheduleEntries,
+  createScheduleEntry,
+  updateScheduleEntry,
+  deleteScheduleEntry,
+  reorderScheduleEntries,
 } from "./live-course.controller";
 import {
   listFolders,
@@ -68,7 +78,21 @@ router.get("/:id/plans",                     listLiveCoursePlans);
 router.post("/:id/plans",                    createLiveCoursePlan);
 router.get("/:id/subscriptions",             listLiveCourseSubscriptions);
 router.post("/:id/grant",                    grantLiveCourseSubscription);
-router.patch("/:id/timetable-files",         updateTimetableFiles);
+// Deprecated: old flat schedule-entries PATCH → 410. Old timetable-files
+// route is intentionally NOT registered → 404 from the router.
+router.patch("/:id/schedule-entries",        updateScheduleEntriesDeprecated);
+
+// --- Schedule folders + entries ---------------------------------------------
+router.get   ("/:id/schedule-folders",                                            listScheduleFolders);
+router.post  ("/:id/schedule-folders",                                            createScheduleFolder);
+router.post  ("/:id/schedule-folders/reorder",                                    reorderScheduleFolders);
+router.patch ("/:id/schedule-folders/:folderId",                                  updateScheduleFolder);
+router.delete("/:id/schedule-folders/:folderId",                                  deleteScheduleFolder);
+router.get   ("/:id/schedule-folders/:folderId/entries",                          listScheduleEntries);
+router.post  ("/:id/schedule-folders/:folderId/entries",                          createScheduleEntry);
+router.post  ("/:id/schedule-folders/:folderId/entries/reorder",                  reorderScheduleEntries);
+router.patch ("/:id/schedule-folders/:folderId/entries/:entryId",                 updateScheduleEntry);
+router.delete("/:id/schedule-folders/:folderId/entries/:entryId",                 deleteScheduleEntry);
 
 // --- Folder CRUD (under a live course) --------------------------------------
 router.get("/:liveCourseId/folders",                       listFolders);

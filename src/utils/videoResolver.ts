@@ -4,6 +4,7 @@ import fs from "fs";
 import { redisClient } from "../config/redis";
 import { decrypt, generateKey, generateVector } from "./videoEncryption";
 import logger from "./logger";
+import { callOutbound } from "../libs/outbound";
 
 // YouTube rotates which "innertube clients" pass bot protection from minute to
 // minute. ytdl-core defaults to WEB, which fails most often; iterating through
@@ -188,17 +189,25 @@ async function resolveAws(awsId: string): Promise<ResolvedSource> {
     throw new Error("VIDEOCRYPT_URL is not configured.");
   }
 
-  const response = await axios.post(
-    VIDEOCRYPT_URL,
-    { id: awsId },
-    {
-      headers: {
-        accessKey: VIDEOCRYPT_ACCESS_KEY,
-        secretKey: VIDEOCRYPT_SECRET_KEY,
-        "Content-Type": "application/json",
-      },
-      timeout: 15_000,
-    },
+  // Wrapped in callOutbound so a VideoCrypt outage doesn't pin lecture
+  // requests for 15s × every viewer. 3 attempts on network/5xx/429.
+  // Resolved URLs are cached in Redis for 24h (see the caller); a transient
+  // VideoCrypt blip stays invisible to clients with already-cached entries.
+  const response = await callOutbound(
+    () =>
+      axios.post(
+        VIDEOCRYPT_URL,
+        { id: awsId },
+        {
+          headers: {
+            accessKey: VIDEOCRYPT_ACCESS_KEY,
+            secretKey: VIDEOCRYPT_SECRET_KEY,
+            "Content-Type": "application/json",
+          },
+          timeout: 15_000,
+        }
+      ),
+    { label: "videocrypt.resolve", timeoutMs: 15_000, attempts: 3 }
   );
 
   const body = response.data;

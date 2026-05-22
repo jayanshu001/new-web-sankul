@@ -6,6 +6,8 @@ import { Customer } from "../../models/customer/Customer.model";
 import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
 import { applyPromocodeSchema } from "./promocode.validation";
 import { promoCovers, computePromoDiscount } from "./applies-to";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const isObjectId = (v?: string | null) => !!v && mongoose.Types.ObjectId.isValid(v);
 
@@ -19,6 +21,9 @@ const splitByMaterial = (plans: PlanDoc[]) => {
 };
 
 export const listPromocodes = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listPromocodes invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -43,19 +48,24 @@ export const listPromocodes = async (req: Request, res: Response) => {
       PromoCode.countDocuments(filter),
     ]);
 
+    logger.info("listPromocodes success", { traceId, total });
     return res.status(200).json({
       success: true,
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
+    logger.error("listPromocodes failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const applyPromocode = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = (req as any).user?.id || (req as any).user?._id;
+  logger.info("applyPromocode invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = (req as any).user?.id || (req as any).user?._id;
     const parsed = applyPromocodeSchema.parse(req.body);
     const { promocode } = parsed;
     const packageId = parsed.package || null;
@@ -77,15 +87,16 @@ export const applyPromocode = async (req: Request, res: Response) => {
       planFilter.ebookId = ebookId;
       // Ebooks are not part of the new appliesTo model — promocode path will
       // reject, only the referral-code path can discount ebook plans.
-    } else
+    } else {
+      logger.warn("applyPromocode invalid selection", { traceId, customerId: userId, promocode });
       return res.status(400).json({ success: false, message: "Invalid course selection!" });
+    }
 
     const pricingPlans: PlanDoc[] = (
       await PackageCourseEbookPrice.find(planFilter).sort({ duration: 1 }).lean()
     ).map((p) => ({ ...p }));
 
-    if (!pricingPlans.length)
-      return res.status(404).json({ success: false, message: "No pricing plans available." });
+    if (!pricingPlans.length) { logger.warn("applyPromocode no pricing plans", { traceId, customerId: userId, cartType, cartId }); return res.status(404).json({ success: false, message: "No pricing plans available." }); }
 
     const code = promocode.toUpperCase();
     const now = new Date();
@@ -106,12 +117,14 @@ export const applyPromocode = async (req: Request, res: Response) => {
     ]);
 
     if (!promo && !referralCustomer) {
+      logger.warn("applyPromocode invalid code", { traceId, customerId: userId, promocode: code });
       return res.status(400).json({ success: false, message: "Invalid promocode!" });
     }
 
     // Referral code path
     if (referralCustomer) {
       if (userId && String(userId) === String(referralCustomer._id)) {
+        logger.warn("applyPromocode self-referral", { traceId, customerId: userId, promocode: code });
         return res.status(400).json({
           success: false,
           message:
@@ -119,6 +132,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
         });
       }
       if (!referralProgram) {
+        logger.warn("applyPromocode referral program inactive", { traceId, customerId: userId });
         return res
           .status(404)
           .json({ success: false, message: "Referral program currently deactivated!" });
@@ -134,6 +148,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
         }
       });
 
+      logger.info("applyPromocode referral success", { traceId, customerId: userId, promocode: code });
       return res.status(200).json({
         success: true,
         data: {
@@ -149,12 +164,14 @@ export const applyPromocode = async (req: Request, res: Response) => {
     // not covered, reject. The single `discountType`/`discountValue` on the
     // promocode is used as the discount for every plan of that entity.
     if (!cartType || !cartId) {
+      logger.warn("applyPromocode no cart entity", { traceId, customerId: userId, promocode: code });
       return res
         .status(404)
         .json({ success: false, message: "This promocode is not valid for this course!" });
     }
 
     if (!promoCovers(promo!, { type: cartType, id: cartId })) {
+      logger.warn("applyPromocode not covered", { traceId, customerId: userId, promocode: code, cartType, cartId });
       return res
         .status(404)
         .json({ success: false, message: "This promocode is not valid for this course!" });
@@ -163,6 +180,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
     const promoDiscountType = promo!.discountType;
     const promoDiscountValue = Number(promo!.discountValue ?? 0);
     if (!(promoDiscountValue > 0)) {
+      logger.warn("applyPromocode zero discount", { traceId, customerId: userId, promocode: code });
       return res
         .status(400)
         .json({ success: false, message: "This promocode has no discount configured." });
@@ -182,6 +200,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
     const id = first.packageId || first.courseId || first.ebookId;
     const key = first.packageId ? "package" : first.courseId ? "course" : "ebook";
 
+    logger.info("applyPromocode success", { traceId, customerId: userId, promocode: code, cartType, cartId });
     return res.status(200).json({
       success: true,
       data: {
@@ -192,7 +211,8 @@ export const applyPromocode = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) { logger.warn("applyPromocode validation failed", { traceId, customerId: userId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
+    logger.error("applyPromocode failed", { traceId, customerId: userId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

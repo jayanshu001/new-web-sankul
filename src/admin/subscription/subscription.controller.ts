@@ -17,6 +17,7 @@ import {
 } from "./subscription.validation";
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { PackageCourseEbookOrderStatus } from "../../models/enums";
+import { computeEndAt } from "../../utils/planDuration";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -30,7 +31,7 @@ const paginated = (req: Request) => {
 
 export const listCourseSubscriptions = async (req: Request, res: Response) => {
   try {
-    const { customerId, courseId, packageId, status, fromDate, toDate } =
+    const { customerId, courseId, packageId, status, fromDate, toDate, search, sortBy, sortOrder, type } =
       req.query as Record<string, string>;
 
     const filter: any = {};
@@ -44,23 +45,68 @@ export const listCourseSubscriptions = async (req: Request, res: Response) => {
       if (toDate) filter.createdAt.$lte = new Date(toDate);
     }
 
+    if (type === "course") filter.courseId = { ...(filter.courseId || {}), $ne: null };
+    else if (type === "package") {
+      filter.courseId = null;
+      filter.targetPackageId = { $ne: null };
+    }
+
+    if (search) {
+      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+      const [matchedCustomers, matchedCourses, matchedPackages, matchedPlans] = await Promise.all([
+        Customer.find({ $or: [{ firstName: rx }, { lastName: rx }, { phoneNumber: rx }] }).select("_id").lean(),
+        Course.find({ name: rx }).select("_id").lean(),
+        Package.find({ name: rx }).select("_id").lean(),
+        PackageCourseEbookPrice.find({ name: rx }).select("_id").lean(),
+      ]);
+      filter.$or = [
+        { customerId: { $in: matchedCustomers.map((c) => c._id) } },
+        { courseId: { $in: matchedCourses.map((c) => c._id) } },
+        { targetPackageId: { $in: matchedPackages.map((p) => p._id) } },
+        { packageId: { $in: matchedPlans.map((p) => p._id) } },
+      ];
+    }
+
     const { pageNum, limitNum, skip } = paginated(req);
 
-    const [data, total] = await Promise.all([
+    const sortField = sortBy || "createdAt";
+    const sortDir = sortOrder === "asc" ? 1 : -1;
+
+    const [rows, total] = await Promise.all([
       PackageCourseSubscription.find(filter)
-        .populate({ path: "customerId", model: Customer, select: "firstName lastName phoneNumber emailAddress" })
-        .populate({ path: "courseId", model: Course, select: "name thumbnail" })
-        .populate({ path: "packageId", model: PackageCourseEbookPrice })
-        .sort({ createdAt: -1 })
+        .populate({ path: "customerId", model: Customer, select: "_id firstName lastName phoneNumber" })
+        .populate({ path: "courseId", model: Course, select: "_id name image thumbnail" })
+        .populate({ path: "targetPackageId", model: Package, select: "_id name image thumbnail" })
+        .populate({ path: "packageId", model: PackageCourseEbookPrice, select: "_id name duration price" })
+        .sort({ [sortField]: sortDir })
         .skip(skip)
-        .limit(limitNum),
+        .limit(limitNum)
+        .lean(),
       PackageCourseSubscription.countDocuments(filter),
     ]);
 
+    const items = rows.map((r: any) => ({
+      _id: r._id,
+      customerId: r.customerId,
+      courseId: r.courseId || null,
+      targetPackageId: r.targetPackageId || null,
+      planId: r.packageId || null,
+      paidAmount: r.paidAmount ?? 0,
+      startAt: r.startAt,
+      endAt: r.endAt,
+      paymentMethod: r.paymentMethod ?? null,
+      paymentStatus: r.paymentStatus ?? null,
+      status: r.status,
+      withMaterial: r.withMaterial ?? false,
+      remark: r.remark ?? null,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
+
     return res.status(200).json({
       success: true,
-      data,
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      items,
+      pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
@@ -124,15 +170,14 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
       }
     }
 
-    // Compute startAt / endAt
+    // Compute startAt / endAt — delegate to shared helper so the
+    // `setMonth`-honors-calendar-length contract is enforced uniformly with
+    // webhook/verify paths.
     const startAt = data.startAt ? new Date(data.startAt) : new Date();
-    const endAt = new Date(startAt);
-    if (data.durationDays && data.durationDays > 0) {
-      endAt.setDate(endAt.getDate() + data.durationDays);
-    } else {
-      // Plan `duration` is months per project convention.
-      endAt.setMonth(endAt.getMonth() + (plan.duration || 0));
-    }
+    const endAt =
+      data.durationDays && data.durationDays > 0
+        ? computeEndAt({ startAt, durationMonths: data.durationDays, asDays: true })
+        : computeEndAt({ startAt, durationMonths: plan.duration || 0 });
 
     // Compute amount: explicit > plan.price (+ materialPrice if withMaterial)
     const computedAmount =

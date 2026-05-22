@@ -9,21 +9,28 @@ import logger from "../../utils/logger";
 
 // POST /api/v1/admin/live-polls
 export const createPoll = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("createPoll invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const { liveClassId, question, options } = req.body;
 
     const streamId = await resolveLiveClassId(liveClassId);
     if (!streamId) {
+      logger.warn("createPoll no live session", { traceId, liveClassId });
       return failure(res, "No live session for this liveClassId.", 404);
     }
     if (!question || typeof question !== "string" || question.trim().length === 0) {
+      logger.warn("createPoll missing question", { traceId, liveClassId });
       return failure(res, "question is required.", 422);
     }
     if (!Array.isArray(options) || options.length < 2 || options.length > 6) {
+      logger.warn("createPoll bad options count", { traceId, liveClassId });
       return failure(res, "Provide between 2 and 6 options.", 422);
     }
     const optionTexts = options.map((o: any) => (typeof o === "string" ? o.trim() : "")).filter(Boolean);
     if (optionTexts.length !== options.length) {
+      logger.warn("createPoll empty option", { traceId, liveClassId });
       return failure(res, "All options must be non-empty strings.", 422);
     }
 
@@ -63,26 +70,29 @@ export const createPoll = async (req: Request, res: Response) => {
     // Broadcast to all students in the live class room
     io?.to(roomKey(liveClassId)).emit("poll_created", { poll: pollData });
 
-    logger.info("Live poll: created", { pollId: poll._id, liveClassId, adminId: req.user!.id });
+    logger.info("createPoll success", { traceId, pollId: poll._id, liveClassId, adminId: req.user!.id });
     return success(res, { poll: pollData }, "Poll created and sent to live class.", 201);
   } catch (err) {
-    logger.error("Live poll: createPoll failed", { error: getErrorMessage(err) });
+    logger.error("createPoll failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to create poll.", 500);
   }
 };
 
 // PATCH /api/v1/admin/live-polls/:pollId/close
 export const closePoll = async (req: Request, res: Response) => {
-  try {
-    const pollId = req.params.pollId as string;
+  const traceId = req.traceId;
+  const pollId = req.params.pollId as string;
+  logger.info("closePoll invoked", { traceId, path: req.originalUrl, pollId, userId: req.user?.id });
 
+  try {
     if (!Types.ObjectId.isValid(pollId)) {
+      logger.warn("closePoll invalid id", { traceId, pollId });
       return failure(res, "Invalid pollId.", 422);
     }
 
     const poll = await LivePoll.findById(pollId);
-    if (!poll) return failure(res, "Poll not found.", 404);
-    if (!poll.isActive) return failure(res, "Poll is already closed.", 400);
+    if (!poll) { logger.warn("closePoll not found", { traceId, pollId }); return failure(res, "Poll not found.", 404); }
+    if (!poll.isActive) { logger.warn("closePoll already closed", { traceId, pollId }); return failure(res, "Poll is already closed.", 400); }
 
     poll.isActive = false;
     poll.closedAt = new Date();
@@ -90,18 +100,21 @@ export const closePoll = async (req: Request, res: Response) => {
 
     io?.to(roomKey(poll.liveClassId)).emit("poll_closed", { pollId });
 
-    logger.info("Live poll: closed", { pollId, adminId: req.user!.id });
+    logger.info("closePoll success", { traceId, pollId, adminId: req.user!.id });
     return success(res, {}, "Poll closed.");
   } catch (err) {
-    logger.error("Live poll: closePoll failed", { error: getErrorMessage(err) });
+    logger.error("closePoll failed", { traceId, pollId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to close poll.", 500);
   }
 };
 
 // GET /api/v1/admin/live-polls/:liveClassId
 export const getPollsByClass = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const { liveClassId } = req.params;
+  logger.info("getPollsByClass invoked", { traceId, path: req.originalUrl, liveClassId, userId: req.user?.id });
+
   try {
-    const { liveClassId } = req.params;
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(50, parseInt(req.query.limit as string) || 20);
 
@@ -115,32 +128,37 @@ export const getPollsByClass = async (req: Request, res: Response) => {
       LivePoll.countDocuments({ liveClassId }),
     ]);
 
+    logger.info("getPollsByClass success", { traceId, liveClassId, total });
     return success(res, { polls, total, page, limit }, "Polls fetched.");
   } catch (err) {
-    logger.error("Live poll: getPollsByClass failed", { error: getErrorMessage(err) });
+    logger.error("getPollsByClass failed", { traceId, liveClassId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch polls.", 500);
   }
 };
 
 // PATCH /api/v1/admin/live-polls/:pollId — edit question/options (only when 0 votes)
 export const updatePoll = async (req: Request, res: Response) => {
-  try {
-    const pollId = req.params.pollId as string;
+  const traceId = req.traceId;
+  const pollId = req.params.pollId as string;
+  logger.info("updatePoll invoked", { traceId, path: req.originalUrl, pollId, userId: req.user?.id });
 
+  try {
     if (!Types.ObjectId.isValid(pollId)) {
+      logger.warn("updatePoll invalid id", { traceId, pollId });
       return failure(res, "Invalid pollId.", 422);
     }
 
     const poll = await LivePoll.findById(pollId);
-    if (!poll) return failure(res, "Poll not found.", 404);
-    if (!poll.isActive) return failure(res, "Cannot edit a closed poll.", 400);
-    if (poll.totalVotes > 0) return failure(res, "Cannot edit a poll that already has votes.", 400);
+    if (!poll) { logger.warn("updatePoll not found", { traceId, pollId }); return failure(res, "Poll not found.", 404); }
+    if (!poll.isActive) { logger.warn("updatePoll already closed", { traceId, pollId }); return failure(res, "Cannot edit a closed poll.", 400); }
+    if (poll.totalVotes > 0) { logger.warn("updatePoll has votes", { traceId, pollId, votes: poll.totalVotes }); return failure(res, "Cannot edit a poll that already has votes.", 400); }
 
     const { question, options } = req.body;
     let changed = false;
 
     if (question !== undefined) {
       if (typeof question !== "string" || question.trim().length === 0) {
+        logger.warn("updatePoll invalid question", { traceId, pollId });
         return failure(res, "question must be a non-empty string.", 422);
       }
       poll.question = question.trim();
@@ -149,17 +167,19 @@ export const updatePoll = async (req: Request, res: Response) => {
 
     if (options !== undefined) {
       if (!Array.isArray(options) || options.length < 2 || options.length > 6) {
+        logger.warn("updatePoll bad options count", { traceId, pollId });
         return failure(res, "Provide between 2 and 6 options.", 422);
       }
       const optionTexts = options.map((o: any) => (typeof o === "string" ? o.trim() : "")).filter(Boolean);
       if (optionTexts.length !== options.length) {
+        logger.warn("updatePoll empty option", { traceId, pollId });
         return failure(res, "All options must be non-empty strings.", 422);
       }
       poll.options = optionTexts.map((text) => ({ text, votes: 0 }));
       changed = true;
     }
 
-    if (!changed) return failure(res, "Provide question or options to update.", 422);
+    if (!changed) { logger.warn("updatePoll no fields", { traceId, pollId }); return failure(res, "Provide question or options to update.", 422); }
 
     await poll.save();
 
@@ -176,25 +196,28 @@ export const updatePoll = async (req: Request, res: Response) => {
     // Broadcast updated poll to all students — they re-render the poll card
     io?.to(roomKey(poll.liveClassId)).emit("poll_updated", { poll: pollData });
 
-    logger.info("Live poll: updated", { pollId, adminId: req.user!.id });
+    logger.info("updatePoll success", { traceId, pollId, adminId: req.user!.id });
     return success(res, { poll: pollData }, "Poll updated.");
   } catch (err) {
-    logger.error("Live poll: updatePoll failed", { error: getErrorMessage(err) });
+    logger.error("updatePoll failed", { traceId, pollId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to update poll.", 500);
   }
 };
 
 // DELETE /api/v1/admin/live-polls/:pollId
 export const deletePoll = async (req: Request, res: Response) => {
-  try {
-    const pollId = req.params.pollId as string;
+  const traceId = req.traceId;
+  const pollId = req.params.pollId as string;
+  logger.info("deletePoll invoked", { traceId, path: req.originalUrl, pollId, userId: req.user?.id });
 
+  try {
     if (!Types.ObjectId.isValid(pollId)) {
+      logger.warn("deletePoll invalid id", { traceId, pollId });
       return failure(res, "Invalid pollId.", 422);
     }
 
     const poll = await LivePoll.findById(pollId);
-    if (!poll) return failure(res, "Poll not found.", 404);
+    if (!poll) { logger.warn("deletePoll not found", { traceId, pollId }); return failure(res, "Poll not found.", 404); }
 
     const { liveClassId } = poll;
 
@@ -207,33 +230,37 @@ export const deletePoll = async (req: Request, res: Response) => {
     // Tell students to dismiss the poll card
     io?.to(roomKey(liveClassId)).emit("poll_deleted", { pollId });
 
-    logger.info("Live poll: deleted", { pollId, liveClassId, adminId: req.user!.id });
+    logger.info("deletePoll success", { traceId, pollId, liveClassId, adminId: req.user!.id });
     return success(res, {}, "Poll deleted.");
   } catch (err) {
-    logger.error("Live poll: deletePoll failed", { error: getErrorMessage(err) });
+    logger.error("deletePoll failed", { traceId, pollId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to delete poll.", 500);
   }
 };
 
 // GET /api/v1/admin/live-polls/:pollId/results
 export const getPollResults = async (req: Request, res: Response) => {
-  try {
-    const pollId = req.params.pollId as string;
+  const traceId = req.traceId;
+  const pollId = req.params.pollId as string;
+  logger.info("getPollResults invoked", { traceId, path: req.originalUrl, pollId, userId: req.user?.id });
 
+  try {
     if (!Types.ObjectId.isValid(pollId)) {
+      logger.warn("getPollResults invalid id", { traceId, pollId });
       return failure(res, "Invalid pollId.", 422);
     }
 
     const poll = await LivePoll.findById(pollId)
       .select("question options totalVotes isActive createdByName createdAt closedAt liveClassId")
       .lean();
-    if (!poll) return failure(res, "Poll not found.", 404);
+    if (!poll) { logger.warn("getPollResults not found", { traceId, pollId }); return failure(res, "Poll not found.", 404); }
 
     const voterCount = await LivePollVote.countDocuments({ pollId: new Types.ObjectId(pollId) });
 
+    logger.info("getPollResults success", { traceId, pollId, voterCount });
     return success(res, { poll, voterCount }, "Poll results fetched.");
   } catch (err) {
-    logger.error("Live poll: getPollResults failed", { error: getErrorMessage(err) });
+    logger.error("getPollResults failed", { traceId, pollId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch poll results.", 500);
   }
 };

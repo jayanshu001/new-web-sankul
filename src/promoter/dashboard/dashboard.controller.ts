@@ -7,12 +7,17 @@ import { Course } from "../../models/course/Course.model";
 import { Customer } from "../../models/customer/Customer.model";
 
 import { buildPromoterOverview } from "./overview.service";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 // GET /api/v1/promoter/dashboard
 export const getDashboard = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const promoterId = req.user?.id;
+  logger.info("getDashboard invoked", { traceId, path: req.originalUrl, promoterId });
+
   try {
-    const promoterId = req.user?.id;
-    if (!promoterId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!promoterId) { logger.warn("getDashboard unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const now = new Date();
 
@@ -79,6 +84,7 @@ export const getDashboard = async (req: Request, res: Response) => {
         .lean(),
     ]);
 
+    logger.info("getDashboard success", { traceId, promoterId, subscriptionCount, totalRevenue: (courseRevenueAgg[0]?.total || 0) + (ebookRevenueAgg[0]?.total || 0) });
     return res.status(200).json({
       success: true,
       data: {
@@ -99,6 +105,7 @@ export const getDashboard = async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
+    logger.error("getDashboard failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -107,14 +114,18 @@ export const getDashboard = async (req: Request, res: Response) => {
 // The logged-in promoter sees their own data. Admin views the same screen via
 // /api/v1/admin/promoters/:id/dashboard.
 export const getDashboardOverview = async (req: Request, res: Response) => {
-  try {
-    const promoterId = req.user?.id;
-    if (!promoterId)
-      return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const promoterId = req.user?.id;
+  logger.info("getDashboardOverview invoked", { traceId, path: req.originalUrl, promoterId, range: req.query.range });
 
-    const data = await buildPromoterOverview(promoterId, req.query.range as string);
+  try {
+    if (!promoterId) { logger.warn("getDashboardOverview unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    const data = await buildPromoterOverview(promoterId, req.query.range as string, traceId);
+    logger.info("getDashboardOverview success", { traceId, promoterId });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
+    logger.error("getDashboardOverview failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

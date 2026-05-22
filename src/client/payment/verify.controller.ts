@@ -18,6 +18,9 @@ import {
   PackageCourseEbookOrderStatus,
   PackageCourseEbookPaymentType,
 } from "../../models/enums";
+import { computeEndAt } from "../../utils/planDuration";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const verifySchema = z.object({
   razorpay_order_id: z.string().min(1),
@@ -50,14 +53,18 @@ const verifySignature = (
 // razorpay_order_id (BookOrder vs PackageCourseSubscription). Idempotent:
 // re-running on an already-verified order returns 200 with the existing row.
 export const verifyPayment = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("verifyPayment invoked", { traceId, path: req.originalUrl, customerId: userId, razorpayOrderId: req.body?.razorpay_order_id });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("verifyPayment unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { razorpay_order_id, razorpay_payment_id, razorpay_signature } =
       verifySchema.parse(req.body);
 
     if (!verifySignature(razorpay_order_id, razorpay_payment_id, razorpay_signature)) {
+      logger.warn("verifyPayment signature mismatch", { traceId, customerId: userId, razorpayOrderId: razorpay_order_id });
       return res.status(400).json({
         success: false,
         message: "Signature verification failed.",
@@ -81,6 +88,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
     ]);
 
     if (!bookOrder && !courseSub && !ebookOrder && !liveCourseSub && !testSeriesOrder) {
+      logger.warn("verifyPayment no local order", { traceId, customerId: userId, razorpayOrderId: razorpay_order_id });
       return res.status(404).json({
         success: false,
         message: "No local order found for this Razorpay order id.",
@@ -91,6 +99,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
       // Idempotency: already verified means the webhook (or a previous call)
       // beat us to it. Return success without re-running side effects.
       if (bookOrder.status !== BookOrderStatus.PENDING) {
+        logger.info("verifyPayment: book order already verified (idempotent)", {
+          orderId: String(bookOrder._id),
+          razorpay_order_id,
+        });
         return res.status(200).json({
           success: true,
           data: { kind: "book", order: bookOrder },
@@ -106,10 +118,16 @@ export const verifyPayment = async (req: Request, res: Response) => {
       // Deactivate whichever cart pointed at this order's shipping. We match
       // on shippingId — the cart that was used to place this order. Other
       // active carts (rare, but possible if the user opened a new session) stay.
-      await BookCart.updateOne(
+      const cartResult = await BookCart.updateOne(
         { customerId: userId, status: true, shippingId: bookOrder.shippingId },
         { $set: { status: false } }
       );
+      logger.info("verifyPayment: book order verified", {
+        orderId: String(bookOrder._id),
+        razorpay_order_id,
+        razorpay_payment_id,
+        cartsDeactivated: cartResult.modifiedCount,
+      });
 
       return res.status(200).json({
         success: true,
@@ -120,6 +138,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
     // courseSub branch
     if (courseSub) {
       if (courseSub.paymentStatus !== "pending") {
+        logger.info("verifyPayment: course subscription already verified (idempotent)", {
+          subscriptionId: String(courseSub._id),
+          razorpay_order_id,
+        });
         return res.status(200).json({
           success: true,
           data: { kind: "course", subscription: courseSub },
@@ -129,16 +151,22 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
       // Look up the plan to compute access window. `duration` is stored as
       // MONTHS (matches the admin UI: "1 Month / 3 Months / 6 Months / 12 Months").
-      // We use setMonth so calendar-month length is honoured — a 6-month plan
-      // bought on Mar 11 expires on Sep 11, not "now + 180 days".
+      // The shared helper guarantees setMonth semantics across all activation
+      // paths (verify / webhook / admin grant) — a 6-month plan bought on
+      // Mar 11 expires on Sep 11, not "now + 180 days".
       const plan = await PackageCourseEbookPrice.findById(courseSub.packageId)
         .select("duration")
         .lean();
       const durationMonths = plan?.duration ?? 0;
+      if (!plan) {
+        logger.warn("verifyPayment: course plan lookup returned null", {
+          subscriptionId: String(courseSub._id),
+          planId: String(courseSub.packageId),
+        });
+      }
 
       const now = new Date();
-      const endAt = new Date(now);
-      endAt.setMonth(endAt.getMonth() + durationMonths);
+      const endAt = computeEndAt({ startAt: now, durationMonths });
 
       courseSub.paymentStatus = "verified";
       courseSub.razorpayPaymentId = razorpay_payment_id;
@@ -146,6 +174,16 @@ export const verifyPayment = async (req: Request, res: Response) => {
       courseSub.startAt = now;
       courseSub.endAt = endAt;
       await courseSub.save();
+
+      logger.info("verifyPayment: course subscription activated", {
+        subscriptionId: String(courseSub._id),
+        planId: String(courseSub.packageId),
+        customerId: String(courseSub.customerId),
+        razorpay_order_id,
+        razorpay_payment_id,
+        durationMonths,
+        endAt: endAt.toISOString(),
+      });
 
       return res.status(200).json({
         success: true,
@@ -155,6 +193,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
     if (liveCourseSub) {
       if (liveCourseSub.paymentStatus !== "pending") {
+        logger.info("verifyPayment: live-course subscription already verified (idempotent)", {
+          subscriptionId: String(liveCourseSub._id),
+          razorpay_order_id,
+        });
         return res.status(200).json({
           success: true,
           data: { kind: "live-course", subscription: liveCourseSub },
@@ -164,10 +206,15 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
       const plan = await LiveCoursePlan.findById(liveCourseSub.planId).select("duration").lean();
       const durationMonths = plan?.duration ?? 0;
+      if (!plan) {
+        logger.warn("verifyPayment: live-course plan lookup returned null", {
+          subscriptionId: String(liveCourseSub._id),
+          planId: String(liveCourseSub.planId),
+        });
+      }
 
       const now = new Date();
-      const endAt = new Date(now);
-      endAt.setMonth(endAt.getMonth() + durationMonths);
+      const endAt = computeEndAt({ startAt: now, durationMonths });
 
       liveCourseSub.paymentStatus = "verified";
       liveCourseSub.razorpayPaymentId = razorpay_payment_id;
@@ -175,6 +222,17 @@ export const verifyPayment = async (req: Request, res: Response) => {
       liveCourseSub.startAt = now;
       liveCourseSub.endAt = endAt;
       await liveCourseSub.save();
+
+      logger.info("verifyPayment: live-course subscription activated", {
+        subscriptionId: String(liveCourseSub._id),
+        planId: String(liveCourseSub.planId),
+        customerId: String(liveCourseSub.customerId),
+        liveCourseId: String(liveCourseSub.liveCourseId),
+        razorpay_order_id,
+        razorpay_payment_id,
+        durationMonths,
+        endAt: endAt.toISOString(),
+      });
 
       return res.status(200).json({
         success: true,
@@ -184,6 +242,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
     if (ebookOrder) {
       if (ebookOrder.status !== PackageCourseEbookOrderStatus.PENDING) {
+        logger.info("verifyPayment: ebook order already verified (idempotent)", {
+          orderId: String(ebookOrder._id),
+          razorpay_order_id,
+        });
         return res.status(200).json({
           success: true,
           data: { kind: "ebook", order: ebookOrder },
@@ -194,15 +256,24 @@ export const verifyPayment = async (req: Request, res: Response) => {
       // `duration` is stored as MONTHS — matches the webhook fulfillment path.
       const plan = await EbookPrice.findById(ebookOrder.planId).select("duration").lean();
       const durationMonths = plan?.duration ?? 0;
+      if (!plan) {
+        logger.warn("verifyPayment: ebook plan lookup returned null", {
+          orderId: String(ebookOrder._id),
+          planId: String(ebookOrder.planId),
+        });
+      }
 
       ebookOrder.status = PackageCourseEbookOrderStatus.COMPLETE;
       ebookOrder.razorpayPaymentId = razorpay_payment_id;
       await ebookOrder.save();
 
       const startAt = new Date();
-      const endAt = new Date(startAt);
-      endAt.setMonth(endAt.getMonth() + durationMonths);
-      await EbookSubscription.create({
+      const endAt = computeEndAt({ startAt, durationMonths });
+      // Order is COMPLETE on disk; if subscription.create fails next, we'd
+      // be left with a paid order and no entitlement row. The thrown error
+      // surfaces to the global handler, which logs it — but we add a trace
+      // BEFORE the subscription write so the log file shows both sides.
+      const subscription = await EbookSubscription.create({
         orderId: ebookOrder._id,
         customerId: ebookOrder.customerId,
         ebookId: ebookOrder.ebookId,
@@ -213,6 +284,17 @@ export const verifyPayment = async (req: Request, res: Response) => {
         status: true,
       });
 
+      logger.info("verifyPayment: ebook order activated", {
+        orderId: String(ebookOrder._id),
+        subscriptionId: String(subscription._id),
+        ebookId: String(ebookOrder.ebookId),
+        customerId: String(ebookOrder.customerId),
+        razorpay_order_id,
+        razorpay_payment_id,
+        durationMonths,
+        endAt: endAt.toISOString(),
+      });
+
       return res.status(200).json({
         success: true,
         data: { kind: "ebook", order: ebookOrder },
@@ -221,6 +303,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
 
     if (testSeriesOrder) {
       if (testSeriesOrder.status !== PackageCourseEbookOrderStatus.PENDING) {
+        logger.info("verifyPayment: test-series order already verified (idempotent)", {
+          orderId: String(testSeriesOrder._id),
+          razorpay_order_id,
+        });
         return res.status(200).json({
           success: true,
           data: { kind: "test-series", order: testSeriesOrder },
@@ -234,6 +320,12 @@ export const verifyPayment = async (req: Request, res: Response) => {
         .select("durationDays")
         .lean();
       const durationDays = plan?.durationDays ?? 0;
+      if (!plan) {
+        logger.warn("verifyPayment: test-series plan lookup returned null", {
+          orderId: String(testSeriesOrder._id),
+          planId: String(testSeriesOrder.planId),
+        });
+      }
 
       testSeriesOrder.status = PackageCourseEbookOrderStatus.COMPLETE;
       testSeriesOrder.razorpayPaymentId = razorpay_payment_id;
@@ -255,6 +347,17 @@ export const verifyPayment = async (req: Request, res: Response) => {
         status: true,
       });
 
+      logger.info("verifyPayment: test-series order activated", {
+        orderId: String(testSeriesOrder._id),
+        subscriptionId: String(subscription._id),
+        testSeriesId: String(testSeriesOrder.testSeriesId),
+        customerId: String(testSeriesOrder.customerId),
+        razorpay_order_id,
+        razorpay_payment_id,
+        durationDays,
+        endAt: endAt.toISOString(),
+      });
+
       return res.status(200).json({
         success: true,
         data: { kind: "test-series", order: testSeriesOrder, subscription },
@@ -262,10 +365,11 @@ export const verifyPayment = async (req: Request, res: Response) => {
     }
 
     // Unreachable — TypeScript exhaustiveness only.
+    logger.error("verifyPayment unhandled kind", { traceId, customerId: userId, razorpayOrderId: req.body?.razorpay_order_id });
     return res.status(500).json({ success: false, message: "Unhandled order kind." });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
-    console.error("[payment/verify] failed:", e);
+    if (e.issues) { logger.warn("verifyPayment validation failed", { traceId, customerId: userId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    logger.error("verifyPayment failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e?.stack });
     return res.status(500).json({
       success: false,
       message: e?.message || "Verification failed.",

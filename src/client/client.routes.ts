@@ -39,6 +39,7 @@ import clientLiveReminderRoutes from "./live-reminder/live-reminder.routes";
 import clientLectureNoteRoutes from "./lecture-note/lecture-note.routes";
 import clientLectureAudioNoteRoutes from "./lecture-audio-note/lecture-audio-note.routes";
 import clientTestSeriesRoutes from "./testSeries/testSeries.routes";
+import clientLearningRoutes from "./learning/learning.routes";
 
 const router = Router();
 
@@ -91,5 +92,6 @@ router.use("/live-reminders", clientLiveReminderRoutes);  // -> /api/v1/client/l
 router.use("/lecture-notes", clientLectureNoteRoutes);    // -> /api/v1/client/lecture-notes/*
 router.use("/lecture-audio-notes", clientLectureAudioNoteRoutes); // -> /api/v1/client/lecture-audio-notes/*
 router.use("/test-series", clientTestSeriesRoutes); // -> /api/v1/client/test-series/*
+router.use("/learning", clientLearningRoutes);      // -> /api/v1/client/learning/* (unified Resume-Learning feed + live-session progress)
 
 export default router;

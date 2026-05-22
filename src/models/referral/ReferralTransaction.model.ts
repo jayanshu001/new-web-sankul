@@ -40,7 +40,15 @@ const ReferralTransactionSchema = new Schema<IReferralTransaction>(
     providerRef: { type: String, index: true },
     providerPayload: { type: Schema.Types.Mixed },
   },
-  { collection: "ws_referral_transactions", timestamps: true }
+  {
+    collection: "ws_referral_transactions",
+    timestamps: true,
+    // strict:"throw" — silently dropping an unknown field on a financial
+    // ledger row is a real bug class (typo in field name → coin/status
+    // never persisted, customer reward state drifts). Throw loudly so
+    // callers see the misconfiguration immediately during dev/CI.
+    strict: "throw",
+  }
 );
 
 ReferralTransactionSchema.index({ customerId: 1, createdAt: -1 });

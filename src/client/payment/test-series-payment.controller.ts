@@ -11,7 +11,9 @@ import {
 } from "../../models/enums";
 import { resolveLivePromo } from "../live-course/promo";
 import { _shared } from "../testSeries/testSeries.controller";
-import { getRazorpay, razorpayResponseFor } from "./razorpay";
+import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -28,15 +30,19 @@ const applyPromoSchema = z.object({
 // POST /api/v1/client/payment/apply-promo/test-series
 // Preview-only. Mirrors apply-promo/live-course.
 export const applyTestSeriesPromo = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("applyTestSeriesPromo invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) { logger.warn("applyTestSeriesPromo unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { planId, promocode } = applyPromoSchema.parse(req.body);
 
     const plan = await TestSeriesPrice.findOne({ _id: planId, status: true });
-    if (!plan) return res.status(404).json({ success: false, message: "Plan not found or inactive." });
+    if (!plan) { logger.warn("applyTestSeriesPromo plan not found", { traceId, customerId, planId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }
     if (!plan.price || plan.price <= 0) {
+      logger.warn("applyTestSeriesPromo zero price", { traceId, customerId, planId });
       return res.status(400).json({
         success: false,
         message: "Plan amount is zero — promo codes don't apply.",
@@ -50,6 +56,7 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
       id: String(plan.testSeriesId),
     });
     if (error || !result) {
+      logger.warn("applyTestSeriesPromo promo rejected", { traceId, customerId, planId, promocode, error });
       return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
     }
 
@@ -59,6 +66,7 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
       String(result.promo._id)
     );
 
+    logger.info("applyTestSeriesPromo success", { traceId, customerId, planId, promocode, total: bd.totalAmount });
     return res.status(200).json({
       success: true,
       data: {
@@ -72,7 +80,8 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) { logger.warn("applyTestSeriesPromo validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    logger.error("applyTestSeriesPromo failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -81,12 +90,16 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
 // Body: { planId, promocode? }. Creates TestSeriesOrder PENDING + Razorpay order.
 // /payment/verify provisions TestSeriesSubscription on signature success.
 export const createTestSeriesOrderPayment = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("createTestSeriesOrderPayment invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) { logger.warn("createTestSeriesOrderPayment unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const rp = getRazorpay();
     if (!rp) {
+      logger.error("createTestSeriesOrderPayment razorpay not configured", { traceId, customerId });
       return res.status(500).json({
         success: false,
         message: "Razorpay credentials not configured on the server.",
@@ -96,8 +109,9 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
     const { planId, promocode } = createOrderSchema.parse(req.body);
 
     const plan = await TestSeriesPrice.findOne({ _id: planId, status: true });
-    if (!plan) return res.status(404).json({ success: false, message: "Plan not found or inactive." });
+    if (!plan) { logger.warn("createTestSeriesOrderPayment plan not found", { traceId, customerId, planId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }
     if (!plan.price || plan.price <= 0) {
+      logger.warn("createTestSeriesOrderPayment zero price", { traceId, customerId, planId });
       return res.status(400).json({
         success: false,
         message: "Plan amount is zero — use the admin grant flow instead.",
@@ -105,9 +119,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
     }
 
     const series = await TestSeries.findOne({ _id: plan.testSeriesId, status: true });
-    if (!series) {
-      return res.status(404).json({ success: false, message: "Test series not found or inactive." });
-    }
+    if (!series) { logger.warn("createTestSeriesOrderPayment series not found", { traceId, customerId, testSeriesId: plan.testSeriesId }); return res.status(404).json({ success: false, message: "Test series not found or inactive." }); }
 
     // Block double-buy on overlapping access.
     const now = new Date();
@@ -118,6 +130,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       endAt: { $gt: now },
     });
     if (activeSub) {
+      logger.warn("createTestSeriesOrderPayment already subscribed", { traceId, customerId, testSeriesId: plan.testSeriesId, existingId: activeSub._id });
       return res.status(409).json({
         success: false,
         message: "You already have an active subscription to this test series.",
@@ -133,6 +146,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
         id: String(plan.testSeriesId),
       });
       if (error || !result) {
+        logger.warn("createTestSeriesOrderPayment promo rejected", { traceId, customerId, promocode, error });
         return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
       }
       discountAmount = result.discountAmount;
@@ -141,6 +155,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
     const bd = _shared.computeBreakdown(plan.price, discountAmount, promocodeId);
 
     if (bd.totalAmount < 1) {
+      logger.warn("createTestSeriesOrderPayment below minimum", { traceId, customerId, totalAmount: bd.totalAmount });
       return res.status(400).json({
         success: false,
         message:
@@ -165,7 +180,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
 
     const receiptId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const rzpOrder = await rp.orders.create({
+    const rzpOrder = await createRazorpayOrder(rp, {
       amount: Math.round(bd.totalAmount * 100),
       currency: "INR",
       receipt: receiptId,
@@ -182,6 +197,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
     order.razorpayOrderId = rzpOrder.id;
     await order.save();
 
+    logger.info("createTestSeriesOrderPayment success", { traceId, customerId, orderId: order._id, razorpayOrderId: rzpOrder.id, amount: bd.totalAmount });
     return res.status(201).json({
       success: true,
       data: {
@@ -200,12 +216,12 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       },
     });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) { logger.warn("createTestSeriesOrderPayment validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
     const message =
       e?.error?.description ||
       e?.message ||
       "Unknown error creating test-series payment order.";
-    console.error("[payment/create-order/test-series] failed:", e);
+    logger.error("createTestSeriesOrderPayment failed", { traceId, customerId, error: message, stack: e?.stack });
     return res.status(500).json({ success: false, message });
   }
 };

@@ -6,6 +6,12 @@ import { Video } from "../../models/course/Video.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { Course } from "../../models/course/Course.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
+import { PackageVideoCategoryRelation } from "../../models/course/PackageVideoCategoryRelation.model";
+import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
+import { LiveCourse } from "../../models/course/LiveCourse.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -23,45 +29,125 @@ const COMPLETION_THRESHOLD = 0.95;
 // pair upserts a new row — that's also what makes the course appear on the
 // My Courses screen for the first time. No separate "start course" call.
 export const reportLectureProgress = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("reportLectureProgress invoked", { traceId, path: req.originalUrl, userId, videoId: req.params.videoId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) {
+      logger.warn("reportLectureProgress unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const videoId = objectId.parse(req.params.videoId);
     const { positionSec, durationSec } = progressSchema.parse(req.body);
 
     // Resolve the video's course via VideoCategory, so we can store courseId
     // on the progress row (denormalised for fast per-course rollups later).
-    const video = await Video.findById(videoId).select("videoCategoryId status").lean();
+    const video = await Video.findById(videoId).select("videoCategoryId status priceType").lean();
     if (!video || !video.status) {
+      logger.warn("reportLectureProgress video not found", { traceId, userId, videoId });
       return res.status(404).json({ success: false, message: "Lecture not found." });
     }
     const category = await VideoCategory.findById(video.videoCategoryId)
       .select("courseId")
       .lean();
-    if (!category?.courseId) {
-      return res.status(400).json({
-        success: false,
-        message: "This lecture is not attached to a course.",
-      });
+    const courseId = category?.courseId ?? null;
+
+    // Resolve which "container(s)" this lecture sits under for rollup. A video
+    // category is the leaf; walk parents via VideoCategoryRelation to find:
+    //   - the package(s) it's reachable through (PackageVideoCategoryRelation)
+    //   - the live course it belongs to (LiveCourse.videoCategoryId matches
+    //     this leaf or any ancestor)
+    // The walk is bounded — most trees are 2-3 levels deep.
+    const ancestorIds: any[] = [];
+    if (video.videoCategoryId) {
+      ancestorIds.push(video.videoCategoryId);
+      let cursorIds: any[] = [video.videoCategoryId];
+      for (let depth = 0; depth < 5 && cursorIds.length; depth++) {
+        const parents = await VideoCategoryRelation.find({
+          child: { $in: cursorIds },
+        })
+          .select("parent")
+          .lean();
+        cursorIds = parents.map((p) => p.parent);
+        for (const pid of cursorIds) ancestorIds.push(pid);
+      }
     }
 
-    // Don't grant a "watch" event on a course the user doesn't have access to.
-    // We piggyback on the same gate the lecture endpoint uses: an active,
-    // verified, non-expired subscription. Same predicate as lecture.controller
-    // so behaviour can't drift.
+    const liveCourse = ancestorIds.length
+      ? await LiveCourse.findOne({
+          videoCategoryId: { $in: ancestorIds },
+          status: true,
+        })
+          .select("_id")
+          .lean()
+      : null;
+
+    // PackageVideoCategoryRelation links via VideoCategoryRelation rows, not
+    // raw category ids — resolve the relation rows first, then the packages.
+    let packageIds: any[] = [];
+    if (ancestorIds.length) {
+      const relRows = await VideoCategoryRelation.find({
+        child: { $in: ancestorIds },
+      })
+        .select("_id")
+        .lean();
+      if (relRows.length) {
+        const pkgRows = await PackageVideoCategoryRelation.find({
+          videoCategoryRelationId: { $in: relRows.map((r) => r._id) },
+          active: true,
+        })
+          .select("packageId")
+          .lean();
+        packageIds = [...new Set(pkgRows.map((p) => String(p.packageId)))].map(
+          (s) => new mongoose.Types.ObjectId(s)
+        );
+      }
+    }
+
+    // Entitlement gate. The user must hold *one* active, verified, non-expired
+    // subscription that covers this lecture — direct course sub, package sub
+    // that includes the course, or a live-course sub for the live course this
+    // lecture's folder belongs to.
     const now = new Date();
-    const sub = await PackageCourseSubscription.findOne({
-      customerId: new mongoose.Types.ObjectId(userId),
-      courseId: category.courseId,
-      status: true,
-      paymentStatus: "verified",
-      endAt: { $gt: now },
-    }).select("_id");
-    if (!sub) {
+    const cid = new mongoose.Types.ObjectId(userId);
+    const orGates: any[] = [];
+    if (courseId) orGates.push({ courseId });
+    if (packageIds.length) orGates.push({ targetPackageId: { $in: packageIds } });
+
+    const isFree = (video as any).priceType === "free";
+
+    const [pkgSub, liveSub] = await Promise.all([
+      orGates.length
+        ? PackageCourseSubscription.findOne({
+            customerId: cid,
+            status: true,
+            paymentStatus: "verified",
+            endAt: { $gt: now },
+            $or: orGates,
+          })
+            .select("courseId targetPackageId")
+            .lean()
+        : Promise.resolve(null as any),
+      liveCourse
+        ? LiveCourseSubscription.findOne({
+            customerId: cid,
+            liveCourseId: liveCourse._id,
+            status: true,
+            paymentStatus: "verified",
+            endAt: { $gt: now },
+          })
+            .select("_id")
+            .lean()
+        : Promise.resolve(null as any),
+    ]);
+
+    if (!isFree && !pkgSub && !liveSub) {
+      logger.warn("reportLectureProgress no active subscription", { traceId, userId, videoId, courseId, packageIds });
       return res.status(403).json({
         success: false,
-        message: "No active subscription for this course.",
+        message: "No active subscription for this lecture.",
       });
     }
 
@@ -70,15 +156,21 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
 
     // We never *un*complete a lecture — once completed: true, it stays true even
     // if a later heartbeat reports an earlier position (user re-watched the start).
+    // Denormalise every container the user could see this lecture under so the
+    // unified /learning/progress/my read does not have to re-walk the tree.
+    const setFields: any = {
+      positionSec,
+      durationSec,
+      lastWatchedAt: now,
+    };
+    if (courseId) setFields.courseId = courseId;
+    if (pkgSub?.targetPackageId) setFields.packageId = pkgSub.targetPackageId;
+    if (liveCourse?._id) setFields.liveCourseId = liveCourse._id;
+
     const update: any = {
-      $set: {
-        courseId: category.courseId,
-        positionSec,
-        durationSec,
-        lastWatchedAt: now,
-      },
+      $set: setFields,
       $setOnInsert: {
-        customerId: new mongoose.Types.ObjectId(userId),
+        customerId: cid,
         videoId: new mongoose.Types.ObjectId(videoId),
       },
     };
@@ -93,9 +185,14 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
+    logger.info("reportLectureProgress success", { traceId, userId, videoId, positionSec, durationSec, completedNow });
     return res.status(200).json({ success: true, data: row });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) {
+      logger.warn("reportLectureProgress validation failed", { traceId, userId, issues: e.issues });
+      return res.status(400).json({ success: false, errors: e.issues });
+    }
+    logger.error("reportLectureProgress failed", { traceId, userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -111,9 +208,15 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
 // Untouched courses (subscribed but never opened) are intentionally excluded —
 // that matches the design (100 enrolled, only 3 shown).
 export const listMyCoursesForResume = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("listMyCoursesForResume invoked", { traceId, path: req.originalUrl, userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) {
+      logger.warn("listMyCoursesForResume unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const cid = new mongoose.Types.ObjectId(userId);
     const now = new Date();
@@ -137,6 +240,7 @@ export const listMyCoursesForResume = async (req: Request, res: Response) => {
     ]);
 
     if (perCourse.length === 0) {
+      logger.info("listMyCoursesForResume empty", { traceId, userId });
       return res.status(200).json({
         success: true,
         data: { courses: [], resumeNext: null },
@@ -247,11 +351,13 @@ export const listMyCoursesForResume = async (req: Request, res: Response) => {
       }
     }
 
+    logger.info("listMyCoursesForResume success", { traceId, userId, courseCount: courseCards.length, hasResume: !!resumeNext });
     return res.status(200).json({
       success: true,
       data: { courses: courseCards, resumeNext },
     });
   } catch (e: any) {
+    logger.error("listMyCoursesForResume failed", { traceId, userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

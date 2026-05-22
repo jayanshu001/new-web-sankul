@@ -1,5 +1,7 @@
 import crypto from "crypto";
 import logger from "./logger";
+import { scrub } from "./scrub";
+import { getContext } from "./requestContext";
 import type { RequestHandler } from 'express';
 
 // Extend Request to store tracing metadata in request lifecycle
@@ -38,11 +40,22 @@ const requestLogger: RequestHandler = (req, res, next) => {
     completed = true;
     const durationMs = Number(process.hrtime.bigint() - startHighRes) / 1_000_000;
 
+    // Surface accumulated per-request telemetry from the AsyncLocalStorage
+    // context: dbMs (total Mongo time), cacheHit/cacheMiss counters. The
+    // logger format auto-merges userId/route/traceId so we don't repeat
+    // them here. See utils/requestContext.ts for what the context carries.
+    const ctx = getContext();
     logger.info("API Request Completed", {
       ...requestMetadata,
       statusCode: res.statusCode,
       responseTime: `${durationMs.toFixed(2)}ms`,
-      body: req.method !== "GET" ? req.body : undefined,
+      durationMs: Number(durationMs.toFixed(2)),
+      dbMs: ctx ? Number(ctx.dbMs.toFixed(2)) : undefined,
+      cacheHit: ctx?.cacheHit,
+      cacheMiss: ctx?.cacheMiss,
+      // Body is scrubbed before logging so passwords, OTPs, tokens, and
+      // bank/card identifiers never reach disk. See utils/scrub.ts.
+      body: req.method !== "GET" ? scrub(req.body) : undefined,
     });
   });
 

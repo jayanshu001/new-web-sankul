@@ -1,6 +1,7 @@
 // src/utils/emailService.ts
 import 'dotenv/config';
 import nodemailer, { Transporter, SentMessageInfo } from 'nodemailer';
+import { callOutbound } from '../libs/outbound';
 
 let transporter: Transporter | null = null;
 
@@ -32,14 +33,22 @@ export async function sendEmail(
   html?: string,
   text?: string
 ): Promise<SentMessageInfo> {
+  // Wrapped in callOutbound so a flaky SMTP doesn't pin a request-handling
+  // process. The crash-reporter calls this too — a crash + an unreachable
+  // SMTP shouldn't compound into a hung shutdown. 8s × 2 attempts is enough
+  // for one TLS handshake retry but bounded total wait.
   const tx = getTransporter();
-  await tx.verify(); // fail fast if can’t connect/auth
-  const info = await tx.sendMail({
-    from: process.env.SMTP_USER,
-    to,
-    subject,
-    html,
-    text,
-  });
-  return info;
+  return callOutbound(
+    async () => {
+      await tx.verify();
+      return tx.sendMail({
+        from: process.env.SMTP_USER,
+        to,
+        subject,
+        html,
+        text,
+      });
+    },
+    { label: "email.smtp", timeoutMs: 8_000, attempts: 2 }
+  );
 }

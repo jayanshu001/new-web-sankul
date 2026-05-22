@@ -125,6 +125,12 @@ export const uploadS3Audio = multer({
 /**
  * Utility function to delete an object from DigitalOcean Spaces given its public URL.
  * Automatically extracts the File Key based on your endpoint domain.
+ *
+ * Wrapped in callOutbound so a Spaces outage can't pin every "update profile
+ * with a new image" request indefinitely. Every caller in the codebase
+ * already invokes this with `.catch(() => {})` (it's best-effort cleanup
+ * of an orphaned file), so the wrapper's eventual throw on retry-exhaustion
+ * is swallowed gracefully.
  */
 export const deleteFromS3FileUrl = async (fileUrl: string) => {
   try {
@@ -132,17 +138,24 @@ export const deleteFromS3FileUrl = async (fileUrl: string) => {
 
     // Parse URL (e.g. https://websankul-staging.blr1.digitaloceanspaces.com/admin/profiles/123.jpg)
     const urlObj = new URL(fileUrl);
-    
+
     // Remove the leading slash to get the strict S3 Object Key (e.g., admin/profiles/123.jpg)
-    const fileKey = urlObj.pathname.startsWith("/") 
-      ? urlObj.pathname.substring(1) 
+    const fileKey = urlObj.pathname.startsWith("/")
+      ? urlObj.pathname.substring(1)
       : urlObj.pathname;
 
-    await s3Config.send(
-      new DeleteObjectCommand({
-        Bucket: process.env.DO_BUCKET || "websankul-staging",
-        Key: fileKey,
-      })
+    // Lazy-load to avoid a circular import (libs/outbound → utils/logger →
+    // … this module is loaded very early in some entry points).
+    const { callOutbound } = await import("../libs/outbound");
+    await callOutbound(
+      () =>
+        s3Config.send(
+          new DeleteObjectCommand({
+            Bucket: process.env.DO_BUCKET || "websankul-staging",
+            Key: fileKey,
+          })
+        ),
+      { label: "s3.delete", timeoutMs: 5_000, attempts: 2 }
     );
   } catch (err) {
     console.error(`[deleteFromS3FileUrl] Failed to delete orphaned file ${fileUrl}:`, err);

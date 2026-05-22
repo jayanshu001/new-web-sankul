@@ -11,6 +11,8 @@ import { Video } from "../../models/course/Video.model";
 import { resolveFreeCategoryIds } from "../free/free.controller";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
 import { Notification } from "../../models/system/Notification.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const RECENTLY_ADDED_LIMIT = 5;
 const COURSE_CATEGORY_LIMIT = 6;
@@ -45,8 +47,11 @@ async function buildPackageEntry(pkg: any) {
 
 // GET /api/v1/client/dashboard
 export const getDashboard = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("getDashboard invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = req.user?.id;
     const [banners, recentPackages, courses, trending, testimonial, courseCategories, examCountdownsRaw, unreadNotifications] = await Promise.all([
       BannerSlider.find().sort({ orderBy: 1 }).populate("keyId").lean(),
       Package.find({ active: true })
@@ -137,6 +142,7 @@ export const getDashboard = async (req: Request, res: Response) => {
     if (trending.items.length)
       dashboard.push({ title: "Trending Books", type: "trending-book", data: trending.items });
 
+    logger.info("getDashboard success", { traceId, customerId: userId, sections: dashboard.length, unreadNotifications });
     return res.status(200).json({
       todayDate: new Date().toISOString().slice(0, 10),
       logo: process.env.APP_LOGO_URL ?? "",
@@ -145,6 +151,7 @@ export const getDashboard = async (req: Request, res: Response) => {
       testimonial,
     });
   } catch (e: any) {
+    logger.error("getDashboard failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -153,6 +160,9 @@ const FREE_DASHBOARD_LIMIT = 5;
 
 // GET /api/v1/client/free-dashboard
 export const getFreeDashboard = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  logger.info("getFreeDashboard invoked", { traceId, path: _req.originalUrl });
+
   try {
     const [trendingFree, magazinePackages, freeCats] = await Promise.all([
       fetchTrendingBookItems({ type: "free", limit: FREE_DASHBOARD_LIMIT }),
@@ -186,12 +196,14 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
     if (freeVideos.length)
       dashboard.push({ title: "Free Videos", type: "video", data: freeVideos });
 
+    logger.info("getFreeDashboard success", { traceId, sections: dashboard.length });
     return res.status(200).json({
       todayDate: new Date().toISOString().slice(0, 10),
       logo: process.env.APP_LOGO_URL ?? "",
       dashboard,
     });
   } catch (e: any) {
+    logger.error("getFreeDashboard failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

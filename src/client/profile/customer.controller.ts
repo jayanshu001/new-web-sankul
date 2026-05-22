@@ -199,20 +199,25 @@ export const updateFirebaseTokenHandler = async (req: Request, res: Response) =>
 export const registerDeviceTokenHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
+  logger.info("registerDeviceTokenHandler invoked", { traceId, userId });
+
   try {
-    if (!userId) return failure(res, "Unauthorized request.", 401);
+    if (!userId) { logger.warn("registerDeviceTokenHandler unauthorized", { traceId }); return failure(res, "Unauthorized request.", 401); }
     const { firebaseToken, platform } = req.body;
     if (!firebaseToken || typeof firebaseToken !== "string") {
+      logger.warn("registerDeviceTokenHandler missing firebaseToken", { traceId, userId });
       return failure(res, "firebaseToken is required.", 422);
     }
     const normalizedPlatform =
       platform === "ios" || platform === "android" ? platform : undefined;
     const result = await registerDeviceToken(userId, firebaseToken, normalizedPlatform, traceId);
-    if (!result.ok) return failure(res, result.message, 404);
+    if (!result.ok) { logger.warn("registerDeviceTokenHandler service failure", { traceId, userId, message: result.message }); return failure(res, result.message, 404); }
+    logger.info("registerDeviceTokenHandler success", { traceId, userId });
     return success(res, {}, result.message, 200);
   } catch (err) {
     logger.error("registerDeviceTokenHandler failed", {
       traceId,
+      userId,
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
@@ -229,18 +234,23 @@ export const registerDeviceTokenHandler = async (req: Request, res: Response) =>
 export const unregisterDeviceTokenHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
+  logger.info("unregisterDeviceTokenHandler invoked", { traceId, userId });
+
   try {
-    if (!userId) return failure(res, "Unauthorized request.", 401);
+    if (!userId) { logger.warn("unregisterDeviceTokenHandler unauthorized", { traceId }); return failure(res, "Unauthorized request.", 401); }
     const { firebaseToken } = req.body;
     if (!firebaseToken || typeof firebaseToken !== "string") {
+      logger.warn("unregisterDeviceTokenHandler missing firebaseToken", { traceId, userId });
       return failure(res, "firebaseToken is required.", 422);
     }
     const result = await unregisterDeviceToken(userId, firebaseToken, traceId);
-    if (!result.ok) return failure(res, result.message, 404);
+    if (!result.ok) { logger.warn("unregisterDeviceTokenHandler service failure", { traceId, userId, message: result.message }); return failure(res, result.message, 404); }
+    logger.info("unregisterDeviceTokenHandler success", { traceId, userId });
     return success(res, {}, result.message, 200);
   } catch (err) {
     logger.error("unregisterDeviceTokenHandler failed", {
       traceId,
+      userId,
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });

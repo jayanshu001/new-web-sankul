@@ -88,14 +88,19 @@ export const updateMyGoalsHandler = async (req: Request, res: Response) => {
   logger.info("updateMyGoalsHandler invoked", { traceId, userId });
   try {
     if (!userId) {
+      logger.warn("updateMyGoalsHandler unauthorized", { traceId });
       return failure(res, "Unauthorized request.", 401);
     }
     const { goals } = req.body;
     const result = await updateMyGoals(userId, goals, traceId);
-    if (!result.ok) return failure(res, result.message, 400);
+    if (!result.ok) {
+      logger.warn("updateMyGoalsHandler invalid", { traceId, userId, message: result.message });
+      return failure(res, result.message, 400);
+    }
+    logger.info("updateMyGoalsHandler success", { traceId, userId });
     return success(res, result.data, result.message ?? "Goals updated.", 200);
   } catch (err) {
-    logger.error("updateMyGoalsHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("updateMyGoalsHandler failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
   }
 };
@@ -110,13 +115,18 @@ export const fetchGoalsWithSelectionHandler = async (req: Request, res: Response
   logger.info("fetchGoalsWithSelectionHandler invoked", { traceId, userId });
   try {
     if (!userId) {
+      logger.warn("fetchGoalsWithSelectionHandler unauthorized", { traceId });
       return failure(res, "Unauthorized request.", 401);
     }
     const result = await getGoalsWithSelection(userId, traceId);
-    if (!result.ok) return failure(res, result.message, 404);
+    if (!result.ok) {
+      logger.warn("fetchGoalsWithSelectionHandler not found", { traceId, userId, message: result.message });
+      return failure(res, result.message, 404);
+    }
+    logger.info("fetchGoalsWithSelectionHandler success", { traceId, userId });
     return success(res, result.data, "Goals fetched successfully.", 200);
   } catch (err) {
-    logger.error("fetchGoalsWithSelectionHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    logger.error("fetchGoalsWithSelectionHandler failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
   }
 };

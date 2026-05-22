@@ -14,15 +14,20 @@ import {
 } from "./referral.validation";
 import { lookupIfsc } from "./ifsc";
 import { createContact, createFundAccount, createPayout } from "../payment/razorpayx";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const MIN_WITHDRAWAL_AMOUNT = 500;
 
 // ─── Rewards Screen ───────────────────────────────────────────────────────────
 
 export const getRewardsOverview = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("getRewardsOverview invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!customerId) { logger.warn("getRewardsOverview unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
 
     const customer = await Customer.findOne({
       _id: customerId,
@@ -30,7 +35,7 @@ export const getRewardsOverview = async (req: Request, res: Response) => {
       status: true,
     }).select("_id firstName middleName lastName phoneNumber referralCode rewardPoints");
 
-    if (!customer) return res.status(404).json({ success: false, message: "Invalid user." });
+    if (!customer) { logger.warn("getRewardsOverview customer not found", { traceId, customerId }); return res.status(404).json({ success: false, message: "Invalid user." }); }
 
     const program = await ReferralProgram.find({ name: "student", status: true });
 
@@ -50,6 +55,7 @@ export const getRewardsOverview = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("getRewardsOverview failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -57,9 +63,12 @@ export const getRewardsOverview = async (req: Request, res: Response) => {
 // ─── Transactions List ────────────────────────────────────────────────────────
 
 export const getMyTransactions = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("getMyTransactions invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!customerId) { logger.warn("getMyTransactions unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
 
     const { page = "1", limit = "20", type } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -76,12 +85,14 @@ export const getMyTransactions = async (req: Request, res: Response) => {
       ReferralTransaction.countDocuments(filter),
     ]);
 
+    logger.info("getMyTransactions success", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
       data: transactions,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
+    logger.error("getMyTransactions failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -89,22 +100,29 @@ export const getMyTransactions = async (req: Request, res: Response) => {
 // ─── Transaction Detail ───────────────────────────────────────────────────────
 
 export const getTransactionById = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getTransactionById invoked", { traceId, path: req.originalUrl, customerId, transactionId: id });
 
-    const id = req.params.id as string;
+  try {
+    if (!customerId) { logger.warn("getTransactionById unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("getTransactionById invalid id", { traceId, customerId, transactionId: id });
       return res.status(400).json({ success: false, message: "Invalid transaction id." });
     }
 
     const transaction = await ReferralTransaction.findOne({ _id: id, customerId });
     if (!transaction) {
+      logger.warn("getTransactionById not found", { traceId, customerId, transactionId: id });
       return res.status(404).json({ success: false, message: "Transaction not found." });
     }
 
+    logger.info("getTransactionById success", { traceId, customerId, transactionId: id });
     return res.status(200).json({ success: true, data: transaction });
   } catch (error: any) {
+    logger.error("getTransactionById failed", { traceId, customerId, transactionId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -112,14 +130,18 @@ export const getTransactionById = async (req: Request, res: Response) => {
 // ─── Withdrawal Request ───────────────────────────────────────────────────────
 
 export const requestWithdrawal = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("requestWithdrawal invoked", { traceId, path: req.originalUrl, customerId });
+
   const session = await mongoose.startSession();
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!customerId) { logger.warn("requestWithdrawal unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
 
     const { bankAccountId, amount } = withdrawRewardsSchema.parse(req.body);
 
     if (amount < MIN_WITHDRAWAL_AMOUNT) {
+      logger.warn("requestWithdrawal below minimum", { traceId, customerId, amount });
       return res.status(400).json({
         success: false,
         message: `Your withdrawal request must be greater than or equal to ₹${MIN_WITHDRAWAL_AMOUNT}.`,
@@ -127,6 +149,7 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
     }
 
     if (!mongoose.Types.ObjectId.isValid(bankAccountId)) {
+      logger.warn("requestWithdrawal invalid bank account id", { traceId, customerId, bankAccountId });
       return res.status(400).json({ success: false, message: "Invalid bank account id." });
     }
 
@@ -136,9 +159,10 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
       status: true,
     }).select("_id rewardPoints");
 
-    if (!customer) return res.status(404).json({ success: false, message: "Invalid user." });
+    if (!customer) { logger.warn("requestWithdrawal customer not found", { traceId, customerId }); return res.status(404).json({ success: false, message: "Invalid user." }); }
 
     if (amount > (customer.rewardPoints ?? 0)) {
+      logger.warn("requestWithdrawal insufficient points", { traceId, customerId, amount, available: customer.rewardPoints });
       return res.status(400).json({
         success: false,
         message: "Your withdrawal request must be less than or equal to your reward points.",
@@ -147,6 +171,7 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
 
     const bankAccount = await CustomerBankAccount.findOne({ _id: bankAccountId, customerId });
     if (!bankAccount) {
+      logger.warn("requestWithdrawal bank account not found", { traceId, customerId, bankAccountId });
       return res.status(404).json({ success: false, message: "Bank account not found." });
     }
 
@@ -200,6 +225,7 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
       transaction.providerRef = payout.id;
       await transaction.save();
     } catch (payoutErr: any) {
+      logger.error("requestWithdrawal payout failed", { traceId, customerId, transactionId: transaction?._id, error: payoutErr?.message, stack: payoutErr?.stack });
       const refundSession = await mongoose.startSession();
       try {
         await refundSession.withTransaction(async () => {
@@ -221,9 +247,11 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
       });
     }
 
+    logger.info("requestWithdrawal success", { traceId, customerId, transactionId: transaction._id, amount });
     return res.status(201).json({ success: true, data: transaction });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) { logger.warn("requestWithdrawal validation failed", { traceId, customerId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
+    logger.error("requestWithdrawal failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   } finally {
     session.endSession();
@@ -233,9 +261,12 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
 // ─── Generate Referral Code ───────────────────────────────────────────────────
 
 export const generateReferralCode = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("generateReferralCode invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!customerId) { logger.warn("generateReferralCode unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
 
     const { referralCode } = generateReferralCodeSchema.parse(req.body);
     const code = referralCode.toUpperCase();
@@ -246,9 +277,10 @@ export const generateReferralCode = async (req: Request, res: Response) => {
       status: true,
     }).select("_id referralCode");
 
-    if (!customer) return res.status(404).json({ success: false, message: "Invalid user." });
+    if (!customer) { logger.warn("generateReferralCode customer not found", { traceId, customerId }); return res.status(404).json({ success: false, message: "Invalid user." }); }
 
     if (customer.referralCode) {
+      logger.warn("generateReferralCode already has code", { traceId, customerId });
       return res.status(400).json({
         success: false,
         message: "You can't generate referral code again.",
@@ -257,6 +289,7 @@ export const generateReferralCode = async (req: Request, res: Response) => {
 
     const blacklistHit = BLACKLISTED_REFERRAL_WORDS.some((word) => code.includes(word));
     if (blacklistHit) {
+      logger.warn("generateReferralCode blacklisted", { traceId, customerId, code });
       return res.status(400).json({
         success: false,
         message: "Referral code is not available, please try another one.",
@@ -265,6 +298,7 @@ export const generateReferralCode = async (req: Request, res: Response) => {
 
     const exists = await Customer.exists({ referralCode: code });
     if (exists) {
+      logger.warn("generateReferralCode taken", { traceId, customerId, code });
       return res.status(400).json({
         success: false,
         message: "Referral code is not available, please try another one.",
@@ -277,15 +311,18 @@ export const generateReferralCode = async (req: Request, res: Response) => {
       { new: true }
     ).select("_id firstName lastName phoneNumber referralCode rewardPoints");
 
+    logger.info("generateReferralCode success", { traceId, customerId, code });
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) { logger.warn("generateReferralCode validation failed", { traceId, customerId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
     if (error.code === 11000) {
+      logger.warn("generateReferralCode duplicate", { traceId, customerId });
       return res.status(400).json({
         success: false,
         message: "Referral code is not available, please try another one.",
       });
     }
+    logger.error("generateReferralCode failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -293,25 +330,32 @@ export const generateReferralCode = async (req: Request, res: Response) => {
 // ─── Bank Accounts (for withdrawal payouts) ───────────────────────────────────
 
 export const listBankAccounts = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listBankAccounts invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!customerId) { logger.warn("listBankAccounts unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
     const accounts = await CustomerBankAccount.find({ customerId }).sort({ createdAt: -1 });
+    logger.info("listBankAccounts success", { traceId, customerId, count: accounts.length });
     return res.status(200).json({ success: true, data: accounts });
   } catch (error: any) {
+    logger.error("listBankAccounts failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const createBankAccount = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("createBankAccount invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
+    if (!customerId) { logger.warn("createBankAccount unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
 
     const parsed = createBankAccountSchema.parse(req.body);
     const ifscDetails = await lookupIfsc(parsed.ifscCode);
-    if (!ifscDetails)
-      return res.status(400).json({ success: false, message: "Invalid IFSC code." });
+    if (!ifscDetails) { logger.warn("createBankAccount invalid IFSC", { traceId, customerId, ifsc: parsed.ifscCode }); return res.status(400).json({ success: false, message: "Invalid IFSC code." }); }
 
     const { confirmAccountNumber: _confirm, ...rest } = parsed;
     const account = await CustomerBankAccount.create({
@@ -321,20 +365,24 @@ export const createBankAccount = async (req: Request, res: Response) => {
       branchName: ifscDetails.branchName,
       city: ifscDetails.city,
     });
+    logger.info("createBankAccount success", { traceId, customerId, accountId: account._id });
     return res.status(201).json({ success: true, data: account });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) { logger.warn("createBankAccount validation failed", { traceId, customerId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
+    logger.error("createBankAccount failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const updateBankAccount = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("updateBankAccount invoked", { traceId, path: req.originalUrl, customerId, accountId: id });
+
   try {
-    const customerId = req.user?.id;
-    const id = req.params.id as string;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid bank account id." });
+    if (!customerId) { logger.warn("updateBankAccount unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
+    if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("updateBankAccount invalid id", { traceId, customerId, accountId: id }); return res.status(400).json({ success: false, message: "Invalid bank account id." }); }
 
     const parsed = updateBankAccountSchema.parse(req.body);
     const { confirmAccountNumber: _confirm, ...rest } = parsed;
@@ -342,8 +390,7 @@ export const updateBankAccount = async (req: Request, res: Response) => {
 
     if (parsed.ifscCode) {
       const ifscDetails = await lookupIfsc(parsed.ifscCode);
-      if (!ifscDetails)
-        return res.status(400).json({ success: false, message: "Invalid IFSC code." });
+      if (!ifscDetails) { logger.warn("updateBankAccount invalid IFSC", { traceId, customerId, ifsc: parsed.ifscCode }); return res.status(400).json({ success: false, message: "Invalid IFSC code." }); }
       update.bankName = ifscDetails.bankName;
       update.branchName = ifscDetails.branchName;
       update.city = ifscDetails.city;
@@ -354,26 +401,32 @@ export const updateBankAccount = async (req: Request, res: Response) => {
       { $set: update },
       { new: true }
     );
-    if (!account) return res.status(404).json({ success: false, message: "Bank account not found." });
+    if (!account) { logger.warn("updateBankAccount not found", { traceId, customerId, accountId: id }); return res.status(404).json({ success: false, message: "Bank account not found." }); }
+    logger.info("updateBankAccount success", { traceId, customerId, accountId: id });
     return res.status(200).json({ success: true, data: account });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) { logger.warn("updateBankAccount validation failed", { traceId, customerId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
+    logger.error("updateBankAccount failed", { traceId, customerId, accountId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 export const deleteBankAccount = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("deleteBankAccount invoked", { traceId, path: req.originalUrl, customerId, accountId: id });
+
   try {
-    const customerId = req.user?.id;
-    const id = req.params.id as string;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized" });
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid bank account id." });
+    if (!customerId) { logger.warn("deleteBankAccount unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
+    if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("deleteBankAccount invalid id", { traceId, customerId, accountId: id }); return res.status(400).json({ success: false, message: "Invalid bank account id." }); }
 
     const account = await CustomerBankAccount.findOneAndDelete({ _id: id, customerId });
-    if (!account) return res.status(404).json({ success: false, message: "Bank account not found." });
+    if (!account) { logger.warn("deleteBankAccount not found", { traceId, customerId, accountId: id }); return res.status(404).json({ success: false, message: "Bank account not found." }); }
+    logger.info("deleteBankAccount success", { traceId, customerId, accountId: id });
     return res.status(200).json({ success: true, message: "Bank account deleted." });
   } catch (error: any) {
+    logger.error("deleteBankAccount failed", { traceId, customerId, accountId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

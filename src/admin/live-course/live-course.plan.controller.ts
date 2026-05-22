@@ -29,20 +29,30 @@ function zodIssueResponse(res: Response, err: z.ZodError) {
 
 // POST /api/v1/admin/live-courses/:id/plans
 export const createLiveCoursePlan = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.id ?? "");
+  logger.info("createLiveCoursePlan invoked", { traceId, path: req.originalUrl, liveCourseId, userId: req.user?.id });
+
   const txn = await mongoose.startSession();
   try {
-    const liveCourseId = String(req.params.id ?? "");
     if (!mongoose.Types.ObjectId.isValid(liveCourseId)) {
+      logger.warn("createLiveCoursePlan invalid id", { traceId, liveCourseId });
       return failure(res, "Invalid live course id.", 422);
     }
     const exists = await LiveCourse.exists({ _id: liveCourseId });
-    if (!exists) return failure(res, "Live course not found.", 404);
+    if (!exists) {
+      logger.warn("createLiveCoursePlan course not found", { traceId, liveCourseId });
+      return failure(res, "Live course not found.", 404);
+    }
 
     let validated: z.infer<typeof createPlanSchema>;
     try {
       validated = createPlanSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      if (err instanceof z.ZodError) {
+        logger.warn("createLiveCoursePlan validation failed", { traceId, liveCourseId, issues: err.issues });
+        return zodIssueResponse(res, err);
+      }
       throw err;
     }
 
@@ -63,10 +73,11 @@ export const createLiveCoursePlan = async (req: Request, res: Response) => {
     );
 
     await txn.commitTransaction();
+    logger.info("createLiveCoursePlan success", { traceId, liveCourseId, planId: plan._id });
     return success(res, { plan: plan.toObject() }, "Plan created.", 201);
   } catch (err) {
     if (txn.inTransaction()) await txn.abortTransaction();
-    logger.error("LiveCoursePlan create failed", { error: getErrorMessage(err) });
+    logger.error("createLiveCoursePlan failed", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to create plan.", 500);
   } finally {
     txn.endSession();
@@ -75,47 +86,71 @@ export const createLiveCoursePlan = async (req: Request, res: Response) => {
 
 // GET /api/v1/admin/live-courses/:id/plans
 export const listLiveCoursePlans = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.id ?? "");
+  logger.info("listLiveCoursePlans invoked", { traceId, path: req.originalUrl, liveCourseId, userId: req.user?.id });
+
   try {
-    const liveCourseId = String(req.params.id ?? "");
     if (!mongoose.Types.ObjectId.isValid(liveCourseId)) {
+      logger.warn("listLiveCoursePlans invalid id", { traceId, liveCourseId });
       return failure(res, "Invalid live course id.", 422);
     }
     const plans = await LiveCoursePlan.find({ liveCourseId })
       .sort({ isDefault: -1, price: 1, createdAt: 1 })
       .lean();
+    logger.info("listLiveCoursePlans success", { traceId, liveCourseId, count: plans.length });
     return success(res, { plans, total: plans.length }, "Plans fetched.");
   } catch (err) {
-    logger.error("LiveCoursePlan list failed", { error: getErrorMessage(err) });
+    logger.error("listLiveCoursePlans failed", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list plans.", 500);
   }
 };
 
 // GET /api/v1/admin/live-courses/plans/:planId
 export const getLiveCoursePlan = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const planId = String(req.params.planId ?? "");
+  logger.info("getLiveCoursePlan invoked", { traceId, path: req.originalUrl, planId, userId: req.user?.id });
+
   try {
-    const planId = String(req.params.planId ?? "");
-    if (!mongoose.Types.ObjectId.isValid(planId)) return failure(res, "Invalid plan id.", 422);
+    if (!mongoose.Types.ObjectId.isValid(planId)) {
+      logger.warn("getLiveCoursePlan invalid id", { traceId, planId });
+      return failure(res, "Invalid plan id.", 422);
+    }
     const plan = await LiveCoursePlan.findById(planId).lean();
-    if (!plan) return failure(res, "Plan not found.", 404);
+    if (!plan) {
+      logger.warn("getLiveCoursePlan not found", { traceId, planId });
+      return failure(res, "Plan not found.", 404);
+    }
+    logger.info("getLiveCoursePlan success", { traceId, planId });
     return success(res, { plan }, "Plan fetched.");
   } catch (err) {
-    logger.error("LiveCoursePlan get failed", { error: getErrorMessage(err) });
+    logger.error("getLiveCoursePlan failed", { traceId, planId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch plan.", 500);
   }
 };
 
 // PUT /api/v1/admin/live-courses/plans/:planId
 export const updateLiveCoursePlan = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const planId = String(req.params.planId ?? "");
+  logger.info("updateLiveCoursePlan invoked", { traceId, path: req.originalUrl, planId, userId: req.user?.id });
+
   const txn = await mongoose.startSession();
   try {
-    const planId = String(req.params.planId ?? "");
-    if (!mongoose.Types.ObjectId.isValid(planId)) return failure(res, "Invalid plan id.", 422);
+    if (!mongoose.Types.ObjectId.isValid(planId)) {
+      logger.warn("updateLiveCoursePlan invalid id", { traceId, planId });
+      return failure(res, "Invalid plan id.", 422);
+    }
 
     let validated: z.infer<typeof updatePlanSchema>;
     try {
       validated = updatePlanSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      if (err instanceof z.ZodError) {
+        logger.warn("updateLiveCoursePlan validation failed", { traceId, planId, issues: err.issues });
+        return zodIssueResponse(res, err);
+      }
       throw err;
     }
 
@@ -124,6 +159,7 @@ export const updateLiveCoursePlan = async (req: Request, res: Response) => {
     const plan = await LiveCoursePlan.findById(planId).session(txn);
     if (!plan) {
       await txn.abortTransaction();
+      logger.warn("updateLiveCoursePlan not found", { traceId, planId });
       return failure(res, "Plan not found.", 404);
     }
 
@@ -139,10 +175,11 @@ export const updateLiveCoursePlan = async (req: Request, res: Response) => {
     await plan.save({ session: txn });
 
     await txn.commitTransaction();
+    logger.info("updateLiveCoursePlan success", { traceId, planId });
     return success(res, { plan: plan.toObject() }, "Plan updated.");
   } catch (err) {
     if (txn.inTransaction()) await txn.abortTransaction();
-    logger.error("LiveCoursePlan update failed", { error: getErrorMessage(err) });
+    logger.error("updateLiveCoursePlan failed", { traceId, planId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to update plan.", 500);
   } finally {
     txn.endSession();
@@ -153,15 +190,22 @@ export const updateLiveCoursePlan = async (req: Request, res: Response) => {
 // Refuses if any verified subscriptions point at the plan — prevents stranding
 // paying customers when admin tries to clean up.
 export const deleteLiveCoursePlan = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const planId = String(req.params.planId ?? "");
+  logger.info("deleteLiveCoursePlan invoked", { traceId, path: req.originalUrl, planId, userId: req.user?.id });
+
   try {
-    const planId = String(req.params.planId ?? "");
-    if (!mongoose.Types.ObjectId.isValid(planId)) return failure(res, "Invalid plan id.", 422);
+    if (!mongoose.Types.ObjectId.isValid(planId)) {
+      logger.warn("deleteLiveCoursePlan invalid id", { traceId, planId });
+      return failure(res, "Invalid plan id.", 422);
+    }
 
     const liveSubs = await LiveCourseSubscription.countDocuments({
       planId,
       paymentStatus: "verified",
     });
     if (liveSubs > 0) {
+      logger.warn("deleteLiveCoursePlan refused active subs", { traceId, planId, liveSubs });
       return failure(
         res,
         `Cannot delete: ${liveSubs} verified subscription(s) reference this plan. Toggle status off instead.`,
@@ -170,10 +214,14 @@ export const deleteLiveCoursePlan = async (req: Request, res: Response) => {
     }
 
     const out = await LiveCoursePlan.findByIdAndDelete(planId);
-    if (!out) return failure(res, "Plan not found.", 404);
+    if (!out) {
+      logger.warn("deleteLiveCoursePlan not found", { traceId, planId });
+      return failure(res, "Plan not found.", 404);
+    }
+    logger.info("deleteLiveCoursePlan success", { traceId, planId });
     return success(res, { id: planId }, "Plan deleted.");
   } catch (err) {
-    logger.error("LiveCoursePlan delete failed", { error: getErrorMessage(err) });
+    logger.error("deleteLiveCoursePlan failed", { traceId, planId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to delete plan.", 500);
   }
 };

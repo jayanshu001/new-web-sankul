@@ -4,14 +4,19 @@ import { Course } from "../../models/course/Course.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { Customer } from "../../models/customer/Customer.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
 // GET /api/v1/educator/courses
 export const listMyCourses = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const educatorId = req.user?.id;
+  logger.info("listMyCourses invoked", { traceId, path: req.originalUrl, educatorId });
+
   try {
-    const educatorId = req.user?.id;
-    if (!educatorId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!educatorId) { logger.warn("listMyCourses unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const courses = await Course.find({ courseEducatorId: educatorId })
       .populate("courseSubjectCategoryId")
@@ -57,51 +62,57 @@ export const listMyCourses = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("listMyCourses success", { traceId, educatorId, count: data.length });
     return res.status(200).json({ success: true, data: { courses: data } });
   } catch (error: any) {
+    logger.error("listMyCourses failed", { traceId, educatorId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/educator/courses/:id
 export const getMyCourseDetail = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const educatorId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getMyCourseDetail invoked", { traceId, path: req.originalUrl, educatorId, courseId: id });
+
   try {
-    const educatorId = req.user?.id;
-    if (!educatorId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const id = req.params.id as string;
-    if (!isObjectId(id))
-      return res.status(400).json({ success: false, message: "Invalid course id." });
+    if (!educatorId) { logger.warn("getMyCourseDetail unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!isObjectId(id)) { logger.warn("getMyCourseDetail invalid id", { traceId, educatorId, courseId: id }); return res.status(400).json({ success: false, message: "Invalid course id." }); }
 
     const course = await Course.findOne({ _id: id, courseEducatorId: educatorId })
       .populate("courseSubjectCategoryId")
       .populate("courseEducatorId", "_id name image")
       .lean();
 
-    if (!course)
-      return res.status(404).json({ success: false, message: "Course not found or not yours." });
+    if (!course) { logger.warn("getMyCourseDetail not found", { traceId, educatorId, courseId: id }); return res.status(404).json({ success: false, message: "Course not found or not yours." }); }
 
     const plans = await PackageCourseEbookPrice.find({ courseId: id, status: true })
       .sort({ duration: 1 })
       .lean();
 
+    logger.info("getMyCourseDetail success", { traceId, educatorId, courseId: id, planCount: plans.length });
     return res.status(200).json({ success: true, data: { ...course, plans } });
   } catch (error: any) {
+    logger.error("getMyCourseDetail failed", { traceId, educatorId, courseId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/educator/courses/:id/dashboard
 export const getCourseDashboard = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const educatorId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getCourseDashboard invoked", { traceId, path: req.originalUrl, educatorId, courseId: id });
+
   try {
-    const educatorId = req.user?.id;
-    if (!educatorId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const id = req.params.id as string;
-    if (!isObjectId(id))
-      return res.status(400).json({ success: false, message: "Invalid course id." });
+    if (!educatorId) { logger.warn("getCourseDashboard unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!isObjectId(id)) { logger.warn("getCourseDashboard invalid id", { traceId, educatorId, courseId: id }); return res.status(400).json({ success: false, message: "Invalid course id." }); }
 
     const course = await Course.findOne({ _id: id, courseEducatorId: educatorId });
-    if (!course)
-      return res.status(404).json({ success: false, message: "Course not found or not yours." });
+    if (!course) { logger.warn("getCourseDashboard not found", { traceId, educatorId, courseId: id }); return res.status(404).json({ success: false, message: "Course not found or not yours." }); }
 
     const now = new Date();
     const [totalSubs, activeSubs, expiredSubs, plansCount, recentSubs] = await Promise.all([
@@ -123,6 +134,7 @@ export const getCourseDashboard = async (req: Request, res: Response) => {
         .lean(),
     ]);
 
+    logger.info("getCourseDashboard success", { traceId, educatorId, courseId: id, totalSubs, activeSubs });
     return res.status(200).json({
       success: true,
       data: {
@@ -134,22 +146,24 @@ export const getCourseDashboard = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("getCourseDashboard failed", { traceId, educatorId, courseId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/educator/courses/:id/subscribers
 export const getCourseSubscribers = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const educatorId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getCourseSubscribers invoked", { traceId, path: req.originalUrl, educatorId, courseId: id });
+
   try {
-    const educatorId = req.user?.id;
-    if (!educatorId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const id = req.params.id as string;
-    if (!isObjectId(id))
-      return res.status(400).json({ success: false, message: "Invalid course id." });
+    if (!educatorId) { logger.warn("getCourseSubscribers unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!isObjectId(id)) { logger.warn("getCourseSubscribers invalid id", { traceId, educatorId, courseId: id }); return res.status(400).json({ success: false, message: "Invalid course id." }); }
 
     const course = await Course.findOne({ _id: id, courseEducatorId: educatorId }).select("_id");
-    if (!course)
-      return res.status(404).json({ success: false, message: "Course not found or not yours." });
+    if (!course) { logger.warn("getCourseSubscribers not found", { traceId, educatorId, courseId: id }); return res.status(404).json({ success: false, message: "Course not found or not yours." }); }
 
     const pageNum = Math.max(parseInt((req.query.page as string) || "1", 10) || 1, 1);
     const limitNum = Math.max(parseInt((req.query.limit as string) || "20", 10) || 20, 1);
@@ -165,12 +179,14 @@ export const getCourseSubscribers = async (req: Request, res: Response) => {
       PackageCourseSubscription.countDocuments({ courseId: id }),
     ]);
 
+    logger.info("getCourseSubscribers success", { traceId, educatorId, courseId: id, total });
     return res.status(200).json({
       success: true,
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
+    logger.error("getCourseSubscribers failed", { traceId, educatorId, courseId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

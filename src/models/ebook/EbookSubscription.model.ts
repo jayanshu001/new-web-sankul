@@ -33,7 +33,13 @@ const ebookSubscriptionSchema: Schema = new Schema(
     promoterId: { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
     referrerId: { type: Schema.Types.ObjectId, ref: "Customer", default: null },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // Entitlement row — same reasoning as PackageCourseSubscription. Silent
+    // drops on `endAt` or `startAt` would lock customers out of paid ebooks
+    // without anyone noticing until the support tickets arrive.
+    strict: "throw",
+  }
 );
 
 ebookSubscriptionSchema.index({ promoterId: 1, createdAt: -1 });

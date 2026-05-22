@@ -1,5 +1,7 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
+import { idempotency } from "../../middlewares/idempotency";
+import { adminMutationLimiter } from "../../config/rateLimiter";
 import {
   getPrograms,
   getProgramById,
@@ -42,16 +44,36 @@ router.delete("/programs/:id", deleteProgram);
 router.get("/referrers", getReferrers);
 
 // Transactions
+//
+// Withdrawal status changes and manual reward adjustments are financial
+// mutations: each must be retry-safe (network/client retries must not
+// double-credit a customer). We enforce `Idempotency-Key` here (P1 audit gap)
+// and apply a per-admin mutation rate limit on top of the global admin limiter.
 router.get("/transactions", getTransactions);
-router.patch("/transactions/:id/status", updateWithdrawalStatus);
-router.post("/transactions/:id/reject", rejectWithdrawal);
+router.patch(
+  "/transactions/:id/status",
+  adminMutationLimiter,
+  idempotency({ scope: "referral.withdrawal.status" }),
+  updateWithdrawalStatus
+);
+router.post(
+  "/transactions/:id/reject",
+  adminMutationLimiter,
+  idempotency({ scope: "referral.withdrawal.reject" }),
+  rejectWithdrawal
+);
 
 // Withdrawal Report (listing + CSV)
 router.get("/withdrawals", getWithdrawalsReport);
 router.get("/withdrawals/csv", exportWithdrawalsCsv);
 
-// Manual reward adjustment
-router.post("/customers/:customerId/rewards", adjustCustomerRewards);
+// Manual reward adjustment (credit/debit a customer's reward balance)
+router.post(
+  "/customers/:customerId/rewards",
+  adminMutationLimiter,
+  idempotency({ scope: "referral.rewards.adjust" }),
+  adjustCustomerRewards
+);
 
 // Terms & Conditions
 router.get("/terms", listTerms);

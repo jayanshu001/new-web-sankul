@@ -6,6 +6,8 @@ import { Course } from "../../models/course/Course.model";
 import { Package } from "../../models/course/Package.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { Book } from "../../models/book/Book.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -23,9 +25,12 @@ const addSchema = z.object({
 
 // GET /api/v1/client/wishlist
 export const listWishlist = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("listWishlist invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("listWishlist unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
     const { itemType } = req.query as Record<string, string>;
 
     const filter: any = { customerId: userId };
@@ -72,79 +77,94 @@ export const listWishlist = async (req: Request, res: Response) => {
       books: attachItem(books, grouped.book),
     };
 
+    const totalCount = data.courses.length + data.packages.length + data.ebooks.length + data.books.length;
+    logger.info("listWishlist success", { traceId, customerId: userId, count: totalCount });
     return res.status(200).json({
       success: true,
       data,
-      count:
-        data.courses.length + data.packages.length + data.ebooks.length + data.books.length,
+      count: totalCount,
     });
   } catch (e: any) {
+    logger.error("listWishlist failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
 // POST /api/v1/client/wishlist
 export const addToWishlist = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("addToWishlist invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("addToWishlist unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { itemType, itemId } = addSchema.parse(req.body);
 
     const Model = typeToModel[itemType];
     const exists = await Model.exists({ _id: itemId });
-    if (!exists) return res.status(404).json({ success: false, message: "Item not found." });
+    if (!exists) { logger.warn("addToWishlist item not found", { traceId, customerId: userId, itemType, itemId }); return res.status(404).json({ success: false, message: "Item not found." }); }
 
     try {
       const doc = await Wishlist.create({ customerId: userId, itemType, itemId });
+      logger.info("addToWishlist success", { traceId, customerId: userId, itemType, itemId });
       return res.status(201).json({ success: true, data: doc });
     } catch (err: any) {
       if (err?.code === 11000) {
+        logger.info("addToWishlist already exists", { traceId, customerId: userId, itemType, itemId });
         return res.status(200).json({ success: true, message: "Already in wishlist." });
       }
       throw err;
     }
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) { logger.warn("addToWishlist validation failed", { traceId, customerId: userId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    logger.error("addToWishlist failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
 // DELETE /api/v1/client/wishlist/:itemType/:itemId
 export const removeFromWishlist = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  const { itemType, itemId } = req.params as Record<string, string>;
+  logger.info("removeFromWishlist invoked", { traceId, path: req.originalUrl, customerId: userId, itemType, itemId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const { itemType, itemId } = req.params as Record<string, string>;
-    if (!typeToModel[itemType])
-      return res.status(400).json({ success: false, message: "Invalid itemType." });
-    if (!isObjectId(itemId))
-      return res.status(400).json({ success: false, message: "Invalid itemId." });
+    if (!userId) { logger.warn("removeFromWishlist unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!typeToModel[itemType]) { logger.warn("removeFromWishlist invalid itemType", { traceId, customerId: userId, itemType }); return res.status(400).json({ success: false, message: "Invalid itemType." }); }
+    if (!isObjectId(itemId)) { logger.warn("removeFromWishlist invalid itemId", { traceId, customerId: userId, itemId }); return res.status(400).json({ success: false, message: "Invalid itemId." }); }
 
     const deleted = await Wishlist.findOneAndDelete({
       customerId: userId,
       itemType,
       itemId,
     });
-    if (!deleted) return res.status(404).json({ success: false, message: "Not in wishlist." });
+    if (!deleted) { logger.warn("removeFromWishlist not found", { traceId, customerId: userId, itemType, itemId }); return res.status(404).json({ success: false, message: "Not in wishlist." }); }
+    logger.info("removeFromWishlist success", { traceId, customerId: userId, itemType, itemId });
     return res.status(200).json({ success: true, message: "Removed." });
   } catch (e: any) {
+    logger.error("removeFromWishlist failed", { traceId, customerId: userId, itemType, itemId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
 // GET /api/v1/client/wishlist/check/:itemType/:itemId
 export const checkWishlist = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  const { itemType, itemId } = req.params as Record<string, string>;
+  logger.info("checkWishlist invoked", { traceId, path: req.originalUrl, customerId: userId, itemType, itemId });
+
   try {
-    const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const { itemType, itemId } = req.params as Record<string, string>;
-    if (!typeToModel[itemType] || !isObjectId(itemId))
-      return res.status(400).json({ success: false, message: "Invalid params." });
+    if (!userId) { logger.warn("checkWishlist unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    if (!typeToModel[itemType] || !isObjectId(itemId)) { logger.warn("checkWishlist invalid params", { traceId, customerId: userId, itemType, itemId }); return res.status(400).json({ success: false, message: "Invalid params." }); }
 
     const exists = await Wishlist.exists({ customerId: userId, itemType, itemId });
+    logger.info("checkWishlist success", { traceId, customerId: userId, itemType, itemId, inWishlist: !!exists });
     return res.status(200).json({ success: true, data: { inWishlist: !!exists } });
   } catch (e: any) {
+    logger.error("checkWishlist failed", { traceId, customerId: userId, itemType, itemId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

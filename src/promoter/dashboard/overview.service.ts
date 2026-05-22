@@ -3,6 +3,7 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { PromoCode } from "../../models/course/PromoCode.model";
 import { Course } from "../../models/course/Course.model";
 import { Customer } from "../../models/customer/Customer.model";
+import logger from "../../utils/logger";
 
 export type RangeKey = "today" | "week" | "month" | "year" | "all";
 export const ALLOWED_RANGES: RangeKey[] = ["today", "week", "month", "year", "all"];
@@ -46,7 +47,9 @@ export function bucketFormatFor(range: RangeKey) {
   }
 }
 
-export async function buildPromoterOverview(promoterId: string, rangeRaw: string | undefined) {
+export async function buildPromoterOverview(promoterId: string, rangeRaw: string | undefined, traceId?: string) {
+  logger.info("buildPromoterOverview service invoked", { traceId, promoterId, range: rangeRaw });
+
   const range: RangeKey = ALLOWED_RANGES.includes(rangeRaw as RangeKey)
     ? (rangeRaw as RangeKey)
     : "all";
@@ -133,6 +136,7 @@ export async function buildPromoterOverview(promoterId: string, rangeRaw: string
     };
   });
 
+  logger.info("buildPromoterOverview service completed", { traceId, promoterId, range, subscriptions: totals.subscriptions });
   return {
     range,
     window: { start, end },

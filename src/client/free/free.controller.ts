@@ -9,6 +9,8 @@ import { ExamStatus } from "../../models/enums";
 import { Material } from "../../models/course/Material.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { Video } from "../../models/course/Video.model";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 // Resolve category ids reachable through any free package OR free course.
 export async function resolveFreeCategoryIds() {
@@ -82,6 +84,9 @@ function paginate(req: Request) {
 
 // GET /api/v1/client/free-tests
 export const listFreeTests = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listFreeTests invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const { search } = req.query as Record<string, string>;
     const { examCategoryIds } = await resolveFreeCategoryIds();
@@ -108,12 +113,14 @@ export const listFreeTests = async (req: Request, res: Response) => {
       Exam.countDocuments(filter),
     ]);
 
+    logger.info("listFreeTests success", { traceId, total });
     return res.status(200).json({
       success: true,
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {
+    logger.error("listFreeTests failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -122,6 +129,9 @@ export const listFreeTests = async (req: Request, res: Response) => {
 // Optional query: materialCategoryId — when the client taps a category card,
 // it passes the id and only materials under that category are returned.
 export const listFreeMaterials = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listFreeMaterials invoked", { traceId, path: req.originalUrl, userId: req.user?.id, materialCategoryId: req.query.materialCategoryId });
+
   try {
     const { search, materialCategoryId } = req.query as Record<string, string>;
     const { materialCategoryIds } = await resolveFreeCategoryIds();
@@ -156,12 +166,14 @@ export const listFreeMaterials = async (req: Request, res: Response) => {
       Material.countDocuments(filter),
     ]);
 
+    logger.info("listFreeMaterials success", { traceId, total });
     return res.status(200).json({
       success: true,
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {
+    logger.error("listFreeMaterials failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -172,6 +184,9 @@ export const listFreeMaterials = async (req: Request, res: Response) => {
 // open. lessonCount is the number of active materials in that category that
 // belong to this parent's free-reachable set.
 export const listFreeMaterialsGrouped = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  logger.info("listFreeMaterialsGrouped invoked", { traceId, path: _req.originalUrl });
+
   try {
     const [freePackages, freeCourses] = await Promise.all([
       Package.find({ active: true, isPaid: false })
@@ -203,6 +218,7 @@ export const listFreeMaterialsGrouped = async (_req: Request, res: Response) => 
     ).map((id) => new Types.ObjectId(id));
 
     if (!allCategoryIds.length) {
+      logger.info("listFreeMaterialsGrouped empty", { traceId });
       return res.status(200).json({ success: true, data: [] });
     }
 
@@ -239,14 +255,19 @@ export const listFreeMaterialsGrouped = async (_req: Request, res: Response) => 
       }))
       .filter((p) => p.materialCategories.length);
 
+    logger.info("listFreeMaterialsGrouped success", { traceId, parentCount: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
+    logger.error("listFreeMaterialsGrouped failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
 // GET /api/v1/client/free-videos
 export const listFreeVideos = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listFreeVideos invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const { search } = req.query as Record<string, string>;
     const { videoCategoryIds } = await resolveFreeCategoryIds();
@@ -273,12 +294,14 @@ export const listFreeVideos = async (req: Request, res: Response) => {
       Video.countDocuments(filter),
     ]);
 
+    logger.info("listFreeVideos success", { traceId, total });
     return res.status(200).json({
       success: true,
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {
+    logger.error("listFreeVideos failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

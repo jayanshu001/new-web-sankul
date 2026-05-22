@@ -41,10 +41,17 @@ async function findSessionByAnyId(id: string) {
 // - ENDED/READY: recordings[] for replay. If the webhook was missed we'll
 //   transparently recover recordings from Streamos `streamDetails` here.
 export const getLiveSessionForClient = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  const id = String(req.params.id ?? req.params.streamId ?? "");
+  logger.info("getLiveSessionForClient invoked", { traceId, path: req.originalUrl, userId, id });
+
   try {
-    const id = String(req.params.id ?? req.params.streamId ?? "");
     const session = await findSessionByAnyId(id);
-    if (!session) return failure(res, "Live session not found.", 404);
+    if (!session) {
+      logger.warn("getLiveSessionForClient not found", { traceId, userId, id });
+      return failure(res, "Live session not found.", 404);
+    }
 
     let isLive = false;
 
@@ -82,13 +89,15 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
         if (dirty) await session.save();
       } catch (err) {
         if (err instanceof StreamosError) {
-          logger.warn("Client live-session: streamos check failed", {
+          logger.warn("getLiveSessionForClient streamos check failed", {
+            traceId,
             sessionId: session._id,
             message: err.message,
             upstreamStatus: err.upstreamStatus,
           });
         } else {
-          logger.warn("Client live-session: streamos check error", {
+          logger.warn("getLiveSessionForClient streamos check error", {
+            traceId,
             sessionId: session._id,
             error: getErrorMessage(err),
           });
@@ -130,6 +139,7 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
         ? []
         : await buildPurchaseOptions(liveCourseIds);
 
+    logger.info("getLiveSessionForClient success", { traceId, userId, sessionId: session._id, status: session.status, accessLevel: preview.accessLevel });
     return success(
       res,
       {
@@ -164,7 +174,7 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
       "Live session fetched."
     );
   } catch (err) {
-    logger.error("Client live-session fetch failed", { error: getErrorMessage(err) });
+    logger.error("getLiveSessionForClient failed", { traceId, userId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch live session.", 500);
   }
 };

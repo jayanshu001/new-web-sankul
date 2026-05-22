@@ -1,5 +1,6 @@
 // src/utils/crashReporter.ts
 import { sendEmail } from "../utils/emailService";
+import { redisClient, isRedisReady } from "../config/redis";
 
 type CrashReporterOptions = {
   appName?: string;
@@ -18,15 +19,30 @@ const lastRequests: Array<{
 }> = [];
 
 const MAX_REQ_SNAPSHOT = 20;
-let lastEmailAt = 0;
+// Per-pod guard — fine to stay in-memory; prevents the SAME pod from sending
+// two emails for two near-simultaneous crashes during its dying moments.
 let crashEmailInFlight = false;
+// CROSS-pod throttle uses Redis SET NX EX. Without this, a crash loop across
+// N pods would emit N emails per throttle window — alert spam during the
+// moment you most need a clean signal. Lock key includes the title so two
+// different crash types within the same window each get one email.
+const CRASH_LOCK_KEY = (title: string) => `crash-email-lock:${title}`;
+
+// Strip the query string off a request URL before snapshotting it. Crash
+// emails attach the last 20 requests, and a careless `/reset?token=abc123`
+// would otherwise leak the token via email. Path is enough for triage.
+const stripQuery = (url: string): string => {
+  const i = url.indexOf("?");
+  return i === -1 ? url : url.slice(0, i);
+};
 
 export function captureCrashContextMiddleware() {
   return (req: any, res: any, next: any) => {
+    const fullUrl = req.originalUrl || req.url || "";
     const entry = {
       ts: new Date().toISOString(),
       method: req.method,
-      url: req.originalUrl || req.url,
+      url: stripQuery(fullUrl),
       ip: req.ip,
       ua: req.get?.("user-agent"),
       status: undefined as number | undefined,
@@ -51,12 +67,30 @@ export function initCrashReporter(opts: CrashReporterOptions) {
   } = opts;
 
   const sendCrashEmail = async (title: string, payload: any) => {
-    const now = Date.now();
-    if (now - lastEmailAt < throttleMs) return;          // throttled
-    if (crashEmailInFlight) return;                      // already sending
-
+    if (crashEmailInFlight) return; // same-pod guard
     crashEmailInFlight = true;
-    lastEmailAt = now;
+
+    // Cross-pod throttle. SET NX EX is atomic — exactly one pod wins per
+    // throttle window per crash title. If Redis is down (likely during
+    // major outages — the very moments we want a crash email), fail open
+    // and let the email through; better one alert per pod than zero.
+    if (isRedisReady()) {
+      try {
+        const acquired = await redisClient.set(
+          CRASH_LOCK_KEY(title),
+          String(Date.now()),
+          "EX",
+          Math.ceil(throttleMs / 1000),
+          "NX"
+        );
+        if (acquired !== "OK") {
+          crashEmailInFlight = false;
+          return;
+        }
+      } catch {
+        // fall-open
+      }
+    }
 
     const html = `
       <html>

@@ -24,6 +24,8 @@ import {
   verifyPaymentSchema,
 } from "./orders.validation";
 import { creditReferrer } from "../referral/credit-referrer";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -98,20 +100,20 @@ async function resolveFinalPrice(opts: {
 
 // POST /api/v1/client/orders/course
 export const placeCourseOrder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = (req as any).user?.id || (req as any).user?._id;
+  logger.info("placeCourseOrder invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = (req as any).user?.id || (req as any).user?._id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("placeCourseOrder unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const data = placeCourseOrderSchema.parse(req.body);
 
     const plan = await PackageCourseEbookPrice.findById(data.planId);
-    if (!plan || !plan.status)
-      return res.status(404).json({ success: false, message: "Plan not found." });
+    if (!plan || !plan.status) { logger.warn("placeCourseOrder plan not found", { traceId, customerId: userId, planId: data.planId }); return res.status(404).json({ success: false, message: "Plan not found." }); }
 
-    if (data.courseId && String(plan.courseId) !== data.courseId)
-      return res.status(400).json({ success: false, message: "Plan does not belong to this course." });
-    if (data.packageId && String(plan.packageId) !== data.packageId)
-      return res.status(400).json({ success: false, message: "Plan does not belong to this package." });
+    if (data.courseId && String(plan.courseId) !== data.courseId) { logger.warn("placeCourseOrder course mismatch", { traceId, customerId: userId, planId: data.planId, courseId: data.courseId }); return res.status(400).json({ success: false, message: "Plan does not belong to this course." }); }
+    if (data.packageId && String(plan.packageId) !== data.packageId) { logger.warn("placeCourseOrder package mismatch", { traceId, customerId: userId, planId: data.planId, packageId: data.packageId }); return res.status(400).json({ success: false, message: "Plan does not belong to this package." }); }
 
     // Resolve the cart entity for appliesTo matching. Course id (if any)
     // wins over package id — a plan can only belong to one parent.
@@ -170,6 +172,7 @@ export const placeCourseOrder = async (req: Request, res: Response) => {
       });
     }
 
+    logger.info("placeCourseOrder success", { traceId, customerId: userId, orderId: subscription._id, amount: finalPrice, paymentDone });
     return res.status(201).json({
       success: true,
       data: {
@@ -183,22 +186,25 @@ export const placeCourseOrder = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) { logger.warn("placeCourseOrder validation failed", { traceId, customerId: userId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
+    logger.error("placeCourseOrder failed", { traceId, customerId: userId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // POST /api/v1/client/orders/ebook
 export const placeEbookOrder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = (req as any).user?.id || (req as any).user?._id;
+  logger.info("placeEbookOrder invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = (req as any).user?.id || (req as any).user?._id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("placeEbookOrder unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const data = placeEbookOrderSchema.parse(req.body);
 
     const plan = await EbookPrice.findById(data.planId);
-    if (!plan || !plan.status || String(plan.ebookId) !== data.ebookId)
-      return res.status(404).json({ success: false, message: "Plan not found for this ebook." });
+    if (!plan || !plan.status || String(plan.ebookId) !== data.ebookId) { logger.warn("placeEbookOrder plan not found", { traceId, customerId: userId, planId: data.planId, ebookId: data.ebookId }); return res.status(404).json({ success: false, message: "Plan not found for this ebook." }); }
 
     // Ebooks are not part of the new `appliesTo` enum — promocodes no longer
     // discount ebooks. Referral codes still apply through their own branch.
@@ -262,6 +268,7 @@ export const placeEbookOrder = async (req: Request, res: Response) => {
       }
     }
 
+    logger.info("placeEbookOrder success", { traceId, customerId: userId, orderId: order._id, amount: finalPrice, paymentDone });
     return res.status(201).json({
       success: true,
       data: {
@@ -275,22 +282,26 @@ export const placeEbookOrder = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) { logger.warn("placeEbookOrder validation failed", { traceId, customerId: userId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
+    logger.error("placeEbookOrder failed", { traceId, customerId: userId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // POST /api/v1/client/orders/verify-payment
 export const verifyPayment = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = (req as any).user?.id || (req as any).user?._id;
+  logger.info("verifyPayment invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = (req as any).user?.id || (req as any).user?._id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("verifyPayment unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const data = verifyPaymentSchema.parse(req.body);
 
     if (data.orderType === "ebook") {
       const order = await EbookOrder.findOne({ _id: data.orderId, customerId: userId });
-      if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+      if (!order) { logger.warn("verifyPayment ebook order not found", { traceId, customerId: userId, orderId: data.orderId }); return res.status(404).json({ success: false, message: "Order not found." }); }
 
       order.razorpayOrderId = data.razorpayOrderId;
       order.razorpayPaymentId = data.razorpayPaymentId;
@@ -298,7 +309,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
       await order.save();
 
       const plan = await EbookPrice.findById(order.planId);
-      if (!plan) return res.status(404).json({ success: false, message: "Plan missing." });
+      if (!plan) { logger.warn("verifyPayment ebook plan missing", { traceId, customerId: userId, orderId: data.orderId, planId: order.planId }); return res.status(404).json({ success: false, message: "Plan missing." }); }
       const startAt = new Date();
       const endAt = new Date(startAt.getTime() + plan.duration * 24 * 60 * 60 * 1000);
 
@@ -331,6 +342,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         });
       }
 
+      logger.info("verifyPayment ebook success", { traceId, customerId: userId, orderId: data.orderId, subscriptionId: sub._id });
       return res.status(200).json({ success: true, data: { order, subscription: sub } });
     }
 
@@ -339,10 +351,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
         _id: data.orderId,
         customerId: userId,
       });
-      if (!sub) return res.status(404).json({ success: false, message: "Order not found." });
+      if (!sub) { logger.warn("verifyPayment course order not found", { traceId, customerId: userId, orderId: data.orderId }); return res.status(404).json({ success: false, message: "Order not found." }); }
 
       const plan = await PackageCourseEbookPrice.findById(sub.packageId);
-      if (!plan) return res.status(404).json({ success: false, message: "Plan missing." });
+      if (!plan) { logger.warn("verifyPayment course plan missing", { traceId, customerId: userId, orderId: data.orderId, planId: sub.packageId }); return res.status(404).json({ success: false, message: "Plan missing." }); }
 
       const startAt = sub.startAt || new Date();
       const endAt = new Date(startAt.getTime() + plan.duration * 24 * 60 * 60 * 1000);
@@ -361,32 +373,39 @@ export const verifyPayment = async (req: Request, res: Response) => {
         });
       }
 
+      logger.info("verifyPayment course success", { traceId, customerId: userId, subscriptionId: sub._id });
       return res.status(200).json({ success: true, data: { subscription: sub } });
     }
 
     if (data.orderType === "book") {
       const order = await BookOrder.findOne({ _id: data.orderId, customerId: userId });
-      if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+      if (!order) { logger.warn("verifyPayment book order not found", { traceId, customerId: userId, orderId: data.orderId }); return res.status(404).json({ success: false, message: "Order not found." }); }
       order.razorpayOrderId = data.razorpayOrderId;
       order.razorpayPaymentId = data.razorpayPaymentId;
       order.status = "verified" as any;
       order.paidAt = new Date();
       await order.save();
+      logger.info("verifyPayment book success", { traceId, customerId: userId, orderId: order._id });
       return res.status(200).json({ success: true, data: order });
     }
 
+    logger.warn("verifyPayment unknown orderType", { traceId, customerId: userId, orderType: data.orderType });
     return res.status(400).json({ success: false, message: "Unknown order type." });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) { logger.warn("verifyPayment validation failed", { traceId, customerId: userId, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
+    logger.error("verifyPayment failed", { traceId, customerId: userId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/client/orders — unified listing
 export const listMyOrders = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = (req as any).user?.id || (req as any).user?._id;
+  logger.info("listMyOrders invoked", { traceId, path: req.originalUrl, customerId: userId });
+
   try {
-    const userId = (req as any).user?.id || (req as any).user?._id;
-    if (!userId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!userId) { logger.warn("listMyOrders unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const [courseSubs, ebookSubs, bookOrders] = await Promise.all([
       PackageCourseSubscription.find({ customerId: userId })
@@ -403,6 +422,7 @@ export const listMyOrders = async (req: Request, res: Response) => {
         .lean(),
     ]);
 
+    logger.info("listMyOrders success", { traceId, customerId: userId, courseSubs: courseSubs.length, ebookSubs: ebookSubs.length, bookOrders: bookOrders.length });
     return res.status(200).json({
       success: true,
       data: {
@@ -412,6 +432,7 @@ export const listMyOrders = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("listMyOrders failed", { traceId, customerId: userId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

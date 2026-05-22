@@ -4,7 +4,9 @@ import { LiveCourse } from "../../models/course/LiveCourse.model";
 import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { resolveLivePromo } from "../live-course/promo";
-import { getRazorpay, razorpayResponseFor } from "./razorpay";
+import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -26,15 +28,19 @@ const applyPromoSchema = z.object({
 // breakdown. The discount is re-validated server-side at create-order time —
 // this endpoint is purely so the UI can show the final price before checkout.
 export const applyLiveCoursePromo = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("applyLiveCoursePromo invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) { logger.warn("applyLiveCoursePromo unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { planId, promocode } = applyPromoSchema.parse(req.body);
 
     const plan = await LiveCoursePlan.findOne({ _id: planId, status: true });
-    if (!plan) return res.status(404).json({ success: false, message: "Plan not found or inactive." });
+    if (!plan) { logger.warn("applyLiveCoursePromo plan not found", { traceId, customerId, planId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }
     if (!plan.price || plan.price <= 0) {
+      logger.warn("applyLiveCoursePromo zero price", { traceId, customerId, planId });
       return res.status(400).json({
         success: false,
         message: "Plan amount is zero — promo codes don't apply.",
@@ -46,9 +52,11 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
       id: String(plan.liveCourseId),
     });
     if (error || !result) {
+      logger.warn("applyLiveCoursePromo promo rejected", { traceId, customerId, planId, promocode, error });
       return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
     }
 
+    logger.info("applyLiveCoursePromo success", { traceId, customerId, planId, promocode, finalAmount: result.finalAmount });
     return res.status(200).json({
       success: true,
       data: {
@@ -64,7 +72,8 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
       },
     });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) { logger.warn("applyLiveCoursePromo validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    logger.error("applyLiveCoursePromo failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
@@ -73,12 +82,16 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
 // Mirrors createCourseOrderPayment but writes to LiveCourseSubscription so the
 // existing course flow stays isolated. Body: { planId, promocode? }.
 export const createLiveCourseOrderPayment = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("createLiveCourseOrderPayment invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) { logger.warn("createLiveCourseOrderPayment unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const rp = getRazorpay();
     if (!rp) {
+      logger.error("createLiveCourseOrderPayment razorpay not configured", { traceId, customerId });
       return res.status(500).json({
         success: false,
         message: "Razorpay credentials not configured on the server.",
@@ -88,8 +101,9 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
     const { planId, promocode } = createOrderSchema.parse(req.body);
 
     const plan = await LiveCoursePlan.findOne({ _id: planId, status: true });
-    if (!plan) return res.status(404).json({ success: false, message: "Plan not found or inactive." });
+    if (!plan) { logger.warn("createLiveCourseOrderPayment plan not found", { traceId, customerId, planId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }
     if (!plan.price || plan.price <= 0) {
+      logger.warn("createLiveCourseOrderPayment zero price", { traceId, customerId, planId });
       return res.status(400).json({
         success: false,
         message: "Plan amount is zero — use the free-grant flow instead.",
@@ -97,9 +111,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
     }
 
     const course = await LiveCourse.findOne({ _id: plan.liveCourseId, status: true });
-    if (!course) {
-      return res.status(404).json({ success: false, message: "Live course not found or inactive." });
-    }
+    if (!course) { logger.warn("createLiveCourseOrderPayment course not found", { traceId, customerId, liveCourseId: plan.liveCourseId }); return res.status(404).json({ success: false, message: "Live course not found or inactive." }); }
 
     const now = new Date();
     const existingPaid = await LiveCourseSubscription.findOne({
@@ -110,6 +122,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       $or: [{ endAt: null }, { endAt: { $gte: now } }],
     });
     if (existingPaid) {
+      logger.warn("createLiveCourseOrderPayment already subscribed", { traceId, customerId, liveCourseId: plan.liveCourseId, existingId: existingPaid._id });
       return res.status(409).json({
         success: false,
         message: "You already have an active subscription to this live course.",
@@ -130,11 +143,13 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         id: String(plan.liveCourseId),
       });
       if (error || !result) {
+        logger.warn("createLiveCourseOrderPayment promo rejected", { traceId, customerId, promocode, error });
         return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
       }
       // Razorpay rejects sub-₹1 orders; a code that zeroes the price can't go
       // through online checkout — admin should free-grant instead.
       if (result.finalAmount < 1) {
+        logger.warn("createLiveCourseOrderPayment promo zeroes amount", { traceId, customerId, promocode });
         return res.status(400).json({
           success: false,
           message:
@@ -161,7 +176,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
 
     const receiptId = `live-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const rzpOrder = await rp.orders.create({
+    const rzpOrder = await createRazorpayOrder(rp, {
       amount: Math.round(chargeAmount * 100),
       currency: "INR",
       receipt: receiptId,
@@ -178,6 +193,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
     subscription.razorpayOrderId = rzpOrder.id;
     await subscription.save();
 
+    logger.info("createLiveCourseOrderPayment success", { traceId, customerId, subscriptionId: subscription._id, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
     return res.status(201).json({
       success: true,
       data: {
@@ -194,7 +210,8 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       },
     });
   } catch (e: any) {
-    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    if (e.issues) { logger.warn("createLiveCourseOrderPayment validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    logger.error("createLiveCourseOrderPayment failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

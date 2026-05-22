@@ -15,6 +15,8 @@ import {
   saveSingleAnswerSchema,
   submitAttemptSchema,
 } from "./exam.validation";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 const norm = (s: string) => (s ?? "").trim().toLowerCase();
@@ -23,6 +25,9 @@ const norm = (s: string) => (s ?? "").trim().toLowerCase();
 
 // GET /api/v1/client/exams/categories
 export const listCategories = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listCategories invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
   try {
     const { parentId } = req.query as Record<string, string>;
     const filter: any = { status: true };
@@ -32,19 +37,26 @@ export const listCategories = async (req: Request, res: Response) => {
     const categories = await ExamCategory.find(filter)
       .select("_id name image parentId orderBy")
       .sort({ orderBy: 1, name: 1 });
+    logger.info("listCategories success", { traceId, count: categories.length });
     return res.status(200).json({ success: true, data: categories });
   } catch (error: any) {
+    logger.error("listCategories failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/client/exams/categories/:categoryId/exams
 export const listExamsByCategory = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const categoryId = req.params.categoryId as string;
+  logger.info("listExamsByCategory invoked", { traceId, path: req.originalUrl, customerId, categoryId });
+
   try {
-    const customerId = req.user?.id;
-    const categoryId = req.params.categoryId as string;
-    if (!isObjectId(categoryId))
+    if (!isObjectId(categoryId)) {
+      logger.warn("listExamsByCategory invalid id", { traceId, categoryId });
       return res.status(400).json({ success: false, message: "Invalid category id." });
+    }
 
     const subjects = await ExamCategory.find({ parentId: categoryId, status: true })
       .select("_id name image orderBy")
@@ -83,11 +95,13 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
       (exam: any) => exam.type === ExamType.SUBJECT && exam.isCompleted
     );
 
+    logger.info("listExamsByCategory success", { traceId, customerId, categoryId, examCount: decorated.length });
     return res.status(200).json({
       success: true,
       data: { subjects, exams: decorated, completedTests },
     });
   } catch (error: any) {
+    logger.error("listExamsByCategory failed", { traceId, customerId, categoryId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -115,8 +129,11 @@ const weekRange = (year: number, month: number, week: number) => {
 };
 
 export const getDailyExams = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("getDailyExams invoked", { traceId, path: req.originalUrl, customerId, query: req.query });
+
   try {
-    const customerId = req.user?.id;
     const now = new Date();
     const endOfDay = new Date(now); endOfDay.setHours(23, 59, 59, 999);
 
@@ -264,6 +281,7 @@ export const getDailyExams = async (req: Request, res: Response) => {
       };
     });
 
+    logger.info("getDailyExams success", { traceId, customerId, level: "tests", count: decorated.length });
     return res.status(200).json({
       success: true,
       data: {
@@ -275,6 +293,7 @@ export const getDailyExams = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("getDailyExams failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -283,13 +302,21 @@ export const getDailyExams = async (req: Request, res: Response) => {
 
 // GET /api/v1/client/exams/:id — questions with options (old API shape). `answer` is not exposed.
 export const getExamQuestions = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  logger.info("getExamQuestions invoked", { traceId, path: req.originalUrl, examId: id, userId: req.user?.id });
+
   try {
-    const id = req.params.id as string;
-    if (!isObjectId(id))
+    if (!isObjectId(id)) {
+      logger.warn("getExamQuestions invalid id", { traceId, examId: id });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    }
 
     const exam = await Exam.findOne({ _id: id, status: ExamStatus.PUBLISHED });
-    if (!exam) return res.status(404).json({ success: false, message: "Exam not found or not published." });
+    if (!exam) {
+      logger.warn("getExamQuestions not found", { traceId, examId: id });
+      return res.status(404).json({ success: false, message: "Exam not found or not published." });
+    }
 
     const questions = await ExamQuestion.find({ examId: id, status: true })
       .sort({ orderBy: 1, createdAt: 1 })
@@ -315,8 +342,10 @@ export const getExamQuestions = async (req: Request, res: Response) => {
       answers: optsByQ[String(q._id)] || [],
     }));
 
+    logger.info("getExamQuestions success", { traceId, examId: id, questionCount: decorated.length });
     return res.status(200).json({ success: true, data: { exam, questions: decorated } });
   } catch (error: any) {
+    logger.error("getExamQuestions failed", { traceId, examId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -364,16 +393,26 @@ async function recomputeAnalytics(customerId: string) {
 // POST /api/v1/client/save/answers  (also mounted at /exams/:id/submit)
 // Body: { examId, timing, test: [{questionId, answerId}, ...], ratting? }
 export const saveAnswers = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("saveAnswers invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) {
+      logger.warn("saveAnswers unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const data = saveAnswersSchema.parse(req.body);
 
     const exam = await Exam.findById(data.examId);
-    if (!exam) return res.status(404).json({ success: false, message: "Exam is not found." });
+    if (!exam) {
+      logger.warn("saveAnswers exam not found", { traceId, customerId, examId: data.examId });
+      return res.status(404).json({ success: false, message: "Exam is not found." });
+    }
 
     if (exam.questionCount !== data.test.length) {
+      logger.warn("saveAnswers question count mismatch", { traceId, customerId, examId: data.examId, expected: exam.questionCount, got: data.test.length });
       return res.status(400).json({
         success: false,
         message: `Exam's total questions are not match with your total answers.`,
@@ -506,6 +545,7 @@ export const saveAnswers = async (req: Request, res: Response) => {
     const totalCandidates = bestPerUser.length;
     const rank = higher + 1;
 
+    logger.info("saveAnswers success", { traceId, customerId, examId: data.examId, score, rank });
     return res.status(200).json({
       success: true,
       data: {
@@ -514,7 +554,11 @@ export const saveAnswers = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) {
+      logger.warn("saveAnswers validation failed", { traceId, customerId, issues: error.issues });
+      return res.status(400).json({ success: false, errors: error.issues });
+    }
+    logger.error("saveAnswers failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -523,26 +567,38 @@ export const saveAnswers = async (req: Request, res: Response) => {
 
 // GET /api/v1/client/exams/:id/solution
 export const getSolutionByExam = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const examId = req.params.id as string;
+  logger.info("getSolutionByExam invoked", { traceId, path: req.originalUrl, customerId, examId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const examId = req.params.id as string;
-    if (!isObjectId(examId))
+    if (!customerId) {
+      logger.warn("getSolutionByExam unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+    if (!isObjectId(examId)) {
+      logger.warn("getSolutionByExam invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    }
 
     // Resolve which attempt to show: ?attemptId=<id> if provided, else latest submitted.
     const reqAttemptId = (req.query.attemptId as string | undefined) ?? undefined;
     let target;
     if (reqAttemptId) {
-      if (!isObjectId(reqAttemptId))
+      if (!isObjectId(reqAttemptId)) {
+        logger.warn("getSolutionByExam invalid attemptId", { traceId, attemptId: reqAttemptId });
         return res.status(400).json({ success: false, message: "Invalid attemptId." });
+      }
       target = await ExamResult.findOne({ _id: reqAttemptId, customerId, examId, status: true });
     } else {
       target = await ExamResult.findOne({ customerId, examId, status: true })
         .sort({ submittedAt: -1, attemptNumber: -1 });
     }
-    if (!target)
+    if (!target) {
+      logger.warn("getSolutionByExam no attempt", { traceId, customerId, examId });
       return res.status(404).json({ success: false, message: "No submitted attempt found." });
+    }
 
     const details = await ExamResultDetail.find({ examResultId: target._id })
       .populate({ path: "questionId", model: ExamQuestion })
@@ -573,34 +629,48 @@ export const getSolutionByExam = async (req: Request, res: Response) => {
         return { ...q, answers: questionOptions, result: d.result, point: d.point };
       });
 
+    logger.info("getSolutionByExam success", { traceId, customerId, examId, questionCount: questionList.length });
     return res.status(200).json({ success: true, data: questionList });
   } catch (error: any) {
+    logger.error("getSolutionByExam failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/client/exams/:id/solution/analytics
 export const getSolutionAnalyticsByExam = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const examId = req.params.id as string;
+  logger.info("getSolutionAnalyticsByExam invoked", { traceId, path: req.originalUrl, customerId, examId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const examId = req.params.id as string;
-    if (!isObjectId(examId))
+    if (!customerId) {
+      logger.warn("getSolutionAnalyticsByExam unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+    if (!isObjectId(examId)) {
+      logger.warn("getSolutionAnalyticsByExam invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    }
 
     const reqAttemptId = (req.query.attemptId as string | undefined) ?? undefined;
     let examResult: any;
     if (reqAttemptId) {
-      if (!isObjectId(reqAttemptId))
+      if (!isObjectId(reqAttemptId)) {
+        logger.warn("getSolutionAnalyticsByExam invalid attemptId", { traceId, attemptId: reqAttemptId });
         return res.status(400).json({ success: false, message: "Invalid attemptId." });
+      }
       examResult = await ExamResult.findOne({ _id: reqAttemptId, customerId, examId, status: true }).lean();
     } else {
       examResult = await ExamResult.findOne({ customerId, examId, status: true })
         .sort({ submittedAt: -1, attemptNumber: -1 })
         .lean();
     }
-    if (!examResult)
+    if (!examResult) {
+      logger.warn("getSolutionAnalyticsByExam no attempt", { traceId, customerId, examId });
       return res.status(404).json({ success: false, message: "No submitted attempt found." });
+    }
 
     const accuracy =
       examResult.total > 0 ? (examResult.success * 100) / examResult.total : 0;
@@ -617,20 +687,30 @@ export const getSolutionAnalyticsByExam = async (req: Request, res: Response) =>
     examResult.accuracy = Math.round(accuracy * 100) / 100;
     examResult.rank = `${higher + 1}/${totalCandidates}`;
 
+    logger.info("getSolutionAnalyticsByExam success", { traceId, customerId, examId });
     return res.status(200).json({ success: true, data: { examResult } });
   } catch (error: any) {
+    logger.error("getSolutionAnalyticsByExam failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/client/exams/:id/solution/download
 export const getSolutionDownloadByExam = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const examId = req.params.id as string;
+  logger.info("getSolutionDownloadByExam invoked", { traceId, path: req.originalUrl, customerId, examId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const examId = req.params.id as string;
-    if (!isObjectId(examId))
+    if (!customerId) {
+      logger.warn("getSolutionDownloadByExam unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+    if (!isObjectId(examId)) {
+      logger.warn("getSolutionDownloadByExam invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    }
 
     const attemptId = (req.query.attemptId as string | undefined) ?? undefined;
     const { pdf, fileName } = await generateExamSolutionPdf(examId, customerId, attemptId);
@@ -640,10 +720,16 @@ export const getSolutionDownloadByExam = async (req: Request, res: Response) => 
       "Content-Length": String(pdf.length),
       "Content-Disposition": `attachment; filename="${fileName}"`,
     });
+    logger.info("getSolutionDownloadByExam success", { traceId, customerId, examId, bytes: pdf.length });
     return res.send(pdf);
   } catch (error: any) {
     const msg = error?.message || "Failed to generate PDF.";
     const code = /not found|Invalid/i.test(msg) ? 404 : 500;
+    if (code === 500) {
+      logger.error("getSolutionDownloadByExam failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
+    } else {
+      logger.warn("getSolutionDownloadByExam client error", { traceId, customerId, examId, msg });
+    }
     return res.status(code).json({ success: false, message: msg });
   }
 };
@@ -652,9 +738,15 @@ export const getSolutionDownloadByExam = async (req: Request, res: Response) => 
 
 // GET /api/v1/client/exams/my/attempts
 export const listMyResults = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listMyResults invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) {
+      logger.warn("listMyResults unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const { page = "1", limit = "20", examId } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -673,12 +765,14 @@ export const listMyResults = async (req: Request, res: Response) => {
       ExamResult.countDocuments(filter),
     ]);
 
+    logger.info("listMyResults success", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
+    logger.error("listMyResults failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -687,9 +781,15 @@ export const listMyResults = async (req: Request, res: Response) => {
 // Past (finished) attempts of DAILY-type exams, for the "Exam Analytics" screen.
 // Predicate matches the `pastExams` count on /profile/dashboard exactly so badge ⇄ list agree.
 export const listMyPastDailyResults = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listMyPastDailyResults invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) {
+      logger.warn("listMyPastDailyResults unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
 
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -754,36 +854,54 @@ export const listMyPastDailyResults = async (req: Request, res: Response) => {
     ]);
 
     const total = totalRows[0]?.n ?? 0;
+    logger.info("listMyPastDailyResults success", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
       data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
+    logger.error("listMyPastDailyResults failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/client/exams/my/analytics
 export const getMyOverallAnalytics = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("getMyOverallAnalytics invoked", { traceId, path: req.originalUrl, customerId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!customerId) {
+      logger.warn("getMyOverallAnalytics unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
     const analytics = await ExamResultDetailAnalytics.findOne({ customerId }).lean();
+    logger.info("getMyOverallAnalytics success", { traceId, customerId });
     return res.status(200).json({ success: true, data: analytics });
   } catch (error: any) {
+    logger.error("getMyOverallAnalytics failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // POST /api/v1/client/exams/:id/rate
 export const rateExamResult = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const examId = req.params.id as string;
+  logger.info("rateExamResult invoked", { traceId, path: req.originalUrl, customerId, examId });
+
   try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const examId = req.params.id as string;
-    if (!isObjectId(examId))
+    if (!customerId) {
+      logger.warn("rateExamResult unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+    if (!isObjectId(examId)) {
+      logger.warn("rateExamResult invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Invalid exam id." });
+    }
 
     const { ratting } = rateResultSchema.parse(req.body);
     const result = await ExamResult.findOneAndUpdate(
@@ -791,25 +909,42 @@ export const rateExamResult = async (req: Request, res: Response) => {
       { $set: { ratting } },
       { new: true }
     );
-    if (!result)
+    if (!result) {
+      logger.warn("rateExamResult result not found", { traceId, customerId, examId });
       return res.status(404).json({ success: false, message: "No result found to rate." });
+    }
+    logger.info("rateExamResult success", { traceId, customerId, examId, ratting });
     return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) {
+      logger.warn("rateExamResult validation failed", { traceId, customerId, issues: error.issues });
+      return res.status(400).json({ success: false, errors: error.issues });
+    }
+    logger.error("rateExamResult failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/client/exams/:id/detail
 export const getExamDetail = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  logger.info("getExamDetail invoked", { traceId, path: req.originalUrl, examId: id, userId: req.user?.id });
+
   try {
-    const id = req.params.id as string;
-    if (!isObjectId(id))
+    if (!isObjectId(id)) {
+      logger.warn("getExamDetail invalid id", { traceId, examId: id });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    }
     const exam = await Exam.findOne({ _id: id, status: ExamStatus.PUBLISHED });
-    if (!exam) return res.status(404).json({ success: false, message: "Exam not found or not published." });
+    if (!exam) {
+      logger.warn("getExamDetail not found", { traceId, examId: id });
+      return res.status(404).json({ success: false, message: "Exam not found or not published." });
+    }
+    logger.info("getExamDetail success", { traceId, examId: id });
     return res.status(200).json({ success: true, data: exam });
   } catch (error: any) {
+    logger.error("getExamDetail failed", { traceId, examId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -824,20 +959,33 @@ const isAttemptExpired = (r: any, durationMinutes: number) => {
 
 // POST /api/v1/client/quizzes/:id/attempts/start
 export const startAttempt = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const examId = req.params.id as string;
+  logger.info("startAttempt invoked", { traceId, path: req.originalUrl, customerId, examId });
 
-    const examId = req.params.id as string;
-    if (!isObjectId(examId))
+  try {
+    if (!customerId) {
+      logger.warn("startAttempt unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (!isObjectId(examId)) {
+      logger.warn("startAttempt invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    }
 
     const exam = await Exam.findOne({ _id: examId, status: ExamStatus.PUBLISHED });
-    if (!exam) return res.status(404).json({ success: false, message: "Exam not found or not published." });
+    if (!exam) {
+      logger.warn("startAttempt exam not found", { traceId, examId });
+      return res.status(404).json({ success: false, message: "Exam not found or not published." });
+    }
 
     const now = new Date();
-    if (exam.startAt && now < new Date(exam.startAt))
+    if (exam.startAt && now < new Date(exam.startAt)) {
+      logger.warn("startAttempt not yet started", { traceId, customerId, examId, startAt: exam.startAt });
       return res.status(400).json({ success: false, message: "Exam has not started yet." });
+    }
 
     // Resume any in-progress attempt instead of creating a new row.
     const inProgress = await ExamResult.findOne({ customerId, examId, status: false });
@@ -867,6 +1015,7 @@ export const startAttempt = async (req: Request, res: Response) => {
       });
     }
 
+    logger.info("startAttempt success", { traceId, customerId, examId, attemptId: attempt._id, resumed: !!inProgress });
     return res.status(200).json({
       success: true,
       data: {
@@ -879,6 +1028,7 @@ export const startAttempt = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("startAttempt failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -886,28 +1036,49 @@ export const startAttempt = async (req: Request, res: Response) => {
 // POST /api/v1/client/quizzes/:id/attempts/:attemptId/answer
 // Body: { questionId, answerId? }   (answerId omitted/null => skip)
 export const saveSingleAnswer = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const { id: examId, attemptId } = req.params as { id: string; attemptId: string };
+  logger.info("saveSingleAnswer invoked", { traceId, path: req.originalUrl, customerId, examId, attemptId });
 
-    const { id: examId, attemptId } = req.params as { id: string; attemptId: string };
-    if (!isObjectId(examId) || !isObjectId(attemptId))
+  try {
+    if (!customerId) {
+      logger.warn("saveSingleAnswer unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (!isObjectId(examId) || !isObjectId(attemptId)) {
+      logger.warn("saveSingleAnswer invalid ids", { traceId, examId, attemptId });
       return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
+    }
 
     const data = saveSingleAnswerSchema.parse(req.body);
 
     const attempt = await ExamResult.findOne({ _id: attemptId, customerId, examId });
-    if (!attempt) return res.status(404).json({ success: false, message: "Attempt not found." });
-    if (attempt.status === true)
+    if (!attempt) {
+      logger.warn("saveSingleAnswer attempt not found", { traceId, customerId, attemptId });
+      return res.status(404).json({ success: false, message: "Attempt not found." });
+    }
+    if (attempt.status === true) {
+      logger.warn("saveSingleAnswer already submitted", { traceId, customerId, attemptId });
       return res.status(400).json({ success: false, message: "Attempt already submitted." });
+    }
 
     const exam = await Exam.findById(examId);
-    if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
-    if (isAttemptExpired(attempt, exam.durationMinutes))
+    if (!exam) {
+      logger.warn("saveSingleAnswer exam not found", { traceId, examId });
+      return res.status(404).json({ success: false, message: "Exam not found." });
+    }
+    if (isAttemptExpired(attempt, exam.durationMinutes)) {
+      logger.warn("saveSingleAnswer expired", { traceId, customerId, attemptId });
       return res.status(400).json({ success: false, message: "Attempt has expired. Please submit." });
+    }
 
     const question = await ExamQuestion.findOne({ _id: data.questionId, examId });
-    if (!question) return res.status(400).json({ success: false, message: "Question does not belong to exam." });
+    if (!question) {
+      logger.warn("saveSingleAnswer question mismatch", { traceId, customerId, examId, questionId: data.questionId });
+      return res.status(400).json({ success: false, message: "Question does not belong to exam." });
+    }
 
     let result: ExamResultType;
     let point = 0;
@@ -917,8 +1088,10 @@ export const saveSingleAnswer = async (req: Request, res: Response) => {
       result = ExamResultType.SKIP;
     } else {
       const option = await ExamQuestionOption.findOne({ _id: data.answerId, questionId: data.questionId });
-      if (!option)
+      if (!option) {
+        logger.warn("saveSingleAnswer answer mismatch", { traceId, customerId, questionId: data.questionId, answerId: data.answerId });
         return res.status(400).json({ success: false, message: "Answer does not belong to question." });
+      }
       answerId = String(option._id);
       if (norm(option.name) === "skip") {
         result = ExamResultType.SKIP;
@@ -947,9 +1120,14 @@ export const saveSingleAnswer = async (req: Request, res: Response) => {
       { upsert: true }
     );
 
+    logger.info("saveSingleAnswer success", { traceId, customerId, examId, attemptId, questionId: data.questionId, result });
     return res.status(200).json({ success: true, data: { saved: true } });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) {
+      logger.warn("saveSingleAnswer validation failed", { traceId, customerId, issues: error.issues });
+      return res.status(400).json({ success: false, errors: error.issues });
+    }
+    logger.error("saveSingleAnswer failed", { traceId, customerId, examId, attemptId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -957,23 +1135,39 @@ export const saveSingleAnswer = async (req: Request, res: Response) => {
 // POST /api/v1/client/quizzes/:id/attempts/:attemptId/submit
 // Body: { timing?, ratting? }   Scores from saved details; unanswered => SKIP.
 export const submitAttempt = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const { id: examId, attemptId } = req.params as { id: string; attemptId: string };
+  logger.info("submitAttempt invoked", { traceId, path: req.originalUrl, customerId, examId, attemptId });
 
-    const { id: examId, attemptId } = req.params as { id: string; attemptId: string };
-    if (!isObjectId(examId) || !isObjectId(attemptId))
+  try {
+    if (!customerId) {
+      logger.warn("submitAttempt unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (!isObjectId(examId) || !isObjectId(attemptId)) {
+      logger.warn("submitAttempt invalid ids", { traceId, examId, attemptId });
       return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
+    }
 
     const data = submitAttemptSchema.parse(req.body ?? {});
 
     const attempt = await ExamResult.findOne({ _id: attemptId, customerId, examId });
-    if (!attempt) return res.status(404).json({ success: false, message: "Attempt not found." });
-    if (attempt.status === true)
+    if (!attempt) {
+      logger.warn("submitAttempt attempt not found", { traceId, customerId, attemptId });
+      return res.status(404).json({ success: false, message: "Attempt not found." });
+    }
+    if (attempt.status === true) {
+      logger.warn("submitAttempt already submitted", { traceId, customerId, attemptId });
       return res.status(400).json({ success: false, message: "Attempt already submitted." });
+    }
 
     const exam = await Exam.findById(examId);
-    if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
+    if (!exam) {
+      logger.warn("submitAttempt exam not found", { traceId, examId });
+      return res.status(404).json({ success: false, message: "Exam not found." });
+    }
 
     const questions = await ExamQuestion.find({ examId, status: true }).select("_id");
     const allQIds = questions.map((q) => String(q._id));
@@ -1066,12 +1260,17 @@ export const submitAttempt = async (req: Request, res: Response) => {
     const totalCandidates = bestPerUser.length;
     const rank = higher + 1;
 
+    logger.info("submitAttempt success", { traceId, customerId, examId, attemptId, score: finalResult?.score, rank });
     return res.status(200).json({
       success: true,
       data: { examResult: finalResult, rank: `${rank}/${totalCandidates}` },
     });
   } catch (error: any) {
-    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    if (error.issues) {
+      logger.warn("submitAttempt validation failed", { traceId, customerId, issues: error.issues });
+      return res.status(400).json({ success: false, errors: error.issues });
+    }
+    logger.error("submitAttempt failed", { traceId, customerId, examId, attemptId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -1079,22 +1278,34 @@ export const submitAttempt = async (req: Request, res: Response) => {
 // GET /api/v1/client/quizzes/:id/attempts
 // Lists all of this user's attempts for an exam (history list).
 export const listAttempts = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const examId = req.params.id as string;
+  logger.info("listAttempts invoked", { traceId, path: req.originalUrl, customerId, examId });
 
-    const examId = req.params.id as string;
-    if (!isObjectId(examId))
+  try {
+    if (!customerId) {
+      logger.warn("listAttempts unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (!isObjectId(examId)) {
+      logger.warn("listAttempts invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    }
 
     const exam = await Exam.findById(examId).select("title type durationMinutes");
-    if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
+    if (!exam) {
+      logger.warn("listAttempts exam not found", { traceId, examId });
+      return res.status(404).json({ success: false, message: "Exam not found." });
+    }
 
     const attempts = await ExamResult.find({ customerId, examId })
       .sort({ attemptNumber: -1 })
       .select("_id attemptNumber total attempt skip success failed score timing status inProgress startedAt submittedAt createdAt")
       .lean();
 
+    logger.info("listAttempts success", { traceId, customerId, examId, count: attempts.length });
     return res.status(200).json({
       success: true,
       data: {
@@ -1103,6 +1314,7 @@ export const listAttempts = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("listAttempts failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -1111,16 +1323,27 @@ export const listAttempts = async (req: Request, res: Response) => {
 // Aggregate stats across ALL of this user's submitted attempts for the exam.
 // Powers the donut + summary on the Exam Analytics screen.
 export const getAttemptsAggregate = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const examId = req.params.id as string;
+  logger.info("getAttemptsAggregate invoked", { traceId, path: req.originalUrl, customerId, examId });
 
-    const examId = req.params.id as string;
-    if (!isObjectId(examId))
+  try {
+    if (!customerId) {
+      logger.warn("getAttemptsAggregate unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (!isObjectId(examId)) {
+      logger.warn("getAttemptsAggregate invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    }
 
     const exam = await Exam.findById(examId).select("title questionCount durationMinutes");
-    if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
+    if (!exam) {
+      logger.warn("getAttemptsAggregate exam not found", { traceId, examId });
+      return res.status(404).json({ success: false, message: "Exam not found." });
+    }
 
     const cid = new mongoose.Types.ObjectId(customerId);
     const eid = new mongoose.Types.ObjectId(examId);
@@ -1194,6 +1417,7 @@ export const getAttemptsAggregate = async (req: Request, res: Response) => {
     const higher = bestPerUser.filter((u: any) => u.best > myBest).length;
     const totalCandidates = bestPerUser.length;
 
+    logger.info("getAttemptsAggregate success", { traceId, customerId, examId, attemptsCount: summary.attemptsCount });
     return res.status(200).json({
       success: true,
       data: {
@@ -1203,26 +1427,40 @@ export const getAttemptsAggregate = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("getAttemptsAggregate failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 // GET /api/v1/client/quizzes/:id/attempts/active
 export const getActiveAttempt = async (req: Request, res: Response) => {
-  try {
-    const customerId = req.user?.id;
-    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const examId = req.params.id as string;
+  logger.info("getActiveAttempt invoked", { traceId, path: req.originalUrl, customerId, examId });
 
-    const examId = req.params.id as string;
-    if (!isObjectId(examId))
+  try {
+    if (!customerId) {
+      logger.warn("getActiveAttempt unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (!isObjectId(examId)) {
+      logger.warn("getActiveAttempt invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    }
 
     const attempt = await ExamResult.findOne({ customerId, examId, status: false });
-    if (!attempt)
+    if (!attempt) {
+      logger.info("getActiveAttempt no active", { traceId, customerId, examId });
       return res.status(200).json({ success: true, data: null });
+    }
 
     const exam = await Exam.findById(examId);
-    if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
+    if (!exam) {
+      logger.warn("getActiveAttempt exam not found", { traceId, examId });
+      return res.status(404).json({ success: false, message: "Exam not found." });
+    }
 
     const details = await ExamResultDetail.find({ examResultId: attempt._id })
       .select("questionId answerId result")
@@ -1231,6 +1469,7 @@ export const getActiveAttempt = async (req: Request, res: Response) => {
     const now = new Date();
     const expired = isAttemptExpired(attempt, exam.durationMinutes);
 
+    logger.info("getActiveAttempt success", { traceId, customerId, examId, attemptId: attempt._id, expired });
     return res.status(200).json({
       success: true,
       data: {
@@ -1247,6 +1486,7 @@ export const getActiveAttempt = async (req: Request, res: Response) => {
       },
     });
   } catch (error: any) {
+    logger.error("getActiveAttempt failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

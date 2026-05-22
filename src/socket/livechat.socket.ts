@@ -1,9 +1,11 @@
 import { Server as HttpServer } from "http";
 import { Server as SocketServer, Socket } from "socket.io";
-import jwt from "jsonwebtoken";
+import { createAdapter } from "@socket.io/redis-adapter";
+import { verifyAccessToken } from "../utils/jwtSigner";
 import { Types } from "mongoose";
 import { Customer } from "../models/customer/Customer.model";
 import { LiveChatMessage } from "../models/course/LiveChatMessage.model";
+import { LiveChatBan } from "../models/course/LiveChatBan.model";
 import { LivePoll } from "../models/course/LivePoll.model";
 import { LivePollVote } from "../models/course/LivePollVote.model";
 import { LiveSession } from "../models/course/LiveSession.model";
@@ -27,17 +29,57 @@ export function roomKey(liveClassId: string) {
   return `live_chat:${liveClassId}`;
 }
 
-// Distinct customers currently in a live class room — a customer with two tabs
-// counts once.
-function viewerCount(liveClassId: string): number {
-  const room = io?.sockets.adapter.rooms.get(roomKey(liveClassId));
-  if (!room) return 0;
-  const customers = new Set<string>();
-  for (const sid of room) {
-    const s = io.sockets.sockets.get(sid) as AuthenticatedSocket | undefined;
-    if (s?.customerId) customers.add(s.customerId);
+// Called by the admin ban endpoint. Emits `chat_banned` to every live socket
+// belonging to this customer, then disconnects them so any in-flight UI state
+// flips to the banned view without a refresh. Cluster-wide via the Redis
+// adapter — fetchSockets() returns RemoteSocket objects from other pods, but
+// RemoteSocket.disconnect() is supported and routes back to the owning pod.
+export async function disconnectChatSocketsForCustomer(
+  customerId: string,
+  payload: { reason?: string } = {}
+): Promise<void> {
+  if (!io) return;
+  try {
+    const sockets = await io.fetchSockets();
+    for (const s of sockets) {
+      const cid = (s.data?.customerId as string | undefined) ?? (s as any).customerId;
+      if (cid !== customerId) continue;
+      s.emit("chat_banned", {
+        message: "You are blocked from sending messages.",
+        reason: payload.reason ?? null,
+      });
+      s.disconnect(true);
+    }
+  } catch (err) {
+    logger.warn("disconnectChatSocketsForCustomer failed", {
+      customerId,
+      err: (err as Error).message,
+    });
   }
-  return customers.size;
+}
+
+// Distinct customers currently in a live class room — a customer with two tabs
+// counts once. Uses Socket.io's `fetchSockets({})` which, with the Redis
+// adapter attached, queries EVERY pod in the cluster and returns the union
+// of socket metadata. Without the adapter this would only count sockets on
+// the current pod, giving the wrong "now watching" number in production.
+async function viewerCount(liveClassId: string): Promise<number> {
+  if (!io) return 0;
+  try {
+    const sockets = await io.in(roomKey(liveClassId)).fetchSockets();
+    const customers = new Set<string>();
+    for (const s of sockets) {
+      const cid = (s.data?.customerId as string | undefined) ?? (s as any).customerId;
+      if (cid) customers.add(cid);
+    }
+    return customers.size;
+  } catch (err) {
+    logger.warn("viewerCount fetchSockets failed", {
+      liveClassId,
+      err: (err as Error).message,
+    });
+    return 0;
+  }
 }
 
 // Open an attendance row for this socket's stint in a live class. Best-effort.
@@ -80,8 +122,9 @@ async function closeAttendance(socket: AuthenticatedSocket) {
 
 async function authenticateSocket(token: string): Promise<{ customerId: string; userName: string } | null> {
   try {
-    const secret = process.env.JWT_ACCESS_SECRET as string;
-    const decoded = jwt.verify(token, secret) as any;
+    // Keyring-aware verify so socket auth survives JWT key rotation alongside
+    // HTTP requests. See utils/jwtSigner.ts + config/jwtKeys.ts.
+    const decoded = verifyAccessToken<any>(token);
 
     if (decoded.type !== "customer") return null;
 
@@ -109,6 +152,26 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
     transports: ["websocket", "polling"],
   });
 
+  // Redis adapter for multi-pod broadcasting. Without this, a chat message
+  // sent through pod A's socket never reaches viewers connected to pod B —
+  // each pod's in-memory Adapter only knows about its own sockets.
+  //
+  // Dedicated pub/sub connections: Redis pub/sub mode blocks a connection
+  // from issuing other commands while subscribed, so reusing the shared
+  // `redisClient` (which serves cache/session/breaker traffic) would lock
+  // those reads. ioredis's .duplicate() preserves the host/port/password/
+  // retry config of the shared client without duplicating that wiring.
+  const pubClient = redisClient.duplicate();
+  const subClient = redisClient.duplicate();
+  pubClient.on("error", (err) =>
+    logger.error("Socket.io pub client error", { err: (err as Error).message })
+  );
+  subClient.on("error", (err) =>
+    logger.error("Socket.io sub client error", { err: (err as Error).message })
+  );
+  io.adapter(createAdapter(pubClient, subClient));
+  logger.info("Live chat: Socket.io Redis adapter attached.");
+
   // Only customer tokens are accepted — admin manages polls via REST API
   io.use(async (socket: AuthenticatedSocket, next) => {
     const token =
@@ -122,6 +185,12 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
 
     socket.customerId = auth.customerId;
     socket.userName = auth.userName;
+    // Also stash on socket.data so the Redis adapter's fetchSockets() can
+    // see the customerId on RemoteSocket objects from OTHER pods. Local
+    // socket reads continue to use socket.customerId; only cross-pod reads
+    // need socket.data.
+    socket.data.customerId = auth.customerId;
+    socket.data.userName = auth.userName;
     next();
   });
 
@@ -149,14 +218,14 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
           userName: socket.userName,
           leftAt: new Date().toISOString(),
         });
-        io.to(roomKey(prev)).emit("viewer_count", { liveClassId: prev, count: viewerCount(prev) });
+        io.to(roomKey(prev)).emit("viewer_count", { liveClassId: prev, count: await viewerCount(prev) });
       }
 
       socket.join(roomKey(liveClassId));
       await openAttendance(socket, liveClassId);
 
       try {
-        const history = await LiveChatMessage.find({ liveClassId })
+        const history = await LiveChatMessage.find({ liveClassId, deletedAt: null })
           .sort({ createdAt: 1 })
           .limit(50)
           .select("customerId adminId isAdmin userName message createdAt")
@@ -197,7 +266,7 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
       });
       io.to(roomKey(liveClassId)).emit("viewer_count", {
         liveClassId,
-        count: viewerCount(liveClassId),
+        count: await viewerCount(liveClassId),
       });
     });
 
@@ -259,6 +328,14 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
       if (!text) { socket.emit("error", { message: "Message cannot be empty" }); return; }
       if (text.length > 2000) { socket.emit("error", { message: "Message too long (max 2000 characters)" }); return; }
 
+      // Global chat ban — same enforcement as the http path. Reject early and
+      // let the client render the "you're banned" state.
+      const banned = await LiveChatBan.exists({ customerId: socket.customerId });
+      if (banned) {
+        socket.emit("chat_banned", { message: "You are blocked from sending messages." });
+        return;
+      }
+
       try {
         const saved = await LiveChatMessage.create({
           liveClassId,
@@ -297,7 +374,7 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
       });
       io.to(roomKey(liveClassId)).emit("viewer_count", {
         liveClassId,
-        count: viewerCount(liveClassId),
+        count: await viewerCount(liveClassId),
       });
     });
 
@@ -315,7 +392,7 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
           userName: socket.userName,
           leftAt: new Date().toISOString(),
         });
-        io.to(roomKey(room)).emit("viewer_count", { liveClassId: room, count: viewerCount(room) });
+        io.to(roomKey(room)).emit("viewer_count", { liveClassId: room, count: await viewerCount(room) });
       }
       logger.info("Live chat: client disconnected", { socketId: socket.id, customerId: socket.customerId });
     });

@@ -45,6 +45,7 @@ export const updateMyGoals = async (customerId: string, goals: string[], traceId
   logger.info("updateMyGoals service invoked", { traceId, customerId, goalCount: goals?.length });
   try {
     if (!Array.isArray(goals)) {
+      logger.warn("updateMyGoals service invalid input", { traceId, customerId });
       return { ok: false, message: "Goals must be an array of IDs." };
     }
     const validGoals = goals.filter((id) => Types.ObjectId.isValid(id));
@@ -85,6 +86,7 @@ export const getGoalsWithSelection = async (customerId: string, traceId?: string
   try {
     const customer = await Customer.findById(customerId).select("goals");
     if (!customer) {
+      logger.warn("getGoalsWithSelection service customer not found", { traceId, customerId });
       return { ok: false, message: "Customer not found." };
     }
     const selectedSet = new Set((customer.goals || []).map((id) => id.toString()));
@@ -107,9 +109,10 @@ export const getGoalsWithSelection = async (customerId: string, traceId?: string
       };
     });
 
+    logger.info("getGoalsWithSelection service completed", { traceId, customerId, count: shaped.length });
     return { ok: true, data: shaped };
   } catch (error) {
-    logger.error("getGoalsWithSelection service error", { traceId, customerId, error: (error as Error).message });
+    logger.error("getGoalsWithSelection service error", { traceId, customerId, error: (error as Error).message, stack: (error as Error).stack });
     return { ok: false, message: "Failed to fetch goals." };
   }
 };

@@ -55,9 +55,13 @@ async function assertFolderBelongsToCourse(folderId: string, liveCourseId: strin
 // Returns the flat list of folders for this course PLUS the parent/child
 // relation rows so the UI can build a tree.
 export const listFolders = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  logger.info("listFolders invoked", { traceId, path: req.originalUrl, liveCourseId, userId: req.user?.id });
+
   try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
     if (!(await assertCourseExists(liveCourseId))) {
+      logger.warn("listFolders course not found", { traceId, liveCourseId });
       return failure(res, "Live course not found.", 404);
     }
 
@@ -72,9 +76,10 @@ export const listFolders = async (req: Request, res: Response) => {
         }).lean()
       : [];
 
+    logger.info("listFolders success", { traceId, liveCourseId, folderCount: folders.length, relationCount: relations.length });
     return success(res, { folders, relations }, "Folders fetched.");
   } catch (err) {
-    logger.error("LiveCourse listFolders failed", { error: getErrorMessage(err) });
+    logger.error("listFolders failed", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list folders.", 500);
   }
 };
@@ -83,10 +88,14 @@ export const listFolders = async (req: Request, res: Response) => {
 // Creates a folder under this live course. If parentFolderId is given, also
 // inserts a VideoCategoryRelation row (parent → new child).
 export const createFolder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  logger.info("createFolder invoked", { traceId, path: req.originalUrl, liveCourseId, userId: req.user?.id });
+
   const txn = await mongoose.startSession();
   try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
     if (!(await assertCourseExists(liveCourseId))) {
+      logger.warn("createFolder course not found", { traceId, liveCourseId });
       return failure(res, "Live course not found.", 404);
     }
 
@@ -94,13 +103,19 @@ export const createFolder = async (req: Request, res: Response) => {
     try {
       validated = createFolderSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      if (err instanceof z.ZodError) {
+        logger.warn("createFolder validation failed", { traceId, liveCourseId, issues: err.issues });
+        return zodIssueResponse(res, err);
+      }
       throw err;
     }
 
     if (validated.parentFolderId) {
       const parentOk = await assertFolderBelongsToCourse(validated.parentFolderId, liveCourseId);
-      if (!parentOk) return failure(res, "parentFolderId does not belong to this live course.", 422);
+      if (!parentOk) {
+        logger.warn("createFolder invalid parent", { traceId, liveCourseId, parentFolderId: validated.parentFolderId });
+        return failure(res, "parentFolderId does not belong to this live course.", 422);
+      }
     }
 
     txn.startTransaction();
@@ -137,11 +152,11 @@ export const createFolder = async (req: Request, res: Response) => {
     }
 
     await txn.commitTransaction();
-    logger.info("LiveCourse folder created", { liveCourseId, folderId: folder._id });
+    logger.info("createFolder success", { traceId, liveCourseId, folderId: folder._id });
     return success(res, { folder: folder.toObject() }, "Folder created.", 201);
   } catch (err) {
     if (txn.inTransaction()) await txn.abortTransaction();
-    logger.error("LiveCourse createFolder failed", { error: getErrorMessage(err) });
+    logger.error("createFolder failed", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to create folder.", 500);
   } finally {
     txn.endSession();
@@ -150,10 +165,14 @@ export const createFolder = async (req: Request, res: Response) => {
 
 // PATCH /api/v1/admin/live-courses/:liveCourseId/folders/:folderId
 export const updateFolder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  logger.info("updateFolder invoked", { traceId, path: req.originalUrl, liveCourseId, folderId, userId: req.user?.id });
+
   try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
-    const folderId = String(req.params.folderId ?? "");
     if (!(await assertFolderBelongsToCourse(folderId, liveCourseId))) {
+      logger.warn("updateFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
 
@@ -161,7 +180,10 @@ export const updateFolder = async (req: Request, res: Response) => {
     try {
       validated = updateFolderSchema.parse(req.body);
     } catch (err) {
-      if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+      if (err instanceof z.ZodError) {
+        logger.warn("updateFolder validation failed", { traceId, liveCourseId, folderId, issues: err.issues });
+        return zodIssueResponse(res, err);
+      }
       throw err;
     }
 
@@ -169,9 +191,10 @@ export const updateFolder = async (req: Request, res: Response) => {
       new: true,
       runValidators: true,
     });
+    logger.info("updateFolder success", { traceId, liveCourseId, folderId });
     return success(res, { folder: updated?.toObject() }, "Folder updated.");
   } catch (err) {
-    logger.error("LiveCourse updateFolder failed", { error: getErrorMessage(err) });
+    logger.error("updateFolder failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to update folder.", 500);
   }
 };
@@ -180,17 +203,21 @@ export const updateFolder = async (req: Request, res: Response) => {
 // Refuses to delete the root folder (the one stored on LiveCourse.videoCategoryId).
 // Cascades: deletes all videos in this folder, all relations referencing it.
 export const deleteFolder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveCourseId = String(req.params.liveCourseId ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  logger.info("deleteFolder invoked", { traceId, path: req.originalUrl, liveCourseId, folderId, userId: req.user?.id });
+
   const txn = await mongoose.startSession();
   try {
-    const liveCourseId = String(req.params.liveCourseId ?? "");
-    const folderId = String(req.params.folderId ?? "");
-
     if (!(await assertFolderBelongsToCourse(folderId, liveCourseId))) {
+      logger.warn("deleteFolder folder not found", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
 
     const course = await LiveCourse.findById(liveCourseId).select("videoCategoryId").lean();
     if (course?.videoCategoryId && String(course.videoCategoryId) === folderId) {
+      logger.warn("deleteFolder refused root", { traceId, liveCourseId, folderId });
       return failure(res, "Cannot delete the root folder of a live course.", 409);
     }
 
@@ -207,7 +234,8 @@ export const deleteFolder = async (req: Request, res: Response) => {
     await VideoCategory.deleteOne({ _id: folderId }, { session: txn });
 
     await txn.commitTransaction();
-    logger.info("LiveCourse folder deleted", {
+    logger.info("deleteFolder success", {
+      traceId,
       liveCourseId,
       folderId,
       videos: videos.deletedCount,
@@ -225,7 +253,7 @@ export const deleteFolder = async (req: Request, res: Response) => {
     );
   } catch (err) {
     if (txn.inTransaction()) await txn.abortTransaction();
-    logger.error("LiveCourse deleteFolder failed", { error: getErrorMessage(err) });
+    logger.error("deleteFolder failed", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to delete folder.", 500);
   } finally {
     txn.endSession();
