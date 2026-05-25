@@ -7,8 +7,7 @@
 import mongoose, { Types } from "mongoose";
 import { LiveCourse, ILiveCourse } from "../../models/course/LiveCourse.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
-import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
-import { LiveCourseCategory } from "../../models/course/LiveCourseCategory.model";
+import { PackageCategory } from "../../models/course/PackageCategory.model";
 import { LiveSession } from "../../models/course/LiveSession.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
@@ -42,30 +41,22 @@ const invalidateCaches = async (id?: string) => {
 
 export const assertRefsExist = async (input: {
   courseEducatorId?: string;
-  courseSubjectCategoryId?: string;
-  liveCourseCategoryId?: string;
+  packageCategoryId?: string;
 }): Promise<void> => {
   if (input.courseEducatorId) {
     const exists = await CourseEducator.exists({ _id: input.courseEducatorId });
     if (!exists)
       throw new HttpError(422, "courseEducatorId does not reference an existing educator.");
   }
-  if (input.courseSubjectCategoryId) {
-    const exists = await CourseSubjectCategory.exists({
-      _id: input.courseSubjectCategoryId,
+  if (input.packageCategoryId) {
+    const exists = await PackageCategory.exists({
+      _id: input.packageCategoryId,
+      status: true,
     });
     if (!exists)
       throw new HttpError(
         422,
-        "courseSubjectCategoryId does not reference an existing subject category."
-      );
-  }
-  if (input.liveCourseCategoryId) {
-    const exists = await LiveCourseCategory.exists({ _id: input.liveCourseCategoryId });
-    if (!exists)
-      throw new HttpError(
-        422,
-        "liveCourseCategoryId does not reference an existing live course category."
+        "packageCategoryId does not reference an existing active package category."
       );
   }
 };
@@ -158,8 +149,7 @@ export const listLiveCourses = async (query: ListLiveCoursesQuery) => {
           .skip((page - 1) * limit)
           .limit(limit)
           .populate("courseEducatorId", "name image")
-          .populate("courseSubjectCategoryId", "title slug")
-          .populate("liveCourseCategoryId", "_id title slug image")
+          .populate("packageCategoryId", "title slug image")
           .lean(),
         LiveCourse.countDocuments(filter),
       ]);
@@ -176,8 +166,7 @@ export const getLiveCourseById = async (id: string) => {
     load: async () => {
       const doc = await LiveCourse.findById(id)
         .populate("courseEducatorId", "name image")
-        .populate("courseSubjectCategoryId", "title slug")
-        .populate("liveCourseCategoryId", "_id title slug image")
+        .populate("packageCategoryId", "title slug image")
         .lean();
       if (!doc) throw new HttpError(404, "Live course not found.");
       return { liveCourse: doc };

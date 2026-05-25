@@ -19,6 +19,7 @@ import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { ShippingBody } from "./course.validation";
 import { COURIER } from "../../config/courier";
 import logger from "../../utils/logger";
+import { computeDaysLeft } from "../../utils/planDuration";
 
 export interface PromoCodeDTO {
   title: string;
@@ -206,6 +207,7 @@ export async function buildCourseDetails(
   // sub row (admin/legacy flow) or the plan row stored in `packageId` whose own
   // courseId points to this course.
   let isPurchased = false;
+  let daysLeft: number | null = null;
   if (customerId) {
     const coursePlanIds = AllPlans.map((p: any) => p._id);
     const sub = await PackageCourseSubscription.findOne({
@@ -216,10 +218,12 @@ export async function buildCourseDetails(
         { $or: [{ endAt: null }, { endAt: { $gt: now } }] },
         { $or: [{ courseId: courseDoc._id }, { packageId: { $in: coursePlanIds } }] },
       ],
-    }).select("_id");
+    }).select("endAt");
     isPurchased = !!sub;
+    if (sub) daysLeft = computeDaysLeft(sub.endAt ?? null, now);
   }
   course.isPurchased = isPurchased;
+  course.daysLeft = daysLeft;
 
   logger.info("buildCourseDetails service completed", { traceId, courseId, isPurchased, videoGroups: videos.length, materialGroups: materials.length, testGroups: tests.length });
   return { course, videos, materials, tests, plans, availablePromoCode };
@@ -350,6 +354,7 @@ export async function getOrderDetailsForUser(orderId: string, userId: string, tr
     subscription.tracking_id = subscription.trackingId;
   }
   delete subscription.trackingId;
+  subscription.daysLeft = computeDaysLeft(subscription.endAt ?? null);
   logger.info("getOrderDetailsForUser service completed", { traceId, orderId, userId });
   return subscription;
 }

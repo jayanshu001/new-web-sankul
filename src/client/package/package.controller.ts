@@ -12,6 +12,7 @@ import { PromoCode } from "../../models/course/PromoCode.model";
 import { Goal } from "../../models/Goal.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { computeDaysLeft } from "../../utils/planDuration";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -104,9 +105,11 @@ async function buildPackageDetail(packageId: string, customerId?: string) {
     description: c.description ?? "",
   }));
 
-  const isPurchased = customerId
-    ? await hasActiveSubscription(customerId, String(pkg._id))
-    : false;
+  const activeSub = customerId
+    ? await getActiveSubscription(customerId, String(pkg._id))
+    : null;
+  const isPurchased = !!activeSub;
+  const daysLeft = isPurchased ? computeDaysLeft(activeSub?.endAt ?? null) : null;
 
   return {
     package: {
@@ -121,6 +124,7 @@ async function buildPackageDetail(packageId: string, customerId?: string) {
       goal: pkg.goalId,
       isPaid: pkg.isPaid,
       isPurchased,
+      daysLeft,
     },
     videos: videos.filter(Boolean),
     materials: materials.filter(Boolean),
@@ -130,7 +134,7 @@ async function buildPackageDetail(packageId: string, customerId?: string) {
   };
 }
 
-async function hasActiveSubscription(customerId: string, packageId: string): Promise<boolean> {
+async function getActiveSubscription(customerId: string, packageId: string): Promise<{ endAt: Date | null } | null> {
   const now = new Date();
   // Subscriptions can reference the Package directly via `targetPackageId`
   // (admin-created flow) or transitively via the plan row stored in `packageId`
@@ -144,8 +148,12 @@ async function hasActiveSubscription(customerId: string, packageId: string): Pro
       { $or: [{ endAt: null }, { endAt: { $gt: now } }] },
       { $or: [{ targetPackageId: packageId }, { packageId: { $in: planIds } }] },
     ],
-  });
-  return !!sub;
+  }).select("endAt").lean();
+  return sub ? { endAt: (sub as any).endAt ?? null } : null;
+}
+
+async function hasActiveSubscription(customerId: string, packageId: string): Promise<boolean> {
+  return !!(await getActiveSubscription(customerId, packageId));
 }
 
 // ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -254,8 +262,10 @@ export const listPackagesByType = async (req: Request, res: Response) => {
   }
 };
 
-async function purchasedPackageIdSet(customerId: string | undefined, packageIds: any[]): Promise<Set<string>> {
-  if (!customerId || packageIds.length === 0) return new Set();
+// Returns a map of packageId -> latest-expiring active subscription's endAt
+// (Date | null). `null` means lifetime; absence means not purchased.
+async function purchasedPackageEndAtMap(customerId: string | undefined, packageIds: any[]): Promise<Map<string, Date | null>> {
+  if (!customerId || packageIds.length === 0) return new Map();
   const now = new Date();
   const planIds = await PackageCourseEbookPrice.find({ packageId: { $in: packageIds } }).distinct("_id");
   const subs = await PackageCourseSubscription.find({
@@ -267,7 +277,7 @@ async function purchasedPackageIdSet(customerId: string | undefined, packageIds:
       { $or: [{ targetPackageId: { $in: packageIds } }, { packageId: { $in: planIds } }] },
     ],
   })
-    .select("targetPackageId packageId")
+    .select("targetPackageId packageId endAt")
     .lean();
 
   const planToPackage = new Map<string, string>();
@@ -278,23 +288,34 @@ async function purchasedPackageIdSet(customerId: string | undefined, packageIds:
     plans.forEach((pl: any) => planToPackage.set(String(pl._id), String(pl.packageId)));
   }
 
-  const owned = new Set<string>();
+  // Pick the longest-lived active sub per package. `null` (lifetime) beats any date.
+  const owned = new Map<string, Date | null>();
+  const upsert = (pid: string, endAt: Date | null) => {
+    if (!owned.has(pid)) { owned.set(pid, endAt); return; }
+    const prev = owned.get(pid);
+    if (prev === null || endAt === null) { owned.set(pid, null); return; }
+    if (endAt.getTime() > (prev as Date).getTime()) owned.set(pid, endAt);
+  };
   subs.forEach((s: any) => {
-    if (s.targetPackageId) owned.add(String(s.targetPackageId));
+    const endAt: Date | null = s.endAt ?? null;
+    if (s.targetPackageId) upsert(String(s.targetPackageId), endAt);
     const viaPlan = planToPackage.get(String(s.packageId));
-    if (viaPlan) owned.add(viaPlan);
+    if (viaPlan) upsert(viaPlan, endAt);
   });
   return owned;
 }
 
 async function enrichPackages(packages: any[], customerId?: string) {
-  const ownedSet = await purchasedPackageIdSet(customerId, packages.map((p) => p._id));
+  const ownedMap = await purchasedPackageEndAtMap(customerId, packages.map((p) => p._id));
+  const now = new Date();
   return Promise.all(
     packages.map(async (p) => {
       const [plans, subCount] = await Promise.all([
         PackageCourseEbookPrice.find({ packageId: p._id, status: true }).sort({ duration: 1 }),
         PackageCourseSubscription.countDocuments({ packageId: p._id, status: true }),
       ]);
+      const pid = String(p._id);
+      const isPurchased = ownedMap.has(pid);
       return {
         ...p.toObject(),
         plans: {
@@ -302,7 +323,8 @@ async function enrichPackages(packages: any[], customerId?: string) {
           withoutMaterial: plans.filter((pl) => !pl.withMaterial),
         },
         subscriberCount: subCount,
-        isPurchased: ownedSet.has(String(p._id)),
+        isPurchased,
+        daysLeft: isPurchased ? computeDaysLeft(ownedMap.get(pid) ?? null, now) : null,
       };
     })
   );
@@ -412,10 +434,16 @@ export const listMyPackages = async (req: Request, res: Response) => {
       $or: [{ endAt: null }, { endAt: { $gt: now } }],
     })
       .populate({ path: "packageId", populate: { path: "packageTypeId goalId" } })
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const data = subs.map((s: any) => ({
+      ...s,
+      daysLeft: computeDaysLeft(s.endAt ?? null, now),
+    }));
 
     logger.info("listMyPackages success", { traceId, customerId, count: subs.length });
-    return res.status(200).json({ success: true, data: subs });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("listMyPackages failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

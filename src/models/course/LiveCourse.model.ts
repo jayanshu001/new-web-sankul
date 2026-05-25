@@ -43,11 +43,11 @@ export interface ILiveCourse extends Document {
   status: boolean;
   isPaid: boolean;
   isPopular: boolean;
+  startTime?: Date | null;
 
   // Relations
   courseEducatorId?: mongoose.Types.ObjectId | null;
-  courseSubjectCategoryId?: mongoose.Types.ObjectId | null;
-  liveCourseCategoryId?: mongoose.Types.ObjectId | null;
+  packageCategoryId?: mongoose.Types.ObjectId | null;
   videoCategoryId?: mongoose.Types.ObjectId | null; // root VideoCategory folder
 
   // Adjacent content (kept for parity with Course)
@@ -116,11 +116,11 @@ const liveCourseSchema = new Schema<ILiveCourse>(
     status:          { type: Boolean, required: true, default: true },
     isPaid:          { type: Boolean, default: true },
     isPopular:       { type: Boolean, default: false, index: true },
+    startTime:       { type: Date, default: null, index: true },
 
-    courseEducatorId:        { type: Schema.Types.ObjectId, ref: "CourseEducator",        default: null },
-    courseSubjectCategoryId: { type: Schema.Types.ObjectId, ref: "CourseSubjectCategory", default: null },
-    liveCourseCategoryId:    { type: Schema.Types.ObjectId, ref: "LiveCourseCategory",    default: null },
-    videoCategoryId:         { type: Schema.Types.ObjectId, ref: "VideoCategory",         default: null },
+    courseEducatorId:   { type: Schema.Types.ObjectId, ref: "CourseEducator",  default: null },
+    packageCategoryId:  { type: Schema.Types.ObjectId, ref: "PackageCategory", default: null, index: true },
+    videoCategoryId:    { type: Schema.Types.ObjectId, ref: "VideoCategory",   default: null },
 
     materialCategories: { type: [materialCategoryRefSchema], default: [] },
     examCategories:     { type: [examCategoryRefSchema],     default: [] },

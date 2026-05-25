@@ -7,8 +7,10 @@ import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { Video } from "../../models/course/Video.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { LectureProgress } from "../../models/customer/LectureProgress.model";
-import { hasAccessToAnyLiveCourse, buildPurchaseOptions } from "./entitlement";
+import { hasAccessToAnyLiveCourse, buildPurchaseOptions, getDaysLeftForLiveCourses, getDaysLeftMapForLiveCourses } from "./entitlement";
+import { computeDaysLeft } from "../../utils/planDuration";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import cache from "../../libs/cache";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
 import { resolveVideoSource } from "../../utils/videoResolver";
 import logger from "../../utils/logger";
@@ -70,6 +72,39 @@ async function encryptLecture(v: {
   };
 }
 
+// Verified-subscription counts per live course. Cached for 5min — it powers
+// a popularity ranking, not entitlement, so slight staleness is fine.
+const getPurchaseCountMap = async (courseIds: mongoose.Types.ObjectId[]): Promise<Map<string, number>> => {
+  if (courseIds.length === 0) return new Map();
+  return cache.aside({
+    key: cache.key("client", "live-course", `purchase-counts:${cache.hashFilter({ ids: courseIds.map(String).sort() })}`),
+    ttlSeconds: 300,
+    load: async () => {
+      const rows = await LiveCourseSubscription.aggregate([
+        { $match: { liveCourseId: { $in: courseIds }, paymentStatus: "verified" } },
+        { $group: { _id: "$liveCourseId", count: { $sum: 1 } } },
+      ]);
+      return rows.map((r: any) => [String(r._id), r.count] as [string, number]);
+    },
+  }).then((entries) => new Map(entries));
+};
+
+// Customer's currently-active live-course subscription set. Used to stamp
+// `isPurchased` on listing/detail rows. Returns an empty set for guests.
+const getOwnedLiveCourseIds = async (customerId: string | undefined): Promise<Set<string>> => {
+  if (!customerId) return new Set();
+  const now = new Date();
+  const subs = await LiveCourseSubscription.find({
+    customerId,
+    paymentStatus: "verified",
+    status: true,
+    $or: [{ endAt: null }, { endAt: { $gte: now } }],
+  })
+    .select("liveCourseId")
+    .lean();
+  return new Set(subs.map((s) => String(s.liveCourseId)));
+};
+
 // GET /api/v1/client/live-courses
 export const listLiveCoursesForClient = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -89,13 +124,46 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
         .skip((page - 1) * limit)
         .limit(limit)
         .populate("courseEducatorId", "name image")
-        .populate("courseSubjectCategoryId", "title slug")
+        .populate("packageCategoryId", "title slug image")
         .lean(),
       LiveCourse.countDocuments(query),
     ]);
 
+    const rowIds = rows.map((r: any) => r._id);
+    const [daysLeftMap, purchaseCountMap, ownedIds] = await Promise.all([
+      getDaysLeftMapForLiveCourses(req.user?.id, rowIds),
+      getPurchaseCountMap(rowIds),
+      getOwnedLiveCourseIds(req.user?.id),
+    ]);
+
+    // Both hero cards require startTime > now. Among upcoming batches, the
+    // top-purchased course gets "featured" (red), the second-highest gets
+    // "coming_soon" (blue). Courses with no future startTime never appear as
+    // a hero card.
+    const now = Date.now();
+    const upcoming = (rows as any[])
+      .filter((r) => r.startTime && new Date(r.startTime).getTime() > now)
+      .map((r) => ({ id: String(r._id), score: purchaseCountMap.get(String(r._id)) ?? 0 }))
+      .sort((a, b) => b.score - a.score);
+    const featuredId: string | null = upcoming[0]?.id ?? null;
+    const comingSoonId: string | null = upcoming[1]?.id ?? null;
+
+    const liveCourses = rows.map((r: any) => {
+      const key = String(r._id);
+      let cardVariant: "featured" | "coming_soon" | null = null;
+      if (key === featuredId) cardVariant = "featured";
+      else if (key === comingSoonId) cardVariant = "coming_soon";
+      return {
+        ...r,
+        daysLeft: daysLeftMap.has(key) ? daysLeftMap.get(key) ?? null : null,
+        isPurchased: ownedIds.has(key),
+        purchaseCount: purchaseCountMap.get(key) ?? 0,
+        cardVariant,
+      };
+    });
+
     logger.info("listLiveCoursesForClient success", { traceId, total, returned: rows.length });
-    return success(res, { liveCourses: rows, total, page, limit }, "Live courses fetched.");
+    return success(res, { liveCourses, total, page, limit }, "Live courses fetched.");
   } catch (err) {
     logger.error("listLiveCoursesForClient failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list live courses.", 500);
@@ -119,7 +187,7 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
     const [course, plans] = await Promise.all([
       LiveCourse.findOne({ _id: id, status: true })
         .populate("courseEducatorId", "name image about")
-        .populate("courseSubjectCategoryId", "title slug")
+        .populate("packageCategoryId", "title slug image")
         .lean(),
       LiveCoursePlan.find({ liveCourseId: id, status: true })
         .sort({ price: 1 })
@@ -130,10 +198,11 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
       return failure(res, "Live course not found.", 404);
     }
 
-    const [subscribed, subjectsCount] = await Promise.all([
+    const [subscribed, subjectsCount, daysLeft] = await Promise.all([
       hasAccessToAnyLiveCourse(req.user?.id, [id]),
       // "Subjects" on the header stat bar = folders under this live course.
       VideoCategory.countDocuments({ liveCourseId: id }),
+      getDaysLeftForLiveCourses(req.user?.id, [id]),
     ]);
 
     // Header stat bar.
@@ -158,7 +227,7 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
     logger.info("getLiveCourseForClient success", { traceId, userId, id, subscribed });
     return success(
       res,
-      { liveCourse: course, stats, plans: plansOut, subscribed },
+      { liveCourse: course, stats, plans: plansOut, subscribed, isPurchased: subscribed, daysLeft },
       "Live course fetched."
     );
   } catch (err) {
@@ -314,7 +383,10 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
           .lean()
       : [];
 
-    const subscribed = await hasAccessToAnyLiveCourse(req.user?.id, [id]);
+    const [subscribed, daysLeft] = await Promise.all([
+      hasAccessToAnyLiveCourse(req.user?.id, [id]),
+      getDaysLeftForLiveCourses(req.user?.id, [id]),
+    ]);
 
     const videosByFolder = new Map<string, typeof videos>();
     for (const v of videos) {
@@ -381,6 +453,7 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
       {
         liveCourse: { _id: String(course._id), name: course.name, image: course.image },
         subscribed,
+        daysLeft,
         totalLectures: videos.length,
         folders: folderPayload,
         purchaseOptions: subscribed ? [] : await buildPurchaseOptions([id]),
@@ -603,6 +676,7 @@ export const listMyLiveCourses = async (req: Request, res: Response) => {
         endAt: s.endAt ?? null,
         paymentStatus: s.paymentStatus,
         active,
+        daysLeft: active ? computeDaysLeft(s.endAt ?? null, now) : 0,
       };
     });
 
@@ -1007,6 +1081,8 @@ export const getLiveCourseSchedule = async (req: Request, res: Response) => {
       // Clients only see active folders.
       .filter((f: any) => f.status);
 
+    const daysLeft = await getDaysLeftForLiveCourses(req.user?.id, [id]);
+
     logger.info("getLiveCourseSchedule success", { traceId, id, timetableCount: timetable.length, folderCount: scheduleFolders.length });
     return success(
       res,
@@ -1015,6 +1091,7 @@ export const getLiveCourseSchedule = async (req: Request, res: Response) => {
         timetable,
         scheduleFolders,
         total: timetable.length,
+        daysLeft,
       },
       "Schedule fetched."
     );
@@ -1065,6 +1142,25 @@ export const listMyScheduleByCategory = async (req: Request, res: Response) => {
       level: string;
       scheduleFolders?: any[];
     };
+
+    // For each course, pick the longest-lived sub's endAt — same lifetime-wins
+    // rule as getDaysLeftForLiveCourses (lifetime null beats any date).
+    const endAtByCourse = new Map<string, Date | null>();
+    let hasLifetimeByCourse = new Map<string, boolean>();
+    for (const s of subs as any[]) {
+      if (!s.liveCourseId) continue;
+      const key = String(s.liveCourseId._id ?? s.liveCourseId);
+      const endAt: Date | null = s.endAt ?? null;
+      if (endAt === null) {
+        hasLifetimeByCourse.set(key, true);
+        endAtByCourse.set(key, null);
+        continue;
+      }
+      if (hasLifetimeByCourse.get(key)) continue;
+      const prev = endAtByCourse.get(key);
+      if (!prev || endAt.getTime() > (prev as Date).getTime()) endAtByCourse.set(key, endAt);
+    }
+
     const populated = (subs
       .map((s) => s.liveCourseId)
       .filter(Boolean) as unknown) as PopulatedCourse[];
@@ -1089,12 +1185,15 @@ export const listMyScheduleByCategory = async (req: Request, res: Response) => {
           entryCount: Array.isArray(f.entries) ? f.entries.length : 0,
         }));
 
+      const key = String(c._id);
+      const endAt = hasLifetimeByCourse.get(key) ? null : (endAtByCourse.get(key) ?? null);
       return {
         _id: String(c._id),
         name: c.name,
         image: c.image,
         level: c.level,
         scheduleFolders: folders,
+        daysLeft: hasLifetimeByCourse.get(key) ? null : computeDaysLeft(endAt, now),
       };
     });
 
@@ -1172,6 +1271,8 @@ export const getMyScheduleFolder = async (req: Request, res: Response) => {
         order: e.order ?? 0,
       }));
 
+    const daysLeft = await getDaysLeftForLiveCourses(customerId, [id]);
+
     return success(
       res,
       {
@@ -1184,6 +1285,7 @@ export const getMyScheduleFolder = async (req: Request, res: Response) => {
         },
         entries,
         total: entries.length,
+        daysLeft,
       },
       "Schedule folder fetched."
     );

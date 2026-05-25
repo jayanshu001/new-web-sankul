@@ -58,6 +58,29 @@ export async function disconnectChatSocketsForCustomer(
   }
 }
 
+// Called by the admin unban endpoint. Emits `chat_unbanned` to every live
+// socket belonging to this customer so the client can re-enable chat input
+// without a page reload. Cluster-wide via Redis adapter.
+export async function emitChatUnbannedForCustomer(customerId: string): Promise<void> {
+  if (!io) return;
+  try {
+    const sockets = await io.fetchSockets();
+    for (const s of sockets) {
+      const cid = (s.data?.customerId as string | undefined) ?? (s as any).customerId;
+      if (cid !== customerId) continue;
+      s.emit("chat_unbanned", {
+        message: "You can send messages again.",
+        unbannedAt: new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    logger.warn("emitChatUnbannedForCustomer failed", {
+      customerId,
+      err: (err as Error).message,
+    });
+  }
+}
+
 // Distinct customers currently in a live class room — a customer with two tabs
 // counts once. Uses Socket.io's `fetchSockets({})` which, with the Redis
 // adapter attached, queries EVERY pod in the cluster and returns the union

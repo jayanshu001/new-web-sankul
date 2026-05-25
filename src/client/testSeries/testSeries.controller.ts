@@ -16,6 +16,7 @@ import {
 } from "../../models/enums";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
+import { computeDaysLeft } from "../../utils/planDuration";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
@@ -90,17 +91,23 @@ export const listTestSeries = async (req: Request, res: Response) => {
       if (!defaultByid.has(k)) defaultByid.set(k, p);
     }
 
-    let activeByid = new Map<string, boolean>();
+    // Latest-expiring active sub per series → daysLeft.
+    const now = new Date();
+    const latestEndAtByid = new Map<string, Date>();
     if (customerId && seriesIds.length) {
       const subs = await TestSeriesSubscription.find({
         customerId,
         testSeriesId: { $in: seriesIds },
         status: true,
-        endAt: { $gt: new Date() },
+        endAt: { $gt: now },
       })
-        .select("testSeriesId")
+        .select("testSeriesId endAt")
         .lean();
-      for (const s of subs) activeByid.set(String(s.testSeriesId), true);
+      for (const s of subs as any[]) {
+        const k = String(s.testSeriesId);
+        const prev = latestEndAtByid.get(k);
+        if (!prev || (s.endAt as Date).getTime() > prev.getTime()) latestEndAtByid.set(k, s.endAt as Date);
+      }
     }
 
     const decorated = rows.map((r: any) => {
@@ -109,6 +116,7 @@ export const listTestSeries = async (req: Request, res: Response) => {
         def?.originalPrice && def.originalPrice > def.price
           ? Math.round(((def.originalPrice - def.price) / def.originalPrice) * 100)
           : 0;
+      const endAt = latestEndAtByid.get(String(r._id)) ?? null;
       return {
         ...r,
         defaultPlan: def
@@ -120,7 +128,8 @@ export const listTestSeries = async (req: Request, res: Response) => {
               discountPct,
             }
           : null,
-        isPurchased: activeByid.has(String(r._id)),
+        isPurchased: !!endAt,
+        daysLeft: endAt ? computeDaysLeft(endAt, now) : null,
       };
     });
 
@@ -168,10 +177,14 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
       isPurchased = !!activeSubscription;
     }
 
+    const daysLeft = activeSubscription
+      ? computeDaysLeft(activeSubscription.endAt ?? null)
+      : null;
+
     logger.info("getTestSeriesDetail success", { traceId, customerId, id, isPurchased });
     return success(
       res,
-      { series, contentCategories, prices, isPurchased, activeSubscription },
+      { series, contentCategories, prices, isPurchased, activeSubscription, daysLeft },
       "Fetched."
     );
   } catch (e: any) {
@@ -363,10 +376,15 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       .populate("testSeriesId", "title thumbnail paperCount")
       .lean();
     const now = new Date();
-    const data = subs.map((s: any) => ({
-      ...s,
-      isActive: s.endAt && new Date(s.endAt) > now,
-    }));
+    const data = subs.map((s: any) => {
+      const endAt = s.endAt ? new Date(s.endAt) : null;
+      const isActive = !!(endAt && endAt > now);
+      return {
+        ...s,
+        isActive,
+        daysLeft: isActive ? computeDaysLeft(endAt, now) : 0,
+      };
+    });
     logger.info("listMySubscriptions success", { traceId, customerId, count: data.length });
     return success(res, { data, total: data.length }, "Fetched.");
   } catch (e: any) {

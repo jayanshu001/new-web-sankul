@@ -5,6 +5,8 @@ import logger from "../../utils/logger";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { Course } from "../../models/course/Course.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
+import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { computeDaysLeft } from "../../utils/planDuration";
 
 // GET /api/v1/client/educators/:id
 // Returns educator profile + list of active courses taught by them (with plans).
@@ -75,14 +77,53 @@ export const getEducatorWithCoursesHandler = async (
       (p.withMaterial ? bucket.withMaterial : bucket.withoutMaterial).push(p);
     }
 
-    const coursesWithPlans = courses.map((c: any) => ({
-      ...c,
-      plans:
-        plansByCourse.get(String(c._id)) ?? {
-          withMaterial: [],
-          withoutMaterial: [],
-        },
-    }));
+    // Per-course daysLeft: latest active sub wins; lifetime (null endAt) wins
+    // over all dated subs. Same rule as the rest of the courses API.
+    const now = new Date();
+    const life = new Set<string>();
+    const latest = new Map<string, Date>();
+    if (userId && courseIds.length) {
+      const planIdsArr = (allPlans as any[]).map((p) => p._id);
+      const planToCourse = new Map<string, string>(
+        (allPlans as any[]).map((p) => [String(p._id), String(p.courseId)])
+      );
+      const subs = await PackageCourseSubscription.find({
+        customerId: userId,
+        paymentStatus: "verified",
+        status: true,
+        $and: [
+          { $or: [{ endAt: null }, { endAt: { $gt: now } }] },
+          { $or: [{ courseId: { $in: courseIds } }, { packageId: { $in: planIdsArr } }] },
+        ],
+      }).select("courseId packageId endAt").lean();
+      const upsert = (key: string, endAt: Date | null) => {
+        if (endAt === null) { life.add(key); return; }
+        if (life.has(key)) return;
+        const prev = latest.get(key);
+        if (!prev || endAt.getTime() > prev.getTime()) latest.set(key, endAt);
+      };
+      for (const s of subs as any[]) {
+        const endAt: Date | null = s.endAt ?? null;
+        if (s.courseId) upsert(String(s.courseId), endAt);
+        const viaPlan = planToCourse.get(String(s.packageId));
+        if (viaPlan) upsert(viaPlan, endAt);
+      }
+    }
+
+    const coursesWithPlans = courses.map((c: any) => {
+      const key = String(c._id);
+      const isLifetime = life.has(key);
+      const endAt = latest.get(key);
+      return {
+        ...c,
+        plans:
+          plansByCourse.get(key) ?? {
+            withMaterial: [],
+            withoutMaterial: [],
+          },
+        daysLeft: isLifetime ? null : (endAt ? computeDaysLeft(endAt, now) : null),
+      };
+    });
 
     // Fire-and-forget view counter bump
     setImmediate(() => {

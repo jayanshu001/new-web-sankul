@@ -556,17 +556,32 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
 
 // ─── Package Categories ──────────────────────────────────────────────────────
 import { PackageCategory } from "../../models/course/PackageCategory.model";
-import { LiveCourseCategory } from "../../models/course/LiveCourseCategory.model";
 import { LiveCourse } from "../../models/course/LiveCourse.model";
 
-export const listPackageCategories = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listPackageCategories invoked", { traceId, path: _req.originalUrl });
+export const listPackageCategories = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveOnly = String(req.query.live ?? "").toLowerCase() === "true";
+  logger.info("listPackageCategories invoked", { traceId, path: req.originalUrl, liveOnly });
 
   try {
-    const categories = await PackageCategory.find({ status: true }).sort({ order: 1 });
-    logger.info("listPackageCategories success", { traceId, count: categories.length });
-    return res.status(200).json({ success: true, data: categories });
+    const categories = await PackageCategory.find({ status: true }).sort({ order: 1 }).lean();
+
+    if (!liveOnly) {
+      logger.info("listPackageCategories success", { traceId, count: categories.length, liveOnly });
+      return res.status(200).json({ success: true, data: categories });
+    }
+
+    // ?live=true → keep only categories that have ≥1 active LiveCourse.
+    const categoryIds = categories.map((c: any) => c._id);
+    const liveCategoryIds = await LiveCourse.distinct("packageCategoryId", {
+      status: true,
+      packageCategoryId: { $in: categoryIds },
+    });
+    const liveSet = new Set(liveCategoryIds.map((x: any) => String(x)));
+    const filtered = categories.filter((c: any) => liveSet.has(String(c._id)));
+
+    logger.info("listPackageCategories success", { traceId, count: filtered.length, liveOnly });
+    return res.status(200).json({ success: true, data: filtered });
   } catch (error: any) {
     logger.error("listPackageCategories failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -584,20 +599,30 @@ export const listPackagesByCategory = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid package category id" });
     }
 
-    const packages = await Package.find({ active: true, packageCategoryId: id })
-      .select(
-        "_id name description image shareableLink order isPaid isMagazine isSmartCourse isPlannerCourse withMaterialText withoutMaterialText packageTypeId goalId educatorId"
-      )
-      .sort({ order: 1 })
-      .lean();
+    const [packages, liveCourses] = await Promise.all([
+      Package.find({ active: true, packageCategoryId: id })
+        .select(
+          "_id name description image shareableLink order isPaid isMagazine isSmartCourse isPlannerCourse withMaterialText withoutMaterialText packageTypeId goalId educatorId"
+        )
+        .sort({ order: 1 })
+        .lean(),
+      LiveCourse.find({ status: true, packageCategoryId: id })
+        .select(
+          "_id name description image shareableLink ordered isPaid isPopular level classType withMaterial withoutMaterial courseEducatorId"
+        )
+        .sort({ ordered: 1 })
+        .lean(),
+    ]);
 
     const packageIds = packages.map((p) => p._id);
-    const plans = await PackageCourseEbookPrice.find({
-      packageId: { $in: packageIds },
-      status: true,
-    })
-      .select("_id packageId name duration price withMaterial materialPrice isDefault")
-      .lean();
+    const plans = packageIds.length
+      ? await PackageCourseEbookPrice.find({
+          packageId: { $in: packageIds },
+          status: true,
+        })
+          .select("_id packageId name duration price withMaterial materialPrice isDefault")
+          .lean()
+      : [];
 
     const plansByPackage = new Map<string, typeof plans>();
     for (const plan of plans) {
@@ -612,7 +637,7 @@ export const listPackagesByCategory = async (req: Request, res: Response) => {
       });
     }
 
-    const data = packages.map((p) => {
+    const recorded = packages.map((p) => {
       const pkgPlans = plansByPackage.get(String(p._id)) ?? [];
       const defaultPlan = pkgPlans.find((pl) => pl.isDefault) ?? pkgPlans[0] ?? null;
       return {
@@ -623,46 +648,16 @@ export const listPackagesByCategory = async (req: Request, res: Response) => {
       };
     });
 
-    logger.info("listPackagesByCategory success", { traceId, categoryId: id, count: data.length });
-    return res.status(200).json({ success: true, data });
+    logger.info("listPackagesByCategory success", {
+      traceId,
+      categoryId: id,
+      recordedCount: recorded.length,
+      liveCount: liveCourses.length,
+    });
+    return res.status(200).json({ success: true, data: { recorded, live: liveCourses } });
   } catch (error: any) {
     logger.error("listPackagesByCategory failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-// ─── Live Course Categories ──────────────────────────────────────────────────
-export const listLiveCourseCategories = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listLiveCourseCategories invoked", { traceId, path: _req.originalUrl });
-
-  try {
-    const categories = await LiveCourseCategory.find({ status: true }).sort({ order: 1 });
-    logger.info("listLiveCourseCategories success", { traceId, count: categories.length });
-    return res.status(200).json({ success: true, data: categories });
-  } catch (error: any) {
-    logger.error("listLiveCourseCategories failed", { traceId, error: getErrorMessage(error), stack: error.stack });
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-export const listLiveCoursesByCategory = async (req: Request, res: Response) => {
-  const traceId = req.traceId;
-  const { id } = req.params as { id: string };
-  logger.info("listLiveCoursesByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
-
-  try {
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listLiveCoursesByCategory invalid id", { traceId, categoryId: id });
-      return res.status(400).json({ success: false, message: "Invalid live course category id" });
-    }
-    const liveCourses = await LiveCourse.find({ status: true, liveCourseCategoryId: id })
-      .select("_id name image ordered isPaid isPopular classType")
-      .sort({ ordered: 1 });
-    logger.info("listLiveCoursesByCategory success", { traceId, categoryId: id, count: liveCourses.length });
-    return res.status(200).json({ success: true, data: liveCourses });
-  } catch (error: any) {
-    logger.error("listLiveCoursesByCategory failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};

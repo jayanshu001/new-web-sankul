@@ -12,8 +12,6 @@ import {
   listBooksAndEbooksByExamCountdownCategory,
   listPackageCategories,
   listPackagesByCategory,
-  listLiveCourseCategories,
-  listLiveCoursesByCategory,
 } from "./categories.controller";
 
 const router = Router();
@@ -31,7 +29,5 @@ router.get("/exam-countdown-categories/:id/packages", listPackagesByExamCountdow
 router.get("/exam-countdown-categories/:id/books-ebooks", listBooksAndEbooksByExamCountdownCategory);
 router.get("/package-categories", listPackageCategories);
 router.get("/package-categories/:id/packages", listPackagesByCategory);
-router.get("/live-course-categories", listLiveCourseCategories);
-router.get("/live-course-categories/:id/live-courses", listLiveCoursesByCategory);
 
 export default router;

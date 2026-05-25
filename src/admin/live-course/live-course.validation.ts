@@ -16,9 +16,9 @@ export const createLiveCourseSchema = z
     status:        z.boolean(),
     isPaid:        z.boolean().optional(),
     isPopular:     z.boolean().optional(),
-    courseEducatorId:        objectId.optional(),
-    courseSubjectCategoryId: objectId.optional(),
-    liveCourseCategoryId:    objectId.optional(),
+    startTime:     z.string().datetime({ offset: true }).nullable().optional(),
+    courseEducatorId:  objectId.optional(),
+    packageCategoryId: objectId.optional(),
   })
   .strict();
 

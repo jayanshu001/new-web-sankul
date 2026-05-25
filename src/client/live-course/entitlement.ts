@@ -3,6 +3,7 @@ import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscrip
 import { LiveSessionPreview } from "../../models/customer/LiveSessionPreview.model";
 import { LiveCourse } from "../../models/course/LiveCourse.model";
 import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
+import { computeDaysLeft } from "../../utils/planDuration";
 
 // Default per-viewer preview window for non-subscribers, in seconds.
 export const PREVIEW_SECONDS = 180;
@@ -26,6 +27,72 @@ export async function hasAccessToAnyLiveCourse(
     $or: [{ endAt: null }, { endAt: { $gte: now } }],
   });
   return Boolean(exists);
+}
+
+/**
+ * Returns `daysLeft` for the longest-lived active+verified subscription a
+ * customer has against ANY of the given live courses. Used so detail / schedule
+ * / recordings endpoints can surface a single counter even when a session
+ * spans multiple courses. `null` means lifetime (or no active sub).
+ */
+export async function getDaysLeftForLiveCourses(
+  customerId: string | undefined,
+  liveCourseIds: Array<mongoose.Types.ObjectId | string>
+): Promise<number | null> {
+  if (!customerId || !Array.isArray(liveCourseIds) || liveCourseIds.length === 0) return null;
+  const now = new Date();
+  const subs = await LiveCourseSubscription.find({
+    customerId,
+    liveCourseId: { $in: liveCourseIds },
+    status: true,
+    paymentStatus: "verified",
+    $or: [{ endAt: null }, { endAt: { $gte: now } }],
+  }).select("endAt").lean();
+  if (!subs.length) return null;
+  // Lifetime (endAt null) wins; otherwise pick the latest endAt.
+  if (subs.some((s: any) => s.endAt == null)) return null;
+  const latest = subs.reduce((acc: Date | null, s: any) => {
+    const d = s.endAt as Date;
+    return !acc || d.getTime() > acc.getTime() ? d : acc;
+  }, null as Date | null);
+  return computeDaysLeft(latest, now);
+}
+
+/**
+ * Bulk variant of getDaysLeftForLiveCourses: returns a map keyed by
+ * liveCourseId → daysLeft (`null` if not owned OR lifetime). Used by listing
+ * endpoints that need per-row daysLeft without N+1 queries.
+ */
+export async function getDaysLeftMapForLiveCourses(
+  customerId: string | undefined,
+  liveCourseIds: Array<mongoose.Types.ObjectId | string>
+): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>();
+  if (!customerId || !Array.isArray(liveCourseIds) || liveCourseIds.length === 0) return out;
+  const now = new Date();
+  const subs = await LiveCourseSubscription.find({
+    customerId,
+    liveCourseId: { $in: liveCourseIds },
+    status: true,
+    paymentStatus: "verified",
+    $or: [{ endAt: null }, { endAt: { $gte: now } }],
+  }).select("liveCourseId endAt").lean();
+
+  // Lifetime (null endAt) wins; otherwise pick the latest endAt per course.
+  const lifetime = new Set<string>();
+  const latestByCourse = new Map<string, Date>();
+  for (const s of subs as any[]) {
+    const key = String(s.liveCourseId);
+    if (s.endAt == null) { lifetime.add(key); continue; }
+    const prev = latestByCourse.get(key);
+    if (!prev || (s.endAt as Date).getTime() > prev.getTime()) latestByCourse.set(key, s.endAt as Date);
+  }
+  for (const key of lifetime) out.set(key, null);
+  for (const [key, endAt] of latestByCourse) {
+    if (lifetime.has(key)) continue;
+    out.set(key, computeDaysLeft(endAt, now));
+  }
+  return out;
 }
 
 export interface LivePurchaseOption {

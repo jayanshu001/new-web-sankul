@@ -46,6 +46,20 @@ export const computeEndAt = ({
 };
 
 /**
+ * Days remaining on a subscription, for frontend "Extend Validity" UX.
+ * Returns ceil((endAt - now) / 1 day), floored at 0 for expired rows.
+ * `null` endAt (lifetime grants) -> `null` so the UI can hide the counter.
+ */
+export const computeDaysLeft = (
+  endAt: Date | null | undefined,
+  now: Date = new Date()
+): number | null => {
+  if (!endAt) return null;
+  const ms = endAt.getTime() - now.getTime();
+  return Math.max(0, Math.ceil(ms / 86_400_000));
+};
+
+/**
  * Sum the saved-materials + saved-videos + active-ebook-downloads counts
  * for a profile dashboard's `downloads` field. Pinned by audit memory:
  * composition must remain exactly these three terms.

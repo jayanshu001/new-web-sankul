@@ -9,7 +9,7 @@
  * lowercase kebab-case, dot-separated. Once shipped, a key must never be renamed.
  */
 
-export const CATALOG_VERSION = "2026.05.20-1";
+export const CATALOG_VERSION = "2026.05.25-1";
 
 export type CatalogAction =
   | "view" | "list" | "create" | "edit" | "delete" | "toggle-status"
@@ -107,7 +107,6 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
     extras: [extra("video-categories", "duplicate", "Duplicate video categories")],
   }),
   mod("package-categories", "Package Categories", "Master Data"),
-  mod("live-course-categories", "Live Course Categories", "Master Data"),
   mod("customer-masters.states", "Customer Master — States", "Master Data"),
   mod("customer-masters.districts", "Customer Master — Districts", "Master Data"),
   mod("customer-masters.educations", "Customer Master — Educations", "Master Data"),

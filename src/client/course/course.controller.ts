@@ -17,6 +17,7 @@ import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { computeDaysLeft } from "../../utils/planDuration";
 
 async function paginateCoursesWithPlans(
   baseFilters: any,
@@ -81,9 +82,12 @@ async function paginateCoursesWithPlans(
     (p.withMaterial ? bucket.withMaterial : bucket.withoutMaterial).push(p);
   }
 
-  let purchasedSet = new Set<string>();
+  // Per-course `daysLeft`: pick the longest-lived active sub for that course.
+  // Lifetime (null endAt) beats any dated sub.
+  const endAtByCourse = new Map<string, Date | null>();
+  const lifetimeByCourse = new Set<string>();
+  const now = new Date();
   if (userId && courseIds.length) {
-    const now = new Date();
     const planIds = (allPlans as any[]).map((p) => p._id);
     const subs = await PackageCourseSubscription.find({
       customerId: userId,
@@ -94,24 +98,37 @@ async function paginateCoursesWithPlans(
         { $or: [{ courseId: { $in: courseIds } }, { packageId: { $in: planIds } }] },
       ],
     })
-      .select("courseId packageId")
+      .select("courseId packageId endAt")
       .lean();
     const planToCourse = new Map<string, string>(
       (allPlans as any[]).map((p) => [String(p._id), String(p.courseId)])
     );
+    const upsert = (cid: string, endAt: Date | null) => {
+      if (endAt === null) { lifetimeByCourse.add(cid); endAtByCourse.set(cid, null); return; }
+      if (lifetimeByCourse.has(cid)) return;
+      const prev = endAtByCourse.get(cid);
+      if (!prev || endAt.getTime() > (prev as Date).getTime()) endAtByCourse.set(cid, endAt);
+    };
     subs.forEach((s: any) => {
-      if (s.courseId) purchasedSet.add(String(s.courseId));
+      const endAt: Date | null = s.endAt ?? null;
+      if (s.courseId) upsert(String(s.courseId), endAt);
       const viaPlan = planToCourse.get(String(s.packageId));
-      if (viaPlan) purchasedSet.add(viaPlan);
+      if (viaPlan) upsert(viaPlan, endAt);
     });
   }
 
-  const data = courses.map((c: any) => ({
-    ...c,
-    isPaid: c.isPaid ?? true,
-    isPurchased: purchasedSet.has(String(c._id)),
-    plans: plansByCourse.get(String(c._id)) ?? { withMaterial: [], withoutMaterial: [] },
-  }));
+  const data = courses.map((c: any) => {
+    const cid = String(c._id);
+    const isPurchased = endAtByCourse.has(cid);
+    const endAt = lifetimeByCourse.has(cid) ? null : (endAtByCourse.get(cid) ?? null);
+    return {
+      ...c,
+      isPaid: c.isPaid ?? true,
+      isPurchased,
+      daysLeft: isPurchased ? computeDaysLeft(endAt, now) : null,
+      plans: plansByCourse.get(cid) ?? { withMaterial: [], withoutMaterial: [] },
+    };
+  });
 
   return {
     data,

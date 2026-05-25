@@ -15,6 +15,7 @@ import {
   listNotesQuerySchema,
   noteIdParamSchema,
 } from "./lecture-note.validation";
+import { buildResumeNextCard } from "../learning/resumeCard";
 
 /**
  * Resolve the recorded lecture and confirm the customer holds an active,
@@ -162,8 +163,14 @@ export const listNotes = async (req: Request, res: Response) => {
       .sort({ timestampSec: 1, createdAt: 1 })
       .lean();
 
-    logger.info("listNotes success", { traceId, userId, lectureType, count: notes.length });
-    return success(res, { notes }, "Notes fetched.", 200);
+    const resumeNext = await buildResumeNextCard(
+      lectureType === "recorded"
+        ? { lectureType: "recorded", userId, videoId: videoId! }
+        : { lectureType: "live", userId, liveSessionId: liveSessionId! }
+    );
+
+    logger.info("listNotes success", { traceId, userId, lectureType, count: notes.length, hasResume: !!resumeNext });
+    return success(res, { notes, resumeNext }, "Notes fetched.", 200);
   } catch (err) {
     logger.error("listNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);

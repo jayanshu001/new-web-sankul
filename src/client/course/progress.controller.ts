@@ -12,6 +12,7 @@ import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation
 import { LiveCourse } from "../../models/course/LiveCourse.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { computeDaysLeft } from "../../utils/planDuration";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -303,9 +304,7 @@ export const listMyCoursesForResume = async (req: Request, res: Response) => {
         if (!course) return null; // course was deleted/disabled — skip
         const sub = subByCourse.get(String(p._id));
         const total = totalByCourse.get(String(p._id)) ?? 0;
-        const daysLeft = sub?.endAt
-          ? Math.max(0, Math.ceil((sub.endAt.getTime() - now.getTime()) / 86_400_000))
-          : null;
+        const daysLeft = computeDaysLeft(sub?.endAt ?? null, now);
         const percent = total > 0 ? Math.min(100, Math.round((p.completedCount / total) * 100)) : 0;
         return {
           course,

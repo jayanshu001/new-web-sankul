@@ -15,6 +15,7 @@ import {
   listAudioNotesQuerySchema,
   audioNoteIdParamSchema,
 } from "./lecture-audio-note.validation";
+import { buildResumeNextCard } from "../learning/resumeCard";
 
 // Same subscription gate as the text-note controller. Kept inline rather than
 // shared because the two modules will likely diverge (audio may grow per-row
@@ -191,8 +192,14 @@ export const listAudioNotes = async (req: Request, res: Response) => {
       .sort({ timestampSec: 1, createdAt: 1 })
       .lean();
 
-    logger.info("listAudioNotes success", { traceId, userId, lectureType, count: notes.length });
-    return success(res, { notes }, "Audio notes fetched.", 200);
+    const resumeNext = await buildResumeNextCard(
+      lectureType === "recorded"
+        ? { lectureType: "recorded", userId, videoId: videoId! }
+        : { lectureType: "live", userId, liveSessionId: liveSessionId! }
+    );
+
+    logger.info("listAudioNotes success", { traceId, userId, lectureType, count: notes.length, hasResume: !!resumeNext });
+    return success(res, { notes, resumeNext }, "Audio notes fetched.", 200);
   } catch (err) {
     logger.error("listAudioNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);

@@ -3,7 +3,7 @@ import mongoose, { Types } from "mongoose";
 import { LiveChatMessage } from "../../models/course/LiveChatMessage.model";
 import { LiveChatBan } from "../../models/course/LiveChatBan.model";
 import { Customer } from "../../models/customer/Customer.model";
-import { io, roomKey, disconnectChatSocketsForCustomer } from "../../socket/livechat.socket";
+import { io, roomKey, disconnectChatSocketsForCustomer, emitChatUnbannedForCustomer } from "../../socket/livechat.socket";
 import { resolveLiveClassId } from "../live/live.guards";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -187,6 +187,11 @@ export const unbanCustomerFromChat = async (req: Request, res: Response) => {
     if (result.deletedCount === 0) {
       return success(res, { customerId, alreadyUnbanned: true }, "Customer was not banned.");
     }
+
+    // Real-time: tell any live sockets this customer has so their UI re-enables
+    // chat input without a refresh.
+    await emitChatUnbannedForCustomer(customerId);
+
     logger.info("unbanCustomerFromChat success", { traceId, customerId });
     return success(res, { customerId }, "Customer unbanned.");
   } catch (err) {

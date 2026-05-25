@@ -116,7 +116,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
         ...s.ebookId,
         startAt: s.startAt,
         endAt: s.endAt,
-        remainingDays: daysBetween(now, s.endAt),
+        daysLeft: daysBetween(now, s.endAt),
       }));
 
     logger.info("listMySubscriptions success", { traceId, customerId: userId, count: subscriptions.length });
