@@ -1,0 +1,15 @@
+[
+    {
+        "relation": [
+            "delegate_permission/common.handle_all_urls"
+        ],
+        "target": {
+            "namespace": "android_app",
+            "package_name": "com.gpscvideo.gpsc",
+            "sha256_cert_fingerprints": [
+                "FA:C6:17:45:DC:09:03:78:6F:B9:ED:E6:2A:96:2B:39:9F:73:48:F0:BB:6F:89:9B:83:32:66:75:91:03:3B:9C",
+                "47:6F:2B:7F:8C:7D:5E:60:1E:88:09:6E:98:62:20:51:10:90:EF:EB:F4:FB:69:0F:2D:D7:0E:78:6E:9E:4D:98"
+            ]
+        }
+    }
+]

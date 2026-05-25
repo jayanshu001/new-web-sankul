@@ -1,0 +1,16 @@
+{
+    "applinks": {
+        "apps": [],
+        "details": [
+            {
+                "appID": "PW33ZHYC82.com.4tysix.websankul",
+                "components": [
+                    "*"
+                ],
+                "paths": [
+                    "*"
+                ]
+            }
+        ]
+    }
+}

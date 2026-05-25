@@ -48,6 +48,26 @@ app.use(
 // 2) Serve static uploads
 app.use("/uploads", express.static(path.join(process.cwd(), "uploads")));
 
+// --- Well-known files (iOS Universal Links / Android App Links) -------------
+const appleAASA = path.join(process.cwd(), "public", ".well-known", "apple-app-site-association");
+const assetLinks = path.join(process.cwd(), "public", ".well-known", "assetlinks.json");
+
+app.get(
+  ["/.well-known/apple-app-site-association", "/apple-app-site-association"],
+  (_req, res, next) =>
+    res
+      .type("application/json")
+      .sendFile(appleAASA, { dotfiles: "allow" }, (err) => err && next(err))
+);
+
+app.get(
+  ["/.well-known/assetlinks.json", "/assetlinks.json"],
+  (_req, res, next) =>
+    res
+      .type("application/json")
+      .sendFile(assetLinks, { dotfiles: "allow" }, (err) => err && next(err))
+);
+
 // 2b) Live-course demo harness — served same-origin to dodge the file:// CORS trap.
 // The page uses an inline <script> + two CDN scripts (hls.js, socket.io), both of
 // which violate Helmet's default CSP. Relax the policy on this single route only.
