@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Web Sankul</title>
+  <script nonce="{{NONCE}}">
+    (function () {
+      var ua = navigator.userAgent || navigator.vendor || window.opera;
+      var appLink = '{{APP_LINK}}';
+      var webLink = '{{WEB_LINK}}';
+      var playStoreLink = '{{PLAY_STORE_URL}}';
+      var appStoreLink = '{{APP_STORE_URL}}';
+      var fallbackUrl = '{{FALLBACK_URL}}';
+
+      function go() {
+        if (/android/i.test(ua)) {
+          window.location.href = appLink;
+          setTimeout(function () { window.location.href = playStoreLink; }, 1500);
+        } else if (/iPad|iPhone|iPod/.test(ua) && !window.MSStream) {
+          setTimeout(function () { window.location.href = webLink; }, 500);
+          window.location.href = appStoreLink;
+        } else {
+          window.location.href = fallbackUrl;
+        }
+      }
+
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', go);
+      } else {
+        go();
+      }
+    })();
+  </script>
+</head>
+<body></body>
+</html>

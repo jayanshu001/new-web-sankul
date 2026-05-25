@@ -16,6 +16,7 @@ import { Course } from "../../models/course/Course.model";
 import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { buildShareUrl } from "../../deeplinking/shareRedirect";
 
 async function paginateCoursesWithPlans(
   baseFilters: any,
@@ -234,6 +235,9 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
     if (!response) {
       return failure(res, "Please select valid package", 400);
     }
+
+    const requestBase = process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
+    (response as any).shareableLink = buildShareUrl("courses", courseId, requestBase);
 
     setImmediate(() => {
       void GenerateCRMLead({

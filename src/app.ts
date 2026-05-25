@@ -18,6 +18,7 @@ import { metricsMiddleware } from "./middlewares/metricsMiddleware";
 import { renderMetrics } from "./utils/metrics";
 import { livenessHandler, readinessHandler } from "./middlewares/health";
 import { requestContextMiddleware } from "./middlewares/requestContext";
+import deeplinkingRoutes from "./deeplinking/deeplinking.routes";
 
 // ─── Route modules ──────────────────────────────────────────────────────────
 import clientRoutes from "./client/client.routes";
@@ -67,6 +68,11 @@ app.get(
       .type("application/json")
       .sendFile(assetLinks, { dotfiles: "allow" }, (err) => err && next(err))
 );
+
+// --- Public deep-link / share routes ---------------------------------------
+// Mounted OUTSIDE /api/v1/* so they stay unauthenticated and rate-limit-light.
+// Add new share surfaces in src/deeplinking/deeplinking.routes.ts.
+app.use("/share", deeplinkingRoutes);
 
 // 2b) Live-course demo harness — served same-origin to dodge the file:// CORS trap.
 // The page uses an inline <script> + two CDN scripts (hls.js, socket.io), both of
