@@ -20,6 +20,16 @@ const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 const progressBodySchema = z.object({
   positionSec: z.number().int().min(0).max(60 * 60 * 24),
   durationSec: z.number().int().min(0).max(60 * 60 * 24),
+  // Optional active container. When provided, a per-scope row is upserted
+  // (so the same live session reached through a package vs. a live course
+  // has independent position+completion). When omitted, the legacy
+  // single-row-per-(customer,liveSession) write path runs unchanged.
+  scope: z
+    .object({
+      kind: z.enum(["liveCourse", "package"]),
+      id: objectId,
+    })
+    .optional(),
 });
 
 // A lecture is treated as completed once the user has watched ~95% of it.
@@ -40,7 +50,7 @@ export const reportLiveSessionProgress = async (req: Request, res: Response) => 
     if (!userId) { logger.warn("reportLiveSessionProgress unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const liveSessionId = objectId.parse(req.params.liveSessionId);
-    const { positionSec, durationSec } = progressBodySchema.parse(req.body);
+    const { positionSec, durationSec, scope } = progressBodySchema.parse(req.body);
 
     const session = await LiveSession.findById(liveSessionId)
       .select("liveCourseIds status")
@@ -52,6 +62,100 @@ export const reportLiveSessionProgress = async (req: Request, res: Response) => 
 
     const now = new Date();
     const cid = new mongoose.Types.ObjectId(userId);
+
+    // ─── New per-scope write path ────────────────────────────────────────
+    // Same pattern as the video heartbeat: when the frontend tells us the
+    // container the user is in, we upsert a row keyed on that scope so
+    // different containers don't overwrite each other's progress.
+    if (scope) {
+      const scopeObjId = new mongoose.Types.ObjectId(scope.id);
+      let entitled = false;
+
+      if (scope.kind === "liveCourse") {
+        // The scope must be one of the live courses this session belongs to,
+        // AND the user must hold an active sub for it.
+        const belongs = (session.liveCourseIds as any[]).some(
+          (id) => String(id) === scope.id
+        );
+        if (belongs) {
+          const scopedSub = await LiveCourseSubscription.findOne({
+            customerId: cid,
+            liveCourseId: scopeObjId,
+            status: true,
+            paymentStatus: "verified",
+            endAt: { $gt: now },
+          })
+            .select("_id")
+            .lean();
+          entitled = !!scopedSub;
+        }
+      } else {
+        // package
+        const scopedSub = await PackageCourseSubscription.findOne({
+          customerId: cid,
+          targetPackageId: scopeObjId,
+          status: true,
+          paymentStatus: "verified",
+          endAt: { $gt: now },
+        })
+          .select("_id")
+          .lean();
+        entitled = !!scopedSub;
+      }
+
+      if (!entitled) {
+        logger.warn("reportLiveSessionProgress scoped entitlement failed", {
+          traceId, customerId: userId, liveSessionId, scope,
+        });
+        return res.status(403).json({
+          success: false,
+          message: "No active subscription for this scope.",
+        });
+      }
+
+      const completedNow =
+        durationSec > 0 && positionSec / durationSec >= COMPLETION_THRESHOLD;
+
+      const setFields: any = {
+        positionSec,
+        durationSec,
+        lastWatchedAt: now,
+        scopeKind: scope.kind,
+        liveCourseId: scope.kind === "liveCourse" ? scopeObjId : null,
+        packageId:    scope.kind === "package"    ? scopeObjId : null,
+        courseId:     null,
+      };
+      if (completedNow) {
+        setFields.completed = true;
+        setFields.completedAt = now;
+      }
+
+      const filter: any = {
+        customerId: cid,
+        liveSessionId: new mongoose.Types.ObjectId(liveSessionId),
+        scopeKind: scope.kind,
+      };
+      if (scope.kind === "liveCourse") filter.liveCourseId = scopeObjId;
+      if (scope.kind === "package")    filter.packageId    = scopeObjId;
+
+      const row = await LectureProgress.findOneAndUpdate(
+        filter,
+        {
+          $set: setFields,
+          $setOnInsert: {
+            customerId: cid,
+            liveSessionId: new mongoose.Types.ObjectId(liveSessionId),
+          },
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+
+      logger.info("reportLiveSessionProgress scoped success", {
+        traceId, customerId: userId, liveSessionId, scope, completedNow,
+      });
+      return res.status(200).json({ success: true, data: row });
+    }
+    // ─── End per-scope write path ────────────────────────────────────────
 
     // Any one of the session's live courses being entitled is enough. Pick
     // the first matching sub for the denormalised liveCourseId pointer.

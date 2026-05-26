@@ -19,6 +19,15 @@ const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 const progressSchema = z.object({
   positionSec: z.number().int().min(0).max(60 * 60 * 24), // sanity cap: 24h
   durationSec: z.number().int().min(0).max(60 * 60 * 24),
+  // Active container the user is watching from. Optional for back-compat
+  // with older app builds — when omitted, the legacy ancestor-walk path
+  // runs and a (legacy, scopeKind=null) row is written exactly like before.
+  scope: z
+    .object({
+      kind: z.enum(["course", "liveCourse", "package"]),
+      id: objectId,
+    })
+    .optional(),
 });
 
 // A lecture is treated as completed once the user has watched ~95% of it.
@@ -41,7 +50,7 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
     }
 
     const videoId = objectId.parse(req.params.videoId);
-    const { positionSec, durationSec } = progressSchema.parse(req.body);
+    const { positionSec, durationSec, scope } = progressSchema.parse(req.body);
 
     // Resolve the video's course via VideoCategory, so we can store courseId
     // on the progress row (denormalised for fast per-course rollups later).
@@ -54,6 +63,119 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       .select("courseId")
       .lean();
     const courseId = category?.courseId ?? null;
+
+    // ─── New per-scope write path ────────────────────────────────────────
+    // Frontend tells us which container the user is currently watching
+    // from. We verify entitlement for *that* scope only and upsert a row
+    // keyed on (customer, video, scope). Same video watched under two
+    // different containers => two independent rows => independent
+    // position+completion per container.
+    if (scope) {
+      const now = new Date();
+      const cid = new mongoose.Types.ObjectId(userId);
+      const scopeObjId = new mongoose.Types.ObjectId(scope.id);
+      const isFree = (video as any).priceType === "free";
+
+      let entitled = isFree;
+      if (!entitled) {
+        if (scope.kind === "course") {
+          // Either direct course sub OR package sub whose target package
+          // includes the video — both satisfy the course scope.
+          const sub = await PackageCourseSubscription.findOne({
+            customerId: cid,
+            courseId: scopeObjId,
+            status: true,
+            paymentStatus: "verified",
+            endAt: { $gt: now },
+          })
+            .select("_id")
+            .lean();
+          entitled = !!sub;
+        } else if (scope.kind === "liveCourse") {
+          const sub = await LiveCourseSubscription.findOne({
+            customerId: cid,
+            liveCourseId: scopeObjId,
+            status: true,
+            paymentStatus: "verified",
+            endAt: { $gt: now },
+          })
+            .select("_id")
+            .lean();
+          entitled = !!sub;
+        } else {
+          // package
+          const sub = await PackageCourseSubscription.findOne({
+            customerId: cid,
+            targetPackageId: scopeObjId,
+            status: true,
+            paymentStatus: "verified",
+            endAt: { $gt: now },
+          })
+            .select("_id")
+            .lean();
+          entitled = !!sub;
+        }
+      }
+
+      if (!entitled) {
+        logger.warn("reportLectureProgress scoped entitlement failed", {
+          traceId, userId, videoId, scope,
+        });
+        return res.status(403).json({
+          success: false,
+          message: "No active subscription for this scope.",
+        });
+      }
+
+      const completedNow =
+        durationSec > 0 && positionSec / durationSec >= COMPLETION_THRESHOLD;
+
+      const setFields: any = {
+        positionSec,
+        durationSec,
+        lastWatchedAt: now,
+        scopeKind: scope.kind,
+        // Only the matching parent pointer is set; the other two stay null
+        // on a per-scope row so reads filtering by scopeKind never see a
+        // cross-container leak.
+        courseId:     scope.kind === "course"     ? scopeObjId : null,
+        liveCourseId: scope.kind === "liveCourse" ? scopeObjId : null,
+        packageId:    scope.kind === "package"    ? scopeObjId : null,
+      };
+      if (completedNow) {
+        setFields.completed = true;
+        setFields.completedAt = now;
+      }
+
+      const filter: any = {
+        customerId: cid,
+        videoId: new mongoose.Types.ObjectId(videoId),
+        scopeKind: scope.kind,
+      };
+      // Include the scope id in the filter so the partial-unique index
+      // (customerId, videoId, courseId|liveCourseId|packageId) matches.
+      if (scope.kind === "course")     filter.courseId     = scopeObjId;
+      if (scope.kind === "liveCourse") filter.liveCourseId = scopeObjId;
+      if (scope.kind === "package")    filter.packageId    = scopeObjId;
+
+      const row = await LectureProgress.findOneAndUpdate(
+        filter,
+        {
+          $set: setFields,
+          $setOnInsert: {
+            customerId: cid,
+            videoId: new mongoose.Types.ObjectId(videoId),
+          },
+        },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+
+      logger.info("reportLectureProgress scoped success", {
+        traceId, userId, videoId, scope, completedNow,
+      });
+      return res.status(200).json({ success: true, data: row });
+    }
+    // ─── End per-scope write path ────────────────────────────────────────
 
     // Resolve which "container(s)" this lecture sits under for rollup. A video
     // category is the leaf; walk parents via VideoCategoryRelation to find:

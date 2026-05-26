@@ -14,6 +14,19 @@ import cache from "../../libs/cache";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
 import { resolveVideoSource } from "../../utils/videoResolver";
 import logger from "../../utils/logger";
+import { buildShareUrl } from "../../deeplinking/shareRedirect";
+
+const resolveBase = (req: Request) =>
+  process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
+
+// Streamos historically delivered some recording paths with stray quote
+// characters (raw `"`, URL-encoded `%22`, or `%2522`) tacked onto the end of
+// the URL — an upstream JSON-quoting bug. We strip those defensively so the
+// client never sees an unplayable URL.
+function sanitizeRecordingPath<T extends string | null | undefined>(p: T): T {
+  if (typeof p !== "string") return p;
+  return p.replace(/(?:"|%22|%2522)+$/i, "") as T;
+}
 
 // Builds the multi-resolution playback envelope a lecture detail endpoint
 // returns. The shape mirrors the legacy "encryptLecture" contract:
@@ -148,6 +161,7 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
     const featuredId: string | null = upcoming[0]?.id ?? null;
     const comingSoonId: string | null = upcoming[1]?.id ?? null;
 
+    const base = resolveBase(req);
     const liveCourses = rows.map((r: any) => {
       const key = String(r._id);
       let cardVariant: "featured" | "coming_soon" | null = null;
@@ -159,6 +173,7 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
         isPurchased: ownedIds.has(key),
         purchaseCount: purchaseCountMap.get(key) ?? 0,
         cardVariant,
+        shareableLink: buildShareUrl("live-courses", key, base),
       };
     });
 
@@ -225,9 +240,10 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
     });
 
     logger.info("getLiveCourseForClient success", { traceId, userId, id, subscribed });
+    const shareableLink = buildShareUrl("live-courses", id, resolveBase(req));
     return success(
       res,
-      { liveCourse: course, stats, plans: plansOut, subscribed, isPurchased: subscribed, daysLeft },
+      { liveCourse: { ...course, shareableLink }, stats, plans: plansOut, subscribed, isPurchased: subscribed, daysLeft, shareableLink },
       "Live course fetched."
     );
   } catch (err) {
@@ -410,9 +426,38 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
       progressByVideo = new Map(progressRows.map((r: any) => [String(r.videoId), r]));
     }
 
+    // Multi-quality recordings live on the source LiveSession (Streamos
+    // returns 5 tiers per stream). Each Video derived from a live recording
+    // carries a `liveSessionId` back-link; batch-fetch the sessions and surface
+    // the full per-quality array on the lecture row so the FE can offer a
+    // resolution switcher. Manually-uploaded Videos (no liveSessionId) get an
+    // empty array and continue to play via `aws_id` alone.
+    const liveSessionIds = videos
+      .map((v: any) => v.liveSessionId)
+      .filter((id: any): id is mongoose.Types.ObjectId => !!id);
+    let recordingsBySession = new Map<string, Array<{ quality: string | null; file_size: number | null; path: string }>>();
+    if (liveSessionIds.length) {
+      const sessions = await LiveSession.find({ _id: { $in: liveSessionIds } })
+        .select("_id recordings")
+        .lean();
+      for (const s of sessions as any[]) {
+        const shaped = (s.recordings ?? [])
+          .filter((r: any) => typeof r?.path === "string" && r.path.length > 0)
+          .map((r: any) => ({
+            quality: typeof r.quality === "string" ? r.quality : null,
+            file_size: typeof r.file_size === "number" ? r.file_size : null,
+            path: sanitizeRecordingPath(r.path),
+          }));
+        recordingsBySession.set(String(s._id), shaped);
+      }
+    }
+
     const shapeLecture = (v: (typeof videos)[number]) => {
       const canPlay = subscribed || v.priceType === "free";
       const p = progressByVideo.get(String(v._id));
+      const recordings = v.liveSessionId
+        ? recordingsBySession.get(String(v.liveSessionId)) ?? []
+        : [];
       return {
         _id: String(v._id),
         title: v.title ?? "",
@@ -425,8 +470,11 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
         // labels). They're NOT directly playable — the FE must call
         // GET /lecture/:videoId on tap to get the resolved+encrypted envelope.
         youtube_id: v.youtube_id ?? null,
-        aws_id: v.aws_id ?? null,
+        aws_id: sanitizeRecordingPath(v.aws_id ?? null),
         vimeo_id: v.vimeo_id ?? null,
+        // Per-quality MP4 list from the source LiveSession. Empty for
+        // manually-uploaded videos (no associated live session).
+        recordings,
         progress: p
           ? {
               positionSec: p.positionSec ?? 0,
@@ -664,13 +712,18 @@ export const listMyLiveCourses = async (req: Request, res: Response) => {
       .populate("planId", "name duration price")
       .lean();
 
+    const base = resolveBase(req);
     const liveCourses = subs.map((s) => {
       const active =
         s.status === true &&
         (s.endAt == null || new Date(s.endAt).getTime() >= now.getTime());
+      const lc: any = s.liveCourseId ?? null;
+      const lcWithShare = lc
+        ? { ...lc, shareableLink: buildShareUrl("live-courses", String(lc._id), base) }
+        : null;
       return {
         subscriptionId: String(s._id),
-        liveCourse: s.liveCourseId ?? null,
+        liveCourse: lcWithShare,
         plan: s.planId ?? null,
         startAt: s.startAt ?? null,
         endAt: s.endAt ?? null,

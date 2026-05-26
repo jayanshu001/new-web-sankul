@@ -1,20 +1,23 @@
 import { Schema, model, Document, Types } from "mongoose";
 
 /**
- * One row per (customer, lecture). A "lecture" is either a recorded Video
- * (course / live-course recording) or a LiveSession recording playback.
+ * One row per (customer, lecture, scope). A "lecture" is either a recorded
+ * Video (course / live-course recording) or a LiveSession playback. A
+ * "scope" is the container the user is currently inside (course / live
+ * course / package) — the same video reached through two different
+ * containers gets two independent rows, so position and completion don't
+ * bleed between them.
  *
- * The "Resume Learning" UI on the client is built on top of this:
- *   - For Course / Package cards: the most recent row whose courseId matches
- *     drives the resume target.
- *   - For Live Course cards: the most recent row whose liveCourseId matches
- *     drives the resume target. The lecture may be a Video (folder recording)
- *     or a LiveSession (raw recording playback) — videoId / liveSessionId are
- *     mutually exclusive on a given row.
+ * The "Resume Learning" UI is built on top of this:
+ *   - Course cards: rows with scopeKind="course" filtered by courseId.
+ *   - Live Course cards: rows with scopeKind="liveCourse" filtered by
+ *     liveCourseId. The lecture may be a Video (folder recording) or a
+ *     LiveSession (raw recording playback).
+ *   - Package cards: rows with scopeKind="package" filtered by packageId.
  *
- * `packageId` is denormalised on rows watched under a package subscription so
- * we can roll up % completion at the package level without re-joining through
- * PackageVideoCategoryRelation on every read.
+ * Legacy rows (written before the scope split) may have null `scopeKind`
+ * with one or more of courseId/liveCourseId/packageId set — a one-time
+ * backfill fans those out into per-scope rows and deletes the originals.
  */
 export interface ILectureProgress extends Document {
   customerId: Types.ObjectId;
@@ -32,6 +35,11 @@ export interface ILectureProgress extends Document {
   courseId?: Types.ObjectId | null;
   liveCourseId?: Types.ObjectId | null;
   packageId?: Types.ObjectId | null;
+
+  // Which container the user was inside when this row was written. Exactly
+  // one of courseId / liveCourseId / packageId is set, matching scopeKind.
+  // Null on legacy rows that predate the per-scope split.
+  scopeKind?: "course" | "liveCourse" | "package" | null;
 
   positionSec: number;
   durationSec: number;
@@ -54,6 +62,12 @@ const LectureProgressSchema = new Schema<ILectureProgress>(
     liveCourseId: { type: Schema.Types.ObjectId, ref: "LiveCourse", default: null },
     packageId:    { type: Schema.Types.ObjectId, ref: "Package",    default: null },
 
+    scopeKind: {
+      type: String,
+      enum: ["course", "liveCourse", "package", null],
+      default: null,
+    },
+
     positionSec:   { type: Number,  required: true, default: 0, min: 0 },
     durationSec:   { type: Number,  required: true, default: 0, min: 0 },
     completed:     { type: Boolean, default: false },
@@ -63,17 +77,91 @@ const LectureProgressSchema = new Schema<ILectureProgress>(
   { collection: "ws_lecture_progress", timestamps: true }
 );
 
-// One row per (customer, video) — heartbeat upserts on this.
-// Partial filter: only enforce uniqueness on rows that actually carry a
-// videoId, otherwise every (customer, null) live-session row would collide.
+// One row per (customer, video, scope). Three partial unique indexes — one
+// per scopeKind — so the heartbeat upsert key includes the active container.
+// The same video watched under a course and a package now yields two rows.
+LectureProgressSchema.index(
+  { customerId: 1, videoId: 1, courseId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      videoId: { $type: "objectId" },
+      scopeKind: "course",
+    },
+    name: "uniq_customer_video_course",
+  }
+);
+LectureProgressSchema.index(
+  { customerId: 1, videoId: 1, liveCourseId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      videoId: { $type: "objectId" },
+      scopeKind: "liveCourse",
+    },
+    name: "uniq_customer_video_liveCourse",
+  }
+);
+LectureProgressSchema.index(
+  { customerId: 1, videoId: 1, packageId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      videoId: { $type: "objectId" },
+      scopeKind: "package",
+    },
+    name: "uniq_customer_video_package",
+  }
+);
+
+// Same per-scope split for live-session rows.
+LectureProgressSchema.index(
+  { customerId: 1, liveSessionId: 1, liveCourseId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      liveSessionId: { $type: "objectId" },
+      scopeKind: "liveCourse",
+    },
+    name: "uniq_customer_liveSession_liveCourse",
+  }
+);
+LectureProgressSchema.index(
+  { customerId: 1, liveSessionId: 1, packageId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      liveSessionId: { $type: "objectId" },
+      scopeKind: "package",
+    },
+    name: "uniq_customer_liveSession_package",
+  }
+);
+
+// Legacy (scopeKind=null) rows — keep a partial unique index so the old
+// (customer, video) and (customer, liveSession) invariant still holds on
+// pre-backfill rows. Drops itself naturally once the backfill removes them.
 LectureProgressSchema.index(
   { customerId: 1, videoId: 1 },
-  { unique: true, partialFilterExpression: { videoId: { $type: "objectId" } } }
+  {
+    unique: true,
+    partialFilterExpression: {
+      videoId: { $type: "objectId" },
+      scopeKind: null,
+    },
+    name: "uniq_customer_video_legacy",
+  }
 );
-// Same idea for live-session rows.
 LectureProgressSchema.index(
   { customerId: 1, liveSessionId: 1 },
-  { unique: true, partialFilterExpression: { liveSessionId: { $type: "objectId" } } }
+  {
+    unique: true,
+    partialFilterExpression: {
+      liveSessionId: { $type: "objectId" },
+      scopeKind: null,
+    },
+    name: "uniq_customer_liveSession_legacy",
+  }
 );
 
 // Fast "most recent activity in this course / live course / package" lookups.

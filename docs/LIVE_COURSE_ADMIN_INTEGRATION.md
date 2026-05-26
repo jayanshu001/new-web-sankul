@@ -195,12 +195,14 @@ Lifecycle: `SCHEDULED` → `CREATED` → `ENDED` → `READY`.
   verifying the Streamos API itself).
 
 ### `POST /admin/live-sessions` — create or schedule
-Body: `{ title, liveCourseIds?: [...] | liveCourseId?: "...", subject?, educatorId?, endAt?, scheduledAt?, recordingTargetFolderId? }`
+Body: `{ title, subject, liveCourseIds?: [...] | liveCourseId?: "...", educatorId?, endAt?, scheduledAt? }`
 - Pass either `liveCourseIds` (array, preferred) **or** the single-string convenience `liveCourseId` — the controller accepts both.
 - `scheduledAt` in the **future** → stored `SCHEDULED`, **no Streamos call** (`streamId` / `rtmpUrl` / `hlsUrl` all `null`).
 - omitted / past → created on Streamos immediately, status `CREATED` (URLs populated).
-- `subject` / `educatorId` / `endAt` are **optional** timetable metadata — they feed the customer **Schedule tab** (which is derived from scheduled sessions).
-- `recordingTargetFolderId` — when set, the recording webhook auto-promotes the best-quality recording into that folder. Must belong to one of `liveCourseIds`.
+- **`subject` is REQUIRED.** It's both the timetable label AND the auto-grouping key for recordings: when the Streamos webhook lands, the best-quality MP4 is filed into the `VideoCategory` folder whose `subjectKey` matches `normalize(subject)` under each linked live course. If no such folder exists yet, **one is auto-created** (title = the admin's subject as typed, `image: null` — admin can set the image later). Folders dedupe across casing/whitespace ("Maths" / "maths" / " Maths " → same folder).
+- `educatorId` / `endAt` are optional timetable metadata.
+
+> **Removed:** `recordingTargetFolderId` is gone. Admins no longer pick a folder id; the system resolves the folder from `subject`.
 
 `data`: `{ session }` `201`.
 
@@ -218,7 +220,8 @@ Only allowed within 2 minutes of `scheduledAt` (late starts always allowed).
 Calls Streamos. `data`: `{ session }`.
 
 ### `PATCH /admin/live-sessions/:id` — edit a SCHEDULED session
-Body (any subset): `{ title?, scheduledAt?, liveCourseIds?, recordingTargetFolderId?, subject?, endAt?, educatorId? }`.
+Body (any subset): `{ title?, scheduledAt?, liveCourseIds?, subject?, endAt?, educatorId? }`.
+`subject` cannot be cleared (it's the recording grouping key) but can be changed.
 Only `SCHEDULED` sessions are editable. `data`: `{ session }`.
 
 ### `DELETE /admin/live-sessions/:id`

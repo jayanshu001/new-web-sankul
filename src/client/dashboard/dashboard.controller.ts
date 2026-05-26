@@ -6,7 +6,7 @@ import { Package } from "../../models/course/Package.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { Testimonial } from "../../models/system/Testimonial.model";
-import { fetchTrendingBookItems } from "../book/book.controller";
+import { fetchTrendingBooksOnly, fetchTrendingEbooksOnly } from "../book/book.controller";
 import { Video } from "../../models/course/Video.model";
 import { resolveFreeCategoryIds } from "../free/free.controller";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
@@ -21,7 +21,6 @@ import { LiveSession } from "../../models/course/LiveSession.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
-import { buildResumeNextCard } from "../learning/resumeCard";
 
 const RECENTLY_ADDED_LIMIT = 5;
 const COURSE_CATEGORY_LIMIT = 6;
@@ -136,7 +135,7 @@ export const getDashboard = async (req: Request, res: Response) => {
   logger.info("getDashboard invoked", { traceId, path: req.originalUrl, customerId: userId });
 
   try {
-    const [banners, recentPackages, courses, trending, testimonial, courseCategories, examCountdownsRaw, unreadNotifications] = await Promise.all([
+    const [banners, recentPackages, courses, trendingBooks, trendingEbooks, testimonial, courseCategories, examCountdownsRaw, unreadNotifications] = await Promise.all([
       BannerSlider.find().sort({ orderBy: 1 }).populate("keyId").lean(),
       Package.find({ active: true })
         .populate("packageTypeId", "_id name createdAt updatedAt")
@@ -144,7 +143,8 @@ export const getDashboard = async (req: Request, res: Response) => {
         .limit(RECENTLY_ADDED_LIMIT)
         .lean(),
       Course.find({ status: true }).sort({ ordered: 1, createdAt: -1 }).lean(),
-      fetchTrendingBookItems({ type: "paid" }),
+      fetchTrendingBooksOnly({ type: "paid" }),
+      fetchTrendingEbooksOnly({ type: "paid" }),
       Testimonial.find().sort({ rating: -1 }).lean(),
       CourseSubjectCategory.find({ status: true })
         .sort({ order: 1, title: 1 })
@@ -238,8 +238,10 @@ export const getDashboard = async (req: Request, res: Response) => {
     if (coursesWithPlans.length) dashboard.push({ title: "Course Subjects", type: "course", data: coursesWithPlans });
     if (courseCategoriesData.length)
       dashboard.push({ title: "Course Categories", type: "courseCategory", data: courseCategoriesData });
-    if (trending.items.length)
-      dashboard.push({ title: "Trending Books", type: "trending-book", data: trending.items });
+    if (trendingBooks.items.length)
+      dashboard.push({ title: "Trending Books", type: "trending-book", data: trendingBooks.items });
+    if (trendingEbooks.items.length)
+      dashboard.push({ title: "Trending Ebooks", type: "trending-ebook", data: trendingEbooks.items });
 
     logger.info("getDashboard success", { traceId, customerId: userId, sections: dashboard.length, unreadNotifications });
     return res.status(200).json({
@@ -278,9 +280,14 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
     const cid = new mongoose.Types.ObjectId(userId);
     const now = new Date();
 
-    // Most-recent row in each scope. Indexes
-    // {customerId,liveCourseId|courseId|packageId,lastWatchedAt:-1} make these
-    // index-only lookups.
+    // Most-recent row in each scope. Filter by the parent pointer only —
+    // matches /learning/progress/my exactly. We deliberately do NOT
+    // require `scopeKind` to equal the container kind, because legacy
+    // rows (written before the per-scope split, and any rows still being
+    // written by older app builds that don't send `scope` in the
+    // heartbeat) carry `scopeKind: null` but DO carry the right parent
+    // pointer. Reads should be filter-compatible with progress/my so
+    // the two endpoints never disagree about what the user has touched.
     const [liveRow, courseRow, packageRow] = await Promise.all([
       LectureProgress.findOne({ customerId: cid, liveCourseId: { $ne: null } })
         .sort({ lastWatchedAt: -1 })
@@ -297,87 +304,298 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
     ]);
 
     // ---- resumeLecture (purple "Resume Learning" — live course lecture) ----
+    // Built directly from the row, NOT via buildResumeNextCard. The shared
+    // builder gates a "recorded" lecture on a PackageCourseSubscription
+    // with a matching courseId — which doesn't exist for videos that live
+    // under a LiveCourse (no recorded courseId chain), so it would return
+    // null and the card would never populate. Mirrors what
+    // /learning/progress/my does for live cards.
     let resumeLecture: any = null;
-    if (liveRow) {
-      if (liveRow.liveSessionId) {
-        resumeLecture = await buildResumeNextCard({
-          lectureType: "live",
-          userId,
-          liveSessionId: String(liveRow.liveSessionId),
-        });
-      } else if (liveRow.videoId) {
-        // Live-course recording stored as a Video. Reuse the recorded
-        // builder but then re-tag with the live course's identity so the
-        // frontend treats it as a live card.
-        const card = await buildResumeNextCard({
-          lectureType: "recorded",
-          userId,
-          videoId: String(liveRow.videoId),
-        });
-        if (card) {
-          const lc = await LiveCourse.findOne({
-            _id: liveRow.liveCourseId,
-            status: true,
+    if (liveRow?.liveCourseId) {
+      const lcId = liveRow.liveCourseId as Types.ObjectId;
+      const [lc, lcSub, lastRow, totalRow, completedCount] = await Promise.all([
+        LiveCourse.findOne({ _id: lcId, status: true })
+          .select("_id name image courseEducatorId")
+          .populate({
+            path: "courseEducatorId",
+            model: CourseEducator,
+            select: "name image",
           })
-            .select("_id name image courseEducatorId")
-            .populate({
-              path: "courseEducatorId",
-              model: CourseEducator,
-              select: "name image",
-            })
+          .lean<any>(),
+        LiveCourseSubscription.findOne({
+          customerId: cid,
+          liveCourseId: lcId,
+          status: true,
+          paymentStatus: "verified",
+          endAt: { $gt: now },
+        })
+          .select("endAt")
+          .lean<any>(),
+        LectureProgress.findOne({ customerId: cid, liveCourseId: lcId })
+          .sort({ lastWatchedAt: -1 })
+          .select("videoId liveSessionId positionSec durationSec lastWatchedAt")
+          .lean<any>(),
+        LiveSession.aggregate([
+          { $match: { liveCourseIds: lcId } },
+          { $count: "total" },
+        ]),
+        LectureProgress.countDocuments({
+          customerId: cid,
+          liveCourseId: lcId,
+          completed: true,
+        }),
+      ]);
+
+      if (lc) {
+        const totalLectures = totalRow[0]?.total ?? 0;
+        // % on the purple card is for the *current lecture being resumed*,
+        // not the live course as a whole. The course-wide rollup lives in
+        // completedLectures / totalLectures for callers that want it.
+        const lecturePct =
+          lastRow && lastRow.durationSec > 0
+            ? Math.min(
+                100,
+                Math.round((lastRow.positionSec / lastRow.durationSec) * 100)
+              )
+            : 0;
+        const minutesLeft =
+          lastRow && lastRow.durationSec > 0
+            ? Math.max(
+                0,
+                Math.floor((lastRow.durationSec - lastRow.positionSec) / 60)
+              )
+            : 0;
+
+        let lecture: any = null;
+        if (lastRow?.liveSessionId) {
+          const s = await LiveSession.findById(lastRow.liveSessionId)
+            .select("title subject")
             .lean<any>();
-          const lcSub = await LiveCourseSubscription.findOne({
-            customerId: cid,
-            liveCourseId: liveRow.liveCourseId,
-            status: true,
-            paymentStatus: "verified",
-            endAt: { $gt: now },
-          })
-            .select("endAt")
+          if (s) {
+            lecture = {
+              _id: String(s._id),
+              title: s.title,
+              topic: s.subject ?? null,
+              videoCategoryId: null,
+              chapterTitle: null,
+            };
+          }
+        } else if (lastRow?.videoId) {
+          const v = await Video.findById(lastRow.videoId)
+            .select("title topic videoCategoryId")
             .lean<any>();
-          if (lc) {
-            resumeLecture = {
-              ...card,
-              type: "live",
-              id: String(lc._id),
-              courseId: null,
-              liveCourseId: String(lc._id),
-              title: lc.name,
-              subtitle: lc.courseEducatorId?.name
-                ? `By ${lc.courseEducatorId.name}`
+          const chapter = v?.videoCategoryId
+            ? await VideoCategory.findById(v.videoCategoryId)
+                .select("title")
+                .lean<any>()
+            : null;
+          if (v) {
+            lecture = {
+              _id: String(v._id),
+              title: v.title,
+              topic: v.topic ?? null,
+              videoCategoryId: v.videoCategoryId
+                ? String(v.videoCategoryId)
                 : null,
-              educator:
-                lc.courseEducatorId && lc.courseEducatorId._id
-                  ? {
-                      id: String(lc.courseEducatorId._id),
-                      name: lc.courseEducatorId.name ?? null,
-                      image: lc.courseEducatorId.image ?? null,
-                    }
-                  : null,
-              thumbnail: lc.image ?? null,
-              daysLeft: lcSub?.endAt
-                ? Math.max(
-                    0,
-                    Math.ceil(
-                      (new Date(lcSub.endAt).getTime() - now.getTime()) / 86_400_000
-                    )
-                  )
-                : null,
-              subscriptionEndAt: lcSub?.endAt ?? null,
+              chapterTitle: chapter?.title ?? null,
             };
           }
         }
+
+        resumeLecture = {
+          type: "live",
+          id: String(lc._id),
+          liveCourseId: String(lc._id),
+          courseId: null,
+          packageId: null,
+          title: lc.name,
+          subtitle: lc.courseEducatorId?.name
+            ? `By ${lc.courseEducatorId.name}`
+            : null,
+          educator:
+            lc.courseEducatorId && lc.courseEducatorId._id
+              ? {
+                  id: String(lc.courseEducatorId._id),
+                  name: lc.courseEducatorId.name ?? null,
+                  image: lc.courseEducatorId.image ?? null,
+                }
+              : null,
+          thumbnail: lc.image ?? null,
+          daysLeft: lcSub?.endAt
+            ? Math.max(
+                0,
+                Math.ceil(
+                  (new Date(lcSub.endAt).getTime() - now.getTime()) / 86_400_000
+                )
+              )
+            : null,
+          subscriptionEndAt: lcSub?.endAt ?? null,
+          percentCompleted: lecturePct,
+          minutesLeft,
+          completedLectures: completedCount,
+          totalLectures,
+          lastWatchedAt: lastRow?.lastWatchedAt ?? liveRow.lastWatchedAt,
+          lecture,
+          resume: {
+            videoId: lastRow?.videoId ? String(lastRow.videoId) : null,
+            liveSessionId: lastRow?.liveSessionId
+              ? String(lastRow.liveSessionId)
+              : null,
+            positionSec: lastRow?.positionSec ?? 0,
+            durationSec: lastRow?.durationSec ?? 0,
+          },
+        };
       }
     }
 
     // ---- recentCourse (My Courses/Subject — recorded course card) ----
+    // Built directly from the row (same approach as resumeLecture above)
+    // so lifetime subscriptions (endAt:null) and edge cases mirror
+    // /learning/progress/my exactly. We can't use buildResumeNextCard
+    // here because it inner-filters subs with endAt:{$gt:now}, dropping
+    // lifetime-sub courses from the resume card silently.
     let recentCourse: any = null;
-    if (courseRow?.videoId) {
-      recentCourse = await buildResumeNextCard({
-        lectureType: "recorded",
-        userId,
-        videoId: String(courseRow.videoId),
-      });
+    if (courseRow?.courseId) {
+      const courseId = courseRow.courseId as Types.ObjectId;
+      const [course, sub, lastRow, totalRow, completedCount] = await Promise.all([
+        Course.findOne({ _id: courseId, status: true })
+          .select("_id name image courseEducatorId")
+          .populate({
+            path: "courseEducatorId",
+            model: CourseEducator,
+            select: "name image",
+          })
+          .lean<any>(),
+        PackageCourseSubscription.findOne({
+          customerId: cid,
+          courseId,
+          status: true,
+          paymentStatus: "verified",
+          $or: [{ endAt: null }, { endAt: { $gt: now } }],
+        })
+          .select("endAt")
+          .lean<any>(),
+        LectureProgress.findOne({ customerId: cid, courseId })
+          .sort({ lastWatchedAt: -1 })
+          .select("videoId positionSec durationSec lastWatchedAt")
+          .lean<any>(),
+        VideoCategory.aggregate([
+          { $match: { courseId, status: true } },
+          {
+            $lookup: {
+              from: "ws_videos",
+              let: { categoryId: "$_id" },
+              pipeline: [
+                {
+                  $match: {
+                    $expr: { $eq: ["$videoCategoryId", "$$categoryId"] },
+                    status: true,
+                  },
+                },
+                { $count: "n" },
+              ],
+              as: "videos",
+            },
+          },
+          {
+            $group: {
+              _id: "$courseId",
+              total: { $sum: { $ifNull: [{ $first: "$videos.n" }, 0] } },
+            },
+          },
+        ]),
+        LectureProgress.countDocuments({
+          customerId: cid,
+          courseId,
+          completed: true,
+        }),
+      ]);
+
+      if (course) {
+        const totalLectures = totalRow[0]?.total ?? 0;
+        // Lecture-level % + min-left for the card (see resumeLecture for
+        // the rationale). Course-wide rollup is still in
+        // completedLectures / totalLectures.
+        const lecturePct =
+          lastRow && lastRow.durationSec > 0
+            ? Math.min(
+                100,
+                Math.round((lastRow.positionSec / lastRow.durationSec) * 100)
+              )
+            : 0;
+        const minutesLeft =
+          lastRow && lastRow.durationSec > 0
+            ? Math.max(
+                0,
+                Math.floor((lastRow.durationSec - lastRow.positionSec) / 60)
+              )
+            : 0;
+
+        let lecture: any = null;
+        if (lastRow?.videoId) {
+          const v = await Video.findById(lastRow.videoId)
+            .select("title topic videoCategoryId")
+            .lean<any>();
+          const chapter = v?.videoCategoryId
+            ? await VideoCategory.findById(v.videoCategoryId)
+                .select("title")
+                .lean<any>()
+            : null;
+          if (v) {
+            lecture = {
+              _id: String(v._id),
+              title: v.title,
+              topic: v.topic ?? null,
+              videoCategoryId: v.videoCategoryId
+                ? String(v.videoCategoryId)
+                : null,
+              chapterTitle: chapter?.title ?? null,
+            };
+          }
+        }
+
+        recentCourse = {
+          type: "course",
+          id: String(course._id),
+          courseId: String(course._id),
+          liveCourseId: null,
+          packageId: null,
+          title: course.name,
+          subtitle: course.courseEducatorId?.name
+            ? `By ${course.courseEducatorId.name}`
+            : null,
+          educator:
+            course.courseEducatorId && course.courseEducatorId._id
+              ? {
+                  id: String(course.courseEducatorId._id),
+                  name: course.courseEducatorId.name ?? null,
+                  image: course.courseEducatorId.image ?? null,
+                }
+              : null,
+          thumbnail: course.image ?? null,
+          daysLeft: sub?.endAt
+            ? Math.max(
+                0,
+                Math.ceil(
+                  (new Date(sub.endAt).getTime() - now.getTime()) / 86_400_000
+                )
+              )
+            : null,
+          subscriptionEndAt: sub?.endAt ?? null,
+          percentCompleted: lecturePct,
+          minutesLeft,
+          completedLectures: completedCount,
+          totalLectures,
+          lastWatchedAt: lastRow?.lastWatchedAt ?? courseRow.lastWatchedAt,
+          lecture,
+          resume: {
+            videoId: lastRow?.videoId ? String(lastRow.videoId) : null,
+            liveSessionId: null,
+            positionSec: lastRow?.positionSec ?? 0,
+            durationSec: lastRow?.durationSec ?? 0,
+          },
+        };
+      }
     }
 
     // ---- recentPackage (My Courses/Subject — package card) ----
@@ -487,7 +705,17 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
               : null
             : null,
           subscriptionEndAt: sub?.endAt ?? null,
+          // Package card shows package-wide rollup, not per-lecture %.
+          // minutesLeft is on the currently-resumable lecture inside the
+          // package, so the frontend can render "X min left" if it wants.
           percentCompleted: pct,
+          minutesLeft:
+            lastRow && lastRow.durationSec > 0
+              ? Math.max(
+                  0,
+                  Math.floor((lastRow.durationSec - lastRow.positionSec) / 60)
+                )
+              : 0,
           completedLectures: completedCount,
           totalLectures: totalTouched,
           lastWatchedAt: lastRow?.lastWatchedAt ?? packageRow.lastWatchedAt,
@@ -534,8 +762,9 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
   logger.info("getFreeDashboard invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const [trendingFree, magazinePackages, freeCats] = await Promise.all([
-      fetchTrendingBookItems({ type: "free", limit: FREE_DASHBOARD_LIMIT }),
+    const [trendingFreeBooks, trendingFreeEbooks, magazinePackages, freeCats] = await Promise.all([
+      fetchTrendingBooksOnly({ type: "free", limit: FREE_DASHBOARD_LIMIT }),
+      fetchTrendingEbooksOnly({ type: "free", limit: FREE_DASHBOARD_LIMIT }),
       Package.find({ active: true, isMagazine: true, isPaid: false })
         .populate("packageTypeId", "_id name createdAt updatedAt")
         .sort({ order: 1, createdAt: -1 })
@@ -564,11 +793,17 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
       : [];
 
     const dashboard: Array<{ title: string; type: string; data: unknown }> = [];
-    if (trendingFree.items.length)
+    if (trendingFreeBooks.items.length)
       dashboard.push({
         title: "Trending Free Books",
         type: "trending-book",
-        data: trendingFree.items.slice(0, FREE_DASHBOARD_LIMIT),
+        data: trendingFreeBooks.items.slice(0, FREE_DASHBOARD_LIMIT),
+      });
+    if (trendingFreeEbooks.items.length)
+      dashboard.push({
+        title: "Trending Free Ebooks",
+        type: "trending-ebook",
+        data: trendingFreeEbooks.items.slice(0, FREE_DASHBOARD_LIMIT),
       });
     if (currentAffairs.length)
       dashboard.push({ title: "Current Affairs", type: "package", data: currentAffairs });

@@ -3,6 +3,8 @@ import authenticate from "../../middlewares/authenticate";
 import {
   listBooks,
   listTrendingBooks,
+  listTrendingBooksOnly,
+  listTrendingEbooksOnly,
   getBookDetail,
   listMyOrders,
   getMyOrderById,
@@ -14,6 +16,8 @@ const router = Router();
 // Catalogue — auth required so we can decorate with cart + isPurchased.
 router.get("/", authenticate, listBooks);
 router.get("/trending", authenticate, listTrendingBooks);
+router.get("/trending/books", authenticate, listTrendingBooksOnly);
+router.get("/trending/ebooks", authenticate, listTrendingEbooksOnly);
 
 // Cart endpoints have moved to /api/v1/client/cart (see src/client/cart/*)
 

@@ -1,4 +1,4 @@
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import RedisStore from "rate-limit-redis";
 import { redisClient, isRedisReady } from "./redis";
 
@@ -49,7 +49,9 @@ export const adminLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => {
     const uid = (req as any).user?.id;
-    return uid ? `admin:${uid}` : `ip:${req.ip}`;
+    // ipKeyGenerator normalises IPv6 to /64 so a user can't rotate within
+    // their subnet to bypass the limit. Required by express-rate-limit v7.
+    return uid ? `admin:${uid}` : `ip:${ipKeyGenerator(req.ip ?? "")}`;
   },
   message: {
     success: false,
@@ -72,7 +74,7 @@ export const adminMutationLimiter = rateLimit({
   legacyHeaders: false,
   keyGenerator: (req) => {
     const uid = (req as any).user?.id;
-    return uid ? `adminmut:${uid}` : `ipmut:${req.ip}`;
+    return uid ? `adminmut:${uid}` : `ipmut:${ipKeyGenerator(req.ip ?? "")}`;
   },
   message: {
     success: false,

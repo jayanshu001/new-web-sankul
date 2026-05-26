@@ -7,6 +7,10 @@ import { Course } from "../../models/course/Course.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { buildShareUrl } from "../../deeplinking/shareRedirect";
+
+const resolveBase = (req: Request) =>
+  process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
 // GET /api/v1/client/educators/:id
 // Returns educator profile + list of active courses taught by them (with plans).
@@ -110,6 +114,7 @@ export const getEducatorWithCoursesHandler = async (
       }
     }
 
+    const base = resolveBase(req);
     const coursesWithPlans = courses.map((c: any) => {
       const key = String(c._id);
       const isLifetime = life.has(key);
@@ -122,6 +127,7 @@ export const getEducatorWithCoursesHandler = async (
             withoutMaterial: [],
           },
         daysLeft: isLifetime ? null : (endAt ? computeDaysLeft(endAt, now) : null),
+        shareableLink: buildShareUrl("courses", key, base),
       };
     });
 
@@ -139,10 +145,12 @@ export const getEducatorWithCoursesHandler = async (
       });
     });
 
+    const shareableLink = buildShareUrl("educators", educatorId, base);
     const response = {
-      educator,
+      educator: { ...educator, shareableLink },
       courses: coursesWithPlans,
       totalCourses: coursesWithPlans.length,
+      shareableLink,
     };
 
     logger.info("getEducatorWithCoursesHandler success", {

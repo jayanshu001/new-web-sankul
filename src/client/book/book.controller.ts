@@ -9,6 +9,10 @@ import { BookOrderStatus, BookCourier } from "../../models/enums";
 import { generateBookReceipt } from "../../libs/core/generate";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildShareUrl } from "../../deeplinking/shareRedirect";
+
+const resolveBase = (req: Request) =>
+  process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -64,6 +68,7 @@ export const listBooks = async (req: Request, res: Response) => {
       purchasedSet = new Set(purchasedIds.map((id: any) => String(id)));
     }
 
+    const base = resolveBase(req);
     const decorated = books.map((b) => {
       const doc = b.toObject();
       const idStr = b._id.toString();
@@ -72,6 +77,7 @@ export const listBooks = async (req: Request, res: Response) => {
         qty: cartMap.get(idStr) ?? 0,
         key: b.isCombo ? "combo" : "individual",
         isPurchased: purchasedSet.has(idStr),
+        shareableLink: buildShareUrl("books", idStr, base),
       };
     });
 
@@ -85,32 +91,63 @@ export const listBooks = async (req: Request, res: Response) => {
 
 type TrendingOpts = { type?: string; search?: string; language?: string; limit?: number };
 
-export async function fetchTrendingBookItems(opts: TrendingOpts = {}) {
+function resolveTrendingFlags(opts: TrendingOpts) {
   const wantFree = opts.type === "free";
   const wantPaid = opts.type === "paid" || !opts.type;
   const limitNum = Math.min(Math.max(opts.limit ?? 20, 1), 100);
+  return { wantFree, wantPaid, limitNum };
+}
+
+export async function fetchTrendingBooksOnly(opts: TrendingOpts = {}) {
+  const { wantFree, wantPaid, limitNum } = resolveTrendingFlags(opts);
 
   const bookFilter: any = { status: true, isTrending: true };
-  const ebookFilter: any = { status: true, isTrending: true };
-  if (opts.language) {
-    bookFilter.language = opts.language;
-    ebookFilter.language = opts.language;
-  }
+  if (opts.language) bookFilter.language = opts.language;
   if (opts.search) {
     const rx = { $regex: opts.search, $options: "i" };
     bookFilter.$or = [{ name: rx }, { author: rx }];
+  }
+  if (wantFree) bookFilter.discountedPrice = 0;
+  else if (wantPaid) bookFilter.discountedPrice = { $gt: 0 };
+
+  const books = await Book.find(bookFilter).sort({ orderBy: 1, createdAt: -1 }).lean();
+
+  const items = books.slice(0, limitNum).map((b) => ({
+    type: "book" as const,
+    _id: b._id,
+    name: b.name,
+    description: b.description,
+    author: b.author,
+    language: b.language,
+    image: b.image,
+    thumbnail: b.thumbnail,
+    demoUrl: b.demoUrl,
+    isTrending: b.isTrending,
+    isCombo: b.isCombo,
+    isMagazine: b.isMagazine,
+    listPrice: b.listPrice,
+    discountedPrice: b.discountedPrice,
+    shippingPrice: b.shippingPrice,
+    pages: b.pages ?? 0,
+    price: b.discountedPrice,
+    isFree: b.discountedPrice === 0,
+    createdAt: b.createdAt,
+  }));
+
+  return { type: wantFree ? "free" : "paid", items };
+}
+
+export async function fetchTrendingEbooksOnly(opts: TrendingOpts = {}) {
+  const { wantFree, wantPaid, limitNum } = resolveTrendingFlags(opts);
+
+  const ebookFilter: any = { status: true, isTrending: true };
+  if (opts.language) ebookFilter.language = opts.language;
+  if (opts.search) {
+    const rx = { $regex: opts.search, $options: "i" };
     ebookFilter.$or = [{ name: rx }, { author: rx }];
   }
-  if (wantFree) {
-    bookFilter.discountedPrice = 0;
-  } else if (wantPaid) {
-    bookFilter.discountedPrice = { $gt: 0 };
-  }
 
-  const [books, ebooks] = await Promise.all([
-    Book.find(bookFilter).sort({ orderBy: 1, createdAt: -1 }).lean(),
-    Ebook.find(ebookFilter).sort({ order: 1, createdAt: -1 }).lean(),
-  ]);
+  const ebooks = await Ebook.find(ebookFilter).sort({ order: 1, createdAt: -1 }).lean();
 
   const ebookIds = ebooks.map((e) => e._id);
   const plans = ebookIds.length
@@ -124,7 +161,7 @@ export async function fetchTrendingBookItems(opts: TrendingOpts = {}) {
     plansByEbook.set(key, arr);
   });
 
-  const ebookItems = ebooks
+  const items = ebooks
     .map((e) => {
       const ePlans = plansByEbook.get(String(e._id)) || [];
       const minPrice = ePlans.length ? Math.min(...ePlans.map((p) => p.price ?? 0)) : 0;
@@ -149,29 +186,18 @@ export async function fetchTrendingBookItems(opts: TrendingOpts = {}) {
         createdAt: e.createdAt,
       };
     })
-    .filter(Boolean) as any[];
+    .filter(Boolean)
+    .slice(0, limitNum) as any[];
 
-  const bookItems = books.map((b) => ({
-    type: "book" as const,
-    _id: b._id,
-    name: b.name,
-    description: b.description,
-    author: b.author,
-    language: b.language,
-    image: b.image,
-    thumbnail: b.thumbnail,
-    demoUrl: b.demoUrl,
-    isTrending: b.isTrending,
-    isCombo: b.isCombo,
-    isMagazine: b.isMagazine,
-    listPrice: b.listPrice,
-    discountedPrice: b.discountedPrice,
-    shippingPrice: b.shippingPrice,
-    pages: b.pages ?? 0,
-    price: b.discountedPrice,
-    isFree: b.discountedPrice === 0,
-    createdAt: b.createdAt,
-  }));
+  return { type: wantFree ? "free" : "paid", items };
+}
+
+export async function fetchTrendingBookItems(opts: TrendingOpts = {}) {
+  const { wantFree, limitNum } = resolveTrendingFlags(opts);
+  const [{ items: bookItems }, { items: ebookItems }] = await Promise.all([
+    fetchTrendingBooksOnly({ ...opts, limit: 100 }),
+    fetchTrendingEbooksOnly({ ...opts, limit: 100 }),
+  ]);
 
   const merged = [...bookItems, ...ebookItems]
     .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
@@ -276,9 +302,18 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
       createdAt: b.createdAt,
     }));
 
+    const base = resolveBase(req);
     const merged = [...bookItems, ...ebookItems]
       .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
-      .slice(0, limitNum);
+      .slice(0, limitNum)
+      .map((item) => ({
+        ...item,
+        shareableLink: buildShareUrl(
+          item.type === "ebook" ? "ebooks" : "books",
+          String(item._id),
+          base
+        ),
+      }));
 
     logger.info("listTrendingBooks success", { traceId, type: wantFree ? "free" : "paid", count: merged.length });
     return res.status(200).json({
@@ -287,6 +322,60 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     logger.error("listTrendingBooks failed", { traceId, error: getErrorMessage(error), stack: error.stack });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/client/books/trending/books?type=paid|free&language=&search=&limit=
+export const listTrendingBooksOnly = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listTrendingBooksOnly invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
+  try {
+    const { type, search, language, limit } = req.query as Record<string, string>;
+    const limitNum = parseInt(limit, 10) || 20;
+    const result = await fetchTrendingBooksOnly({ type, search, language, limit: limitNum });
+
+    const base = resolveBase(req);
+    const items = result.items.map((item) => ({
+      ...item,
+      shareableLink: buildShareUrl("books", String(item._id), base),
+    }));
+
+    logger.info("listTrendingBooksOnly success", { traceId, type: result.type, count: items.length });
+    return res.status(200).json({
+      success: true,
+      data: { type: result.type, items, total: items.length },
+    });
+  } catch (error: any) {
+    logger.error("listTrendingBooksOnly failed", { traceId, error: getErrorMessage(error), stack: error.stack });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /api/v1/client/books/trending/ebooks?type=paid|free&language=&search=&limit=
+export const listTrendingEbooksOnly = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listTrendingEbooksOnly invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
+  try {
+    const { type, search, language, limit } = req.query as Record<string, string>;
+    const limitNum = parseInt(limit, 10) || 20;
+    const result = await fetchTrendingEbooksOnly({ type, search, language, limit: limitNum });
+
+    const base = resolveBase(req);
+    const items = result.items.map((item) => ({
+      ...item,
+      shareableLink: buildShareUrl("ebooks", String(item._id), base),
+    }));
+
+    logger.info("listTrendingEbooksOnly success", { traceId, type: result.type, count: items.length });
+    return res.status(200).json({
+      success: true,
+      data: { type: result.type, items, total: items.length },
+    });
+  } catch (error: any) {
+    logger.error("listTrendingEbooksOnly failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -327,6 +416,7 @@ export const getBookDetail = async (req: Request, res: Response) => {
         ...book,
         pages: book.pages ?? 0,
         isPurchased,
+        shareableLink: buildShareUrl("books", id, resolveBase(req)),
       },
     });
   } catch (error: any) {

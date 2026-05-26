@@ -17,6 +17,10 @@ import {
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { buildShareUrl } from "../../deeplinking/shareRedirect";
+
+const resolveBase = (req: Request) =>
+  process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
@@ -110,6 +114,7 @@ export const listTestSeries = async (req: Request, res: Response) => {
       }
     }
 
+    const base = resolveBase(req);
     const decorated = rows.map((r: any) => {
       const def = defaultByid.get(String(r._id));
       const discountPct =
@@ -130,6 +135,7 @@ export const listTestSeries = async (req: Request, res: Response) => {
           : null,
         isPurchased: !!endAt,
         daysLeft: endAt ? computeDaysLeft(endAt, now) : null,
+        shareableLink: buildShareUrl("test-series", String(r._id), base),
       };
     });
 
@@ -182,9 +188,10 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
       : null;
 
     logger.info("getTestSeriesDetail success", { traceId, customerId, id, isPurchased });
+    const shareableLink = buildShareUrl("test-series", id, resolveBase(req));
     return success(
       res,
-      { series, contentCategories, prices, isPurchased, activeSubscription, daysLeft },
+      { series: { ...series, shareableLink }, contentCategories, prices, isPurchased, activeSubscription, daysLeft, shareableLink },
       "Fetched."
     );
   } catch (e: any) {
@@ -376,11 +383,17 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       .populate("testSeriesId", "title thumbnail paperCount")
       .lean();
     const now = new Date();
+    const base = resolveBase(req);
     const data = subs.map((s: any) => {
       const endAt = s.endAt ? new Date(s.endAt) : null;
       const isActive = !!(endAt && endAt > now);
+      const ts = s.testSeriesId;
+      const tsWithShare = ts && ts._id
+        ? { ...ts, shareableLink: buildShareUrl("test-series", String(ts._id), base) }
+        : ts;
       return {
         ...s,
+        testSeriesId: tsWithShare,
         isActive,
         daysLeft: isActive ? computeDaysLeft(endAt, now) : 0,
       };

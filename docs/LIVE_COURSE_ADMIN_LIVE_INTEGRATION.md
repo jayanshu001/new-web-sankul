@@ -107,12 +107,11 @@ Body:
 ```jsonc
 {
   "title": "Day 03 — વર્ગ & ઘન",
+  "subject": "Maths",                                // REQUIRED — also the recording-folder grouping key
   "scheduledAt": "2026-05-20T09:00:00.000Z",   // optional; future = schedule, past/null = go live NOW
   "liveCourseIds": ["6a058c63ea69f98d3d42f382"],   // or "liveCourseId" (single)
-  "subject": "Maths",                                // optional — timetable label
   "endAt": "2026-05-20T10:00:00.000Z",               // optional — for Schedule tab
-  "educatorId": "6a05a8d8c818602bfbbe0ef5",          // optional
-  "recordingTargetFolderId": "6a06..."               // optional — auto-promote on READY
+  "educatorId": "6a05a8d8c818602bfbbe0ef5"           // optional
 }
 ```
 
@@ -122,8 +121,7 @@ Body:
   "session": {
     "id": "...", "title": "...", "status": "SCHEDULED",   // or "CREATED" for immediate mode
     "liveCourseIds": [...],
-    "subject": "...", "educatorId": "...", "endAt": "...",
-    "recordingTargetFolderId": "...",
+    "subject": "Maths", "educatorId": "...", "endAt": "...",
     "scheduledAt": "2026-05-20T09:00:00.000Z",            // null in immediate mode
     "streamId": null,                                      // string when CREATED
     "rtmpUrl": null, "hlsUrl": null, "hlsUrls": null,     // populated only when CREATED
@@ -133,8 +131,16 @@ Body:
 }
 ```
 
-> **Rule:** `recordingTargetFolderId` is only valid when the folder belongs to
-> one of the `liveCourseIds` you're attaching. A 422 is returned otherwise.
+> **Recording grouping by subject:** when Streamos delivers recordings, the
+> webhook auto-files the best-quality MP4 into the `VideoCategory` folder
+> whose normalized title matches `subject`, **per linked live course**. If no
+> such folder exists under a course yet, one is auto-created (title = the
+> subject as typed; image left null — admin can set the image later). Subject
+> matching ignores casing and surrounding whitespace, so "Maths", "maths" and
+> " Maths " all collapse to the same folder.
+>
+> **Removed:** `recordingTargetFolderId` no longer exists. Admins no longer
+> type folder ObjectIds. The folder is implied by `subject`.
 
 ---
 
@@ -191,7 +197,7 @@ blocked with `409` and `secondsRemaining` in the message).
 
 ### `PATCH /admin/live-sessions/:id` — edit (SCHEDULED only)
 Editable: `title`, `scheduledAt`, `liveCourseIds` / `liveCourseId`,
-`recordingTargetFolderId`, `subject`, `endAt`, `educatorId`.
+`subject` (cannot be blanked), `endAt`, `educatorId`.
 
 `409` if the session isn't `SCHEDULED`. A `scheduledAt` change automatically
 re-syncs every customer reminder (`syncRemindersForSession`).
@@ -475,10 +481,16 @@ webhook (`POST /api/v1/client/webhook/recording`, secured by
 `STREAMOS_WEBHOOK_SECRET`). That handler:
 1. Saves `recordings[]` on the session and flips status to `READY`.
 2. Emits `recordings_ready` to the room.
-3. If `recordingTargetFolderId` was set when the session was created/edited,
-   auto-promotes the best-quality recording into that folder as a `Video`.
+3. **Subject-based auto-promote:** for each linked live course, resolves (or
+   auto-creates) the `VideoCategory` folder whose `subjectKey` matches
+   `normalize(session.subject)` and files the best-quality MP4 into it as a
+   `Video`. The folder's `title` is the subject as typed by the admin; its
+   `image` starts as `null` (admin can set it later from the folders screen).
+   Idempotent — re-delivery of the same recording into the same folder is a
+   no-op.
 
-For everything else, the admin promotes manually:
+For everything else (filing into a manually-chosen folder, re-quality, etc.),
+the admin promotes manually:
 
 ### `POST /admin/live-sessions/:id/promote-recording`
 Body:

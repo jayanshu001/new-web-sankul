@@ -12,6 +12,32 @@ one network round-trip.
 
 ---
 
+## 0. What changed (per-scope split)
+
+Each of the three cards is the user's most recent `LectureProgress`
+row whose **parent pointer** matches the card's container kind:
+
+- `resumeLecture` ← most recent row with `liveCourseId` set
+- `recentCourse`  ← most recent row with `courseId` set
+- `recentPackage` ← most recent row with `packageId` set
+
+This matches `/learning/progress/my` exactly — if a row drives a card
+under My Learning, it will drive the corresponding card here too.
+
+Where the per-scope **write** split helps: the same video watched via a
+Course and via a Package now produces two independent rows (different
+positions, different completion). So `recentCourse` and `recentPackage`
+can both populate with the same lecture but resume from different
+positions. Without scoped writes, the two watches would have collapsed
+onto one row and overwritten each other.
+
+Pre-requisite for the cross-container case: the player must send
+`scope` on every heartbeat — see `resume-sections-frontend-fixes.md`
+§0. The reads themselves don't require it; legacy rows (no `scope`)
+still drive cards just fine.
+
+---
+
 ## 1. Endpoint
 
 ```

@@ -18,7 +18,6 @@ import {
 import { io, roomKey } from "../../socket/livechat.socket";
 import {
   maybeAutoPromoteRecording,
-  validateRecordingTargetFolder,
   resolveRecording,
   promoteRecordingToFolder,
 } from "./recording.promote";
@@ -96,7 +95,6 @@ function publicView(session: ILiveSession | any) {
     subject: session.subject ?? "",
     educatorId: session.educatorId ?? null,
     endAt: session.endAt ?? null,
-    recordingTargetFolderId: session.recordingTargetFolderId ?? null,
     status: session.status,
     scheduledAt: session.scheduledAt ?? null,
     streamId: session.streamId ?? null,
@@ -195,21 +193,20 @@ export const createLiveSession = async (req: Request, res: Response) => {
       return failure(res, "liveCourseIds is required (provide at least one live course).", 400);
     }
 
-    // Optional recording target folder. Only valid when the session is
-    // attached to at least one liveCourseId AND the folder belongs to one
-    // of those courses.
-    let recordingTargetFolderId: Types.ObjectId | null = null;
-    if (req.body?.recordingTargetFolderId) {
-      const folderRef = await validateRecordingTargetFolder(
-        String(req.body.recordingTargetFolderId),
-        courseRef.ids
-      );
-      if (folderRef.error) return failure(res, folderRef.error, 422);
-      recordingTargetFolderId = folderRef.id;
-    }
-
-    // Optional timetable metadata — drives the Schedule tab.
+    // Subject — required. Drives the Schedule tab AND the subject-based
+    // auto folder grouping when recordings arrive (one VideoCategory per
+    // (liveCourse, normalized subject)).
     const subject = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
+    if (!subject) {
+      return failure(
+        res,
+        "subject is required — recordings are auto-grouped into a folder named after it.",
+        422
+      );
+    }
+    if (subject.length > 300) {
+      return failure(res, "subject is too long (max 300).", 422);
+    }
     const endAtParsed = parseScheduledAt(req.body?.endAt);
     if (
       req.body?.endAt !== undefined && req.body?.endAt !== null && req.body?.endAt !== "" &&
@@ -233,7 +230,6 @@ export const createLiveSession = async (req: Request, res: Response) => {
         subject,
         educatorId,
         endAt,
-        recordingTargetFolderId,
         scheduledAt,
         status: "SCHEDULED",
         recordings: [],
@@ -244,7 +240,7 @@ export const createLiveSession = async (req: Request, res: Response) => {
         sessionId: session._id,
         scheduledAt,
         liveCourseIds: courseRef.ids,
-        recordingTargetFolderId,
+        subject,
       });
       return success(res, { session: publicView(session) }, "Live session scheduled.", 201);
     }
@@ -258,7 +254,6 @@ export const createLiveSession = async (req: Request, res: Response) => {
       subject,
       educatorId,
       endAt,
-      recordingTargetFolderId,
       streamId: created.streamId,
       rtmpUrl: created.rtmpUrl,
       hlsUrl: created.hlsUrl,
@@ -689,25 +684,17 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
       changed = true;
     }
 
-    if (req.body?.recordingTargetFolderId !== undefined) {
-      if (req.body.recordingTargetFolderId === null || req.body.recordingTargetFolderId === "") {
-        session.recordingTargetFolderId = null;
-      } else {
-        // Validate against the about-to-be-saved set of courses (changes above
-        // already applied to the in-memory doc).
-        const folderRef = await validateRecordingTargetFolder(
-          String(req.body.recordingTargetFolderId),
-          session.liveCourseIds ?? []
-        );
-        if (folderRef.error) return failure(res, folderRef.error, 422);
-        session.recordingTargetFolderId = folderRef.id;
-      }
-      changed = true;
-    }
-
-    // Timetable metadata.
+    // Timetable metadata. Subject can't be cleared — it's the grouping key
+    // for recordings, so changing it is allowed but blanking it isn't.
     if (req.body?.subject !== undefined) {
-      session.subject = typeof req.body.subject === "string" ? req.body.subject.trim() : "";
+      const next = typeof req.body.subject === "string" ? req.body.subject.trim() : "";
+      if (!next) {
+        return failure(res, "subject cannot be empty.", 422);
+      }
+      if (next.length > 300) {
+        return failure(res, "subject is too long (max 300).", 422);
+      }
+      session.subject = next;
       changed = true;
     }
     if (req.body?.endAt !== undefined) {
@@ -731,7 +718,7 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
     if (!changed) {
       return failure(
         res,
-        "Provide title, scheduledAt, liveCourseIds, recordingTargetFolderId, subject, endAt, or educatorId to update.",
+        "Provide title, scheduledAt, liveCourseIds, subject, endAt, or educatorId to update.",
         422
       );
     }
@@ -968,12 +955,16 @@ export const recordingWebhook = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "recordings must be an array." });
     }
 
+    // Streamos has shipped paths with a stray trailing quote (raw `"`,
+    // URL-encoded `%22`, or even `%2522` from double-encoding). Strip
+    // defensively so we don't persist unplayable URLs.
+    const stripTrailingQuote = (s: string) => s.replace(/(?:"|%22|%2522)+$/i, "");
     const recordings: ILiveSessionRecording[] = rawRecordings
       .filter((r: any) => r && typeof r.path === "string" && r.path.length > 0)
       .map((r: any) => ({
         quality: typeof r.quality === "string" ? r.quality : undefined,
         file_size: typeof r.file_size === "number" ? r.file_size : Number(r.file_size) || undefined,
-        path: r.path,
+        path: stripTrailingQuote(r.path),
       }));
 
     const updated = await LiveSession.findOneAndUpdate(

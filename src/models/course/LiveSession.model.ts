@@ -14,13 +14,12 @@ export interface ILiveSession extends Document {
   // Timetable metadata — drives the "Schedule" tab, which is derived from the
   // course's scheduled sessions. `subject`/`educatorId` describe the class;
   // `scheduledAt`/`endAt` give the time slot.
+  // Required when liveCourseIds is non-empty — drives subject-based auto
+  // folder grouping when recordings arrive (a folder is auto-resolved/created
+  // per liveCourseId using the normalized subject).
   subject?: string;
   educatorId?: Types.ObjectId | null;
   endAt?: Date | null;
-  // If set at schedule time, the recording webhook will auto-create a Video
-  // in this folder once Streamos delivers recordings. Otherwise the recording
-  // only lives on this session and admin must promote it manually.
-  recordingTargetFolderId?: Types.ObjectId | null;
   scheduledAt?: Date | null;
   // Streamos stream id — a STRING (e.g. "T_17787583234029"), not a number.
   // It's the canonical id (the part before any "?token" suffix) used for
@@ -59,11 +58,6 @@ const LiveSessionSchema = new Schema<ILiveSession>(
     subject:     { type: String, default: "", trim: true, maxlength: 300 },
     educatorId:  { type: Schema.Types.ObjectId, ref: "CourseEducator", default: null },
     endAt:       { type: Date, default: null },
-    recordingTargetFolderId: {
-      type: Schema.Types.ObjectId,
-      ref: "VideoCategory",
-      default: null,
-    },
     scheduledAt: { type: Date, default: null, index: true },
     // streamId/rtmpUrl/hlsUrl are only populated once the stream actually
     // starts on Streamos. SCHEDULED rows do not have them yet, so the field

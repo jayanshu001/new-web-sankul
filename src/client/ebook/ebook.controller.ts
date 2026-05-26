@@ -6,6 +6,10 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { generateEbookReceipt } from "../../libs/core/generate";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildShareUrl } from "../../deeplinking/shareRedirect";
+
+const resolveBase = (req: Request) =>
+  process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -68,6 +72,7 @@ export const listEbooks = async (req: Request, res: Response) => {
       });
     }
 
+    const base = resolveBase(req);
     const data = ebooks.map((e) => {
       const endAt = activeByEbook.get(String(e._id)) || null;
       return {
@@ -81,6 +86,7 @@ export const listEbooks = async (req: Request, res: Response) => {
         isPurchased: !!endAt,
         subscriptionEndAt: endAt,
         daysLeft: endAt ? daysBetween(now, endAt) : null,
+        shareableLink: buildShareUrl("ebooks", String(e._id), base),
       };
     });
 
@@ -110,6 +116,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       .sort({ endAt: 1 })
       .lean();
 
+    const base = resolveBase(req);
     const subscriptions = subs
       .filter((s: any) => s.ebookId)
       .map((s: any) => ({
@@ -117,6 +124,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
         startAt: s.startAt,
         endAt: s.endAt,
         daysLeft: daysBetween(now, s.endAt),
+        shareableLink: buildShareUrl("ebooks", String(s.ebookId._id), base),
       }));
 
     logger.info("listMySubscriptions success", { traceId, customerId: userId, count: subscriptions.length });
@@ -184,6 +192,7 @@ export const getEbookDetail = async (req: Request, res: Response) => {
           isPurchased: !!subscriptionEndAt,
           subscriptionEndAt,
           daysLeft: subscriptionEndAt ? daysBetween(nowAccess, subscriptionEndAt) : null,
+          shareableLink: buildShareUrl("ebooks", id, resolveBase(req)),
         },
         availablePromoCode,
       },

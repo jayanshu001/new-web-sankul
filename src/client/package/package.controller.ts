@@ -13,6 +13,10 @@ import { Goal } from "../../models/Goal.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { buildShareUrl } from "../../deeplinking/shareRedirect";
+
+const resolveBase = (req: Request) =>
+  process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -55,7 +59,7 @@ async function buildExamCategoryEntry(cat: any) {
   };
 }
 
-async function buildPackageDetail(packageId: string, customerId?: string) {
+async function buildPackageDetail(packageId: string, customerId?: string, baseUrl?: string) {
   const pkg = await Package.findOne({ _id: packageId, active: true })
     .populate("packageTypeId", "_id name")
     .populate("goalId", "_id title")
@@ -117,7 +121,7 @@ async function buildPackageDetail(packageId: string, customerId?: string) {
       name: pkg.name,
       description: pkg.description,
       image: pkg.image,
-      shareableLink: pkg.shareableLink,
+      shareableLink: buildShareUrl("packages", String(pkg._id), baseUrl),
       withMaterialText: pkg.withMaterialText,
       withoutMaterialText: pkg.withoutMaterialText,
       packageType: pkg.packageTypeId,
@@ -166,7 +170,7 @@ export const getPackageDetail = async (req: Request, res: Response) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("getPackageDetail invalid id", { traceId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 
-    const detail = await buildPackageDetail(id, req.user?.id);
+    const detail = await buildPackageDetail(id, req.user?.id, resolveBase(req));
     if (!detail) { logger.warn("getPackageDetail not found", { traceId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found." }); }
 
     logger.info("getPackageDetail success", { traceId, packageId: id });
@@ -220,7 +224,7 @@ export const listPackages = async (req: Request, res: Response) => {
       Package.countDocuments(filter),
     ]);
 
-    const data = await enrichPackages(packages, req.user?.id);
+    const data = await enrichPackages(packages, req.user?.id, resolveBase(req));
 
     logger.info("listPackages success", { traceId, total, returned: data.length });
     return res.status(200).json({
@@ -252,7 +256,7 @@ export const listPackagesByType = async (req: Request, res: Response) => {
       .populate("goalId", "_id title")
       .sort({ order: 1, createdAt: -1 });
 
-    const enriched = await enrichPackages(packages, req.user?.id);
+    const enriched = await enrichPackages(packages, req.user?.id, resolveBase(req));
 
     logger.info("listPackagesByType success", { traceId, typeId, count: enriched.length });
     return res.status(200).json({ success: true, data: enriched });
@@ -305,7 +309,7 @@ async function purchasedPackageEndAtMap(customerId: string | undefined, packageI
   return owned;
 }
 
-async function enrichPackages(packages: any[], customerId?: string) {
+async function enrichPackages(packages: any[], customerId?: string, baseUrl?: string) {
   const ownedMap = await purchasedPackageEndAtMap(customerId, packages.map((p) => p._id));
   const now = new Date();
   return Promise.all(
@@ -325,6 +329,7 @@ async function enrichPackages(packages: any[], customerId?: string) {
         subscriberCount: subCount,
         isPurchased,
         daysLeft: isPurchased ? computeDaysLeft(ownedMap.get(pid) ?? null, now) : null,
+        shareableLink: buildShareUrl("packages", pid, baseUrl),
       };
     })
   );
@@ -381,7 +386,7 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
           .populate("goalId", "_id title")
           .sort({ order: 1, createdAt: -1 });
 
-        const enriched = await enrichPackages(packages, req.user?.id);
+        const enriched = await enrichPackages(packages, req.user?.id, resolveBase(req));
         const meta = labelMeta.get(labelId);
 
         return {
@@ -437,10 +442,18 @@ export const listMyPackages = async (req: Request, res: Response) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    const data = subs.map((s: any) => ({
-      ...s,
-      daysLeft: computeDaysLeft(s.endAt ?? null, now),
-    }));
+    const base = resolveBase(req);
+    const data = subs.map((s: any) => {
+      const pkg = s.packageId;
+      const pkgWithShare = pkg && pkg._id
+        ? { ...pkg, shareableLink: buildShareUrl("packages", String(pkg._id), base) }
+        : pkg;
+      return {
+        ...s,
+        packageId: pkgWithShare,
+        daysLeft: computeDaysLeft(s.endAt ?? null, now),
+      };
+    });
 
     logger.info("listMyPackages success", { traceId, customerId, count: subs.length });
     return res.status(200).json({ success: true, data });

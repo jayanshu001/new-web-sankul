@@ -110,7 +110,18 @@
       "Bash(python3 -c \" import json,sys d=json.load\\(sys.stdin\\) def find_all\\(items, path=''\\): for item in items: name = item.get\\('name',''\\) if 'item' in item: find_all\\(item['item'], path+' > '+name\\) else: req = item.get\\('request',{}\\) method = req.get\\('method',''\\) url = req.get\\('url',{}\\) raw = url.get\\('raw',''\\) if isinstance\\(url,dict\\) else url body = req.get\\('body',{}\\) raw_body = body.get\\('raw',''\\) if body else '' print\\(f'[{path} > {name}] {method} {raw}'\\) if raw_body: print\\(f' BODY: {raw_body[:300]}'\\) find_all\\(d.get\\('item',[]\\)\\) \")",
       "Bash(python3 *)",
       "Bash(yarn add *)",
-      "Bash(xargs ls)"
+      "Bash(xargs ls)",
+      "Bash(cat)",
+      "Bash(chmod +x /tmp/generate_report.sh)",
+      "Bash(/tmp/generate_report.sh)",
+      "Read(//private/tmp/**)",
+      "Bash(awk '{print \"| TOTAL FILES | \" $1 \" |\"}')",
+      "Bash(awk '{print \"| FULL \\(complete\\) | \" $1 \" |\"}')",
+      "Bash(awk '{print \"| PARTIAL \\(incomplete\\) | \" $1 \" |\"}')",
+      "Bash(awk '{print \"| NONE \\(no logging\\) | \" $1 \" |\"}')",
+      "Bash(awk '{p=$1} END {print \"Files needing work: \" p}')",
+      "Bash(awk '{n=$1} END {print \"Files with no logging: \" n}')",
+      "Bash(awk '{p=$1; getline < \"/tmp/results.txt\"; for\\(i=0;i<200;i++\\) {if\\(getline < \"/tmp/results.txt\" > 0\\) {if\\(/NONE/\\) n++}} print \"Total work items: \" p+n}')"
     ]
   }
 }
