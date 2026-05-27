@@ -63,12 +63,15 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
     }
 
     // Enforce 1 active device rule for admins
-    if (decoded.type === "admin") {
-      const activeAdminToken = await redisClient.get(`admin_session:${decoded.id}`);
-      if (!activeAdminToken || activeAdminToken !== token) {
-        return failure(res, "Admin session expired or logged in elsewhere.", 401);
-      }
-    }
+    // Disabled: admins may stay logged in on multiple devices simultaneously.
+    // The DB-side invalidation in adminLogin is also disabled; coarse revocation
+    // (logout-all / password change) above still applies.
+    // if (decoded.type === "admin") {
+    //   const activeAdminToken = await redisClient.get(`admin_session:${decoded.id}`);
+    //   if (!activeAdminToken || activeAdminToken !== token) {
+    //     return failure(res, "Admin session expired or logged in elsewhere.", 401);
+    //   }
+    // }
 
     // Enforce 1 active device rule for educators
     if (decoded.type === "educator") {
