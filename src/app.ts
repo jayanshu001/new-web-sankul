@@ -120,11 +120,11 @@ if (isProd && (!allowedOriginsRaw || allowedOriginsRaw.trim() === "")) {
 }
 
 const allowedOrigins = (
-  allowedOriginsRaw ?? "http://localhost:3000,http://localhost:5173,http://localhost:5174"
+  allowedOriginsRaw ?? "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://143.110.187.121:5173,http://143.110.187.121:5173/"
 )
   .split(",")
   .map((o) => o.trim())
-  .filter(Boolean);
+  .filter(Boolean); 
 
 
 app.use(
@@ -220,8 +220,8 @@ app.use((req, _res, next) => {
 app.use(captureCrashContextMiddleware());
 
 // --- Health/Index ----------------------------------------------------------
-app.get("/index.php", async (_req, res) => res.json({ Project: "AppNameUpdateHere" }));
-app.get("/api", (_req, res) => res.json({ Project: "AppNameUpdateHere" }));
+app.get("/index.php", async (_req, res) => res.json({ Project: "WebSankul-API" }));
+app.get("/api", (_req, res) => res.json({ Project: "WebSankul-API" }));
 
 // --- Live Chat Demo (dev only) ---------------------------------------------
 if (process.env.NODE_ENV !== "production") {
