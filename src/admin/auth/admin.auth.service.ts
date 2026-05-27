@@ -46,10 +46,11 @@ export async function adminLogin(
   }
 
   // Invalidate old tokens (Optional strict 1-device admin rule)
-  await AdminAccessToken.updateMany(
-    { adminUserId: admin._id },
-    { active: false, deleted: true }
-  );
+  // Disabled: allow the same admin to remain logged in on multiple devices simultaneously.
+  // await AdminAccessToken.updateMany(
+  //   { adminUserId: admin._id },
+  //   { active: false, deleted: true }
+  // );
 
   // Track login stats
   admin.lastLoginIp = ip || admin.lastLoginIp;
