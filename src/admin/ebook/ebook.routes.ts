@@ -1,6 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3Mixed } from "../../middlewares/upload";
+import { uploadS3Mixed, enforceMixedSizeLimits } from "../../middlewares/upload";
 import {
   getEbooks,
   getEbookById,
@@ -40,8 +40,8 @@ const ebookUpload = uploadS3Mixed.fields([
   { name: "bookUrl", maxCount: 1 },
 ]);
 
-router.post("/", ebookUpload, createEbook);
-router.put("/:id", ebookUpload, updateEbook);
+router.post("/", ebookUpload, enforceMixedSizeLimits, createEbook);
+router.put("/:id", ebookUpload, enforceMixedSizeLimits, updateEbook);
 router.delete("/:id", deleteEbook);
 router.patch("/:id/trending", toggleEbookTrending);
 

@@ -47,6 +47,7 @@ export const updateOrderStatusSchema = z.object({
     BookOrderStatus.CANCELLED,
     BookOrderStatus.FAILED,
   ]),
+  location: z.string().max(150).optional(),
   remarks: z.string().max(500).optional(),
 });
 
@@ -54,7 +55,15 @@ export const setTrackingSchema = z.object({
   trackingId: z.string().min(1).max(100),
   courier: z.enum([BookCourier.MAHAVIR, BookCourier.TIRUPATI]),
   status: z.string().max(100).optional(),
+  location: z.string().max(150).optional(),
   note: z.string().max(255).optional(),
+});
+
+export const addTrackingEventSchema = z.object({
+  status: z.string().min(1).max(100),
+  location: z.string().max(150).optional(),
+  note: z.string().max(255).optional(),
+  at: z.coerce.date().optional(),
 });
 
 export const updateSettingsSchema = z.object({
@@ -62,4 +71,6 @@ export const updateSettingsSchema = z.object({
   supportPhone: z.string().max(20).optional(),
   termsAndConditions: z.array(z.string()).optional(),
   gstRate: z.number().min(0).optional(),
+  originCity: z.string().max(50).optional(),
+  originHub: z.string().max(100).optional(),
 });

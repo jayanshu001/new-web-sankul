@@ -1,6 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3Mixed } from "../../middlewares/upload";
+import { uploadS3Mixed, enforceMixedSizeLimits } from "../../middlewares/upload";
 import {
   getBooks,
   getBookById,
@@ -14,6 +14,7 @@ import {
   getOrderById,
   updateOrderStatus,
   setOrderTracking,
+  addOrderTrackingEvent,
   getSettings,
   updateSettings,
 } from "./book.controller";
@@ -30,12 +31,12 @@ const bookUploadFields = uploadS3Mixed.fields([
 
 // Books CRUD
 router.get("/", getBooks);
-router.post("/", bookUploadFields, createBook);
+router.post("/", bookUploadFields, enforceMixedSizeLimits, createBook);
 router.post("/reorder", reorderBooks);
 router.get("/settings", getSettings);
 router.put("/settings", updateSettings);
 router.get("/:id", getBookById);
-router.put("/:id", bookUploadFields, updateBook);
+router.put("/:id", bookUploadFields, enforceMixedSizeLimits, updateBook);
 router.delete("/:id", deleteBook);
 router.patch("/:id/status", toggleBookStatus);
 router.patch("/:id/trending", toggleBookTrending);
@@ -45,5 +46,6 @@ router.get("/orders/list", getOrders);
 router.get("/orders/:id", getOrderById);
 router.patch("/orders/:id/status", updateOrderStatus);
 router.patch("/orders/:id/tracking", setOrderTracking);
+router.post("/orders/:id/tracking/events", addOrderTrackingEvent);
 
 export default router;

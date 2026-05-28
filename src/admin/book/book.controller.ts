@@ -11,6 +11,7 @@ import {
   reorderBooksSchema,
   updateOrderStatusSchema,
   setTrackingSchema,
+  addTrackingEventSchema,
   updateSettingsSchema,
 } from "./book.validation";
 import logger from "../../utils/logger";
@@ -355,7 +356,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("updateOrderStatus invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid order id." }); }
 
-    const { status, remarks } = updateOrderStatusSchema.parse(req.body);
+    const { status, location, remarks } = updateOrderStatusSchema.parse(req.body);
 
     const order = await BookOrder.findById(id);
     if (!order) { logger.warn("updateOrderStatus not found", { traceId, id }); return res.status(404).json({ success: false, message: "Order not found." }); }
@@ -371,8 +372,8 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
     const updated = await BookOrder.findByIdAndUpdate(
       id,
       {
-        $set: update,
-        $push: { "tracking.history": { status, note: remarks, at: now } },
+        $set: { ...update, "tracking.status": status },
+        $push: { "tracking.history": { status, location, note: remarks, at: now } },
       },
       { new: true }
     );
@@ -394,7 +395,7 @@ export const setOrderTracking = async (req: Request, res: Response) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("setOrderTracking invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid order id." }); }
 
-    const { trackingId, courier, status, note } = setTrackingSchema.parse(req.body);
+    const { trackingId, courier, status, location, note } = setTrackingSchema.parse(req.body);
 
     const updated = await BookOrder.findByIdAndUpdate(
       id,
@@ -409,6 +410,7 @@ export const setOrderTracking = async (req: Request, res: Response) => {
         $push: {
           "tracking.history": {
             status: status ?? "shipped",
+            location,
             note: note ?? `Handed over to ${courier}`,
             at: new Date(),
           },
@@ -422,6 +424,38 @@ export const setOrderTracking = async (req: Request, res: Response) => {
   } catch (error: any) {
     if (error.issues) { logger.warn("setOrderTracking validation failed", { traceId, id, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
     logger.error("setOrderTracking failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const addOrderTrackingEvent = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  logger.info("addOrderTrackingEvent invoked", { traceId, path: req.originalUrl, id });
+
+  try {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid order id." });
+    }
+
+    const { status, location, note, at } = addTrackingEventSchema.parse(req.body);
+    const eventAt = at ?? new Date();
+
+    const updated = await BookOrder.findByIdAndUpdate(
+      id,
+      {
+        $set: { "tracking.status": status },
+        $push: { "tracking.history": { status, location, note, at: eventAt } },
+      },
+      { new: true }
+    );
+    if (!updated) return res.status(404).json({ success: false, message: "Order not found." });
+
+    logger.info("addOrderTrackingEvent success", { traceId, id, status });
+    return res.status(200).json({ success: true, data: updated });
+  } catch (error: any) {
+    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    logger.error("addOrderTrackingEvent failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

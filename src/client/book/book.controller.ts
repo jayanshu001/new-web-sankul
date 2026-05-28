@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { Book } from "../../models/book/Book.model";
 import { BookCart } from "../../models/book/BookCart.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
+import { BookSetting } from "../../models/book/BookSetting.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { BookOrderStatus, BookCourier } from "../../models/enums";
@@ -548,6 +549,72 @@ export const getMyOrderById = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     logger.error("getMyOrderById failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Shipment-tracking view for the post-payment screen. Shape matches the UI:
+// summary (from / to / consignee / booked-on / awb) + ordered history with
+// per-event location lines.
+export const getMyOrderTracking = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getMyOrderTracking invoked", { traceId, path: req.originalUrl, customerId, orderId: id });
+
+  try {
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid order id." });
+    }
+
+    const [order, settings] = await Promise.all([
+      BookOrder.findOne({ _id: id, customerId }).populate("shippingId").lean(),
+      BookSetting.findOne({ key: "default" }).lean(),
+    ]);
+    if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+
+    const ship: any = order.shippingId || {};
+    const tracking = order.tracking || ({} as any);
+    const history = (tracking.history || [])
+      .slice()
+      .sort((a: any, b: any) => new Date(a.at).getTime() - new Date(b.at).getTime())
+      .map((h: any) => ({
+        status: h.status,
+        location: h.location || null,
+        note: h.note || null,
+        at: h.at,
+      }));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        orderId: String(order._id),
+        receiptId: order.receiptId,
+        awb: tracking.trackingId || null,
+        courier: tracking.courier || null,
+        trackingUrl: buildTrackingUrl(tracking.courier, tracking.trackingId),
+        from: {
+          city: settings?.originCity || null,
+          hub: settings?.originHub || null,
+        },
+        to: {
+          city: ship.city || null,
+          hub: ship.address || null,
+          pincode: ship.pincode || null,
+        },
+        consignee: ship.name || null,
+        consigneePhone: ship.phone || null,
+        bookedAt: order.paidAt || order.createdAt,
+        currentStatus: tracking.status || order.status,
+        orderStatus: order.status,
+        shippedAt: order.shippedAt || null,
+        deliveredAt: order.deliveredAt || null,
+        history,
+      },
+    });
+  } catch (error: any) {
+    logger.error("getMyOrderTracking failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

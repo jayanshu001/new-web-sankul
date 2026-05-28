@@ -14,6 +14,7 @@ import {
 } from "../live-course/entitlement";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
+import { formatScheduledAt } from "../../utils/displayTime";
 
 // Streamos stream ids are strings (e.g. "T_17787583234029").
 function parseStreamIdParam(raw: unknown): string | null {
@@ -150,6 +151,7 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
         // CREATED). The client gates the "Join" button on this.
         canJoin: session.status === "CREATED",
         scheduledAt: session.scheduledAt ?? null,
+        scheduledAtDisplay: formatScheduledAt(session.scheduledAt),
         streamId: session.streamId ?? null,
         liveCourseIds,
         isLive,

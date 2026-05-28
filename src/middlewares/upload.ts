@@ -41,7 +41,7 @@ const AUDIO_TYPES = /mp3|mpeg|m4a|aac|wav|webm|ogg|opus/;
 export const uploadS3 = multer({
   storage: s3Storage,
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5 MB ceiling
+    fileSize: 3 * 1024 * 1024, // 3 MB ceiling
   },
   fileFilter: (req, file, cb) => {
     if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
@@ -60,10 +60,17 @@ export const uploadS3 = multer({
 
 // For routes that accept both images (image/thumbnail) and PDFs (demoUrl/bookUrl)
 // in a single multipart request — use with `.fields([...])`.
+// Multer applies one `fileSize` limit per uploader instance, so per-field
+// caps are enforced inside `fileFilter` by reading the multipart Content-Length
+// header part-by-part. The outer `limits.fileSize` is set to the largest
+// allowed (PDFs at 50 MB); images get rejected earlier inside the filter.
+const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
+const PDF_MAX_BYTES = 50 * 1024 * 1024;
+
 export const uploadS3Mixed = multer({
   storage: s3Storage,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50 MB ceiling for PDFs
+    fileSize: PDF_MAX_BYTES,
   },
   fileFilter: (req, file, cb) => {
     if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
@@ -71,10 +78,16 @@ export const uploadS3Mixed = multer({
     }
 
     const ext = path.extname(file.originalname).toLowerCase();
+    const declaredSize = Number(req.headers["content-length"]) || 0;
 
     if (IMAGE_FIELDS.has(file.fieldname)) {
-      if (IMAGE_TYPES.test(ext) && IMAGE_TYPES.test(file.mimetype)) return cb(null, true);
-      return cb(new Error(`Invalid file type for ${file.fieldname}. Only JPEG, PNG, WebP allowed.`));
+      if (!(IMAGE_TYPES.test(ext) && IMAGE_TYPES.test(file.mimetype))) {
+        return cb(new Error(`Invalid file type for ${file.fieldname}. Only JPEG, PNG, WebP allowed.`));
+      }
+      if (declaredSize && declaredSize > IMAGE_MAX_BYTES * 2) {
+        return cb(new Error(`${file.fieldname} exceeds the 3 MB image limit.`));
+      }
+      return cb(null, true);
     }
     if (PDF_FIELDS.has(file.fieldname)) {
       if (PDF_TYPES.test(ext) && PDF_TYPES.test(file.mimetype)) return cb(null, true);
@@ -83,6 +96,35 @@ export const uploadS3Mixed = multer({
     cb(new Error(`Unexpected file field: ${file.fieldname}`));
   },
 });
+
+// Post-multer guard: multer streams the file before exposing its size, so the
+// only reliable per-field size check happens after upload. If an image field
+// exceeds 5 MB, delete it from S3 and reject the request.
+export const enforceMixedSizeLimits = async (
+  req: any,
+  _res: any,
+  next: (err?: any) => void
+) => {
+  const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
+  if (!files) return next();
+  const oversized: Express.MulterS3.File[] = [];
+  for (const field of Object.keys(files)) {
+    const isImage = IMAGE_FIELDS.has(field);
+    const cap = isImage ? IMAGE_MAX_BYTES : PDF_MAX_BYTES;
+    for (const f of files[field] || []) {
+      if (f.size > cap) oversized.push(f);
+    }
+  }
+  if (oversized.length === 0) return next();
+  await Promise.all(
+    oversized.map((f) =>
+      deleteFromS3FileUrl((f as any).location).catch(() => {})
+    )
+  );
+  const first = oversized[0];
+  const cap = IMAGE_FIELDS.has(first.fieldname) ? "3 MB" : "50 MB";
+  next(new Error(`${first.fieldname} exceeds the ${cap} limit.`));
+};
 
 // Customer-recorded audio notes attached to a lecture moment. Single file
 // per upload under the `audio` fieldname; stored under a customer-scoped

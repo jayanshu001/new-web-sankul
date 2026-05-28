@@ -49,6 +49,9 @@ const ebookSchema: Schema = new Schema(
 ebookSchema.index({ status: 1, order: 1 });
 ebookSchema.index({ examCountdownCategoryId: 1, status: 1, order: 1 });
 ebookSchema.index({ status: 1, isTrending: 1, order: 1 });
-ebookSchema.index({ author: "text", name: "text" });
+ebookSchema.index(
+  { author: "text", name: "text" },
+  { default_language: "none", language_override: "_none" }
+);
 
 export const Ebook = mongoose.model<IEbook>("Ebook", ebookSchema, "ws_ebooks");

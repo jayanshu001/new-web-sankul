@@ -5,8 +5,6 @@ export interface IEbookPrice extends Document {
   name?: string;
   duration: number;
   price: number;
-  withMaterial: boolean;
-  materialPrice: number;
   isDefault: boolean;
   status: boolean;
   createdAt: Date;
@@ -19,8 +17,6 @@ const ebookPriceSchema: Schema = new Schema(
     name: { type: String, default: null },
     duration: { type: Number, required: true },
     price: { type: Number, required: true },
-    withMaterial: { type: Boolean, default: false },
-    materialPrice: { type: Number, default: 0 },
     isDefault: { type: Boolean, default: false },
     status: { type: Boolean, default: true },
   },

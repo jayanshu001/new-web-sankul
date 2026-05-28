@@ -113,6 +113,12 @@ export const verifyPayment = async (req: Request, res: Response) => {
       bookOrder.status = BookOrderStatus.VERIFIED;
       bookOrder.razorpayPaymentId = razorpay_payment_id;
       bookOrder.paidAt = new Date();
+      bookOrder.tracking.status = "Order Placed";
+      bookOrder.tracking.history.push({
+        status: "Order Placed",
+        note: "Payment received",
+        at: bookOrder.paidAt,
+      } as any);
       await bookOrder.save();
 
       // Deactivate whichever cart pointed at this order's shipping. We match

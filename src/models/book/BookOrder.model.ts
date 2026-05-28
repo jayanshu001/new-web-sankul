@@ -16,7 +16,7 @@ export interface IBookOrderTracking {
   trackingId?: string;
   courier?: BookCourier;
   status: string;
-  history: { status: string; note?: string; at: Date }[];
+  history: { status: string; location?: string; note?: string; at: Date }[];
 }
 
 export interface IBookOrder extends Document {
@@ -87,6 +87,7 @@ const BookOrderSchema = new Schema<IBookOrder>(
         type: [
           {
             status: { type: String, required: true },
+            location: { type: String },
             note: { type: String },
             at: { type: Date, default: Date.now },
           },

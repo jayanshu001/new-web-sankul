@@ -6,6 +6,8 @@ export interface IBookSetting extends Document {
   supportPhone?: string;
   termsAndConditions?: string[];
   gstRate: number;
+  originCity?: string;
+  originHub?: string;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -17,6 +19,8 @@ const BookSettingSchema = new Schema<IBookSetting>(
     supportPhone: { type: String, maxlength: 20 },
     termsAndConditions: { type: [String], default: [] },
     gstRate: { type: Number, required: true, default: 0, min: 0 },
+    originCity: { type: String, maxlength: 50 },
+    originHub: { type: String, maxlength: 100 },
   },
   { collection: "ws_book_settings", timestamps: true }
 );

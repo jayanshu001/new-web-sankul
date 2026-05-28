@@ -9,6 +9,7 @@ import {
 } from "./live-reminder.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
+import { formatScheduledAt } from "../../utils/displayTime";
 
 // Shape a reminder (with its session populated, when available) for the client.
 function publicReminder(reminder: any) {
@@ -22,7 +23,9 @@ function publicReminder(reminder: any) {
     liveCourseId: reminder.liveCourseId ? String(reminder.liveCourseId) : null,
     minutesBefore: reminder.minutesBefore,
     remindAt: reminder.remindAt,
+    remindAtDisplay: formatScheduledAt(reminder.remindAt),
     sessionScheduledAt: reminder.sessionScheduledAt,
+    sessionScheduledAtDisplay: formatScheduledAt(reminder.sessionScheduledAt),
     status: reminder.status,
     // Derived: the scheduled fire time has already passed (reminder likely sent).
     fired: reminder.remindAt ? new Date(reminder.remindAt).getTime() <= Date.now() : false,
@@ -32,6 +35,7 @@ function publicReminder(reminder: any) {
           title: session.title,
           status: session.status,
           scheduledAt: session.scheduledAt ?? null,
+          scheduledAtDisplay: formatScheduledAt(session.scheduledAt),
           subject: session.subject ?? "",
           streamId: session.streamId ?? null,
           liveCourseIds: (session.liveCourseIds ?? []).map(String),

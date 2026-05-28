@@ -10,7 +10,10 @@ const zBool = z.preprocess(
 
 export const createEbookSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  examCountdownCategoryId: z.string().regex(objectIdRegex, "Invalid examCountdownCategoryId").nullable().optional(),
+  examCountdownCategoryId: z.preprocess(
+    (v) => (v === "" || v === "null" ? null : v),
+    z.string().regex(objectIdRegex, "Invalid examCountdownCategoryId").nullable().optional()
+  ),
   description: z.string().min(1, "Description is required"),
   author: z.string().min(1, "Author is required"),
   publisher: z.string().min(1, "Publisher is required"),
@@ -32,8 +35,6 @@ export const createEbookPlanSchema = z.object({
   name: z.string().optional().nullable(),
   duration: z.number().int().positive("Duration must be a positive integer"),
   price: z.number().nonnegative("Price must be non-negative"),
-  withMaterial: zBool.optional().default(false),
-  materialPrice: z.coerce.number().nonnegative().optional().default(0),
   isDefault: zBool.optional().default(false),
   status: zBool.optional().default(true),
 });

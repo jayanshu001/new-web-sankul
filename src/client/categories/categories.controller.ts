@@ -13,8 +13,10 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { Book } from "../../models/book/Book.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { LectureProgress } from "../../models/customer/LectureProgress.model";
+import { LiveSession } from "../../models/course/LiveSession.model";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
 import { resolveVideoSource } from "../../utils/videoResolver";
+import { defaultListingQualities, qualitiesFromSessionRecordings } from "../../utils/videoQualities";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -28,6 +30,15 @@ import { getErrorMessage } from "../../utils/httpResponse";
 // flow it uses. These are just identifiers, not directly-playable URLs.
 function shapeVideoForList(v: any) {
   return v;
+}
+
+// Streamos historically delivered some recording paths with stray quote
+// characters (raw `"`, URL-encoded `%22`, or `%2522`) tacked onto the end of
+// the URL — an upstream JSON-quoting bug. Strip defensively so the client
+// never sees an unplayable URL. Mirrors the helper in live-course.controller.
+function sanitizeRecordingPath<T extends string | null | undefined>(p: T): T {
+  if (typeof p !== "string") return p;
+  return p.replace(/(?:"|%22|%2522)+$/i, "") as T;
 }
 
 // Same envelope encryptLecture (live-course) produces, ported here so this
@@ -126,9 +137,45 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
       progressByVideo = new Map(progressRows.map((r: any) => [String(r.videoId), r]));
     }
 
+    // Multi-quality MP4/m3u8 recordings live on the source LiveSession (Streamos
+    // returns multiple tiers per stream). Videos promoted from a live recording
+    // carry a `liveSessionId` back-link; batch-fetch the sessions and surface
+    // the per-quality array on the row so the FE can offer a resolution
+    // switcher / download size estimate without hitting the detail endpoint.
+    // Manually-uploaded videos (no liveSessionId) get [] and use the synthetic
+    // standard ladder for `qualities` instead.
+    const liveSessionIds = rawList
+      .map((v: any) => v.liveSessionId)
+      .filter((id: any): id is mongoose.Types.ObjectId => !!id);
+    let recordingsBySession = new Map<string, Array<{ quality: string | null; file_size: number | null; path: string }>>();
+    if (liveSessionIds.length) {
+      const sessions = await LiveSession.find({ _id: { $in: liveSessionIds } })
+        .select("_id recordings")
+        .lean();
+      for (const s of sessions as any[]) {
+        const shaped = (s.recordings ?? [])
+          .filter((r: any) => typeof r?.path === "string" && r.path.length > 0)
+          .map((r: any) => ({
+            quality: typeof r.quality === "string" ? r.quality : null,
+            file_size: typeof r.file_size === "number" ? r.file_size : null,
+            path: sanitizeRecordingPath(r.path),
+          }));
+        recordingsBySession.set(String(s._id), shaped);
+      }
+    }
+
     const list = rawList.map((v: any) => {
       const shaped = shapeVideoForList(v);
       const p = progressByVideo.get(String(v._id));
+      const recordings = v.liveSessionId
+        ? recordingsBySession.get(String(v.liveSessionId)) ?? []
+        : [];
+      // Prefer qualities derived from the actual recordings ladder when we have
+      // it; otherwise fall back to the synthetic 4-tier ladder so the FE picker
+      // still renders something useful for manually-uploaded videos.
+      const qualities = recordings.length
+        ? qualitiesFromSessionRecordings(recordings)
+        : defaultListingQualities();
       return {
         ...shaped,
         progress: p
@@ -140,6 +187,8 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
               lastWatchedAt: p.lastWatchedAt ?? null,
             }
           : null,
+        recordings,
+        qualities,
       };
     });
 

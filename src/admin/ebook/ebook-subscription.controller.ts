@@ -256,7 +256,7 @@ export const getEbookPricesForSubscription = async (req: Request, res: Response)
     }
 
     const plans = await EbookPrice.find({ ebookId, status: true })
-      .select("_id name price duration withMaterial materialPrice")
+      .select("_id name price duration")
       .sort({ price: 1 });
 
     return res.status(200).json({ success: true, data: plans });

@@ -15,6 +15,8 @@ import { generateToken, generateKey, generateVector, encrypt } from "../../utils
 import { resolveVideoSource } from "../../utils/videoResolver";
 import logger from "../../utils/logger";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { formatScheduledAt } from "../../utils/displayTime";
+import { qualitiesFromSessionRecordings } from "../../utils/videoQualities";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -342,6 +344,7 @@ export const listSessionsForCourseClient = async (req: Request, res: Response) =
       title: s.title,
       status: s.status,
       scheduledAt: s.scheduledAt ?? null,
+      scheduledAtDisplay: formatScheduledAt(s.scheduledAt),
       streamId: s.streamId ?? null,
       liveCourseIds: s.liveCourseIds ?? [],
       hasRecordings: Array.isArray(s.recordings) && s.recordings.length > 0,
@@ -475,6 +478,12 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
         // Per-quality MP4 list from the source LiveSession. Empty for
         // manually-uploaded videos (no associated live session).
         recordings,
+        // Lightweight qualities hint for the FE download picker — keeps the
+        // mobile client from calling the lecture detail endpoint per row just
+        // to render "720p — ~320 MB". Empty array for manually-uploaded videos
+        // (no live-session recordings to derive a ladder from); the FE then
+        // falls back to the detail endpoint as before.
+        qualities: qualitiesFromSessionRecordings(recordings),
         progress: p
           ? {
               positionSec: p.positionSec ?? 0,
@@ -654,6 +663,7 @@ export const listLiveCourseSessionRecordings = async (req: Request, res: Respons
       subject: s.subject ?? null,
       streamId: s.streamId ?? null,
       scheduledAt: s.scheduledAt ?? null,
+      scheduledAtDisplay: formatScheduledAt(s.scheduledAt),
       endAt: s.endAt ?? null,
       locked: !subscribed,
     }));
@@ -814,6 +824,7 @@ export const listMyUpcomingSessions = async (req: Request, res: Response) => {
       // can show "Course A / Course B" when overlapping.
       liveCourses: Array.isArray(s.liveCourseIds) ? s.liveCourseIds : [],
       scheduledAt: s.scheduledAt ?? null,
+      scheduledAtDisplay: formatScheduledAt(s.scheduledAt),
       endAt: s.endAt ?? null,
       status: s.status,
       streamId: s.streamId ?? null,
@@ -912,6 +923,7 @@ export const listAllUpcomingSessions = async (req: Request, res: Response) => {
         educator: s.educatorId ?? null,
         liveCourses: courseList,
         scheduledAt: s.scheduledAt ?? null,
+        scheduledAtDisplay: formatScheduledAt(s.scheduledAt),
         endAt: s.endAt ?? null,
         status: s.status,
         streamId: s.streamId ?? null,
@@ -1007,6 +1019,7 @@ export const listLiveNowSessions = async (req: Request, res: Response) => {
         educator: s.educatorId ?? null,
         liveCourses: courseList,
         scheduledAt: s.scheduledAt ?? null,
+        scheduledAtDisplay: formatScheduledAt(s.scheduledAt),
         endAt: s.endAt ?? null,
         status: s.status,
         streamId: s.streamId ?? null,
@@ -1109,6 +1122,7 @@ export const getLiveCourseSchedule = async (req: Request, res: Response) => {
       educator: s.educatorId ?? null, // populated { _id, name, image } or null
       date: s.scheduledAt ?? null,
       startAt: s.scheduledAt ?? null,
+      startAtDisplay: formatScheduledAt(s.scheduledAt),
       endAt: s.endAt ?? null,
       status: s.status,
       streamId: s.streamId ?? null,
