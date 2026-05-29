@@ -510,7 +510,7 @@ export const listPackagesByExamCountdownCategory = async (req: Request, res: Res
     }
 
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-    const filter: any = { examCountdownCategoryId: id, active: true };
+    const filter: any = { examCountdownCategoryIds: id, active: true };
     if (search) filter.name = { $regex: search, $options: "i" };
 
     const [packages, total] = await Promise.all([

@@ -9,6 +9,7 @@ const categoryRefSchema = z.object({
 
 export const createCourseSchema = z.object({
   name: z.string().min(1, "Name is required"),
+  subtitle: z.string().optional(),
   description: z.string().min(1, "Description is required"),
   image: z.string().url("Image must be a valid URL"),
   ordered: z.number().int("Ordered must be an integer"),
@@ -22,7 +23,6 @@ export const createCourseSchema = z.object({
   courseEducatorId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
   courseSubjectCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
   videoCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
-  examCountdownCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").nullable().optional(),
   materialCategories: z.array(categoryRefSchema).optional(),
   examCategories: z.array(categoryRefSchema).optional(),
 });

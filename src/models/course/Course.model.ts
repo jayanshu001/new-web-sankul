@@ -7,6 +7,7 @@ export interface ICourseCategoryRef {
 
 export interface ICourse extends Document {
   name: string;
+  subtitle?: string;
   description: string;
   image: string;
   ordered: number;
@@ -22,7 +23,6 @@ export interface ICourse extends Document {
   courseEducatorId?: mongoose.Types.ObjectId;
   courseSubjectCategoryId?: mongoose.Types.ObjectId;
   videoCategoryId?: mongoose.Types.ObjectId;
-  examCountdownCategoryId?: mongoose.Types.ObjectId | null;
 
   // Embedded joins (replacement for SQL MaterialCategoryCourse / ExamCategoryCourse)
   materialCategories: ICourseCategoryRef[];
@@ -51,6 +51,7 @@ const examCategoryRefSchema = new Schema<ICourseCategoryRef>(
 const courseSchema: Schema = new Schema(
   {
     name: { type: String, required: true },
+    subtitle: { type: String, default: "" },
     description: { type: String, required: true },
     image: { type: String, required: true },
     ordered: { type: Number, required: true },
@@ -66,7 +67,6 @@ const courseSchema: Schema = new Schema(
     courseEducatorId: { type: Schema.Types.ObjectId, ref: "CourseEducator", default: null },
     courseSubjectCategoryId: { type: Schema.Types.ObjectId, ref: "CourseSubjectCategory", default: null },
     videoCategoryId: { type: Schema.Types.ObjectId, ref: "VideoCategory", default: null },
-    examCountdownCategoryId: { type: Schema.Types.ObjectId, ref: "ExamCountdownCategory", default: null },
 
     materialCategories: { type: [materialCategoryRefSchema], default: [] },
     examCategories: { type: [examCategoryRefSchema], default: [] },

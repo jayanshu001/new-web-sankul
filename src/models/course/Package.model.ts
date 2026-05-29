@@ -8,6 +8,7 @@ export interface IPackageCategoryRef {
 
 export interface IPackage extends Document {
   name: string;
+  subtitle?: string;
   description: string;
   image?: string;
   shareableLink?: string;
@@ -22,7 +23,8 @@ export interface IPackage extends Document {
   packageTypeId?: Types.ObjectId | null;
   goalId?: Types.ObjectId | null;
   goalLabelId?: Types.ObjectId | null;
-  examCountdownCategoryId?: Types.ObjectId | null;
+  examCountdownCategoryIds: Types.ObjectId[];
+  examCountdownIds: Types.ObjectId[];
   packageCategoryId?: Types.ObjectId | null;
   educatorId?: Types.ObjectId | null;
   specificSubjects: IPackageCategoryRef[];
@@ -45,6 +47,7 @@ const PackageCategoryRefSchema = new Schema<IPackageCategoryRef>(
 const packageSchema = new Schema<IPackage>(
   {
     name: { type: String, required: true, maxlength: 255 },
+    subtitle: { type: String, default: "", maxlength: 255 },
     description: { type: String, default: "" },
     image: { type: String, maxlength: 500 },
     shareableLink: { type: String, maxlength: 500 },
@@ -59,10 +62,13 @@ const packageSchema = new Schema<IPackage>(
     packageTypeId: { type: Schema.Types.ObjectId, ref: "PackageType", default: null },
     goalId: { type: Schema.Types.ObjectId, ref: "Goal", default: null },
     goalLabelId: { type: Schema.Types.ObjectId, default: null },
-    examCountdownCategoryId: {
-      type: Schema.Types.ObjectId,
-      ref: "ExamCountdownCategory",
-      default: null,
+    examCountdownCategoryIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "ExamCountdownCategory" }],
+      default: [],
+    },
+    examCountdownIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "ExamCountdown" }],
+      default: [],
     },
     packageCategoryId: {
       type: Schema.Types.ObjectId,
@@ -82,7 +88,8 @@ packageSchema.index({ active: 1, order: 1 });
 packageSchema.index({ goalId: 1, active: 1 });
 packageSchema.index({ goalLabelId: 1, active: 1 });
 packageSchema.index({ packageTypeId: 1, active: 1 });
-packageSchema.index({ examCountdownCategoryId: 1, active: 1 });
+packageSchema.index({ examCountdownCategoryIds: 1, active: 1 });
+packageSchema.index({ examCountdownIds: 1, active: 1 });
 packageSchema.index({ packageCategoryId: 1, active: 1 });
 packageSchema.index({ isSmartCourse: 1, active: 1 });
 packageSchema.index({ isPlannerCourse: 1, active: 1 });

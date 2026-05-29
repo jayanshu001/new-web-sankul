@@ -8,6 +8,8 @@
 
 import mongoose, { Types } from "mongoose";
 import { Package } from "../../models/course/Package.model";
+import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
+import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
 import { PackageType } from "../../models/course/PackageType.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
@@ -26,6 +28,29 @@ import cache from "../../libs/cache";
 const assertObjectId = (id: string, label: string): void => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new HttpError(400, `Invalid ${label} id.`);
+  }
+};
+
+// Validates the two exam-countdown arrays: each id is a valid ObjectId and
+// exists in its respective collection. Skips checks for undefined inputs so
+// it composes with both create (defaults to []) and update (partial) flows.
+const assertExamCountdownArrays = async (
+  categoryIds: string[] | undefined,
+  countdownIds: string[] | undefined
+): Promise<void> => {
+  if (categoryIds?.length) {
+    if (categoryIds.some((id) => !mongoose.Types.ObjectId.isValid(id)))
+      throw new HttpError(400, "Invalid examCountdownCategoryIds entry.");
+    const count = await ExamCountdownCategory.countDocuments({ _id: { $in: categoryIds } });
+    if (count !== new Set(categoryIds).size)
+      throw new HttpError(400, "One or more examCountdownCategoryIds do not exist.");
+  }
+  if (countdownIds?.length) {
+    if (countdownIds.some((id) => !mongoose.Types.ObjectId.isValid(id)))
+      throw new HttpError(400, "Invalid examCountdownIds entry.");
+    const count = await ExamCountdown.countDocuments({ _id: { $in: countdownIds } });
+    if (count !== new Set(countdownIds).size)
+      throw new HttpError(400, "One or more examCountdownIds do not exist.");
   }
 };
 
@@ -187,7 +212,8 @@ export const getPackageById = async (id: string) => {
     load: async () => {
       const pkg = await Package.findById(id)
         .populate("packageTypeId", "_id name")
-        .populate("examCountdownCategoryId", "_id name colorHex")
+        .populate("examCountdownCategoryIds", "_id name colorHex")
+        .populate("examCountdownIds", "_id title examDate")
         .populate("packageCategoryId", "_id title slug image")
         .populate("educatorId", "_id name")
         .populate("specificSubjects.category", "_id title image")
@@ -203,22 +229,19 @@ export const getPackageById = async (id: string) => {
 export const createPackage = async (validated: any) => {
   await assertGoalLabelPair(validated.goalId, validated.goalLabelId);
   if (
-    validated.examCountdownCategoryId &&
-    !mongoose.Types.ObjectId.isValid(validated.examCountdownCategoryId)
-  )
-    throw new HttpError(400, "Invalid examCountdownCategoryId.");
-  if (
     validated.packageCategoryId &&
     !mongoose.Types.ObjectId.isValid(validated.packageCategoryId)
   )
     throw new HttpError(400, "Invalid packageCategoryId.");
+  await assertExamCountdownArrays(validated.examCountdownCategoryIds, validated.examCountdownIds);
 
   const payload: any = {
     ...validated,
     packageTypeId: validated.packageTypeId || null,
     goalId: validated.goalId || null,
     goalLabelId: validated.goalLabelId || null,
-    examCountdownCategoryId: validated.examCountdownCategoryId || null,
+    examCountdownCategoryIds: validated.examCountdownCategoryIds ?? [],
+    examCountdownIds: validated.examCountdownIds ?? [],
     packageCategoryId: validated.packageCategoryId || null,
     educatorId: validated.educatorId || null,
     specificSubjects: toCategoryRefs(validated.specificSubjects) ?? [],
@@ -253,13 +276,12 @@ export const updatePackage = async (id: string, validated: any) => {
     update.packageTypeId = validated.packageTypeId || null;
   if (validated.goalId !== undefined) update.goalId = validated.goalId || null;
   if (validated.goalLabelId !== undefined) update.goalLabelId = validated.goalLabelId || null;
-  if (validated.examCountdownCategoryId !== undefined) {
-    if (
-      validated.examCountdownCategoryId &&
-      !mongoose.Types.ObjectId.isValid(validated.examCountdownCategoryId)
-    )
-      throw new HttpError(400, "Invalid examCountdownCategoryId.");
-    update.examCountdownCategoryId = validated.examCountdownCategoryId || null;
+  if (validated.examCountdownCategoryIds !== undefined || validated.examCountdownIds !== undefined) {
+    await assertExamCountdownArrays(validated.examCountdownCategoryIds, validated.examCountdownIds);
+    if (validated.examCountdownCategoryIds !== undefined)
+      update.examCountdownCategoryIds = validated.examCountdownCategoryIds;
+    if (validated.examCountdownIds !== undefined)
+      update.examCountdownIds = validated.examCountdownIds;
   }
   if (validated.packageCategoryId !== undefined) {
     if (

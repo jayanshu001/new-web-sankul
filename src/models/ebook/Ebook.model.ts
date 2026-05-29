@@ -13,6 +13,8 @@ export interface IEbook extends Document {
   thumbnail?: string;
   demoUrl?: string;
   bookUrl?: string;
+  demoFileName?: string;
+  bookFileName?: string;
   link: string;
   termsAndConditions?: string;
   isTrending: boolean;
@@ -38,6 +40,8 @@ const ebookSchema: Schema = new Schema(
     thumbnail: { type: String, default: null },
     demoUrl: { type: String, default: null },
     bookUrl: { type: String, default: null },
+    demoFileName: { type: String, default: null },
+    bookFileName: { type: String, default: null },
     link: { type: String, required: true },
     termsAndConditions: { type: String, default: null },
     isTrending: { type: Boolean, default: false },

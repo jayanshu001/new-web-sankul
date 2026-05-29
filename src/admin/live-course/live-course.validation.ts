@@ -5,6 +5,7 @@ const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId");
 export const createLiveCourseSchema = z
   .object({
     name:          z.string().trim().min(1, "Name is required").max(300),
+    subtitle:      z.string().trim().optional(),
     description:   z.string().trim().min(1, "Description is required"),
     image:           z.string().url("Image must be a valid URL"),
     ordered:         z.number().int("Ordered must be an integer"),
@@ -19,6 +20,8 @@ export const createLiveCourseSchema = z
     startTime:     z.string().datetime({ offset: true }).nullable().optional(),
     courseEducatorId:  objectId.optional(),
     packageCategoryId: objectId.optional(),
+    examCountdownCategoryIds: z.array(objectId).optional(),
+    examCountdownIds:         z.array(objectId).optional(),
   })
   .strict();
 

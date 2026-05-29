@@ -121,8 +121,9 @@ async function paginateCoursesWithPlans(
     const cid = String(c._id);
     const isPurchased = endAtByCourse.has(cid);
     const endAt = lifetimeByCourse.has(cid) ? null : (endAtByCourse.get(cid) ?? null);
+    const { examCountdownCategoryId: _drop, ...rest } = c;
     return {
-      ...c,
+      ...rest,
       isPaid: c.isPaid ?? true,
       isPurchased,
       daysLeft: isPurchased ? computeDaysLeft(endAt, now) : null,

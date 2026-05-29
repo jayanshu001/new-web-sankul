@@ -24,6 +24,39 @@ import * as packageService from "./package.service";
 // Multipart coercion helper
 // ──────────────────────────────────────────────────────────────────────────────
 
+// Reassemble `field[0]=a&field[1]=b` (multer flattens indexed keys to literal strings)
+// into a real array. Also accepts `field[]=""` (frontend's "clear to empty array" signal)
+// and a JSON-stringified array as a fallback. Mutates req.body in place.
+const coerceIdArrayField = (req: Request, field: string) => {
+  const body = req.body as Record<string, any>;
+  if (Array.isArray(body[field])) return;
+
+  const indexedKeys = Object.keys(body).filter((k) => k.startsWith(`${field}[`));
+  if (indexedKeys.length) {
+    const arr: string[] = [];
+    let sawEmptyMarker = false;
+    for (const k of indexedKeys) {
+      const v = body[k];
+      delete body[k];
+      if (k === `${field}[]` && (v === "" || v == null)) { sawEmptyMarker = true; continue; }
+      const m = k.match(/\[(\d+)\]$/);
+      if (m && typeof v === "string" && v) arr[Number(m[1])] = v;
+    }
+    body[field] = arr.filter(Boolean);
+    if (!body[field].length && sawEmptyMarker) body[field] = [];
+    return;
+  }
+
+  if (typeof body[field] === "string") {
+    const s = body[field].trim();
+    if (s.startsWith("[")) {
+      try { const parsed = JSON.parse(s); if (Array.isArray(parsed)) body[field] = parsed; } catch {}
+    } else if (s === "") {
+      body[field] = [];
+    }
+  }
+};
+
 const coercePackageBody = (req: Request) => {
   const file = req.file as any;
   if (file?.location) req.body.image = file.location;
@@ -36,6 +69,8 @@ const coercePackageBody = (req: Request) => {
     req.body.isSmartCourse = req.body.isSmartCourse === "true";
   if (typeof req.body.isPlannerCourse === "string")
     req.body.isPlannerCourse = req.body.isPlannerCourse === "true";
+  coerceIdArrayField(req, "examCountdownCategoryIds");
+  coerceIdArrayField(req, "examCountdownIds");
 };
 
 // ──────────────────────────────────────────────────────────────────────────────

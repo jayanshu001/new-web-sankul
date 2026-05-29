@@ -39,12 +39,7 @@ const coerceCourseBody = (req: Request) => {
   if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
   if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
   if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
-  if (
-    req.body.examCountdownCategoryId === "" ||
-    req.body.examCountdownCategoryId === "null"
-  ) {
-    req.body.examCountdownCategoryId = null;
-  }
+  delete req.body.examCountdownCategoryId;
   const materialCategories = courseService.parseCategoryRefs(req.body.materialCategories);
   const examCategories = courseService.parseCategoryRefs(req.body.examCategories);
   // Zod accepts ObjectId strings; pass the string form for schema validation

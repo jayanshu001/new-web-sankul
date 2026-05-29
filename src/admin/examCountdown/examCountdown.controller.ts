@@ -166,7 +166,7 @@ export const adminListCountdowns = async (req: Request, res: Response) => {
     const [data, total] = await Promise.all([
       ExamCountdown.find(filter)
         .populate("categoryId", "_id name colorHex")
-        .sort({ examDate: 1, order: 1 })
+        .sort({ examDate: 1 })
         .skip(skip)
         .limit(limitNum)
         .lean(),
@@ -189,7 +189,6 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
     const title = (req.body?.title ?? "").toString().trim();
     const categoryId = (req.body?.categoryId ?? "").toString().trim();
     const description = (req.body?.description ?? "").toString();
-    const order = Number.isFinite(Number(req.body?.order)) ? Number(req.body.order) : 0;
     const status = req.body?.status === undefined ? true : Boolean(req.body.status);
 
     if (!title) return res.status(400).json({ success: false, message: "title is required." });
@@ -213,7 +212,6 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
       categoryId,
       examDate: date,
       description,
-      order,
       status,
     });
     return res.status(201).json({ success: true, data: doc });
@@ -255,7 +253,6 @@ export const adminUpdateCountdown = async (req: Request, res: Response) => {
       update.examDate = date;
     }
     if (req.body?.description !== undefined) update.description = req.body.description.toString();
-    if (req.body?.order !== undefined) update.order = Number(req.body.order) || 0;
     if (req.body?.status !== undefined) update.status = Boolean(req.body.status);
 
     const doc = await ExamCountdown.findByIdAndUpdate(id, { $set: update }, { new: true });

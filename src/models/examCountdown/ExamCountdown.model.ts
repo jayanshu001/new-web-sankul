@@ -5,7 +5,6 @@ export interface IExamCountdown extends Document {
   categoryId: Types.ObjectId;
   examDate: Date;
   description?: string;
-  order: number;
   status: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -21,7 +20,6 @@ const examCountdownSchema = new Schema<IExamCountdown>(
     },
     examDate: { type: Date, required: true },
     description: { type: String, default: "" },
-    order: { type: Number, default: 0 },
     status: { type: Boolean, default: true },
   },
   { collection: "ws_exam_countdowns", timestamps: true }

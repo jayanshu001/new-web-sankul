@@ -95,12 +95,12 @@ export async function generateOtp(rawPhone: string, traceId?: string): Promise<{
       return { ok: false, message: "Your account has been blocked. Please contact support." };
     }
     // OTP cooldown — still within TTL
-    if (existing.otp && existing.otpExpiresAt && existing.otpExpiresAt > new Date()) {
-      return {
-        ok: false,
-        message: `Please wait ${OTP_TTL_MINUTES} minutes before requesting a new OTP.`,
-      };
-    }
+    // if (existing.otp && existing.otpExpiresAt && existing.otpExpiresAt > new Date()) {
+    //   return {
+    //     ok: false,
+    //     message: `Please wait ${OTP_TTL_MINUTES} minutes before requesting a new OTP.`,
+    //   };
+    // }
   }
 
   const otp = isStatic ? STATIC_OTP : String(Math.floor(1000 + Math.random() * 8999));

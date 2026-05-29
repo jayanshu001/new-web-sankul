@@ -8,6 +8,7 @@ const categoryRefSchema = z.object({
 
 export const createPackageSchema = z.object({
   name: z.string().min(1).max(255),
+  subtitle: z.string().max(255).optional(),
   description: z.string().default(""),
   image: z.string().max(500).optional(),
   shareableLink: z.string().max(500).optional(),
@@ -22,7 +23,8 @@ export const createPackageSchema = z.object({
   packageTypeId: z.string().nullable().optional(),
   goalId: z.string().nullable().optional(),
   goalLabelId: z.string().nullable().optional(),
-  examCountdownCategoryId: z.string().nullable().optional(),
+  examCountdownCategoryIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId")).optional(),
+  examCountdownIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId")).optional(),
   packageCategoryId: z.string().nullable().optional(),
   educatorId: z.string().nullable().optional(),
   specificSubjects: z.array(categoryRefSchema).optional(),

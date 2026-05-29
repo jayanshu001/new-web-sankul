@@ -269,7 +269,7 @@ app.get("/metrics", (req, res) => {
 });
 
 // --- Global Rate Limiter ---------------------------------------------------
-app.use(globalLimiter);
+// app.use(globalLimiter);
 
 // --- Routes ----------------------------------------------------------------
 // Master Client Routes (Mobile App / Web Portal)

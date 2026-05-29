@@ -75,6 +75,7 @@ export async function buildCourseDetails(
   delete course.courseSubjectCategoryId;
   delete course.materialCategories;
   delete course.examCategories;
+  delete course.examCountdownCategoryId;
 
   // Videos — Course has a single videoCategoryId; expose as one-entry videos[]
   // with the category's active videos inlined so the FE can render the Videos

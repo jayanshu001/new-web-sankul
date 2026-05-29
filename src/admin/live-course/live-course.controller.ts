@@ -14,12 +14,26 @@ import {
 } from "./live-course.validation";
 import * as liveCourseService from "./live-course.service";
 
+// In multipart submissions (when an image file is uploaded), array fields
+// arrive as JSON-stringified strings. Parse them back to arrays so Zod's
+// `.strict()` schema accepts them. Leaves real arrays untouched.
+const parseJsonArray = (v: unknown): unknown => {
+  if (typeof v !== "string") return v;
+  const s = v.trim();
+  if (!s.startsWith("[")) return v;
+  try { const parsed = JSON.parse(s); return Array.isArray(parsed) ? parsed : v; } catch { return v; }
+};
+
 const coerceBody = (body: Record<string, any>): Record<string, any> => {
   const out = { ...body };
   if (typeof out.ordered === "string") out.ordered = Number(out.ordered);
   if (typeof out.status === "string") out.status = out.status === "true";
   if (typeof out.isPaid === "string") out.isPaid = out.isPaid === "true";
   if (typeof out.isPopular === "string") out.isPopular = out.isPopular === "true";
+  if (out.examCountdownCategoryIds !== undefined)
+    out.examCountdownCategoryIds = parseJsonArray(out.examCountdownCategoryIds);
+  if (out.examCountdownIds !== undefined)
+    out.examCountdownIds = parseJsonArray(out.examCountdownIds);
   return out;
 };
 

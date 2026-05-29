@@ -78,14 +78,10 @@ export const uploadS3Mixed = multer({
     }
 
     const ext = path.extname(file.originalname).toLowerCase();
-    const declaredSize = Number(req.headers["content-length"]) || 0;
 
     if (IMAGE_FIELDS.has(file.fieldname)) {
       if (!(IMAGE_TYPES.test(ext) && IMAGE_TYPES.test(file.mimetype))) {
         return cb(new Error(`Invalid file type for ${file.fieldname}. Only JPEG, PNG, WebP allowed.`));
-      }
-      if (declaredSize && declaredSize > IMAGE_MAX_BYTES * 2) {
-        return cb(new Error(`${file.fieldname} exceeds the 3 MB image limit.`));
       }
       return cb(null, true);
     }

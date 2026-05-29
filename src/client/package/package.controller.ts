@@ -119,6 +119,7 @@ async function buildPackageDetail(packageId: string, customerId?: string, baseUr
     package: {
       _id: pkg._id,
       name: pkg.name,
+      subtitle: (pkg as any).subtitle ?? "",
       description: pkg.description,
       image: pkg.image,
       shareableLink: buildShareUrl("packages", String(pkg._id), baseUrl),
@@ -129,6 +130,8 @@ async function buildPackageDetail(packageId: string, customerId?: string, baseUr
       isPaid: pkg.isPaid,
       isPurchased,
       daysLeft,
+      examCountdownCategoryIds: (pkg as any).examCountdownCategoryIds ?? [],
+      examCountdownIds: (pkg as any).examCountdownIds ?? [],
     },
     videos: videos.filter(Boolean),
     materials: materials.filter(Boolean),

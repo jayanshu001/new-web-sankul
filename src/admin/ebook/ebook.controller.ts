@@ -14,12 +14,26 @@ import {
 } from "./ebook.validation";
 import * as ebookService from "./ebook.service";
 
+const NAME_FIELD_BY_URL = {
+  demoUrl: "demoFileName",
+  bookUrl: "bookFileName",
+} as const;
+
 const applyEbookUploads = (req: Request) => {
   const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
   if (files) {
     for (const key of ["image", "thumbnail", "demoUrl", "bookUrl"] as const) {
-      const url = files[key]?.[0]?.location;
-      if (url) req.body[key] = url;
+      const file = files[key]?.[0];
+      if (file?.location) {
+        req.body[key] = file.location;
+        const nameField = (NAME_FIELD_BY_URL as Record<string, string>)[key];
+        if (nameField) req.body[nameField] = file.originalname ?? null;
+      }
+    }
+  }
+  for (const urlField of ["demoUrl", "bookUrl"] as const) {
+    if (req.body[urlField] === "") {
+      req.body[NAME_FIELD_BY_URL[urlField]] = "";
     }
   }
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);

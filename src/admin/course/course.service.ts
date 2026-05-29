@@ -169,7 +169,6 @@ export const listCourses = async (query: ListCoursesQuery) => {
           .populate("courseEducatorId", "_id name")
           .populate("courseSubjectCategoryId", "_id title")
           .populate("videoCategoryId", "_id title")
-          .populate("examCountdownCategoryId", "_id name colorHex")
           .populate("materialCategories.category", "_id title image")
           .populate("examCategories.category", "_id name image")
           .sort(sort)
@@ -204,7 +203,6 @@ export const getCourseById = async (id: string) => {
           .populate("courseEducatorId", "_id name")
           .populate("courseSubjectCategoryId", "_id title")
           .populate("videoCategoryId", "_id title")
-          .populate("examCountdownCategoryId", "_id name colorHex")
           .populate("materialCategories.category", "_id title image")
           .populate("examCategories.category", "_id name image")
           .lean(),
@@ -359,7 +357,6 @@ export const createCourse = async (input: CreateCourseInput) => {
         [
           {
             ...validated,
-            examCountdownCategoryId: validated.examCountdownCategoryId || null,
             materialCategories: materialCategories ?? [],
             examCategories: examCategories ?? [],
           },
@@ -401,9 +398,6 @@ export interface UpdateCourseInput {
 export const updateCourse = async (input: UpdateCourseInput) => {
   assertObjectId(input.id, "Course");
   const update: any = { ...input.validated };
-  if (input.validated.examCountdownCategoryId !== undefined) {
-    update.examCountdownCategoryId = input.validated.examCountdownCategoryId || null;
-  }
   if (input.materialCategories !== undefined) update.materialCategories = input.materialCategories;
   if (input.examCategories !== undefined) update.examCategories = input.examCategories;
 

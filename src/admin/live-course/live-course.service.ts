@@ -8,6 +8,8 @@ import mongoose, { Types } from "mongoose";
 import { LiveCourse, ILiveCourse } from "../../models/course/LiveCourse.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { PackageCategory } from "../../models/course/PackageCategory.model";
+import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
+import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
 import { LiveSession } from "../../models/course/LiveSession.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
@@ -42,6 +44,8 @@ const invalidateCaches = async (id?: string) => {
 export const assertRefsExist = async (input: {
   courseEducatorId?: string;
   packageCategoryId?: string;
+  examCountdownCategoryIds?: string[];
+  examCountdownIds?: string[];
 }): Promise<void> => {
   if (input.courseEducatorId) {
     const exists = await CourseEducator.exists({ _id: input.courseEducatorId });
@@ -58,6 +62,20 @@ export const assertRefsExist = async (input: {
         422,
         "packageCategoryId does not reference an existing active package category."
       );
+  }
+  if (input.examCountdownCategoryIds?.length) {
+    const count = await ExamCountdownCategory.countDocuments({
+      _id: { $in: input.examCountdownCategoryIds },
+    });
+    if (count !== new Set(input.examCountdownCategoryIds).size)
+      throw new HttpError(422, "One or more examCountdownCategoryIds do not exist.");
+  }
+  if (input.examCountdownIds?.length) {
+    const count = await ExamCountdown.countDocuments({
+      _id: { $in: input.examCountdownIds },
+    });
+    if (count !== new Set(input.examCountdownIds).size)
+      throw new HttpError(422, "One or more examCountdownIds do not exist.");
   }
 };
 

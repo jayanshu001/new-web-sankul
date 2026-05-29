@@ -30,6 +30,7 @@ export interface ILiveCourseScheduleFolder {
 
 export interface ILiveCourse extends Document {
   name: string;
+  subtitle?: string;
   description: string;
   image: string;
   ordered: number;
@@ -49,6 +50,8 @@ export interface ILiveCourse extends Document {
   courseEducatorId?: mongoose.Types.ObjectId | null;
   packageCategoryId?: mongoose.Types.ObjectId | null;
   videoCategoryId?: mongoose.Types.ObjectId | null; // root VideoCategory folder
+  examCountdownCategoryIds: mongoose.Types.ObjectId[];
+  examCountdownIds: mongoose.Types.ObjectId[];
 
   // Adjacent content (kept for parity with Course)
   materialCategories: ILiveCourseCategoryRef[];
@@ -105,6 +108,7 @@ const scheduleFolderSchema = new Schema<ILiveCourseScheduleFolder>(
 const liveCourseSchema = new Schema<ILiveCourse>(
   {
     name:          { type: String, required: true, unique: true },
+    subtitle:      { type: String, default: "" },
     description:   { type: String, required: true },
     image:         { type: String, required: true },
     ordered:       { type: Number, required: true },
@@ -121,6 +125,8 @@ const liveCourseSchema = new Schema<ILiveCourse>(
     courseEducatorId:   { type: Schema.Types.ObjectId, ref: "CourseEducator",  default: null },
     packageCategoryId:  { type: Schema.Types.ObjectId, ref: "PackageCategory", default: null, index: true },
     videoCategoryId:    { type: Schema.Types.ObjectId, ref: "VideoCategory",   default: null },
+    examCountdownCategoryIds: { type: [{ type: Schema.Types.ObjectId, ref: "ExamCountdownCategory" }], default: [] },
+    examCountdownIds:         { type: [{ type: Schema.Types.ObjectId, ref: "ExamCountdown" }],         default: [] },
 
     materialCategories: { type: [materialCategoryRefSchema], default: [] },
     examCategories:     { type: [examCategoryRefSchema],     default: [] },
