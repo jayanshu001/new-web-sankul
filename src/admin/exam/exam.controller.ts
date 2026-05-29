@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
+import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { ExamQuestion } from "../../models/exam/ExamQuestion.model";
@@ -421,7 +422,6 @@ export const createExam = async (req: Request, res: Response) => {
     const payload: any = {
       ...data,
       categoryId: data.categoryId || null,
-      startAt: data.startAt ? new Date(data.startAt) : undefined,
       status: mapStatusFlagToEnum(data.status),
     };
     const exam = await Exam.create(payload);
@@ -441,11 +441,10 @@ export const updateExam = async (req: Request, res: Response) => {
     const data = updateExamSchema.parse(req.body);
     const set: any = { ...data };
     if (data.categoryId !== undefined) set.categoryId = data.categoryId || null;
-    if (data.startAt) set.startAt = new Date(data.startAt);
     if (data.status !== undefined) set.status = mapStatusFlagToEnum(data.status);
     const exam = await Exam.findByIdAndUpdate(
       id,
-      { $set: set, $unset: { endAt: "" } },
+      { $set: set },
       { new: true }
     );
     if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
@@ -582,9 +581,65 @@ export const getQuestionById = async (req: Request, res: Response) => {
   }
 };
 
+// Resolves the multipart "image-or-URL-or-clear" convention for question
+// endpoints. Mutates req.body to the shape the Zod schema + downstream handlers
+// expect. Returns a list of validation errors (e.g. missing @file:<i>) so the
+// caller can short-circuit with 400.
+type QuestionImageError = { message: string };
+const coerceQuestionImages = (req: Request): QuestionImageError | null => {
+  const body = req.body as Record<string, any>;
+
+  // Parse options=JSON-string (multipart) into array.
+  if (typeof body.options === "string") {
+    const s = body.options.trim();
+    if (s.startsWith("[")) {
+      try { const parsed = JSON.parse(s); if (Array.isArray(parsed)) body.options = parsed; } catch {}
+    }
+  }
+
+  // Index uploaded files by fieldname. With upload.any(), req.files is an array.
+  const files = (req.files as Express.MulterS3.File[] | undefined) ?? [];
+  const filesByField = new Map<string, Express.MulterS3.File>();
+  for (const f of files) filesByField.set(f.fieldname, f);
+
+  // image / solutionImage: file present -> use URL; "" -> "" (handler treats
+  // as clear); URL stays.
+  for (const field of ["image", "solutionImage"] as const) {
+    const f = filesByField.get(field);
+    if (f) body[field] = (f as any).location;
+  }
+
+  // Normalize option.image "" to undefined so create-paths default to null
+  // cleanly. Real clears on update are handled in updateQuestion.
+  if (Array.isArray(body.options)) {
+    for (const opt of body.options) {
+      if (opt && typeof opt === "object" && opt.image === "") delete opt.image;
+    }
+  }
+
+  // options[i].image: "@file:<i>" -> resolve from optionImage_<i>.
+  if (Array.isArray(body.options)) {
+    for (let i = 0; i < body.options.length; i++) {
+      const opt = body.options[i];
+      if (!opt || typeof opt !== "object") continue;
+      if (typeof opt.image === "string" && opt.image.startsWith("@file:")) {
+        const idx = opt.image.slice("@file:".length);
+        const file = filesByField.get(`optionImage_${idx}`);
+        if (!file)
+          return { message: `Missing uploaded file for option ${idx} (expected field optionImage_${idx}).` };
+        opt.image = (file as any).location;
+      }
+    }
+  }
+
+  return null;
+};
+
 export const createQuestion = async (req: Request, res: Response) => {
   const session = await mongoose.startSession();
   try {
+    const coerceErr = coerceQuestionImages(req);
+    if (coerceErr) return res.status(400).json({ success: false, message: coerceErr.message });
     const data = createQuestionSchema.parse(req.body);
     if (!isObjectId(data.examId)) {
       return res.status(400).json({ success: false, message: "Invalid examId." });
@@ -708,6 +763,8 @@ export const updateQuestion = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid question id." });
+    const coerceErr = coerceQuestionImages(req);
+    if (coerceErr) return res.status(400).json({ success: false, message: coerceErr.message });
     const data = updateQuestionSchema.parse(req.body);
 
     // If both options + answer updated, validate match. If only answer, validate against existing options.
@@ -725,11 +782,38 @@ export const updateQuestion = async (req: Request, res: Response) => {
       if (err) return res.status(400).json({ success: false, message: err });
     }
 
+    // Snapshot pre-update image URLs so we can best-effort delete S3 objects
+    // that get replaced or cleared after the transaction commits.
+    const before = await ExamQuestion.findById(id).select("image solutionImage").lean();
+    const beforeOptionImages: string[] = data.options
+      ? ((await ExamQuestionOption.find({ questionId: id }).select("image").lean()) as any[])
+          .map((o) => o?.image)
+          .filter((u) => typeof u === "string" && u)
+      : [];
+    const orphanUrls: string[] = [];
+
     let updated: any;
     await session.withTransaction(async () => {
       const update: any = { ...data };
       delete update.options;
-      const q = await ExamQuestion.findByIdAndUpdate(id, { $set: update }, { new: true, session });
+
+      // Empty-string semantics: "" means clear the stored image.
+      const unset: Record<string, ""> = {};
+      for (const field of ["image", "solutionImage"] as const) {
+        if (update[field] === "") {
+          delete update[field];
+          unset[field] = "";
+          const prev = (before as any)?.[field];
+          if (typeof prev === "string" && prev) orphanUrls.push(prev);
+        } else if (typeof update[field] === "string" && update[field]) {
+          const prev = (before as any)?.[field];
+          if (typeof prev === "string" && prev && prev !== update[field]) orphanUrls.push(prev);
+        }
+      }
+
+      const mutation: any = { $set: update };
+      if (Object.keys(unset).length) mutation.$unset = unset;
+      const q = await ExamQuestion.findByIdAndUpdate(id, mutation, { new: true, session });
       if (!q) throw new Error("Question not found.");
 
       if (data.options) {
@@ -737,10 +821,16 @@ export const updateQuestion = async (req: Request, res: Response) => {
         const docs = data.options.map((o: any, idx: number) => ({
           questionId: id,
           name: o.name,
-          image: o.image ?? null,
+          image: o.image && o.image !== "" ? o.image : null,
           orderBy: o.orderBy ?? idx,
         }));
         await ExamQuestionOption.insertMany(docs, { session });
+        // All old option-image URLs are candidates for cleanup, minus any that
+        // are still referenced by the new option set.
+        const stillUsed = new Set(
+          data.options.map((o: any) => o.image).filter((u: any) => typeof u === "string" && u)
+        );
+        for (const url of beforeOptionImages) if (!stillUsed.has(url)) orphanUrls.push(url);
       }
 
       const options = await ExamQuestionOption.find({ questionId: id })
@@ -752,6 +842,12 @@ export const updateQuestion = async (req: Request, res: Response) => {
       }
       updated = { ...q.toObject(), options };
     });
+
+    // Best-effort S3 cleanup after the transaction commits. Failures are
+    // swallowed so an S3 hiccup never fails a successful DB write.
+    if (orphanUrls.length) {
+      Promise.all(orphanUrls.map((u) => deleteFromS3FileUrl(u).catch(() => {}))).catch(() => {});
+    }
 
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {

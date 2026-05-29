@@ -160,6 +160,36 @@ export const uploadS3Audio = multer({
   },
 });
 
+// Quiz-question images: question/solution/options. Accepts any field name
+// (the dynamic `optionImage_<i>` fields make a fixed allowlist impractical),
+// caps each file at 2 MB, restricts mimetype to png/jpeg/jpg/webp.
+const questionImageStorage = multerS3({
+  s3: s3Config,
+  bucket: process.env.DO_BUCKET || "websankul-staging",
+  acl: "public-read",
+  contentType: multerS3.AUTO_CONTENT_TYPE,
+  key: function (_req, file, cb) {
+    const ext = path.extname(file.originalname).toLowerCase();
+    const filename = `admin/quiz-questions/${Date.now()}-${Math.round(Math.random() * 1e9)}-${file.fieldname}${ext}`;
+    cb(null, filename);
+  },
+});
+
+export const uploadQuestionImages = multer({
+  storage: questionImageStorage,
+  limits: { fileSize: 2 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
+      return cb(new Error("File uploads are disabled: DigitalOcean Spaces credentials are not configured."));
+    }
+    const ext = path.extname(file.originalname).toLowerCase();
+    const extOk = /\.(png|jpe?g|webp)$/.test(ext);
+    const mimeOk = /^image\/(png|jpe?g|webp)$/.test(file.mimetype);
+    if (extOk && mimeOk) return cb(null, true);
+    cb(new Error("Invalid image type. Only PNG, JPG, JPEG, WebP are allowed."));
+  },
+});
+
 /**
  * Utility function to delete an object from DigitalOcean Spaces given its public URL.
  * Automatically extracts the File Key based on your endpoint domain.

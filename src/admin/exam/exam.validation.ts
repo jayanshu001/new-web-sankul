@@ -26,7 +26,8 @@ export const createExamSchema = z.object({
     .default(ExamType.SUBJECT),
   positiveMarks: z.coerce.number().nonnegative(),
   negativeMarks: z.coerce.number(),
-  startAt: z.string().optional(),
+  startAt: z.coerce.date().optional(),
+  endAt: z.coerce.date().optional(),
   solutionPdfUrl: z.string().max(500).optional(),
   sendPush: z.coerce.boolean().optional(),
   isPaid: z.coerce.boolean().optional(),
@@ -45,8 +46,9 @@ export const reorderExamsSchema = z.object({
 
 const optionSchema = z.object({
   name: z.string().min(1).max(1000),
+  // Allow URL, empty string (= clear), or absent. Final coercion happens in controller.
   image: z.string().max(500).optional(),
-  orderBy: z.number().int().optional(),
+  orderBy: z.coerce.number().int().optional(),
 });
 
 const questionBase = {
@@ -56,8 +58,8 @@ const questionBase = {
   solutionText: z.string().optional(),
   solutionImage: z.string().max(500).optional(),
   options: z.array(optionSchema).min(2),
-  orderBy: z.number().int().optional(),
-  status: z.boolean().optional(),
+  orderBy: z.coerce.number().int().optional(),
+  status: z.coerce.boolean().optional(),
 };
 
 export const createQuestionSchema = z.object({

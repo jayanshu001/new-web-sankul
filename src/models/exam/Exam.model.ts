@@ -16,6 +16,7 @@ export interface IExam extends Document {
   instructions?: string;
   policy?: string;
   startAt?: Date;
+  endAt?: Date;
   status: ExamStatus;
   orderBy: number;
   language: ExamLanguage;
@@ -46,6 +47,7 @@ const ExamSchema = new Schema<IExam>(
     instructions: { type: String },
     policy: { type: String },
     startAt: { type: Date },
+    endAt: { type: Date },
     status: {
       type: String,
       enum: Object.values(ExamStatus),

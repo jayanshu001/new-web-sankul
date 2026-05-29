@@ -1,6 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { uploadS3, uploadS3Mixed } from "../../middlewares/upload";
+import { uploadS3, uploadS3Mixed, uploadQuestionImages } from "../../middlewares/upload";
 import {
   getCategories,
   getCategoryTree,
@@ -54,11 +54,11 @@ router.patch("/:id/status", updateExamStatus);
 
 // Questions
 router.get("/questions/list", getQuestions);
-router.post("/questions", createQuestion);
+router.post("/questions", uploadQuestionImages.any(), createQuestion);
 router.post("/questions/bulk", bulkCreateQuestions);
 router.post("/questions/reorder", reorderQuestions);
 router.get("/questions/:id", getQuestionById);
-router.put("/questions/:id", updateQuestion);
+router.put("/questions/:id", uploadQuestionImages.any(), updateQuestion);
 router.delete("/questions/:id", deleteQuestion);
 
 // Submissions / Analytics
