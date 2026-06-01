@@ -48,7 +48,7 @@ const invalidatePermissionCaches = async (permissionId?: string) => {
   if (permissionId) keys.push(detailKey(permissionId));
   await Promise.all([
     cache.invalidate(...keys),
-    cache.invalidateByPrefix(cache.key("permission", "catalog", "list:")),
+    cache.invalidateByPrefix(cache.keyPrefix("permission", "catalog", "list:")),
   ]);
 };
 

@@ -48,6 +48,19 @@ export const key = (
 ): string => `${ENV}:${domain}:${entity}:${id}:${version}`;
 
 /**
+ * Build a stable key prefix (no version suffix) for `invalidateByPrefix`.
+ * `key()` always appends `:{version}`, so it cannot be used to construct a
+ * partial prefix — `key("admin","package","list:")` yields
+ * `...:package:list::v1`, which never matches real keys like
+ * `...:package:list:<hash>:v1`. Use this for prefix sweeps instead.
+ */
+export const keyPrefix = (
+  domain: Domain,
+  entity: string,
+  idPrefix: string
+): string => `${ENV}:${domain}:${entity}:${idPrefix}`;
+
+/**
  * Hash a filter object into a stable short key suffix so list queries with
  * different filters get distinct cache slots.
  */
@@ -229,6 +242,7 @@ export const invalidateByPrefix = async (prefix: string): Promise<number> => {
 
 export default {
   key,
+  keyPrefix,
   hashFilter,
   aside,
   invalidate,

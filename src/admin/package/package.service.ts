@@ -105,7 +105,7 @@ const invalidatePackageCaches = async (packageId?: string) => {
   if (packageId) keys.push(packageDetailKey(packageId));
   await Promise.all([
     cache.invalidate(...keys),
-    cache.invalidateByPrefix(cache.key("admin", "package", "list:")),
+    cache.invalidateByPrefix(cache.keyPrefix("admin", "package", "list:")),
   ]);
 };
 

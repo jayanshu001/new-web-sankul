@@ -33,7 +33,7 @@ const invalidateCaches = async (id?: string) => {
   if (id) keys.push(detailKey(id));
   await Promise.all([
     cache.invalidate(...keys),
-    cache.invalidateByPrefix(cache.key("admin", "live-course", "list:")),
+    cache.invalidateByPrefix(cache.keyPrefix("admin", "live-course", "list:")),
   ]);
 };
 

@@ -7,6 +7,7 @@ import { Material } from "../../models/course/Material.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
+import { ExamStatus } from "../../models/enums";
 import { Package } from "../../models/course/Package.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
@@ -320,7 +321,7 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
     }
 
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-    const filter: any = { categoryId: id };
+    const filter: any = { categoryId: id, status: ExamStatus.PUBLISHED };
     if (search) filter.title = { $regex: search, $options: "i" };
 
     const [list, total] = await Promise.all([

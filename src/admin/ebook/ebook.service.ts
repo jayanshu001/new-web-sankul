@@ -30,7 +30,7 @@ const invalidateEbookCaches = async (ebookId?: string) => {
   if (ebookId) keys.push(ebookDetailKey(ebookId));
   await Promise.all([
     cache.invalidate(...keys),
-    cache.invalidateByPrefix(cache.key("admin", "ebook", "list:")),
+    cache.invalidateByPrefix(cache.keyPrefix("admin", "ebook", "list:")),
   ]);
 };
 

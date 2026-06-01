@@ -103,7 +103,7 @@ const invalidateCourseCaches = async (courseId?: string) => {
   await Promise.all([
     cache.invalidate(...keys),
     // List cache is partitioned by filter hash; sweep the prefix.
-    cache.invalidateByPrefix(cache.key("admin", "course", "list:")),
+    cache.invalidateByPrefix(cache.keyPrefix("admin", "course", "list:")),
   ]);
 };
 
