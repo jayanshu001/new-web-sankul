@@ -1,6 +1,6 @@
 import logger from "../../utils/logger";
 import jwt from "jsonwebtoken";
-import { Customer } from "../../models/customer/Customer.model";
+import { Customer, isProfileComplete } from "../../models/customer/Customer.model";
 import { CustomerOtp } from "../../models/customer/CustomerOtp.model";
 import { CustomerAccessToken } from "../../models/customer/CustomerAccessToken.model";
 import { redisClient } from "../../config/redis";
@@ -260,7 +260,7 @@ export async function validateOtp(
     isAccountDeleted: false,
     status: true,
   }).select(
-    "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseToken osType loginCount isLoggedIn"
+    "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified isProfileCompleted firebaseToken osType loginCount isLoggedIn"
   );
 
   if (!customer) {
@@ -302,16 +302,19 @@ export async function validateOtp(
 
   const isNewUser = !customer.verified;
 
+  // Whether the user has finished the "Complete Your Profile" step.
+  const profileCompleted = isProfileComplete(customer);
+
   // Mark phone verified on first-time login
   if (!customer.isPhoneVerified || !customer.verified) {
     await Customer.updateOne(
       { _id: customer._id },
-      { isPhoneVerified: true, verified: true, triedOtp: 0, ...(osType ? { osType } : {}) }
+      { isPhoneVerified: true, verified: true, triedOtp: 0, isProfileCompleted: profileCompleted, ...(osType ? { osType } : {}) }
     );
   } else {
     await Customer.updateOne(
       { _id: customer._id },
-      { triedOtp: 0, ...(osType ? { osType } : {}) }
+      { triedOtp: 0, isProfileCompleted: profileCompleted, ...(osType ? { osType } : {}) }
     );
   }
 
@@ -374,6 +377,7 @@ export async function validateOtp(
     rewardPoints: customer.rewardPoints ?? 0,
     osType: customer.osType,
     isNewUser,
+    isProfileCompleted: profileCompleted,
   };
 
   return { ok: true, message: "Login successful.", token, refreshToken, customer: profile, isNewUser };
@@ -423,7 +427,7 @@ export async function refreshCustomerToken(refreshToken: string, traceId?: strin
     }
 
     const customer = await Customer.findOne({ _id: customerId, isAccountDeleted: false, status: true }).select(
-      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseToken osType loginCount isLoggedIn"
+      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified isProfileCompleted firebaseToken osType loginCount isLoggedIn"
     );
 
     if (!customer) {
@@ -486,6 +490,7 @@ export async function refreshCustomerToken(refreshToken: string, traceId?: strin
       rewardPoints: customer.rewardPoints ?? 0,
       osType: customer.osType,
       isNewUser: !customer.verified,
+      isProfileCompleted: isProfileComplete(customer),
     };
 
     logger.info("refreshCustomerToken service success", { traceId, customerId });

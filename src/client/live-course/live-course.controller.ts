@@ -6,6 +6,7 @@ import { LiveSession } from "../../models/course/LiveSession.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { Video } from "../../models/course/Video.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
+import { PackageCategory } from "../../models/course/PackageCategory.model";
 import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { hasAccessToAnyLiveCourse, buildPurchaseOptions, getDaysLeftForLiveCourses, getDaysLeftMapForLiveCourses } from "./entitlement";
 import { computeDaysLeft } from "../../utils/planDuration";
@@ -184,6 +185,126 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
   } catch (err) {
     logger.error("listLiveCoursesForClient failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list live courses.", 500);
+  }
+};
+
+// GET /api/v1/client/live-courses/upcoming-batches
+// Powers the home-screen "Upcoming Live Batches" carousel with its
+// All / <category> filter tab bar (see the design mockup). An "upcoming
+// batch" is an active LiveCourse whose startTime is still in the future.
+//
+// Filtering:
+//   - no categoryId            → "All" tab: every upcoming batch.
+//   - categoryId=<PackageCategory _id> → only that category's upcoming batches.
+//
+// The response also returns the tab bar itself in `categories` — the set of
+// PackageCategory rows that actually have ≥1 upcoming batch (so the FE never
+// renders an empty tab). The synthetic "All" tab is the FE's responsibility to
+// prepend; we just supply the real categories with a per-tab `count`.
+//
+// Intentionally separate from listLiveCoursesForClient: that endpoint lists the
+// full catalogue (including started/evergreen courses) with hero-card ranking;
+// this one is the upcoming-only, category-filtered batch feed. Neither touches
+// the other.
+export const listUpcomingLiveBatches = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listUpcomingLiveBatches invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
+  try {
+    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(50, parseInt(req.query.limit as string) || 20);
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const categoryId = typeof req.query.categoryId === "string" ? req.query.categoryId.trim() : "";
+
+    if (categoryId && !mongoose.Types.ObjectId.isValid(categoryId)) {
+      logger.warn("listUpcomingLiveBatches invalid categoryId", { traceId, categoryId });
+      return failure(res, "Invalid category id.", 422);
+    }
+
+    const now = new Date();
+    // "Upcoming" = active course whose batch start is still ahead of now.
+    const baseQuery: Record<string, any> = {
+      status: true,
+      startTime: { $ne: null, $gte: now },
+    };
+    if (search) baseQuery.name = { $regex: search, $options: "i" };
+
+    // The list query layers the optional category filter on top of the base
+    // "upcoming" criteria. The tab bar (below) is derived from the base query
+    // WITHOUT the category filter, so every tab reflects the same upcoming set.
+    const listQuery: Record<string, any> = { ...baseQuery };
+    if (categoryId) listQuery.packageCategoryId = new mongoose.Types.ObjectId(categoryId);
+
+    const [rows, total, catCounts] = await Promise.all([
+      LiveCourse.find(listQuery)
+        // Soonest-starting batch first; ties broken by curated order.
+        .sort({ startTime: 1, ordered: 1 })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate("courseEducatorId", "name image")
+        .populate("packageCategoryId", "title slug image")
+        .lean(),
+      LiveCourse.countDocuments(listQuery),
+      // Per-category counts over the *unfiltered* upcoming set — drives the tab
+      // bar and the count badge on each tab.
+      LiveCourse.aggregate([
+        { $match: { ...baseQuery, packageCategoryId: { $ne: null } } },
+        { $group: { _id: "$packageCategoryId", count: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const rowIds = rows.map((r: any) => r._id);
+    const [daysLeftMap, purchaseCountMap, ownedIds] = await Promise.all([
+      getDaysLeftMapForLiveCourses(req.user?.id, rowIds),
+      getPurchaseCountMap(rowIds),
+      getOwnedLiveCourseIds(req.user?.id),
+    ]);
+
+    const base = resolveBase(req);
+    const liveBatches = rows.map((r: any) => {
+      const key = String(r._id);
+      return {
+        ...r,
+        daysLeft: daysLeftMap.has(key) ? daysLeftMap.get(key) ?? null : null,
+        isPurchased: ownedIds.has(key),
+        purchaseCount: purchaseCountMap.get(key) ?? 0,
+        shareableLink: buildShareUrl("live-courses", key, base),
+      };
+    });
+
+    // Build the tab bar: only categories that actually have upcoming batches,
+    // each stamped with how many. Ordered by the PackageCategory.order field.
+    const countByCategory = new Map<string, number>(
+      (catCounts as any[]).map((c) => [String(c._id), c.count])
+    );
+    const upcomingCategoryIds = Array.from(countByCategory.keys()).map(
+      (idStr) => new mongoose.Types.ObjectId(idStr)
+    );
+    const categoryRows = upcomingCategoryIds.length
+      ? await PackageCategory.find({ _id: { $in: upcomingCategoryIds }, status: true })
+          .select("title slug image order")
+          .sort({ order: 1 })
+          .lean()
+      : [];
+    const categories = categoryRows.map((c: any) => ({
+      _id: String(c._id),
+      title: c.title,
+      slug: c.slug,
+      image: c.image,
+      count: countByCategory.get(String(c._id)) ?? 0,
+    }));
+    // "All" tab count = total upcoming batches across every category.
+    const allCount = (catCounts as any[]).reduce((n, c) => n + c.count, 0);
+
+    logger.info("listUpcomingLiveBatches success", { traceId, total, returned: rows.length, categoryId: categoryId || "all" });
+    return success(
+      res,
+      { liveBatches, total, page, limit, categories, allCount, selectedCategoryId: categoryId || null },
+      "Upcoming live batches fetched."
+    );
+  } catch (err) {
+    logger.error("listUpcomingLiveBatches failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to fetch upcoming live batches.", 500);
   }
 };
 

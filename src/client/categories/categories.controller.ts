@@ -365,9 +365,12 @@ export const listVideoCategoryChildren = async (req: Request, res: Response) => 
       return res.status(404).json({ success: false, message: "Video category not found." });
     }
 
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
+    const childFilter: any = { _id: { $in: childIds }, status: true };
+    if (search) childFilter.title = { $regex: search, $options: "i" };
     const children = childIds.length
-      ? await VideoCategory.find({ _id: { $in: childIds }, status: true })
+      ? await VideoCategory.find(childFilter)
           .sort({ order_by: 1 })
           .lean()
       : [];
@@ -414,9 +417,12 @@ export const listMaterialCategoryChildren = async (req: Request, res: Response) 
       return res.status(404).json({ success: false, message: "Material category not found." });
     }
 
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
+    const childFilter: any = { _id: { $in: childIds }, status: true };
+    if (search) childFilter.title = { $regex: search, $options: "i" };
     const children = childIds.length
-      ? await MaterialCategory.find({ _id: { $in: childIds }, status: true })
+      ? await MaterialCategory.find(childFilter)
           .sort({ order: 1 })
           .lean()
       : [];
@@ -463,9 +469,13 @@ export const listExamCategoryChildren = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Exam category not found." });
     }
 
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
+    // ExamCategory's display field is `name` (not `title`), so search matches `name`.
+    const childFilter: any = { _id: { $in: childIds }, status: true };
+    if (search) childFilter.name = { $regex: search, $options: "i" };
     const children = childIds.length
-      ? await ExamCategory.find({ _id: { $in: childIds }, status: true })
+      ? await ExamCategory.find(childFilter)
           .sort({ orderBy: 1 })
           .lean()
       : [];

@@ -2,6 +2,13 @@ import { z } from "zod";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId");
 
+// A material/exam category reference, mirroring the recorded-Course schema and
+// the LiveCourse model's `{ category, order }` sub-document shape.
+const categoryRefSchema = z.object({
+  category: objectId,
+  order: z.number().int().nonnegative().optional(),
+});
+
 export const createLiveCourseSchema = z
   .object({
     name:          z.string().trim().min(1, "Name is required").max(300),
@@ -22,6 +29,8 @@ export const createLiveCourseSchema = z
     packageCategoryId: objectId.optional(),
     examCountdownCategoryIds: z.array(objectId).optional(),
     examCountdownIds:         z.array(objectId).optional(),
+    materialCategories:       z.array(categoryRefSchema).optional(),
+    examCategories:           z.array(categoryRefSchema).optional(),
   })
   .strict();
 

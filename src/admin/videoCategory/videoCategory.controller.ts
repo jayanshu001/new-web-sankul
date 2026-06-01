@@ -2,12 +2,15 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { Video } from "../../models/course/Video.model";
+import { Course } from "../../models/course/Course.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import {
   createVideoCategorySchema,
   updateVideoCategorySchema,
   listQuerySchema,
+  categoryCoursesQuerySchema,
+  categoryVideosQuerySchema,
   sortFieldMap,
 } from "./videoCategory.validation";
 
@@ -16,6 +19,13 @@ const formatZodErrors = (issues: any[]) =>
     acc[i.path.join(".")] = i.message;
     return acc;
   }, {});
+
+const buildMeta = (page: number, per_page: number, total: number) => ({
+  page,
+  per_page,
+  total,
+  totalPages: Math.ceil(total / per_page),
+});
 
 const toItem = (c: any) => ({
   id: c._id,
@@ -26,8 +36,14 @@ const toItem = (c: any) => ({
   child_categories: Array.isArray(c.childCategoryIds)
     ? c.childCategoryIds.map((cc: any) =>
         cc && typeof cc === "object" && cc._id
-          ? { id: cc._id, name: cc.title }
-          : { id: cc, name: null }
+          ? {
+              id: cc._id,
+              name: cc.title,
+              slug: cc.slug ?? null,
+              status: cc.status,
+              order: cc.order_by ?? 0,
+            }
+          : { id: cc, name: null, slug: null, status: null, order: null }
       )
     : [],
   educator: c.educatorId
@@ -70,7 +86,7 @@ export const listVideoCategories = async (req: Request, res: Response) => {
 
     const [items, total] = await Promise.all([
       VideoCategory.find(filter)
-        .populate("childCategoryIds", "_id title")
+        .populate("childCategoryIds", "_id title slug status order_by")
         .populate("educatorId", "_id name")
         .sort(sort)
         .skip(skip)
@@ -115,11 +131,126 @@ export const getVideoCategory = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
     }
     const cat = await VideoCategory.findById(id)
-      .populate("childCategoryIds", "_id title")
+      .populate("childCategoryIds", "_id title slug status order_by")
       .populate("educatorId", "_id name")
       .lean();
     if (!cat) return res.status(404).json({ success: false, message: "Video Category not found" });
     return res.status(200).json({ success: true, data: toItem(cat) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /:id/courses — paginated, searchable courses linked to this video category.
+export const listVideoCategoryCourses = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    }
+    const exists = await VideoCategory.exists({ _id: id });
+    if (!exists) {
+      return res.status(404).json({ success: false, message: "Video Category not found" });
+    }
+
+    const parsed = categoryCoursesQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(422).json({
+        success: false,
+        message: "Validation failed",
+        errors: formatZodErrors(parsed.error.issues),
+      });
+    }
+    const { search, status, page, per_page } = parsed.data;
+
+    const filter: any = { videoCategoryId: id };
+    if (search) filter.name = { $regex: search, $options: "i" };
+    if (status === "true" || status === "false") filter.status = status === "true";
+
+    const skip = (page - 1) * per_page;
+    const [docs, total] = await Promise.all([
+      Course.find(filter)
+        .select("_id name status ordered")
+        .sort({ ordered: 1 })
+        .skip(skip)
+        .limit(per_page)
+        .lean(),
+      Course.countDocuments(filter),
+    ]);
+
+    const items = docs.map((c: any) => ({
+      id: c._id,
+      name: c.name,
+      status: c.status,
+      orderBy: c.ordered ?? 0,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: { items, meta: buildMeta(page, per_page, total) },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /:id/videos — paginated, searchable videos belonging to this video category.
+export const listVideoCategoryVideos = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    }
+    const exists = await VideoCategory.exists({ _id: id });
+    if (!exists) {
+      return res.status(404).json({ success: false, message: "Video Category not found" });
+    }
+
+    const parsed = categoryVideosQuerySchema.safeParse(req.query);
+    if (!parsed.success) {
+      return res.status(422).json({
+        success: false,
+        message: "Validation failed",
+        errors: formatZodErrors(parsed.error.issues),
+      });
+    }
+    const { search, status, platform, page, per_page } = parsed.data;
+
+    const filter: any = { videoCategoryId: id };
+    if (search) {
+      filter.$or = [
+        { title: { $regex: search, $options: "i" } },
+        { slug: { $regex: search, $options: "i" } },
+        { topic: { $regex: search, $options: "i" } },
+      ];
+    }
+    if (status === "true" || status === "false") filter.status = status === "true";
+    if (platform) filter.platform = platform;
+
+    const skip = (page - 1) * per_page;
+    const [docs, total] = await Promise.all([
+      Video.find(filter)
+        .select("_id title slug status order platform")
+        .sort({ order: 1 })
+        .skip(skip)
+        .limit(per_page)
+        .lean(),
+      Video.countDocuments(filter),
+    ]);
+
+    const items = docs.map((v: any) => ({
+      id: v._id,
+      name: v.title ?? null,
+      slug: v.slug ?? null,
+      status: v.status,
+      orderBy: v.order ?? 0,
+      platform: v.platform ?? null,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: { items, meta: buildMeta(page, per_page, total) },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -179,7 +310,7 @@ export const createVideoCategory = async (req: Request, res: Response) => {
     });
 
     const populated = await VideoCategory.findById(created._id)
-      .populate("childCategoryIds", "_id title")
+      .populate("childCategoryIds", "_id title slug status order_by")
       .populate("educatorId", "_id name")
       .lean();
 
@@ -259,7 +390,7 @@ export const updateVideoCategory = async (req: Request, res: Response) => {
     await cat.save();
 
     const populated = await VideoCategory.findById(cat._id)
-      .populate("childCategoryIds", "_id title")
+      .populate("childCategoryIds", "_id title slug status order_by")
       .populate("educatorId", "_id name")
       .lean();
 

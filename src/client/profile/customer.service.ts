@@ -1,6 +1,6 @@
 import logger from "../../utils/logger";
 import { Types } from "mongoose";
-import { Customer } from "../../models/customer/Customer.model";
+import { Customer, isProfileComplete } from "../../models/customer/Customer.model";
 import { CustomerAccessToken } from "../../models/customer/CustomerAccessToken.model";
 import { Goal } from "../../models/Goal.model";
 import { redisClient } from "../../config/redis";
@@ -77,12 +77,20 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
       { $set: updatePayload },
       { new: true, runValidators: true }
     ).select(
-      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseTokens osType loginCount isLoggedIn phoneNumber"
+      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified isProfileCompleted firebaseTokens osType loginCount isLoggedIn phoneNumber"
     );
 
     if (!updatedCustomer) {
       logger.warn("updateCustomerProfile service customer not found", { traceId, customerId });
       return { ok: false, message: "Customer not found." };
+    }
+
+    // Recompute profile completion against the freshly-updated fields and persist
+    // the flag if it flipped to true, so the frontend stops showing the
+    // "Complete Your Profile" screen on subsequent logins.
+    const profileCompleted = isProfileComplete(updatedCustomer);
+    if (profileCompleted && !updatedCustomer.isProfileCompleted) {
+      await Customer.updateOne({ _id: customerId }, { $set: { isProfileCompleted: true } });
     }
 
     // Shape the output to strictly match what the login endpoint provides
@@ -107,6 +115,7 @@ export async function updateCustomerProfile(customerId: string, data: IProfileUp
       rewardPoints: updatedCustomer.rewardPoints ?? 0,
       osType: updatedCustomer.osType,
       isNewUser: !updatedCustomer.verified,
+      isProfileCompleted: profileCompleted,
     };
 
     // Optimized: Use aggregation to filter subdocuments at the DB level
@@ -162,7 +171,7 @@ export async function getCustomerProfile(customerId: string, traceId?: string) {
     }
 
     const customer = await Customer.findById(customerId).select(
-      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified firebaseTokens osType loginCount isLoggedIn phoneNumber"
+      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified isProfileCompleted firebaseTokens osType loginCount isLoggedIn phoneNumber"
     );
 
     if (!customer) {
@@ -191,6 +200,7 @@ export async function getCustomerProfile(customerId: string, traceId?: string) {
       rewardPoints: customer.rewardPoints ?? 0,
       osType: customer.osType,
       isNewUser: !customer.verified,
+      isProfileCompleted: isProfileComplete(customer),
     };
 
     // Optimized: Use aggregation to filter subdocuments at the DB level

@@ -3,6 +3,9 @@ import mongoose from "mongoose";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
+import { Package } from "../../models/course/Package.model";
+import { Course } from "../../models/course/Course.model";
+import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { ExamQuestion } from "../../models/exam/ExamQuestion.model";
 import { ExamQuestionOption } from "../../models/exam/ExamQuestionOption.model";
 import { ExamResult } from "../../models/exam/ExamResult.model";
@@ -22,6 +25,21 @@ import {
 } from "./exam.validation";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
+
+// Parse + clamp the standard list pagination params, returning the spec's
+// { page, per_page } naming (vs the module's older page/limit handlers).
+const parseListPaging = (q: Record<string, string>) => {
+  const page = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
+  const per_page = Math.min(Math.max(parseInt(q.per_page ?? "20", 10) || 20, 1), 200);
+  return { page, per_page, skip: (page - 1) * per_page };
+};
+
+const buildMeta = (page: number, per_page: number, total: number) => ({
+  page,
+  per_page,
+  total,
+  totalPages: Math.ceil(total / per_page),
+});
 
 // Recompute exam.questionCount = number of active questions for that exam.
 // Call this whenever questions are created, deleted, or bulk-imported.
@@ -81,7 +99,121 @@ export const getCategoryById = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const cat = await ExamCategory.findById(id);
     if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
-    return res.status(200).json({ success: true, data: cat });
+
+    // Resolve the parent (id + name) so the detail page needn't make a second request.
+    let parent: { id: mongoose.Types.ObjectId; name: string } | null = null;
+    if (cat.parentId) {
+      const p = await ExamCategory.findById(cat.parentId).select("_id name").lean();
+      if (p) parent = { id: p._id, name: p.name };
+    }
+
+    return res.status(200).json({ success: true, data: { ...cat.toObject(), parent } });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /categories/:id/packages — paginated, searchable packages linked to this quiz category.
+export const getCategoryPackages = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!isObjectId(id))
+      return res.status(400).json({ success: false, message: "Invalid category id." });
+    const exists = await ExamCategory.exists({ _id: id });
+    if (!exists) return res.status(404).json({ success: false, message: "Category not found." });
+
+    const { search, status } = req.query as Record<string, string>;
+    const { page, per_page, skip } = parseListPaging(req.query as Record<string, string>);
+
+    const filter: any = { "examCategories.category": id };
+    if (search) filter.name = { $regex: search, $options: "i" };
+    if (status === "true" || status === "false") filter.active = status === "true";
+
+    const [docs, total] = await Promise.all([
+      Package.find(filter)
+        .select("_id name shareableLink active order")
+        .sort({ order: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(per_page)
+        .lean(),
+      Package.countDocuments(filter),
+    ]);
+
+    // Resolve a representative price per package: prefer the default plan row,
+    // otherwise the lowest active price. Price lives in a separate collection.
+    const packageIds = docs.map((p: any) => p._id);
+    const priceRows = packageIds.length
+      ? await PackageCourseEbookPrice.find({
+          packageId: { $in: packageIds },
+          status: true,
+        })
+          .select("packageId price isDefault")
+          .lean()
+      : [];
+    const priceByPackage = new Map<string, number>();
+    for (const row of priceRows as any[]) {
+      const key = String(row.packageId);
+      const existing = priceByPackage.get(key);
+      // Default row wins outright; otherwise keep the lowest price seen.
+      if (row.isDefault) priceByPackage.set(key, row.price);
+      else if (existing === undefined || row.price < existing)
+        priceByPackage.set(key, existing === undefined ? row.price : Math.min(existing, row.price));
+    }
+
+    const items = docs.map((p: any) => ({
+      id: p._id,
+      name: p.name,
+      price: priceByPackage.get(String(p._id)) ?? null,
+      shareableLink: p.shareableLink ?? null,
+      status: p.active,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: { items, meta: buildMeta(page, per_page, total) },
+    });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /categories/:id/courses — paginated, searchable courses linked to this quiz category.
+export const getCategoryCourses = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!isObjectId(id))
+      return res.status(400).json({ success: false, message: "Invalid category id." });
+    const exists = await ExamCategory.exists({ _id: id });
+    if (!exists) return res.status(404).json({ success: false, message: "Category not found." });
+
+    const { search, status } = req.query as Record<string, string>;
+    const { page, per_page, skip } = parseListPaging(req.query as Record<string, string>);
+
+    const filter: any = { "examCategories.category": id };
+    if (search) filter.name = { $regex: search, $options: "i" };
+    if (status === "true" || status === "false") filter.status = status === "true";
+
+    const [docs, total] = await Promise.all([
+      Course.find(filter)
+        .select("_id name status ordered")
+        .sort({ ordered: 1, createdAt: -1 })
+        .skip(skip)
+        .limit(per_page)
+        .lean(),
+      Course.countDocuments(filter),
+    ]);
+
+    const items = docs.map((c: any) => ({
+      id: c._id,
+      name: c.name,
+      status: c.status,
+      orderBy: c.ordered ?? 0,
+    }));
+
+    return res.status(200).json({
+      success: true,
+      data: { items, meta: buildMeta(page, per_page, total) },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

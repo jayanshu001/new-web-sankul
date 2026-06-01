@@ -53,3 +53,20 @@ export const sortFieldMap: Record<string, string> = {
   created_at: "createdAt",
   updated_at: "updatedAt",
 };
+
+// Query schema for the category-scoped Courses tab list.
+export const categoryCoursesQuerySchema = z.object({
+  search: z.string().trim().optional(),
+  status: z.enum(["true", "false"]).optional(),
+  page: z.coerce.number().int().min(1).optional().default(1),
+  per_page: z.coerce.number().int().min(1).max(200).optional().default(20),
+});
+
+// Query schema for the category-scoped Videos tab list.
+export const categoryVideosQuerySchema = z.object({
+  search: z.string().trim().optional(),
+  status: z.enum(["true", "false"]).optional(),
+  platform: z.enum(["youtube", "vimeo", "aws"]).optional(),
+  page: z.coerce.number().int().min(1).optional().default(1),
+  per_page: z.coerce.number().int().min(1).max(200).optional().default(20),
+});

@@ -26,6 +26,7 @@ export interface ICustomer extends Document {
   referralCode?: string;
   rewardPoints?: number;
   verified: boolean;
+  isProfileCompleted: boolean;
   firebaseTokens?: Array<{ token: string; platform?: string; updatedAt: Date }>;
   osType: OsType;
   lastLoginDate?: Date;
@@ -64,6 +65,10 @@ const CustomerSchema = new Schema<ICustomer>(
     referralCode: { type: String },
     rewardPoints: { type: Number, default: 0 },
     verified: { type: Boolean, required: true, default: false },
+    // True once the user has filled the required profile fields (firstName + lastName).
+    // Drives whether the frontend shows the "Complete Your Profile" screen — decoupled
+    // from `verified` (which only tracks OTP phone verification).
+    isProfileCompleted: { type: Boolean, required: true, default: false },
     firebaseTokens: {
       type: [
         {
@@ -97,3 +102,24 @@ CustomerSchema.index({ "firebaseTokens.token": 1 }, { sparse: true });
 CustomerSchema.index({ osType: 1, "firebaseTokens.token": 1 });
 
 export const Customer = model<ICustomer>("Customer", CustomerSchema);
+
+/**
+ * Determines whether a customer's profile is "complete" — i.e. the required
+ * profile fields are filled in. Now that email is optional, completeness is
+ * based on firstName + lastName being present. This is the single source of
+ * truth for the `isProfileCompleted` flag returned to the frontend (which uses
+ * it to decide whether to show the "Complete Your Profile" screen).
+ *
+ * Backward-compat: legacy `verified` users predate this flag and may have it
+ * unset/false despite having usable accounts — treat them as completed so they
+ * are never re-routed to the profile screen.
+ */
+export function isProfileComplete(
+  customer: Pick<ICustomer, "firstName" | "lastName" | "isProfileCompleted" | "verified">
+): boolean {
+  if (customer.isProfileCompleted) return true;
+  const hasRequiredFields = !!customer.firstName?.trim() && !!customer.lastName?.trim();
+  if (hasRequiredFields) return true;
+  // Legacy fallback: pre-existing verified users are treated as completed.
+  return !!customer.verified;
+}

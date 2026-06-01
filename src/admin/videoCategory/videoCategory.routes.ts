@@ -5,6 +5,8 @@ import {
   listVideoCategories,
   getVideoCategoryPreRequisites,
   getVideoCategory,
+  listVideoCategoryCourses,
+  listVideoCategoryVideos,
   createVideoCategory,
   updateVideoCategory,
   deleteVideoCategory,
@@ -21,6 +23,8 @@ router.get("/pre-requisites", getVideoCategoryPreRequisites);
 router.get("/", listVideoCategories);
 router.post("/", uploadS3.single("image"), createVideoCategory);
 router.get("/:id", getVideoCategory);
+router.get("/:id/courses", listVideoCategoryCourses);
+router.get("/:id/videos", listVideoCategoryVideos);
 router.put("/:id", uploadS3.single("image"), updateVideoCategory);
 router.delete("/:id", deleteVideoCategory);
 router.patch("/:id/status", toggleVideoCategoryStatus);

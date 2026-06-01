@@ -5,6 +5,8 @@ import {
   getCategories,
   getCategoryTree,
   getCategoryById,
+  getCategoryPackages,
+  getCategoryCourses,
   createCategory,
   updateCategory,
   deleteCategory,
@@ -38,6 +40,8 @@ router.get("/categories/tree", getCategoryTree);
 router.get("/categories", getCategories);
 router.post("/categories", uploadS3.single("image"), createCategory);
 router.get("/categories/:id", getCategoryById);
+router.get("/categories/:id/packages", getCategoryPackages);
+router.get("/categories/:id/courses", getCategoryCourses);
 router.put("/categories/:id", uploadS3.single("image"), updateCategory);
 router.delete("/categories/:id", deleteCategory);
 

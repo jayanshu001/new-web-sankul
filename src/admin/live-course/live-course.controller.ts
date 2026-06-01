@@ -34,6 +34,10 @@ const coerceBody = (body: Record<string, any>): Record<string, any> => {
     out.examCountdownCategoryIds = parseJsonArray(out.examCountdownCategoryIds);
   if (out.examCountdownIds !== undefined)
     out.examCountdownIds = parseJsonArray(out.examCountdownIds);
+  if (out.materialCategories !== undefined)
+    out.materialCategories = parseJsonArray(out.materialCategories);
+  if (out.examCategories !== undefined)
+    out.examCategories = parseJsonArray(out.examCategories);
   return out;
 };
 
