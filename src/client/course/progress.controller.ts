@@ -13,6 +13,7 @@ import { LiveCourse } from "../../models/course/LiveCourse.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { resolveVideoCourseId } from "./resolveVideoCourse";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -51,7 +52,7 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
     }
 
     const videoId = objectId.parse(req.params.videoId);
-    const { positionSec, durationSec } = progressSchema.parse(req.body);
+    const { positionSec, durationSec, scope } = progressSchema.parse(req.body);
 
     // Resolve the video's course via VideoCategory, so we can store courseId
     // on the progress row (denormalised for fast per-course rollups later).
@@ -60,10 +61,10 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       logger.warn("reportLectureProgress video not found", { traceId, userId, videoId });
       return res.status(404).json({ success: false, message: "Lecture not found." });
     }
-    const category = await VideoCategory.findById(video.videoCategoryId)
-      .select("courseId")
-      .lean();
-    const courseId = category?.courseId ?? null;
+    // Resolve the owning course robustly (leaf courseId → ancestor courseId →
+    // Course.videoCategoryId downward pointer). Shared with the note
+    // controllers so "which course is this video under" can never drift.
+    let courseId: any = await resolveVideoCourseId(video.videoCategoryId);
 
     // Resolve which "container(s)" this lecture sits under for rollup. A video
     // category is the leaf; walk parents via VideoCategoryRelation to find:
@@ -177,6 +178,68 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
     if (courseId) setFields.courseId = courseId;
     if (pkgSub?.targetPackageId) setFields.packageId = pkgSub.targetPackageId;
     if (liveCourse?._id) setFields.liveCourseId = liveCourse._id;
+
+    // Honor the FE-supplied `scope` as an additional pointer source, but ONLY
+    // after validating the user is genuinely entitled to that container — the
+    // scope is a client hint and must never let a caller stamp a pointer to a
+    // container they don't hold. The entitlement gate above already confirmed
+    // *an* active sub; here we confirm the scoped container specifically and,
+    // if valid, stamp its pointer so the row surfaces under the card the user
+    // is actually watching from (e.g. the Package card, not just a Course card).
+    if (scope) {
+      if (scope.kind === "package" && !setFields.packageId) {
+        const scopedPkgSub = await PackageCourseSubscription.findOne({
+          customerId: cid,
+          targetPackageId: new mongoose.Types.ObjectId(scope.id),
+          status: true,
+          paymentStatus: "verified",
+          endAt: { $gt: now },
+        })
+          .select("targetPackageId")
+          .lean();
+        if (scopedPkgSub?.targetPackageId)
+          setFields.packageId = scopedPkgSub.targetPackageId;
+      } else if (scope.kind === "course" && !setFields.courseId) {
+        const scopedCourseSub = await PackageCourseSubscription.findOne({
+          customerId: cid,
+          courseId: new mongoose.Types.ObjectId(scope.id),
+          status: true,
+          paymentStatus: "verified",
+          endAt: { $gt: now },
+        })
+          .select("courseId")
+          .lean();
+        if (scopedCourseSub?.courseId) {
+          setFields.courseId = scopedCourseSub.courseId;
+        } else if (isFree) {
+          // Free videos have no subscription, so the sub-based check above can
+          // never stamp a pointer — yet they still belong on the Resume feed.
+          // Trust the FE-supplied course scope just enough to attribute the
+          // row, after confirming the course actually exists and is active.
+          // (Free content is ungated, so the only risk here is mis-attribution,
+          // not an access leak.)
+          const scopedCourse = await Course.findOne({
+            _id: new mongoose.Types.ObjectId(scope.id),
+            status: true,
+          })
+            .select("_id")
+            .lean();
+          if (scopedCourse?._id) setFields.courseId = scopedCourse._id;
+        }
+      } else if (scope.kind === "liveCourse" && !setFields.liveCourseId) {
+        const scopedLiveSub = await LiveCourseSubscription.findOne({
+          customerId: cid,
+          liveCourseId: new mongoose.Types.ObjectId(scope.id),
+          status: true,
+          paymentStatus: "verified",
+          endAt: { $gt: now },
+        })
+          .select("liveCourseId")
+          .lean();
+        if (scopedLiveSub?.liveCourseId)
+          setFields.liveCourseId = scopedLiveSub.liveCourseId;
+      }
+    }
 
     const update: any = {
       $set: setFields,

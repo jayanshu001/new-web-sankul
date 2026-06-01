@@ -18,7 +18,7 @@ import {
   PackageCourseEbookOrderStatus,
   PackageCourseEbookPaymentType,
 } from "../../models/enums";
-import { computeEndAt } from "../../utils/planDuration";
+import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -172,6 +172,56 @@ export const verifyPayment = async (req: Request, res: Response) => {
       }
 
       const now = new Date();
+
+      // Upsert-extend: this pending row was created at order time. If the
+      // customer ALREADY has an active verified subscription for the same
+      // course/package target, fold the purchased window onto it and retire
+      // this row — otherwise we'd surface two "My Subscription" cards for the
+      // one course with different availability dates.
+      const targetFilter: Record<string, any> = {
+        _id: { $ne: courseSub._id },
+        customerId: courseSub.customerId,
+        status: true,
+        paymentStatus: "verified",
+      };
+      if (courseSub.courseId) targetFilter.courseId = courseSub.courseId;
+      else if (courseSub.targetPackageId) {
+        targetFilter.courseId = null;
+        targetFilter.targetPackageId = courseSub.targetPackageId;
+      }
+      const existingActive =
+        courseSub.courseId || courseSub.targetPackageId
+          ? await PackageCourseSubscription.findOne(targetFilter).sort({ endAt: -1 })
+          : null;
+
+      if (existingActive) {
+        existingActive.endAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths, now });
+        existingActive.paidAmount = (existingActive.paidAmount || 0) + (courseSub.paidAmount || 0);
+        await existingActive.save();
+
+        // Retire the just-paid pending row: record the payment + a pointer to
+        // the row it extended, but keep status:false so it never lists.
+        courseSub.paymentStatus = "verified";
+        courseSub.razorpayPaymentId = razorpay_payment_id;
+        courseSub.paidAt = now;
+        courseSub.status = false;
+        await courseSub.save();
+
+        logger.info("verifyPayment: course subscription extended existing", {
+          subscriptionId: String(existingActive._id),
+          supersededId: String(courseSub._id),
+          customerId: String(courseSub.customerId),
+          razorpay_order_id,
+          razorpay_payment_id,
+          endAt: existingActive.endAt?.toISOString?.(),
+        });
+
+        return res.status(200).json({
+          success: true,
+          data: { kind: "course", subscription: existingActive },
+        });
+      }
+
       const endAt = computeEndAt({ startAt: now, durationMonths });
 
       courseSub.paymentStatus = "verified";
@@ -220,6 +270,46 @@ export const verifyPayment = async (req: Request, res: Response) => {
       }
 
       const now = new Date();
+
+      // Upsert-extend (same rationale as the course branch): fold onto an
+      // existing active subscription for this live course rather than listing a
+      // second card.
+      const existingActive = await LiveCourseSubscription.findOne({
+        _id: { $ne: liveCourseSub._id },
+        customerId: liveCourseSub.customerId,
+        liveCourseId: liveCourseSub.liveCourseId,
+        status: true,
+        paymentStatus: "verified",
+        $or: [{ endAt: null }, { endAt: { $gte: now } }],
+      }).sort({ endAt: -1 });
+
+      if (existingActive) {
+        existingActive.endAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths, now });
+        existingActive.paidAmount = (existingActive.paidAmount || 0) + (liveCourseSub.paidAmount || 0);
+        await existingActive.save();
+
+        liveCourseSub.paymentStatus = "verified";
+        liveCourseSub.razorpayPaymentId = razorpay_payment_id;
+        liveCourseSub.paidAt = now;
+        liveCourseSub.status = false;
+        await liveCourseSub.save();
+
+        logger.info("verifyPayment: live-course subscription extended existing", {
+          subscriptionId: String(existingActive._id),
+          supersededId: String(liveCourseSub._id),
+          customerId: String(liveCourseSub.customerId),
+          liveCourseId: String(liveCourseSub.liveCourseId),
+          razorpay_order_id,
+          razorpay_payment_id,
+          endAt: existingActive.endAt?.toISOString?.(),
+        });
+
+        return res.status(200).json({
+          success: true,
+          data: { kind: "live-course", subscription: existingActive },
+        });
+      }
+
       const endAt = computeEndAt({ startAt: now, durationMonths });
 
       liveCourseSub.paymentStatus = "verified";

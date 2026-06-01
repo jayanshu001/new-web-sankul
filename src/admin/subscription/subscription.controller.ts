@@ -17,7 +17,7 @@ import {
 } from "./subscription.validation";
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { PackageCourseEbookOrderStatus } from "../../models/enums";
-import { computeEndAt } from "../../utils/planDuration";
+import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -170,14 +170,9 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
       }
     }
 
-    // Compute startAt / endAt — delegate to shared helper so the
-    // `setMonth`-honors-calendar-length contract is enforced uniformly with
-    // webhook/verify paths.
-    const startAt = data.startAt ? new Date(data.startAt) : new Date();
-    const endAt =
-      data.durationDays && data.durationDays > 0
-        ? computeEndAt({ startAt, durationMonths: data.durationDays, asDays: true })
-        : computeEndAt({ startAt, durationMonths: plan.duration || 0 });
+    const now = new Date();
+    const resolvedCourseId = data.courseId || plan.courseId || null;
+    const resolvedPackageId = data.packageId || plan.packageId || null;
 
     // Compute amount: explicit > plan.price (+ materialPrice if withMaterial)
     const computedAmount =
@@ -185,10 +180,55 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
         ? data.amount
         : (plan.price || 0) + (data.withMaterial ? (plan as any).materialPrice || 0 : 0);
 
+    // Upsert-extend: if the customer already has an active verified subscription
+    // for this same course (or package) target, extend that row's endAt instead
+    // of inserting a second row. Two rows for the same target are exactly what
+    // surfaced as duplicate "My Subscription" cards with differing availability.
+    // We only auto-extend when the caller did NOT pin an explicit startAt — an
+    // explicit startAt signals "create a distinct window", so we honour it.
+    const target: Record<string, any> = { customerId: data.customerId, status: true, paymentStatus: "verified" };
+    if (resolvedCourseId) {
+      target.courseId = resolvedCourseId;
+    } else if (resolvedPackageId) {
+      target.courseId = null;
+      target.targetPackageId = resolvedPackageId;
+    }
+    const existing =
+      !data.startAt && (resolvedCourseId || resolvedPackageId)
+        ? await PackageCourseSubscription.findOne(target).sort({ endAt: -1 })
+        : null;
+
+    if (existing) {
+      const newEndAt =
+        data.durationDays && data.durationDays > 0
+          ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: data.durationDays, asDays: true, now })
+          : extendEndAt({ currentEndAt: existing.endAt, durationMonths: plan.duration || 0, now });
+
+      existing.endAt = newEndAt;
+      existing.packageId = plan._id; // reflect the plan they extended with
+      existing.paidAmount = (existing.paidAmount || 0) + computedAmount;
+      if (data.customerShippingId) existing.customerShippingId = data.customerShippingId as any;
+      if (data.withMaterial) existing.withMaterial = true;
+      if (data.remark) existing.remark = data.remark;
+      existing.paidAt = now;
+      await existing.save();
+
+      return res.status(200).json({ success: true, data: existing, extended: true });
+    }
+
+    // No active sub for this target — grant a fresh one. Delegate window math to
+    // the shared helper so the setMonth-honors-calendar-length contract matches
+    // the webhook/verify paths.
+    const startAt = data.startAt ? new Date(data.startAt) : now;
+    const endAt =
+      data.durationDays && data.durationDays > 0
+        ? computeEndAt({ startAt, durationMonths: data.durationDays, asDays: true })
+        : computeEndAt({ startAt, durationMonths: plan.duration || 0 });
+
     const sub = await PackageCourseSubscription.create({
       customerId: data.customerId,
-      courseId: data.courseId || plan.courseId || null,
-      targetPackageId: data.packageId || plan.packageId || null,
+      courseId: resolvedCourseId,
+      targetPackageId: resolvedPackageId,
       packageId: plan._id, // plan row reference (historical field name)
       customerShippingId: data.customerShippingId || null,
       startAt,
@@ -199,7 +239,7 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
       paymentMethod: data.paymentMethod,
       withMaterial: !!data.withMaterial,
       remark: data.remark || null,
-      paidAt: new Date(),
+      paidAt: now,
     });
 
     return res.status(201).json({ success: true, data: sub });

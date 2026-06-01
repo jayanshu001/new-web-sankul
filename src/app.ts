@@ -166,16 +166,18 @@ app.use(metricsMiddleware);
 app.use(
   express.json({
     limit: "10mb",
-    // Accept application/json, application/*+json, text/json, and even missing/incorrect CT
+    // Accept application/json, application/*+json, text/json.
+    // NOTE: do NOT parse when Content-Type is missing. A no-CT fallback here
+    // drains the request stream for ANY body-less-CT POST/PUT/PATCH — including
+    // multipart/form-data uploads whose CT was stripped by a proxy — leaving
+    // multer with an empty stream (req.file === undefined) and silently
+    // dropping file uploads. Only parse when the CT explicitly says JSON.
     type: (req) => {
       const ct = req.headers["content-type"] || "";
-      // parse if it looks like json OR if client forgot to set CT but sends braces
       return (
         ct.includes("application/json") ||
         ct.includes("+json") ||
-        ct.includes("text/json") ||
-        // Allow parsing when content-type is missing but method usually sends bodies
-        (!ct && ["POST", "PUT", "PATCH"].includes(req.method as string) && true)
+        ct.includes("text/json")
       );
     },
     // Graceful JSON parse error -> let our middleware catch it

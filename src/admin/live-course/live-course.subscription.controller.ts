@@ -7,7 +7,7 @@ import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscrip
 import { Customer } from "../../models/customer/Customer.model";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
-import { computeEndAt } from "../../utils/planDuration";
+import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId");
 
@@ -198,26 +198,40 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
       return failure(res, "endAt must be after startAt.", 422);
     }
 
-    // Don't stack a grant on top of an already-active subscription — tell the
-    // admin to extend the existing one instead.
-    const existing = await LiveCourseSubscription.findOne({
-      customerId: validated.customerId,
-      liveCourseId,
-      status: true,
-      paymentStatus: "verified",
-      $or: [{ endAt: null }, { endAt: { $gte: now } }],
-    })
-      .select("_id endAt")
-      .lean();
+    // Upsert-extend: rather than stacking a second row on top of an existing
+    // active subscription (which surfaces as duplicate "My Subscription" cards
+    // with differing availability), extend the existing row's endAt in place.
+    // We extend only when the caller didn't pin an explicit start/end window —
+    // an explicit override means "set this exact window", which we honour.
+    const existing =
+      validated.startAt || validated.endAt
+        ? null
+        : await LiveCourseSubscription.findOne({
+            customerId: validated.customerId,
+            liveCourseId,
+            status: true,
+            paymentStatus: "verified",
+            $or: [{ endAt: null }, { endAt: { $gte: now } }],
+          }).sort({ endAt: -1 });
+
     if (existing) {
-      logger.warn("grantLiveCourseSubscription duplicate active sub", { traceId, customerId: validated.customerId, liveCourseId, existingId: existing._id });
-      return failure(
-        res,
-        "Customer already has an active subscription to this live course. Use the update endpoint to extend it.",
-        409,
-        {},
-        { subscriptionId: String(existing._id) }
-      );
+      // Stack the plan's duration onto whatever time is left on the row.
+      const months = validated.durationMonths ?? plan.duration;
+      existing.endAt = extendEndAt({ currentEndAt: existing.endAt, durationMonths: months, now });
+      existing.planId = validated.planId as any;
+      existing.paidAt = now;
+      await existing.save();
+
+      logger.info("grantLiveCourseSubscription extended existing", {
+        traceId,
+        subscriptionId: existing._id,
+        customerId: validated.customerId,
+        liveCourseId,
+        endAt: existing.endAt?.toISOString?.(),
+        by: req.user?.id,
+      });
+
+      return success(res, { subscription: existing.toObject() }, "Subscription extended.");
     }
 
     const sub = await LiveCourseSubscription.create({

@@ -2,10 +2,10 @@ import { Request, Response } from "express";
 import { Types } from "mongoose";
 import { LectureAudioNote } from "../../models/customer/LectureAudioNote.model";
 import { Video } from "../../models/course/Video.model";
-import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { LiveSession } from "../../models/course/LiveSession.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { hasAccessToAnyLiveCourse } from "../live-course/entitlement";
+import { resolveVideoCourseId } from "../course/resolveVideoCourse";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -30,22 +30,24 @@ async function authorizeRecorded(
     .lean();
   if (!video || !video.status) return { error: "Lecture not found.", status: 404 };
 
-  const category = await VideoCategory.findById(video.videoCategoryId)
-    .select("courseId")
-    .lean();
-  if (!category?.courseId) {
+  // Robustly resolve the owning course — a video often sits under a child
+  // category whose own courseId is null while the link lives on an ancestor or
+  // on Course.videoCategoryId. Reading only the leaf wrongly reports
+  // "not attached to a course". See resolveVideoCourseId.
+  const courseId = await resolveVideoCourseId(video.videoCategoryId);
+  if (!courseId) {
     return { error: "This lecture is not attached to a course.", status: 400 };
   }
 
   // Free lectures don't require a subscription — any authenticated user can
   // record audio notes on them.
   if (video.priceType === "free") {
-    return { courseId: category.courseId as Types.ObjectId };
+    return { courseId };
   }
 
   const sub = await PackageCourseSubscription.findOne({
     customerId: new Types.ObjectId(userId),
-    courseId: category.courseId,
+    courseId,
     status: true,
     paymentStatus: "verified",
     endAt: { $gt: new Date() },
@@ -54,7 +56,7 @@ async function authorizeRecorded(
     return { error: "Active subscription required to record audio notes.", status: 403 };
   }
 
-  return { courseId: category.courseId as Types.ObjectId };
+  return { courseId };
 }
 
 async function authorizeLive(

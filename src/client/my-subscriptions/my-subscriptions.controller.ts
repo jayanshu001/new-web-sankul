@@ -40,14 +40,34 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       endAt: { $gt: now },
     };
 
-    const [subs, total] = await Promise.all([
-      PackageCourseSubscription.find(filter)
-        .sort({ endAt: 1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      PackageCourseSubscription.countDocuments(filter),
-    ]);
+    // Fetch ALL active rows (sorted latest-expiring first) so we can collapse
+    // duplicates BEFORE paginating. A customer can end up with more than one
+    // active row per course/package target (legacy data, or an extend that
+    // landed as a new row); listing them raw shows the same course twice with
+    // different availability. We keep only the furthest-out endAt per target.
+    const allActive = await PackageCourseSubscription.find(filter)
+      .sort({ endAt: -1 })
+      .lean();
+
+    const seen = new Set<string>();
+    const deduped = allActive.filter((s: any) => {
+      // Group key: course subs by courseId, package subs by targetPackageId.
+      // Fall back to the row id so an untargeted row is never dropped.
+      const key = s.courseId
+        ? `c:${String(s.courseId)}`
+        : s.targetPackageId
+        ? `p:${String(s.targetPackageId)}`
+        : `s:${String(s._id)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    const total = deduped.length;
+    // Re-sort to the screen's contract (expiring-soonest first), then paginate.
+    const subs = deduped
+      .sort((a: any, b: any) => new Date(a.endAt).getTime() - new Date(b.endAt).getTime())
+      .slice(skip, skip + limitNum);
 
     if (subs.length === 0) {
       logger.info("listMySubscriptions empty", { traceId, customerId: userId });

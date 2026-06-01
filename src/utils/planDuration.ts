@@ -46,6 +46,42 @@ export const computeEndAt = ({
 };
 
 /**
+ * Compute the new `endAt` when EXTENDING an existing subscription, rather than
+ * granting a fresh one. The new window stacks onto whatever time is left:
+ *
+ *   - If the current sub is still active (currentEndAt in the future), the new
+ *     duration is added on top of currentEndAt — the customer keeps the days
+ *     they already paid for and the extension lands after them.
+ *   - If it has already lapsed (or has no endAt), the window starts from `now`.
+ *
+ * This is what makes "extend availability" idempotent at the row level: we
+ * update the single existing row's endAt instead of inserting a second row,
+ * which is the source of the duplicate "My Subscription" cards.
+ *
+ * @example
+ *   // active sub ending Sep 11, extend by a 3-month plan on Aug 1
+ *   extendEndAt({ currentEndAt: 2026-09-11, durationMonths: 3, now: 2026-08-01 })
+ *   // -> 2026-12-11  (stacks onto Sep 11, not onto Aug 1)
+ */
+export const extendEndAt = ({
+  currentEndAt,
+  durationMonths,
+  asDays = false,
+  now = new Date(),
+}: {
+  currentEndAt: Date | null | undefined;
+  durationMonths: number;
+  asDays?: boolean;
+  now?: Date;
+}): Date => {
+  const base =
+    currentEndAt && currentEndAt.getTime() > now.getTime()
+      ? currentEndAt
+      : now;
+  return computeEndAt({ startAt: base, durationMonths, asDays });
+};
+
+/**
  * Days remaining on a subscription, for frontend "Extend Validity" UX.
  * Returns ceil((endAt - now) / 1 day), floored at 0 for expired rows.
  * `null` endAt (lifetime grants) -> `null` so the UI can hide the counter.
