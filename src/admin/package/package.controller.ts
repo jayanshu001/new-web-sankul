@@ -62,8 +62,6 @@ const coercePackageBody = (req: Request) => {
   if (file?.location) req.body.image = file.location;
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
   if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
-  if (typeof req.body.isMagazine === "string")
-    req.body.isMagazine = req.body.isMagazine === "true";
   if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
   if (typeof req.body.isSmartCourse === "string")
     req.body.isSmartCourse = req.body.isSmartCourse === "true";

@@ -6,23 +6,71 @@ import { Book } from "../../models/book/Book.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
+import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
+import { BookOrder } from "../../models/book/BookOrder.model";
+import { BookOrderStatus } from "../../models/enums";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
 
-// Resolves daysLeft for search hits of a single entity type. Books are
-// excluded — they're one-off purchases, not time-bound subscriptions.
-async function attachDaysLeft(
+// Derives `isPaid` per entity type using the same rules the dedicated
+// catalog endpoints use, so a search hit and its detail page agree:
+//   - courses / packages → the model's own `isPaid` flag (default true)
+//   - ebooks             → paid when any active price plan costs > 0
+//   - books              → paid when discountedPrice > 0
+async function attachIsPaid(type: string, items: any[]): Promise<Map<string, boolean>> {
+  const paidByid = new Map<string, boolean>();
+  if (type === "ebooks") {
+    const ids = items.map((i: any) => i._id);
+    const plans = ids.length
+      ? await EbookPrice.find({ ebookId: { $in: ids }, status: true }).select("ebookId price").lean()
+      : [];
+    const hasPaidPlan = new Map<string, boolean>();
+    for (const p of plans as any[]) {
+      const k = String(p.ebookId);
+      if ((p.price ?? 0) > 0) hasPaidPlan.set(k, true);
+    }
+    for (const it of items) paidByid.set(String(it._id), hasPaidPlan.get(String(it._id)) ?? false);
+  } else if (type === "books") {
+    for (const it of items) paidByid.set(String(it._id), (it.discountedPrice ?? 0) > 0);
+  } else {
+    // courses / packages carry the flag on the document itself.
+    for (const it of items) paidByid.set(String(it._id), it.isPaid ?? true);
+  }
+  return paidByid;
+}
+
+// Stamps `isPaid`, `isPurchased`, and `daysLeft` on search hits of a single
+// entity type. Books are one-off purchases (no expiry → daysLeft always null),
+// everything else is a time-bound subscription.
+async function attachPurchaseState(
   type: string,
   items: any[],
   customerId: string | undefined
 ): Promise<any[]> {
-  if (!customerId || !items.length || type === "books") {
-    return items.map((it) => ({ ...it, daysLeft: null }));
+  const paidByid = await attachIsPaid(type, items);
+  const withPaid = items.map((it: any) => ({ ...it, isPaid: paidByid.get(String(it._id)) ?? true }));
+
+  if (!customerId || !withPaid.length) {
+    return withPaid.map((it) => ({ ...it, isPurchased: false, daysLeft: null }));
   }
-  const ids = items.map((i: any) => i._id);
+  const ids = withPaid.map((i: any) => i._id);
   const now = new Date();
+
+  if (type === "books") {
+    // Books are permanent once a successful order exists — no expiry window.
+    const purchasedIds = await BookOrder.distinct("items.bookId", {
+      customerId,
+      status: { $in: [BookOrderStatus.VERIFIED, BookOrderStatus.SHIPPED, BookOrderStatus.DELIVERED] },
+    });
+    const owned = new Set(purchasedIds.map((id: any) => String(id)));
+    return withPaid.map((it: any) => ({
+      ...it,
+      isPurchased: owned.has(String(it._id)),
+      daysLeft: null,
+    }));
+  }
 
   if (type === "ebooks") {
     const subs = await EbookSubscription.find({
@@ -36,10 +84,14 @@ async function attachDaysLeft(
       const k = String(s.ebookId);
       if (!latest.has(k)) latest.set(k, s.endAt as Date);
     }
-    return items.map((it: any) => ({
-      ...it,
-      daysLeft: latest.has(String(it._id)) ? computeDaysLeft(latest.get(String(it._id))!, now) : null,
-    }));
+    return withPaid.map((it: any) => {
+      const endAt = latest.get(String(it._id)) ?? null;
+      return {
+        ...it,
+        isPurchased: !!endAt,
+        daysLeft: endAt ? computeDaysLeft(endAt, now) : null,
+      };
+    });
   }
 
   if (type === "courses" || type === "packages") {
@@ -85,15 +137,16 @@ async function attachDaysLeft(
         if (viaPlan) upsert(viaPlan, endAt);
       }
     }
-    return items.map((it: any) => {
+    return withPaid.map((it: any) => {
       const k = String(it._id);
-      if (life.has(k)) return { ...it, daysLeft: null };
+      // Lifetime (life) or a future-dated sub (latest) both mean purchased.
+      if (life.has(k)) return { ...it, isPurchased: true, daysLeft: null };
       const endAt = latest.get(k);
-      return { ...it, daysLeft: endAt ? computeDaysLeft(endAt, now) : null };
+      return { ...it, isPurchased: !!endAt, daysLeft: endAt ? computeDaysLeft(endAt, now) : null };
     });
   }
 
-  return items.map((it) => ({ ...it, daysLeft: null }));
+  return withPaid.map((it) => ({ ...it, isPurchased: false, daysLeft: null }));
 }
 
 const TYPE_TO_MODEL: Record<string, Model<any>> = {
@@ -133,7 +186,7 @@ export const globalSearch = async (req: Request, res: Response) => {
             M.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
             M.countDocuments(filter),
           ]);
-          const items = await attachDaysLeft(key, rawItems, customerId);
+          const items = await attachPurchaseState(key, rawItems, customerId);
           return [key, { items, total, hasMore: skip + items.length < total }] as const;
         })
       );
@@ -160,7 +213,7 @@ export const globalSearch = async (req: Request, res: Response) => {
       M.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
       M.countDocuments(filter),
     ]);
-    const items = await attachDaysLeft(type, rawItems, req.user?.id);
+    const items = await attachPurchaseState(type, rawItems, req.user?.id);
 
     logger.info("globalSearch success", { traceId, type, q, total, returned: items.length });
     return res.status(200).json({

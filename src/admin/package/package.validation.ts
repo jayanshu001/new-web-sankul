@@ -16,7 +16,6 @@ export const createPackageSchema = z.object({
   withoutMaterialText: z.string().optional(),
   order: z.number().int().optional(),
   active: z.boolean().optional(),
-  isMagazine: z.boolean().optional(),
   isPaid: z.boolean().optional(),
   isSmartCourse: z.boolean().optional(),
   isPlannerCourse: z.boolean().optional(),

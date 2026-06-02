@@ -75,14 +75,19 @@ export const listEbooks = async (req: Request, res: Response) => {
     const base = resolveBase(req);
     const data = ebooks.map((e) => {
       const endAt = activeByEbook.get(String(e._id)) || null;
+      const ePlans = plansByEbook[String(e._id)] || [];
+      // Ebooks carry no `isPaid` flag; they're paid when at least one active
+      // price plan costs > 0. No active priced plans → free.
+      const isPaid = ePlans.some((p: any) => (p.price ?? 0) > 0);
       return {
         ...e,
-        plans: plansByEbook[String(e._id)] || [],
+        plans: ePlans,
         details: [
           { id: 1, mainText: "Language", subText: e.language },
           { id: 2, mainText: "Author", subText: e.author },
           { id: 3, mainText: "Publisher", subText: e.publisher },
         ],
+        isPaid,
         isPurchased: !!endAt,
         subscriptionEndAt: endAt,
         daysLeft: endAt ? daysBetween(now, endAt) : null,
@@ -189,6 +194,8 @@ export const getEbookDetail = async (req: Request, res: Response) => {
         ebook: {
           ...ebook,
           plans,
+          // Paid when at least one active price plan costs > 0; else free.
+          isPaid: plans.some((p: any) => (p.price ?? 0) > 0),
           isPurchased: !!subscriptionEndAt,
           subscriptionEndAt,
           daysLeft: subscriptionEndAt ? daysBetween(nowAccess, subscriptionEndAt) : null,

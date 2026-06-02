@@ -16,6 +16,7 @@ import {
   audioNoteIdParamSchema,
 } from "./lecture-audio-note.validation";
 import { buildResumeNextCard } from "../learning/resumeCard";
+import { buildLectureRef } from "../learning/lectureRef";
 
 // Same subscription gate as the text-note controller. Kept inline rather than
 // shared because the two modules will likely diverge (audio may grow per-row
@@ -194,14 +195,21 @@ export const listAudioNotes = async (req: Request, res: Response) => {
       .sort({ timestampSec: 1, createdAt: 1 })
       .lean();
 
-    const resumeNext = await buildResumeNextCard(
+    const refInput =
       lectureType === "recorded"
-        ? { lectureType: "recorded", userId, videoId: videoId! }
-        : { lectureType: "live", userId, liveSessionId: liveSessionId! }
-    );
+        ? ({ lectureType: "recorded", userId, videoId: videoId! } as const)
+        : ({ lectureType: "live", userId, liveSessionId: liveSessionId! } as const);
 
-    logger.info("listAudioNotes success", { traceId, userId, lectureType, count: notes.length, hasResume: !!resumeNext });
-    return success(res, { notes, resumeNext }, "Audio notes fetched.", 200);
+    // `lecture` = the exact video/session these notes belong to, with the
+    // customer's resume position so the FE can "Go to Video" and seek straight
+    // in. `resumeNext` stays the course-level "resume now" hero card.
+    const [lecture, resumeNext] = await Promise.all([
+      buildLectureRef(refInput),
+      buildResumeNextCard(refInput),
+    ]);
+
+    logger.info("listAudioNotes success", { traceId, userId, lectureType, count: notes.length, hasLecture: !!lecture, hasResume: !!resumeNext });
+    return success(res, { notes, lecture, resumeNext }, "Audio notes fetched.", 200);
   } catch (err) {
     logger.error("listAudioNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);

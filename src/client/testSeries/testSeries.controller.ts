@@ -124,6 +124,7 @@ export const listTestSeries = async (req: Request, res: Response) => {
       const endAt = latestEndAtByid.get(String(r._id)) ?? null;
       return {
         ...r,
+        isPaid: !r.isFree,
         defaultPlan: def
           ? {
               _id: def._id,
@@ -191,7 +192,7 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
     const shareableLink = buildShareUrl("test-series", id, resolveBase(req));
     return success(
       res,
-      { series: { ...series, shareableLink }, contentCategories, prices, isPurchased, activeSubscription, daysLeft, shareableLink },
+      { series: { ...series, isPaid: !series.isFree, shareableLink }, contentCategories, prices, isPaid: !series.isFree, isPurchased, activeSubscription, daysLeft, shareableLink },
       "Fetched."
     );
   } catch (e: any) {

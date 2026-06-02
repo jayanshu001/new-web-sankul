@@ -5,6 +5,7 @@ import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { Video } from "../../models/course/Video.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { Course } from "../../models/course/Course.model";
+import { Package } from "../../models/course/Package.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { PackageVideoCategoryRelation } from "../../models/course/PackageVideoCategoryRelation.model";
@@ -13,23 +14,22 @@ import { LiveCourse } from "../../models/course/LiveCourse.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
-import { resolveVideoCourseId } from "./resolveVideoCourse";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
 const progressSchema = z.object({
   positionSec: z.number().int().min(0).max(60 * 60 * 24), // sanity cap: 24h
   durationSec: z.number().int().min(0).max(60 * 60 * 24),
-  // Container the user is watching from. Accepted for back-compat with
-  // older app builds but no longer affects storage — progress is global
-  // per (customer, video). The kind/id are used only as an entitlement
-  // hint when present.
-  scope: z
-    .object({
-      kind: z.enum(["course", "liveCourse", "package"]),
-      id: objectId,
-    })
-    .optional(),
+  // Container the user is watching from. REQUIRED: progress is stored per
+  // (customer, video, container), so we cannot persist a heartbeat without
+  // knowing which product the row belongs to. The same video watched from
+  // two packages keeps two independent rows — `scope` is what tells them
+  // apart. `scope.id` must be the top-level product the user opened (Course /
+  // Package / Live Course), never a video-category id.
+  scope: z.object({
+    kind: z.enum(["course", "liveCourse", "package"]),
+    id: objectId,
+  }),
 });
 
 // A lecture is treated as completed once the user has watched ~95% of it.
@@ -54,24 +54,20 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
     const videoId = objectId.parse(req.params.videoId);
     const { positionSec, durationSec, scope } = progressSchema.parse(req.body);
 
-    // Resolve the video's course via VideoCategory, so we can store courseId
-    // on the progress row (denormalised for fast per-course rollups later).
     const video = await Video.findById(videoId).select("videoCategoryId status priceType").lean();
     if (!video || !video.status) {
       logger.warn("reportLectureProgress video not found", { traceId, userId, videoId });
       return res.status(404).json({ success: false, message: "Lecture not found." });
     }
-    // Resolve the owning course robustly (leaf courseId → ancestor courseId →
-    // Course.videoCategoryId downward pointer). Shared with the note
-    // controllers so "which course is this video under" can never drift.
-    let courseId: any = await resolveVideoCourseId(video.videoCategoryId);
 
-    // Resolve which "container(s)" this lecture sits under for rollup. A video
-    // category is the leaf; walk parents via VideoCategoryRelation to find:
-    //   - the package(s) it's reachable through (PackageVideoCategoryRelation)
-    //   - the live course it belongs to (LiveCourse.videoCategoryId matches
-    //     this leaf or any ancestor)
-    // The walk is bounded — most trees are 2-3 levels deep.
+    const now = new Date();
+    const cid = new mongoose.Types.ObjectId(userId);
+    const scopeOid = new mongoose.Types.ObjectId(scope.id);
+    const isFree = (video as any).priceType === "free";
+
+    // Resolve the set of video categories this video sits under (leaf + every
+    // ancestor) so we can confirm the video is genuinely reachable from the
+    // scoped container. The walk is bounded — most trees are 2-3 levels deep.
     const ancestorIds: any[] = [];
     if (video.videoCategoryId) {
       ancestorIds.push(video.videoCategoryId);
@@ -87,80 +83,178 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       }
     }
 
-    const liveCourse = ancestorIds.length
-      ? await LiveCourse.findOne({
-          videoCategoryId: { $in: ancestorIds },
-          status: true,
-        })
-          .select("_id")
-          .lean()
-      : null;
+    // The container the row attaches to is decided ENTIRELY by `scope`. We
+    // validate two things before trusting it: (1) the user is entitled to that
+    // exact container (so a spoofed scope can't attach progress to something
+    // unbought), and (2) the video is actually reachable under that container
+    // (so progress can't be mis-filed onto an unrelated product the user does
+    // happen to own). Only then do we stamp the single matching pointer.
+    let courseId: any = null;
+    let packageId: any = null;
+    let liveCourseId: any = null;
 
-    // PackageVideoCategoryRelation links via VideoCategoryRelation rows, not
-    // raw category ids — resolve the relation rows first, then the packages.
-    let packageIds: any[] = [];
-    if (ancestorIds.length) {
-      const relRows = await VideoCategoryRelation.find({
-        child: { $in: ancestorIds },
-      })
-        .select("_id")
-        .lean();
-      if (relRows.length) {
-        const pkgRows = await PackageVideoCategoryRelation.find({
-          videoCategoryRelationId: { $in: relRows.map((r) => r._id) },
-          active: true,
-        })
-          .select("packageId")
-          .lean();
-        packageIds = [...new Set(pkgRows.map((p) => String(p.packageId)))].map(
-          (s) => new mongoose.Types.ObjectId(s)
-        );
+    if (scope.kind === "course") {
+      // Reachability: is the video reachable from the scoped course? A video can
+      // legitimately belong to more than one course (shared categories), so we
+      // ask "is THIS course one of them?" rather than "is the single resolved
+      // course equal to this one?". The course ⇄ category link, like the package
+      // one, exists in several forms — accept any:
+      //   (a) the scoped course carries the leaf/an-ancestor category id, or
+      //   (b) the scoped course's downward videoCategoryId points at the leaf or
+      //       an ancestor.
+      const [catWithCourse, downwardCourse] = await Promise.all([
+        ancestorIds.length
+          ? VideoCategory.findOne({ _id: { $in: ancestorIds }, courseId: scopeOid })
+              .select("_id")
+              .lean()
+          : Promise.resolve(null as any),
+        ancestorIds.length
+          ? Course.findOne({ _id: scopeOid, videoCategoryId: { $in: ancestorIds }, status: true })
+              .select("_id")
+              .lean()
+          : Promise.resolve(null as any),
+      ]);
+      const reachable = !!catWithCourse || !!downwardCourse;
+      if (!reachable) {
+        logger.warn("reportLectureProgress scope mismatch (course)", { traceId, userId, videoId, scope });
+        return res.status(400).json({ success: false, message: "Video is not part of the scoped course." });
       }
-    }
-
-    // Entitlement gate. The user must hold *one* active, verified, non-expired
-    // subscription that covers this lecture — direct course sub, package sub
-    // that includes the course, or a live-course sub for the live course this
-    // lecture's folder belongs to.
-    const now = new Date();
-    const cid = new mongoose.Types.ObjectId(userId);
-    const orGates: any[] = [];
-    if (courseId) orGates.push({ courseId });
-    if (packageIds.length) orGates.push({ targetPackageId: { $in: packageIds } });
-
-    const isFree = (video as any).priceType === "free";
-
-    const [pkgSub, liveSub] = await Promise.all([
-      orGates.length
-        ? PackageCourseSubscription.findOne({
-            customerId: cid,
-            status: true,
-            paymentStatus: "verified",
-            endAt: { $gt: now },
-            $or: orGates,
-          })
-            .select("courseId targetPackageId")
-            .lean()
-        : Promise.resolve(null as any),
-      liveCourse
-        ? LiveCourseSubscription.findOne({
-            customerId: cid,
-            liveCourseId: liveCourse._id,
-            status: true,
-            paymentStatus: "verified",
-            endAt: { $gt: now },
+      if (isFree) {
+        const scopedCourse = await Course.findOne({ _id: scopeOid, status: true }).select("_id").lean();
+        if (!scopedCourse) {
+          return res.status(404).json({ success: false, message: "Course not found." });
+        }
+      } else {
+        const sub = await PackageCourseSubscription.findOne({
+          customerId: cid,
+          courseId: scopeOid,
+          status: true,
+          paymentStatus: "verified",
+          endAt: { $gt: now },
+        }).select("_id").lean();
+        if (!sub) {
+          logger.warn("reportLectureProgress no active subscription (course)", { traceId, userId, videoId, scope });
+          return res.status(403).json({ success: false, message: "No active subscription for this lecture." });
+        }
+      }
+      courseId = scopeOid;
+    } else if (scope.kind === "package") {
+      // Reachability: is the video inside the scoped package? A package links
+      // its subjects two ways and a video can hang off either, so we accept
+      // EITHER path (matching how the catalog actually lists package videos):
+      //   (a) the embedded Package.specificSubjects[].category — the linked
+      //       subject roots (and videos directly under a linked leaf), and
+      //   (b) the expanded PackageVideoCategoryRelation tree — videos under any
+      //       category that is an endpoint (parent or child) of a stored relation.
+      // We test the video's own category PLUS all its ancestors against both.
+      let reachable = false;
+      if (ancestorIds.length) {
+        const [pkg, relRows] = await Promise.all([
+          Package.findById(scopeOid).select("specificSubjects").lean<any>(),
+          // A relation row counts if EITHER endpoint is one of the video's
+          // categories — the catalog read (free.controller) treats both `parent`
+          // and `child` of a stored relation as in-package, so we mirror that to
+          // avoid a false 400 for a video filed on the parent side of a relation.
+          VideoCategoryRelation.find({
+            $or: [{ child: { $in: ancestorIds } }, { parent: { $in: ancestorIds } }],
           })
             .select("_id")
-            .lean()
-        : Promise.resolve(null as any),
-    ]);
+            .lean(),
+        ]);
 
-    if (!isFree && !pkgSub && !liveSub) {
-      logger.warn("reportLectureProgress no active subscription", { traceId, userId, videoId, courseId, packageIds });
-      return res.status(403).json({
-        success: false,
-        message: "No active subscription for this lecture.",
-      });
+        // (a) direct subject link
+        const ancestorSet = new Set(ancestorIds.map((a) => String(a)));
+        const directLinked = (pkg?.specificSubjects ?? []).some(
+          (s: any) => s?.category && ancestorSet.has(String(s.category))
+        );
+
+        // (b) relation-tree link
+        let relationLinked = false;
+        if (!directLinked && relRows.length) {
+          const pkgRel = await PackageVideoCategoryRelation.findOne({
+            packageId: scopeOid,
+            videoCategoryRelationId: { $in: relRows.map((r) => r._id) },
+            active: true,
+          }).select("_id").lean();
+          relationLinked = !!pkgRel;
+        }
+
+        reachable = directLinked || relationLinked;
+      }
+      if (!reachable) {
+        logger.warn("reportLectureProgress scope mismatch (package)", { traceId, userId, videoId, scope });
+        return res.status(400).json({ success: false, message: "Video is not part of the scoped package." });
+      }
+      // Free videos inside a paid package are watchable without purchasing it,
+      // so their progress must persist too — only confirm the package exists.
+      // Paid videos still require an active subscription. (Mirrors the `course`
+      // scope rule above.)
+      if (isFree) {
+        const scopedPackage = await Package.findOne({ _id: scopeOid, active: true }).select("_id").lean();
+        if (!scopedPackage) {
+          return res.status(404).json({ success: false, message: "Package not found." });
+        }
+      } else {
+        const sub = await PackageCourseSubscription.findOne({
+          customerId: cid,
+          targetPackageId: scopeOid,
+          status: true,
+          paymentStatus: "verified",
+          endAt: { $gt: now },
+        }).select("_id").lean();
+        if (!sub) {
+          logger.warn("reportLectureProgress no active subscription (package)", { traceId, userId, videoId, scope });
+          return res.status(403).json({ success: false, message: "No active subscription for this lecture." });
+        }
+      }
+      packageId = scopeOid;
+    } else {
+      // liveCourse — reachability via either linkage form (matching how the
+      // recordings list resolves a live course's videos):
+      //   (a) one of the video's categories carries liveCourseId === scoped
+      //       course (the canonical form: `VideoCategory.find({ liveCourseId })`
+      //       in listLiveCourseRecordings), or
+      //   (b) the scoped live course's downward videoCategoryId root folder is
+      //       the video's leaf category or one of its ancestors.
+      let reachable = false;
+      if (ancestorIds.length) {
+        const [folder, liveCourse] = await Promise.all([
+          VideoCategory.findOne({ _id: { $in: ancestorIds }, liveCourseId: scopeOid })
+            .select("_id")
+            .lean(),
+          LiveCourse.findOne({ _id: scopeOid, videoCategoryId: { $in: ancestorIds }, status: true })
+            .select("_id")
+            .lean(),
+        ]);
+        reachable = !!folder || !!liveCourse;
+      }
+      if (!reachable) {
+        logger.warn("reportLectureProgress scope mismatch (liveCourse)", { traceId, userId, videoId, scope });
+        return res.status(400).json({ success: false, message: "Video is not part of the scoped live course." });
+      }
+      // Free recorded lectures inside a paid live course are watchable without
+      // purchasing it, so their progress must persist too — only confirm the
+      // live course exists. Paid lectures still require an active subscription.
+      // (Mirrors the `course` scope rule above.)
+      if (isFree) {
+        const scopedLiveCourse = await LiveCourse.findOne({ _id: scopeOid, status: true }).select("_id").lean();
+        if (!scopedLiveCourse) {
+          return res.status(404).json({ success: false, message: "Live course not found." });
+        }
+      } else {
+        const sub = await LiveCourseSubscription.findOne({
+          customerId: cid,
+          liveCourseId: scopeOid,
+          status: true,
+          paymentStatus: "verified",
+          endAt: { $gt: now },
+        }).select("_id").lean();
+        if (!sub) {
+          logger.warn("reportLectureProgress no active subscription (liveCourse)", { traceId, userId, videoId, scope });
+          return res.status(403).json({ success: false, message: "No active subscription for this lecture." });
+        }
+      }
+      liveCourseId = scopeOid;
     }
 
     const completedNow =
@@ -168,98 +262,43 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
 
     // We never *un*complete a lecture — once completed: true, it stays true even
     // if a later heartbeat reports an earlier position (user re-watched the start).
-    // Denormalise every container the user could see this lecture under so the
-    // unified /learning/progress/my read does not have to re-walk the tree.
+    // The row is keyed on (customer, video, container): watching the same video
+    // from a different product upserts a SEPARATE row, so each product keeps its
+    // own resume position and completion.
     const setFields: any = {
       positionSec,
       durationSec,
       lastWatchedAt: now,
-    };
-    if (courseId) setFields.courseId = courseId;
-    if (pkgSub?.targetPackageId) setFields.packageId = pkgSub.targetPackageId;
-    if (liveCourse?._id) setFields.liveCourseId = liveCourse._id;
-
-    // Honor the FE-supplied `scope` as an additional pointer source, but ONLY
-    // after validating the user is genuinely entitled to that container — the
-    // scope is a client hint and must never let a caller stamp a pointer to a
-    // container they don't hold. The entitlement gate above already confirmed
-    // *an* active sub; here we confirm the scoped container specifically and,
-    // if valid, stamp its pointer so the row surfaces under the card the user
-    // is actually watching from (e.g. the Package card, not just a Course card).
-    if (scope) {
-      if (scope.kind === "package" && !setFields.packageId) {
-        const scopedPkgSub = await PackageCourseSubscription.findOne({
-          customerId: cid,
-          targetPackageId: new mongoose.Types.ObjectId(scope.id),
-          status: true,
-          paymentStatus: "verified",
-          endAt: { $gt: now },
-        })
-          .select("targetPackageId")
-          .lean();
-        if (scopedPkgSub?.targetPackageId)
-          setFields.packageId = scopedPkgSub.targetPackageId;
-      } else if (scope.kind === "course" && !setFields.courseId) {
-        const scopedCourseSub = await PackageCourseSubscription.findOne({
-          customerId: cid,
-          courseId: new mongoose.Types.ObjectId(scope.id),
-          status: true,
-          paymentStatus: "verified",
-          endAt: { $gt: now },
-        })
-          .select("courseId")
-          .lean();
-        if (scopedCourseSub?.courseId) {
-          setFields.courseId = scopedCourseSub.courseId;
-        } else if (isFree) {
-          // Free videos have no subscription, so the sub-based check above can
-          // never stamp a pointer — yet they still belong on the Resume feed.
-          // Trust the FE-supplied course scope just enough to attribute the
-          // row, after confirming the course actually exists and is active.
-          // (Free content is ungated, so the only risk here is mis-attribution,
-          // not an access leak.)
-          const scopedCourse = await Course.findOne({
-            _id: new mongoose.Types.ObjectId(scope.id),
-            status: true,
-          })
-            .select("_id")
-            .lean();
-          if (scopedCourse?._id) setFields.courseId = scopedCourse._id;
-        }
-      } else if (scope.kind === "liveCourse" && !setFields.liveCourseId) {
-        const scopedLiveSub = await LiveCourseSubscription.findOne({
-          customerId: cid,
-          liveCourseId: new mongoose.Types.ObjectId(scope.id),
-          status: true,
-          paymentStatus: "verified",
-          endAt: { $gt: now },
-        })
-          .select("liveCourseId")
-          .lean();
-        if (scopedLiveSub?.liveCourseId)
-          setFields.liveCourseId = scopedLiveSub.liveCourseId;
-      }
-    }
-
-    const update: any = {
-      $set: setFields,
-      $setOnInsert: {
-        customerId: cid,
-        videoId: new mongoose.Types.ObjectId(videoId),
-      },
+      // Mirror the single container onto its typed pointer for the rollups.
+      courseId,
+      packageId,
+      liveCourseId,
     };
     if (completedNow) {
-      update.$set.completed = true;
-      update.$set.completedAt = now;
+      setFields.completed = true;
+      setFields.completedAt = now;
     }
 
     const row = await LectureProgress.findOneAndUpdate(
-      { customerId: userId, videoId },
-      update,
+      {
+        customerId: cid,
+        videoId: new mongoose.Types.ObjectId(videoId),
+        containerType: scope.kind,
+        containerId: scopeOid,
+      },
+      {
+        $set: setFields,
+        $setOnInsert: {
+          customerId: cid,
+          videoId: new mongoose.Types.ObjectId(videoId),
+          containerType: scope.kind,
+          containerId: scopeOid,
+        },
+      },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 
-    logger.info("reportLectureProgress success", { traceId, userId, videoId, positionSec, durationSec, completedNow });
+    logger.info("reportLectureProgress success", { traceId, userId, videoId, scope, positionSec, durationSec, completedNow });
     return res.status(200).json({ success: true, data: row });
   } catch (e: any) {
     if (e.issues) {
@@ -296,8 +335,10 @@ export const listMyCoursesForResume = async (req: Request, res: Response) => {
     const now = new Date();
 
     // Group progress rows by course; pick the latest activity per course.
+    // Only course-container rows carry a courseId now (package / live-course
+    // rows live under their own pointer), so scope the match to them.
     const perCourse = await LectureProgress.aggregate([
-      { $match: { customerId: cid } },
+      { $match: { customerId: cid, courseId: { $ne: null } } },
       { $sort: { lastWatchedAt: -1 } },
       {
         $group: {

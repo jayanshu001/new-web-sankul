@@ -366,7 +366,7 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
     const shareableLink = buildShareUrl("live-courses", id, resolveBase(req));
     return success(
       res,
-      { liveCourse: { ...course, shareableLink }, stats, plans: plansOut, subscribed, isPurchased: subscribed, daysLeft, shareableLink },
+      { liveCourse: { ...course, isPaid: course.isPaid ?? true, shareableLink }, scope: { kind: "liveCourse", id: String(course._id) }, stats, plans: plansOut, subscribed, isPaid: course.isPaid ?? true, isPurchased: subscribed, daysLeft, shareableLink },
       "Live course fetched."
     );
   } catch (err) {

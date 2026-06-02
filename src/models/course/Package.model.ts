@@ -16,7 +16,6 @@ export interface IPackage extends Document {
   withoutMaterialText?: string;
   order: number;
   active: boolean;
-  isMagazine: boolean;
   isPaid: boolean;
   isSmartCourse: boolean;
   isPlannerCourse: boolean;
@@ -55,7 +54,6 @@ const packageSchema = new Schema<IPackage>(
     withoutMaterialText: { type: String, default: "" },
     order: { type: Number, default: 0 },
     active: { type: Boolean, default: true },
-    isMagazine: { type: Boolean, default: false },
     isPaid: { type: Boolean, default: true },
     isSmartCourse: { type: Boolean, default: false },
     isPlannerCourse: { type: Boolean, default: false },

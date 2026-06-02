@@ -758,31 +758,14 @@ const FREE_DASHBOARD_LIMIT = 5;
 // GET /api/v1/client/free-dashboard
 export const getFreeDashboard = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
-  const userId = (_req as any).user?.id;
   logger.info("getFreeDashboard invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const [trendingFreeBooks, trendingFreeEbooks, magazinePackages, freeCats] = await Promise.all([
+    const [trendingFreeBooks, trendingFreeEbooks, freeCats] = await Promise.all([
       fetchTrendingBooksOnly({ type: "free", limit: FREE_DASHBOARD_LIMIT }),
       fetchTrendingEbooksOnly({ type: "free", limit: FREE_DASHBOARD_LIMIT }),
-      Package.find({ active: true, isMagazine: true, isPaid: false })
-        .populate("packageTypeId", "_id name createdAt updatedAt")
-        .sort({ order: 1, createdAt: -1 })
-        .limit(FREE_DASHBOARD_LIMIT)
-        .lean(),
       resolveFreeCategoryIds(),
     ]);
-
-    const { packageDaysLeft } = await resolveOwnedEndAt(
-      userId,
-      [],
-      magazinePackages.map((p: any) => p._id)
-    );
-    const currentAffairsRaw = await Promise.all(magazinePackages.map(buildPackageEntry));
-    const currentAffairs = currentAffairsRaw.map((p: any) => ({
-      ...p,
-      daysLeft: packageDaysLeft.has(String(p._id)) ? packageDaysLeft.get(String(p._id)) ?? null : null,
-    }));
 
     const freeVideos = freeCats.videoCategoryIds.length
       ? await Video.find({ status: true, videoCategoryId: { $in: freeCats.videoCategoryIds } })
@@ -805,8 +788,6 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
         type: "trending-ebook",
         data: trendingFreeEbooks.items.slice(0, FREE_DASHBOARD_LIMIT),
       });
-    if (currentAffairs.length)
-      dashboard.push({ title: "Current Affairs", type: "package", data: currentAffairs });
     if (freeVideos.length)
       dashboard.push({ title: "Free Videos", type: "video", data: freeVideos });
 

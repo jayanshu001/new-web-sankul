@@ -144,7 +144,6 @@ export const deletePackageType = async (id: string) => {
 export interface ListPackagesQuery {
   search?: string;
   active?: string;
-  isMagazine?: string;
   isPaid?: string;
   packageTypeId?: string;
   goalId?: string;
@@ -156,7 +155,6 @@ export const listPackages = async (query: ListPackagesQuery) => {
   const {
     search,
     active,
-    isMagazine,
     isPaid,
     packageTypeId,
     goalId,
@@ -167,8 +165,6 @@ export const listPackages = async (query: ListPackagesQuery) => {
   const filter: any = {};
   if (search) filter.name = { $regex: search, $options: "i" };
   if (active === "true" || active === "false") filter.active = active === "true";
-  if (isMagazine === "true" || isMagazine === "false")
-    filter.isMagazine = isMagazine === "true";
   if (isPaid === "true" || isPaid === "false") filter.isPaid = isPaid === "true";
   if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))
     filter.packageTypeId = packageTypeId;

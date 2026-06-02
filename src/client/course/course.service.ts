@@ -37,6 +37,10 @@ export interface VideoCategoryGroupDTO extends CategoryGroupDTO {
 
 export interface CourseDetailsResponse {
   course: any;
+  // The container scope the FE must echo into the progress heartbeat for any
+  // video played from this screen. On the course-detail screen this is always
+  // the course itself — no tree walk needed — so it's emitted directly.
+  scope: { kind: "course"; id: string };
   videos: VideoCategoryGroupDTO[];
   materials: CategoryGroupDTO[];
   tests: CategoryGroupDTO[];
@@ -227,7 +231,15 @@ export async function buildCourseDetails(
   course.daysLeft = daysLeft;
 
   logger.info("buildCourseDetails service completed", { traceId, courseId, isPurchased, videoGroups: videos.length, materialGroups: materials.length, testGroups: tests.length });
-  return { course, videos, materials, tests, plans, availablePromoCode };
+  return {
+    course,
+    scope: { kind: "course", id: String(courseDoc._id) },
+    videos,
+    materials,
+    tests,
+    plans,
+    availablePromoCode,
+  };
 }
 
 // ───────────────────────────────────────────────────────────────────────────

@@ -14,6 +14,8 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { Book } from "../../models/book/Book.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { LectureProgress } from "../../models/customer/LectureProgress.model";
+import { collapseProgressByVideo } from "../learning/collapseProgress";
+import { resolveVideoScope } from "../course/resolveVideoScope";
 import { LiveSession } from "../../models/course/LiveSession.model";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
 import { resolveVideoSource } from "../../utils/videoResolver";
@@ -118,9 +120,14 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     const filter: any = { videoCategoryId: id, status: true };
     if (search) filter.title = { $regex: search, $options: "i" };
 
-    const [rawList, total] = await Promise.all([
+    const [rawList, total, scope] = await Promise.all([
       Video.find(filter).sort({ order: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
       Video.countDocuments(filter),
+      // The owning container (course / package / live course) the FE must echo
+      // back into the progress heartbeat's `scope`. Resolved once per category
+      // since every video here shares the same category. `null` for an orphan
+      // category linked to no container.
+      resolveVideoScope(id),
     ]);
 
     // Per-video resume state — lets the FE render the red progress sliver
@@ -193,10 +200,10 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
       };
     });
 
-    logger.info("listVideosByCategory success", { traceId, categoryId: id, total, returned: list.length });
+    logger.info("listVideosByCategory success", { traceId, categoryId: id, total, returned: list.length, scopeKind: scope?.kind ?? null });
     return res.status(200).json({
       success: true,
-      data: { category, list },
+      data: { category, scope, list },
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
@@ -228,8 +235,14 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
     }
 
     let envelope;
+    let scope;
     try {
-      envelope = await encryptVideoEnvelope(video);
+      // Resolve the owning container alongside the playback envelope so the FE
+      // can echo `scope` straight into the progress heartbeat — no guessing.
+      [envelope, scope] = await Promise.all([
+        encryptVideoEnvelope(video),
+        resolveVideoScope(video.videoCategoryId),
+      ]);
     } catch (err: any) {
       logger.error("getVideoByCategory resolve/encrypt failed", {
         traceId,
@@ -244,7 +257,7 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
       });
     }
 
-    logger.info("getVideoByCategory success", { traceId, categoryId: id, videoId, platform: video.platform });
+    logger.info("getVideoByCategory success", { traceId, categoryId: id, videoId, platform: video.platform, scopeKind: scope?.kind ?? null });
     return res.status(200).json({
       success: true,
       data: {
@@ -253,6 +266,7 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
         topic: video.topic ?? "",
         platform: video.platform,
         priceType: video.priceType,
+        scope,
         ...envelope,
       },
       message: "Video fetched.",
@@ -662,7 +676,7 @@ export const listPackagesByCategory = async (req: Request, res: Response) => {
     const [packages, liveCourses] = await Promise.all([
       Package.find({ active: true, packageCategoryId: id })
         .select(
-          "_id name description image shareableLink order isPaid isMagazine isSmartCourse isPlannerCourse withMaterialText withoutMaterialText packageTypeId goalId educatorId"
+          "_id name description image shareableLink order isPaid isSmartCourse isPlannerCourse withMaterialText withoutMaterialText packageTypeId goalId educatorId"
         )
         .sort({ order: 1 })
         .lean(),

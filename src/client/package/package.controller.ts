@@ -116,6 +116,9 @@ async function buildPackageDetail(packageId: string, customerId?: string, baseUr
   const daysLeft = isPurchased ? computeDaysLeft(activeSub?.endAt ?? null) : null;
 
   return {
+    // The container scope the FE echoes into the progress heartbeat for any
+    // video played from this package screen — always the package itself.
+    scope: { kind: "package", id: String(pkg._id) },
     package: {
       _id: pkg._id,
       name: pkg.name,
@@ -193,7 +196,6 @@ export const listPackages = async (req: Request, res: Response) => {
   try {
     const {
       search,
-      isMagazine,
       packageTypeId,
       goalId,
       isSmartCourse,
@@ -204,7 +206,6 @@ export const listPackages = async (req: Request, res: Response) => {
 
     const filter: any = { active: true };
     if (search) filter.name = { $regex: search, $options: "i" };
-    if (isMagazine === "true" || isMagazine === "false") filter.isMagazine = isMagazine === "true";
     if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))
       filter.packageTypeId = packageTypeId;
     if (goalId && mongoose.Types.ObjectId.isValid(goalId)) filter.goalId = goalId;

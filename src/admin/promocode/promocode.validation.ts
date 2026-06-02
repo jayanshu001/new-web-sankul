@@ -31,13 +31,36 @@ export const appliesToSchema = z.object({
     .min(1, "Select at least one item"),
 });
 
+const objectId = z.string().regex(/^[a-f0-9]{24}$/i, "Invalid id");
+const percentage = z
+  .number()
+  .min(0, "must be >= 0")
+  .max(100, "must be <= 100");
+
+// Per-plan promoter/customer split. The full array is the desired set on update
+// (replace-semantics); rows whose parent entity isn't in `appliesTo.ids` are
+// ignored rather than rejected (see TASK 2 #3).
+export const planLinkSchema = z.object({
+  planId: objectId,
+  promoterPercentage: percentage.default(0),
+  customerPercentage: percentage.default(0),
+});
+
+export type PlanLinkInput = z.infer<typeof planLinkSchema>;
+
 export const createPromocodeSchema = promocodeBase
-  .extend({ appliesTo: appliesToSchema })
+  .extend({
+    appliesTo: appliesToSchema,
+    plans: z.array(planLinkSchema).optional().default([]),
+  })
   .refine(validateDiscount, discountErr);
 
 export const updatePromocodeSchema = promocodeBase
   .partial()
-  .extend({ appliesTo: appliesToSchema.optional() })
+  .extend({
+    appliesTo: appliesToSchema.optional(),
+    plans: z.array(planLinkSchema).optional(),
+  })
   .refine(validateDiscount, discountErr);
 
 export const togglePromocodeStatusSchema = z.object({

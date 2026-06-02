@@ -77,7 +77,11 @@ export const listBooks = async (req: Request, res: Response) => {
         ...doc,
         qty: cartMap.get(idStr) ?? 0,
         key: b.isCombo ? "combo" : "individual",
+        // Books are paid when they cost > 0 (discountedPrice 0 = free).
+        isPaid: (doc.discountedPrice ?? 0) > 0,
         isPurchased: purchasedSet.has(idStr),
+        // One-time purchase with no expiry, so there's no countdown.
+        daysLeft: null,
         shareableLink: buildShareUrl("books", idStr, base),
       };
     });
@@ -416,7 +420,11 @@ export const getBookDetail = async (req: Request, res: Response) => {
       data: {
         ...book,
         pages: book.pages ?? 0,
+        // Books are paid when they cost > 0 (discountedPrice 0 = free).
+        isPaid: (book.discountedPrice ?? 0) > 0,
         isPurchased,
+        // One-time purchase with no expiry, so there's no countdown.
+        daysLeft: null,
         shareableLink: buildShareUrl("books", id, resolveBase(req)),
       },
     });
