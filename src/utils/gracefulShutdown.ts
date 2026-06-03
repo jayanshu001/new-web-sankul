@@ -19,6 +19,8 @@
 
 import type { Server } from "http";
 import mongoose from "mongoose";
+import { disconnectPrisma } from "../config/prisma";
+import { hasMysqlMigrationModules } from "../config/migration";
 import { redisClient } from "../config/redis";
 import { shutdownNotificationScheduler } from "../admin/notification/scheduler";
 import logger from "./logger";
@@ -99,7 +101,14 @@ export const installGracefulShutdown = (hooks: ShutdownHooks): void => {
       // Redis QUIT waits for in-flight commands to finish.
       try {
         logger.info("Closing Mongo + Redis connections.");
-        await Promise.allSettled([mongoose.connection.close(), redisClient.quit()]);
+        const closes: Promise<unknown>[] = [
+          mongoose.connection.close(),
+          redisClient.quit(),
+        ];
+        if (hasMysqlMigrationModules()) {
+          closes.push(disconnectPrisma());
+        }
+        await Promise.allSettled(closes);
       } catch (err) {
         logger.warn("Connection close error", { err: (err as Error).message });
       }

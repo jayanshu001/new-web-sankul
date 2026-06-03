@@ -16,6 +16,8 @@
 // logger because the logger itself is initialized lazily and we want the
 // check to run as early as possible.
 
+import { hasMysqlMigrationModules } from "./migration";
+
 const REQUIRED = [
   "JWT_ACCESS_SECRET",
   "JWT_REFRESH_SECRET",
@@ -49,6 +51,13 @@ export const validateEnv = (): EnvValidationResult => {
     const v = env[key];
     if (!v || v.trim() === "") {
       missing.push(key);
+    }
+  }
+
+  if (hasMysqlMigrationModules()) {
+    const dbUrl = env.DATABASE_URL?.trim();
+    if (!dbUrl) {
+      missing.push("DATABASE_URL");
     }
   }
 

@@ -1,6 +1,25 @@
+import dns from "node:dns";
 import mongoose from "mongoose";
 import logger from "../utils/logger";
 import { incrementContext } from "../utils/requestContext";
+
+// Atlas `mongodb+srv://` URIs require SRV DNS lookups. Some local/resolver
+// setups (common on Windows) refuse SRV queries — use public DNS instead.
+const configureMongoSrvDns = (): void => {
+  const uri = process.env.MONGODB_URI ?? "";
+  if (!uri.startsWith("mongodb+srv://")) return;
+
+  const servers = (process.env.MONGO_DNS_SERVERS ?? "8.8.8.8,1.1.1.1")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (servers.length === 0) return;
+
+  dns.setServers(servers);
+};
+
+configureMongoSrvDns();
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Mongoose query / aggregate timing hooks
