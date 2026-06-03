@@ -1,14 +1,15 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { FAQ } from "../../models/system/FAQ.model";
-import { FaqType } from "../../models/system/FaqType.model";
+import {
+  listFaqs as listFaqsService,
+  listFaqTypes as listFaqTypesService,
+} from "../../modules/faq/faq.service";
 import { PopupNotification } from "../../models/system/PopupNotification.model";
 import { BannerSlider } from "../../models/system/BannerSlider.model";
 import { LiveBannerSlider } from "../../models/system/LiveBannerSlider.model";
 import { Testimonial } from "../../models/system/Testimonial.model";
 import { TermsAndConditions } from "../../models/system/TermsAndConditions.model";
-import { Version } from "../../models/system/Version.model";
-import { AppUpdate } from "../../models/system/AppUpdate.model";
+import { checkClientUpgrade } from "../../modules/cms/upgrade-check.service";
+import { getVersionSettings } from "../../modules/version/version.service";
 import { SocialLink } from "../../models/system/SocialLink.model";
 import { SocialLinkType } from "../../models/system/SocialLinkType.model";
 import { CurrentAffair } from "../../models/system/CurrentAffair.model";
@@ -21,13 +22,11 @@ export const listFaqs = async (req: Request, res: Response) => {
   logger.info("listFaqs invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { typeId } = req.query as Record<string, string>;
-    const filter: any = {};
-    if (typeId && mongoose.Types.ObjectId.isValid(typeId)) filter.typeId = typeId;
-    const data = await FAQ.find(filter)
-      .populate("typeId", "_id title")
-      .sort({ createdAt: 1 })
-      .lean();
+    const { typeId, type } = req.query as Record<string, string>;
+    const filterKey = typeId ?? type;
+    const data = await listFaqsService(
+      filterKey ? { typeId: filterKey } : undefined
+    );
     logger.info("listFaqs success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -42,7 +41,7 @@ export const listFaqTypes = async (_req: Request, res: Response) => {
   logger.info("listFaqTypes invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const data = await FaqType.find().sort({ title: 1 }).lean();
+    const data = await listFaqTypesService();
     logger.info("listFaqTypes success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -208,10 +207,7 @@ export const getVersion = async (_req: Request, res: Response) => {
   logger.info("getVersion invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const data = (await Version.findOne().lean()) || {
-      latestVersionCode: 0,
-      lastSupportedVersionCode: 0,
-    };
+    const data = await getVersionSettings();
     logger.info("getVersion success", { traceId });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -227,31 +223,16 @@ export const checkUpgrade = async (req: Request, res: Response) => {
 
   try {
     const clientVersion = Number((req.query.clientVersion as string) ?? "") || 0;
-    const [appUpdate, version] = await Promise.all([
-      AppUpdate.findOne().lean(),
-      Version.findOne().lean(),
-    ]);
+    const data = await checkClientUpgrade(clientVersion);
 
-    const latest = appUpdate?.latestVersion ?? version?.latestVersionCode ?? 0;
-    const lastSupported = version?.lastSupportedVersionCode ?? 0;
-
-    const isForceUpdate =
-      clientVersion > 0 && clientVersion < lastSupported;
-    const isUpdateAvailable =
-      appUpdate?.isUpdateAvailable ?? clientVersion < latest;
-
-    logger.info("checkUpgrade success", { traceId, clientVersion, latest, isUpdateAvailable, isForceUpdate });
-    return res.status(200).json({
-      success: true,
-      data: {
-        clientVersion,
-        latestVersion: latest,
-        lastSupportedVersion: lastSupported,
-        updateType: appUpdate?.updateType ?? "flexible",
-        isUpdateAvailable,
-        isForceUpdate,
-      },
+    logger.info("checkUpgrade success", {
+      traceId,
+      clientVersion: data.clientVersion,
+      latest: data.latestVersion,
+      isUpdateAvailable: data.isUpdateAvailable,
+      isForceUpdate: data.isForceUpdate,
     });
+    return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("checkUpgrade failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

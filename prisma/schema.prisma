@@ -1,0 +1,1416 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Introspected from legacy websankul-api-staging; align with local dump via `yarn db:pull`.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// *****************************ENUMS******************************
+
+enum UpdateType {
+  immediate
+  flexible
+}
+
+enum BookLanguage {
+  English
+  Gujarati
+  Hindi
+}
+
+enum BookOrderType {
+  purchase
+}
+
+enum ExamType {
+  daily
+  subject
+}
+
+enum ExamResultType {
+  true
+  false
+  skip
+}
+
+enum PaymentMethod {
+  Backend
+  razorpay
+  bank
+  cash
+  free
+  Paykun
+  Paytm
+}
+
+enum EBookLanguage {
+  English
+  Gujarati
+  Hindi
+}
+
+enum VideoType {
+  free
+  paid
+}
+
+enum PackageCourseEbookOrderType {
+  purchase
+}
+
+enum PackageCourseEbookOrderStatus {
+  cancel
+  complete
+  pending
+}
+
+enum PackageCourseEbookPaymentType {
+  backend
+  online
+}
+
+enum PromocodeType {
+  private
+  public
+}
+
+enum RefferalTransactionType {
+  credit
+  debit
+}
+
+enum RefferalTransactionStatus {
+  pending
+  successful
+}
+
+enum OsType {
+  android
+  ios
+}
+
+enum Courses {
+  UPSC
+  GPSC
+  STI
+  DYSO
+  RFO
+  PI
+  PSI
+  Constable
+  CCE
+  Talati
+  Forest
+  TET_TAT
+  FHW_MPHW
+}
+
+enum inquiryMode {
+  online
+  offline
+}
+
+// ****************************MODELS******************************
+
+model AppUpdate {
+  id               Int        @id @default(autoincrement())
+  latestVersion    Int
+  updateType       UpdateType @default(flexible)
+  isUpdateAvailble Boolean
+
+  @@map("ws_app_update")
+}
+
+model DynamicImage {
+  id   Int    @id @default(autoincrement())
+  logo String
+
+  @@map("ws_dynamic_image")
+}
+
+model Department {
+  id           Int                 @id @default(autoincrement())
+  name         String
+  decscription String
+  order        Int
+  active       Boolean
+  contacts     DepartmentContact[]
+
+  @@map("ws_department")
+}
+
+model DepartmentContact {
+  id                  Int         @id @default(autoincrement())
+  department          Int
+  mobile              String      @db.VarChar(20)
+  isCallAvailable     Boolean
+  isWhatsAppAvailable Boolean
+  order               Int
+  active              Boolean
+  DepartmentId        Department? @relation(fields: [department], references: [id])
+
+  @@map("ws_department_contact")
+}
+
+model PopupNotifications {
+  id              Int       @id @default(autoincrement())
+  title           String
+  description     String
+  image           String
+  discount        String
+  promocode       String
+  promo_expire_at DateTime
+  status          Boolean
+  created_at      DateTime?
+  updated_at      DateTime?
+
+  @@map("ws_popup_notification")
+}
+
+model FAQ {
+  id         Int       @id @default(autoincrement())
+  type       String    @map("type")
+  question   String
+  answer     String
+  is_expand  Boolean
+  created_at DateTime?
+  updated_at DateTime?
+
+  @@map("ws_faq")
+}
+
+model ImageNotification {
+  id           Int     @id @default(autoincrement())
+  image        String
+  redirect_url String?
+  active       Boolean
+
+  @@map("ws_image_notification")
+}
+
+model TermsAndConditions {
+  id                             Int     @id @default(autoincrement())
+  module                         String
+  terms                          String
+  freeShippingMinimumOrderAmount Int
+  status                         Boolean
+
+  @@map("ws_termsandcondition")
+}
+
+model Version {
+  id                       Int @id @default(autoincrement())
+  latestVersionCode        Int
+  lastSupportedVersionCode Int
+
+  @@map("ws_versions")
+}
+
+model BannerSlider {
+  id         Int       @id @default(autoincrement())
+  image      String    @db.VarChar(255)
+  key        String?   @db.VarChar(255)
+  keyId      Int?      @map("key_id") @db.Int
+  orderBy    Int       @map("order_by")
+  created_at DateTime?
+  updated_at DateTime?
+
+  @@map("ws_banner_slider")
+}
+
+// ****************************CUSTOMER MODULE******************************
+
+model CustomerEducation {
+  id       Int        @id @default(autoincrement())
+  name     String     @db.VarChar(255)
+  status   Boolean
+  customer Customer[]
+
+  @@map("ws_customer_education")
+}
+
+model CustomerState {
+  id               Int                @id @default(autoincrement())
+  name             String             @db.VarChar(255)
+  state_code       String             @db.VarChar(255)
+  active           Boolean
+  distict          CustomerDistict[]
+  customer         Customer[]
+  customerAddress  CustomerAddress[]
+  CustomerShipping CustomerShipping[]
+
+  @@map("ws_customer_state")
+}
+
+model CustomerDistict {
+  id       Int           @id @default(autoincrement())
+  name     String        @db.VarChar(255)
+  state    CustomerState @relation(references: [id], fields: [stateId])
+  stateId  Int           @map("state")
+  active   Boolean
+  customer Customer[]
+
+  @@map("ws_customer_distict")
+}
+
+model CustomerTargetGoal {
+  id      Int       @id @default(autoincrement())
+  name    String    @db.VarChar(255)
+  image   String
+  active  Boolean
+  //customer   Customer[]
+  Package Package[]
+
+  @@map("ws_customer_target_goal")
+}
+
+model Customer {
+  id                        Int                         @id @default(autoincrement())
+  fullName                  String?                     @map("full_name") @db.VarChar(255)
+  phoneNumber               String                      @unique @map("phone") @db.VarChar(11)
+  emailAddress              String?                     @map("email_address") @db.VarChar(255)
+  password                  String?                     @db.VarChar(255)
+  isPhoneVerified           Boolean                     @map("is_phone_verified")
+  otp                       String?                     @db.VarChar(4)
+  otp_expires_at            DateTime?
+  triedOtp                  Int                         @map("tried_otp") @db.Int
+  otpBlockedAt              DateTime?                   @map("otp_blocked_at")
+  profile_picture           String?                     @db.VarChar(255)
+  phoneNumber2              String?                     @map("phone_2") @db.VarChar(11)
+  birthDate                 DateTime?                   @map("dob") @db.Date
+  gender                    String?                     @map("gender") @db.VarChar(10)
+  state                     CustomerState?              @relation(references: [id], fields: [stateId])
+  stateId                   Int?                        @map("state")
+  district                  CustomerDistict?            @relation(references: [id], fields: [districtId])
+  districtId                Int?                        @map("district")
+  city                      String?                     @db.VarChar(255)
+  education                 CustomerEducation?          @relation(references: [id], fields: [educationId])
+  educationId               Int?                        @map("education_id") @db.Int
+  language                  String?                     @db.VarChar(50)
+  goal                      Json?                       @db.Json
+  //goalIds             CustomerTargetGoal    @relation(references: [id], fields: [goal])
+  referralCode              String?                     @map("referral_code")
+  rewardPoints              Int?                        @map("reward_points")
+  verified                  Boolean
+  firebaseToken             String?                     @map("device") @db.Text
+  os_type                   OsType                      @default(android)
+  lastLogin                 DateTime?                   @map("last_login_date")
+  lastLoginIp               String?                     @map("last_login_ip") @db.VarChar(255)
+  lastLoginCount            Int?                        @map("login_count") @db.Int
+  isLoggedIn                Boolean?                    @map("is_login")
+  isAccountDeleted          Boolean                     @default(false) @map("is_account_deleted")
+  status                    Boolean                     @default(true)
+  createdAt                 DateTime?                   @map("created_at")
+  updatedAt                 DateTime?                   @map("updated_at")
+  customerOtp               CustomerOtp[]
+  customerAccessToken       CustomerAccessToken[]
+  customerAddress           CustomerAddress[]
+  CustomerShipping          CustomerShipping[]
+  bookCart                  BookCart[]
+  bookOrder                 BookOrder[]
+  pendriveCourseCart        PendriveCourseCart[]
+  pendriveCourseOrder       PendriveCourseOrder[]
+  examResultDetail          ExamResultDetail[]
+  examResult                ExamResult[]
+  examResultDetailAnalytics ExamResultDetailAnalytics[]
+  packageCourseOrder        PackageCourseOrder[]
+  packageCourseSubscription PackageCourseSubscription[]
+  EBookOrder                EBookOrder[]
+  EBookSubscription         EBookSubscription[]
+  OfflineEnquiry            OfflineEnquiry[]
+  CustomerBankAccount       CustomerBankAccount[]
+  RefferalTransaction       RefferalTransaction[]
+
+  @@map("ws_customer")
+}
+
+model CustomerOtp {
+  id         Int       @id @default(autoincrement())
+  customer   Customer  @relation(references: [id], fields: [customerId])
+  customerId Int       @map("customer_id")
+  otp        String    @db.VarChar(4)
+  created_at DateTime?
+
+  @@map("ws_customer_otp")
+}
+
+model CustomerAccessToken {
+  id         Int      @id @default(autoincrement())
+  customer   Customer @relation(references: [id], fields: [customerId])
+  customerId Int      @map("customer_id")
+  token      String   @db.Text
+  active     Boolean
+  deleted    Boolean
+  created_at DateTime
+  expires_at DateTime
+
+  @@map("ws_customer_access_token")
+}
+
+model CustomerAddress {
+  id              Int            @id @default(autoincrement())
+  name            String         @db.VarChar(50)
+  phone           Int
+  alternate_phone Int?
+  email           String         @db.VarChar(100)
+  address         String         @db.VarChar(255)
+  address_2       String         @db.VarChar(255)
+  city            String         @db.VarChar(20)
+  State           CustomerState? @relation(fields: [state], references: [id])
+  state           Int?           @map("state")
+  pincode         Int
+  customer        Customer?      @relation(fields: [userId], references: [id])
+  userId          Int?           @map("user_id")
+  status          Boolean?
+  created_at      DateTime?
+  updated_at      DateTime?
+
+  @@map("ws_customer_address")
+}
+
+model CustomerShipping {
+  id                        Int                         @id @default(autoincrement())
+  name                      String                      @db.VarChar(50)
+  phone                     Int
+  alternate_phone           Int?
+  email                     String                      @db.VarChar(100)
+  address                   String                      @db.VarChar(255)
+  address_2                 String                      @db.VarChar(255)
+  city                      String                      @db.VarChar(20)
+  State                     CustomerState?              @relation(fields: [state], references: [id])
+  state                     Int?                        @map("state")
+  pincode                   Int
+  customer                  Customer?                   @relation(fields: [userId], references: [id])
+  userId                    Int?                        @map("user_id")
+  status                    Boolean?
+  created_at                DateTime?
+  updated_at                DateTime?
+  bookCart                  BookCart[]
+  pendriveCourseCart        PendriveCourseCart[]
+  bookOrder                 BookOrder[]
+  pendriveCourseOrder       PendriveCourseOrder[]
+  packageCourseOrder        PackageCourseOrder[]
+  packageCourseSubscription PackageCourseSubscription[]
+
+  @@map("ws_customer_shipping")
+}
+
+model CustomerBankAccount {
+  id                Int       @id @default(autoincrement()) @map("id")
+  customerId        Int       @map("customer_id")
+  customer          Customer? @relation(fields: [customerId], references: [id])
+  accountHolderName String    @map("account_holder_name") @db.VarChar(150)
+  ifscCode          String    @map("ifsc_code") @db.VarChar(50)
+  accountNumber     String    @map("account_number")
+  createdAt         DateTime? @map("created_at")
+  updatedAt         DateTime? @map("updated_at")
+
+  @@map("ws_customer_bank_account")
+}
+
+// ****************************REFFERAL PROGRAM MODULE******************************
+
+model RefferalProgram {
+  id                  Int      @id @default(autoincrement()) @map("id")
+  name                String   @map("name") @db.VarChar(50)
+  title               String   @map("title")
+  image               String   @map("image")
+  refferalDiscount    Decimal  @map("refferal_discount")
+  refferalReward      Decimal  @map("refferal_reward")
+  minimumPrice        Int      @map("minimum_price")
+  initialRewardAmount Int      @map("initial_reward_amount")
+  video               String   @map("video") @db.VarChar(100)
+  status              Boolean? @map("status")
+
+  @@map("ws_refferal_program")
+}
+
+model RefferalTransaction {
+  id          Int                       @id @default(autoincrement()) @map("id")
+  orderId     Int?                      @map("order_id")
+  order       PackageCourseOrder?       @relation(fields: [orderId], references: [id])
+  customerId  Int                       @map("customer_id")
+  customer    Customer?                 @relation(fields: [customerId], references: [id])
+  bankAccount Json?                     @map("bank_account")
+  description String                    @map("description") @db.VarChar(150)
+  coin        Int                       @map("coin")
+  type        RefferalTransactionType   @map("type")
+  status      RefferalTransactionStatus @map("status")
+  createdAt   DateTime?                 @map("created_at")
+  updatedAt   DateTime?                 @map("updated_at")
+
+  @@map("ws_refferal_transaction")
+}
+
+// ****************************BOOK MODULE******************************
+
+model Book {
+  id               Int             @id @default(autoincrement())
+  name             String
+  thumbnail        String?
+  author           String?
+  image            String?
+  description      String?
+  demo_url         String?
+  weight           Int?
+  pages            Int?
+  dynamic_link     String?
+  list_price       Int
+  discounted_price Int
+  shipping_price   Int
+  order_by         Int
+  language         String          @default("Gujarati")
+  is_magazine      Boolean         @default(false)
+  isCombo          Boolean         @default(false) @map("is_combo")
+  active           Boolean         @default(true) @map("status")
+  created_at       DateTime?
+  updated_at       DateTime?
+  bookCartItem     BookCartItem[]
+  bookOrderItem    BookOrderItem[]
+
+  @@map("ws_book")
+}
+
+model BookCart {
+  id               Int               @id @default(autoincrement())
+  cart_id          String
+  Customer         Customer?         @relation(fields: [userId], references: [id])
+  userId           Int?              @map("user_id")
+  CustomerShipping CustomerShipping? @relation(fields: [shippingId], references: [id])
+  shippingId       Int?              @map("shipping_id")
+  active           Boolean           @map("status")
+  created_at       DateTime?
+  updated_at       DateTime?         @map("last_update")
+  bookCartItem     BookCartItem[]
+
+  @@map("ws_book_cart")
+}
+
+model BookCartItem {
+  id       Int       @id @default(autoincrement())
+  bookCart BookCart? @relation(fields: [cartId], references: [id])
+  cartId   Int?      @map("cartid")
+  book     Book?     @relation(fields: [bookId], references: [id])
+  bookId   Int?      @map("item_id")
+  qty      Int
+
+  @@map("ws_book_cart_item")
+}
+
+model BookTracking {
+  tracking_id Int         @id @default(autoincrement())
+  orderId     String      @map("order_id")
+  status      String
+  createdAt   DateTime?   @map("created_at")
+  updatedAt   DateTime?   @map("last_update")
+  bookOrder   BookOrder[]
+
+  @@map("ws_book_tracking")
+}
+
+model BookOrder {
+  id               Int               @id @default(autoincrement())
+  receiptId        String            @map("order_id")
+  user             Customer?         @relation(fields: [userId], references: [id])
+  userId           Int?              @map("customer_id")
+  cartId           String            @map("cart_id")
+  shipping         CustomerShipping? @relation(fields: [shippingId], references: [id])
+  shippingId       Int?              @map("shipping_id")
+  BookTracking     BookTracking?     @relation(fields: [trackingId], references: [tracking_id])
+  trackingId       Int?              @map("tracking_id")
+  orderType        BookOrderType     @map("order_type")
+  orderItems       String            @map("order_items")
+  paymentMethod    PaymentMethod     @map("payment_method")
+  amount           Decimal           @map("order_price")
+  gatewayOrderId   String            @map("gateway_order_id")
+  gatewayOrder     String            @map("razorpay_order")
+  gatewayPaymentId String?           @map("gateway_transaction_id")
+  transactionId    String?           @map("transaction_id")
+  orderDate        DateTime?         @map("order_date")
+  status           String
+  createdAt        DateTime?         @map("created_at")
+  updatedAt        DateTime?         @map("updated_at")
+
+  @@map("ws_book_order")
+}
+
+model BookOrderItem {
+  id             Int       @id @default(autoincrement())
+  order_id       String
+  Book           Book?     @relation(fields: [bookId], references: [id])
+  bookId         Int?      @map("book_id")
+  list_price     Int
+  qty            Int
+  price          Int
+  shipping_price Int
+  created_at     DateTime?
+  updated_at     DateTime?
+
+  @@map("ws_book_order_item")
+}
+
+// ****************************PENDRIVE MODULE******************************
+
+model PendriveCourse {
+  id                     Int                      @id @default(autoincrement())
+  name                   String
+  thumbnail              String
+  image                  Json?
+  orderby                Int
+  description            String
+  language               String
+  pendrive               String
+  dynamicLink            String
+  duration               Int
+  courseStorage          Int
+  courseStorageUnit      String
+  noOfSubjects           Int
+  noOfVideos             Int
+  listPrice              Int
+  discountedPrice        Int
+  shippingPrice          Int
+  withMaterial           Boolean
+  materialName           String
+  materialPrice          Int
+  examTag                Json?
+  isCombo                Boolean
+  active                 Boolean
+  createdAt              DateTime?
+  pendriveCourseCartItem PendriveCourseCartItem[]
+
+  @@map("ws_pendrive_course")
+}
+
+model PendriveCourseStorageDevice {
+  id                  Int                   @id @default(autoincrement())
+  name                String
+  note                String
+  isDefault           Boolean
+  active              Boolean
+  pendriveCourseCart  PendriveCourseCart[]
+  pendriveCourseOrder PendriveCourseOrder[]
+
+  @@map("ws_pendrive_course_storage_device")
+}
+
+model PendriveCourseCart {
+  id                          Int                          @id @default(autoincrement())
+  Customer                    Customer?                    @relation(fields: [user], references: [id])
+  user                        Int?
+  CustomerShipping            CustomerShipping?            @relation(fields: [shipping], references: [id])
+  shipping                    Int?
+  PendriveCourseStorageDevice PendriveCourseStorageDevice? @relation(fields: [storageDevice], references: [id])
+  storageDevice               Int?
+  active                      Boolean
+  PendriveCourseCartItem      PendriveCourseCartItem[]
+
+  @@map("ws_pendrive_course_cart")
+}
+
+model PendriveCourseCartItem {
+  id                 Int                 @id @default(autoincrement())
+  PendriveCourseCart PendriveCourseCart? @relation(fields: [cart], references: [id])
+  cart               Int?
+  PendriveCourse     PendriveCourse?     @relation(fields: [pendriveCourse], references: [id])
+  pendriveCourse     Int?
+
+  @@map("ws_pendrive_course_cart_item")
+}
+
+model PendriveCourseTag {
+  id       Int     @id @default(autoincrement()) @map("tag_id")
+  name     String  @map("tag_name")
+  count    Int?    @map("tag_count")
+  image    String? @map("tag_image")
+  featured Int?    @map("tag_featured")
+
+  @@map("ws_pendrive_course_tag")
+}
+
+model PendriveCourseTracking {
+  id                  Int                   @id @default(autoincrement())
+  order               Int
+  status              String
+  createdAt           DateTime?
+  updatedAt           DateTime?
+  pendriveCourseOrder PendriveCourseOrder[]
+
+  @@map("ws_pendrive_course_tracking")
+}
+
+model PendriveCourseOrder {
+  id                          Int                          @id @default(autoincrement())
+  receiptId                   String
+  Customer                    Customer?                    @relation(fields: [user], references: [id])
+  user                        Int?
+  cart                        Int
+  CustomerShipping            CustomerShipping?            @relation(fields: [shipping], references: [id])
+  shipping                    Int?
+  PendriveCourseTracking      PendriveCourseTracking?      @relation(fields: [tracking], references: [id])
+  tracking                    Int?
+  orderType                   String
+  PendriveCourseStorageDevice PendriveCourseStorageDevice? @relation(fields: [storageDevice], references: [id])
+  storageDevice               Int?
+  orderItems                  String
+  amount                      Decimal
+  paymentMethod               PaymentMethod
+  gatewayOrderId              String                       @map("gatewayOrderID")
+  gatewayPaymentId            String?                      @map("gatewayPaymentID")
+  status                      String
+  createdAt                   DateTime?
+  updatedAt                   DateTime?
+
+  @@map("ws_pendrive_course_order")
+}
+
+// ****************************EXAM MODULE******************************
+
+model ExamCategory {
+  id                  Int                   @id @default(autoincrement())
+  name                String
+  image               String
+  parent              Int                   @map("parent_id")
+  status              Boolean
+  order_by            Int
+  deleted             Boolean
+  created_at          DateTime?
+  updated_at          DateTime?
+  exam                Exam[]
+  examCategoryPackage ExamCategoryPackage[]
+  examCategoryCourse  ExamCategoryCourse[]
+
+  @@map("ws_exam_category")
+}
+
+model Exam {
+  id                Int                @id @default(autoincrement())
+  name              String             @map("title")
+  description       String
+  type              ExamType
+  ExamCategory      ExamCategory?      @relation(fields: [examCategoryId], references: [id])
+  examCategoryId    Int?               @map("exam_category_id")
+  isPaid            Boolean            @map("is_paid")
+  time              Int
+  numberOfQuestions Int                @map("questions")
+  positiveMarks     Decimal            @map("positive_marks")
+  negativeMarks     Decimal            @map("negative_marks")
+  solution          String?            @map("solution_pdf")
+  startAt           DateTime?          @map("start_date")
+  endAt             DateTime?          @map("end_date")
+  status            Boolean
+  order_by          Int
+  send_push         Boolean
+  createAt          DateTime?          @map("created_at")
+  updatedAt         DateTime?          @map("updated_at")
+  examQuestion      ExamQuestion[]
+  examResultDetail  ExamResultDetail[]
+  examResult        ExamResult[]
+
+  @@map("ws_exam")
+}
+
+model ExamQuestion {
+  id                  Int                  @id @default(autoincrement())
+  name                String               @map("title")
+  answer              String
+  Exam                Exam?                @relation(fields: [exam], references: [id])
+  exam                Int?                 @map("exam_id")
+  image               String?
+  solutionDescription String?              @map("solution_text")
+  solutionFile        String?              @map("solution_image")
+  status              Boolean
+  order_by            Int
+  createdAt           DateTime?            @map("created_at")
+  updatedAt           DateTime?            @map("updated_at")
+  answers             ExamQuestionOption[]
+  examResultDetail    ExamResultDetail[]
+
+  @@map("ws_exam_question")
+}
+
+model ExamQuestionOption {
+  id               Int                @id @default(autoincrement())
+  name             String             @map("title")
+  ExamQuestion     ExamQuestion?      @relation(fields: [question], references: [id])
+  question         Int?               @map("question_id")
+  createdAt        DateTime?          @map("created_at")
+  updatedAt        DateTime?          @map("updated_at")
+  examResultDetail ExamResultDetail[]
+
+  @@map("ws_exam_question_option")
+}
+
+model ExamResult {
+  id               Int                @id @default(autoincrement()) @map("qresult_id")
+  Customer         Customer?          @relation(fields: [customerId], references: [id])
+  customerId       Int?               @map("qresult_customer_id")
+  Exam             Exam?              @relation(fields: [examId], references: [id])
+  examId           Int?               @map("qresult_qtest_id")
+  total            Int                @map("qresult_total")
+  attempt          Int                @map("qresult_attempt")
+  skip             Int                @map("qresult_skip")
+  success          Int                @map("qresult_true")
+  failed           Int                @map("qresult_false")
+  score            Decimal            @map("qresult_result")
+  timing           String             @map("qresult_timing")
+  ratting          String?            @map("qresult_ratting")
+  solution         String?            @map("qresult_solution")
+  created_at       DateTime?          @map("qresult_created_date")
+  status           Boolean?           @map("qresult_status")
+  examResultDetail ExamResultDetail[]
+
+  @@map("ws_exam_result")
+}
+
+model ExamResultDetail {
+  id                 Int                 @id @default(autoincrement()) @map("qresult_detail_id")
+  ExamResult         ExamResult?         @relation(fields: [examResultId], references: [id])
+  examResultId       Int?                @map("qresult_detail_qresult_id")
+  Customer           Customer?           @relation(fields: [customerId], references: [id])
+  customerId         Int?                @map("qresult_detail_customer_id")
+  Exam               Exam?               @relation(fields: [examId], references: [id])
+  examId             Int?                @map("qresult_detail_qtest_id")
+  ExamQuestion       ExamQuestion?       @relation(fields: [questionId], references: [id])
+  questionId         Int?                @map("qresult_detail_question_id")
+  ExamQuestionOption ExamQuestionOption? @relation(fields: [answerId], references: [id])
+  answerId           Int?                @map("qresult_detail_answer_id")
+  result             ExamResultType      @map("qresult_detail_result")
+  point              Decimal             @map("qresult_detail_point")
+
+  @@map("ws_exam_result_detail")
+}
+
+model ExamResultDetailAnalytics {
+  id         Int       @id @default(autoincrement())
+  Customer   Customer? @relation(fields: [customerId], references: [id])
+  customerId Int?      @map("userId")
+  exams      Int
+  questions  Int
+  attempt    Int
+  skip       Int
+  success    Int
+  failed     Int
+  score      Decimal
+
+  @@map("ws_exam_result_detail_analytics")
+}
+
+model ExamCategoryPackage {
+  id             Int           @id @default(autoincrement())
+  Package        Package?      @relation(fields: [packageId], references: [id])
+  packageId      Int?          @map("package_id")
+  ExamCategory   ExamCategory? @relation(fields: [examCategoryId], references: [id])
+  examCategoryId Int?          @map("exam_category_id")
+  order          Int
+  created_at     DateTime?
+  updated_at     DateTime?
+
+  @@map("ws_exam_category_package")
+}
+
+model ExamCategoryCourse {
+  id             Int           @id @default(autoincrement())
+  Course         Course?       @relation(fields: [courseId], references: [id])
+  courseId       Int?          @map("course_id")
+  ExamCategory   ExamCategory? @relation(fields: [examCategoryId], references: [id])
+  examCategoryId Int?          @map("exam_category_id")
+  order          Int
+  created_at     DateTime?
+  updated_at     DateTime?
+
+  @@map("ws_exam_category_course")
+}
+
+// ****************************MATERIAL MODULE******************************
+
+model MaterialCategory {
+  id                      Int                       @id @default(autoincrement())
+  name                    String                    @map("title")
+  slug                    String
+  image                   String?
+  parent                  Int
+  order_by                Int
+  status                  Boolean
+  created_at              DateTime?
+  updated_at              DateTime?
+  material                Material[]
+  materialCategoryPackage MaterialCategoryPackage[]
+  materialCategoryCourse  MaterialCategoryCourse[]
+
+  @@map("ws_material_category")
+}
+
+model Material {
+  id                 Int               @id @default(autoincrement())
+  MaterialCategory   MaterialCategory? @relation(fields: [materialCategoryId], references: [id])
+  materialCategoryId Int?              @map("material_category_id")
+  name               String            @map("title")
+  direct_link        String?
+  file               String
+  order_by           Int
+  status             Boolean
+  created_at         DateTime?
+  updated_at         DateTime?
+
+  @@map("ws_material")
+}
+
+model MaterialCategoryPackage {
+  id                 Int               @id @default(autoincrement())
+  Package            Package?          @relation(fields: [packageId], references: [id])
+  packageId          Int?              @map("package_id")
+  MaterialCategory   MaterialCategory? @relation(fields: [materialCategoryId], references: [id])
+  materialCategoryId Int?              @map("mcategory_id")
+  order              Int
+  created_at         DateTime?
+  updated_at         DateTime?
+
+  @@map("ws_material_category_package")
+}
+
+model MaterialCategoryCourse {
+  id                 Int               @id @default(autoincrement())
+  Course             Course?           @relation(fields: [courseId], references: [id])
+  courseId           Int?              @map("course_id")
+  MaterialCategory   MaterialCategory? @relation(fields: [materialCategoryId], references: [id])
+  materialCategoryId Int?              @map("mcategory_id")
+  order              Int
+  created_at         DateTime?
+  updated_at         DateTime?
+
+  @@map("ws_material_category_course")
+}
+
+// ****************************E-BOOK MODULE******************************
+
+model EBook {
+  id                 Int                       @id @default(autoincrement())
+  name               String
+  thumbnail          String
+  image              String
+  description        String
+  termsAndConditions String                    @map("terms_and_conditions")
+  author             String
+  publisher          String?
+  orderby            Int                       @map("order_by")
+  language           EBookLanguage
+  bookDemoUrl        String                    @map("demo_url")
+  bookUrl            String                    @map("book_url")
+  shareableLink      String                    @map("link")
+  active             Boolean                   @map("status")
+  createdAt          DateTime?                 @map("created_at")
+  updatedAt          DateTime?                 @map("updated_at")
+  plans              PackageCourseEbookPrice[]
+  eBookSubscription  EBookSubscription[]
+
+  @@map("ws_ebook")
+}
+
+// ****************************PACKAGE MODULE******************************
+
+model chat {
+  id        Int       @id @default(autoincrement())
+  packageId Int       @map("package_id")
+  package   Package?  @relation(fields: [packageId], references: [id])
+  message   String
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@map("ws_package_chat")
+}
+
+// ****************************PACKAGE MODULE******************************
+
+model PackageType {
+  id         Int       @id @default(autoincrement())
+  name       String    @db.VarChar(255)
+  created_at DateTime?
+  updated_at DateTime?
+  Package    Package[]
+
+  @@map("ws_package_type")
+}
+
+model Package {
+  id                        Int                         @id @default(autoincrement())
+  name                      String
+  description               String
+  image                     String
+  shareable_link            String
+  withMaterial              String                      @map("with_material")
+  withoutMaterial           String                      @map("without_material")
+  material                  PackageCourseMaterial?      @relation(fields: [pcMaterialId], references: [id])
+  pcMaterialId              Int?                        @map("pc_material_id")
+  order_by                  Int
+  active                    Boolean                     @map("status")
+  packageTypeId             Int?                        @map("package_type_id")
+  packageType               PackageType?                @relation(fields: [packageTypeId], references: [id])
+  examId                    Int?                        @map("exam_id")
+  Exam                      CustomerTargetGoal?         @relation(fields: [examId], references: [id])
+  created_at                DateTime?
+  updated_at                DateTime?
+  packageSpecificSubject    PackageSpecificSubject[]
+  examCategoryPackage       ExamCategoryPackage[]
+  materialCategoryPackage   MaterialCategoryPackage[]
+  plans                     PackageCourseEbookPrice[]
+  packageCourseSubscription PackageCourseSubscription[]
+  chat                      chat[]
+
+  @@map("ws_package")
+}
+
+model VideoCategory {
+  id                     Int                      @id @default(autoincrement())
+  title                  String
+  slug                   String
+  // parent                 Int
+  image                  String
+  order_by               Int
+  status                 Boolean
+  created_at             DateTime?
+  updated_at             DateTime?
+  packageSpecificSubject PackageSpecificSubject[]
+  course                 Course[]
+  video                  Video[]
+  videoCategoryRelation  VideoCategoryRelation[]
+
+  @@map("ws_video_category")
+}
+
+model VideoCategoryRelation {
+  id                 Int            @id @default(autoincrement())
+  parent             Int
+  child              Int
+  childVideoCategory VideoCategory? @relation(fields: [child], references: [id])
+  order              Int
+
+  @@map("ws_video_category_relation")
+}
+
+model PackageSpecificSubject {
+  id            Int            @id @default(autoincrement())
+  Package       Package?       @relation(fields: [packageId], references: [id])
+  packageId     Int?           @map("package_id")
+  VideoCategory VideoCategory? @relation(fields: [subjectId], references: [id])
+  subjectId     Int?           @map("subject_id")
+  order_by      Int
+  status        Boolean
+  created_at    DateTime?
+  updated_at    DateTime?
+
+  @@map("ws_package_specific_subject")
+}
+
+model PackageVideoCategoryRelation {
+  id                      Int       @id @default(autoincrement())
+  videoCategoryRelationId Int       @map("video_category_relation_id")
+  packageId               Int       @map("package_id")
+  status                  Boolean
+  created_at              DateTime?
+  updated_at              DateTime?
+
+  @@map("ws_video_category_package_relation")
+}
+
+// ****************************COURSE MODULE******************************
+
+model CourseEducator {
+  id        Int       @id @default(autoincrement())
+  name      String
+  image     String
+  about     String
+  email     String    @map("email_address")
+  password  String
+  view      Int
+  status    Boolean
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+  course    Course[]
+
+  @@map("ws_course_educator")
+}
+
+model CourseSubjectCategory {
+  id        Int       @id @default(autoincrement())
+  title     String
+  slug      String
+  image     String
+  parent    Int
+  order     Int       @map("order_by")
+  status    Boolean
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+  course    Course[]
+
+  @@map("ws_course_subject_category")
+}
+
+model Course {
+  id                        Int                         @id @default(autoincrement())
+  educator                  CourseEducator?             @relation(fields: [courseEducatorId], references: [id])
+  courseEducatorId          Int?                        @map("educator_id")
+  subject                   CourseSubjectCategory?      @relation(fields: [courseSubjectCategoryId], references: [id])
+  courseSubjectCategoryId   Int?                        @map("course_category_id")
+  VideoCategory             VideoCategory?              @relation(fields: [videoCategoryId], references: [id])
+  videoCategoryId           Int?                        @map("vcategory_id")
+  name                      String?
+  image                     String
+  description               String
+  ordered                   Int                         @map("order_by")
+  shareableLink             String                      @map("shareable_link")
+  withMaterial              String                      @map("with_material")
+  withoutMaterial           String                      @map("without_material")
+  material                  PackageCourseMaterial?      @relation(fields: [pcMaterialId], references: [id])
+  pcMaterialId              Int?                        @map("pc_material_id")
+  level                     String
+  status                    Boolean
+  createdAt                 DateTime?                   @map("created_at")
+  updatedAt                 DateTime?                   @map("updated_at")
+  examCategoryCourse        ExamCategoryCourse[]
+  materialCategoryCourse    MaterialCategoryCourse[]
+  plans                     PackageCourseEbookPrice[]
+  packageCourseSubscription PackageCourseSubscription[]
+
+  @@map("ws_course")
+}
+
+// ****************************VIDEO MODULE******************************
+
+model Video {
+  id              Int            @id @default(autoincrement())
+  VideoCategory   VideoCategory? @relation(fields: [videoCategoryId], references: [id])
+  videoCategoryId Int?           @map("vcategory_id")
+  title           String
+  topic           String
+  platform        String
+  vimeo_id        String?
+  aws_id          String?
+  youtube_id      String?
+  slug            String
+  order           Int            @map("order_by")
+  priceType       VideoType      @map("type")
+  status          Boolean
+  created_at      DateTime?
+  updated_at      DateTime?
+
+  @@map("ws_video")
+}
+
+// ****************************PACKAGE COURSE MATERIAL MODULE******************************
+
+model PackageCourseMaterial {
+  id                        Int                         @id @default(autoincrement())
+  title                     String
+  created_at                DateTime?
+  updated_at                DateTime?
+  course                    Course[]
+  package                   Package[]
+  packageCourseSubscription PackageCourseSubscription[]
+
+  @@map("ws_package_course_material")
+}
+
+// ****************************PACKAGE COURSE E_BOOK PRICE MODULE******************************
+
+model PackageCourseEbookPrice {
+  id                         Int                          @id @default(autoincrement())
+  Package                    Package?                     @relation(fields: [packageId], references: [id])
+  packageId                  Int?                         @map("package_id")
+  Course                     Course?                      @relation(fields: [courseId], references: [id])
+  courseId                   Int?                         @map("course_id")
+  EBook                      EBook?                       @relation(fields: [ebookId], references: [id])
+  ebookId                    Int?                         @map("ebook_id")
+  name                       String?
+  duration                   Int
+  price                      Int
+  withMaterial               Boolean                      @map("with_material")
+  materialPrice              Int?                         @map("material_price")
+  isDefault                  Boolean                      @map("is_default")
+  status                     Boolean
+  created_at                 DateTime?
+  updated_at                 DateTime?
+  packageCourseOrder         PackageCourseOrder[]
+  packageCourseSubscription  PackageCourseSubscription[]
+  EBookOrder                 EBookOrder[]
+  promotedPackageCourseEbook PromotedPackageCourseEbook[]
+
+  @@map("ws_package_course_ebook_price")
+}
+
+// ****************************PACKAGE COURSE ORDER SUBSCRIPTION MODULE******************************
+
+model PackageCourseOrder {
+  id                                Int                                 @id @default(autoincrement())
+  uniqueId                          String?                             @map("unique_id")
+  Customer                          Customer?                           @relation(fields: [userId], references: [id])
+  userId                            Int?                                @map("customer_id")
+  orderType                         PackageCourseEbookOrderType         @map("order_type")
+  PackageCourseEbookPrice           PackageCourseEbookPrice?            @relation(fields: [planId], references: [id])
+  planId                            Int?                                @map("plan_id")
+  CustomerShipping                  CustomerShipping?                   @relation(fields: [shipping], references: [id])
+  shipping                          Int?                                @map("shipping")
+  promocode                         Json?
+  refferalcode                      Json?
+  OrigianalPrice                    Int                                 @map("price")
+  codeDiscount                      Int?                                @map("code_discount")
+  wsCoin                            Int?                                @map("ws_coin")
+  amount                            Int                                 @map("discount_price")
+  paymentMethod                     PaymentMethod                       @map("payment_method")
+  gatewayOrderId                    String?                             @map("razorpay_order_id")
+  gatewayOrder                      String?                             @map("razorpay_order")
+  gatewayPaymentId                  String?                             @map("razorpay_payment_id")
+  bankTransactionId                 String?                             @map("bank_transaction_id")
+  ip_address                        String?
+  status                            PackageCourseEbookOrderStatus
+  createdAt                         DateTime?                           @map("created_at")
+  updatedAt                         DateTime?                           @map("updated_at")
+  packageCourseSubscription         PackageCourseSubscription[]
+  packageCourseSubscriptionTracking PackageCourseSubscriptionTracking[]
+  RefferalTransaction               RefferalTransaction[]
+
+  @@map("ws_package_course_order")
+}
+
+model PackageCourseSubscription {
+  id                                Int                                @id @default(autoincrement())
+  customer                          Customer?                          @relation(fields: [customerId], references: [id])
+  customerId                        Int?                               @map("customer_id")
+  packageCourseOrder                PackageCourseOrder?                @relation(fields: [orderId], references: [id])
+  orderId                           Int?                               @map("order_id")
+  package                           Package?                           @relation(fields: [packageId], references: [id])
+  packageId                         Int?                               @map("package_id")
+  course                            Course?                            @relation(fields: [courseId], references: [id])
+  courseId                          Int?                               @map("course_id")
+  packageCourseEbookPrice           PackageCourseEbookPrice?           @relation(fields: [planId], references: [id])
+  planId                            Int?                               @map("pcb_id")
+  material                          PackageCourseMaterial?             @relation(fields: [pcMaterialId], references: [id])
+  pcMaterialId                      Int?                               @map("pc_material_id")
+  customerShipping                  CustomerShipping?                  @relation(fields: [shippingId], references: [id])
+  shippingId                        Int?                               @map("shipping")
+  packageCourseSubscriptionTracking PackageCourseSubscriptionTracking? @relation(fields: [trackingId], references: [id])
+  trackingId                        Int?                               @map("tracking")
+  startAt                           DateTime?                          @map("start_at")
+  endAt                             DateTime?                          @map("end_at")
+  amount                            Decimal?
+  courseAmount                      Decimal?                           @map("course_amount")
+  materialAmount                    Decimal?                           @map("material_amount")
+  status                            Boolean
+  payment_type                      PackageCourseEbookPaymentType
+  remarks                           String?
+  created_by                        Int?
+  updated_by                        Int?
+  createdAt                         DateTime?                          @map("created_at")
+  updatedAt                         DateTime?                          @map("updated_at")
+
+  @@map("ws_package_course_subscription")
+}
+
+model PackageCourseSubscriptionTracking {
+  id                        Int                         @id @default(autoincrement())
+  PackageCourseOrder        PackageCourseOrder?         @relation(fields: [orderId], references: [id])
+  orderId                   Int?                        @map("order")
+  status                    String
+  created_at                DateTime?
+  updated_at                DateTime?
+  packageCourseSubscription PackageCourseSubscription[]
+
+  @@map("ws_package_course_subscription_tracking")
+}
+
+// ****************************EBOOK ORDER SUBSCRIPTION MODULE******************************
+
+model EBookOrder {
+  id                      Int                           @id @default(autoincrement())
+  uniqueId                String                        @map("unique_id")
+  Customer                Customer?                     @relation(fields: [userId], references: [id])
+  userId                  Int?                          @map("customer_id")
+  orderType               PackageCourseEbookOrderType   @map("order_type")
+  promocode               Json?
+  PackageCourseEbookPrice PackageCourseEbookPrice?      @relation(fields: [planId], references: [id])
+  planId                  Int?                          @map("plan_id")
+  orderPrice              Int                           @map("order_price")
+  paymentMethod           PaymentMethod                 @map("payment_method")
+  gatewayOrderId          String                        @map("razorpay_order_id")
+  gatewayOrder            String?                       @map("razorpay_order")
+  gatewayPaymentId        String?                       @map("razorpay_payment_id")
+  bankTransactionId       String?                       @map("transaction_id")
+  ip_address              String?
+  status                  PackageCourseEbookOrderStatus
+  createdAt               DateTime?                     @map("created_at")
+  updatedAt               DateTime?                     @map("updated_at")
+  eBookSubscription       EBookSubscription[]
+
+  @@map("ws_ebook_order")
+}
+
+model EBookSubscription {
+  id         Int         @id @default(autoincrement())
+  eBookOrder EBookOrder? @relation(fields: [orderId], references: [id])
+  orderId    Int?        @map("order_id")
+  customer   Customer?   @relation(fields: [customerId], references: [id])
+  customerId Int?        @map("customer_id")
+  eBook      EBook?      @relation(fields: [ebookId], references: [id])
+  ebookId    Int?        @map("ebook_id")
+  price      Decimal
+  startAt    DateTime    @map("start_at")
+  endAt      DateTime    @map("end_at")
+  remarks    String?
+  createdAt  DateTime?   @map("created_at")
+  updatedAt  DateTime?   @map("updated_at")
+
+  @@map("ws_ebook_subscription")
+}
+
+// ****************************PROMOTION MODULE******************************
+
+model Promoter {
+  id         Int         @id @default(autoincrement())
+  full_name  String
+  email      String
+  phone      String
+  image      String?
+  status     Boolean
+  is_delete  Boolean
+  created_at DateTime?
+  updated_at DateTime?
+  promocode  Promocode[]
+
+  @@map("ws_promoter")
+}
+
+model Promocode {
+  id                         Int                          @id @default(autoincrement())
+  promoter                   Promoter?                    @relation(fields: [promoterId], references: [id])
+  promoterId                 Int?                         @map("promoter_id")
+  promocode                  String
+  title                      String?
+  description                String?
+  promo_start_at             DateTime
+  promo_expire_at            DateTime
+  type                       PromocodeType
+  status                     Boolean
+  created_at                 DateTime?
+  updated_at                 DateTime?
+  promotedPackageCourseEbook PromotedPackageCourseEbook[]
+
+  @@map("ws_promocode")
+}
+
+model PromotedPackageCourseEbook {
+  id                      Int                      @id @default(autoincrement())
+  promocode               Promocode?               @relation(fields: [promocodeId], references: [id])
+  promocodeId             Int?                     @map("promocode_id")
+  packageCourseEbookPrice PackageCourseEbookPrice? @relation(fields: [planId], references: [id])
+  planId                  Int?                     @map("pcb_price_id")
+  type                    String?
+  promoterPercentage      Decimal                  @map("promoter_percentage")
+  customerPercentage      Decimal                  @map("customer_percentage")
+  created_at              DateTime?
+  updated_at              DateTime?
+
+  @@map("ws_promoted_package_course_ebook")
+}
+
+// ****************************OFFLINE BATCH MODULE******************************
+
+model OfflineBannerSlider {
+  id        Int      @id @default(autoincrement())
+  image     String   @map("image")
+  key       String?  @map("key")
+  keyId     Int?     @map("key_id")
+  createdAt DateTime @map("created_at")
+  updatedAt DateTime @map("updated_at")
+
+  @@map("ws_offline_banner_slider")
+}
+
+model OfflineCity {
+  id        Int             @id @default(autoincrement())
+  name      String          @map("name")
+  image     String          @map("image")
+  createdAt DateTime        @map("created_at")
+  updatedAt DateTime        @map("updated_at")
+  centers   OfflineCenter[]
+
+  @@map("ws_offline_city")
+}
+
+model OfflineCenter {
+  id        Int            @id @default(autoincrement())
+  name      String         @map("name")
+  image     Json?          @map("image")
+  address   String         @map("address")
+  latitude  Float          @map("latitude")
+  longitude Float          @map("longitude")
+  phone     Int            @map("phone")
+  cityId    Int            @map("city_id")
+  city      OfflineCity?   @relation(fields: [cityId], references: [id])
+  createdAt DateTime       @map("created_at")
+  updatedAt DateTime       @map("updated_at")
+  batches   OfflineBatch[]
+
+  @@map("ws_offline_center")
+}
+
+model OfflineBatch {
+  id             Int              @id @default(autoincrement())
+  name           String           @map("name")
+  image          String           @map("image")
+  discription    String           @map("discription")
+  startAt        DateTime         @map("start_at")
+  duration       String           @map("duration")
+  centerId       Int              @map("center_id")
+  center         OfflineCenter?   @relation(fields: [centerId], references: [id])
+  status         Boolean
+  createdAt      DateTime         @map("created_at")
+  updatedAt      DateTime         @map("updated_at")
+  OfflineEnquiry OfflineEnquiry[]
+
+  @@map("ws_offline_batch")
+}
+
+model OfflineEnquiry {
+  id            Int          @id @default(autoincrement())
+  userId        Int?         @map("customer_id")
+  customer      Customer?    @relation(fields: [userId], references: [id])
+  name          String       @map("name")
+  email         String       @map("email")
+  mobile        Int          @map("mobile")
+  qualification String       @map("qualification")
+  batchId       Int          @map("batch_id")
+  batch         OfflineBatch @relation(fields: [batchId], references: [id])
+
+  @@map("ws_offline_enquiry")
+}
+
+// ****************************TESTIMONIAL BATCH MODULE******************************
+model Testimonial {
+  id          Int    @id @default(autoincrement())
+  name        String @map("name")
+  title       String @map("title")
+  discription String @map("discription")
+  rating      Int    @map("rating")
+
+  @@map("ws_testimonial")
+}
+
+// ****************************Website Inquiry******************************
+model Inquiry {
+  id        Int         @id @default(autoincrement())
+  name      String
+  mobile    String
+  email     String
+  city      String
+  course    Courses
+  mode      inquiryMode
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@map("ws_website_inquiry")
+}

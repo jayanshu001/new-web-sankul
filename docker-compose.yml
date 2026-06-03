@@ -1,6 +1,28 @@
-version: "3.8"
-
 services:
+  ws-mysql:
+    image: mysql:8.0
+    container_name: ws-mysql
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-websankul_dev}
+      MYSQL_DATABASE: websankul_staging
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    volumes:
+      - mysql_data:/var/lib/mysql
+    restart: unless-stopped
+    networks:
+      - socket-network
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -uroot -p$$MYSQL_ROOT_PASSWORD || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
   ws-redis:
     image: redis:alpine
     container_name: ws-redis
@@ -39,5 +61,6 @@ networks:
     driver: bridge
 
 volumes:
+  mysql_data:
   redis_data:
   rabbitmq_data:

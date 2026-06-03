@@ -1,14 +1,34 @@
 import { Request, Response } from "express";
 import mongoose, { Model } from "mongoose";
-import { FAQ } from "../../models/system/FAQ.model";
 import { FaqType } from "../../models/system/FaqType.model";
+import { isMysqlModule } from "../../config/migration";
+import {
+  listFaqs as listFaqsService,
+  getFaqById,
+  createFaq as createFaqService,
+  updateFaq as updateFaqService,
+  deleteFaq as deleteFaqService,
+  listFaqTypes as listFaqTypesService,
+  parseFaqId,
+  isFaqTypeInUse,
+} from "../../modules/faq/faq.service";
+import {
+  faqCreateSchemaMysql,
+  faqUpdateSchemaMysql,
+} from "../../modules/faq/faq.validation";
 import { PopupNotification } from "../../models/system/PopupNotification.model";
 import { BannerSlider, BANNER_KEY_TO_MODEL, BannerKey } from "../../models/system/BannerSlider.model";
 import { LiveBannerSlider } from "../../models/system/LiveBannerSlider.model";
 import { Testimonial } from "../../models/system/Testimonial.model";
 import { TermsAndConditions } from "../../models/system/TermsAndConditions.model";
-import { Version } from "../../models/system/Version.model";
-import { AppUpdate } from "../../models/system/AppUpdate.model";
+import {
+  getAppUpdateSettings,
+  upsertAppUpdateSettings,
+} from "../../modules/app-update/app-update.service";
+import {
+  getVersionSettings,
+  upsertVersionSettings,
+} from "../../modules/version/version.service";
 import { SocialLink } from "../../models/system/SocialLink.model";
 import { SocialLinkType } from "../../models/system/SocialLinkType.model";
 import { CurrentAffair } from "../../models/system/CurrentAffair.model";
@@ -138,14 +158,110 @@ const genericDelete = (model: Model<any>) => async (req: Request, res: Response)
 };
 
 // ─── FAQ ──
-export const listFaqs = genericList(FAQ);
-export const getFaq = genericGet(FAQ);
-export const createFaq = genericCreate(FAQ, faqCreateSchema);
-export const updateFaq = genericUpdate(FAQ, faqUpdateSchema);
-export const deleteFaq = genericDelete(FAQ);
+export const listFaqs = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  try {
+    const data = await listFaqsService();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    logger.error("listFaqs failed", { traceId, error: getErrorMessage(e) });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+export const getFaq = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (isMysqlModule("faq")) {
+      if (!parseFaqId(id)) {
+        return res.status(400).json({ success: false, message: "Invalid id." });
+      }
+    } else if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id." });
+    }
+    const doc = await getFaqById(id);
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    logger.error("getFaq failed", { traceId, id, error: getErrorMessage(e) });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+export const createFaq = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  try {
+    if (isMysqlModule("faq")) {
+      const data = faqCreateSchemaMysql.parse(req.body);
+      const doc = await createFaqService(data);
+      return res.status(201).json({ success: true, data: doc });
+    }
+    const data = faqCreateSchema.parse(req.body);
+    const doc = await createFaqService(data);
+    return res.status(201).json({ success: true, data: doc });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+export const updateFaq = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (isMysqlModule("faq")) {
+      if (!parseFaqId(id)) {
+        return res.status(400).json({ success: false, message: "Invalid id." });
+      }
+      const data = faqUpdateSchemaMysql.parse(req.body);
+      const doc = await updateFaqService(id, data);
+      if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data: doc });
+    }
+    if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id." });
+    }
+    const data = faqUpdateSchema.parse(req.body);
+    const doc = await updateFaqService(id, data);
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+export const deleteFaq = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (isMysqlModule("faq")) {
+      if (!parseFaqId(id)) {
+        return res.status(400).json({ success: false, message: "Invalid id." });
+      }
+    } else if (!isObjectId(id)) {
+      return res.status(400).json({ success: false, message: "Invalid id." });
+    }
+    const ok = await deleteFaqService(id);
+    if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, message: "Deleted." });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
 
 // ─── FAQ Type ──
-export const listFaqTypes = genericList(FaqType, { title: 1 });
+export const listFaqTypes = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  try {
+    const data = await listFaqTypesService();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    logger.error("listFaqTypes failed", { traceId, error: getErrorMessage(e) });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
 export const getFaqType = genericGet(FaqType);
 export const createFaqType = genericCreate(FaqType, faqTypeCreateSchema);
 export const updateFaqType = genericUpdate(FaqType, faqTypeUpdateSchema);
@@ -156,8 +272,15 @@ export const deleteFaqType = async (req: Request, res: Response) => {
   logger.info("deleteFaqType invoked", { traceId, path: req.originalUrl, id });
 
   try {
+    if (isMysqlModule("faq")) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "FAQ categories are fixed (general, referral) on the legacy MySQL schema and cannot be deleted.",
+      });
+    }
     if (!isObjectId(id)) { logger.warn("deleteFaqType invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
-    const inUse = await FAQ.exists({ typeId: id });
+    const inUse = await isFaqTypeInUse(id);
     if (inUse) {
       logger.warn("deleteFaqType in use", { traceId, id });
       return res.status(409).json({
@@ -388,8 +511,7 @@ export const getVersion = async (_req: Request, res: Response) => {
   logger.info("getVersion invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const doc = (await Version.findOne().lean()) ||
-      { latestVersionCode: 0, lastSupportedVersionCode: 0 };
+    const doc = await getVersionSettings();
     logger.info("getVersion success", { traceId });
     return res.status(200).json({ success: true, data: doc });
   } catch (e: any) {
@@ -404,11 +526,7 @@ export const upsertVersion = async (req: Request, res: Response) => {
 
   try {
     const data = versionUpsertSchema.parse(req.body);
-    const doc = await Version.findOneAndUpdate(
-      {},
-      { $set: data },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
+    const doc = await upsertVersionSettings(data);
     logger.info("upsertVersion success", { traceId });
     return res.status(200).json({ success: true, data: doc });
   } catch (e: any) {
@@ -424,8 +542,7 @@ export const getAppUpdate = async (_req: Request, res: Response) => {
   logger.info("getAppUpdate invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const doc = (await AppUpdate.findOne().lean()) ||
-      { latestVersion: 0, updateType: "flexible", isUpdateAvailable: false };
+    const doc = await getAppUpdateSettings();
     logger.info("getAppUpdate success", { traceId });
     return res.status(200).json({ success: true, data: doc });
   } catch (e: any) {
@@ -440,11 +557,7 @@ export const upsertAppUpdate = async (req: Request, res: Response) => {
 
   try {
     const data = appUpdateUpsertSchema.parse(req.body);
-    const doc = await AppUpdate.findOneAndUpdate(
-      {},
-      { $set: data },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
+    const doc = await upsertAppUpdateSettings(data);
     logger.info("upsertAppUpdate success", { traceId });
     return res.status(200).json({ success: true, data: doc });
   } catch (e: any) {

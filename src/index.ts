@@ -10,6 +10,8 @@ validateEnvOrExit();
 import { createServer } from "http";
 import app from "./app";
 import connectDB from "./config/db";
+import { connectPrisma } from "./config/prisma";
+import { hasMysqlMigrationModules } from "./config/migration";
 import logger from "./utils/logger";
 import { sendEmail } from "./utils/emailService";
 import getLocalIpAddress from "./utils/getLocalIp";
@@ -42,6 +44,12 @@ const allowedOrigins = (
 
 const startServer = async () => {
   try {
+    if (hasMysqlMigrationModules()) {
+      await connectPrisma();
+      logger.info(
+        `[migration] MySQL modules active: ${process.env.MIGRATION_MYSQL_MODULES}`
+      );
+    }
     await connectDB();
     try {
       await syncPermissionCatalog();
