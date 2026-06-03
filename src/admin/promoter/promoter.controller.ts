@@ -5,7 +5,7 @@ import { Promoter } from "../../models/promoter/Promoter.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { createPromoterSchema, updatePromoterSchema } from "./promoter.validation";
-import { buildPromoterOverview } from "../../promoter/dashboard/overview.service";
+import { buildPromoterOverview, buildAllPromotersOverview } from "../../promoter/dashboard/overview.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 const SALT_ROUNDS = 10;
@@ -194,7 +194,21 @@ export const getPromoterDashboard = async (req: Request, res: Response) => {
     if (!exists)
       return res.status(404).json({ success: false, message: "Promoter not found." });
 
-    const data = await buildPromoterOverview(id, req.query.range as string);
+    const { range, startDate, endDate, promocodeId } = req.query as Record<string, string>;
+    const data = await buildPromoterOverview(id, range, undefined, { startDate, endDate, promocodeId });
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/admin/promoters/dashboard
+// Aggregate dashboard across all promoters. Same response shape as the
+// per-promoter view; supports the same range presets + custom date range.
+export const getAllPromotersDashboard = async (req: Request, res: Response) => {
+  try {
+    const { range, startDate, endDate, promocodeId } = req.query as Record<string, string>;
+    const data = await buildAllPromotersOverview({ rangeRaw: range, startDate, endDate, promocodeId });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });

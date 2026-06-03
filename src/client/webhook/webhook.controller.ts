@@ -4,6 +4,8 @@ import { EbookOrder } from "../../models/ebook/EbookOrder.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
+import { nextTrackingId } from "../../models/book/Counter.model";
+import { COURIER } from "../../config/courier";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
@@ -13,7 +15,7 @@ import {
   PackageCourseEbookPaymentType,
   BookOrderStatus,
 } from "../../models/enums";
-import { computeEndAt } from "../../utils/planDuration";
+import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -71,20 +73,44 @@ export const paymentWebhook = async (req: Request, res: Response) => {
 
         const plan = await EbookPrice.findById(ebookOrder.planId);
         if (plan) {
-          // `duration` is stored as MONTHS — shared helper enforces the
-          // setMonth-honors-calendar-length contract uniformly.
+          // `duration` is stored as DAYS — shared helper applies setDate so
+          // day-precision is preserved (matches /payment/verify ebook branch).
           const startAt = new Date();
-          const endAt = computeEndAt({ startAt, durationMonths: plan.duration });
-          await EbookSubscription.create({
-            orderId: ebookOrder._id,
+
+          // Extend-on-active: fold the purchased days onto an existing active
+          // subscription instead of creating a second overlapping row. Mirrors
+          // the /payment/verify ebook branch so whichever path fulfills the
+          // order first (verify or this webhook) produces the same result.
+          const existingActive = await EbookSubscription.findOne({
             customerId: ebookOrder.customerId,
             ebookId: ebookOrder.ebookId,
-            price: ebookOrder.orderPrice,
-            startAt,
-            endAt,
-            paymentType: PackageCourseEbookPaymentType.ONLINE,
             status: true,
-          });
+            endAt: { $gt: startAt },
+          }).sort({ endAt: -1 });
+
+          if (existingActive) {
+            existingActive.endAt = extendEndAt({
+              currentEndAt: existingActive.endAt,
+              durationMonths: plan.duration,
+              asDays: true,
+              now: startAt,
+            });
+            existingActive.price = (existingActive.price || 0) + (ebookOrder.orderPrice || 0);
+            existingActive.orderId = ebookOrder._id;
+            await existingActive.save();
+          } else {
+            const endAt = computeEndAt({ startAt, durationMonths: plan.duration, asDays: true });
+            await EbookSubscription.create({
+              orderId: ebookOrder._id,
+              customerId: ebookOrder.customerId,
+              ebookId: ebookOrder.ebookId,
+              price: ebookOrder.orderPrice,
+              startAt,
+              endAt,
+              paymentType: PackageCourseEbookPaymentType.ONLINE,
+              status: true,
+            });
+          }
         }
       }
       logger.info("paymentWebhook ebook activated", { traceId, razorpayOrderId, orderId: ebookOrder._id });
@@ -98,6 +124,12 @@ export const paymentWebhook = async (req: Request, res: Response) => {
         bookOrder.status = BookOrderStatus.VERIFIED;
         bookOrder.razorpayPaymentId = razorpayPaymentId;
         bookOrder.paidAt = new Date();
+        // Allocate the sequential courier tracking id if /payment/verify didn't
+        // beat us to it (see book-order-courier-tracking.md Point 1 & 2).
+        if (!bookOrder.tracking.trackingId) {
+          const allocated = await nextTrackingId(COURIER.TIRUPATI.INITIAL_Number);
+          bookOrder.tracking.trackingId = String(allocated);
+        }
         await bookOrder.save();
       }
       logger.info("paymentWebhook book verified", { traceId, razorpayOrderId, orderId: bookOrder._id });

@@ -10,6 +10,7 @@ import {
   getMyOrderById,
   getMyOrderInvoice,
   getMyOrderTracking,
+  getMyOrderTrackingLive,
 } from "./book.controller";
 
 const router = Router();
@@ -27,6 +28,7 @@ router.get("/trending/ebooks", authenticate, listTrendingEbooksOnly);
 // Orders (place-order moved to /api/v1/client/payment/create-order)
 router.get("/orders", authenticate, listMyOrders);
 router.get("/orders/:id/invoice", authenticate, getMyOrderInvoice);
+router.get("/orders/:id/tracking/live", authenticate, getMyOrderTrackingLive);
 router.get("/orders/:id/tracking", authenticate, getMyOrderTracking);
 router.get("/orders/:id", authenticate, getMyOrderById);
 

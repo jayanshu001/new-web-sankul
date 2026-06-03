@@ -53,23 +53,11 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
     const pkg = await Package.findOne({ _id: plan.packageId, active: true });
     if (!pkg) { logger.warn("createPackageOrderPayment package not found", { traceId, customerId, packageId: plan.packageId }); return res.status(404).json({ success: false, message: "Package not found or inactive." }); }
 
-    // Block double-buy: same rule as the course endpoint. If the customer has
-    // a verified active subscription to this exact plan row, refuse.
-    const existingPaid = await PackageCourseSubscription.findOne({
-      customerId,
-      targetPackageId: plan.packageId,
-      packageId: plan._id,
-      status: true,
-      paymentStatus: "verified",
-    });
-    if (existingPaid) {
-      logger.warn("createPackageOrderPayment already subscribed", { traceId, customerId, packageId, existingId: existingPaid._id });
-      return res.status(409).json({
-        success: false,
-        message: "You already have an active subscription to this plan.",
-      });
-    }
-
+    // Re-purchasing an active plan is an "Extend Validity" action, NOT a
+    // double-buy error. We create a fresh pending row regardless; /payment/verify
+    // folds the purchased window onto the existing active subscription (extending
+    // its endAt) and retires this row, so the customer never ends up with two
+    // overlapping cards. See verify.controller course/package branch.
     const subscription = await PackageCourseSubscription.create({
       customerId,
       targetPackageId: plan.packageId,

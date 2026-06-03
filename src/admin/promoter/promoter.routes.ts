@@ -11,6 +11,7 @@ import {
   getPromoterPromocodes,
   getPromoterSubscriptions,
   getPromoterDashboard,
+  getAllPromotersDashboard,
 } from "./promoter.controller";
 
 const router = Router();
@@ -19,6 +20,8 @@ router.use(authenticate, requireRole("admin", "super_admin"));
 
 router.get("/", listPromoters);
 router.post("/", uploadS3.single("image"), createPromoter);
+// Static path — must precede "/:id" so it isn't captured as id="dashboard".
+router.get("/dashboard", getAllPromotersDashboard);
 router.get("/:id", getPromoter);
 router.put("/:id", uploadS3.single("image"), updatePromoter);
 router.delete("/:id", deletePromoter);

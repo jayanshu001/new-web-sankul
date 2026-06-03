@@ -8,6 +8,7 @@ import { Course } from "../../models/course/Course.model";
 import { Video } from "../../models/course/Video.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
+import { resolveVideoCourseId } from "../course/resolveVideoCourse";
 
 // Shared "Resume Now" card builder. Produces the same shape as the
 // /learning/progress/my hero card, but scoped to the parent course / live
@@ -41,10 +42,13 @@ export async function buildResumeNextCard(input: Input): Promise<any | null> {
       .select("videoCategoryId")
       .lean();
     if (!video) return null;
-    const cat = await VideoCategory.findById(video.videoCategoryId)
-      .select("courseId")
-      .lean();
-    const courseId = cat?.courseId as Types.ObjectId | undefined;
+    // Resolve the owning course robustly. A video frequently lives under a
+    // child category whose own courseId is null while the real link sits on an
+    // ancestor or on Course.videoCategoryId. Reading only the leaf (the old
+    // behaviour) wrongly returned null here, so notes/audio-notes responses got
+    // `resumeNext: null` even when the lecture clearly belongs to a course.
+    // Mirrors buildLectureRef, which already uses this resolver.
+    const courseId = (await resolveVideoCourseId(video.videoCategoryId)) ?? undefined;
     if (!courseId) return null;
 
     const [course, sub, rollup, total] = await Promise.all([

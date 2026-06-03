@@ -3,7 +3,6 @@ import { z } from "zod";
 import { TestSeries } from "../../models/testSeries/TestSeries.model";
 import { TestSeriesPrice } from "../../models/testSeries/TestSeriesPrice.model";
 import { TestSeriesOrder } from "../../models/testSeries/TestSeriesOrder.model";
-import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
 import {
   PackageCourseEbookOrderStatus,
   PackageCourseEbookOrderType,
@@ -121,21 +120,11 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
     const series = await TestSeries.findOne({ _id: plan.testSeriesId, status: true });
     if (!series) { logger.warn("createTestSeriesOrderPayment series not found", { traceId, customerId, testSeriesId: plan.testSeriesId }); return res.status(404).json({ success: false, message: "Test series not found or inactive." }); }
 
-    // Block double-buy on overlapping access.
-    const now = new Date();
-    const activeSub = await TestSeriesSubscription.findOne({
-      customerId,
-      testSeriesId: plan.testSeriesId,
-      status: true,
-      endAt: { $gt: now },
-    });
-    if (activeSub) {
-      logger.warn("createTestSeriesOrderPayment already subscribed", { traceId, customerId, testSeriesId: plan.testSeriesId, existingId: activeSub._id });
-      return res.status(409).json({
-        success: false,
-        message: "You already have an active subscription to this test series.",
-      });
-    }
+    // Re-purchasing an active test series is an "Extend Validity" action, NOT a
+    // double-buy error. We create a fresh pending order regardless; /payment/verify
+    // folds the purchased days onto the existing active subscription (extending
+    // its endAt) instead of creating a second row. See verify.controller
+    // test-series branch.
 
     // Re-validate promo and compute the breakdown server-side.
     let discountAmount = 0;

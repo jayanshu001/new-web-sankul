@@ -113,21 +113,10 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
     const course = await LiveCourse.findOne({ _id: plan.liveCourseId, status: true });
     if (!course) { logger.warn("createLiveCourseOrderPayment course not found", { traceId, customerId, liveCourseId: plan.liveCourseId }); return res.status(404).json({ success: false, message: "Live course not found or inactive." }); }
 
-    const now = new Date();
-    const existingPaid = await LiveCourseSubscription.findOne({
-      customerId,
-      liveCourseId: plan.liveCourseId,
-      status: true,
-      paymentStatus: "verified",
-      $or: [{ endAt: null }, { endAt: { $gte: now } }],
-    });
-    if (existingPaid) {
-      logger.warn("createLiveCourseOrderPayment already subscribed", { traceId, customerId, liveCourseId: plan.liveCourseId, existingId: existingPaid._id });
-      return res.status(409).json({
-        success: false,
-        message: "You already have an active subscription to this live course.",
-      });
-    }
+    // Re-purchasing an active live course is an "Extend Validity" action, NOT a
+    // double-buy error. We create a fresh pending row regardless; /payment/verify
+    // folds the purchased window onto the existing active subscription (extending
+    // its endAt) and retires this row. See verify.controller live-course branch.
 
     // Resolve the promo code (if any) and derive the amount to charge. The
     // discount is always re-validated here — the preview endpoint's result is

@@ -3,6 +3,8 @@ import crypto from "crypto";
 import { z } from "zod";
 import { BookOrder } from "../../models/book/BookOrder.model";
 import { BookCart } from "../../models/book/BookCart.model";
+import { nextTrackingId } from "../../models/book/Counter.model";
+import { COURIER } from "../../config/courier";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
@@ -113,6 +115,16 @@ export const verifyPayment = async (req: Request, res: Response) => {
       bookOrder.status = BookOrderStatus.VERIFIED;
       bookOrder.razorpayPaymentId = razorpay_payment_id;
       bookOrder.paidAt = new Date();
+      // Allocate the sequential courier tracking id (Point 1 & 2 of
+      // book-order-courier-tracking.md): on verification the DB hands out the
+      // next integer, which doubles as the courier AWB / docno. Stored as a
+      // string to fit the schema; buildTrackingUrl() coerces it back to a
+      // number for threshold routing. Only allocate once (idempotency above
+      // guards re-entry, but guard here too in case of partial prior writes).
+      if (!bookOrder.tracking.trackingId) {
+        const allocated = await nextTrackingId(COURIER.TIRUPATI.INITIAL_Number);
+        bookOrder.tracking.trackingId = String(allocated);
+      }
       bookOrder.tracking.status = "Order Placed";
       bookOrder.tracking.history.push({
         status: "Order Placed",
@@ -156,14 +168,14 @@ export const verifyPayment = async (req: Request, res: Response) => {
       }
 
       // Look up the plan to compute access window. `duration` is stored as
-      // MONTHS (matches the admin UI: "1 Month / 3 Months / 6 Months / 12 Months").
-      // The shared helper guarantees setMonth semantics across all activation
-      // paths (verify / webhook / admin grant) — a 6-month plan bought on
-      // Mar 11 expires on Sep 11, not "now + 180 days".
+      // DAYS (matches the webhook fulfillment path and the ebook/test-series
+      // branches). The shared helper applies setDate via `asDays:true` so a
+      // 89-day plan bought today expires in 89 days, not 89 months — this
+      // keeps verify / webhook / admin grant producing identical endAt values.
       const plan = await PackageCourseEbookPrice.findById(courseSub.packageId)
         .select("duration")
         .lean();
-      const durationMonths = plan?.duration ?? 0;
+      const durationDays = plan?.duration ?? 0;
       if (!plan) {
         logger.warn("verifyPayment: course plan lookup returned null", {
           subscriptionId: String(courseSub._id),
@@ -195,7 +207,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
           : null;
 
       if (existingActive) {
-        existingActive.endAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths, now });
+        existingActive.endAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
         existingActive.paidAmount = (existingActive.paidAmount || 0) + (courseSub.paidAmount || 0);
         await existingActive.save();
 
@@ -222,7 +234,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         });
       }
 
-      const endAt = computeEndAt({ startAt: now, durationMonths });
+      const endAt = computeEndAt({ startAt: now, durationMonths: durationDays, asDays: true });
 
       courseSub.paymentStatus = "verified";
       courseSub.razorpayPaymentId = razorpay_payment_id;
@@ -237,7 +249,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         customerId: String(courseSub.customerId),
         razorpay_order_id,
         razorpay_payment_id,
-        durationMonths,
+        durationDays,
         endAt: endAt.toISOString(),
       });
 
@@ -349,9 +361,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
         });
       }
 
-      // `duration` is stored as MONTHS — matches the webhook fulfillment path.
+      // `duration` is stored as DAYS — matches the webhook fulfillment path.
       const plan = await EbookPrice.findById(ebookOrder.planId).select("duration").lean();
-      const durationMonths = plan?.duration ?? 0;
+      const durationDays = plan?.duration ?? 0;
       if (!plan) {
         logger.warn("verifyPayment: ebook plan lookup returned null", {
           orderId: String(ebookOrder._id),
@@ -364,7 +376,50 @@ export const verifyPayment = async (req: Request, res: Response) => {
       await ebookOrder.save();
 
       const startAt = new Date();
-      const endAt = computeEndAt({ startAt, durationMonths });
+
+      // Extend-on-active: if the customer already has an active subscription to
+      // this ebook, stack the purchased days onto its endAt instead of creating
+      // a second row — otherwise /client/ebooks would list two overlapping
+      // entitlements with conflicting daysLeft. Mirrors the course/package
+      // upsert-extend behavior; `asDays:true` because ebook `duration` is DAYS.
+      const existingActive = await EbookSubscription.findOne({
+        customerId: ebookOrder.customerId,
+        ebookId: ebookOrder.ebookId,
+        status: true,
+        endAt: { $gt: startAt },
+      }).sort({ endAt: -1 });
+
+      if (existingActive) {
+        existingActive.endAt = extendEndAt({
+          currentEndAt: existingActive.endAt,
+          durationMonths: durationDays,
+          asDays: true,
+          now: startAt,
+        });
+        existingActive.price = (existingActive.price || 0) + (ebookOrder.orderPrice || 0);
+        // Point the row at the most recent paid order so the invoice/receipt
+        // chain follows the latest payment.
+        existingActive.orderId = ebookOrder._id;
+        await existingActive.save();
+
+        logger.info("verifyPayment: ebook subscription extended existing", {
+          orderId: String(ebookOrder._id),
+          subscriptionId: String(existingActive._id),
+          ebookId: String(ebookOrder.ebookId),
+          customerId: String(ebookOrder.customerId),
+          razorpay_order_id,
+          razorpay_payment_id,
+          durationDays,
+          endAt: existingActive.endAt?.toISOString?.(),
+        });
+
+        return res.status(200).json({
+          success: true,
+          data: { kind: "ebook", order: ebookOrder },
+        });
+      }
+
+      const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
       // Order is COMPLETE on disk; if subscription.create fails next, we'd
       // be left with a paid order and no entitlement row. The thrown error
       // surfaces to the global handler, which logs it — but we add a trace
@@ -387,7 +442,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         customerId: String(ebookOrder.customerId),
         razorpay_order_id,
         razorpay_payment_id,
-        durationMonths,
+        durationDays,
         endAt: endAt.toISOString(),
       });
 
@@ -428,6 +483,46 @@ export const verifyPayment = async (req: Request, res: Response) => {
       await testSeriesOrder.save();
 
       const startAt = new Date();
+
+      // Extend-on-active: stack the purchased days onto an existing active
+      // subscription rather than creating a second overlapping row (mirrors the
+      // ebook/course branches). `durationDays` → setDate via extendEndAt asDays.
+      const existingActive = await TestSeriesSubscription.findOne({
+        customerId: testSeriesOrder.customerId,
+        testSeriesId: testSeriesOrder.testSeriesId,
+        status: true,
+        endAt: { $gt: startAt },
+      }).sort({ endAt: -1 });
+
+      if (existingActive) {
+        existingActive.endAt = extendEndAt({
+          currentEndAt: existingActive.endAt,
+          durationMonths: durationDays,
+          asDays: true,
+          now: startAt,
+        });
+        existingActive.price = (existingActive.price || 0) + (testSeriesOrder.orderPrice || 0);
+        existingActive.orderId = testSeriesOrder._id;
+        if (testSeriesOrder.promocodeId) existingActive.promocodeId = testSeriesOrder.promocodeId;
+        await existingActive.save();
+
+        logger.info("verifyPayment: test-series subscription extended existing", {
+          orderId: String(testSeriesOrder._id),
+          subscriptionId: String(existingActive._id),
+          testSeriesId: String(testSeriesOrder.testSeriesId),
+          customerId: String(testSeriesOrder.customerId),
+          razorpay_order_id,
+          razorpay_payment_id,
+          durationDays,
+          endAt: existingActive.endAt?.toISOString?.(),
+        });
+
+        return res.status(200).json({
+          success: true,
+          data: { kind: "test-series", order: testSeriesOrder, subscription: existingActive },
+        });
+      }
+
       const endAt = new Date(startAt);
       endAt.setDate(endAt.getDate() + durationDays);
       const subscription = await TestSeriesSubscription.create({

@@ -92,16 +92,17 @@ export const listFreeTests = async (req: Request, res: Response) => {
     const { examCategoryIds } = await resolveFreeCategoryIds();
     const { pageNum, limitNum, skip } = paginate(req);
 
-    const filter: any = { status: ExamStatus.PUBLISHED, categoryId: { $in: examCategoryIds } };
+    // "Free" = reachable via a free category OR explicitly marked isPaid:false.
+    // Guard the per-item branch with categoryId !== null so the schema default
+    // (isPaid:false) on orphan/uncategorised exams can't leak the whole catalog.
+    const filter: any = {
+      status: ExamStatus.PUBLISHED,
+      $or: [
+        { categoryId: { $in: examCategoryIds } },
+        { isPaid: false, categoryId: { $ne: null } },
+      ],
+    };
     if (search) filter.title = { $regex: search, $options: "i" };
-
-    if (!examCategoryIds.length) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
-      });
-    }
 
     const [data, total] = await Promise.all([
       Exam.find(filter)
@@ -273,16 +274,16 @@ export const listFreeVideos = async (req: Request, res: Response) => {
     const { videoCategoryIds } = await resolveFreeCategoryIds();
     const { pageNum, limitNum, skip } = paginate(req);
 
-    const filter: any = { status: true, videoCategoryId: { $in: videoCategoryIds } };
+    // "Free" = reachable via a free video category OR the video itself is
+    // marked priceType:"free" (the same flag /v1/lecture honours for playback).
+    const filter: any = {
+      status: true,
+      $or: [
+        { videoCategoryId: { $in: videoCategoryIds } },
+        { priceType: "free" },
+      ],
+    };
     if (search) filter.title = { $regex: search, $options: "i" };
-
-    if (!videoCategoryIds.length) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
-      });
-    }
 
     const [data, total] = await Promise.all([
       Video.find(filter)

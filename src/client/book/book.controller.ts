@@ -6,27 +6,16 @@ import { BookOrder } from "../../models/book/BookOrder.model";
 import { BookSetting } from "../../models/book/BookSetting.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
-import { BookOrderStatus, BookCourier } from "../../models/enums";
+import { BookOrderStatus } from "../../models/enums";
 import { generateBookReceipt } from "../../libs/core/generate";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { buildTrackingUrl, COURIER } from "../../config/courier";
+import { fetchLiveAWBData } from "../../libs/courier/tracking";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function buildTrackingUrl(courier?: string, trackingId?: string): string | null {
-  if (!courier || !trackingId) return null;
-  if (courier === BookCourier.MAHAVIR) {
-    return `http://shreemahavircourier.com/Frm_DocTrack.aspx?Tmp=${Date.now()}&docno=${trackingId}`;
-  }
-  if (courier === BookCourier.TIRUPATI) {
-    return `http://shreetirupaticourier.net/DocTracking.aspx?Tmp=${Date.now()}&docno=${trackingId}`;
-  }
-  return null;
-}
 
 // ─── Catalogue ────────────────────────────────────────────────────────────────
 
@@ -469,7 +458,7 @@ export const listMyOrders = async (req: Request, res: Response) => {
       const obj = o.toObject();
       return {
         ...obj,
-        trackingUrl: buildTrackingUrl(obj.tracking?.courier, obj.tracking?.trackingId),
+        trackingUrl: buildTrackingUrl(obj.tracking?.trackingId),
       };
     });
 
@@ -552,7 +541,7 @@ export const getMyOrderById = async (req: Request, res: Response) => {
       success: true,
       data: {
         ...obj,
-        trackingUrl: buildTrackingUrl(obj.tracking?.courier, obj.tracking?.trackingId),
+        trackingUrl: buildTrackingUrl(obj.tracking?.trackingId),
       },
     });
   } catch (error: any) {
@@ -601,7 +590,7 @@ export const getMyOrderTracking = async (req: Request, res: Response) => {
         receiptId: order.receiptId,
         awb: tracking.trackingId || null,
         courier: tracking.courier || null,
-        trackingUrl: buildTrackingUrl(tracking.courier, tracking.trackingId),
+        trackingUrl: buildTrackingUrl(tracking.trackingId),
         from: {
           city: settings?.originCity || null,
           hub: settings?.originHub || null,
@@ -624,5 +613,55 @@ export const getMyOrderTracking = async (req: Request, res: Response) => {
   } catch (error: any) {
     logger.error("getMyOrderTracking failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Live AWB status polled from the Tirupati courier API (Point 4 of
+// book-order-courier-tracking.md). Two-step: Redis-cached token, then AWB data.
+// Only meaningful for trackingIds in the Tirupati range (>= INITIAL_Number) —
+// Mahavir has no API, so below-threshold ids return a 422 with a hint to use
+// the static trackingUrl instead.
+export const getMyOrderTrackingLive = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  const id = req.params.id as string;
+  logger.info("getMyOrderTrackingLive invoked", { traceId, path: req.originalUrl, customerId, orderId: id });
+
+  try {
+    if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid order id." });
+    }
+
+    const order = await BookOrder.findOne({ _id: id, customerId })
+      .select("status tracking.trackingId")
+      .lean();
+    if (!order) return res.status(404).json({ success: false, message: "Order not found." });
+
+    // Only verified+ orders carry an allocated trackingId.
+    if (order.status === BookOrderStatus.PENDING) {
+      return res.status(409).json({ success: false, message: "Order not yet verified." });
+    }
+
+    const trackingId = order.tracking?.trackingId;
+    if (!trackingId) {
+      return res.status(404).json({ success: false, message: "Tracking not available yet." });
+    }
+
+    // Mahavir range has no live API.
+    if (Number(trackingId) < COURIER.TIRUPATI.INITIAL_Number) {
+      return res.status(422).json({
+        success: false,
+        message: "Live tracking is not available for this carrier. Use trackingUrl instead.",
+        data: { trackingUrl: buildTrackingUrl(trackingId) },
+      });
+    }
+
+    const awbData = await fetchLiveAWBData(trackingId);
+    logger.info("getMyOrderTrackingLive success", { traceId, customerId, orderId: id });
+    return res.status(200).json({ success: true, data: awbData });
+  } catch (error: any) {
+    logger.error("getMyOrderTrackingLive failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });
+    return res.status(502).json({ success: false, message: "Failed to fetch live tracking." });
   }
 };

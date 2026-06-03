@@ -3,7 +3,6 @@ import { z } from "zod";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { EbookOrder } from "../../models/ebook/EbookOrder.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import {
   PackageCourseEbookOrderStatus,
   PackageCourseEbookOrderType,
@@ -55,23 +54,11 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
     const ebook = await Ebook.findOne({ _id: plan.ebookId, status: true });
     if (!ebook) { logger.warn("createEbookOrderPayment ebook not found", { traceId, customerId, ebookId: plan.ebookId }); return res.status(404).json({ success: false, message: "Ebook not found or inactive." }); }
 
-    // Block double-buy: if the customer has an active (un-expired) subscription
-    // to this ebook, refuse so they don't pay twice for overlapping access.
-    const now = new Date();
-    const activeSub = await EbookSubscription.findOne({
-      customerId,
-      ebookId: plan.ebookId,
-      status: true,
-      endAt: { $gt: now },
-    });
-    if (activeSub) {
-      logger.warn("createEbookOrderPayment already subscribed", { traceId, customerId, ebookId: plan.ebookId, existingId: activeSub._id });
-      return res.status(409).json({
-        success: false,
-        message: "You already have an active subscription to this ebook.",
-      });
-    }
-
+    // Re-purchasing an active ebook is an "Extend Validity" action, NOT a
+    // double-buy error. We create a fresh pending order regardless; /payment/verify
+    // (and the webhook) folds the purchased days onto the existing active
+    // subscription (extending its endAt) instead of creating a second row. See
+    // verify.controller / webhook.controller ebook branch.
     const order = await EbookOrder.create({
       customerId,
       ebookId: plan.ebookId,

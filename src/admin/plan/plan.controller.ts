@@ -164,12 +164,25 @@ export const updatePlan = async (req: Request, res: Response) => {
   try {
     const data = updatePlanSchema.parse(req.body);
 
+    // When linkage is being changed, normalise all three keys so the plan can
+    // never end up pointing at two entities: the chosen one is set, the other
+    // two are explicitly nulled. Validation already guaranteed exactly one is
+    // truthy when any of the three is present.
+    const linkagePresent =
+      data.courseId !== undefined || data.packageId !== undefined || data.ebookId !== undefined;
+    const setFields: any = { ...data };
+    if (linkagePresent) {
+      setFields.courseId = data.courseId || null;
+      setFields.packageId = data.packageId || null;
+      setFields.ebookId = data.ebookId || null;
+    }
+
     let updated: any;
     let notFound = false;
     await session.withTransaction(async () => {
       const plan = await PackageCourseEbookPrice.findByIdAndUpdate(
         id,
-        { $set: data },
+        { $set: setFields },
         { new: true, session }
       );
       if (!plan) {

@@ -21,6 +21,9 @@ import { LiveSession } from "../../models/course/LiveSession.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
+import { BookOrder } from "../../models/book/BookOrder.model";
+import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
+import { BookOrderStatus } from "../../models/enums";
 
 const RECENTLY_ADDED_LIMIT = 5;
 const COURSE_CATEGORY_LIMIT = 6;
@@ -221,12 +224,70 @@ export const getDashboard = async (req: Request, res: Response) => {
     const coursesWithPlans = courses.map((c: any) => ({
       ...c,
       plans: plansByCourse.get(String(c._id)) ?? { withMaterial: [], withoutMaterial: [] },
+      isPaid: c.isPaid ?? true,
+      isPurchased: courseDaysLeft.has(String(c._id)),
       daysLeft: courseDaysLeft.has(String(c._id)) ? courseDaysLeft.get(String(c._id)) ?? null : null,
     }));
     const recentlyAddedWithDaysLeft = recentlyAddedData.map((p: any) => ({
       ...p,
+      isPaid: p.isPaid ?? true,
+      isPurchased: packageDaysLeft.has(String(p._id)),
       daysLeft: packageDaysLeft.has(String(p._id)) ? packageDaysLeft.get(String(p._id)) ?? null : null,
     }));
+
+    // Decorate trending books/ebooks with the same isPaid/isPurchased/daysLeft
+    // contract the catalog endpoints use. The shared fetchTrending* helpers
+    // carry no customer context, so ownership is resolved here:
+    //   - books: any verified/shipped/delivered order = permanently owned
+    //     (one-time purchase, no expiry → daysLeft null). Matches /client/books.
+    //   - ebooks: an active (endAt > now) subscription = owned; daysLeft is the
+    //     remaining window. Matches /client/ebooks.
+    const bookIds = trendingBooks.items.map((b: any) => b._id);
+    const trendingEbookIds = trendingEbooks.items.map((e: any) => e._id);
+    const nowTrending = new Date();
+    const [ownedBookIds, ebookSubs] = await Promise.all([
+      userId && bookIds.length
+        ? BookOrder.distinct("items.bookId", {
+            customerId: userId,
+            status: {
+              $in: [BookOrderStatus.VERIFIED, BookOrderStatus.SHIPPED, BookOrderStatus.DELIVERED],
+            },
+          })
+        : Promise.resolve([] as any[]),
+      userId && trendingEbookIds.length
+        ? EbookSubscription.find({
+            customerId: userId,
+            ebookId: { $in: trendingEbookIds },
+            status: true,
+            endAt: { $gt: nowTrending },
+          })
+            .select("ebookId endAt")
+            .lean()
+        : Promise.resolve([] as any[]),
+    ]);
+    const ownedBookSet = new Set((ownedBookIds as any[]).map((id) => String(id)));
+    const ebookEndAt = new Map<string, Date>();
+    for (const s of ebookSubs as any[]) {
+      const key = String(s.ebookId);
+      const prev = ebookEndAt.get(key);
+      if (!prev || s.endAt.getTime() > prev.getTime()) ebookEndAt.set(key, s.endAt);
+    }
+
+    const trendingBookData = trendingBooks.items.map((b: any) => ({
+      ...b,
+      isPaid: (b.price ?? 0) > 0,
+      isPurchased: ownedBookSet.has(String(b._id)),
+      daysLeft: null,
+    }));
+    const trendingEbookData = trendingEbooks.items.map((e: any) => {
+      const endAt = ebookEndAt.get(String(e._id)) ?? null;
+      return {
+        ...e,
+        isPaid: !e.isFree,
+        isPurchased: !!endAt,
+        daysLeft: endAt ? computeDaysLeft(endAt, nowTrending) : null,
+      };
+    });
 
     const dashboard: Array<{ title: string; type: string; data: unknown }> = [];
 
@@ -238,10 +299,10 @@ export const getDashboard = async (req: Request, res: Response) => {
     if (coursesWithPlans.length) dashboard.push({ title: "Course Subjects", type: "course", data: coursesWithPlans });
     if (courseCategoriesData.length)
       dashboard.push({ title: "Course Categories", type: "courseCategory", data: courseCategoriesData });
-    if (trendingBooks.items.length)
-      dashboard.push({ title: "Trending Books", type: "trending-book", data: trendingBooks.items });
-    if (trendingEbooks.items.length)
-      dashboard.push({ title: "Trending Ebooks", type: "trending-ebook", data: trendingEbooks.items });
+    if (trendingBookData.length)
+      dashboard.push({ title: "Trending Books", type: "trending-book", data: trendingBookData });
+    if (trendingEbookData.length)
+      dashboard.push({ title: "Trending Ebooks", type: "trending-ebook", data: trendingEbookData });
 
     logger.info("getDashboard success", { traceId, customerId: userId, sections: dashboard.length, unreadNotifications });
     return res.status(200).json({
@@ -767,13 +828,19 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
       resolveFreeCategoryIds(),
     ]);
 
-    const freeVideos = freeCats.videoCategoryIds.length
-      ? await Video.find({ status: true, videoCategoryId: { $in: freeCats.videoCategoryIds } })
-          .populate("videoCategoryId", "_id title image")
-          .sort({ order: 1, createdAt: -1 })
-          .limit(FREE_DASHBOARD_LIMIT)
-          .lean()
-      : [];
+    // Free = reachable via a free video category OR the video's own
+    // priceType:"free" flag (matches free-videos listing + /v1/lecture).
+    const freeVideos = await Video.find({
+      status: true,
+      $or: [
+        { videoCategoryId: { $in: freeCats.videoCategoryIds } },
+        { priceType: "free" },
+      ],
+    })
+      .populate("videoCategoryId", "_id title image")
+      .sort({ order: 1, createdAt: -1 })
+      .limit(FREE_DASHBOARD_LIMIT)
+      .lean();
 
     const dashboard: Array<{ title: string; type: string; data: unknown }> = [];
     if (trendingFreeBooks.items.length)

@@ -121,7 +121,8 @@ export const getDashboardOverview = async (req: Request, res: Response) => {
   try {
     if (!promoterId) { logger.warn("getDashboardOverview unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    const data = await buildPromoterOverview(promoterId, req.query.range as string, traceId);
+    const { range, startDate, endDate, promocodeId } = req.query as Record<string, string>;
+    const data = await buildPromoterOverview(promoterId, range, traceId, { startDate, endDate, promocodeId });
     logger.info("getDashboardOverview success", { traceId, promoterId });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {

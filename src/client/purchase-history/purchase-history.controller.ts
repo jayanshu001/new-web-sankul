@@ -212,6 +212,13 @@ export const listBooksHistory = async (req: Request, res: Response) => {
         purchasedAt: o.createdAt,
         status: o.status,
         receiptUrl: `/api/v1/client/purchase-history/books/${o._id}/receipt`,
+        // Drives the "Track Order" button on the Books tab. Only present once
+        // admin has bound a courier/AWB; mirrors the shape under tracking.* in
+        // GET /client/books/orders/:id/tracking so the FE can read tracking.trackingId.
+        tracking: {
+          trackingId: o.tracking?.trackingId ?? null,
+          courier: o.tracking?.courier ?? null,
+        },
         meta: {
           receiptId: o.receiptId,
           itemsCount: o.items?.length ?? 0,
