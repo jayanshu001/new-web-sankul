@@ -13,6 +13,7 @@ export const createBookSchema = z.object({
   author: z.string().max(150).optional(),
   image: z.string().max(500).optional(),
   description: z.string().optional(),
+  termsAndConditions: z.string().optional().nullable(),
   demoUrl: z.string().max(500).optional(),
   weight: z.coerce.number().int().nonnegative().optional(),
   pages: z.coerce.number().int().nonnegative().optional(),

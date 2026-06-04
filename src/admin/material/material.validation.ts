@@ -48,6 +48,7 @@ export const createMaterialSchema = z.object({
   fileMime: z.string().max(100).optional(),
   language: z.string().max(20).optional(),
   isPreview: z.boolean().optional(),
+  isPaid: z.boolean().optional(),
   order: z.number().int().optional(),
   status: z.boolean().optional(),
 });

@@ -55,12 +55,12 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
     }
 
     // Enforce 1 active device rule for customers
-    if (decoded.type === "customer") {
-      const activeToken = await redisClient.get(`customer_session:${decoded.id}`);
-      if (!activeToken || activeToken !== token) {
-        return failure(res, "Session expired or logged in on another device.", 401);
-      }
-    }
+    // if (decoded.type === "customer") {
+    //   const activeToken = await redisClient.get(`customer_session:${decoded.id}`);
+    //   if (!activeToken || activeToken !== token) {
+    //     return failure(res, "Session expired or logged in on another device.", 401);
+    //   }
+    // }
 
     // Enforce 1 active device rule for admins
     // Disabled: admins may stay logged in on multiple devices simultaneously.

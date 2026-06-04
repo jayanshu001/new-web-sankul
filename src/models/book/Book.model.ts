@@ -8,6 +8,7 @@ export interface IBook extends Document {
   author?: string;
   image?: string;
   description?: string;
+  termsAndConditions?: string;
   demoUrl?: string;
   bookUrl?: string;
   weight?: number;
@@ -40,6 +41,8 @@ const BookSchema = new Schema<IBook>(
     author: { type: String, maxlength: 150 },
     image: { type: String, maxlength: 500 },
     description: { type: String },
+    // Rich-text HTML (no length cap), mirrors the Ebook model's field.
+    termsAndConditions: { type: String, default: null },
     demoUrl: { type: String, maxlength: 500 },
     bookUrl: { type: String, maxlength: 500 },
     weight: { type: Number, default: 0 },
@@ -63,6 +66,16 @@ const BookSchema = new Schema<IBook>(
 BookSchema.index({ status: 1, orderBy: 1 });
 BookSchema.index({ examCountdownCategoryId: 1, status: 1, orderBy: 1 });
 BookSchema.index({ status: 1, isTrending: 1, orderBy: 1 });
-BookSchema.index({ name: "text", author: "text" });
+// The Book has a `language` field (e.g. "Gujarati") that is plain metadata.
+// Without `language_override`, Mongo's text index treats that field as the
+// per-document text-search language override, and "Gujarati" isn't a supported
+// text-search language — so any insert/update fails with
+// "language override unsupported: Gujarati". Pointing the override at a
+// non-existent field (`_none`) and defaulting to "none" decouples the metadata
+// `language` from the text index. Mirrors the Ebook model's text index.
+BookSchema.index(
+  { name: "text", author: "text" },
+  { default_language: "none", language_override: "_none" }
+);
 
 export const Book = model<IBook>("Book", BookSchema);

@@ -16,6 +16,19 @@ const TESTING_ACCOUNTS: string[] = (process.env.TESTING_PHONE_NUMBERS || "")
   .filter(Boolean);
 const STATIC_OTP = "5786";
 
+// TEMPORARY: when DUMMY_OTP_ENABLED=true, EVERY signup/login gets a fixed dummy
+// OTP and the real SMS provider is NOT called. Lets QA/dev sign up any number
+// without burning SMS credits. Verify needs no change — it string-compares the
+// entered OTP against the stored one, which is now the dummy. MUST stay off in
+// production (defaults off; opt-in via env only).
+const DUMMY_OTP_ENABLED = process.env.DUMMY_OTP_ENABLED === "true";
+const DUMMY_OTP_VALUE = process.env.DUMMY_OTP_VALUE || "1234";
+if (DUMMY_OTP_ENABLED) {
+  logger.warn(
+    `[AUTH] DUMMY_OTP_ENABLED is ON — all OTPs are "${DUMMY_OTP_VALUE}" and SMS is skipped. Do NOT use in production.`
+  );
+}
+
 const JWT_SECRET = process.env.JWT_ACCESS_SECRET as string;
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET as string;
 const JWT_ACCESS_TTL_DAYS = 7;
@@ -103,11 +116,15 @@ export async function generateOtp(rawPhone: string, traceId?: string): Promise<{
     // }
   }
 
-  const otp = isStatic ? STATIC_OTP : String(Math.floor(1000 + Math.random() * 8999));
+  const otp = DUMMY_OTP_ENABLED
+    ? DUMMY_OTP_VALUE
+    : isStatic
+    ? STATIC_OTP
+    : String(Math.floor(1000 + Math.random() * 8999));
   console.log(`\x1b[1m\x1b[38;5;50m[OTP]\x1b[0m \x1b[38;5;208mGenerated\x1b[0m → \x1b[1m\x1b[38;5;226m${otp}\x1b[0m`);
 
-  // Send SMS (or skip for static test numbers)
-  const sent = isStatic || (await sendOtpSms(phone, otp));
+  // Send SMS (skipped for dummy mode and for static test numbers).
+  const sent = DUMMY_OTP_ENABLED || isStatic || (await sendOtpSms(phone, otp));
   if (!sent) {
     return { ok: false, message: "Unable to send OTP. Please try again later." };
   }
@@ -210,10 +227,18 @@ export async function resendOtp(rawPhone: string, traceId?: string): Promise<{
   }
 
   // Generate & Send
-  const otp = isStatic ? STATIC_OTP : String(Math.floor(1000 + Math.random() * 8999));
-  logger.info("resendOtp service otp generated", { traceId, phone, otpType: isStatic ? "static" : "dynamic" });
+  const otp = DUMMY_OTP_ENABLED
+    ? DUMMY_OTP_VALUE
+    : isStatic
+    ? STATIC_OTP
+    : String(Math.floor(1000 + Math.random() * 8999));
+  logger.info("resendOtp service otp generated", {
+    traceId,
+    phone,
+    otpType: DUMMY_OTP_ENABLED ? "dummy" : isStatic ? "static" : "dynamic",
+  });
 
-  const sent = isStatic || (await sendOtpSms(phone, otp));
+  const sent = DUMMY_OTP_ENABLED || isStatic || (await sendOtpSms(phone, otp));
   if (!sent) {
     return { ok: false, message: "Unable to resend OTP. Please try again later." };
   }

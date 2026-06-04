@@ -504,6 +504,7 @@ export const duplicateCategory = async (req: Request, res: Response) => {
           fileMime: m.fileMime,
           language: m.language,
           isPreview: m.isPreview,
+          isPaid: m.isPaid,
           order: m.order,
           status: m.status,
         }));
@@ -642,6 +643,9 @@ function applyUploadedFile(req: Request) {
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
   if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
   if (typeof req.body.isPreview === "string") req.body.isPreview = req.body.isPreview === "true";
+  // Arrives as "true"/"false" in multipart (PDF upload) requests — coerce it
+  // the same way as isPreview/status so the Zod boolean validator passes.
+  if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
 }
 
 export const createMaterial = async (req: Request, res: Response) => {

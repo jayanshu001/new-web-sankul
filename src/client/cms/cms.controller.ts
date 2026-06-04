@@ -12,6 +12,7 @@ import { checkClientUpgrade } from "../../modules/cms/upgrade-check.service";
 import { getVersionSettings } from "../../modules/version/version.service";
 import { SocialLink } from "../../models/system/SocialLink.model";
 import { SocialLinkType } from "../../models/system/SocialLinkType.model";
+import { CurrentAffair } from "../../models/system/CurrentAffair.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -142,6 +143,29 @@ export const listSocialLinkTypes = async (_req: Request, res: Response) => {
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("listSocialLinkTypes failed", { traceId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// GET /api/v1/client/current-affairs[?limit=N] — active current affairs for
+// the home screen, newest first. Returns only the fields the client renders
+// (image, title, youtubeLink). `?limit=` optionally caps the list (0/absent =
+// no cap).
+export const listCurrentAffairs = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listCurrentAffairs invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+
+  try {
+    const limit = Math.max(parseInt(req.query.limit as string) || 0, 0);
+    let q = CurrentAffair.find({ status: true })
+      .sort({ createdAt: -1 })
+      .select("title image youtubeLink");
+    if (limit > 0) q = q.limit(limit);
+    const data = await q.lean();
+    logger.info("listCurrentAffairs success", { traceId, count: data.length });
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    logger.error("listCurrentAffairs failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

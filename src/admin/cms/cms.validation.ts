@@ -27,6 +27,19 @@ export const popupCreateSchema = z.object({
 });
 export const popupUpdateSchema = popupCreateSchema.partial();
 
+// ─── Current Affairs ──
+// `image` required on create (must always be present per the frontend
+// contract). On update it's optional: when the admin doesn't change the
+// image, the request omits it and genericUpdate's $set leaves the existing
+// URL untouched — never null it out.
+export const currentAffairCreateSchema = z.object({
+  title: z.string().min(1).max(255),
+  image: z.string().min(1).max(500),
+  youtubeLink: z.string().min(1).max(500),
+  status: z.boolean().optional(),
+});
+export const currentAffairUpdateSchema = currentAffairCreateSchema.partial();
+
 // ─── Banner ──
 const bannerObjectId = z
   .string()
@@ -34,7 +47,7 @@ const bannerObjectId = z
 
 export const bannerCreateSchema = z.object({
   image: z.string().min(1).max(500),
-  key: z.enum(["Packages", "Courses", "Book", "EBook"]).optional(),
+  key: z.enum(["Packages", "Courses", "Book", "EBook", "Explore"]).optional(),
   keyId: bannerObjectId.optional(),
   orderBy: z.number().int().default(0),
 });

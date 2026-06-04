@@ -64,6 +64,7 @@ import {
 } from "../../modules/terms/terms.validation";
 import { SocialLink } from "../../models/system/SocialLink.model";
 import { SocialLinkType } from "../../models/system/SocialLinkType.model";
+import { CurrentAffair } from "../../models/system/CurrentAffair.model";
 import {
   faqCreateSchema,
   faqUpdateSchema,
@@ -85,6 +86,8 @@ import {
   socialLinkUpdateSchema,
   socialLinkTypeCreateSchema,
   socialLinkTypeUpdateSchema,
+  currentAffairCreateSchema,
+  currentAffairUpdateSchema,
   reorderSchema,
 } from "./cms.validation";
 import logger from "../../utils/logger";
@@ -682,6 +685,13 @@ export const getSocialLink = genericGet(SocialLink);
 export const createSocialLink = genericCreate(SocialLink, socialLinkCreateSchema);
 export const updateSocialLink = genericUpdate(SocialLink, socialLinkUpdateSchema);
 export const deleteSocialLink = genericDelete(SocialLink);
+
+// ─── Current Affairs ──
+export const listCurrentAffairs = genericList(CurrentAffair, { createdAt: -1 });
+export const getCurrentAffair = genericGet(CurrentAffair);
+export const createCurrentAffair = genericCreate(CurrentAffair, currentAffairCreateSchema);
+export const updateCurrentAffair = genericUpdate(CurrentAffair, currentAffairUpdateSchema);
+export const deleteCurrentAffair = genericDelete(CurrentAffair);
 
 // ─── Terms ──
 // Delegated to terms service (MySQL/Prisma when listed in
