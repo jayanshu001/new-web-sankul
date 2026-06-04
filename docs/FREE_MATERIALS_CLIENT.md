@@ -1,19 +1,31 @@
 # Free Materials — Client Integration
 
-The Free Materials screen uses **two endpoints**: one for the grouped landing
-view (sections + category cards), and one for the per-category material list
-(detail page shown after tapping a card).
+`/free-materials` returns **distinct material-category cards** — each category
+that contains at least one free material appears exactly **once**, with its free
+`lessonCount` and the free course/package it belongs to. (The old
+`/free-materials/grouped` endpoint has been **removed**.)
 
-Both require a Bearer token.
+Tapping a card lists that category's free materials via the existing
+`/material-categories/:id/materials` endpoint with `?type=free`.
+
+All endpoints require a Bearer token.
 
 ---
 
-## 1) `GET /api/v1/client/free-materials/grouped`
+## 1) `GET /api/v1/client/free-materials`
 
-Returns the two-level tree for the Free Materials landing screen.
+Distinct, paginated list of material-category cards. A category appears once,
+never duplicated, regardless of how many free materials it holds. "Free" is
+decided per material by the row's own `isPaid:false` flag (mirrors `/free-videos`
+using `priceType:"free"`); a category is included only if it has ≥1 such material.
 
-**Auth:** Bearer token (required)
-**Query params:** none
+### Query params (all optional)
+
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `search` | string | — | Case-insensitive substring match on the **category title**. |
+| `page` | number | `1` | 1-indexed (paginates over the distinct category set). |
+| `limit` | number | `20` | Page size. |
 
 ### Response 200
 
@@ -22,144 +34,101 @@ Returns the two-level tree for the Free Materials landing screen.
   "success": true,
   "data": [
     {
-      "_id": "66f0a1b2c3d4e5f600000001",
-      "name": "UPSC Preparations",
-      "type": "course",
-      "materialCategories": [
-        {
-          "_id": "66f0a1b2c3d4e5f600000010",
-          "title": "Reasoning",
-          "image": "https://websankul-staging.blr1.digitaloceanspaces.com/.../reasoning.jpg",
-          "lessonCount": 67
-        },
-        {
-          "_id": "66f0a1b2c3d4e5f600000011",
-          "title": "Subject",
-          "image": "https://websankul-staging.blr1.digitaloceanspaces.com/.../subject.jpg",
-          "lessonCount": 67
-        }
-      ]
-    },
-    {
-      "_id": "66f0a1b2c3d4e5f600000002",
-      "name": "GPSC Free Pack",
-      "type": "package",
-      "materialCategories": [ /* ... */ ]
+      "_id": "66f0a1b2c3d4e5f600000010",
+      "title": "Reasoning",
+      "image": "https://.../reasoning.jpg",
+      "lessonCount": 2,
+      "parent": {
+        "_id": "66f0a1b2c3d4e5f600000001",
+        "name": "UPSC Preparations",
+        "type": "course"
+      }
     }
-  ]
+  ],
+  "pagination": { "total": 3, "page": 1, "limit": 20, "totalPages": 1 }
 }
 ```
-
-### Field reference
 
 | Field | Type | Notes |
 |---|---|---|
-| `data[]._id` | ObjectId | Course or package id. Use as section key — not needed for the detail-page call. |
-| `data[].name` | string | Section header shown in the UI (e.g. "UPSC Preparations"). Replaces the old material-category title that was being shown as the header. |
-| `data[].type` | `"course"` \| `"package"` | Tells the client which kind of parent this is. Useful if courses and packages need different styling/icons. |
-| `data[].materialCategories[]._id` | ObjectId | **Pass this as `materialCategoryId` to endpoint #2 when the user taps the card.** |
-| `data[].materialCategories[].title` | string | Card title (e.g. "Reasoning"). |
-| `data[].materialCategories[].image` | string \| null | Card icon/image url. May be `null`. |
-| `data[].materialCategories[].lessonCount` | number | Count of active materials in that category. Render as "67 Lessons". |
+| `_id` | ObjectId | Material category id. **Pass as `:id` to endpoint #2.** |
+| `title` / `image` | string | Card label + icon. |
+| `lessonCount` | number | Count of **free** (`isPaid:false`, active) materials in the category — matches what endpoint #2 returns with `type=free`. |
+| `parent` | object \| null | The free course/package the category belongs to (`type`: `"course"` \| `"package"`). `null` for a category whose materials are free only via their own `isPaid:false` flag (no free parent). If attached to several free parents, the first match is returned. |
 
-### Behavior notes
-
-- A material category shared across multiple free courses/packages appears
-  **under each parent** (duplicated by design).
-- `lessonCount` counts only materials with `status: true`.
-- Parents with no resolvable categories, and inactive categories, are omitted.
-- No pagination — the tree is expected to be small (number of free
-  courses/packages).
+- A category appears **once** even if shared across multiple free courses/packages.
+- Categories with zero free materials never appear (no empty cards).
+- Orphan/uncategorised materials are excluded.
 
 ---
 
-## 2) `GET /api/v1/client/free-materials`
+## 2) `GET /api/v1/client/material-categories/:id/materials`
 
-Returns the flat, paginated list of materials. Call this when the user taps a
-category card to render the detail page.
-
-**Auth:** Bearer token (required)
+Per-category material list (used after tapping a category). Now supports a price
+filter via `type`, mirroring `/video-categories/:id/videos`.
 
 ### Query params
 
-| Param | Type | Required | Default | Notes |
-|---|---|---|---|---|
-| `materialCategoryId` | ObjectId | **Required for the detail page** | — | The `_id` taken from `data[].materialCategories[]._id` of endpoint #1. If omitted, the endpoint returns materials across *all* free categories. If the id isn't part of any free course/package, an empty list is returned (paid categories cannot leak through). |
-| `search` | string | optional | — | Case-insensitive substring match on material `title`. |
-| `page` | number | optional | `1` | 1-indexed. |
-| `limit` | number | optional | `20` | Page size. |
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `type` | `"free"` \| `"paid"` | — | `free` → only `isPaid:false`; `paid` → only `isPaid:true`; omitted → all. Any other value is ignored. |
+| `search` | string | — | Case-insensitive match on `title`. |
+| `page` | number | `1` | 1-indexed. |
+| `limit` | number | `20` | Page size. |
+
+To list a category's free materials:
+```
+GET /api/v1/client/material-categories/<id>/materials?type=free&page=1&limit=20
+```
 
 ### Response 200
 
 ```json
 {
   "success": true,
-  "data": [
-    {
-      "_id": "69ef65c3debc01c16b45c08e",
-      "title": "Material List One",
-      "materialCategoryId": {
-        "_id": "66f0a1b2c3d4e5f600000010",
-        "title": "Reasoning",
-        "image": "https://.../reasoning.jpg"
-      },
-      "file": "https://.../1778149369636-file.pdf",
-      "directLink": "",
-      "fileSize": 69173,
-      "fileMime": "application/pdf",
-      "language": "gu",
-      "isPreview": false,
-      "downloadCount": 0,
-      "order": 2,
-      "status": true,
-      "createdAt": "2026-04-27T13:33:55.520Z",
-      "updatedAt": "2026-05-07T10:22:50.052Z"
-    }
-  ],
-  "pagination": {
-    "total": 67,
-    "page": 1,
-    "limit": 20,
-    "totalPages": 4
-  }
+  "data": {
+    "category": { "_id": "...", "title": "Reasoning", "image": "..." },
+    "list": [
+      {
+        "_id": "...",
+        "title": "Material List One",
+        "file": "https://.../file.pdf",
+        "directLink": "",
+        "isPaid": false,
+        "isPurchased": true,
+        "...": "..."
+      }
+    ]
+  },
+  "pagination": { "total": 2, "page": 1, "limit": 20, "totalPages": 1 }
 }
 ```
 
-Response shape is unchanged from the previous version of this endpoint — only
-the `materialCategoryId` query param is new.
+- Each row carries `isPaid` and `isPurchased`. For **paid** materials the user
+  hasn't purchased, `file`/`directLink` are returned empty (server-side gating).
+  Free materials (`type=free`) are always accessible, so their URLs are present.
 
 ---
 
 ## Frontend integration flow
 
-1. **Landing screen ("Free Materials"):** call
-   `GET /free-materials/grouped`.
-   - For each item in `data`, render a section with header = `name`.
-   - Inside the section, render each `materialCategories[]` entry as a card
-     showing `title`, `"{lessonCount} Lessons"`, and `image`.
+1. **Free Materials landing:** call `GET /free-materials` (paginate as needed).
+   Each item is already a distinct category card — render `title`, `image`,
+   `"{lessonCount} Lessons"`, and optionally the `parent` name.
+2. **Tapping a category card:** call
+   `GET /material-categories/<card._id>/materials?type=free`.
+   - For a mixed/paid screen, omit `type` (all) or pass `type=paid`.
 
-2. **On tapping a category card:** navigate to the detail page, passing the
-   category's `_id`. On that page, call:
-
-   ```
-   GET /api/v1/client/free-materials?materialCategoryId=<id>&page=1&limit=20
-   ```
-
-   Add `&search=<query>` when the search bar is used. Paginate via `page`.
-
-### Why two endpoints instead of one bundled call
-
-The detail page is paginated and searchable, so it belongs on the server. A
-single bundled call would either drop pagination (breaks for large categories)
-or invent a nested-pagination shape that is harder to consume on both sides.
-The grouped endpoint stays cheap (no material rows shipped up front), and the
-detail call only fires when the user actually opens a category.
+> `/free-materials` returns each category at most once and only when it has ≥1
+> free material — no duplicates, no empty cards.
 
 ---
 
-## Error responses (both endpoints)
+## Error responses
 
 | Status | Body |
 |---|---|
+| 400 | `{ "success": false, "message": "Invalid category id." }` — bad `:id` (endpoint #2). |
 | 401 | `{ "success": false, "message": "Unauthorized." }` — missing/invalid Bearer token. |
+| 404 | `{ "success": false, "message": "Material category not found." }` — unknown `:id` (endpoint #2). |
 | 500 | `{ "success": false, "message": "<error>" }` — server error. |

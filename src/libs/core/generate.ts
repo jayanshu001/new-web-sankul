@@ -8,6 +8,10 @@ import { EbookOrder } from "../../models/ebook/EbookOrder.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { Customer } from "../../models/customer/Customer.model";
+import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { Course } from "../../models/course/Course.model";
+import { Package } from "../../models/course/Package.model";
+import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamQuestion } from "../../models/exam/ExamQuestion.model";
 import { ExamQuestionOption } from "../../models/exam/ExamQuestionOption.model";
@@ -75,7 +79,7 @@ function formatDate(d?: Date): string {
   return `${dd}-${mm}-${yyyy}`;
 }
 
-async function renderPdfFromHtml(html: string): Promise<Buffer> {
+export async function renderPdfFromHtml(html: string): Promise<Buffer> {
   const browser = await puppeteer.launch({
     headless: true,
     args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
@@ -180,6 +184,77 @@ export async function generateEbookReceipt(orderId: string, customerId: string):
   };
 
   const html = await ejs.renderFile(TEMPLATE_PATH, data);
+  return renderPdfFromHtml(html);
+}
+
+// Course/package order receipt — same EJS template + Puppeteer pipeline as the
+// ebook/book receipts so all three invoices look identical. A "course order" is
+// a PackageCourseSubscription, which is either a course (courseId) or a package
+// (targetPackageId); the plan lives in `packageId` → PackageCourseEbookPrice.
+// Plan `duration` is in DAYS for course/package plans (unlike ebook = months).
+// Builds the receipt HTML (fetch order → assemble data → render EJS) without
+// rasterising it. Split out so callers can run renderPdfFromHtml themselves.
+export async function buildCourseReceiptHtml(orderId: string, customerId: string): Promise<string> {
+  if (!Types.ObjectId.isValid(orderId)) throw new Error("Invalid order id.");
+  const order = await PackageCourseSubscription.findOne({ _id: orderId, customerId }).lean();
+  if (!order) throw new Error("Order not found.");
+  if (!order.razorpayPaymentId) throw new Error("Order has not been paid yet.");
+
+  const [customer, course, pkg, plan] = await Promise.all([
+    Customer.findById(customerId).lean(),
+    order.courseId ? Course.findById(order.courseId).select("name").lean() : Promise.resolve(null),
+    order.targetPackageId ? Package.findById(order.targetPackageId).select("name").lean() : Promise.resolve(null),
+    order.packageId
+      ? PackageCourseEbookPrice.findById(order.packageId).select("name duration withMaterial").lean()
+      : Promise.resolve(null),
+  ]);
+  if (!customer) throw new Error("Customer not found.");
+
+  const validity = plan?.duration
+    ? `${plan.duration} day${plan.duration > 1 ? "s" : ""}`
+    : "-";
+
+  const productName =
+    (course as any)?.name || (pkg as any)?.name || (plan as any)?.name || "Course";
+  const itemName = plan?.withMaterial ? `${productName} (with material)` : productName;
+
+  // Amount: prefer the recorded paidAmount; fall back to 0 if absent.
+  const amount = typeof order.paidAmount === "number" ? order.paidAmount : 0;
+
+  const items = [
+    {
+      name: itemName,
+      validity,
+      amount: amount.toFixed(2),
+    },
+  ];
+
+  const data = {
+    contactNumber: COMPANY_CONTACT,
+    email: COMPANY_EMAIL,
+    paymentMethod: order.paymentMethod || "Online",
+    razorpayPaymentId: order.razorpayPaymentId || "-",
+    receipt: order.razorpayOrderId || String(order._id),
+    createdDate: formatDate(order.paidAt || order.createdAt),
+    userName: fullName(customer) || "-",
+    userPhone: customer.phoneNumber || "-",
+    userEmailAddress: customer.emailAddress || "-",
+    items,
+    totalAmount: amount.toFixed(2),
+    totalAmountInWord: numberToIndianWords(amount),
+    notes: DEFAULT_NOTES,
+  };
+
+  return ejs.renderFile(TEMPLATE_PATH, data);
+}
+
+// Course/package order receipt — same EJS template + Puppeteer pipeline as the
+// ebook/book receipts so all three invoices look identical. A "course order" is
+// a PackageCourseSubscription, which is either a course (courseId) or a package
+// (targetPackageId); the plan lives in `packageId` → PackageCourseEbookPrice.
+// Plan `duration` is in DAYS for course/package plans (unlike ebook = months).
+export async function generateCourseReceipt(orderId: string, customerId: string): Promise<Buffer> {
+  const html = await buildCourseReceiptHtml(orderId, customerId);
   return renderPdfFromHtml(html);
 }
 

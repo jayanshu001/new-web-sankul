@@ -4,13 +4,12 @@ import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { CRM_LEAD_TYPE } from "../../models/enums";
 import { GenerateCRMLead } from "../../utils/crm";
-import { pdfCourseReceipt } from "../../utils/pdfCourseReceipt";
+import { buildCourseReceiptHtml, renderPdfFromHtml } from "../../libs/core/generate";
 import { shippingBodySchema } from "./course.validation";
 import {
   buildCourseDetails,
   upsertCourseOrderShipping,
   getOrderDetailsForUser,
-  getOrderForInvoice,
 } from "./course.service";
 import { Course } from "../../models/course/Course.model";
 import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
@@ -385,24 +384,30 @@ export const getOrderInvoiceHandler = async (req: Request, res: Response) => {
       return failure(res, "Please select valid package", 400);
     }
 
-    const sub = await getOrderForInvoice(orderId, userId, traceId);
-    if (!sub) {
-      return failure(res, "Invalid Package / Course Order!", 400);
-    }
-
-    const buffer = await pdfCourseReceipt(orderId);
+    // Build the receipt HTML (shared EJS template — identical to the ebook/book
+    // invoices) then rasterise it via the shared Puppeteer renderer.
+    // buildCourseReceiptHtml does its own ownership (_id + customerId) and paid
+    // checks.
+    const html = await buildCourseReceiptHtml(orderId, userId);
+    const buffer = await renderPdfFromHtml(html);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", buffer.length);
     logger.info("getOrderInvoiceHandler success", { traceId, userId, orderId });
     return res.send(buffer);
-  } catch (err) {
-    logger.error("getOrderInvoiceHandler failed", {
-      traceId,
-      userId,
-      orderId,
-      error: getErrorMessage(err),
-      stack: (err as Error).stack,
-    });
-    return failure(res, getErrorMessage(err), 500);
+  } catch (err: any) {
+    const msg = err?.message || "Failed to generate invoice.";
+    const code = /not found|invalid|not been paid/i.test(msg) ? 404 : 500;
+    if (code === 500) {
+      logger.error("getOrderInvoiceHandler failed", {
+        traceId,
+        userId,
+        orderId,
+        error: getErrorMessage(err),
+        stack: (err as Error).stack,
+      });
+    } else {
+      logger.warn("getOrderInvoiceHandler client error", { traceId, userId, orderId, msg });
+    }
+    return failure(res, msg, code);
   }
 };

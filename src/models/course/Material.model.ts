@@ -11,6 +11,7 @@ export interface IMaterial extends Document {
   fileMime?: string;
   language?: string;
   isPreview: boolean;
+  isPaid: boolean;
   downloadCount: number;
   order: number;
   status: boolean;
@@ -34,6 +35,7 @@ const materialSchema = new Schema<IMaterial>(
     fileMime: { type: String, maxlength: 100 },
     language: { type: String, default: "gu", maxlength: 20 },
     isPreview: { type: Boolean, default: false },
+    isPaid: { type: Boolean, default: false },
     downloadCount: { type: Number, default: 0 },
     order: { type: Number, default: 0 },
     status: { type: Boolean, default: true },

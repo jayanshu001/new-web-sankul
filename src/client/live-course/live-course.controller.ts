@@ -146,11 +146,27 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
     ]);
 
     const rowIds = rows.map((r: any) => r._id);
-    const [daysLeftMap, purchaseCountMap, ownedIds] = await Promise.all([
+    const [daysLeftMap, purchaseCountMap, ownedIds, planRows] = await Promise.all([
       getDaysLeftMapForLiveCourses(req.user?.id, rowIds),
       getPurchaseCountMap(rowIds),
       getOwnedLiveCourseIds(req.user?.id),
+      // Pricing plans for every listed course, batched into one query and
+      // grouped per course below. Same enrichment (originalPrice/discountPercent)
+      // the detail endpoint (getLiveCourseForClient) applies.
+      rowIds.length
+        ? LiveCoursePlan.find({ liveCourseId: { $in: rowIds }, status: true }).sort({ price: 1 }).lean()
+        : Promise.resolve([]),
     ]);
+
+    const plansByCourse = new Map<string, any[]>();
+    for (const p of planRows as any[]) {
+      const original =
+        typeof p.originalPrice === "number" && p.originalPrice > p.price ? p.originalPrice : null;
+      const discountPercent = original ? Math.round(((original - p.price) / original) * 100) : 0;
+      const key = String(p.liveCourseId);
+      if (!plansByCourse.has(key)) plansByCourse.set(key, []);
+      plansByCourse.get(key)!.push({ ...p, originalPrice: original, discountPercent });
+    }
 
     // Both hero cards require startTime > now. Among upcoming batches, the
     // top-purchased course gets "featured" (red), the second-highest gets
@@ -176,6 +192,7 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
         isPurchased: ownedIds.has(key),
         purchaseCount: purchaseCountMap.get(key) ?? 0,
         cardVariant,
+        plans: plansByCourse.get(key) ?? [],
         shareableLink: buildShareUrl("live-courses", key, base),
       };
     });

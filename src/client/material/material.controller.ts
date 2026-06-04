@@ -4,6 +4,7 @@ import { Material } from "../../models/course/Material.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { getPurchasedMaterialIds, shapeMaterialForClient } from "./entitlement";
 
 const NEWLY_ADDED_DAYS = 10;
 
@@ -79,9 +80,12 @@ export const getCategoryContents = async (req: Request, res: Response) => {
       })
     );
 
-    const materials = await Material.find({ materialCategoryId: id, status: true })
-      .select("_id title description thumbnail file directLink fileSize language isPreview order createdAt")
-      .sort({ order: 1, createdAt: -1 });
+    const materialsRaw = await Material.find({ materialCategoryId: id, status: true })
+      .select("_id title description thumbnail file directLink fileSize language isPreview isPaid materialCategoryId order createdAt")
+      .sort({ order: 1, createdAt: -1 })
+      .lean();
+    const ownedIds = await getPurchasedMaterialIds(req.user?.id, materialsRaw as any);
+    const materials = materialsRaw.map((m) => shapeMaterialForClient(m, ownedIds));
 
     let breadcrumbs: any[] = [];
     if (current.ancestors && current.ancestors.length) {
@@ -118,14 +122,21 @@ export const getMaterialDetail = async (req: Request, res: Response) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("getMaterialDetail invalid id", { traceId, materialId: id }); return res.status(400).json({ success: false, message: "Invalid material id." }); }
 
-    const material = await Material.findOne({ _id: id, status: true }).populate(
-      "materialCategoryId",
-      "_id title"
-    );
+    const material = await Material.findOne({ _id: id, status: true })
+      .populate("materialCategoryId", "_id title")
+      .lean();
     if (!material) { logger.warn("getMaterialDetail not found", { traceId, materialId: id }); return res.status(404).json({ success: false, message: "Material not found." }); }
 
-    logger.info("getMaterialDetail success", { traceId, materialId: id });
-    return res.status(200).json({ success: true, data: material });
+    // materialCategoryId is populated to an object here; entitlement needs the
+    // raw category id, so resolve it before computing access.
+    const categoryId = (material.materialCategoryId as any)?._id ?? material.materialCategoryId;
+    const ownedIds = await getPurchasedMaterialIds(req.user?.id, [
+      { _id: material._id as any, materialCategoryId: categoryId, isPaid: (material as any).isPaid },
+    ]);
+    const data = shapeMaterialForClient(material, ownedIds);
+
+    logger.info("getMaterialDetail success", { traceId, materialId: id, isPurchased: data.isPurchased });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getMaterialDetail failed", { traceId, materialId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -172,10 +183,19 @@ export const getRecentMaterials = async (req: Request, res: Response) => {
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const limit = Math.min(Math.max(parseInt((req.query.limit as string) || "20", 10), 1), 100);
 
-    const materials = await Material.find({ status: true, createdAt: { $gt: cutoff } })
+    const materialsRaw = await Material.find({ status: true, createdAt: { $gt: cutoff } })
       .populate("materialCategoryId", "_id title")
       .sort({ createdAt: -1 })
-      .limit(limit);
+      .limit(limit)
+      .lean();
+    // Populated category → unwrap to raw id for the entitlement lookup.
+    const forEntitlement = materialsRaw.map((m: any) => ({
+      _id: m._id,
+      materialCategoryId: m.materialCategoryId?._id ?? m.materialCategoryId,
+      isPaid: m.isPaid,
+    }));
+    const ownedIds = await getPurchasedMaterialIds(req.user?.id, forEntitlement);
+    const materials = materialsRaw.map((m) => shapeMaterialForClient(m, ownedIds));
 
     logger.info("getRecentMaterials success", { traceId, days, count: materials.length });
     return res.status(200).json({ success: true, data: materials });

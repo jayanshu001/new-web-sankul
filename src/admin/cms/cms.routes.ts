@@ -11,6 +11,7 @@ import {
   listSocialLinkTypes, getSocialLinkType, createSocialLinkType, updateSocialLinkType, deleteSocialLinkType,
   listSocialLinks, getSocialLink, createSocialLink, updateSocialLink, deleteSocialLink,
   listTerms, getTerms, createTerms, updateTerms, deleteTerms,
+  listCurrentAffairs, getCurrentAffair, createCurrentAffair, updateCurrentAffair, deleteCurrentAffair,
   getVersion, upsertVersion,
   getAppUpdate, upsertAppUpdate,
 } from "./cms.controller";
@@ -41,6 +42,11 @@ const attachIcon = (req: Request, _res: Response, next: NextFunction) => {
 
 const coerceSocialLink = (req: Request, _res: Response, next: NextFunction) => {
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
+  if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+  next();
+};
+
+const coerceCurrentAffair = (req: Request, _res: Response, next: NextFunction) => {
   if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
   next();
 };
@@ -104,6 +110,14 @@ router.post("/social-links", uploadS3.single("icon"), attachIcon, coerceSocialLi
 router.get("/social-links/:id", getSocialLink);
 router.put("/social-links/:id", uploadS3.single("icon"), attachIcon, coerceSocialLink, updateSocialLink);
 router.delete("/social-links/:id", deleteSocialLink);
+
+// Current Affairs — image optional on PUT; when absent, attachImage adds
+// nothing and genericUpdate's $set keeps the existing image URL.
+router.get("/current-affairs", listCurrentAffairs);
+router.post("/current-affairs", uploadS3.single("image"), attachImage, coerceCurrentAffair, createCurrentAffair);
+router.get("/current-affairs/:id", getCurrentAffair);
+router.put("/current-affairs/:id", uploadS3.single("image"), attachImage, coerceCurrentAffair, updateCurrentAffair);
+router.delete("/current-affairs/:id", deleteCurrentAffair);
 
 // Terms
 router.get("/terms", listTerms);

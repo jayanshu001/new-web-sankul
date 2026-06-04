@@ -16,6 +16,7 @@ import { Ebook } from "../../models/ebook/Ebook.model";
 import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { collapseProgressByVideo } from "../learning/collapseProgress";
 import { resolveVideoScope } from "../course/resolveVideoScope";
+import { getPurchasedMaterialIds, shapeMaterialForClient } from "../material/entitlement";
 import { LiveSession } from "../../models/course/LiveSession.model";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
 import { resolveVideoSource } from "../../utils/videoResolver";
@@ -23,14 +24,12 @@ import { defaultListingQualities, qualitiesFromSessionRecordings } from "../../u
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
-// Metadata-only row shape. Resolved/playable URLs (ytdl-core / VideoCrypt
-// output) are NOT included here — a single category page can hold 20+ videos
-// and we don't want to pay 20+ upstream calls per page load. The FE calls the
-// detail endpoint (getVideoByCategory) on row tap to get the encrypted envelope.
-//
-// We DO include youtube_id / aws_id / vimeo_id on each row so the FE can show
-// the right thumbnail/label and pass the correct id to whatever native player
-// flow it uses. These are just identifiers, not directly-playable URLs.
+// Row passthrough. The list now also embeds the encrypted playback envelope
+// (`request.files`, see listVideosByCategory) so the FE can download/play
+// straight from the list. Resolution is Redis-cached and failure-isolated per
+// row, so the page stays resilient even when an individual video can't resolve.
+// We also keep youtube_id / aws_id / vimeo_id on each row for thumbnail/label
+// and native-player flows — these are identifiers, not directly-playable URLs.
 function shapeVideoForList(v: any) {
   return v;
 }
@@ -119,6 +118,11 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const filter: any = { videoCategoryId: id, status: true };
     if (search) filter.title = { $regex: search, $options: "i" };
+    // Optional price filter. `?type=free` → only free videos, `?type=paid` →
+    // only paid. Any other value is ignored (no filter). Maps to the Video
+    // model's `priceType` field.
+    const typeQ = String(req.query.type ?? "").toLowerCase();
+    if (typeQ === "free" || typeQ === "paid") filter.priceType = typeQ;
 
     const [rawList, total, scope] = await Promise.all([
       Video.find(filter).sort({ order: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
@@ -172,8 +176,38 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
       }
     }
 
+    // Playable URL envelopes, one per row, built in parallel. Each video gets
+    // the SAME {request:{files:{token,hls,progressive}}} contract the detail
+    // endpoint (getVideoByCategory) returns, so the FE can download
+    // (hls/progressive) straight from the list without a per-row detail call.
+    // resolveVideoSource is Redis-cached (4h YouTube / 24h AWS), so warm pages
+    // are cheap; cold pages pay one upstream call per uncached video but run
+    // concurrently. Failures are isolated per video — a single unresolvable
+    // video yields request:null instead of failing the whole page.
+    const envelopeByVideo = new Map<string, any>();
+    await Promise.all(
+      rawList.map(async (v: any) => {
+        try {
+          const env = await encryptVideoEnvelope(v);
+          envelopeByVideo.set(String(v._id), env.request);
+        } catch (err: any) {
+          logger.warn("listVideosByCategory envelope resolve failed", {
+            traceId,
+            videoId: String(v._id),
+            platform: v.platform,
+            error: err?.message,
+          });
+          envelopeByVideo.set(String(v._id), null);
+        }
+      })
+    );
+
     const list = rawList.map((v: any) => {
-      const shaped = shapeVideoForList(v);
+      // Drop the raw string `priceType` from the row and expose a boolean
+      // `isPaid` instead (isPaid = priceType === "paid").
+      const { priceType, ...shapedDoc } = shapeVideoForList(v);
+      const shaped = shapedDoc;
+      const isPaid = priceType === "paid";
       const p = progressByVideo.get(String(v._id));
       const recordings = v.liveSessionId
         ? recordingsBySession.get(String(v.liveSessionId)) ?? []
@@ -186,6 +220,7 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
         : defaultListingQualities();
       return {
         ...shaped,
+        isPaid,
         progress: p
           ? {
               positionSec: p.positionSec ?? 0,
@@ -197,6 +232,10 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
           : null,
         recordings,
         qualities,
+        // Encrypted playback envelope: { files: { token, hls, progressive } },
+        // identical to the detail endpoint. null when the video's source
+        // couldn't be resolved (upstream error / missing id).
+        request: envelopeByVideo.get(String(v._id)) ?? null,
       };
     });
 
@@ -298,11 +337,20 @@ export const listMaterialsByCategory = async (req: Request, res: Response) => {
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const filter: any = { materialCategoryId: id, status: true };
     if (search) filter.title = { $regex: search, $options: "i" };
+    // Optional price filter. `?type=free` → only free materials, `?type=paid` →
+    // only paid. Any other value is ignored (no filter). Maps to the Material
+    // model's `isPaid` flag. Mirrors listVideosByCategory's `type`/priceType.
+    const typeQ = String(req.query.type ?? "").toLowerCase();
+    if (typeQ === "free") filter.isPaid = false;
+    else if (typeQ === "paid") filter.isPaid = true;
 
-    const [list, total] = await Promise.all([
+    const [rawList, total] = await Promise.all([
       Material.find(filter).sort({ order: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
       Material.countDocuments(filter),
     ]);
+    // Surface isPaid/isPurchased and gate file/directLink for locked paid items.
+    const ownedIds = await getPurchasedMaterialIds(req.user?.id, rawList as any);
+    const list = rawList.map((m) => shapeMaterialForClient(m, ownedIds));
 
     logger.info("listMaterialsByCategory success", { traceId, categoryId: id, total, returned: list.length });
     return res.status(200).json({
@@ -635,17 +683,45 @@ import { LiveCourse } from "../../models/course/LiveCourse.model";
 export const listPackageCategories = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveOnly = String(req.query.live ?? "").toLowerCase() === "true";
+  const { pageNum, limitNum, skip, search } = parsePaging(req);
   logger.info("listPackageCategories invoked", { traceId, path: req.originalUrl, liveOnly });
 
   try {
-    const categories = await PackageCategory.find({ status: true }).sort({ order: 1 }).lean();
+    const filter: any = { status: true };
+    if (search) filter.title = { $regex: search, $options: "i" };
+
+    // Active recorded-package count per category, batched into a single
+    // aggregation keyed by packageCategoryId, then looked up per row. Mirrors
+    // the membership used by listPackagesByCategory (active packages).
+    const packageCountFor = async (catIds: mongoose.Types.ObjectId[]) => {
+      if (!catIds.length) return new Map<string, number>();
+      const rows = await Package.aggregate([
+        { $match: { active: true, packageCategoryId: { $in: catIds } } },
+        { $group: { _id: "$packageCategoryId", count: { $sum: 1 } } },
+      ]);
+      return new Map(rows.map((r: any) => [String(r._id), r.count]));
+    };
 
     if (!liveOnly) {
-      logger.info("listPackageCategories success", { traceId, count: categories.length, liveOnly });
-      return res.status(200).json({ success: true, data: categories });
+      const [rawList, total] = await Promise.all([
+        PackageCategory.find(filter).sort({ order: 1 }).skip(skip).limit(limitNum).lean(),
+        PackageCategory.countDocuments(filter),
+      ]);
+      const countMap = await packageCountFor(rawList.map((c: any) => c._id));
+      const list = rawList.map((c: any) => ({ ...c, packageCount: countMap.get(String(c._id)) ?? 0 }));
+      logger.info("listPackageCategories success", { traceId, total, returned: list.length, liveOnly });
+      return res.status(200).json({
+        success: true,
+        data: list,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
     }
 
-    // ?live=true → keep only categories that have ≥1 active LiveCourse.
+    // ?live=true → keep only categories that have ≥1 active LiveCourse. The
+    // live-filter is computed across the full matching set first, then paged,
+    // so totalPages reflects the filtered count rather than the raw category
+    // count.
+    const categories = await PackageCategory.find(filter).sort({ order: 1 }).lean();
     const categoryIds = categories.map((c: any) => c._id);
     const liveCategoryIds = await LiveCourse.distinct("packageCategoryId", {
       status: true,
@@ -654,8 +730,17 @@ export const listPackageCategories = async (req: Request, res: Response) => {
     const liveSet = new Set(liveCategoryIds.map((x: any) => String(x)));
     const filtered = categories.filter((c: any) => liveSet.has(String(c._id)));
 
-    logger.info("listPackageCategories success", { traceId, count: filtered.length, liveOnly });
-    return res.status(200).json({ success: true, data: filtered });
+    const total = filtered.length;
+    const paged = filtered.slice(skip, skip + limitNum);
+    const countMap = await packageCountFor(paged.map((c: any) => c._id));
+    const list = paged.map((c: any) => ({ ...c, packageCount: countMap.get(String(c._id)) ?? 0 }));
+
+    logger.info("listPackageCategories success", { traceId, total, returned: list.length, liveOnly });
+    return res.status(200).json({
+      success: true,
+      data: list,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
   } catch (error: any) {
     logger.error("listPackageCategories failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

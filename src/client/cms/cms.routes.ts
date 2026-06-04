@@ -9,6 +9,7 @@ import {
   listTestimonials,
   listSocialLinks,
   listSocialLinkTypes,
+  listCurrentAffairs,
   getTerms,
   getVersion,
   checkUpgrade,
@@ -26,6 +27,7 @@ router.get("/live-banners", listLiveBanners);
 router.get("/testimonials", listTestimonials);
 router.get("/social-links", listSocialLinks);
 router.get("/social-link-types", listSocialLinkTypes);
+router.get("/current-affairs", listCurrentAffairs);
 router.get("/terms", getTerms);
 router.get("/version", getVersion);
 router.get("/upgrade", checkUpgrade);
