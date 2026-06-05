@@ -18,6 +18,7 @@ import adminBookRoutes from "./book/book.routes";
 import adminExamRoutes from "./exam/exam.routes";
 import adminMaterialRoutes from "./material/material.routes";
 import adminPackageRoutes from "./package/package.routes";
+import adminPcMaterialRoutes from "./pc-material/pc-material.routes";
 import adminPlanRoutes from "./plan/plan.routes";
 import adminPromocodeRoutes from "./promocode/promocode.routes";
 import adminSubscriptionRoutes from "./subscription/subscription.routes";
@@ -87,6 +88,7 @@ router.use("/books", adminBookRoutes);
 router.use("/quizzes", adminExamRoutes);
 router.use("/materials", adminMaterialRoutes);
 router.use("/packages", adminPackageRoutes);
+router.use("/pc-materials", adminPcMaterialRoutes); // -> /api/v1/admin/pc-materials/*
 router.use("/plans", adminPlanRoutes);
 router.use("/promocodes", adminPromocodeRoutes);
 router.use("/subscriptions", adminSubscriptionRoutes);

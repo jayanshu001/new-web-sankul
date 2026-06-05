@@ -16,6 +16,7 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { PackageChat } from "../../models/course/PackageChat.model";
 import { PackageVideoCategoryRelation } from "../../models/course/PackageVideoCategoryRelation.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
+import { Book } from "../../models/book/Book.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { Goal } from "../../models/Goal.model";
 import { HttpError } from "../../middlewares/errorHandler";
@@ -464,6 +465,7 @@ export const listSubscribers = async (packageId: string, query: PaginationQuery)
   const [data, total] = await Promise.all([
     PackageCourseSubscription.find(filter)
       .populate("customerId", "_id firstName lastName phoneNumber emailAddress")
+      .populate("packageId", "name duration price")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limitNum)
@@ -490,6 +492,39 @@ export const listPromotedCodes = async (packageId: string) => {
   })
     .sort({ createdAt: -1 })
     .lean();
+};
+
+// Physical books linked to this package (the "material (Book)" tab). Paginated
+// to mirror listSubscribers. Books carry `packageIds`; a book belongs here when
+// its `packageIds` array contains this package id.
+export const listBooks = async (packageId: string, query: PaginationQuery) => {
+  assertObjectId(packageId, "package");
+  const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
+  const limitNum = Math.min(Math.max(parseInt(query.limit ?? "20", 10) || 20, 1), 100);
+  const skip = (pageNum - 1) * limitNum;
+
+  const filter = { packageIds: packageId };
+  const [data, total] = await Promise.all([
+    Book.find(filter)
+      .select(
+        "_id name author image thumbnail listPrice discountedPrice shippingPrice language isMagazine isCombo isTrending status orderBy createdAt"
+      )
+      .sort({ orderBy: 1, createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .lean(),
+    Book.countDocuments(filter),
+  ]);
+
+  return {
+    data,
+    pagination: {
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    },
+  };
 };
 
 export const listVideoRelations = async (packageId: string) => {

@@ -96,12 +96,30 @@ const mergeUploadedFiles = (req: Request) => {
   }
 };
 
+// Multipart form-data flattens `packageIds[0]=a&packageIds[1]=b` into literal
+// keys; reassemble them into a real array before validation. (The Zod schema
+// also accepts a JSON-stringified array or a single string, so this only needs
+// to handle the indexed-key form.)
+const coercePackageIds = (req: Request) => {
+  const body = req.body as Record<string, any>;
+  if (Array.isArray(body.packageIds)) return;
+  const indexedKeys = Object.keys(body).filter((k) => k.startsWith("packageIds["));
+  if (!indexedKeys.length) return;
+  const arr = indexedKeys.map((k) => {
+    const v = body[k];
+    delete body[k];
+    return v;
+  });
+  body.packageIds = arr.filter((v) => v !== "");
+};
+
 export const createBook = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("createBook invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
     mergeUploadedFiles(req);
+    coercePackageIds(req);
     const data = createBookSchema.parse(req.body);
     if (data.examCountdownCategoryId && !mongoose.Types.ObjectId.isValid(data.examCountdownCategoryId)) { logger.warn("createBook invalid examCountdownCategoryId", { traceId }); return res.status(400).json({ success: false, message: "Invalid examCountdownCategoryId." }); }
     (data as any).examCountdownCategoryId = data.examCountdownCategoryId || null;
@@ -130,6 +148,7 @@ export const updateBook = async (req: Request, res: Response) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("updateBook invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     mergeUploadedFiles(req);
+    coercePackageIds(req);
     const data = updateBookSchema.parse(req.body);
     if (data.examCountdownCategoryId !== undefined) {
       if (data.examCountdownCategoryId && !mongoose.Types.ObjectId.isValid(data.examCountdownCategoryId)) { logger.warn("updateBook invalid examCountdownCategoryId", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid examCountdownCategoryId." }); }

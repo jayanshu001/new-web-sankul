@@ -4,6 +4,11 @@ import { BookLanguage } from "../enums";
 export interface IBook extends Document {
   name: string;
   examCountdownCategoryId?: Types.ObjectId | null;
+  // Packages this physical book is offered as material for. Many-to-many:
+  // a book can belong to several packages and a package to several books.
+  // Stored on the Book (mirrors PromoCode.appliesTo.ids) so the package
+  // detail "material (Book)" tab can query `{ packageIds: <pkgId> }`.
+  packageIds: Types.ObjectId[];
   thumbnail?: string;
   author?: string;
   image?: string;
@@ -37,6 +42,11 @@ const BookSchema = new Schema<IBook>(
       ref: "ExamCountdownCategory",
       default: null,
     },
+    packageIds: {
+      type: [Schema.Types.ObjectId],
+      ref: "Package",
+      default: [],
+    },
     thumbnail: { type: String, maxlength: 500 },
     author: { type: String, maxlength: 150 },
     image: { type: String, maxlength: 500 },
@@ -66,6 +76,8 @@ const BookSchema = new Schema<IBook>(
 BookSchema.index({ status: 1, orderBy: 1 });
 BookSchema.index({ examCountdownCategoryId: 1, status: 1, orderBy: 1 });
 BookSchema.index({ status: 1, isTrending: 1, orderBy: 1 });
+// Supports the package detail "material (Book)" tab: books linked to a package.
+BookSchema.index({ packageIds: 1, status: 1, orderBy: 1 });
 // The Book has a `language` field (e.g. "Gujarati") that is plain metadata.
 // Without `language_override`, Mongo's text index treats that field as the
 // per-document text-search language override, and "Gujarati" isn't a supported

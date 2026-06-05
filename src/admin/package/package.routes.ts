@@ -21,6 +21,7 @@ import {
   detachPlan,
   listSubscribers,
   listPromotedCodes,
+  listBooks,
   listVideoRelations,
   setVideoRelations,
   expandSubjectsToRelations,
@@ -58,9 +59,10 @@ router.get("/:id/plans", listPackagePlans);
 router.post("/:id/plans/attach", attachPlans);
 router.delete("/:id/plans/:planId", detachPlan);
 
-// Subscribers + promoted codes
+// Subscribers + promoted codes + linked physical books (material tab)
 router.get("/:id/subscribers", listSubscribers);
 router.get("/:id/promoted-codes", listPromotedCodes);
+router.get("/:id/books", listBooks);
 
 // Video-category relation management (descendant fan-out)
 router.get("/:id/video-relations", listVideoRelations);

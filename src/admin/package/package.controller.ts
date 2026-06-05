@@ -222,6 +222,14 @@ export const listPromotedCodes = asyncHandler(async (req: Request, res: Response
   return res.status(200).json({ success: true, data });
 });
 
+export const listBooks = asyncHandler(async (req: Request, res: Response) => {
+  const { data, pagination } = await packageService.listBooks(
+    req.params.id as string,
+    req.query as packageService.PaginationQuery
+  );
+  return res.status(200).json({ success: true, data, pagination });
+});
+
 export const listVideoRelations = asyncHandler(async (req: Request, res: Response) => {
   const data = await packageService.listVideoRelations(req.params.id as string);
   return res.status(200).json({ success: true, data });
