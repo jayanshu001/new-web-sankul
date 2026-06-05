@@ -1,4 +1,5 @@
 import { z } from "zod";
+import mongoose from "mongoose";
 import { BookLanguage, BookOrderStatus, BookCourier } from "../../models/enums";
 
 const zBool = z.preprocess(
@@ -6,9 +7,32 @@ const zBool = z.preprocess(
   z.boolean()
 );
 
+// Accepts an array of ids, a single id string, or a JSON-stringified array
+// (multipart form-data flattens arrays), and normalizes to string[]. Empty
+// string / empty array clears the links. Each entry must be a valid ObjectId.
+const zObjectIdArray = z.preprocess((v) => {
+  if (v === undefined) return undefined;
+  if (Array.isArray(v)) return v.filter((s) => s !== "");
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (s === "") return [];
+    if (s.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(s);
+        return Array.isArray(parsed) ? parsed.filter((x) => x !== "") : [s];
+      } catch {
+        return [s];
+      }
+    }
+    return [s];
+  }
+  return v;
+}, z.array(z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), "Invalid package id.")));
+
 export const createBookSchema = z.object({
   name: z.string().min(1).max(255),
   examCountdownCategoryId: z.string().nullable().optional(),
+  packageIds: zObjectIdArray.optional(),
   thumbnail: z.string().max(500).optional(),
   author: z.string().max(150).optional(),
   image: z.string().max(500).optional(),
