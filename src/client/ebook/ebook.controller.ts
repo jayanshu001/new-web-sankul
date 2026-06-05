@@ -7,6 +7,7 @@ import { generateEbookReceipt } from "../../libs/core/generate";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { isNewItem } from "../../utils/isNew";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -76,9 +77,14 @@ export const listEbooks = async (req: Request, res: Response) => {
     const data = ebooks.map((e) => {
       const endAt = activeByEbook.get(String(e._id)) || null;
       const ePlans = plansByEbook[String(e._id)] || [];
-      // Ebooks carry no `isPaid` flag; they're paid when at least one active
-      // price plan costs > 0. No active priced plans → free.
-      const isPaid = ePlans.some((p: any) => (p.price ?? 0) > 0);
+      // `isPaid` is now an admin-controlled field on the Ebook (default true).
+      // It is the source of truth. Legacy rows that predate the field (absent
+      // after backfill is impossible, but defensive) fall back to the old
+      // price-derived rule: paid when ≥1 active plan costs > 0.
+      const isPaid =
+        typeof (e as any).isPaid === "boolean"
+          ? (e as any).isPaid
+          : ePlans.some((p: any) => (p.price ?? 0) > 0);
       return {
         ...e,
         plans: ePlans,
@@ -89,6 +95,7 @@ export const listEbooks = async (req: Request, res: Response) => {
         ],
         isPaid,
         isPurchased: !!endAt,
+        isNew: isNewItem(e.createdAt, now),
         subscriptionEndAt: endAt,
         daysLeft: endAt ? daysBetween(now, endAt) : null,
         shareableLink: buildShareUrl("ebooks", String(e._id), base),
@@ -194,9 +201,14 @@ export const getEbookDetail = async (req: Request, res: Response) => {
         ebook: {
           ...ebook,
           plans,
-          // Paid when at least one active price plan costs > 0; else free.
-          isPaid: plans.some((p: any) => (p.price ?? 0) > 0),
+          // Admin-controlled `isPaid` field is the source of truth (default
+          // true); fall back to the price-derived rule only if it's absent.
+          isPaid:
+            typeof (ebook as any).isPaid === "boolean"
+              ? (ebook as any).isPaid
+              : plans.some((p: any) => (p.price ?? 0) > 0),
           isPurchased: !!subscriptionEndAt,
+          isNew: isNewItem(ebook.createdAt, nowAccess),
           subscriptionEndAt,
           daysLeft: subscriptionEndAt ? daysBetween(nowAccess, subscriptionEndAt) : null,
           shareableLink: buildShareUrl("ebooks", id, resolveBase(req)),

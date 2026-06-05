@@ -32,6 +32,7 @@ export async function adminLogin(
   const admin = await AdminUser.findOne({
     email: email.toLowerCase().trim(),
     status: true,
+    deleted: false,
   }).select("+password");
 
   if (!admin) {
@@ -117,7 +118,8 @@ export async function createAdminUser(data: {
 }, traceId?: string): Promise<{ ok: boolean; message: string }> {
   logger.info("createAdminUser service invoked", { traceId, email: data.email });
 
-  const exists = await AdminUser.findOne({ email: data.email.toLowerCase() });
+  // Only non-deleted admins block the email — a soft-deleted admin's email is reusable.
+  const exists = await AdminUser.findOne({ email: data.email.toLowerCase(), deleted: false });
   if (exists) {
     logger.warn("createAdminUser service conflict", { traceId, email: data.email });
     return { ok: false, message: "Admin with this email already exists." };
@@ -188,7 +190,7 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
       return { ok: false, message: "Invalid or revoked refresh token." };
     }
 
-    const admin = await AdminUser.findOne({ _id: adminUserId, status: true });
+    const admin = await AdminUser.findOne({ _id: adminUserId, status: true, deleted: false });
     if (!admin) {
       logger.warn("refreshAdminToken admin missing or disabled", { traceId, adminUserId });
       return { ok: false, message: "Admin not found or disabled." };

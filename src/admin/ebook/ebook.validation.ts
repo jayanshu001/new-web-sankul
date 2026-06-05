@@ -28,6 +28,7 @@ export const createEbookSchema = z.object({
   link: z.string().min(1, "Link is required"),
   termsAndConditions: z.string().optional().nullable(),
   isTrending: zBool.optional().default(false),
+  isPaid: zBool.optional().default(true),
   status: zBool.optional().default(true),
 });
 
@@ -60,10 +61,15 @@ export const createEbookSubscriptionSchema = z.object({
   { message: "Either planId or durationInDays is required", path: ["planId"] }
 );
 
+// All fields optional so the endpoint can serve both flows:
+//  - verify a pending order  → send razorpayOrderId + razorpayPaymentId
+//  - toggle the subscription → send just { status }
+// The controller decides which path to run based on which fields are present.
 export const updateEbookSubscriptionSchema = z.object({
-  razorpayOrderId: z.string().min(1, "razorpayOrderId is required"),
-  razorpayPaymentId: z.string().min(1, "razorpayPaymentId is required"),
+  razorpayOrderId: z.string().min(1, "razorpayOrderId is required").optional(),
+  razorpayPaymentId: z.string().min(1, "razorpayPaymentId is required").optional(),
   remarks: z.string().optional().nullable(),
+  status: zBool.optional(),
 });
 
 export const reorderEbooksSchema = z.object({

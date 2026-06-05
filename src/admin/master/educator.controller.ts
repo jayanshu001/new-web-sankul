@@ -12,7 +12,7 @@ import { createEducatorSchema, updateEducatorSchema } from "./master.validation"
 
 export const getEducators = async (req: Request, res: Response) => {
   try {
-    const educators = await CourseEducator.find().sort({ createdAt: -1 });
+    const educators = await CourseEducator.find({ deleted: false }).sort({ createdAt: -1 });
     res.status(200).json({ success: true, data: educators });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
@@ -62,7 +62,7 @@ export const getEducatorDetails = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Educator ID" });
     }
 
-    const educator = await CourseEducator.findById(id).select("-password");
+    const educator = await CourseEducator.findOne({ _id: id, deleted: false }).select("-password");
     if (!educator) return res.status(404).json({ success: false, message: "Educator not found" });
 
     const educatorObjectId = new mongoose.Types.ObjectId(id);
@@ -191,7 +191,15 @@ export const deleteEducator = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Educator ID" });
     }
-    const educator = await CourseEducator.findByIdAndDelete(id);
+    // Soft delete: retain the row so existing course/live-course
+    // `courseEducatorId` references still resolve to the educator's name, but
+    // mark it deleted + disabled so it's hidden from the educator list/detail.
+    // The partial unique index frees the email for reuse.
+    const educator = await CourseEducator.findOneAndUpdate(
+      { _id: id, deleted: false },
+      { $set: { deleted: true, status: false } },
+      { new: true }
+    );
     if (!educator) return res.status(404).json({ success: false, message: "Educator not found" });
     res.status(200).json({ success: true, message: "Educator deleted successfully" });
   } catch (error: any) {

@@ -38,6 +38,7 @@ const applyEbookUploads = (req: Request) => {
   }
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
   if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+  if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
 };
 
 // ──────────────────────────────────────────────────────────────────────────────

@@ -35,7 +35,8 @@ export const getAdministrators = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
-    const filters: any = {};
+    // Soft-deleted admins are never listed.
+    const filters: any = { deleted: false };
 
     if (search) {
       filters.$or = [
@@ -95,7 +96,7 @@ export const getAdministratorById = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Administrator ID" });
     }
 
-    const admin = await AdminUser.findById(id)
+    const admin = await AdminUser.findOne({ _id: id, deleted: false })
       .select(PUBLIC_FIELDS)
       .populate("roles", "_id name guardName")
       .populate("permissions", "_id name");
@@ -145,7 +146,8 @@ export const createAdministrator = async (req: Request, res: Response) => {
 
     const data = createAdministratorSchema.parse(req.body);
 
-    const exists = await AdminUser.findOne({ email: data.email.toLowerCase() });
+    // Only non-deleted admins block the email; a soft-deleted one frees it.
+    const exists = await AdminUser.findOne({ email: data.email.toLowerCase(), deleted: false });
     if (exists) {
       logger.warn("createAdministrator email conflict", { traceId, email: data.email });
       return res.status(409).json({
@@ -210,7 +212,7 @@ export const updateAdministrator = async (req: Request, res: Response) => {
 
     const data = updateAdministratorSchema.parse(req.body);
 
-    const admin = await AdminUser.findById(id);
+    const admin = await AdminUser.findOne({ _id: id, deleted: false });
     if (!admin) {
       logger.warn("updateAdministrator not found", { traceId, id });
       return res.status(404).json({ success: false, message: "Administrator not found" });
@@ -220,6 +222,7 @@ export const updateAdministrator = async (req: Request, res: Response) => {
       const emailExists = await AdminUser.exists({
         email: data.email.toLowerCase(),
         _id: { $ne: id },
+        deleted: false,
       });
       if (emailExists) {
         logger.warn("updateAdministrator email in use", { traceId, id, email: data.email });
@@ -283,13 +286,13 @@ export const deleteAdministrator = async (req: Request, res: Response) => {
 
     if (req.user?.id === id) {
       logger.warn("deleteAdministrator self delete refused", { traceId, id });
-      return res.status(400).json({
+      return res.status(403).json({
         success: false,
         message: "You cannot delete your own account.",
       });
     }
 
-    const admin = await AdminUser.findById(id);
+    const admin = await AdminUser.findOne({ _id: id, deleted: false });
     if (!admin) {
       logger.warn("deleteAdministrator not found", { traceId, id });
       return res.status(404).json({ success: false, message: "Administrator not found" });
@@ -304,7 +307,12 @@ export const deleteAdministrator = async (req: Request, res: Response) => {
       { active: false, deleted: true }
     );
 
-    await admin.deleteOne();
+    // Soft delete: retain the row (for audit trail / historical references) but
+    // mark it deleted + disabled so it's excluded from login, list, and detail.
+    // The partial unique index frees the email for re-registration.
+    admin.deleted = true;
+    admin.status = false;
+    await admin.save();
 
     logger.info("deleteAdministrator success", { traceId, id });
     return res.status(200).json({
@@ -338,7 +346,7 @@ export const toggleAdministratorStatus = async (req: Request, res: Response) => 
       });
     }
 
-    const admin = await AdminUser.findById(id).select("status");
+    const admin = await AdminUser.findOne({ _id: id, deleted: false }).select("status");
     if (!admin) {
       logger.warn("toggleAdministratorStatus not found", { traceId, id });
       return res.status(404).json({ success: false, message: "Administrator not found" });

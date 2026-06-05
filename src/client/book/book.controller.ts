@@ -13,6 +13,7 @@ import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { buildTrackingUrl, COURIER } from "../../config/courier";
 import { fetchLiveAWBData } from "../../libs/courier/tracking";
+import { isNewItem } from "../../utils/isNew";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -69,6 +70,7 @@ export const listBooks = async (req: Request, res: Response) => {
         // Books are paid when they cost > 0 (discountedPrice 0 = free).
         isPaid: (doc.discountedPrice ?? 0) > 0,
         isPurchased: purchasedSet.has(idStr),
+        isNew: isNewItem(doc.createdAt),
         // One-time purchase with no expiry, so there's no countdown.
         daysLeft: null,
         shareableLink: buildShareUrl("books", idStr, base),
@@ -125,6 +127,7 @@ export async function fetchTrendingBooksOnly(opts: TrendingOpts = {}) {
     pages: b.pages ?? 0,
     price: b.discountedPrice,
     isFree: b.discountedPrice === 0,
+    isNew: isNewItem(b.createdAt),
     createdAt: b.createdAt,
   }));
 
@@ -176,6 +179,7 @@ export async function fetchTrendingEbooksOnly(opts: TrendingOpts = {}) {
         isTrending: e.isTrending,
         price: minPrice,
         isFree,
+        isNew: isNewItem(e.createdAt),
         plans: ePlans,
         createdAt: e.createdAt,
       };
@@ -269,6 +273,7 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
           isTrending: e.isTrending,
           price: minPrice,
           isFree,
+          isNew: isNewItem(e.createdAt),
           plans: ePlans,
           createdAt: e.createdAt,
         };
@@ -293,6 +298,7 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
       shippingPrice: b.shippingPrice,
       price: b.discountedPrice,
       isFree: b.discountedPrice === 0,
+      isNew: isNewItem(b.createdAt),
       createdAt: b.createdAt,
     }));
 
@@ -412,6 +418,7 @@ export const getBookDetail = async (req: Request, res: Response) => {
         // Books are paid when they cost > 0 (discountedPrice 0 = free).
         isPaid: (book.discountedPrice ?? 0) > 0,
         isPurchased,
+        isNew: isNewItem(book.createdAt),
         // One-time purchase with no expiry, so there's no countdown.
         daysLeft: null,
         shareableLink: buildShareUrl("books", id, resolveBase(req)),

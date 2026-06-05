@@ -4,6 +4,7 @@ import {
   listFreeTests,
   listFreeMaterials,
   listFreeVideos,
+  listFreeEbooks,
   listFreeCourses,
 } from "./free.controller";
 
@@ -14,6 +15,7 @@ router.use(authenticate);
 router.get("/free-tests", listFreeTests);
 router.get("/free-materials", listFreeMaterials);
 router.get("/free-videos", listFreeVideos);
+router.get("/free-ebooks", listFreeEbooks);
 router.get("/free-courses", listFreeCourses);
 
 export default router;

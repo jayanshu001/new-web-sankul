@@ -22,6 +22,8 @@ import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscrip
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
+import { Ebook } from "../../models/ebook/Ebook.model";
+import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { BookOrderStatus } from "../../models/enums";
 
@@ -822,10 +824,17 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
   logger.info("getFreeDashboard invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const [trendingFreeBooks, trendingFreeEbooks, freeCats] = await Promise.all([
+    const [trendingFreeBooks, trendingFreeEbooks, freeCats, freeEbooks] = await Promise.all([
       fetchTrendingBooksOnly({ type: "free", limit: FREE_DASHBOARD_LIMIT }),
       fetchTrendingEbooksOnly({ type: "free", limit: FREE_DASHBOARD_LIMIT }),
       resolveFreeCategoryIds(),
+      // Free Ebooks section — driven by the admin-controlled `isPaid:false`
+      // field (the source of truth that /free-ebooks uses), NOT the price-
+      // derived rule the Trending-Free-Ebooks row above uses.
+      Ebook.find({ status: true, isPaid: false })
+        .sort({ order: 1, createdAt: -1 })
+        .limit(FREE_DASHBOARD_LIMIT)
+        .lean(),
     ]);
 
     // Free = reachable via a free video category OR the video's own
@@ -842,6 +851,45 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
       .limit(FREE_DASHBOARD_LIMIT)
       .lean();
 
+    // Decorate free ebooks with the same plans/isPurchased/daysLeft contract
+    // the /ebooks + /free-ebooks endpoints use, so the FE renders one card.
+    const userId = _req.user?.id;
+    const freeEbookIds = freeEbooks.map((e: any) => e._id);
+    const nowEbook = new Date();
+    const [freeEbookPlans, freeEbookSubs] = await Promise.all([
+      freeEbookIds.length
+        ? EbookPrice.find({ ebookId: { $in: freeEbookIds }, status: true }).sort({ duration: 1 }).lean()
+        : Promise.resolve([] as any[]),
+      userId && freeEbookIds.length
+        ? EbookSubscription.find({
+            customerId: userId,
+            ebookId: { $in: freeEbookIds },
+            status: true,
+            endAt: { $gt: nowEbook },
+          })
+            .select("ebookId endAt")
+            .lean()
+        : Promise.resolve([] as any[]),
+    ]);
+    const freeEbookPlansById: Record<string, any[]> = {};
+    for (const p of freeEbookPlans as any[]) (freeEbookPlansById[String(p.ebookId)] ||= []).push(p);
+    const freeEbookEndAt = new Map<string, Date>();
+    for (const s of freeEbookSubs as any[]) {
+      const key = String(s.ebookId);
+      const prev = freeEbookEndAt.get(key);
+      if (!prev || s.endAt.getTime() > prev.getTime()) freeEbookEndAt.set(key, s.endAt);
+    }
+    const freeEbookData = freeEbooks.map((e: any) => {
+      const endAt = freeEbookEndAt.get(String(e._id)) ?? null;
+      return {
+        ...e,
+        plans: freeEbookPlansById[String(e._id)] || [],
+        isPaid: false,
+        isPurchased: !!endAt,
+        daysLeft: endAt ? computeDaysLeft(endAt, nowEbook) : null,
+      };
+    });
+
     const dashboard: Array<{ title: string; type: string; data: unknown }> = [];
     if (trendingFreeBooks.items.length)
       dashboard.push({
@@ -855,6 +903,8 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
         type: "trending-ebook",
         data: trendingFreeEbooks.items.slice(0, FREE_DASHBOARD_LIMIT),
       });
+    if (freeEbookData.length)
+      dashboard.push({ title: "Free Ebooks", type: "free-ebook", data: freeEbookData });
     if (freeVideos.length)
       dashboard.push({ title: "Free Videos", type: "video", data: freeVideos });
 

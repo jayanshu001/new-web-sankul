@@ -13,6 +13,8 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { Book } from "../../models/book/Book.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
+import { EbookPrice } from "../../models/ebook/EbookPrice.model";
+import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { collapseProgressByVideo } from "../learning/collapseProgress";
 import { resolveVideoScope } from "../course/resolveVideoScope";
@@ -653,9 +655,59 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
       Ebook.find(filter).lean(),
     ]);
 
+    // Ebook pricing lives in a separate EbookPrice collection (books carry
+    // price inline), so join the active plans here — otherwise the ebook rows
+    // come back with no pricing. Also surface isPaid/isPurchased/daysLeft so the
+    // shape matches /client/ebooks and the FE can reuse the ebook card.
+    const customerId = req.user?.id;
+    const ebookIds = ebooks.map((e: any) => e._id);
+    const now = new Date();
+    const [ebookPlans, ebookSubs] = await Promise.all([
+      ebookIds.length
+        ? EbookPrice.find({ ebookId: { $in: ebookIds }, status: true }).sort({ duration: 1 }).lean()
+        : Promise.resolve([] as any[]),
+      customerId && ebookIds.length
+        ? EbookSubscription.find({
+            customerId,
+            ebookId: { $in: ebookIds },
+            status: true,
+            endAt: { $gt: now },
+          })
+            .select("ebookId endAt")
+            .lean()
+        : Promise.resolve([] as any[]),
+    ]);
+    const plansByEbook: Record<string, any[]> = {};
+    for (const p of ebookPlans as any[]) (plansByEbook[String(p.ebookId)] ||= []).push(p);
+    const endAtByEbook = new Map<string, Date>();
+    for (const s of ebookSubs as any[]) {
+      const key = String(s.ebookId);
+      const prev = endAtByEbook.get(key);
+      if (!prev || s.endAt.getTime() > prev.getTime()) endAtByEbook.set(key, s.endAt);
+    }
+    const daysBetween = (from: Date, to: Date) =>
+      Math.max(0, Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)));
+
+    const ebooksWithPricing = ebooks.map((e: any) => {
+      const ePlans = plansByEbook[String(e._id)] || [];
+      const endAt = endAtByEbook.get(String(e._id)) || null;
+      // Admin-controlled `isPaid` field is the source of truth (default true);
+      // fall back to the price-derived rule only if it's absent.
+      const isPaid =
+        typeof e.isPaid === "boolean" ? e.isPaid : ePlans.some((p: any) => (p.price ?? 0) > 0);
+      return {
+        ...e,
+        plans: ePlans,
+        isPaid,
+        isPurchased: !!endAt,
+        subscriptionEndAt: endAt,
+        daysLeft: endAt ? daysBetween(now, endAt) : null,
+      };
+    });
+
     const merged = [
       ...books.map((b) => ({ ...b, type: "book" as const })),
-      ...ebooks.map((e) => ({ ...e, type: "ebook" as const })),
+      ...ebooksWithPricing.map((e) => ({ ...e, type: "ebook" as const })),
     ].sort(
       (a, b) =>
         new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime()

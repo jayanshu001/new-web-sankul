@@ -18,6 +18,7 @@ export interface IEbook extends Document {
   link: string;
   termsAndConditions?: string;
   isTrending: boolean;
+  isPaid: boolean;
   status: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -45,6 +46,8 @@ const ebookSchema: Schema = new Schema(
     link: { type: String, required: true },
     termsAndConditions: { type: String, default: null },
     isTrending: { type: Boolean, default: false },
+    // Paid by default — matches frontend default and the Course.isPaid convention.
+    isPaid: { type: Boolean, default: true },
     status: { type: Boolean, default: true },
   },
   { timestamps: true }

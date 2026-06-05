@@ -21,6 +21,7 @@ const bootstrapOrSuperAdminGuard = async (req: any, res: any, next: any) => {
     const adminCount = await AdminUser.countDocuments({
       role: { $in: ["super_admin", "admin", "editor"] },
       status: true,
+      deleted: false,
     });
 
     // First admin bootstrap: allow registration without token.

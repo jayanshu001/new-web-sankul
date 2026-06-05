@@ -208,6 +208,20 @@ export const updateEbookSubscription = async (req: Request, res: Response) => {
     const subscription = await EbookSubscription.findById(subscriptionId);
     if (!subscription) return res.status(404).json({ success: false, message: "Subscription not found" });
 
+    // Toggle path: a partial { status } (and/or remarks) just patches the
+    // subscription. No razorpay payload, no order verification — this is the
+    // admin enable/disable switch, mirroring the plan toggle.
+    const isVerifyOrder =
+      validatedData.razorpayOrderId !== undefined || validatedData.razorpayPaymentId !== undefined;
+
+    if (!isVerifyOrder) {
+      if (validatedData.status !== undefined) subscription.status = validatedData.status;
+      if (validatedData.remarks !== undefined) subscription.remarks = validatedData.remarks ?? null;
+      await subscription.save();
+      return res.status(200).json({ success: true, data: { subscription } });
+    }
+
+    // Verify-order path (unchanged): marks the pending order COMPLETE.
     const order = await EbookOrder.findById(subscription.orderId);
     if (!order) return res.status(404).json({ success: false, message: "Order not found" });
 
@@ -220,10 +234,9 @@ export const updateEbookSubscription = async (req: Request, res: Response) => {
     order.status = PackageCourseEbookOrderStatus.COMPLETE;
     await order.save();
 
-    if (validatedData.remarks !== undefined) {
-      subscription.remarks = validatedData.remarks ?? null;
-      await subscription.save();
-    }
+    if (validatedData.status !== undefined) subscription.status = validatedData.status;
+    if (validatedData.remarks !== undefined) subscription.remarks = validatedData.remarks ?? null;
+    if (subscription.isModified()) await subscription.save();
 
     return res.status(200).json({ success: true, data: { order, subscription } });
   } catch (error: any) {

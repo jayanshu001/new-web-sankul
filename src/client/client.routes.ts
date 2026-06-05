@@ -69,7 +69,7 @@ router.use("/", clientCmsRoutes); // -> /api/v1/client/{faqs|popup|banners|testi
 router.use("/", clientInquiryRoutes); // -> /api/v1/client/{inquiry|contactus}
 router.use("/", clientNotificationRoutes); // -> /api/v1/client/{notifications|image-notifications}
 router.use("/", clientDashboardRoutes); // -> /api/v1/client/{dashboard|free-dashboard}
-router.use("/", clientFreeRoutes); // -> /api/v1/client/{free-tests|free-materials|free-videos}
+router.use("/", clientFreeRoutes); // -> /api/v1/client/{free-tests|free-materials|free-videos|free-ebooks|free-courses}
 router.use("/offline", clientOfflineRoutes); // -> /api/v1/client/offline/*
 router.use("/wishlist", clientWishlistRoutes); // -> /api/v1/client/wishlist/*
 router.use("/cart", clientCartRoutes); // -> /api/v1/client/cart/*
