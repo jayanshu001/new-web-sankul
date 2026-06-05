@@ -178,15 +178,44 @@ export const listPackages = async (query: ListPackagesQuery) => {
     key: packageListKey(filter, pageNum, limitNum),
     ttlSeconds: 300,
     load: async () => {
-      const [data, total] = await Promise.all([
+      const [packages, total] = await Promise.all([
         Package.find(filter)
           .populate("packageTypeId", "_id name")
-          .sort({ order: 1, createdAt: -1 })
+          // Newest-first so the admin list matches the client "Recently Added"
+          // section — a just-created package always surfaces at the top of
+          // page 1 instead of being buried among other order-0 rows.
+          .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limitNum)
           .lean(),
         Package.countDocuments(filter),
       ]);
+
+      // Attach each package's active price plans (split into withMaterial /
+      // withoutMaterial, same shape the client listing uses) so the list row
+      // can show pricing/type without a second call.
+      const packageIds = packages.map((p: any) => p._id);
+      const plans = packageIds.length
+        ? await PackageCourseEbookPrice.find({ packageId: { $in: packageIds }, status: true })
+            .sort({ duration: 1 })
+            .lean()
+        : [];
+      const plansByPackage = new Map<string, { withMaterial: any[]; withoutMaterial: any[] }>();
+      for (const p of plans as any[]) {
+        const key = String(p.packageId);
+        let bucket = plansByPackage.get(key);
+        if (!bucket) {
+          bucket = { withMaterial: [], withoutMaterial: [] };
+          plansByPackage.set(key, bucket);
+        }
+        (p.withMaterial ? bucket.withMaterial : bucket.withoutMaterial).push(p);
+      }
+
+      const data = packages.map((p: any) => ({
+        ...p,
+        plans: plansByPackage.get(String(p._id)) ?? { withMaterial: [], withoutMaterial: [] },
+      }));
+
       return {
         data,
         pagination: {

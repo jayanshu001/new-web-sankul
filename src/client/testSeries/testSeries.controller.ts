@@ -25,18 +25,20 @@ const resolveBase = (req: Request) =>
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
-// GST + handling fee — overridable via env, sane defaults match the mockup
-// (₹15 + ₹20 on a ₹280 base ≈ ₹315 total).
-const GST_RATE = Number(process.env.TEST_SERIES_GST_PERCENT ?? "5") / 100;
-const HANDLING_FEE = Number(process.env.TEST_SERIES_HANDLING_FEE ?? "20");
+// Test series is charged at the raw plan price (minus any promo discount),
+// matching the eBook flow — NO GST, NO handling fee. The gstAmount/handlingFee
+// fields are kept in the breakdown (always 0) so the response shape is stable
+// for the FE; they can be re-enabled later by reinstating the rates below.
+const GST_RATE = 0;
+const HANDLING_FEE = 0;
 
 interface Breakdown {
   basePrice: number;        // plan price
   discountAmount: number;   // promo discount applied on basePrice
   netPrice: number;         // basePrice - discount
-  gstAmount: number;        // GST on netPrice
-  handlingFee: number;
-  totalAmount: number;      // netPrice + gst + handlingFee
+  gstAmount: number;        // GST on netPrice (0 — see note above)
+  handlingFee: number;      // 0 — see note above
+  totalAmount: number;      // netPrice + gst + handlingFee  (== netPrice)
   promocodeId?: string | null;
 }
 

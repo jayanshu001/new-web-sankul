@@ -12,10 +12,14 @@ import { ExamStatus } from "../../models/enums";
 import { Material } from "../../models/course/Material.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { Video } from "../../models/course/Video.model";
+import { Ebook } from "../../models/ebook/Ebook.model";
+import { EbookPrice } from "../../models/ebook/EbookPrice.model";
+import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { isNewItem } from "../../utils/isNew";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -357,6 +361,104 @@ export const listFreeVideos = async (req: Request, res: Response) => {
     });
   } catch (e: any) {
     logger.error("listFreeVideos failed", { traceId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+const daysBetween = (from: Date, to: Date) =>
+  Math.max(0, Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)));
+
+// GET /api/v1/client/free-ebooks
+// Free ebooks listing. "Free" is decided per ebook by the admin-controlled
+// `isPaid:false` field (the same flag surfaced by /client/ebooks) — NOT by
+// price-plan presence. Response shape mirrors /client/ebooks so the FE can
+// reuse the same ebook card (plans, isPurchased, daysLeft, isNew, shareableLink).
+// `search` matches name/author; `language` filters by language. Paginated.
+export const listFreeEbooks = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const customerId = req.user?.id;
+  logger.info("listFreeEbooks invoked", { traceId, path: req.originalUrl, userId: customerId });
+
+  try {
+    const { search, language } = req.query as Record<string, string>;
+    const { pageNum, limitNum, skip } = paginate(req);
+
+    const filter: any = { status: true, isPaid: false };
+    if (search) {
+      filter.$or = [
+        { name: { $regex: search, $options: "i" } },
+        { author: { $regex: search, $options: "i" } },
+      ];
+    }
+    if (language) filter.language = language;
+
+    const [ebooks, total] = await Promise.all([
+      Ebook.find(filter).sort({ order: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
+      Ebook.countDocuments(filter),
+    ]);
+
+    const ebookIds = ebooks.map((e: any) => e._id);
+
+    // Active price plans (a free ebook can still have a ₹0 plan) and the
+    // user's currently-active subscriptions — same access rules as listEbooks.
+    const now = new Date();
+    const [plans, subs] = await Promise.all([
+      ebookIds.length
+        ? EbookPrice.find({ ebookId: { $in: ebookIds }, status: true }).sort({ duration: 1 }).lean()
+        : Promise.resolve([] as any[]),
+      customerId && ebookIds.length
+        ? EbookSubscription.find({
+            customerId,
+            ebookId: { $in: ebookIds },
+            status: true,
+            endAt: { $gt: now },
+          })
+            .select("ebookId endAt")
+            .lean()
+        : Promise.resolve([] as any[]),
+    ]);
+
+    const plansByEbook: Record<string, any[]> = {};
+    for (const p of plans as any[]) {
+      (plansByEbook[String(p.ebookId)] ||= []).push(p);
+    }
+
+    // Latest active endAt wins, mirroring listEbooks.
+    const activeByEbook = new Map<string, Date>();
+    for (const s of subs as any[]) {
+      const key = String(s.ebookId);
+      const prev = activeByEbook.get(key);
+      if (!prev || s.endAt.getTime() > prev.getTime()) activeByEbook.set(key, s.endAt);
+    }
+
+    const base = resolveBase(req);
+    const data = ebooks.map((e: any) => {
+      const endAt = activeByEbook.get(String(e._id)) || null;
+      return {
+        ...e,
+        plans: plansByEbook[String(e._id)] || [],
+        details: [
+          { id: 1, mainText: "Language", subText: e.language },
+          { id: 2, mainText: "Author", subText: e.author },
+          { id: 3, mainText: "Publisher", subText: e.publisher },
+        ],
+        isPaid: false,
+        isPurchased: !!endAt,
+        isNew: isNewItem(e.createdAt, now),
+        subscriptionEndAt: endAt,
+        daysLeft: endAt ? daysBetween(now, endAt) : null,
+        shareableLink: buildShareUrl("ebooks", String(e._id), base),
+      };
+    });
+
+    logger.info("listFreeEbooks success", { traceId, userId: customerId, total, returned: data.length });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (e: any) {
+    logger.error("listFreeEbooks failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
