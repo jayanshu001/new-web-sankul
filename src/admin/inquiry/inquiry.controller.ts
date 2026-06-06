@@ -2,7 +2,14 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { z } from "zod";
 import { Inquiry } from "../../models/system/Inquiry.model";
-import { Department } from "../../models/system/Department.model";
+import { isMysqlModule } from "../../config/migration";
+import {
+  listDepartments as listDepartmentsService,
+  createDepartment as createDepartmentService,
+  updateDepartment as updateDepartmentService,
+  deleteDepartment as deleteDepartmentService,
+  parseDepartmentId,
+} from "../../modules/department/department.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -86,6 +93,9 @@ const contactSchema = z.object({
   mobile: z.string().min(1).max(20),
   order: z.number().int().default(0),
   active: z.boolean().default(true),
+  // MySQL `ws_department_contact` flags (additive vs the legacy Mongo shape).
+  isCallAvailable: z.boolean().optional(),
+  isWhatsAppAvailable: z.boolean().optional(),
 });
 const departmentCreateSchema = z.object({
   name: z.string().min(1).max(255),
@@ -96,9 +106,14 @@ const departmentCreateSchema = z.object({
 });
 const departmentUpdateSchema = departmentCreateSchema.partial();
 
+// Data access delegated to department service (MySQL/Prisma when listed in
+// MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
+const departmentIdInvalid = (id: string) =>
+  isMysqlModule("department") ? !parseDepartmentId(id) : !isObjectId(id);
+
 export const listDepartments = async (_req: Request, res: Response) => {
   try {
-    const data = await Department.find().sort({ order: 1 }).lean();
+    const data = await listDepartmentsService();
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
@@ -108,7 +123,7 @@ export const listDepartments = async (_req: Request, res: Response) => {
 export const createDepartment = async (req: Request, res: Response) => {
   try {
     const data = departmentCreateSchema.parse(req.body);
-    const doc = await Department.create(data);
+    const doc = await createDepartmentService(data);
     return res.status(201).json({ success: true, data: doc });
   } catch (e: any) {
     if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
@@ -119,9 +134,9 @@ export const createDepartment = async (req: Request, res: Response) => {
 export const updateDepartment = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    if (departmentIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const data = departmentUpdateSchema.parse(req.body);
-    const doc = await Department.findByIdAndUpdate(id, { $set: data }, { new: true });
+    const doc = await updateDepartmentService(id, data);
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });
     return res.status(200).json({ success: true, data: doc });
   } catch (e: any) {
@@ -133,9 +148,9 @@ export const updateDepartment = async (req: Request, res: Response) => {
 export const deleteDepartment = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    const doc = await Department.findByIdAndDelete(id);
-    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    if (departmentIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const ok = await deleteDepartmentService(id);
+    if (!ok) return res.status(404).json({ success: false, message: "Not found." });
     return res.status(200).json({ success: true, message: "Department deleted." });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });

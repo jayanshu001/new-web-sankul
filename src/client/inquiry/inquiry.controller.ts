@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { Inquiry } from "../../models/system/Inquiry.model";
-import { Department } from "../../models/system/Department.model";
+import { listActiveContactDepartments } from "../../modules/department/department.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -52,16 +52,7 @@ export const getContactUs = async (_req: Request, res: Response) => {
   logger.info("getContactUs invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const departments = await Department.find({ active: true })
-      .sort({ order: 1 })
-      .lean();
-
-    const filtered = departments.map((d: any) => ({
-      ...d,
-      contacts: (d.contacts || [])
-        .filter((c: any) => c.active)
-        .sort((a: any, b: any) => a.order - b.order),
-    }));
+    const filtered = await listActiveContactDepartments();
 
     logger.info("getContactUs success", { traceId, count: filtered.length });
     return res.status(200).json({

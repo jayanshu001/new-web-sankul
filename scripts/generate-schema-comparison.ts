@@ -2,12 +2,16 @@
  * Generates docs/migration/SCHEMA_COMPARISON.md
  * Run: yarn docs:schema-comparison
  */
+import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
+// Load .env so MIGRATION_MYSQL_MODULES drives the "✅ Migrated" status without
+// needing the var set inline on every run.
+dotenv.config({ path: path.join(ROOT, ".env") });
 const PRISMA = fs.readFileSync(path.join(ROOT, "prisma/schema.prisma"), "utf8");
 const SQL = fs.readFileSync(
   path.resolve(ROOT, "../websankul-staging/database/websankul_staging.sql"),
@@ -175,6 +179,15 @@ function main() {
     if (table === "ws_app_update" && MIGRATED.includes("app-update")) status = "✅ Migrated";
     if (table === "ws_versions" && MIGRATED.includes("version")) status = "✅ Migrated";
     if (table === "ws_faq" && MIGRATED.includes("faq")) status = "✅ Migrated";
+    if (table === "ws_banner_slider" && MIGRATED.includes("banner-slider")) status = "✅ Migrated";
+    if (table === "ws_testimonial" && MIGRATED.includes("testimonial")) status = "✅ Migrated";
+    if (
+      (table === "ws_department" || table === "ws_department_contact") &&
+      MIGRATED.includes("department")
+    )
+      status = "✅ Migrated";
+    if (table === "ws_termsandcondition" && MIGRATED.includes("terms")) status = "✅ Migrated";
+    if (table === "ws_popup_notification" && MIGRATED.includes("popup")) status = "✅ Migrated";
 
     let notes = "";
     if (mColl !== "—" && mColl !== table && best < 100) notes = "Collection name differs from MySQL table";
@@ -208,6 +221,11 @@ function main() {
     { key: "app-update", prisma: "AppUpdate", mongo: "AppUpdate" },
     { key: "version", prisma: "Version", mongo: "Version" },
     { key: "faq", prisma: "FAQ", mongo: "FAQ" },
+    { key: "banner-slider", prisma: "BannerSlider", mongo: "BannerSlider" },
+    { key: "testimonial", prisma: "Testimonial", mongo: "Testimonial" },
+    { key: "department", prisma: "Department", mongo: "Department" },
+    { key: "terms", prisma: "TermsAndConditions", mongo: "TermsAndConditions" },
+    { key: "popup", prisma: "PopupNotifications", mongo: "PopupNotification" },
   ];
 
   let detailMd = "";

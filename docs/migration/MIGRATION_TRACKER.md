@@ -2,8 +2,8 @@
 
 > **Project:** `new-web-sankul` (modern stack)  
 > **Strategy reference:** [`legacy_system_migration_strategy.md`](./legacy_system_migration_strategy.md)  
-> **Last updated:** 2026-06-04  
-> **Current phase:** Phase 2 — Backend stabilization (**in progress**, CMS pilot done)  
+> **Last updated:** 2026-06-06  
+> **Current phase:** Phase 2 — Backend stabilization (**in progress**; 8 modules on MySQL: app-update, version, faq, banner-slider, testimonial, department, terms, popup. Read-only/CMS group complete — next: customer auth)  
 > **Doc index:** [`README.md`](./README.md) (all migration docs live in this folder)  
 > **How to test:** [`testing-guide.md`](./testing-guide.md)  
 > **Test results log:** [`MIGRATION_TEST_LOG.md`](./MIGRATION_TEST_LOG.md) ← record Pass/Fail here
@@ -488,11 +488,18 @@ Recommended order (safest first):
 
 1. ~~**App update + version**~~ — ✅ done (pilot).
 2. ~~**FAQ**~~ — ✅ done (`ws_faq`, enum types).
-3. **System / read-only** — banners, testimonials, departments, dynamic image.
-3. **Customer auth** — login, OTP, tokens (high traffic; needs transformers).
-3. **Catalog** — courses, packages, videos.
-4. **Commerce** — orders, subscriptions, promocodes.
-5. **Hardest last** — live classes, chat, new permission system.
+3. **System / read-only** — ✅ done:
+   - ~~**Banner slider**~~ — ✅ done (`ws_banner_slider`; lowercase↔cased `key`, `keyId` null, reorder).
+   - ~~**Testimonial**~~ — ✅ done (`ws_testimonial`; `discription`→`description` bridge).
+   - ~~**Department**~~ + `department_contact` — ✅ done (two-table join under embedded `contacts[]`; `decscription`→`description`).
+   - ~~**Terms & Conditions**~~ — ✅ done (`ws_termsandcondition`; `module` fixed enum; client array vs `?module=` single/null).
+   - ~~**Popup notification**~~ — ✅ done (`ws_popup_notification`; `promoExpireAt` date map; client active-popup query; S3 image is DB-agnostic middleware).
+   - ~~**Dynamic image**~~ — ➖ skipped: model exists but no controller/route uses it (no API surface).
+   - ~~**Social link / social-link-type**~~ — ➖ skipped: Mongo-only (no `ws_social*` table in dump, no Prisma model).
+4. **Customer auth** — login, OTP, tokens (high traffic; needs transformers) — ⏳ **next**.
+5. **Catalog** — courses, packages, videos.
+6. **Commerce** — orders, subscriptions, promocodes.
+7. **Hardest last** — live classes, chat, new permission system.
 
 Per module workflow:
 
@@ -505,7 +512,7 @@ Legacy Prisma query (websankul-api-staging) as reference
     → Test against MySQL dump + React admin
 ```
 
-**Next module to port:** `banner-slider` or `testimonial` (read-heavy CMS).
+**Next module to port:** `department` / `dynamic-image` (remaining read-heavy CMS), then `customer` auth.
 
 ---
 
@@ -513,6 +520,12 @@ Legacy Prisma query (websankul-api-staging) as reference
 
 | Date | Phase | What was done |
 |------|-------|----------------|
+| 2026-06-06 | Phase 2 | `popup` on Prisma — `promoExpireAt`↔`promo_expire_at` date map; client active-popup query (status+expiry+newest). Confirmed S3 upload is DB-agnostic middleware. `migration:api` — **73/73**. Read-only/CMS group complete; `social-link` confirmed Mongo-only. |
+| 2026-06-06 | Phase 2 | `terms` on Prisma — client array vs `?module=` single/null preserved. Tests caught MySQL `module` enum (error 1265 on free-string write); added MySQL-specific enum zod schema on admin writes. `migration:api` — **64/64**. |
+| 2026-06-06 | Phase 2 | `department` (contact-us) on Prisma — `ws_department` + `ws_department_contact` join under embedded `contacts[]`; admin `contactSchema` extended for call/whatsapp flags. `migration:api` — **52/52**. `dynamic-image` skipped (no API surface). |
+| 2026-06-06 | Phase 2 | Generators (`schema-comparison`, `field-comparison`) now load `.env` so migrated status follows `MIGRATION_MYSQL_MODULES`. |
+| 2026-06-06 | Phase 2 | `banner-slider` + `testimonial` on Prisma; `yarn migration:api` — **45/45** (incl. reorder, writes). Registry/docs regenerated. |
+| 2026-06-06 | Phase 1 | Local env re-provisioned; dump imported via `db:import:sh`; `db:verify` — 89 tables, 26 customers, 4 packages. |
 | 2026-06-04 | Phase 2 | FAQ module on Prisma (`ws_faq`); `yarn db:test-faq` — 13 rows. |
 | 2026-06-04 | Phase 2 | CMS pilot: `app-update` + `version` on Prisma; transformers; `MIGRATION_MYSQL_MODULES`. |
 | 2026-06-04 | Phase 2 | `yarn db:test-cms-pilot` — staging values from MySQL (4235200 / 40976). |

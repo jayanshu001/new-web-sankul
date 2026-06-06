@@ -1,6 +1,6 @@
 # Schema comparison — Legacy MySQL vs MongoDB vs post-migration MySQL
 
-> **Generated:** 2026-06-03 (re-run `yarn docs:schema-comparison` after schema changes)  
+> **Generated:** 2026-06-06 (re-run `yarn docs:schema-comparison` after schema changes)  
 > **Migrated only:** [MIGRATED_MODULES.md](./MIGRATED_MODULES.md) · **Field-level detail:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md)  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Strategy:** [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
@@ -28,7 +28,7 @@
 
 ### Currently migrated modules (`MIGRATION_MYSQL_MODULES`)
 
-`app-update, version, faq`
+`app-update, version, faq, banner-slider, testimonial, department, terms, popup`
 
 ---
 
@@ -37,7 +37,7 @@
 | # | Domain (model) | Legacy MySQL (staging dump) | MongoDB collection (new app) | Post-migration MySQL (Prisma) | Status | Notes |
 |---:|---|---|---|---|---|---|
 | 1 | AppUpdate | `ws_app_update` (4 cols) | `ws_app_updates` | `ws_app_update` | ✅ Migrated | Collection name differs from MySQL table |
-| 2 | BannerSlider | `ws_banner_slider` (7 cols) | `ws_banner_sliders` | `ws_banner_slider` | ⏳ Not migrated | Collection name differs from MySQL table |
+| 2 | BannerSlider | `ws_banner_slider` (7 cols) | `ws_banner_sliders` | `ws_banner_slider` | ✅ Migrated | Collection name differs from MySQL table |
 | 3 | Book | `ws_book` (20 cols) | `ws_books` | `ws_book` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 4 | BookCart | `ws_book_cart` (11 cols) | `ws_book_carts` | `ws_book_cart` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 5 | BookCartItem | `ws_book_cart_item` (7 cols) | — | `ws_book_cart_item` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
@@ -57,8 +57,8 @@
 | 19 | CustomerShipping | `ws_customer_shipping` (14 cols) | `ws_customer_shippings` | `ws_customer_shipping` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 20 | CustomerState | `ws_customer_state` (4 cols) | `ws_customer_states` | `ws_customer_state` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 21 | CustomerTargetGoal | `ws_customer_target_goal` (4 cols) | `ws_customer_target_goals` | `ws_customer_target_goal` | ⏳ Not migrated | Collection name differs from MySQL table |
-| 22 | Department | `ws_department` (5 cols) | `ws_departments` | `ws_department` | ⏳ Not migrated | Collection name differs from MySQL table |
-| 23 | DepartmentContact | `ws_department_contact` (7 cols) | — | `ws_department_contact` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
+| 22 | Department | `ws_department` (5 cols) | `ws_departments` | `ws_department` | ✅ Migrated | Collection name differs from MySQL table |
+| 23 | DepartmentContact | `ws_department_contact` (7 cols) | — | `ws_department_contact` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 24 | DynamicImage | `ws_dynamic_image` (2 cols) | `ws_dynamic_images` | `ws_dynamic_image` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 25 | EBook | `ws_ebook` (16 cols) | `ws_ebook_downloads` | `ws_ebook` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 26 | EBookOrder | `ws_ebook_order` (16 cols) | — | `ws_ebook_order` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
@@ -106,7 +106,7 @@
 | 68 | PendriveCourseTracking | `ws_pendrive_course_tracking` (5 cols) | — | `ws_pendrive_course_tracking` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 69 | Permission | `ws_permissions` (5 cols) | `ws_permissions` | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 70 | — | `ws_personal_access_tokens` (10 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
-| 71 | PopupNotifications | `ws_popup_notification` (10 cols) | `ws_popup_notifications` | `ws_popup_notification` | ⏳ Not migrated | Collection name differs from MySQL table |
+| 71 | PopupNotifications | `ws_popup_notification` (10 cols) | `ws_popup_notifications` | `ws_popup_notification` | ✅ Migrated | Collection name differs from MySQL table |
 | 72 | Promocode | `ws_promocode` (13 cols) | — | `ws_promocode` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 73 | PromotedPackageCourseEbook | `ws_promoted_package_course_ebook` (10 cols) | — | `ws_promoted_package_course_ebook` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 74 | Promoter | `ws_promoter` (11 cols) | `ws_promoter` | `ws_promoter` | ⏳ Not migrated |  |
@@ -115,8 +115,8 @@
 | 77 | — | `ws_role_has_permissions` (2 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 78 | Role | `ws_roles` (5 cols) | `ws_roles` | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 79 | — | `ws_tag` (5 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
-| 80 | TermsAndConditions | `ws_termsandcondition` (5 cols) | — | `ws_termsandcondition` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 81 | Testimonial | `ws_testimonial` (5 cols) | `ws_testimonials` | `ws_testimonial` | ⏳ Not migrated | Collection name differs from MySQL table |
+| 80 | TermsAndConditions | `ws_termsandcondition` (5 cols) | — | `ws_termsandcondition` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
+| 81 | Testimonial | `ws_testimonial` (5 cols) | `ws_testimonials` | `ws_testimonial` | ✅ Migrated | Collection name differs from MySQL table |
 | 82 | — | `ws_user_inquiry` (10 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 83 | AdminUser | `ws_users` (15 cols) | `ws_users` | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 84 | Version | `ws_versions` (3 cols) | `ws_versions` | `ws_versions` | ✅ Migrated |  |
@@ -125,51 +125,51 @@
 | 87 | PackageVideoCategoryRelation | `ws_video_category_package_relation` (6 cols) | — | `ws_video_category_package_relation` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 88 | VideoCategoryRelation | `ws_video_category_relation` (6 cols) | — | `ws_video_category_relation` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 89 | Inquiry | `ws_website_inquiry` (9 cols) | `ws_website_inquiry` | `ws_website_inquiry` | ⏳ Not migrated |  |
-| 90 | AdminAccessToken | — | `ws_admin_access_tokens` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/admin/AdminAccessToken.model.ts |
-| 91 | PermissionCategory | — | `ws_permission_categories` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/admin/PermissionCategory.model.ts |
-| 92 | BookSetting | — | `ws_book_settings` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/book/BookSetting.model.ts |
-| 93 | Counter | — | `ws_counters` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/book/Counter.model.ts |
-| 94 | Course | — | `(default courses)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/Course.model.ts |
-| 95 | CourseEducator | — | `(default courseeducators)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/CourseEducator.model.ts |
-| 96 | CourseSubjectCategory | — | `(default coursesubjectcategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/CourseSubjectCategory.model.ts |
-| 97 | LiveChatBan | — | `ws_live_chat_bans` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveChatBan.model.ts |
-| 98 | LiveChatMessage | — | `ws_live_chat_messages` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveChatMessage.model.ts |
-| 99 | LiveCourse | — | `ws_live_courses` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveCourse.model.ts |
-| 100 | LiveCoursePlan | — | `ws_live_course_plans` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveCoursePlan.model.ts |
-| 101 | LivePoll | — | `ws_live_polls` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LivePoll.model.ts |
-| 102 | LivePollVote | — | `ws_live_poll_votes` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LivePollVote.model.ts |
-| 103 | LiveSession | — | `ws_live_sessions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveSession.model.ts |
-| 104 | MaterialCategory | — | `(default materialcategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/MaterialCategory.model.ts |
-| 105 | PackageCategory | — | `(default packagecategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PackageCategory.model.ts |
-| 106 | PackageCourseEbookPrice | — | `(default packagecourseebookprices)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PackageCourseEbookPrice.model.ts |
-| 107 | PackageCourseMaterial | — | `(default packagecoursematerials)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PackageCourseMaterial.model.ts |
-| 108 | PackageVideoCategoryRelation | — | `ws_package_video_category_relations` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PackageVideoCategoryRelation.model.ts |
-| 109 | PromoCode | — | `(default promocodes)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PromoCode.model.ts |
-| 110 | PromotedPackageCourseEbook | — | `(default promotedpackagecourseebooks)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PromotedPackageCourseEbook.model.ts |
-| 111 | Video | — | `(default videos)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/Video.model.ts |
-| 112 | VideoCategory | — | `(default videocategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/VideoCategory.model.ts |
-| 113 | VideoCategoryRelation | — | `(default videocategoryrelations)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/VideoCategoryRelation.model.ts |
-| 114 | CustomerDistrict | — | `ws_customer_districts` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/CustomerDistrict.model.ts |
-| 115 | Folder | — | `ws_folders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/Folder.model.ts |
-| 116 | FolderItem | — | `ws_folder_items` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/FolderItem.model.ts |
-| 117 | LectureAudioNote | — | `ws_lecture_audio_notes` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LectureAudioNote.model.ts |
-| 118 | LectureNote | — | `ws_lecture_notes` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LectureNote.model.ts |
-| 119 | LectureProgress | — | `ws_lecture_progress` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LectureProgress.model.ts |
-| 120 | LiveCourseSubscription | — | `ws_live_course_subscriptions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveCourseSubscription.model.ts |
-| 121 | LiveSessionAttendance | — | `ws_live_session_attendance` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveSessionAttendance.model.ts |
-| 122 | LiveSessionPreview | — | `ws_live_session_previews` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveSessionPreview.model.ts |
-| 123 | LiveSessionReminder | — | `(default livesessionreminders)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveSessionReminder.model.ts |
-| 124 | PackageCourseSubscription | — | `(default packagecoursesubscriptions)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/PackageCourseSubscription.model.ts |
-| 125 | Wishlist | — | `ws_wishlists` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/Wishlist.model.ts |
-| 126 | Ebook | — | `(default ebooks)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/ebook/Ebook.model.ts |
-| 127 | EbookOrder | — | `(default ebookorders)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/ebook/EbookOrder.model.ts |
-| 128 | EbookPrice | — | `(default ebookprices)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/ebook/EbookPrice.model.ts |
-| 129 | EbookSubscription | — | `(default ebooksubscriptions)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/ebook/EbookSubscription.model.ts |
-| 130 | EducatorAccessToken | — | `ws_educator_access_tokens` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/educator/EducatorAccessToken.model.ts |
-| 131 | ExamCategory | — | `ws_exam_categories` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/exam/ExamCategory.model.ts |
-| 132 | ExamCountdown | — | `ws_exam_countdowns` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/examCountdown/ExamCountdown.model.ts |
-| 133 | ExamCountdownCategory | — | `ws_exam_countdown_categories` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/examCountdown/ExamCountdownCategory.model.ts |
-| 134 | Goal | — | `(default goals)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/Goal.model.ts |
+| 90 | Goal | — | `(default goals)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/Goal.model.ts |
+| 91 | AdminAccessToken | — | `ws_admin_access_tokens` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/admin/AdminAccessToken.model.ts |
+| 92 | PermissionCategory | — | `ws_permission_categories` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/admin/PermissionCategory.model.ts |
+| 93 | BookSetting | — | `ws_book_settings` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/book/BookSetting.model.ts |
+| 94 | Counter | — | `ws_counters` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/book/Counter.model.ts |
+| 95 | Course | — | `(default courses)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/Course.model.ts |
+| 96 | CourseEducator | — | `(default courseeducators)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/CourseEducator.model.ts |
+| 97 | CourseSubjectCategory | — | `(default coursesubjectcategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/CourseSubjectCategory.model.ts |
+| 98 | LiveChatBan | — | `ws_live_chat_bans` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveChatBan.model.ts |
+| 99 | LiveChatMessage | — | `ws_live_chat_messages` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveChatMessage.model.ts |
+| 100 | LiveCourse | — | `ws_live_courses` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveCourse.model.ts |
+| 101 | LiveCoursePlan | — | `ws_live_course_plans` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveCoursePlan.model.ts |
+| 102 | LivePoll | — | `ws_live_polls` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LivePoll.model.ts |
+| 103 | LivePollVote | — | `ws_live_poll_votes` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LivePollVote.model.ts |
+| 104 | LiveSession | — | `ws_live_sessions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveSession.model.ts |
+| 105 | MaterialCategory | — | `(default materialcategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/MaterialCategory.model.ts |
+| 106 | PackageCategory | — | `(default packagecategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PackageCategory.model.ts |
+| 107 | PackageCourseEbookPrice | — | `(default packagecourseebookprices)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PackageCourseEbookPrice.model.ts |
+| 108 | PackageCourseMaterial | — | `(default packagecoursematerials)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PackageCourseMaterial.model.ts |
+| 109 | PackageVideoCategoryRelation | — | `ws_package_video_category_relations` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PackageVideoCategoryRelation.model.ts |
+| 110 | PromoCode | — | `(default promocodes)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PromoCode.model.ts |
+| 111 | PromotedPackageCourseEbook | — | `(default promotedpackagecourseebooks)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PromotedPackageCourseEbook.model.ts |
+| 112 | Video | — | `(default videos)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/Video.model.ts |
+| 113 | VideoCategory | — | `(default videocategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/VideoCategory.model.ts |
+| 114 | VideoCategoryRelation | — | `(default videocategoryrelations)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/VideoCategoryRelation.model.ts |
+| 115 | CustomerDistrict | — | `ws_customer_districts` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/CustomerDistrict.model.ts |
+| 116 | Folder | — | `ws_folders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/Folder.model.ts |
+| 117 | FolderItem | — | `ws_folder_items` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/FolderItem.model.ts |
+| 118 | LectureAudioNote | — | `ws_lecture_audio_notes` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LectureAudioNote.model.ts |
+| 119 | LectureNote | — | `ws_lecture_notes` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LectureNote.model.ts |
+| 120 | LectureProgress | — | `ws_lecture_progress` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LectureProgress.model.ts |
+| 121 | LiveCourseSubscription | — | `ws_live_course_subscriptions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveCourseSubscription.model.ts |
+| 122 | LiveSessionAttendance | — | `ws_live_session_attendance` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveSessionAttendance.model.ts |
+| 123 | LiveSessionPreview | — | `ws_live_session_previews` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveSessionPreview.model.ts |
+| 124 | LiveSessionReminder | — | `(default livesessionreminders)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveSessionReminder.model.ts |
+| 125 | PackageCourseSubscription | — | `(default packagecoursesubscriptions)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/PackageCourseSubscription.model.ts |
+| 126 | Wishlist | — | `ws_wishlists` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/Wishlist.model.ts |
+| 127 | Ebook | — | `(default ebooks)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/ebook/Ebook.model.ts |
+| 128 | EbookOrder | — | `(default ebookorders)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/ebook/EbookOrder.model.ts |
+| 129 | EbookPrice | — | `(default ebookprices)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/ebook/EbookPrice.model.ts |
+| 130 | EbookSubscription | — | `(default ebooksubscriptions)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/ebook/EbookSubscription.model.ts |
+| 131 | EducatorAccessToken | — | `ws_educator_access_tokens` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/educator/EducatorAccessToken.model.ts |
+| 132 | ExamCategory | — | `ws_exam_categories` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/exam/ExamCategory.model.ts |
+| 133 | ExamCountdown | — | `ws_exam_countdowns` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/examCountdown/ExamCountdown.model.ts |
+| 134 | ExamCountdownCategory | — | `ws_exam_countdown_categories` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/examCountdown/ExamCountdownCategory.model.ts |
 | 135 | PromoterAccessToken | — | `ws_promoter_access_tokens` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/promoter/PromoterAccessToken.model.ts |
 | 136 | ReferralFaq | — | `ws_referral_faqs` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/referral/ReferralFaq.model.ts |
 | 137 | ReferralProgram | — | `ws_referral_programs` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/referral/ReferralProgram.model.ts |
@@ -227,6 +227,74 @@
 | 9 | — | `ws_faq_types` collection | — | Mongo only; no legacy table |
 
 **Naming:** Mongo `ws_faqs` → migration target `ws_faq`.
+
+### BannerSlider (`ws_banner_slider`) — ✅ Migrated
+
+| # | Legacy MySQL column | MongoDB field | Post-migration (Prisma) | Constraints / notes |
+|---:|---|---|---|---|
+| 1 | `id`  | keyId | `id` → `id` | PK/FK per dump |
+| 2 | `image`  | image | `image` → `image` | PK/FK per dump |
+| 3 | `key`  | key | `key` → `key` | PK/FK per dump |
+| 4 | `keyId` (prisma only) | keyId | `keyId` → `keyId` | PK/FK per dump |
+| 5 | `orderBy` (prisma only) | orderBy | `orderBy` → `orderBy` | PK/FK per dump |
+| 6 | `created_at`  | — | `created_at` → `created_at` | PK/FK per dump |
+| 7 | `updated_at`  | — | `updated_at` → `updated_at` | PK/FK per dump |
+
+**Naming:** Mongo `ws_banner_sliders` → migration target `ws_banner_slider`.
+
+### Testimonial (`ws_testimonial`) — ✅ Migrated
+
+| # | Legacy MySQL column | MongoDB field | Post-migration (Prisma) | Constraints / notes |
+|---:|---|---|---|---|
+| 1 | `id`  | — | `id` → `id` | PK/FK per dump |
+| 2 | `name`  | name | `name` → `name` | PK/FK per dump |
+| 3 | `title`  | title | `title` → `title` | PK/FK per dump |
+| 4 | `discription`  | — | `discription` → `discription` | PK/FK per dump |
+| 5 | `rating`  | rating | `rating` → `rating` | PK/FK per dump |
+
+**Naming:** Mongo `ws_testimonials` → migration target `ws_testimonial`.
+
+### Department (`ws_department`) — ✅ Migrated
+
+| # | Legacy MySQL column | MongoDB field | Post-migration (Prisma) | Constraints / notes |
+|---:|---|---|---|---|
+| 1 | `id`  | — | `id` → `id` | PK/FK per dump |
+| 2 | `name`  | — | `name` → `name` | PK/FK per dump |
+| 3 | `decscription`  | — | `decscription` → `decscription` | PK/FK per dump |
+| 4 | `order`  | order | `order` → `order` | PK/FK per dump |
+| 5 | `active`  | active | `active` → `active` | PK/FK per dump |
+| 6 | `contacts` (prisma only) | — | `contacts` → `contacts` | PK/FK per dump |
+
+**Naming:** Mongo `ws_departments` → migration target `ws_department`.
+
+### TermsAndConditions (`ws_termsandcondition`) — ✅ Migrated
+
+| # | Legacy MySQL column | MongoDB field | Post-migration (Prisma) | Constraints / notes |
+|---:|---|---|---|---|
+| 1 | `id`  | — | `id` → `id` | PK/FK per dump |
+| 2 | `module`  | module | `module` → `module` | PK/FK per dump |
+| 3 | `terms`  | terms | `terms` → `terms` | PK/FK per dump |
+| 4 | `freeShippingMinimumOrderAmount`  | freeShippingMinimumOrderAmount | `freeShippingMinimumOrderAmount` → `freeShippingMinimumOrderAmount` | PK/FK per dump |
+| 5 | `status`  | status | `status` → `status` | PK/FK per dump |
+
+**Naming:** Mongo `ws_terms_and_conditions` → migration target `ws_termsandcondition`.
+
+### PopupNotifications (`ws_popup_notification`) — ✅ Migrated
+
+| # | Legacy MySQL column | MongoDB field | Post-migration (Prisma) | Constraints / notes |
+|---:|---|---|---|---|
+| 1 | `id`  | — | `id` → `id` | PK/FK per dump |
+| 2 | `title`  | title | `title` → `title` | PK/FK per dump |
+| 3 | `description`  | description | `description` → `description` | PK/FK per dump |
+| 4 | `image`  | image | `image` → `image` | PK/FK per dump |
+| 5 | `discount`  | discount | `discount` → `discount` | PK/FK per dump |
+| 6 | `promocode`  | promocode | `promocode` → `promocode` | PK/FK per dump |
+| 7 | `promo_expire_at`  | promocode | `promo_expire_at` → `promo_expire_at` | PK/FK per dump |
+| 8 | `status`  | status | `status` → `status` | PK/FK per dump |
+| 9 | `created_at`  | — | `created_at` → `created_at` | PK/FK per dump |
+| 10 | `updated_at`  | — | `updated_at` → `updated_at` | PK/FK per dump |
+
+**Naming:** Mongo `ws_popup_notifications` → migration target `ws_popup_notification`.
 
 
 ---
@@ -325,8 +393,8 @@ High-priority examples to plan before full migration:
 
 ## Maintenance
 
-1. After adding a Prisma module migration, update `MIGRATION_MYSQL_MODULES` and re-run `yarn docs:schema-comparison`.
+1. After adding a Prisma module migration, update `MIGRATION_MYSQL_MODULES` and re-run `yarn docs:schema-comparison` and `yarn docs:field-comparison`.
 2. Edit **Appendix A/B** in `scripts/generate-schema-comparison.ts` if column mappings change; re-run `yarn docs:schema-comparison`.
 3. Add a manual subsection under **Column-level detail** if the generator’s auto-mapping is insufficient (complex renames).
-4. Link from [MIGRATION_TRACKER.md](./MIGRATION_TRACKER.md) and [testing-guide.md](./testing-guide.md).
+4. Link from [MIGRATION_TRACKER.md](./MIGRATION_TRACKER.md), [MIGRATION_DOC_UPDATES.md](./MIGRATION_DOC_UPDATES.md), and [testing-guide.md](./testing-guide.md).
 

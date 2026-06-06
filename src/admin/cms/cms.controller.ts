@@ -16,11 +16,15 @@ import {
   faqCreateSchemaMysql,
   faqUpdateSchemaMysql,
 } from "../../modules/faq/faq.validation";
-import { PopupNotification } from "../../models/system/PopupNotification.model";
-import { BannerSlider, BANNER_KEY_TO_MODEL, BannerKey } from "../../models/system/BannerSlider.model";
+import {
+  listPopups as listPopupsService,
+  getPopupById as getPopupByIdService,
+  createPopup as createPopupService,
+  updatePopup as updatePopupService,
+  deletePopup as deletePopupService,
+  parsePopupId,
+} from "../../modules/popup/popup.service";
 import { LiveBannerSlider } from "../../models/system/LiveBannerSlider.model";
-import { Testimonial } from "../../models/system/Testimonial.model";
-import { TermsAndConditions } from "../../models/system/TermsAndConditions.model";
 import {
   getAppUpdateSettings,
   upsertAppUpdateSettings,
@@ -29,6 +33,35 @@ import {
   getVersionSettings,
   upsertVersionSettings,
 } from "../../modules/version/version.service";
+import {
+  listBanners as listBannersService,
+  getBannerById as getBannerByIdService,
+  createBanner as createBannerService,
+  updateBanner as updateBannerService,
+  deleteBanner as deleteBannerService,
+  reorderBanners as reorderBannersService,
+  parseBannerId,
+} from "../../modules/banner-slider/banner-slider.service";
+import {
+  listTestimonials as listTestimonialsService,
+  getTestimonialById as getTestimonialByIdService,
+  createTestimonial as createTestimonialService,
+  updateTestimonial as updateTestimonialService,
+  deleteTestimonial as deleteTestimonialService,
+  parseTestimonialId,
+} from "../../modules/testimonial/testimonial.service";
+import {
+  listTerms as listTermsService,
+  getTermsById as getTermsByIdService,
+  createTerms as createTermsService,
+  updateTerms as updateTermsService,
+  deleteTerms as deleteTermsService,
+  parseTermsId,
+} from "../../modules/terms/terms.service";
+import {
+  termsCreateSchemaMysql,
+  termsUpdateSchemaMysql,
+} from "../../modules/terms/terms.validation";
 import { SocialLink } from "../../models/system/SocialLink.model";
 import { SocialLinkType } from "../../models/system/SocialLinkType.model";
 import { CurrentAffair } from "../../models/system/CurrentAffair.model";
@@ -299,30 +332,88 @@ export const deleteFaqType = async (req: Request, res: Response) => {
 };
 
 // ─── Popup ──
-const popupTransform = (d: any) => ({ ...d, promoExpireAt: new Date(d.promoExpireAt) });
-export const listPopups = genericList(PopupNotification);
-export const getPopup = genericGet(PopupNotification);
-export const createPopup = genericCreate(PopupNotification, popupCreateSchema, popupTransform);
-export const updatePopup = genericUpdate(PopupNotification, popupUpdateSchema, (d) =>
-  d.promoExpireAt ? { ...d, promoExpireAt: new Date(d.promoExpireAt) } : d
-);
-export const deletePopup = genericDelete(PopupNotification);
+// Delegated to popup service (MySQL/Prisma when listed in
+// MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
+// `promoExpireAt` is coerced to a Date inside the service/transformer.
+const popupIdInvalid = (id: string) =>
+  isMysqlModule("popup") ? !parsePopupId(id) : !isObjectId(id);
+
+export const listPopups = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  try {
+    const data = await listPopupsService();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    logger.error("listPopups failed", { traceId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const getPopup = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (popupIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const doc = await getPopupByIdService(id);
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    logger.error("getPopup failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const createPopup = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  try {
+    const data = popupCreateSchema.parse(req.body);
+    const doc = await createPopupService(data);
+    return res.status(201).json({ success: true, data: doc });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    logger.error("createPopup failed", { traceId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const updatePopup = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (popupIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const data = popupUpdateSchema.parse(req.body);
+    const doc = await updatePopupService(id, data);
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    logger.error("updatePopup failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const deletePopup = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (popupIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const ok = await deletePopupService(id);
+    if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, message: "Deleted." });
+  } catch (e: any) {
+    logger.error("deletePopup failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
 
 // ─── Banner ──
-const bannerTransform = (d: any) => {
-  if (d.key) d.keyRef = BANNER_KEY_TO_MODEL[d.key as BannerKey];
-  return d;
-};
+// Data access delegated to banner-slider service (MySQL/Prisma when listed in
+// MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
+const bannerIdInvalid = (id: string) =>
+  isMysqlModule("banner-slider") ? !parseBannerId(id) : !isObjectId(id);
 
 export const listBanners = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("listBanners invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const data = await BannerSlider.find()
-      .sort({ orderBy: 1 })
-      .populate("keyId")
-      .lean();
+    const data = await listBannersService();
     logger.info("listBanners success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -336,8 +427,8 @@ export const getBanner = async (req: Request, res: Response) => {
   logger.info("getBanner invoked", { traceId, path: req.originalUrl, id });
 
   try {
-    if (!isObjectId(id)) { logger.warn("getBanner invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
-    const doc = await BannerSlider.findById(id).populate("keyId").lean();
+    if (bannerIdInvalid(id)) { logger.warn("getBanner invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
+    const doc = await getBannerByIdService(id);
     if (!doc) { logger.warn("getBanner not found", { traceId, id }); return res.status(404).json({ success: false, message: "Not found." }); }
     logger.info("getBanner success", { traceId, id });
     return res.status(200).json({ success: true, data: doc });
@@ -346,9 +437,55 @@ export const getBanner = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: e.message });
   }
 };
-export const createBanner = genericCreate(BannerSlider, bannerCreateSchema, bannerTransform);
-export const updateBanner = genericUpdate(BannerSlider, bannerUpdateSchema, bannerTransform);
-export const deleteBanner = genericDelete(BannerSlider);
+export const createBanner = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("createBanner invoked", { traceId, path: req.originalUrl });
+
+  try {
+    const data = bannerCreateSchema.parse(req.body);
+    const doc = await createBannerService(data);
+    logger.info("createBanner success", { traceId, id: doc._id });
+    return res.status(201).json({ success: true, data: doc });
+  } catch (e: any) {
+    if (e.issues) { logger.warn("createBanner validation failed", { traceId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    logger.error("createBanner failed", { traceId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const updateBanner = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  logger.info("updateBanner invoked", { traceId, path: req.originalUrl, id });
+
+  try {
+    if (bannerIdInvalid(id)) { logger.warn("updateBanner invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
+    const data = bannerUpdateSchema.parse(req.body);
+    const doc = await updateBannerService(id, data);
+    if (!doc) { logger.warn("updateBanner not found", { traceId, id }); return res.status(404).json({ success: false, message: "Not found." }); }
+    logger.info("updateBanner success", { traceId, id });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    if (e.issues) { logger.warn("updateBanner validation failed", { traceId, id, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    logger.error("updateBanner failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const deleteBanner = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  logger.info("deleteBanner invoked", { traceId, path: req.originalUrl, id });
+
+  try {
+    if (bannerIdInvalid(id)) { logger.warn("deleteBanner invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
+    const ok = await deleteBannerService(id);
+    if (!ok) { logger.warn("deleteBanner not found", { traceId, id }); return res.status(404).json({ success: false, message: "Not found." }); }
+    logger.info("deleteBanner success", { traceId, id });
+    return res.status(200).json({ success: true, message: "Deleted." });
+  } catch (e: any) {
+    logger.error("deleteBanner failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
 
 export const reorderBanners = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -356,14 +493,9 @@ export const reorderBanners = async (req: Request, res: Response) => {
 
   try {
     const { orders } = reorderSchema.parse(req.body);
-    const ops = orders
-      .filter((o) => isObjectId(o.id))
-      .map((o) => ({
-        updateOne: { filter: { _id: o.id }, update: { $set: { orderBy: o.orderBy } } },
-      }));
-    if (!ops.length) { logger.warn("reorderBanners no valid ids", { traceId }); return res.status(400).json({ success: false, message: "No valid ids." }); }
-    await BannerSlider.bulkWrite(ops);
-    logger.info("reorderBanners success", { traceId, count: ops.length });
+    const count = await reorderBannersService(orders);
+    if (!count) { logger.warn("reorderBanners no valid ids", { traceId }); return res.status(400).json({ success: false, message: "No valid ids." }); }
+    logger.info("reorderBanners success", { traceId, count });
     return res.status(200).json({ success: true, message: "Banner order updated." });
   } catch (e: any) {
     if (e.issues) { logger.warn("reorderBanners validation failed", { traceId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
@@ -432,11 +564,74 @@ export const reorderLiveBanners = async (req: Request, res: Response) => {
 };
 
 // ─── Testimonial ──
-export const listTestimonials = genericList(Testimonial);
-export const getTestimonial = genericGet(Testimonial);
-export const createTestimonial = genericCreate(Testimonial, testimonialCreateSchema);
-export const updateTestimonial = genericUpdate(Testimonial, testimonialUpdateSchema);
-export const deleteTestimonial = genericDelete(Testimonial);
+// Delegated to testimonial service (MySQL/Prisma when listed in
+// MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
+const testimonialIdInvalid = (id: string) =>
+  isMysqlModule("testimonial") ? !parseTestimonialId(id) : !isObjectId(id);
+
+export const listTestimonials = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  try {
+    const data = await listTestimonialsService();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    logger.error("listTestimonials failed", { traceId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const getTestimonial = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (testimonialIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const doc = await getTestimonialByIdService(id);
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    logger.error("getTestimonial failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const createTestimonial = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  try {
+    const data = testimonialCreateSchema.parse(req.body);
+    const doc = await createTestimonialService(data);
+    return res.status(201).json({ success: true, data: doc });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    logger.error("createTestimonial failed", { traceId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const updateTestimonial = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (testimonialIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const data = testimonialUpdateSchema.parse(req.body);
+    const doc = await updateTestimonialService(id, data);
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    logger.error("updateTestimonial failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const deleteTestimonial = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (testimonialIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const ok = await deleteTestimonialService(id);
+    if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, message: "Deleted." });
+  } catch (e: any) {
+    logger.error("deleteTestimonial failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
 
 // ─── Social Link Type ──
 export const listSocialLinkTypes = genericList(SocialLinkType, { title: 1 });
@@ -499,11 +694,79 @@ export const updateCurrentAffair = genericUpdate(CurrentAffair, currentAffairUpd
 export const deleteCurrentAffair = genericDelete(CurrentAffair);
 
 // ─── Terms ──
-export const listTerms = genericList(TermsAndConditions);
-export const getTerms = genericGet(TermsAndConditions);
-export const createTerms = genericCreate(TermsAndConditions, termsCreateSchema);
-export const updateTerms = genericUpdate(TermsAndConditions, termsUpdateSchema);
-export const deleteTerms = genericDelete(TermsAndConditions);
+// Delegated to terms service (MySQL/Prisma when listed in
+// MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
+const termsIdInvalid = (id: string) =>
+  isMysqlModule("terms") ? !parseTermsId(id) : !isObjectId(id);
+
+export const listTerms = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
+  try {
+    const data = await listTermsService();
+    return res.status(200).json({ success: true, data });
+  } catch (e: any) {
+    logger.error("listTerms failed", { traceId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const getTerms = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (termsIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const doc = await getTermsByIdService(id);
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    logger.error("getTerms failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const createTerms = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  try {
+    // MySQL `module` is a fixed enum; use the stricter schema when on MySQL.
+    const data = isMysqlModule("terms")
+      ? termsCreateSchemaMysql.parse(req.body)
+      : termsCreateSchema.parse(req.body);
+    const doc = await createTermsService(data);
+    return res.status(201).json({ success: true, data: doc });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    logger.error("createTerms failed", { traceId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const updateTerms = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (termsIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const data = isMysqlModule("terms")
+      ? termsUpdateSchemaMysql.parse(req.body)
+      : termsUpdateSchema.parse(req.body);
+    const doc = await updateTermsService(id, data);
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: doc });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    logger.error("updateTerms failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+export const deleteTerms = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  try {
+    if (termsIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const ok = await deleteTermsService(id);
+    if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, message: "Deleted." });
+  } catch (e: any) {
+    logger.error("deleteTerms failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
 
 // ─── Version (singleton) ──
 export const getVersion = async (_req: Request, res: Response) => {

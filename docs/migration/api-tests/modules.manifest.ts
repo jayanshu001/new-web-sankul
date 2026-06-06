@@ -27,4 +27,52 @@ export const MIGRATED_API_MODULES = [
     ],
     yarnScript: "migration:api:faq",
   },
+  {
+    key: "banner-slider",
+    testFiles: ["banner-slider/admin.api.test.ts", "banner-slider/client.api.test.ts"],
+    endpoints: [
+      "GET/GET:id/POST/PUT/DELETE admin/cms/banners",
+      "POST admin/cms/banners/reorder",
+      "GET client/banners",
+      "GET client/banners?key=",
+    ],
+    yarnScript: "migration:api:banner-slider",
+  },
+  {
+    key: "testimonial",
+    testFiles: ["testimonial/admin.api.test.ts", "testimonial/client.api.test.ts"],
+    endpoints: [
+      "GET/GET:id/POST/PUT/DELETE admin/cms/testimonials",
+      "GET client/testimonials",
+    ],
+    yarnScript: "migration:api:testimonial",
+  },
+  {
+    key: "department",
+    testFiles: ["department/admin.api.test.ts", "department/client.api.test.ts"],
+    endpoints: [
+      "GET/POST/PUT/DELETE admin/departments",
+      "GET client/contactus",
+    ],
+    yarnScript: "migration:api:department",
+  },
+  {
+    key: "terms",
+    testFiles: ["terms/admin.api.test.ts", "terms/client.api.test.ts"],
+    endpoints: [
+      "GET/GET:id/POST/PUT/DELETE admin/cms/terms",
+      "GET client/terms (array)",
+      "GET client/terms?module= (single|null)",
+    ],
+    yarnScript: "migration:api:terms",
+  },
+  {
+    key: "popup",
+    testFiles: ["popup/admin.api.test.ts", "popup/client.api.test.ts"],
+    endpoints: [
+      "GET/GET:id/POST/PUT/DELETE admin/cms/popups",
+      "GET client/popup (active: status + promoExpireAt>now, newest)",
+    ],
+    yarnScript: "migration:api:popup",
+  },
 ] as const;

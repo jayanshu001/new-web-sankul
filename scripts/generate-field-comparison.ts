@@ -2,12 +2,15 @@
  * Generates docs/migration/FIELD_COMPARISON.md — module-by-module column/field matrix.
  * Run: yarn docs:field-comparison
  */
+import dotenv from "dotenv";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, "..");
+// Load .env so MIGRATION_MYSQL_MODULES drives migrated status without inline env.
+dotenv.config({ path: path.join(ROOT, ".env") });
 const PRISMA_PATH = path.join(ROOT, "prisma/schema.prisma");
 const SQL_PATH = path.resolve(ROOT, "../websankul-staging/database/websankul_staging.sql");
 const MODELS_DIR = path.join(ROOT, "src/models");

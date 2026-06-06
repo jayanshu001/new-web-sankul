@@ -3,11 +3,11 @@ import {
   listFaqs as listFaqsService,
   listFaqTypes as listFaqTypesService,
 } from "../../modules/faq/faq.service";
-import { PopupNotification } from "../../models/system/PopupNotification.model";
-import { BannerSlider } from "../../models/system/BannerSlider.model";
 import { LiveBannerSlider } from "../../models/system/LiveBannerSlider.model";
-import { Testimonial } from "../../models/system/Testimonial.model";
-import { TermsAndConditions } from "../../models/system/TermsAndConditions.model";
+import { listBanners as listBannersService } from "../../modules/banner-slider/banner-slider.service";
+import { listTestimonials as listTestimonialsService } from "../../modules/testimonial/testimonial.service";
+import { getClientTerms } from "../../modules/terms/terms.service";
+import { getActivePopup as getActivePopupService } from "../../modules/popup/popup.service";
 import { checkClientUpgrade } from "../../modules/cms/upgrade-check.service";
 import { getVersionSettings } from "../../modules/version/version.service";
 import { SocialLink } from "../../models/system/SocialLink.model";
@@ -56,13 +56,7 @@ export const getActivePopup = async (_req: Request, res: Response) => {
   logger.info("getActivePopup invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const now = new Date();
-    const data = await PopupNotification.findOne({
-      status: true,
-      promoExpireAt: { $gt: now },
-    })
-      .sort({ createdAt: -1 })
-      .lean();
+    const data = await getActivePopupService();
     logger.info("getActivePopup success", { traceId, hasPopup: !!data });
     return res.status(200).json({ success: true, data: data ?? null });
   } catch (e: any) {
@@ -78,12 +72,7 @@ export const listBanners = async (req: Request, res: Response) => {
 
   try {
     const { key } = req.query as Record<string, string>;
-    const filter: any = {};
-    if (key) filter.key = key;
-    const data = await BannerSlider.find(filter)
-      .sort({ orderBy: 1 })
-      .populate("keyId")
-      .lean();
+    const data = await listBannersService(key ? { key } : undefined);
     logger.info("listBanners success", { traceId, key, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -116,7 +105,7 @@ export const listTestimonials = async (_req: Request, res: Response) => {
   logger.info("listTestimonials invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const data = await Testimonial.find().sort({ rating: -1 }).lean();
+    const data = await listTestimonialsService();
     logger.info("listTestimonials success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -188,11 +177,7 @@ export const getTerms = async (req: Request, res: Response) => {
 
   try {
     const { module: moduleName } = req.query as Record<string, string>;
-    const filter: any = { status: true };
-    if (moduleName) filter.module = moduleName;
-    const data = moduleName
-      ? await TermsAndConditions.findOne(filter).lean()
-      : await TermsAndConditions.find(filter).lean();
+    const data = await getClientTerms(moduleName);
     logger.info("getTerms success", { traceId, moduleName });
     return res.status(200).json({ success: true, data: data ?? null });
   } catch (e: any) {
