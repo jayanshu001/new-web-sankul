@@ -21,6 +21,7 @@ import { runTermsAdminApiTests } from "./terms/admin.api.test.js";
 import { runTermsClientApiTests } from "./terms/client.api.test.js";
 import { runPopupAdminApiTests } from "./popup/admin.api.test.js";
 import { runPopupClientApiTests } from "./popup/client.api.test.js";
+import { runCustomerAuthClientApiTests } from "./customer-auth/client.api.test.js";
 
 const moduleKey = process.argv[2]?.trim().toLowerCase();
 
@@ -33,6 +34,7 @@ const runners: Record<string, (() => Promise<boolean>)[]> = {
   department: [runDepartmentAdminApiTests, runDepartmentClientApiTests],
   terms: [runTermsAdminApiTests, runTermsClientApiTests],
   popup: [runPopupAdminApiTests, runPopupClientApiTests],
+  "customer-auth": [runCustomerAuthClientApiTests],
 };
 
 async function main() {

@@ -4,6 +4,18 @@ import { Customer, isProfileComplete } from "../../models/customer/Customer.mode
 import { CustomerOtp } from "../../models/customer/CustomerOtp.model";
 import { CustomerAccessToken } from "../../models/customer/CustomerAccessToken.model";
 import { redisClient } from "../../config/redis";
+import { isMysqlModule } from "../../config/migration";
+import { customerAuthRepository } from "../../modules/customer-auth/customer-auth.repository";
+import {
+  toCustomerProfileDto,
+  isProfileCompleteMysql,
+} from "../../modules/customer-auth/customer-auth.transformer";
+
+// Customer auth migrates to MySQL/Prisma when listed in MIGRATION_MYSQL_MODULES.
+// Each function below branches on this; the Mongo path is unchanged. JWT signing,
+// Redis writes, formatPhone, static-OTP/SMS logic and all response shapes are
+// shared across both branches — only the persistence layer differs.
+const AUTH_MODULE = "customer-auth";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const OTP_TTL_MINUTES = 5;
@@ -86,6 +98,50 @@ export async function generateOtp(rawPhone: string, traceId?: string): Promise<{
   logger.info("generateOtp service invoked", { traceId, rawPhone });
   const phone = formatPhone(rawPhone);
   const isStatic = TESTING_ACCOUNTS.includes(phone);
+
+  const otpFor = () =>
+    DUMMY_OTP_ENABLED
+      ? DUMMY_OTP_VALUE
+      : isStatic
+      ? STATIC_OTP
+      : String(Math.floor(1000 + Math.random() * 8999));
+
+  if (isMysqlModule(AUTH_MODULE)) {
+    const row = await customerAuthRepository.findActiveByPhone(phone);
+    if (row && !row.status) {
+      logger.warn("generateOtp service account blocked", { traceId, phone });
+      return { ok: false, message: "Your account has been blocked. Please contact support." };
+    }
+
+    const otp = otpFor();
+    console.log(`\x1b[1m\x1b[38;5;50m[OTP]\x1b[0m \x1b[38;5;208mGenerated\x1b[0m → \x1b[1m\x1b[38;5;226m${otp}\x1b[0m`);
+    const sent = DUMMY_OTP_ENABLED || isStatic || (await sendOtpSms(phone, otp));
+    if (!sent) {
+      return { ok: false, message: "Unable to send OTP. Please try again later." };
+    }
+
+    const expiresAt = addMinutes(OTP_TTL_MINUTES);
+    let isNewUser = false;
+    let customerId: number;
+    if (row) {
+      await customerAuthRepository.setOtpForLogin(
+        row.id,
+        otp,
+        expiresAt,
+        (row.lastLoginCount ?? 0) + 1
+      );
+      customerId = row.id;
+      logger.info("generateOtp service existing user OTP updated", { traceId, phone, customerId });
+    } else {
+      isNewUser = true;
+      const created = await customerAuthRepository.createStub(phone, otp, expiresAt);
+      customerId = created.id;
+      logger.info("generateOtp service new user created", { traceId, phone, customerId });
+    }
+    await customerAuthRepository.recordOtp(customerId, otp);
+    logger.info("generateOtp service completed", { traceId, phone, isNewUser });
+    return { ok: true, message: "OTP sent successfully.", isNewUser };
+  }
 
   // Find existing customer (active, not deleted)
   const existing = await Customer.findOne({
@@ -195,6 +251,43 @@ export async function resendOtp(rawPhone: string, traceId?: string): Promise<{
   const phone = formatPhone(rawPhone);
   const isStatic = TESTING_ACCOUNTS.includes(phone);
 
+  const otpForResend = () =>
+    DUMMY_OTP_ENABLED
+      ? DUMMY_OTP_VALUE
+      : isStatic
+      ? STATIC_OTP
+      : String(Math.floor(1000 + Math.random() * 8999));
+
+  if (isMysqlModule(AUTH_MODULE)) {
+    const row = await customerAuthRepository.findActiveByPhone(phone);
+    if (!row) {
+      logger.warn("resendOtp service user not found", { traceId, phone });
+      return { ok: false, message: "User not found. Please register first." };
+    }
+    if (!row.status) {
+      return { ok: false, message: "Your account has been blocked. Please contact support." };
+    }
+    // 60-second strict cooldown (mirrors the Mongo branch using otp_expires_at).
+    if (row.otp_expires_at && row.otp_expires_at > new Date()) {
+      const msUntilExpiry = row.otp_expires_at.getTime() - Date.now();
+      const msSinceLastSend = OTP_TTL_MINUTES * 60 * 1000 - msUntilExpiry;
+      if (msSinceLastSend < 60000) {
+        const waitSecs = Math.ceil((60000 - msSinceLastSend) / 1000);
+        return { ok: false, message: `Please wait ${waitSecs} seconds before resending OTP.` };
+      }
+    }
+    const otp = otpForResend();
+    const sent = DUMMY_OTP_ENABLED || isStatic || (await sendOtpSms(phone, otp));
+    if (!sent) {
+      return { ok: false, message: "Unable to resend OTP. Please try again later." };
+    }
+    const expiresAt = addMinutes(OTP_TTL_MINUTES);
+    await customerAuthRepository.setOtpResend(row.id, otp, expiresAt);
+    await customerAuthRepository.recordOtp(row.id, otp);
+    logger.info("resendOtp service completed", { traceId, customerId: row.id });
+    return { ok: true, message: "A new OTP has been sent." };
+  }
+
   const existing = await Customer.findOne({
     phoneNumber: phone,
     isAccountDeleted: false,
@@ -279,6 +372,75 @@ export async function validateOtp(
 }> {
   logger.info("validateOtp service invoked", { traceId, rawPhone, otp });
   const phone = formatPhone(rawPhone);
+
+  if (isMysqlModule(AUTH_MODULE)) {
+    const row = await customerAuthRepository.findLoginableByPhone(phone);
+    if (!row) {
+      logger.warn("validateOtp service invalid user", { traceId, phone });
+      return { ok: false, message: "Invalid user." };
+    }
+
+    const triedOtp = (row.triedOtp ?? 0) + 1;
+
+    if (row.otp !== otp) {
+      await customerAuthRepository.bumpTriedOtp(row.id, triedOtp, osType);
+      const remaining = OTP_MAX_ATTEMPTS - triedOtp;
+      logger.warn("validateOtp service wrong otp", { traceId, customerId: row.id, remaining });
+      return { ok: false, message: `Invalid OTP. ${remaining} attempt(s) remaining.` };
+    }
+
+    if (!row.otp_expires_at || row.otp_expires_at < new Date()) {
+      logger.warn("validateOtp service otp expired", { traceId, customerId: row.id });
+      return { ok: false, message: "OTP has expired. Please request a new one." };
+    }
+
+    const isNewUser = !row.verified;
+    const profileCompleted = isProfileCompleteMysql(row);
+
+    if (!row.isPhoneVerified || !row.verified) {
+      await customerAuthRepository.markVerified(row.id, osType);
+    } else {
+      await customerAuthRepository.clearTried(row.id, osType);
+    }
+
+    await customerAuthRepository.deactivateTokens(row.id);
+
+    const idStr = String(row.id);
+    const token = jwt.sign(
+      { id: idStr, phone: row.phoneNumber, role: "customer", type: "customer" },
+      JWT_SECRET,
+      { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` }
+    );
+    const refreshToken = jwt.sign(
+      { id: idStr, phone: row.phoneNumber, role: "customer", type: "customer" },
+      JWT_REFRESH_SECRET,
+      { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` }
+    );
+
+    await customerAuthRepository.createToken({
+      customerId: row.id,
+      token,
+      refreshToken,
+      expiresAt: addDays(JWT_REFRESH_TTL_DAYS),
+    });
+
+    await redisClient.set(
+      `customer_session:${idStr}`,
+      token,
+      "EX",
+      JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
+    );
+
+    const profile = toCustomerProfileDto(row, { isNewUser, isProfileCompleted: profileCompleted });
+    return {
+      ok: true,
+      message: "Login successful.",
+      token,
+      refreshToken,
+      customer: profile as unknown as Record<string, unknown>,
+      isNewUser,
+    };
+  }
 
   const customer = await Customer.findOne({
     phoneNumber: phone,
@@ -416,6 +578,15 @@ export async function logoutCustomer(customerId: string, traceId?: string): Prom
   message: string;
 }> {
   logger.info("logoutCustomer service invoked", { traceId, customerId });
+  if (isMysqlModule(AUTH_MODULE)) {
+    const numId = Number(customerId);
+    if (Number.isInteger(numId) && numId > 0) {
+      await customerAuthRepository.deactivateTokens(numId);
+    }
+    await redisClient.del(`customer_session:${customerId}`);
+    logger.info("logoutCustomer service completed", { traceId, customerId });
+    return { ok: true, message: "Logged out successfully." };
+  }
   await CustomerAccessToken.updateMany(
     { customerId },
     { active: false, deleted: true }
@@ -438,6 +609,64 @@ export async function refreshCustomerToken(refreshToken: string, traceId?: strin
   try {
     const decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET) as any;
     const customerId = decoded.id;
+
+    if (isMysqlModule(AUTH_MODULE)) {
+      const numId = Number(customerId);
+      if (!Number.isInteger(numId) || numId <= 0) {
+        return { ok: false, message: "Invalid or revoked refresh token." };
+      }
+      const dbToken = await customerAuthRepository.findActiveTokenByRefresh(refreshToken, numId);
+      if (!dbToken) {
+        logger.warn("refreshCustomerToken service invalid token", { traceId, customerId });
+        return { ok: false, message: "Invalid or revoked refresh token." };
+      }
+      const row = await customerAuthRepository.findLoginableById(numId);
+      if (!row) {
+        logger.warn("refreshCustomerToken service user not found", { traceId, customerId });
+        return { ok: false, message: "User not found or disabled." };
+      }
+
+      await customerAuthRepository.deactivateToken(dbToken.id);
+
+      const idStr = String(row.id);
+      const newToken = jwt.sign(
+        { id: idStr, phone: row.phoneNumber, role: "customer", type: "customer" },
+        JWT_SECRET,
+        { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` }
+      );
+      const newRefreshToken = jwt.sign(
+        { id: idStr, phone: row.phoneNumber, role: "customer", type: "customer" },
+        JWT_REFRESH_SECRET,
+        { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` }
+      );
+
+      await customerAuthRepository.createToken({
+        customerId: row.id,
+        token: newToken,
+        refreshToken: newRefreshToken,
+        expiresAt: addDays(JWT_REFRESH_TTL_DAYS),
+      });
+
+      await redisClient.set(
+        `customer_session:${idStr}`,
+        newToken,
+        "EX",
+        JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
+      );
+
+      const profile = toCustomerProfileDto(row, {
+        isNewUser: !row.verified,
+        isProfileCompleted: isProfileCompleteMysql(row),
+      });
+      logger.info("refreshCustomerToken service success", { traceId, customerId });
+      return {
+        ok: true,
+        message: "Token refreshed successfully.",
+        token: newToken,
+        refreshToken: newRefreshToken,
+        customer: profile,
+      };
+    }
 
     const dbToken = await CustomerAccessToken.findOne({
       refreshToken,

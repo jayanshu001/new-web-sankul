@@ -341,14 +341,15 @@ model CustomerOtp {
 }
 
 model CustomerAccessToken {
-  id         Int      @id @default(autoincrement())
-  customer   Customer @relation(references: [id], fields: [customerId])
-  customerId Int      @map("customer_id")
-  token      String   @db.Text
-  active     Boolean
-  deleted    Boolean
-  created_at DateTime
-  expires_at DateTime
+  id           Int      @id @default(autoincrement())
+  customer     Customer @relation(references: [id], fields: [customerId])
+  customerId   Int      @map("customer_id")
+  token        String   @db.Text
+  refreshToken String?  @map("refresh_token") @db.Text
+  active       Boolean
+  deleted      Boolean
+  created_at   DateTime
+  expires_at   DateTime
 
   @@map("ws_customer_access_token")
 }
@@ -365,6 +366,9 @@ model CustomerAddress {
   State           CustomerState? @relation(fields: [state], references: [id])
   state           Int?           @map("state")
   pincode         Int
+  label           String?        @db.VarChar(20)
+  isDefault       Boolean?       @map("is_default")
+  cityId          Int?           @map("city_id")
   customer        Customer?      @relation(fields: [userId], references: [id])
   userId          Int?           @map("user_id")
   status          Boolean?
@@ -408,6 +412,9 @@ model CustomerBankAccount {
   accountHolderName String    @map("account_holder_name") @db.VarChar(150)
   ifscCode          String    @map("ifsc_code") @db.VarChar(50)
   accountNumber     String    @map("account_number")
+  bankName          String?   @map("bank_name") @db.VarChar(150)
+  branchName        String?   @map("branch_name") @db.VarChar(200)
+  city              String?   @db.VarChar(100)
   createdAt         DateTime? @map("created_at")
   updatedAt         DateTime? @map("updated_at")
 

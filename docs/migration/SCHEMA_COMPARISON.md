@@ -28,7 +28,7 @@
 
 ### Currently migrated modules (`MIGRATION_MYSQL_MODULES`)
 
-`app-update, version, faq, banner-slider, testimonial, department, terms, popup`
+`app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth`
 
 ---
 
@@ -47,13 +47,13 @@
 | 9 | Course | `ws_course` (19 cols) | — | `ws_course` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 10 | CourseEducator | `ws_course_educator` (12 cols) | — | `ws_course_educator` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 11 | CourseSubjectCategory | `ws_course_subject_category` (9 cols) | — | `ws_course_subject_category` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 12 | Customer | `ws_customer` (34 cols) | `ws_customers` | `ws_customer` | ⏳ Not migrated | Collection name differs from MySQL table |
-| 13 | CustomerAccessToken | `ws_customer_access_token` (8 cols) | `ws_customer_access_tokens` | `ws_customer_access_token` | ⏳ Not migrated | Collection name differs from MySQL table |
+| 12 | Customer | `ws_customer` (34 cols) | `ws_customers` | `ws_customer` | ✅ Migrated | Collection name differs from MySQL table |
+| 13 | CustomerAccessToken | `ws_customer_access_token` (9 cols) | `ws_customer_access_tokens` | `ws_customer_access_token` | ✅ Migrated | Collection name differs from MySQL table |
 | 14 | CustomerAddress | `ws_customer_address` (14 cols) | `ws_customer_addresses` | `ws_customer_address` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 15 | CustomerBankAccount | `ws_customer_bank_account` (7 cols) | `ws_customer_bank_accounts` | `ws_customer_bank_account` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 16 | CustomerDistict | `ws_customer_distict` (4 cols) | — | `ws_customer_distict` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 17 | CustomerEducation | `ws_customer_education` (3 cols) | `ws_customer_educations` | `ws_customer_education` | ⏳ Not migrated | Collection name differs from MySQL table |
-| 18 | CustomerOtp | `ws_customer_otp` (4 cols) | `ws_customer_otps` | `ws_customer_otp` | ⏳ Not migrated | Collection name differs from MySQL table |
+| 18 | CustomerOtp | `ws_customer_otp` (4 cols) | `ws_customer_otps` | `ws_customer_otp` | ✅ Migrated | Collection name differs from MySQL table |
 | 19 | CustomerShipping | `ws_customer_shipping` (14 cols) | `ws_customer_shippings` | `ws_customer_shipping` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 20 | CustomerState | `ws_customer_state` (4 cols) | `ws_customer_states` | `ws_customer_state` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 21 | CustomerTargetGoal | `ws_customer_target_goal` (4 cols) | `ws_customer_target_goals` | `ws_customer_target_goal` | ⏳ Not migrated | Collection name differs from MySQL table |
@@ -176,18 +176,19 @@
 | 138 | ReferralTerm | — | `ws_referral_terms` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/referral/ReferralTerm.model.ts |
 | 139 | ReferralTransaction | — | `ws_referral_transactions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/referral/ReferralTransaction.model.ts |
 | 140 | ActivityLog | — | `ws_activity_log` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/ActivityLog.model.ts |
-| 141 | FaqType | — | `ws_faq_types` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/FaqType.model.ts |
-| 142 | LiveBannerSlider | — | `ws_live_banner_sliders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/LiveBannerSlider.model.ts |
-| 143 | Notification | — | `ws_notifications` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/Notification.model.ts |
-| 144 | SocialLink | — | `ws_social_links` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/SocialLink.model.ts |
-| 145 | SocialLinkType | — | `ws_social_link_types` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/SocialLinkType.model.ts |
-| 146 | TermsAndConditions | — | `ws_terms_and_conditions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/TermsAndConditions.model.ts |
-| 147 | TestSeries | — | `ws_test_series` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeries.model.ts |
-| 148 | TestSeriesContentCategory | — | `ws_test_series_content_category` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesContentCategory.model.ts |
-| 149 | TestSeriesExam | — | `ws_test_series_exam` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesExam.model.ts |
-| 150 | TestSeriesOrder | — | `ws_test_series_orders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesOrder.model.ts |
-| 151 | TestSeriesPrice | — | `ws_test_series_prices` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesPrice.model.ts |
-| 152 | TestSeriesSubscription | — | `ws_test_series_subscriptions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesSubscription.model.ts |
+| 141 | CurrentAffair | — | `ws_current_affairs` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/CurrentAffair.model.ts |
+| 142 | FaqType | — | `ws_faq_types` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/FaqType.model.ts |
+| 143 | LiveBannerSlider | — | `ws_live_banner_sliders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/LiveBannerSlider.model.ts |
+| 144 | Notification | — | `ws_notifications` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/Notification.model.ts |
+| 145 | SocialLink | — | `ws_social_links` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/SocialLink.model.ts |
+| 146 | SocialLinkType | — | `ws_social_link_types` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/SocialLinkType.model.ts |
+| 147 | TermsAndConditions | — | `ws_terms_and_conditions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/TermsAndConditions.model.ts |
+| 148 | TestSeries | — | `ws_test_series` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeries.model.ts |
+| 149 | TestSeriesContentCategory | — | `ws_test_series_content_category` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesContentCategory.model.ts |
+| 150 | TestSeriesExam | — | `ws_test_series_exam` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesExam.model.ts |
+| 151 | TestSeriesOrder | — | `ws_test_series_orders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesOrder.model.ts |
+| 152 | TestSeriesPrice | — | `ws_test_series_prices` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesPrice.model.ts |
+| 153 | TestSeriesSubscription | — | `ws_test_series_subscriptions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesSubscription.model.ts |
 
 ---
 

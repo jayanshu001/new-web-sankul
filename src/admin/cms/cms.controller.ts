@@ -24,6 +24,43 @@ import {
   deletePopup as deletePopupService,
   parsePopupId,
 } from "../../modules/popup/popup.service";
+import {
+  listBanners as listBannersService,
+  getBannerById as getBannerByIdService,
+  createBanner as createBannerService,
+  updateBanner as updateBannerService,
+  deleteBanner as deleteBannerService,
+  reorderBanners as reorderBannersService,
+  parseBannerId,
+} from "../../modules/banner-slider/banner-slider.service";
+import {
+  listTestimonials as listTestimonialsService,
+  getTestimonialById as getTestimonialByIdService,
+  createTestimonial as createTestimonialService,
+  updateTestimonial as updateTestimonialService,
+  deleteTestimonial as deleteTestimonialService,
+  parseTestimonialId,
+} from "../../modules/testimonial/testimonial.service";
+import {
+  listTerms as listTermsService,
+  getTermsById as getTermsByIdService,
+  createTerms as createTermsService,
+  updateTerms as updateTermsService,
+  deleteTerms as deleteTermsService,
+  parseTermsId,
+} from "../../modules/terms/terms.service";
+import {
+  termsCreateSchemaMysql,
+  termsUpdateSchemaMysql,
+} from "../../modules/terms/terms.validation";
+import {
+  getVersionSettings,
+  upsertVersionSettings,
+} from "../../modules/version/version.service";
+import {
+  getAppUpdateSettings,
+  upsertAppUpdateSettings,
+} from "../../modules/app-update/app-update.service";
 import { LiveBannerSlider } from "../../models/system/LiveBannerSlider.model";
 import { Testimonial } from "../../models/system/Testimonial.model";
 import { TermsAndConditions } from "../../models/system/TermsAndConditions.model";

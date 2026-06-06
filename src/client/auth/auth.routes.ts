@@ -3,6 +3,8 @@ import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpH
 import authenticate from "../../middlewares/authenticate";
 import { logoutAllDevicesHandler } from "../../middlewares/logoutAllDevices";
 import { CustomerAccessToken } from "../../models/customer/CustomerAccessToken.model";
+import { isMysqlModule } from "../../config/migration";
+import { customerAuthRepository } from "../../modules/customer-auth/customer-auth.repository";
 // TEMP (testing): otpLimiter disabled so repeated OTP requests don't hit the
 // 15-min / 5-request 429. RESTORE before merging — re-add it to the two
 // /otp routes below and uncomment this import.
@@ -57,6 +59,13 @@ router.post(
   logoutAllDevicesHandler({
     type: "customer",
     extraTeardown: async (customerId) => {
+      if (isMysqlModule("customer-auth")) {
+        const numId = Number(customerId);
+        if (Number.isInteger(numId) && numId > 0) {
+          await customerAuthRepository.deactivateTokens(numId);
+        }
+        return;
+      }
       await CustomerAccessToken.updateMany(
         { customerId, active: true },
         { active: false, deleted: true }

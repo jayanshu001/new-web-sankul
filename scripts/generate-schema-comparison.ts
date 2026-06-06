@@ -188,6 +188,13 @@ function main() {
       status = "✅ Migrated";
     if (table === "ws_termsandcondition" && MIGRATED.includes("terms")) status = "✅ Migrated";
     if (table === "ws_popup_notification" && MIGRATED.includes("popup")) status = "✅ Migrated";
+    if (
+      (table === "ws_customer" ||
+        table === "ws_customer_otp" ||
+        table === "ws_customer_access_token") &&
+      MIGRATED.includes("customer-auth")
+    )
+      status = "✅ Migrated";
 
     let notes = "";
     if (mColl !== "—" && mColl !== table && best < 100) notes = "Collection name differs from MySQL table";

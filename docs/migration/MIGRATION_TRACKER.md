@@ -3,7 +3,7 @@
 > **Project:** `new-web-sankul` (modern stack)  
 > **Strategy reference:** [`legacy_system_migration_strategy.md`](./legacy_system_migration_strategy.md)  
 > **Last updated:** 2026-06-06  
-> **Current phase:** Phase 2 — Backend stabilization (**in progress**; 8 modules on MySQL: app-update, version, faq, banner-slider, testimonial, department, terms, popup. Read-only/CMS group complete — next: customer auth)  
+> **Current phase:** Phase 2 — Backend stabilization (**in progress**; 9 modules on MySQL: app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth. CMS group + customer auth done — next: catalog)  
 > **Doc index:** [`README.md`](./README.md) (all migration docs live in this folder)  
 > **How to test:** [`testing-guide.md`](./testing-guide.md)  
 > **Test results log:** [`MIGRATION_TEST_LOG.md`](./MIGRATION_TEST_LOG.md) ← record Pass/Fail here
@@ -496,8 +496,8 @@ Recommended order (safest first):
    - ~~**Popup notification**~~ — ✅ done (`ws_popup_notification`; `promoExpireAt` date map; client active-popup query; S3 image is DB-agnostic middleware).
    - ~~**Dynamic image**~~ — ➖ skipped: model exists but no controller/route uses it (no API surface).
    - ~~**Social link / social-link-type**~~ — ➖ skipped: Mongo-only (no `ws_social*` table in dump, no Prisma model).
-4. **Customer auth** — login, OTP, tokens (high traffic; needs transformers) — ⏳ **next**.
-5. **Catalog** — courses, packages, videos.
+4. ~~**Customer auth**~~ — ✅ done (`ws_customer` + `ws_customer_otp` + `ws_customer_access_token`; OTP generate/resend/validate/logout/refresh; added `refresh_token` column; `full_name`→`firstName`; `authenticate` not read-path coupled).
+5. **Catalog** — courses, packages, videos — ⏳ **next** (read-heavy backbone; large surface; video URLs must match `/v1/lecture` encryption).
 6. **Commerce** — orders, subscriptions, promocodes.
 7. **Hardest last** — live classes, chat, new permission system.
 
@@ -520,6 +520,8 @@ Legacy Prisma query (websankul-api-staging) as reference
 
 | Date | Phase | What was done |
 |------|-------|----------------|
+| 2026-06-06 | Phase 2 | `customer-auth` on Prisma — OTP generate/resend/validate/logout/refresh (`ws_customer` + otp + access_token). Added nullable `refresh_token` column; `full_name`→`firstName`; service branched in place, `authenticate.ts` untouched. `migration:api` — **82/82** (issued MySQL token authenticates protected routes). |
+| 2026-06-06 | Fixes | Repaired two pre-existing HEAD regressions from the merge: restored clobbered service imports in `cms.controller.ts` (25 tsc errors) and the missing `package.json` migration scripts block; added the `Explore` banner key. |
 | 2026-06-06 | Phase 2 | `popup` on Prisma — `promoExpireAt`↔`promo_expire_at` date map; client active-popup query (status+expiry+newest). Confirmed S3 upload is DB-agnostic middleware. `migration:api` — **73/73**. Read-only/CMS group complete; `social-link` confirmed Mongo-only. |
 | 2026-06-06 | Phase 2 | `terms` on Prisma — client array vs `?module=` single/null preserved. Tests caught MySQL `module` enum (error 1265 on free-string write); added MySQL-specific enum zod schema on admin writes. `migration:api` — **64/64**. |
 | 2026-06-06 | Phase 2 | `department` (contact-us) on Prisma — `ws_department` + `ws_department_contact` join under embedded `contacts[]`; admin `contactSchema` extended for call/whatsapp flags. `migration:api` — **52/52**. `dynamic-image` skipped (no API surface). |

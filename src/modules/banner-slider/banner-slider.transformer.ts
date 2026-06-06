@@ -1,5 +1,6 @@
 import type { BannerSlider } from "@prisma/client";
 import {
+  BANNER_KEYS,
   BANNER_KEY_TO_MODEL,
   BANNER_KEY_TO_MYSQL,
   MYSQL_KEY_TO_BANNER_KEY,
@@ -12,7 +13,7 @@ import {
 /** Resolve a banner key from either Mongo casing or raw MySQL value. */
 export const resolveBannerKey = (raw?: string | null): BannerKey | undefined => {
   if (!raw) return undefined;
-  if (raw in BANNER_KEY_TO_MODEL) return raw as BannerKey;
+  if ((BANNER_KEYS as readonly string[]).includes(raw)) return raw as BannerKey;
   return MYSQL_KEY_TO_BANNER_KEY[raw.toLowerCase()];
 };
 

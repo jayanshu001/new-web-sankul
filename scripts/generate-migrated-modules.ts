@@ -167,6 +167,29 @@ const MIGRATED_REGISTRY = [
       "Mongo collection `ws_popup_notifications` → MySQL `ws_popup_notification` (Prisma model name `PopupNotifications`, plural)",
     ],
   },
+  {
+    key: "customer-auth",
+    label: "Customer Auth (OTP/token)",
+    phase: 2,
+    migratedOn: "2026-06-06",
+    prismaModel: "Customer / CustomerOtp / CustomerAccessToken",
+    mysqlTable: "ws_customer (+ ws_customer_otp, ws_customer_access_token)",
+    mongoCollection: "ws_customers / ws_customer_otps / ws_customer_access_tokens",
+    code: "src/modules/customer-auth (service refactored in src/client/auth/auth.service.ts)",
+    adminRoutes: "—",
+    clientRoutes:
+      "POST `/api/v1/client/auth/otp/generate` · `/otp/resend` · `/otp/validate` · `/token/refresh` · DELETE `/logout`",
+    testScript: "yarn migration:api:customer-auth",
+    rowCountHint: "26 customers in staging; tests use real phone 9664796376 (static OTP 5786)",
+    transformerNotes: [
+      "Schema change: added nullable `refresh_token` TEXT column to `ws_customer_access_token` (+ Prisma model) — the dump table lacked it; mirrors the Mongo `refreshToken` field",
+      "Profile mapping: MySQL single `full_name` → API `firstName` (middle/last = \"\"); state/district/education ids returned as strings; `goals` from the `goal` JSON column; `isProfileCompleted` computed (no column), never persisted",
+      "`authenticate` middleware is NOT read-path coupled to the token table — it verifies the JWT + Redis revocation only, so migrating the token table does not affect general authenticated requests",
+      "JWT signing/payload, Redis `customer_session:{id}`, `formatPhone`, static-OTP/SMS logic and all response shapes are shared across both DB branches; only persistence differs",
+      "JWT `id` is the int customer id stringified on MySQL (was the Mongo ObjectId string)",
+      "Collections `ws_customers/ws_customer_otps/ws_customer_access_tokens` → MySQL `ws_customer/ws_customer_otp/ws_customer_access_token`",
+    ],
+  },
 ] as const;
 
 function numberedTable(headers: string[], rows: string[][], start = 1): string {

@@ -27,8 +27,9 @@
 | Phase 2 — `dynamic-image` | ➖ | 2026-06-06 | No API surface (model unused) — nothing to migrate |
 | Phase 2 — `terms` | ✅ | 2026-06-06 | `yarn migration:api:terms` (automated) |
 | Phase 2 — `popup` | ✅ | 2026-06-06 | `yarn migration:api:popup` (automated) |
-| Phase 2 — API automation (`api-tests/`) | ✅ | 2026-06-06 | app-update, version, faq, banner-slider, testimonial, department, terms, popup — **73/73** incl. PUT/POST/DELETE + reorder + nested contacts + enum guard + date/active-popup |
-| Next module: _(customer auth)_ | ⬜ | — | — |
+| Phase 2 — `customer-auth` | ✅ | 2026-06-06 | `yarn migration:api:customer-auth` (automated, real dump customer) |
+| Phase 2 — API automation (`api-tests/`) | ✅ | 2026-06-06 | + customer-auth — **82/82** (OTP generate/validate/refresh/logout against real ws_customer; issued token authenticates a protected route) |
+| Next module: _(catalog: course/package/video)_ | ⬜ | — | — |
 
 Update this table after each testing session.
 
@@ -294,9 +295,47 @@ Update this table after each testing session.
 
 ---
 
+## Phase 2 — Customer Auth (`customer-auth`)
+
+**Env:** `MIGRATION_MYSQL_MODULES=...,customer-auth`; `MIGRATION_TEST_CUSTOMER_PHONE=9664796376`
+(in `TESTING_PHONE_NUMBERS` → static OTP `5786`, SMS skipped).
+**MySQL tables:** `ws_customer` + `ws_customer_otp` + `ws_customer_access_token`
+**Script:** `yarn migration:api:customer-auth` (Server: `yarn dev`)
+
+### Automated (HTTP `api-tests/`)
+
+| ID | Test | Expected | Result | Date | Tester | Notes |
+|----|------|----------|--------|------|--------|-------|
+| P2-CA-1 | `POST /client/auth/otp/generate` | ok + isNewUser | ✅ | 2026-06-06 | `migration:api` | real ws_customer row |
+| P2-CA-2 | `POST /client/auth/otp/validate` (5786) | token + refreshToken + profile; phone matches | ✅ | 2026-06-06 | `migration:api` | issued token also authenticates `GET /client/faqs` |
+| P2-CA-3 | `POST /client/auth/token/refresh` | working new token pair + profile | ✅ | 2026-06-06 | `migration:api` | |
+| P2-CA-4 | refresh w/ invalid token | 401 | ✅ | 2026-06-06 | `migration:api` | |
+| P2-CA-5 | `DELETE /client/auth/logout` | ok | ✅ | 2026-06-06 | `migration:api` | token row → active=0,deleted=1 |
+| P2-CA-6 | validate w/ wrong OTP | 400 | ✅ | 2026-06-06 | `migration:api` | |
+
+**De-risking finding:** `authenticate` middleware does NOT read the token table at
+request time (JWT verify + Redis revocation only) — so the full suite's
+`getCustomerToken()` now runs the MySQL OTP path and all 9 modules stay green
+(**82/82**), proving general authenticated requests are unaffected.
+
+**Schema change:** added nullable `refresh_token` column to
+`ws_customer_access_token` (container + dump CREATE TABLE + Prisma model).
+**DB spot-check:** after validate, a new token row has `refresh_token` set,
+`active=1`; prior rows + post-logout row are `active=0,deleted=1`; OTP `5786`
+recorded in `ws_customer_otp`.
+
+### Note — refresh-token rotation behavior
+
+`jwt.sign` is deterministic per-second for the same payload, so a refresh issued
+within the same second yields an identical token *string* (true in both the Mongo
+and MySQL branches — not a migration regression). The contract verified is a valid
+**working** new pair, not string-level rotation.
+
+---
+
 ## Phase 2 — Next module: _______________
 
-_Copy this block when you start the next module (e.g. `customer`)._
+_Copy this block when you start the next module (e.g. `course`)._
 
 **Module:** `_______________`  
 **Added to env:** `MIGRATION_MYSQL_MODULES=_______________`  
@@ -381,6 +420,13 @@ _Free-form notes per testing session (environment, blockers, decisions)._
 - **`social-link` confirmed Mongo-only** (no `ws_social*` table in dump, no Prisma model) — like `dynamic-image`, nothing to migrate.
 - **Next:** `customer` auth — its own focused, security-sensitive session.
 
----
+### 2026-06-06 (cont.) — customer-auth
+
+- Migrated **`customer-auth`** (client OTP/token flow): generate/resend/validate/logout/refresh, 3 tables. Service refactored in place (`auth.service.ts`) with an `isMysqlModule("customer-auth")` branch per function; Mongo path unchanged. `authenticate.ts` untouched.
+- Added nullable `refresh_token` column to `ws_customer_access_token` (container + dump + Prisma) — the only schema change.
+- `yarn migration:api` → **82/82** across 9 modules.
+- **Found & fixed two pre-existing HEAD regressions** (introduced by the `Migration Initiated`/merge commits, unrelated to this work): (1) `src/admin/cms/cms.controller.ts` had its banner-slider/testimonial/terms/version/app-update service imports clobbered back to model imports while keeping the new handler bodies → 25 tsc errors; restored the imports. (2) `package.json` lost the entire migration scripts block (`db:*`, `docs:*`, `migration:api*`, `prisma:generate`); restored from commit `fb52512` + added `customer-auth`. Also added the `Explore` banner key (added to the validation enum after the banner module was built).
+- tsc back to the 8 pre-existing baseline errors; none in migrated code.
+- **Next:** catalog (`course`/`package`/`video`) — read-heavy data backbone, large surface.
 
 *After each test session, update **Summary** at the top and add a row to [`MIGRATION_TRACKER.md`](./MIGRATION_TRACKER.md) §16 Changelog if the module is signed off.*

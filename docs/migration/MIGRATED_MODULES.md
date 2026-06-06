@@ -10,9 +10,9 @@
 
 | | |
 |---|---|
-| **Total migrated (code complete)** | 8 |
-| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup` |
-| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup` |
+| **Total migrated (code complete)** | 9 |
+| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth` |
+| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth` |
 
 | # | Module key | Label | MySQL table | Mongo collection | Env | Detail |
 |---:|---|---|---|---|---|---|
@@ -24,6 +24,7 @@
 | 6 | `department` | Department (Contact-Us) | `ws_department (+ ws_department_contact)` | `ws_departments` | ✅ enabled | [Detail](#department) |
 | 7 | `terms` | Terms & Conditions | `ws_termsandcondition` | `ws_terms_and_conditions` | ✅ enabled | [Detail](#terms) |
 | 8 | `popup` | Popup Notification | `ws_popup_notification` | `ws_popup_notifications` | ✅ enabled | [Detail](#popup) |
+| 9 | `customer-auth` | Customer Auth (OTP/token) | `ws_customer (+ ws_customer_otp, ws_customer_access_token)` | `ws_customers / ws_customer_otps / ws_customer_access_tokens` | ✅ enabled | [Detail](#customer-auth) |
 
 ---
 
@@ -31,7 +32,7 @@
 
 ```env
 DATABASE_URL=mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging
-MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup
+MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth
 ```
 
 - Toggle: `src/config/migration.ts` → `isMysqlModule("<key>")`
@@ -245,6 +246,34 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 - Mongo collection `ws_popup_notifications` → MySQL `ws_popup_notification` (Prisma model name `PopupNotifications`, plural)
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PopupNotifications`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 9. Customer Auth (OTP/token) {#customer-auth}
+
+| | |
+|---|---|
+| **Module key** | `customer-auth` |
+| **Phase** | 2 |
+| **Migrated** | 2026-06-06 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Customer / CustomerOtp / CustomerAccessToken` |
+| **MySQL table** | `ws_customer (+ ws_customer_otp, ws_customer_access_token)` |
+| **Mongo collection (legacy app)** | `ws_customers / ws_customer_otps / ws_customer_access_tokens` |
+| **Code** | `src/modules/customer-auth (service refactored in src/client/auth/auth.service.ts)/` |
+| **Data** | 26 customers in staging; tests use real phone 9664796376 (static OTP 5786) |
+| **Smoke test** | `yarn migration:api:customer-auth` |
+| **Admin API** | — |
+| **Client API** | POST `/api/v1/client/auth/otp/generate` · `/otp/resend` · `/otp/validate` · `/token/refresh` · DELETE `/logout` |
+
+**Transformer / schema notes:**
+
+- Schema change: added nullable `refresh_token` TEXT column to `ws_customer_access_token` (+ Prisma model) — the dump table lacked it; mirrors the Mongo `refreshToken` field
+- Profile mapping: MySQL single `full_name` → API `firstName` (middle/last = ""); state/district/education ids returned as strings; `goals` from the `goal` JSON column; `isProfileCompleted` computed (no column), never persisted
+- `authenticate` middleware is NOT read-path coupled to the token table — it verifies the JWT + Redis revocation only, so migrating the token table does not affect general authenticated requests
+- JWT signing/payload, Redis `customer_session:{id}`, `formatPhone`, static-OTP/SMS logic and all response shapes are shared across both DB branches; only persistence differs
+- JWT `id` is the int customer id stringified on MySQL (was the Mongo ObjectId string)
+- Collections `ws_customers/ws_customer_otps/ws_customer_access_tokens` → MySQL `ws_customer/ws_customer_otp/ws_customer_access_token`
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Customer / CustomerOtp / CustomerAccessToken`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
 ---
 

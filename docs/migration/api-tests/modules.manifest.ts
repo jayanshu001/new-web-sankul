@@ -75,4 +75,15 @@ export const MIGRATED_API_MODULES = [
     ],
     yarnScript: "migration:api:popup",
   },
+  {
+    key: "customer-auth",
+    testFiles: ["customer-auth/client.api.test.ts"],
+    endpoints: [
+      "POST client/auth/otp/generate",
+      "POST client/auth/otp/validate (token + refreshToken + profile)",
+      "POST client/auth/token/refresh (rotation)",
+      "DELETE client/auth/logout",
+    ],
+    yarnScript: "migration:api:customer-auth",
+  },
 ] as const;

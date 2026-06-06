@@ -15,11 +15,15 @@
  *       (every row in the staging dump has key_id = NULL).
  */
 
-export const BANNER_KEYS = ["Packages", "Courses", "Book", "EBook"] as const;
+export const BANNER_KEYS = ["Packages", "Courses", "Book", "EBook", "Explore"] as const;
 export type BannerKey = (typeof BANNER_KEYS)[number];
 
-/** Mongo `keyRef` (model name) derived from `key`. */
-export const BANNER_KEY_TO_MODEL: Record<BannerKey, string> = {
+/**
+ * Mongo `keyRef` (model name) derived from `key`.
+ * `Explore` is a standalone CTA banner with no linked collection — it is
+ * intentionally absent so keyRef/keyId stay unset for it (matches the Mongo model).
+ */
+export const BANNER_KEY_TO_MODEL: Partial<Record<BannerKey, string>> = {
   Packages: "Package",
   Courses: "Course",
   Book: "Book",
@@ -34,6 +38,7 @@ export const MYSQL_KEY_TO_BANNER_KEY: Record<string, BannerKey> = {
   courses: "Courses",
   book: "Book",
   ebook: "EBook",
+  explore: "Explore",
 };
 
 /** Mongo-cased enum → MySQL lowercase column value (for writes). */
@@ -42,6 +47,7 @@ export const BANNER_KEY_TO_MYSQL: Record<BannerKey, string> = {
   Courses: "course",
   Book: "book",
   EBook: "ebook",
+  Explore: "explore",
 };
 
 export interface BannerSliderDto {
