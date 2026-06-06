@@ -28,6 +28,11 @@
     "migration:api:app-update": "tsx docs/migration/api-tests/run-module.ts app-update",
     "migration:api:version": "tsx docs/migration/api-tests/run-module.ts version",
     "migration:api:faq": "tsx docs/migration/api-tests/run-module.ts faq",
+    "migration:api:banner-slider": "tsx docs/migration/api-tests/run-module.ts banner-slider",
+    "migration:api:testimonial": "tsx docs/migration/api-tests/run-module.ts testimonial",
+    "migration:api:department": "tsx docs/migration/api-tests/run-module.ts department",
+    "migration:api:terms": "tsx docs/migration/api-tests/run-module.ts terms",
+    "migration:api:popup": "tsx docs/migration/api-tests/run-module.ts popup",
     "db:pull": "prisma db pull",
     "prisma:generate": "prisma generate"
   },

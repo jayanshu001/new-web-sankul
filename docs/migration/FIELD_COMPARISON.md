@@ -1,6 +1,6 @@
 # Field comparison — module by module
 
-> **Generated:** 2026-06-03 — re-run `yarn docs:field-comparison` after schema changes  
+> **Generated:** 2026-06-06 — re-run `yarn docs:field-comparison` after schema changes  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Related:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md) (table inventory) · [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
 
@@ -16,7 +16,7 @@
 | **Prisma field** | Prisma model property; DB column via `@map` when different |
 | **Match** | ✅ aligned · ⚠️ rename · 🆕 Mongo-only · 🆕 MySQL-only · 🆕 Prisma-only |
 
-**Migrated modules (`MIGRATION_MYSQL_MODULES`):** `app-update, version, faq`
+**Migrated modules (`MIGRATION_MYSQL_MODULES`):** `app-update, version, faq, banner-slider, testimonial, department, terms, popup`
 
 ---
 
