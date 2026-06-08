@@ -11,7 +11,8 @@ import { ExamQuestionOption } from "../../models/exam/ExamQuestionOption.model";
 import { ExamResult } from "../../models/exam/ExamResult.model";
 import { ExamResultDetail } from "../../models/exam/ExamResultDetail.model";
 import { ExamResultDetailAnalytics } from "../../models/exam/ExamResultDetailAnalytics.model";
-import { ExamStatus, ExamResultType } from "../../models/enums";
+import { ExamStatus, ExamResultType, ExamType } from "../../models/enums";
+import { formatScheduledAt } from "../../utils/displayTime";
 import {
   createCategorySchema,
   updateCategorySchema,
@@ -547,14 +548,94 @@ function mapStatusFlagToEnum(statusFlag: unknown): string | undefined {
   return statusFlag ? ExamStatus.PUBLISHED : ExamStatus.DRAFT;
 }
 
+// Single source of truth for the daily-test overlap rule, shared by create,
+// update, and the status toggle so the rule can never drift between endpoints.
+//
+// DAILY tests may not have overlapping availability windows — the slot only
+// frees up after the previous test's endAt. Two intervals overlap when each
+// starts before the other ends: existing.startAt < candidate.endAt AND
+// existing.endAt > candidate.startAt. Strict comparisons allow back-to-back
+// windows (one ending exactly when the next begins). Only PUBLISHED tests
+// reserve a slot, so this returns null unless the candidate is itself a
+// PUBLISHED daily test with a complete window, and it only ever clashes with
+// other PUBLISHED daily tests. `excludeId` drops the row being toggled/edited.
+async function findDailyOverlap(candidate: {
+  type?: string;
+  status?: string;
+  startAt?: Date;
+  endAt?: Date;
+  excludeId?: string;
+}): Promise<any | null> {
+  if (
+    candidate.type !== ExamType.DAILY ||
+    candidate.status !== ExamStatus.PUBLISHED ||
+    !candidate.startAt ||
+    !candidate.endAt
+  )
+    return null;
+
+  const query: any = {
+    type: ExamType.DAILY,
+    status: ExamStatus.PUBLISHED,
+    startAt: { $lt: candidate.endAt },
+    endAt: { $gt: candidate.startAt },
+  };
+  if (candidate.excludeId) query._id = { $ne: candidate.excludeId };
+
+  return Exam.findOne(query).select("_id title startAt endAt").lean();
+}
+
+// IST time-only formatter for the end of a window, e.g. "11:30 pm". Start uses
+// the full formatScheduledAt (date + time); end only needs the time since both
+// ends share a date in the common case, keeping the range compact.
+const IST_TIME_ONLY = new Intl.DateTimeFormat("en-IN", {
+  timeZone: "Asia/Kolkata",
+  hour: "numeric",
+  minute: "2-digit",
+  hour12: true,
+});
+
+// Builds the human-readable 409 message naming the conflicting quiz and its
+// availability window, so the admin sees exactly which test blocks the slot —
+// e.g. "Overlaps with 'Gujarat Police Final Practice Tests'
+//       (08 Jun 2026, 6:01 pm – 11:30 pm)". Falls back gracefully if the
+// conflict has no title/window.
+function dailyOverlapMessage(clash: any): string {
+  const title = clash?.title ? `'${clash.title}'` : "another daily test";
+  const start = formatScheduledAt(clash?.startAt);
+  const end =
+    clash?.endAt && !Number.isNaN(new Date(clash.endAt).getTime())
+      ? IST_TIME_ONLY.format(new Date(clash.endAt))
+      : null;
+  const window = start && end ? ` (${start} – ${end})` : start ? ` (from ${start})` : "";
+  return `This daily test's time window overlaps with ${title}${window}. Pick a slot that starts after it ends.`;
+}
+
+function sendDailyOverlap(res: Response, clash: any) {
+  return res
+    .status(409)
+    .json({ success: false, message: dailyOverlapMessage(clash), conflict: clash });
+}
+
 export const createExam = async (req: Request, res: Response) => {
   try {
     applyExamUpload(req);
     const data = createExamSchema.parse(req.body);
+
+    const newStatus = mapStatusFlagToEnum(data.status);
+
+    const clash = await findDailyOverlap({
+      type: data.type,
+      status: newStatus,
+      startAt: data.startAt,
+      endAt: data.endAt,
+    });
+    if (clash) return sendDailyOverlap(res, clash);
+
     const payload: any = {
       ...data,
       categoryId: data.categoryId || null,
-      status: mapStatusFlagToEnum(data.status),
+      status: newStatus,
     };
     const exam = await Exam.create(payload);
     return res.status(201).json({ success: true, data: exam });
@@ -571,6 +652,36 @@ export const updateExam = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid exam id." });
     applyExamUpload(req);
     const data = updateExamSchema.parse(req.body);
+
+    // Same no-overlap rule as createExam. The payload is partial, so resolve the
+    // effective type/window by merging the update over the current doc, then look
+    // for any OTHER daily test whose window overlaps it.
+    const current = await Exam.findById(id).select("type startAt endAt status").lean();
+    if (!current) return res.status(404).json({ success: false, message: "Exam not found." });
+    const effectiveType = data.type ?? current.type;
+    const effectiveStartAt = data.startAt ?? current.startAt;
+    const effectiveEndAt = data.endAt ?? current.endAt;
+    // status flag is only in the payload when the toggle is touched; otherwise
+    // the test keeps its current status.
+    const effectiveStatus =
+      data.status !== undefined ? mapStatusFlagToEnum(data.status) : current.status;
+    // Daily tests must keep a complete window even after a partial edit.
+    if (effectiveType === ExamType.DAILY && (!effectiveStartAt || !effectiveEndAt))
+      return res.status(400).json({
+        success: false,
+        message: "startAt and endAt are required for daily tests.",
+      });
+    // Overlap only matters between PUBLISHED daily tests — a draft neither
+    // reserves a slot nor is blocked by one.
+    const clash = await findDailyOverlap({
+      type: effectiveType,
+      status: effectiveStatus,
+      startAt: effectiveStartAt,
+      endAt: effectiveEndAt,
+      excludeId: id,
+    });
+    if (clash) return sendDailyOverlap(res, clash);
+
     const set: any = { ...data };
     if (data.categoryId !== undefined) set.categoryId = data.categoryId || null;
     if (data.status !== undefined) set.status = mapStatusFlagToEnum(data.status);
@@ -623,6 +734,27 @@ export const updateExamStatus = async (req: Request, res: Response) => {
     if (!Object.values(ExamStatus).includes(status)) {
       return res.status(400).json({ success: false, message: "Invalid status value." });
     }
+
+    // Publishing via the toggle must obey the same daily-overlap rule as
+    // create/update — otherwise a draft could be saved into an occupied window
+    // and then published here, producing two overlapping live tests. Loading
+    // the existing window lets us run the shared check before persisting.
+    // Unpublishing (draft/archived) can never create a conflict, so the helper
+    // short-circuits to null for any non-PUBLISHED target and we skip straight
+    // to the write.
+    if (status === ExamStatus.PUBLISHED) {
+      const current = await Exam.findById(id).select("type startAt endAt").lean();
+      if (!current) return res.status(404).json({ success: false, message: "Exam not found." });
+      const clash = await findDailyOverlap({
+        type: current.type,
+        status,
+        startAt: current.startAt,
+        endAt: current.endAt,
+        excludeId: id,
+      });
+      if (clash) return sendDailyOverlap(res, clash);
+    }
+
     const exam = await Exam.findByIdAndUpdate(id, { $set: { status } }, { new: true });
     if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
     return res.status(200).json({ success: true, data: exam });

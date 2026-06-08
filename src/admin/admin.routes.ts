@@ -36,6 +36,7 @@ import adminLiveChatRoutes from "./livechat/livechat.routes";
 import adminLiveSessionRoutes from "./live/live.routes";
 import adminLiveCourseRoutes from "./live-course/live-course.routes";
 import adminTestSeriesRoutes from "./testSeries/testSeries.routes";
+import adminUploadsRoutes from "./uploads/uploads.routes";
 import authenticate from "../middlewares/authenticate";
 import { adminLimiter } from "../config/rateLimiter";
 
@@ -106,5 +107,6 @@ router.use("/live-chat",  adminLiveChatRoutes);           // -> /api/v1/admin/li
 router.use("/live-sessions", adminLiveSessionRoutes);     // -> /api/v1/admin/live-sessions/*
 router.use("/live-courses",  adminLiveCourseRoutes);      // -> /api/v1/admin/live-courses/*
 router.use("/test-series",   adminTestSeriesRoutes);      // -> /api/v1/admin/test-series/*
+router.use("/uploads",       adminUploadsRoutes);         // -> /api/v1/admin/uploads/* (presigned direct uploads)
 
 export default router;

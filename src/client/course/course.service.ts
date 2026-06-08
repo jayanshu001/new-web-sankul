@@ -7,6 +7,8 @@ import { Material } from "../../models/course/Material.model";
 import { Video } from "../../models/course/Video.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { Exam } from "../../models/exam/Exam.model";
+import { ExamStatus } from "../../models/enums";
+import { collectCategoryTreeIds } from "../../utils/categoryTree";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
@@ -166,7 +168,14 @@ export async function buildCourseDetails(
     .filter((cat: any) => cat && cat.status === true);
   const [examChildCounts, examCounts] = await Promise.all([
     Promise.all(activeExamCats.map((cat: any) => ExamCategory.countDocuments({ parentId: cat._id, status: true }))),
-    Promise.all(activeExamCats.map((cat: any) => Exam.countDocuments({ categoryId: cat._id }))),
+    // Roll the count up through nested child folders, and count only PUBLISHED
+    // exams — drafts are never client-visible, so they must not inflate the badge.
+    Promise.all(
+      activeExamCats.map(async (cat: any) => {
+        const ids = await collectCategoryTreeIds(ExamCategory, cat);
+        return Exam.countDocuments({ categoryId: { $in: ids }, status: ExamStatus.PUBLISHED });
+      })
+    ),
   ]);
   const tests: CategoryGroupDTO[] = activeExamCats.map((cat: any, i: number) => ({
     category: {

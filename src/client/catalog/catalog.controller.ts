@@ -14,6 +14,8 @@ import { LiveSession } from "../../models/course/LiveSession.model";
 import { defaultListingQualities, qualitiesFromSessionRecordings } from "../../utils/videoQualities";
 import logger from "../../utils/logger";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { collectCategoryTreeIds } from "../../utils/categoryTree";
+import { ExamStatus } from "../../models/enums";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Unified catalog tabs for the three product types (course / package /
@@ -150,8 +152,12 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
         const videoFilter: any = { videoCategoryId: cat._id, status: true };
         if (search) videoFilter.title = { $regex: search, $options: "i" };
 
+        // count rolls up the whole subtree (this folder + any nested child
+        // folders) so the badge matches what the user finds after drilling in;
+        // the inlined `videos` stay this folder's direct items only.
+        const countCategoryIds = await collectCategoryTreeIds(VideoCategory, cat);
         const [count, videos] = await Promise.all([
-          Video.countDocuments({ videoCategoryId: cat._id, status: true }),
+          Video.countDocuments({ videoCategoryId: { $in: countCategoryIds }, status: true }),
           Video.find(videoFilter).sort({ order: 1, createdAt: -1 }).lean(),
         ]);
 
@@ -269,8 +275,13 @@ export const getCatalogMaterials = async (req: Request, res: Response) => {
       matchesSearch(c.title, search)
     );
 
+    // Roll each folder's count up through its nested child folders so the badge
+    // reflects everything reachable beneath it, not just direct materials.
     const counts = await Promise.all(
-      cats.map((c: any) => Material.countDocuments({ materialCategoryId: c._id, status: true }))
+      cats.map(async (c: any) => {
+        const ids = await collectCategoryTreeIds(MaterialCategory, c);
+        return Material.countDocuments({ materialCategoryId: { $in: ids }, status: true });
+      })
     );
 
     const list = cats.map((cat: any, i: number) => ({
@@ -320,8 +331,16 @@ export const getCatalogTests = async (req: Request, res: Response) => {
       matchesSearch(c.name, search)
     );
 
+    // Roll each folder's count up through its nested child folders so the badge
+    // reflects every reachable exam, not just those on the folder directly.
+    // Count only PUBLISHED exams — drafts are never shown to clients (see the
+    // listing in categories.controller / exam.controller), so counting them
+    // would overstate the badge.
     const counts = await Promise.all(
-      cats.map((c: any) => Exam.countDocuments({ categoryId: c._id }))
+      cats.map(async (c: any) => {
+        const ids = await collectCategoryTreeIds(ExamCategory, c);
+        return Exam.countDocuments({ categoryId: { $in: ids }, status: ExamStatus.PUBLISHED });
+      })
     );
 
     const list = cats.map((cat: any, i: number) => ({

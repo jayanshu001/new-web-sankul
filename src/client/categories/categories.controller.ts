@@ -5,6 +5,7 @@ import { Video } from "../../models/course/Video.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { Material } from "../../models/course/Material.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
+import { collectCategoryTreeIds } from "../../utils/categoryTree";
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
 import { ExamStatus } from "../../models/enums";
@@ -546,7 +547,13 @@ export const listExamCategoryChildren = async (req: Request, res: Response) => {
 
     const list = await Promise.all(
       children.map(async (cat: any) => {
-        const count = await Exam.countDocuments({ categoryId: cat._id });
+        // Roll the count up through nested child folders and count only
+        // PUBLISHED exams, matching what the client can actually open.
+        const ids = await collectCategoryTreeIds(ExamCategory, cat);
+        const count = await Exam.countDocuments({
+          categoryId: { $in: ids },
+          status: ExamStatus.PUBLISHED,
+        });
         return {
           category: {
             ...cat,

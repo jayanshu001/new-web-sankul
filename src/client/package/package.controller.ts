@@ -6,14 +6,19 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { PackageChat } from "../../models/course/PackageChat.model";
 import { Video } from "../../models/course/Video.model";
+import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { Material } from "../../models/course/Material.model";
+import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { Exam } from "../../models/exam/Exam.model";
+import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
 import { Goal } from "../../models/Goal.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { collectCategoryTreeIds } from "../../utils/categoryTree";
+import { ExamStatus } from "../../models/enums";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -22,7 +27,11 @@ const resolveBase = (req: Request) =>
 
 async function buildVideoCategoryGroup(cat: any) {
   if (!cat) return null;
-  const count = await Video.countDocuments({ videoCategoryId: cat._id, status: true });
+  const categoryIds = await collectCategoryTreeIds(VideoCategory, cat);
+  const count = await Video.countDocuments({
+    videoCategoryId: { $in: categoryIds },
+    status: true,
+  });
   return {
     category: {
       ...cat,
@@ -35,7 +44,11 @@ async function buildVideoCategoryGroup(cat: any) {
 
 async function buildMaterialCategoryGroup(cat: any) {
   if (!cat) return null;
-  const count = await Material.countDocuments({ materialCategoryId: cat._id, status: true });
+  const categoryIds = await collectCategoryTreeIds(MaterialCategory, cat);
+  const count = await Material.countDocuments({
+    materialCategoryId: { $in: categoryIds },
+    status: true,
+  });
   return {
     category: {
       ...cat,
@@ -48,7 +61,12 @@ async function buildMaterialCategoryGroup(cat: any) {
 
 async function buildExamCategoryEntry(cat: any) {
   if (!cat) return null;
-  const count = await Exam.countDocuments({ categoryId: cat._id });
+  const categoryIds = await collectCategoryTreeIds(ExamCategory, cat);
+  // Only PUBLISHED exams are client-visible, so drafts must not inflate the count.
+  const count = await Exam.countDocuments({
+    categoryId: { $in: categoryIds },
+    status: ExamStatus.PUBLISHED,
+  });
   return {
     category: {
       ...cat,

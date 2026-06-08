@@ -33,7 +33,7 @@ export async function pdfCourseReceipt(subscriptionId: string): Promise<Buffer> 
 
     doc.text(`Course: ${course?.name ?? "-"}`);
     doc.text(`Plan: ${plan?.name ?? "-"}`);
-    doc.text(`Duration (months): ${plan?.duration ?? "-"}`);
+    doc.text(`Duration (days): ${plan?.duration ?? "-"}`);
     doc.text(`Price: ${plan?.price ?? 0}`);
     doc.text(`With Material: ${plan?.withMaterial ? "Yes" : "No"}`);
     if (plan?.withMaterial) {

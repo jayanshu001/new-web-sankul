@@ -167,7 +167,7 @@ export const getCourseReceipt = async (req: Request, res: Response) => {
         courseId: sub.courseId ?? null,
         targetPackageId: sub.targetPackageId ?? null,
         planId: sub.packageId,
-        duration: price?.duration ?? null, // months
+        duration: price?.duration ?? null, // days
         startAt: sub.startAt,
         endAt: sub.endAt,
       },

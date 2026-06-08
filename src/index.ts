@@ -18,6 +18,8 @@ import { initNotificationScheduler } from "./admin/notification/scheduler";
 import { syncPermissionCatalog } from "./admin/permission/permissions.seeder";
 import { initLiveChatSocket } from "./socket/livechat.socket";
 import { initCameraIngest } from "./socket/camera-ingest";
+import { initPdfProgressSocket } from "./socket/pdf-progress.socket";
+import { initPdfUploadScheduler } from "./admin/pdfUpload/pdfUpload.scheduler";
 import { installGracefulShutdown } from "./utils/gracefulShutdown";
 
 const PORT = process.env.PORT || 5000;
@@ -49,6 +51,9 @@ const startServer = async () => {
       logger.error("[permissions] catalog sync failed (continuing boot):", err);
     }
     await initNotificationScheduler();
+    // BullMQ pipeline that uploads admin-supplied PDFs to Spaces and attaches
+    // each to its ebook, strictly one-at-a-time, with live Socket.io progress.
+    await initPdfUploadScheduler();
 
     const httpServer = createServer(app);
     httpServer.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
@@ -59,6 +64,10 @@ const startServer = async () => {
 
     // Attach the camera-ingest WebSocket bridge (browser camera → ffmpeg → RTMP)
     initCameraIngest(httpServer);
+
+    // Attach the admin PDF-upload progress namespace (/admin/pdf-uploads).
+    // Must run AFTER initLiveChatSocket — it reuses that shared Socket.io server.
+    initPdfProgressSocket();
 
     // Wire SIGTERM / SIGINT to the orchestrated shutdown — stops the LB
     // sending traffic via /readyz=503, drains in-flight, closes BullMQ + Mongo
