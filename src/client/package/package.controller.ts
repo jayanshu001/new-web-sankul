@@ -290,7 +290,9 @@ export const listPackagesByType = async (req: Request, res: Response) => {
 
 // Returns a map of packageId -> latest-expiring active subscription's endAt
 // (Date | null). `null` means lifetime; absence means not purchased.
-async function purchasedPackageEndAtMap(customerId: string | undefined, packageIds: any[]): Promise<Map<string, Date | null>> {
+// Exported so other listing endpoints (e.g. exam-countdown product listings in
+// categories.controller) can compute isPurchased/daysLeft with the same contract.
+export async function purchasedPackageEndAtMap(customerId: string | undefined, packageIds: any[]): Promise<Map<string, Date | null>> {
   if (!customerId || packageIds.length === 0) return new Map();
   const now = new Date();
   const planIds = await PackageCourseEbookPrice.find({ packageId: { $in: packageIds } }).distinct("_id");

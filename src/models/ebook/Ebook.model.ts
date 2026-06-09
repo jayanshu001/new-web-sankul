@@ -15,6 +15,12 @@ export type EbookUploadStatus =
 export interface IEbook extends Document {
   name: string;
   examCountdownCategoryId?: mongoose.Types.ObjectId | null;
+  // Multi-select exam-countdown links. `examCountdownCategoryIds` is the
+  // many-to-many successor to the legacy single `examCountdownCategoryId`
+  // (which stays for back-compat); `examCountdownIds` links to specific exam
+  // events. Both default to [] — an empty array means "cleared".
+  examCountdownCategoryIds: mongoose.Types.ObjectId[];
+  examCountdownIds: mongoose.Types.ObjectId[];
   description: string;
   author: string;
   publisher: string;
@@ -48,6 +54,14 @@ const ebookSchema: Schema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "ExamCountdownCategory",
       default: null,
+    },
+    examCountdownCategoryIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "ExamCountdownCategory" }],
+      default: [],
+    },
+    examCountdownIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "ExamCountdown" }],
+      default: [],
     },
     description: { type: String, required: true },
     author: { type: String, required: true },
@@ -84,6 +98,8 @@ const ebookSchema: Schema = new Schema(
 
 ebookSchema.index({ status: 1, order: 1 });
 ebookSchema.index({ examCountdownCategoryId: 1, status: 1, order: 1 });
+ebookSchema.index({ examCountdownCategoryIds: 1, status: 1, order: 1 });
+ebookSchema.index({ examCountdownIds: 1, status: 1, order: 1 });
 ebookSchema.index({ status: 1, isTrending: 1, order: 1 });
 ebookSchema.index(
   { author: "text", name: "text" },

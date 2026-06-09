@@ -11,6 +11,7 @@ import { Video } from "../../models/course/Video.model";
 import { resolveFreeCategoryIds } from "../free/free.controller";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
 import { Exam } from "../../models/exam/Exam.model";
+import { ExamResult } from "../../models/exam/ExamResult.model";
 import { ExamType, ExamStatus } from "../../models/enums";
 import { Notification } from "../../models/system/Notification.model";
 import logger from "../../utils/logger";
@@ -311,8 +312,45 @@ export const getDashboard = async (req: Request, res: Response) => {
     if (banners.length) dashboard.push({ title: "Banner", type: "banner", data: banners });
     if (examCountdowns.length)
       dashboard.push({ title: "Exam Countdown", type: "exam-countdown", data: examCountdowns });
-    if (dailyTestRaw)
-      dashboard.push({ title: "Daily Test", type: "daily-test", data: dailyTestRaw });
+    if (dailyTestRaw) {
+      // isAttempt / lastResult mirror GET /client/quizzes/daily: false + null until
+      // the user has a submitted (status:true) ExamResult for this daily test. The
+      // latest attempt (by submittedAt, then attemptNumber) becomes lastResult.
+      // Logged-out users always see false / null.
+      let isAttempt = false;
+      let lastResult: {
+        _id: any;
+        attemptNumber: number;
+        score: number;
+        timing: any;
+        submittedAt: Date | null | undefined;
+      } | null = null;
+      if (userId) {
+        const last = await ExamResult.findOne({
+          customerId: new mongoose.Types.ObjectId(userId),
+          examId: dailyTestRaw._id,
+          status: true,
+        })
+          .sort({ submittedAt: -1, attemptNumber: -1 })
+          .select("_id attemptNumber score timing submittedAt")
+          .lean();
+        if (last) {
+          isAttempt = true;
+          lastResult = {
+            _id: last._id,
+            attemptNumber: last.attemptNumber,
+            score: last.score,
+            timing: last.timing,
+            submittedAt: last.submittedAt,
+          };
+        }
+      }
+      dashboard.push({
+        title: "Daily Test",
+        type: "daily-test",
+        data: { ...dailyTestRaw, isAttempt, lastResult },
+      });
+    }
     if (recentlyAddedWithDaysLeft.length)
       dashboard.push({ title: "Recently Added", type: "package", data: recentlyAddedWithDaysLeft });
     if (coursesWithPlans.length) dashboard.push({ title: "Course Subjects", type: "course", data: coursesWithPlans });

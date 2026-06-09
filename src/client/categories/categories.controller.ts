@@ -8,10 +8,18 @@ import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { collectCategoryTreeIds } from "../../utils/categoryTree";
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
+import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
 import { ExamStatus } from "../../models/enums";
 import { Package } from "../../models/course/Package.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
+import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
+import { BookOrder } from "../../models/book/BookOrder.model";
+import { BookOrderStatus } from "../../models/enums";
+import { purchasedPackageEndAtMap } from "../package/package.controller";
+import { getDaysLeftMapForLiveCourses } from "../live-course/entitlement";
+import { computeDaysLeft } from "../../utils/planDuration";
 import { Book } from "../../models/book/Book.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
@@ -634,6 +642,249 @@ export const listPackagesByExamCountdownCategory = async (req: Request, res: Res
   }
 };
 
+// GET /client/exam-countdown/:id/packages
+// :id is an ExamCountdown _id (a single exam event), NOT a category. Returns the
+// packages AND live courses tied to that exam, merged into one `list` where each
+// row is tagged `type: "package"` or `type: "live-course"` so the FE can split
+// the listing by type. Matching is by the exam's `examCountdownIds` membership
+// (both Package and LiveCourse carry that array); package plans mirror the
+// `/exam-countdown-categories/:id/packages` shape and live-course plans mirror
+// `/client/live-courses`.
+export const listProductsByExamCountdown = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  logger.info("listProductsByExamCountdown invoked", { traceId, path: req.originalUrl, examCountdownId: id, userId: req.user?.id });
+
+  try {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("listProductsByExamCountdown invalid id", { traceId, examCountdownId: id });
+      return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
+    }
+
+    const examCountdown = await ExamCountdown.findById(id).lean();
+    if (!examCountdown) {
+      logger.warn("listProductsByExamCountdown not found", { traceId, examCountdownId: id });
+      return res.status(404).json({ success: false, message: "Exam countdown not found." });
+    }
+
+    const { pageNum, limitNum, skip, search } = parsePaging(req);
+
+    const packageFilter: any = { examCountdownIds: id, active: true };
+    if (search) packageFilter.name = { $regex: search, $options: "i" };
+    const liveFilter: any = { examCountdownIds: id, status: true };
+    if (search) liveFilter.name = { $regex: search, $options: "i" };
+
+    const [packages, liveCourses] = await Promise.all([
+      Package.find(packageFilter)
+        .populate("packageTypeId", "_id name")
+        .populate("goalId", "_id title")
+        .sort({ order: 1, createdAt: -1 })
+        .lean(),
+      LiveCourse.find(liveFilter)
+        .populate("courseEducatorId", "name image")
+        .populate("packageCategoryId", "title slug image")
+        .sort({ ordered: 1, createdAt: -1 })
+        .lean(),
+    ]);
+
+    const customerId = req.user?.id;
+    const now = new Date();
+    const packageIds = packages.map((p: any) => p._id);
+    const liveCourseIds = liveCourses.map((c: any) => c._id);
+
+    // Batch the pricing + subscriber + ownership queries across both product
+    // types, then group per row below. Ownership/daysLeft reuse the canonical
+    // helpers (purchasedPackageEndAtMap, getDaysLeftMapForLiveCourses) so the
+    // isPurchased/daysLeft contract matches /client/packages and /client/live-courses.
+    const [pkgPlans, pkgSubCounts, livePlans, liveSubCounts, ownedPkgMap, liveDaysLeftMap] = await Promise.all([
+      packageIds.length
+        ? PackageCourseEbookPrice.find({ packageId: { $in: packageIds }, status: true }).sort({ duration: 1 }).lean()
+        : Promise.resolve([] as any[]),
+      packageIds.length
+        ? PackageCourseSubscription.aggregate([
+            { $match: { packageId: { $in: packageIds }, status: true } },
+            { $group: { _id: "$packageId", count: { $sum: 1 } } },
+          ])
+        : Promise.resolve([] as any[]),
+      liveCourseIds.length
+        ? LiveCoursePlan.find({ liveCourseId: { $in: liveCourseIds }, status: true }).sort({ price: 1 }).lean()
+        : Promise.resolve([] as any[]),
+      liveCourseIds.length
+        ? LiveCourseSubscription.aggregate([
+            { $match: { liveCourseId: { $in: liveCourseIds }, status: true, paymentStatus: "verified" } },
+            { $group: { _id: "$liveCourseId", count: { $sum: 1 } } },
+          ])
+        : Promise.resolve([] as any[]),
+      purchasedPackageEndAtMap(customerId, packageIds),
+      getDaysLeftMapForLiveCourses(customerId, liveCourseIds),
+    ]);
+
+    const pkgPlansById: Record<string, any[]> = {};
+    for (const pl of pkgPlans as any[]) (pkgPlansById[String(pl.packageId)] ||= []).push(pl);
+    const pkgSubById = new Map<string, number>();
+    for (const r of pkgSubCounts as any[]) pkgSubById.set(String(r._id), r.count);
+
+    const livePlansById: Record<string, any[]> = {};
+    for (const pl of livePlans as any[]) {
+      const original =
+        typeof pl.originalPrice === "number" && pl.originalPrice > pl.price ? pl.originalPrice : null;
+      const discountPercent = original ? Math.round(((original - pl.price) / original) * 100) : 0;
+      (livePlansById[String(pl.liveCourseId)] ||= []).push({ ...pl, originalPrice: original, discountPercent });
+    }
+    const liveSubById = new Map<string, number>();
+    for (const r of liveSubCounts as any[]) liveSubById.set(String(r._id), r.count);
+
+    const packageRows = packages.map((p: any) => {
+      const pid = String(p._id);
+      const plans = pkgPlansById[pid] || [];
+      const isPurchased = ownedPkgMap.has(pid);
+      return {
+        ...p,
+        type: "package" as const,
+        plans: {
+          withMaterial: plans.filter((pl) => pl.withMaterial),
+          withoutMaterial: plans.filter((pl) => !pl.withMaterial),
+        },
+        subscriberCount: pkgSubById.get(pid) ?? 0,
+        // Package.isPaid is on the doc (spread above) but surface it explicitly
+        // so the row contract is uniform across both product types.
+        isPaid: p.isPaid !== false,
+        isPurchased,
+        daysLeft: isPurchased ? computeDaysLeft(ownedPkgMap.get(pid) ?? null, now) : null,
+      };
+    });
+
+    const liveRows = liveCourses.map((c: any) => {
+      const cid = String(c._id);
+      const isPurchased = liveDaysLeftMap.has(cid);
+      return {
+        ...c,
+        type: "live-course" as const,
+        plans: livePlansById[cid] || [],
+        subscriberCount: liveSubById.get(cid) ?? 0,
+        isPaid: c.isPaid !== false,
+        isPurchased,
+        // Map value is daysLeft (null = lifetime); absence = not owned → null.
+        daysLeft: isPurchased ? liveDaysLeftMap.get(cid) ?? null : null,
+      };
+    });
+
+    const merged = [...packageRows, ...liveRows].sort(
+      (a, b) =>
+        new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime()
+    );
+
+    const total = merged.length;
+    const list = merged.slice(skip, skip + limitNum);
+
+    logger.info("listProductsByExamCountdown success", { traceId, examCountdownId: id, total, returned: list.length });
+    return res.status(200).json({
+      success: true,
+      data: { examCountdown, list },
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (error: any) {
+    logger.error("listProductsByExamCountdown failed", { traceId, examCountdownId: id, error: getErrorMessage(error), stack: error.stack });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// Shared enrichment for the two books-ebooks listings (by ExamCountdown and by
+// ExamCountdownCategory). Takes the raw Book/Ebook docs + the viewer, joins
+// ebook pricing/ownership and book ownership, stamps a uniform
+// isPaid/isPurchased/daysLeft contract on every row, tags each row with `type`,
+// and returns the merged list sorted by createdAt desc (caller paginates).
+//
+// Per-type flag semantics:
+//   ebook → isPaid from admin flag (price-derived fallback); isPurchased/daysLeft
+//           from active EbookSubscription (subscription model, can expire).
+//   book  → physical one-time purchase: isPaid is always true (no free-book
+//           concept) and daysLeft is always null (no expiry); isPurchased from a
+//           BookOrder in a fulfilled state (verified/shipped/delivered), mirroring
+//           getBookDetail.
+const shapeBooksAndEbooks = async (
+  books: any[],
+  ebooks: any[],
+  customerId: string | undefined
+) => {
+  const now = new Date();
+  const ebookIds = ebooks.map((e) => e._id);
+  const bookIds = books.map((b) => b._id);
+
+  const [ebookPlans, ebookSubs, ownedBookOrders] = await Promise.all([
+    ebookIds.length
+      ? EbookPrice.find({ ebookId: { $in: ebookIds }, status: true }).sort({ duration: 1 }).lean()
+      : Promise.resolve([] as any[]),
+    customerId && ebookIds.length
+      ? EbookSubscription.find({
+          customerId,
+          ebookId: { $in: ebookIds },
+          status: true,
+          endAt: { $gt: now },
+        })
+          .select("ebookId endAt")
+          .lean()
+      : Promise.resolve([] as any[]),
+    customerId && bookIds.length
+      ? BookOrder.find({
+          customerId,
+          "items.bookId": { $in: bookIds },
+          status: {
+            $in: [BookOrderStatus.VERIFIED, BookOrderStatus.SHIPPED, BookOrderStatus.DELIVERED],
+          },
+        })
+          .select("items.bookId")
+          .lean()
+      : Promise.resolve([] as any[]),
+  ]);
+
+  const plansByEbook: Record<string, any[]> = {};
+  for (const p of ebookPlans as any[]) (plansByEbook[String(p.ebookId)] ||= []).push(p);
+  const endAtByEbook = new Map<string, Date>();
+  for (const s of ebookSubs as any[]) {
+    const key = String(s.ebookId);
+    const prev = endAtByEbook.get(key);
+    if (!prev || s.endAt.getTime() > prev.getTime()) endAtByEbook.set(key, s.endAt);
+  }
+  const ownedBookIds = new Set<string>();
+  for (const o of ownedBookOrders as any[]) {
+    for (const it of o.items ?? []) if (it.bookId) ownedBookIds.add(String(it.bookId));
+  }
+  const daysBetween = (from: Date, to: Date) =>
+    Math.max(0, Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)));
+
+  const ebooksWithPricing = ebooks.map((e: any) => {
+    const ePlans = plansByEbook[String(e._id)] || [];
+    const endAt = endAtByEbook.get(String(e._id)) || null;
+    // Admin-controlled `isPaid` field is the source of truth (default true);
+    // fall back to the price-derived rule only if it's absent.
+    const isPaid =
+      typeof e.isPaid === "boolean" ? e.isPaid : ePlans.some((p: any) => (p.price ?? 0) > 0);
+    return {
+      ...e,
+      type: "ebook" as const,
+      plans: ePlans,
+      isPaid,
+      isPurchased: !!endAt,
+      subscriptionEndAt: endAt,
+      daysLeft: endAt ? daysBetween(now, endAt) : null,
+    };
+  });
+
+  const booksShaped = books.map((b: any) => ({
+    ...b,
+    type: "book" as const,
+    isPaid: true,
+    isPurchased: ownedBookIds.has(String(b._id)),
+    daysLeft: null as number | null,
+  }));
+
+  return [...booksShaped, ...ebooksWithPricing].sort(
+    (a, b) =>
+      new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime()
+  );
+};
+
 // GET /client/exam-countdown-categories/:id/books-ebooks
 // Returns books + ebooks merged into a single `list`, each row tagged with `type`.
 export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, res: Response) => {
@@ -654,7 +905,11 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
     }
 
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-    const filter: any = { examCountdownCategoryId: id, status: true };
+    // Match on the multi-select examCountdownCategoryIds array (membership), not
+    // the legacy single examCountdownCategoryId. Mongo matches a scalar against
+    // an array field by element membership, so `{ examCountdownCategoryIds: id }`
+    // returns every book/ebook whose array contains this category.
+    const filter: any = { examCountdownCategoryIds: id, status: true };
     if (search) filter.name = { $regex: search, $options: "i" };
 
     const [books, ebooks] = await Promise.all([
@@ -662,64 +917,7 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
       Ebook.find(filter).lean(),
     ]);
 
-    // Ebook pricing lives in a separate EbookPrice collection (books carry
-    // price inline), so join the active plans here — otherwise the ebook rows
-    // come back with no pricing. Also surface isPaid/isPurchased/daysLeft so the
-    // shape matches /client/ebooks and the FE can reuse the ebook card.
-    const customerId = req.user?.id;
-    const ebookIds = ebooks.map((e: any) => e._id);
-    const now = new Date();
-    const [ebookPlans, ebookSubs] = await Promise.all([
-      ebookIds.length
-        ? EbookPrice.find({ ebookId: { $in: ebookIds }, status: true }).sort({ duration: 1 }).lean()
-        : Promise.resolve([] as any[]),
-      customerId && ebookIds.length
-        ? EbookSubscription.find({
-            customerId,
-            ebookId: { $in: ebookIds },
-            status: true,
-            endAt: { $gt: now },
-          })
-            .select("ebookId endAt")
-            .lean()
-        : Promise.resolve([] as any[]),
-    ]);
-    const plansByEbook: Record<string, any[]> = {};
-    for (const p of ebookPlans as any[]) (plansByEbook[String(p.ebookId)] ||= []).push(p);
-    const endAtByEbook = new Map<string, Date>();
-    for (const s of ebookSubs as any[]) {
-      const key = String(s.ebookId);
-      const prev = endAtByEbook.get(key);
-      if (!prev || s.endAt.getTime() > prev.getTime()) endAtByEbook.set(key, s.endAt);
-    }
-    const daysBetween = (from: Date, to: Date) =>
-      Math.max(0, Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)));
-
-    const ebooksWithPricing = ebooks.map((e: any) => {
-      const ePlans = plansByEbook[String(e._id)] || [];
-      const endAt = endAtByEbook.get(String(e._id)) || null;
-      // Admin-controlled `isPaid` field is the source of truth (default true);
-      // fall back to the price-derived rule only if it's absent.
-      const isPaid =
-        typeof e.isPaid === "boolean" ? e.isPaid : ePlans.some((p: any) => (p.price ?? 0) > 0);
-      return {
-        ...e,
-        plans: ePlans,
-        isPaid,
-        isPurchased: !!endAt,
-        subscriptionEndAt: endAt,
-        daysLeft: endAt ? daysBetween(now, endAt) : null,
-      };
-    });
-
-    const merged = [
-      ...books.map((b) => ({ ...b, type: "book" as const })),
-      ...ebooksWithPricing.map((e) => ({ ...e, type: "ebook" as const })),
-    ].sort(
-      (a, b) =>
-        new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime()
-    );
-
+    const merged = await shapeBooksAndEbooks(books, ebooks, req.user?.id);
     const total = merged.length;
     const list = merged.slice(skip, skip + limitNum);
 
@@ -731,6 +929,54 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
     });
   } catch (error: any) {
     logger.error("listBooksAndEbooksByExamCountdownCategory failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /client/exam-countdown/:id/books-ebooks
+// :id is an ExamCountdown _id (a single exam event), NOT a category. Returns the
+// books + ebooks linked to that exam via their `examCountdownIds` array, merged
+// into one `list` where each row is tagged `type: "book"` or `type: "ebook"`.
+// Shape mirrors listBooksAndEbooksByExamCountdownCategory (ebook rows get joined
+// pricing + isPaid/isPurchased/daysLeft) so the FE can reuse the same cards.
+export const listBooksAndEbooksByExamCountdown = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  logger.info("listBooksAndEbooksByExamCountdown invoked", { traceId, path: req.originalUrl, examCountdownId: id, userId: req.user?.id });
+
+  try {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      logger.warn("listBooksAndEbooksByExamCountdown invalid id", { traceId, examCountdownId: id });
+      return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
+    }
+
+    const examCountdown = await ExamCountdown.findById(id).lean();
+    if (!examCountdown) {
+      logger.warn("listBooksAndEbooksByExamCountdown not found", { traceId, examCountdownId: id });
+      return res.status(404).json({ success: false, message: "Exam countdown not found." });
+    }
+
+    const { pageNum, limitNum, skip, search } = parsePaging(req);
+    const filter: any = { examCountdownIds: id, status: true };
+    if (search) filter.name = { $regex: search, $options: "i" };
+
+    const [books, ebooks] = await Promise.all([
+      Book.find(filter).lean(),
+      Ebook.find(filter).lean(),
+    ]);
+
+    const merged = await shapeBooksAndEbooks(books, ebooks, req.user?.id);
+    const total = merged.length;
+    const list = merged.slice(skip, skip + limitNum);
+
+    logger.info("listBooksAndEbooksByExamCountdown success", { traceId, examCountdownId: id, total, returned: list.length });
+    return res.status(200).json({
+      success: true,
+      data: { examCountdown, list },
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (error: any) {
+    logger.error("listBooksAndEbooksByExamCountdown failed", { traceId, examCountdownId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

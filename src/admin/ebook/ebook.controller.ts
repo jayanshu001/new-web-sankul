@@ -39,6 +39,28 @@ const applyEbookUploads = (req: Request) => {
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
   if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
   if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
+  coerceArrayFields(req);
+};
+
+// Multipart form-data flattens `field[0]=a&field[1]=b` (and the bare
+// `field[]=a&field[]=b` form) into literal keys; reassemble them into a real
+// array before validation. The Zod schema also accepts a JSON-stringified
+// array or single string, so this only handles the bracketed-key form.
+const ARRAY_BODY_FIELDS = ["examCountdownCategoryIds", "examCountdownIds"] as const;
+
+const coerceArrayFields = (req: Request) => {
+  const body = req.body as Record<string, any>;
+  for (const field of ARRAY_BODY_FIELDS) {
+    if (Array.isArray(body[field])) continue;
+    const bracketKeys = Object.keys(body).filter((k) => k.startsWith(`${field}[`));
+    if (!bracketKeys.length) continue;
+    const arr = bracketKeys.map((k) => {
+      const v = body[k];
+      delete body[k];
+      return v;
+    });
+    body[field] = arr.filter((v) => v !== "");
+  }
 };
 
 // ──────────────────────────────────────────────────────────────────────────────

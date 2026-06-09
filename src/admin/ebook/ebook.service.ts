@@ -101,6 +101,8 @@ export const getEbookById = async (id: string) => {
     load: async () => {
       const ebook = await Ebook.findById(id)
         .populate("examCountdownCategoryId", "_id name colorHex")
+        .populate("examCountdownCategoryIds", "_id name colorHex")
+        .populate("examCountdownIds", "_id title examDate")
         .lean();
       if (!ebook) throw new HttpError(404, "Ebook not found");
       const plans = await EbookPrice.find({ ebookId: id, status: true })
@@ -112,7 +114,10 @@ export const getEbookById = async (id: string) => {
 };
 
 export const createEbook = async (validated: any) => {
-  (validated as any).examCountdownCategoryId = validated.examCountdownCategoryId || null;
+  // Legacy single field is now a derived mirror of examCountdownCategoryIds[0]
+  // (admin no longer sends a meaningful single value). Kept in sync for the one
+  // remaining reader. See docs/MIGRATION_QUERY_CHANGES.md.
+  (validated as any).examCountdownCategoryId = validated.examCountdownCategoryIds?.[0] ?? null;
   const ebook = await Ebook.create(validated);
   await invalidateEbookCaches();
   return ebook.toObject();
@@ -156,8 +161,14 @@ const EBOOK_FILE_FIELDS = ["image", "thumbnail", "demoUrl", "bookUrl"] as const;
 
 export const updateEbook = async (id: string, validated: any) => {
   assertObjectId(id, "Ebook");
-  if (validated.examCountdownCategoryId !== undefined) {
-    (validated as any).examCountdownCategoryId = validated.examCountdownCategoryId || null;
+  // Keep the legacy single field in sync with examCountdownCategoryIds[0], but
+  // ONLY when the array is present in this payload — otherwise an update that
+  // doesn't touch countdowns would wipe the single field. Drop any stale single
+  // value the admin still sends. See docs/MIGRATION_QUERY_CHANGES.md.
+  if (validated.examCountdownCategoryIds !== undefined) {
+    (validated as any).examCountdownCategoryId = validated.examCountdownCategoryIds[0] ?? null;
+  } else {
+    delete (validated as any).examCountdownCategoryId;
   }
 
   // Snapshot the current file URLs before the update so we can delete any that

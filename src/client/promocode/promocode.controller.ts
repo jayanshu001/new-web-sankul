@@ -96,7 +96,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
       await PackageCourseEbookPrice.find(planFilter).sort({ duration: 1 }).lean()
     ).map((p) => ({ ...p }));
 
-    if (!pricingPlans.length) { logger.warn("applyPromocode no pricing plans", { traceId, customerId: userId, cartType, cartId }); return res.status(404).json({ success: false, message: "No pricing plans available." }); }
+    if (!pricingPlans.length) { logger.warn("applyPromocode no pricing plans", { traceId, customerId: userId, cartType, cartId }); return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." }); }
 
     const code = promocode.toUpperCase();
     const now = new Date();

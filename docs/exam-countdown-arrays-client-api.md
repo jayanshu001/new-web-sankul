@@ -8,12 +8,13 @@ Backend changes are live for the multi-select Exam Countdown feature. This doc s
 
 | Field | Type | Where | Replaces |
 |---|---|---|---|
-| `examCountdownCategoryIds` | `string[]` (ObjectIds) | Package, LiveCourse | the old singular `examCountdownCategoryId` on Package |
-| `examCountdownIds` | `string[]` (ObjectIds) | Package, LiveCourse | (new) |
-| ~~`examCountdownCategoryId`~~ | — | **Removed from Course entirely** | — |
+| `examCountdownCategoryIds` | `string[]` (ObjectIds) | Package, LiveCourse, **Book, Ebook** | the old singular `examCountdownCategoryId` |
+| `examCountdownIds` | `string[]` (ObjectIds) | Package, LiveCourse, **Book, Ebook** | (new) |
+| ~~`examCountdownCategoryId`~~ | — | **Removed from Course**; **deprecated (auto-synced) on Book/Ebook** | — |
 
 - Both array fields default to `[]` (not `null`, not missing) when nothing is set.
-- The detail endpoint for Package may return them as **populated objects** instead of raw ids (see shapes below). The frontend parser should handle both.
+- The detail endpoints for Package, Book, and Ebook may return them as **populated objects** instead of raw ids (see shapes below). The frontend parser should handle both.
+- **Legacy `examCountdownCategoryId` on Book/Ebook:** still present in payloads for back-compat, but the backend now keeps it auto-synced to `examCountdownCategoryIds[0]` and ignores any value you send for it. **Stop sending it; read the array instead.** It will be dropped in a later cleanup.
 - The `subtitle` field added in the prior change also still applies — included here for completeness in the response examples.
 
 ---
@@ -218,6 +219,41 @@ If the frontend Course form still ships this key by mistake, the backend silentl
 
 ---
 
+## 4. Book & Ebook
+
+Both `Book` and `Ebook` now carry `examCountdownCategoryIds` and `examCountdownIds` (same semantics as Package). The legacy single `examCountdownCategoryId` is still in the payload but is **deprecated and auto-synced** to `examCountdownCategoryIds[0]` — read the arrays, not the single field.
+
+### Where the arrays arrive populated vs. raw
+
+- **Admin detail** — `GET /admin/books/:id` and `GET /admin/ebooks/:id` **populate** both arrays (so the edit form can render names + colors without a follow-up call):
+
+  ```json
+  {
+    "examCountdownCategoryId": "65f0ddd111eee222fff333aa",
+    "examCountdownCategoryIds": [
+      { "_id": "65f0ddd111eee222fff333aa", "name": "UPSC Prelims 2026", "colorHex": "#E53935" }
+    ],
+    "examCountdownIds": [
+      { "_id": "65f0fff111000222111333aa", "title": "UPSC Prelims", "examDate": "2026-06-02T00:00:00.000Z" }
+    ]
+  }
+  ```
+
+- **Client detail** (`GET /api/v1/client/books/:id`, `GET /api/v1/client/ebooks/:id`) and **all list endpoints** spread the full document with no populate, so there both arrays arrive as **raw id strings** (`["65f0ddd..."]`). Use the `toIds()` normalizer from the checklist below — it handles both shapes.
+
+### Two client endpoints for "books/ebooks tied to a countdown"
+
+| Endpoint | `:id` is | Matches on |
+|---|---|---|
+| `GET /api/v1/client/exam-countdown/:id/books-ebooks` | an **ExamCountdown** (one exam event) | `examCountdownIds` array contains `:id` |
+| `GET /api/v1/client/exam-countdown-categories/:id/books-ebooks` | an **ExamCountdownCategory** | `examCountdownCategoryIds` array contains `:id` *(switched from the legacy single field)* |
+
+Both return `data: { examCountdown | category, list }`, paginated (`page`/`limit`/`search`). Each `list` row is tagged `type: "book"` or `type: "ebook"`; ebook rows carry joined `plans` + `isPaid`/`isPurchased`/`subscriptionEndAt`/`daysLeft`. See `API_EXAM_COUNTDOWN_BOOKS_EBOOKS.md` for the full ExamCountdown-keyed response.
+
+> ⚠️ The category endpoint now reads the **array**, so a backend backfill of legacy rows was required (and has been run). No frontend action needed for that.
+
+---
+
 ## Frontend integration checklist
 
 1. **Read-side (everywhere):**
@@ -236,10 +272,14 @@ If the frontend Course form still ships this key by mistake, the backend silentl
    - **LiveCourse** admin write — two encodings supported:
      - JSON body (no image): `{ "examCountdownCategoryIds": ["...","..."] }`. Send `[]` to clear (now accepted).
      - Multipart (with image): JSON-stringified field — `examCountdownCategoryIds='["...","..."]'`.
+   - **Book / Ebook** admin write — two encodings supported:
+     - JSON body (no file): `{ "examCountdownCategoryIds": ["...","..."], "examCountdownIds": ["..."] }` as real JSON arrays.
+     - Multipart (with image/PDF): repeated keys `examCountdownCategoryIds[]=...&examCountdownIds[]=...` (bracketed form; the backend reassembles them). Send an empty array to clear.
+     - **Drop the single `examCountdownCategoryId`** from Book/Ebook forms — the backend ignores it and derives it from `examCountdownCategoryIds[0]`.
 
 3. **Course form:** remove the Exam Countdown picker; do not send `examCountdownCategoryId` anymore.
 
-4. **Filter screens:** the existing "Packages by Exam Countdown Category" screen continues to work — no frontend change needed there.
+4. **Filter screens:** the existing "Packages / Books-Ebooks by Exam Countdown Category" screens continue to work — no frontend change needed there.
 
 ---
 
@@ -256,6 +296,8 @@ If the frontend Course form still ships this key by mistake, the backend silentl
 
 ## Notes
 
-- **No data migration needed.** Existing Packages with the old singular `examCountdownCategoryId` will return `examCountdownCategoryIds: []` on the new endpoint until they're edited. If you want a one-shot migration script that moves the old value into the new array, ask backend to add one.
-- **Indexes** were added on both arrays for query performance (`examCountdownCategoryIds`, `examCountdownIds`). Filtering by either field stays efficient at scale.
+- **Migration status:**
+  - **Package / LiveCourse** — no migration needed. Existing rows with the old singular value return `examCountdownCategoryIds: []` until edited (these endpoints already filtered on the array).
+  - **Book / Ebook** — a backfill **was required and has been run** (`scripts/backfill-book-ebook-exam-countdown-arrays.ts`), because the category books-ebooks endpoint now reads the array. Legacy rows had their single `examCountdownCategoryId` copied into `examCountdownCategoryIds[]`, so they keep showing on the category screen. No frontend action.
+- **Indexes** were added on both arrays for query performance (`examCountdownCategoryIds`, `examCountdownIds`) on Package, LiveCourse, Book, and Ebook. Filtering by either field stays efficient at scale.
 - **Empty arrays are `[]`**, never `null`. The frontend can `Array.isArray(...)` safely.

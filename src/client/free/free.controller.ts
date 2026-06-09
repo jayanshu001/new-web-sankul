@@ -11,6 +11,9 @@ import { Exam } from "../../models/exam/Exam.model";
 import { ExamStatus } from "../../models/enums";
 import { Material } from "../../models/course/Material.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
+import { LiveCourse } from "../../models/course/LiveCourse.model";
+import { VideoCategory } from "../../models/course/VideoCategory.model";
+import { collectCategoryTreeIds } from "../../utils/categoryTree";
 import { Video } from "../../models/course/Video.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
@@ -87,6 +90,89 @@ export async function resolveFreeCategoryIds() {
   };
 }
 
+// Resolve category ids that are ASSIGNED to ANY parent — course, package OR
+// live-course — regardless of whether that parent is paid or free. This is the
+// "assignment gate" for the free listings: a material/video/test only surfaces
+// when its category is attached to some product (an unassigned/orphan category
+// is never shown). The item's own free flag (isPaid:false / priceType:"free")
+// is a SEPARATE gate applied by each endpoint. Video-category roots are
+// expanded to their full subtree, since videos attach to leaf folders while
+// parents assign the root folder.
+export async function resolveAssignedCategoryIds() {
+  const [packages, courses, liveCourses] = await Promise.all([
+    Package.find({ active: true })
+      .select("_id materialCategories examCategories specificSubjects")
+      .lean(),
+    Course.find({ status: true })
+      .select("_id materialCategories examCategories videoCategoryId")
+      .lean(),
+    LiveCourse.find({ status: true })
+      .select("_id materialCategories examCategories videoCategoryId")
+      .lean(),
+  ]);
+
+  const materialCategoryIds = new Set<string>();
+  const examCategoryIds = new Set<string>();
+  const videoRootIds = new Set<string>();
+
+  const indexRefs = (refs: any[] | undefined, target: Set<string>) => {
+    for (const ref of refs ?? []) {
+      if (ref?.status !== false && ref?.category) target.add(String(ref.category));
+    }
+  };
+
+  for (const p of packages as any[]) {
+    indexRefs(p.materialCategories, materialCategoryIds);
+    indexRefs(p.examCategories, examCategoryIds);
+  }
+  for (const c of [...(courses as any[]), ...(liveCourses as any[])]) {
+    indexRefs(c.materialCategories, materialCategoryIds);
+    indexRefs(c.examCategories, examCategoryIds);
+    if (c.videoCategoryId) videoRootIds.add(String(c.videoCategoryId));
+  }
+
+  // Videos reachable through a package's video-category relations.
+  const pkgIds = (packages as any[]).map((p) => p._id);
+  if (pkgIds.length) {
+    const relations = await PackageVideoCategoryRelation.find({
+      packageId: { $in: pkgIds },
+      active: true,
+    })
+      .select("videoCategoryRelationId")
+      .lean();
+    if (relations.length) {
+      const relIds = relations.map((r: any) => r.videoCategoryRelationId);
+      const vcRelations = await VideoCategoryRelation.find({ _id: { $in: relIds } })
+        .select("parent child")
+        .lean();
+      for (const r of vcRelations as any[]) {
+        if (r.parent) videoRootIds.add(String(r.parent));
+        if (r.child) videoRootIds.add(String(r.child));
+      }
+    }
+  }
+
+  // Expand each assigned video root to its full subtree (videos live on leaves).
+  const videoCategoryIdSet = new Set<string>();
+  if (videoRootIds.size) {
+    const roots = await VideoCategory.find({
+      _id: { $in: [...videoRootIds].map((id) => new Types.ObjectId(id)) },
+    })
+      .select("_id childCategoryIds")
+      .lean();
+    for (const root of roots as any[]) {
+      const ids = await collectCategoryTreeIds(VideoCategory as any, root);
+      for (const id of ids) videoCategoryIdSet.add(String(id));
+    }
+  }
+
+  return {
+    materialCategoryIds: Array.from(materialCategoryIds).map((id) => new Types.ObjectId(id)),
+    examCategoryIds: Array.from(examCategoryIds).map((id) => new Types.ObjectId(id)),
+    videoCategoryIds: Array.from(videoCategoryIdSet).map((id) => new Types.ObjectId(id)),
+  };
+}
+
 function paginate(req: Request) {
   const { page = "1", limit = "20" } = req.query as Record<string, string>;
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -131,21 +217,20 @@ export const listFreeTests = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "`week` requires `year` and `month`." });
     }
 
-    const { examCategoryIds } = await resolveFreeCategoryIds();
+    const { examCategoryIds } = await resolveAssignedCategoryIds();
 
     const now = new Date();
     const endOfDay = new Date(now);
     endOfDay.setHours(23, 59, 59, 999);
 
-    // "Free" = reachable via a free category OR explicitly marked isPaid:false.
-    // Guard the per-item branch with categoryId !== null so the schema default
-    // (isPaid:false) on orphan/uncategorised exams can't leak the whole catalog.
+    // Two gates: (1) ASSIGNMENT — the exam's category must be assigned to some
+    // course/package/live-course (paid or free); orphan/unassigned exams never
+    // show. (2) FREE — the exam itself must be free (isPaid:false). A paid exam
+    // inside an assigned category is hidden.
     const baseMatch: any = {
       status: ExamStatus.PUBLISHED,
-      $or: [
-        { categoryId: { $in: examCategoryIds } },
-        { isPaid: false, categoryId: { $ne: null } },
-      ],
+      isPaid: false,
+      categoryId: { $in: examCategoryIds },
     };
     if (search) baseMatch.title = { $regex: search, $options: "i" };
 
@@ -241,11 +326,15 @@ export const listFreeTests = async (req: Request, res: Response) => {
 };
 
 // GET /api/v1/client/free-materials
-// Distinct material-CATEGORY cards — each category that has ≥1 free
-// (isPaid:false) material appears exactly ONCE, with its free lessonCount and
-// the free course/package it belongs to. The FE renders cards; tapping one
-// calls /material-categories/:id/materials?type=free for the rows.
-// `search` matches the category title; paginated over the distinct category set.
+// Category cards GROUPED by their top-most ancestor. Every leaf category that
+// has ≥1 free (isPaid:false) material is a `child`; that child is rolled up
+// under its root ancestor (ancestors[0]) so the FE renders the whole tree
+// architecture ("UPSC Preparations" → "Reasoning"/"Subject") rather than bare
+// leaves. A free leaf with no ancestors IS its own top-level group (children:[]).
+// Each child keeps `_id` (the leaf the FE drills into via
+// /materials/categories/:id/contents), `lessonCount`, and the free
+// course/package `parent`. `search` matches the GROUP (top) title; pagination
+// is over the top-level group set.
 export const listFreeMaterials = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listFreeMaterials invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -254,14 +343,28 @@ export const listFreeMaterials = async (req: Request, res: Response) => {
     const { search } = req.query as Record<string, string>;
     const { pageNum, limitNum, skip } = paginate(req);
 
-    // 1) Free material count grouped by category — one row per category, so a
-    // category with N free materials is never duplicated. "Free" = the
-    // material's own isPaid:false (mirrors listFreeVideos' priceType:"free").
-    // materialCategoryId !== null drops orphan/uncategorised materials.
-    const grouped = await Material.aggregate([
-      { $match: { status: true, isPaid: false, materialCategoryId: { $ne: null } } },
-      { $group: { _id: "$materialCategoryId", lessonCount: { $sum: 1 } } },
-    ]);
+    // 1) Two gates produce the candidate leaf categories:
+    //   (a) ASSIGNMENT — the category must be assigned to some
+    //       course/package/live-course (paid or free). Orphan/unassigned
+    //       categories never show, even if they hold free materials.
+    //   (b) FREE — the category must hold ≥1 free material (its own
+    //       isPaid:false). The grouped count below is restricted to the
+    //       assigned set so a category with only paid (or zero) free materials
+    //       is excluded.
+    const { materialCategoryIds: assignedMaterialCatIds } = await resolveAssignedCategoryIds();
+
+    const grouped = assignedMaterialCatIds.length
+      ? await Material.aggregate([
+          {
+            $match: {
+              status: true,
+              isPaid: false,
+              materialCategoryId: { $in: assignedMaterialCatIds },
+            },
+          },
+          { $group: { _id: "$materialCategoryId", lessonCount: { $sum: 1 } } },
+        ])
+      : [];
     const countByCategory = new Map<string, number>(
       grouped.map((g: any) => [String(g._id), g.lessonCount])
     );
@@ -275,18 +378,28 @@ export const listFreeMaterials = async (req: Request, res: Response) => {
       });
     }
 
-    // 2) Resolve the active categories (title/image), optionally filtered by
-    // search on the category title. This is the deduped universe of cards.
-    const catFilter: any = { _id: { $in: candidateIds }, status: true };
-    if (search) catFilter.title = { $regex: search, $options: "i" };
-    const categories = await MaterialCategory.find(catFilter)
-      .select("_id title image")
+    // 2) Resolve the active LEAF categories (with hierarchy fields) that hold
+    // free materials. These become the children. No search filter here — search
+    // applies to the top-level group title, resolved in step 5.
+    const leafCategories = await MaterialCategory.find({
+      _id: { $in: candidateIds },
+      status: true,
+    })
+      .select("_id title image ancestors")
       .sort({ order: 1, title: 1 })
       .lean();
 
-    // 3) Map each category to the free course/package it belongs to (for the
-    // card subtitle / routing). A category attached to several free parents
-    // resolves to the first match; standalone free materials have parent: null.
+    if (!leafCategories.length) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
+      });
+    }
+
+    // 3) Map each leaf to the free course/package it belongs to (for the child
+    // subtitle / routing). A category attached to several free parents resolves
+    // to the first match; standalone free materials have parent: null.
     const [freePackages, freeCourses] = await Promise.all([
       Package.find({ active: true, isPaid: false }).select("_id name materialCategories").lean(),
       Course.find({ status: true, isPaid: false }).select("_id name materialCategories").lean(),
@@ -302,17 +415,65 @@ export const listFreeMaterials = async (req: Request, res: Response) => {
     for (const p of freePackages as any[]) indexParent(p, "package");
     for (const c of freeCourses as any[]) indexParent(c, "course");
 
-    // 4) Build deduped cards, then paginate over the category set.
-    const allCards = categories.map((cat: any) => ({
-      _id: cat._id,
-      title: cat.title,
-      image: cat.image,
-      lessonCount: countByCategory.get(String(cat._id)) ?? 0,
-      parent: parentByCategory.get(String(cat._id)) ?? null,
-    }));
+    // 4) Determine each leaf's ROOT (top-most ancestor). ancestors[0] is the
+    // root of the chain; a leaf with no ancestors is its own root. Collect the
+    // distinct root ids that are NOT themselves free leaves so we can fetch
+    // their title/image for the group header.
+    const rootIdOf = (cat: any): string =>
+      cat.ancestors?.length ? String(cat.ancestors[0]) : String(cat._id);
 
-    const total = allCards.length;
-    const data = allCards.slice(skip, skip + limitNum);
+    const leafIdSet = new Set(leafCategories.map((c: any) => String(c._id)));
+    const rootIdsToFetch = new Set<string>();
+    for (const leaf of leafCategories as any[]) {
+      const rid = rootIdOf(leaf);
+      if (!leafIdSet.has(rid)) rootIdsToFetch.add(rid);
+    }
+    const fetchedRoots = rootIdsToFetch.size
+      ? await MaterialCategory.find({ _id: { $in: [...rootIdsToFetch].map((id) => new Types.ObjectId(id)) } })
+          .select("_id title image")
+          .lean()
+      : [];
+    const rootById = new Map<string, any>();
+    for (const r of fetchedRoots as any[]) rootById.set(String(r._id), r);
+    // Roots that ARE free leaves themselves are already in leafCategories.
+    for (const leaf of leafCategories as any[]) rootById.set(String(leaf._id), leaf);
+
+    // 5) Build groups: one per root, children are the free leaves under it.
+    // Group order follows first-seen leaf order (already sorted by order/title).
+    const buildChild = (leaf: any) => ({
+      _id: leaf._id,
+      title: leaf.title,
+      image: leaf.image,
+      lessonCount: countByCategory.get(String(leaf._id)) ?? 0,
+      parent: parentByCategory.get(String(leaf._id)) ?? null,
+    });
+
+    const groupByRoot = new Map<string, any>();
+    for (const leaf of leafCategories as any[]) {
+      const rid = rootIdOf(leaf);
+      const isStandalone = rid === String(leaf._id);
+      if (!groupByRoot.has(rid)) {
+        const root = rootById.get(rid) ?? leaf;
+        groupByRoot.set(rid, {
+          _id: root._id,
+          title: root.title,
+          image: root.image,
+          children: [] as any[],
+        });
+      }
+      // A standalone free leaf IS its own card — no self-nesting under children.
+      if (!isStandalone) groupByRoot.get(rid).children.push(buildChild(leaf));
+    }
+
+    // 6) Apply search on the GROUP (top) title, then paginate over groups.
+    let allGroups = [...groupByRoot.values()];
+    if (search) {
+      const re = new RegExp(search, "i");
+      allGroups = allGroups.filter((g) => re.test(g.title));
+    }
+
+    const total = allGroups.length;
+    const data = allGroups.slice(skip, skip + limitNum);
 
     logger.info("listFreeMaterials success", { traceId, total, returned: data.length });
     return res.status(200).json({
@@ -335,12 +496,18 @@ export const listFreeVideos = async (req: Request, res: Response) => {
     const { search } = req.query as Record<string, string>;
     const { pageNum, limitNum, skip } = paginate(req);
 
-    // "Free" is decided per video by its own priceType:"free" flag (the same flag
-    // /v1/lecture honours for playback) — NOT by category reachability. A free
-    // parent course/package makes a category browsable, but each video is still
-    // gated individually, so a paid video in a free-reachable category never
-    // leaks here. Mirrors the per-item rule used by free-materials.
-    const filter: any = { status: true, priceType: "free" };
+    // Two gates: (1) ASSIGNMENT — the video's category must be assigned to some
+    // course/package/live-course (paid or free); a video whose category isn't
+    // attached to any product never shows. (2) FREE — the video itself must be
+    // priceType:"free" (the same flag /v1/lecture honours for playback), so a
+    // paid video inside an assigned category never leaks here.
+    const { videoCategoryIds } = await resolveAssignedCategoryIds();
+
+    const filter: any = {
+      status: true,
+      priceType: "free",
+      videoCategoryId: { $in: videoCategoryIds },
+    };
     if (search) filter.title = { $regex: search, $options: "i" };
 
     const [data, total] = await Promise.all([

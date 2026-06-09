@@ -9,7 +9,9 @@ import {
   listMaterialCategoryChildren,
   listExamCategoryChildren,
   listPackagesByExamCountdownCategory,
+  listProductsByExamCountdown,
   listBooksAndEbooksByExamCountdownCategory,
+  listBooksAndEbooksByExamCountdown,
   listPackageCategories,
   listPackagesByCategory,
 } from "./categories.controller";
@@ -26,6 +28,8 @@ router.get("/material-categories/:id/children", listMaterialCategoryChildren);
 router.get("/exam-categories/:id/exams", listExamsByCategory);
 router.get("/exam-categories/:id/children", listExamCategoryChildren);
 router.get("/exam-countdown-categories/:id/packages", listPackagesByExamCountdownCategory);
+router.get("/exam-countdown/:id/packages", listProductsByExamCountdown);
+router.get("/exam-countdown/:id/books-ebooks", listBooksAndEbooksByExamCountdown);
 router.get("/exam-countdown-categories/:id/books-ebooks", listBooksAndEbooksByExamCountdownCategory);
 router.get("/package-categories", listPackageCategories);
 router.get("/package-categories/:id/packages", listPackagesByCategory);

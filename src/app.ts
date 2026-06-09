@@ -165,7 +165,7 @@ app.use(metricsMiddleware);
 // B) JSON: accept typical JSON + JSON-without-correct-CT + JSON subtypes
 app.use(
   express.json({
-    limit: "10mb",
+    limit: "500mb",
     // Accept application/json, application/*+json, text/json.
     // NOTE: do NOT parse when Content-Type is missing. A no-CT fallback here
     // drains the request stream for ANY body-less-CT POST/PUT/PATCH — including
@@ -193,7 +193,7 @@ app.use(
 app.use(
   express.urlencoded({
     extended: true,
-    limit: "10mb",
+    limit: "500mb",
   })
 );
 
