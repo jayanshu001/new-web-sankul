@@ -16,7 +16,11 @@ import {
 } from "./utils/crashReporter";
 import { metricsMiddleware } from "./middlewares/metricsMiddleware";
 import { renderMetrics } from "./utils/metrics";
-import { livenessHandler, readinessHandler } from "./middlewares/health";
+import {
+  livenessHandler,
+  readinessHandler,
+  healthReportHandler,
+} from "./middlewares/health";
 import { requestContextMiddleware } from "./middlewares/requestContext";
 import deeplinkingRoutes from "./deeplinking/deeplinking.routes";
 
@@ -245,6 +249,10 @@ if (process.env.NODE_ENV !== "production") {
 // the pre-existing readyState + a boolean per dependency, nothing sensitive.
 app.get("/healthz", livenessHandler);
 app.get("/readyz", readinessHandler);
+
+// Public full-status report (no auth): DB + Redis + BullMQ queue/worker detail.
+// A dashboard/uptime-monitor endpoint — always 200, with the snapshot in the body.
+app.get("/health", healthReportHandler);
 
 // --- Metrics endpoint ------------------------------------------------------
 //

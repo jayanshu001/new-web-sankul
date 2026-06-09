@@ -64,6 +64,16 @@ export function getPdfUploadQueue(): Queue<PdfUploadJobData> {
   return queue;
 }
 
+// The health endpoint reads these without throwing — a null queue/worker just
+// means the scheduler hasn't booted yet, which the report surfaces as such.
+export function getPdfUploadQueueOrNull(): Queue<PdfUploadJobData> | null {
+  return queue;
+}
+
+export function getPdfUploadWorkerOrNull(): Worker<PdfUploadJobData> | null {
+  return worker;
+}
+
 /**
  * Enqueue one PDF job. jobId = the PdfUploadJob._id so a duplicate enqueue
  * (e.g. boot rehydrate after the controller already added it) is a no-op.
