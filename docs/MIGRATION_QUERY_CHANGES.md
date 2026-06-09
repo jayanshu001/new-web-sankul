@@ -15,6 +15,63 @@
 
 ---
 
+## 2026-06-09 — Package plan listing now excludes soft-detached (status:false) plans
+
+**File:** `src/admin/package/package.service.ts` — `listPackagePlans`
+(`GET /admin/packages/:id/plans`).
+
+**Bug:** `DELETE /admin/packages/:id/plans/:planId` (`detachPlan`) soft-detaches by
+setting the plan row's `status:false`, but `listPackagePlans` queried
+`{ packageId }` with **no status filter**, so the detached plan kept coming back
+(with `status:false`) in the package's plan list / Edit modal.
+
+**Fix:** `listPackagePlans` now filters `{ packageId, status: true }`.
+
+**Why soft-detach (not hard-delete):** a plan row is owned 1:1 by its package
+(scalar `packageId`; the model's `pre("validate")` enforces exactly one owner — no
+shared/many-to-many plans exist, verified: 0 rows with >1 owner across 37). More
+importantly, `PackageCourseSubscription.packageId` **references the plan row**
+(`ref: "PackageCourseEbookPrice"`), so hard-deleting would orphan a buyer's
+subscription. Soft-detach preserves that reference. `detachPlan`'s update is scoped
+`{ _id, packageId }`, so it only ever touches this package's own plan.
+
+**Siblings:** `DELETE /admin/courses/:id/plans/:planId` (`deleteCoursePlan`) and
+`DELETE /admin/live-courses/:id/plans/:planId` (`deleteLiveCoursePlan`) already
+**hard-delete** the row (live-course additionally refuses when verified
+subscriptions reference it), so they never exhibited the reappear bug — left as-is.
+
+**No schema/index change.** Read-only filter addition. Pre-existing `status:false`
+rows from the buggy period (3 observed) simply stop appearing; no backfill needed.
+
+---
+
+## 2026-06-09 — Course detail video/material counts now roll up the subtree
+
+**File:** `src/client/course/course.service.ts` — `buildCourseDetails`
+(`GET /api/v1/client/courses/:id`).
+
+**What changed (count semantics):** the per-folder `count` badge for the **Videos**
+and **Materials** tabs was counting **direct items only**
+(`{ videoCategoryId: cat._id }` / `{ materialCategoryId: cat._id }`). It now rolls
+up the whole subtree via `collectCategoryTreeIds` →
+`{ <field>: { $in: ids }, status: true }`, matching the **Tests** count (already
+subtree) and the unified catalog tabs (`src/client/catalog/catalog.controller.ts`).
+The inlined `videos[].list` is unchanged — still the folder's DIRECT videos only;
+only the `count` field changed.
+
+**Why:** course/package folders can nest child folders, and content attaches to
+leaves. Direct-only counts undercounted any parent folder (observed: a materials
+folder showing 1 instead of 3, a video folder 1 instead of 6). The catalog tabs
+and package detail (`buildPackageDetail`) already rolled up; this aligns course
+detail to the same rule so every surface agrees.
+
+**Migration/QA impact:** Read-only, no schema/index change. Course-detail
+video/material badges **increase** for any folder with populated child folders
+(unchanged for flat/leaf folders). Relies on `childCategoryIds` (already used by
+`collectCategoryTreeIds`). No backfill.
+
+---
+
 ## 2026-06-09 — Uniform `isPaid`/`isPurchased`/`daysLeft` flags on ExamCountdown listing rows
 
 **File:** `src/client/categories/categories.controller.ts` — `listProductsByExamCountdown`

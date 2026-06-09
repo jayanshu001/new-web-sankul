@@ -232,20 +232,37 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
             count,
           },
           list: videoList,
+          // Internal only (stripped before responding): the subtree category ids
+          // this group counted, used to compute a de-duplicated grand total.
+          _countCategoryIds: countCategoryIds,
         };
       })
     );
 
-    const totalItems = list.reduce((n, g) => n + (g.category.count ?? 0), 0);
+    // totals.items must NOT be a naive sum of per-group counts: when a package
+    // assigns both a parent folder AND one of its descendants as separate
+    // subjects, their subtrees overlap and the same video would be counted in
+    // both groups. Count DISTINCT videos across the union of all groups'
+    // subtree category ids instead. (Per-group `count` badges keep their own
+    // subtree total — overlap there is expected and correct for the badge.)
+    const unionCategoryIds = Array.from(
+      new Set(list.flatMap((g) => g._countCategoryIds.map((c: any) => String(c))))
+    );
+    const totalItems = unionCategoryIds.length
+      ? await Video.countDocuments({ videoCategoryId: { $in: unionCategoryIds }, status: true })
+      : 0;
 
-    logger.info("getCatalogVideos success", { traceId, type, id, groups: list.length });
+    // Drop the internal field before responding.
+    const responseList = list.map(({ _countCategoryIds, ...rest }) => rest);
+
+    logger.info("getCatalogVideos success", { traceId, type, id, groups: responseList.length });
     return success(
       res,
       {
         parent: { _id: id, type, name: parent.name },
-        list,
+        list: responseList,
         availableCategories,
-        totals: { categories: list.length, items: totalItems },
+        totals: { categories: responseList.length, items: totalItems },
       },
       "Video categories fetched."
     );

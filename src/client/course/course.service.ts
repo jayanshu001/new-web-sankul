@@ -91,8 +91,13 @@ export async function buildCourseDetails(
   if (courseDoc.videoCategoryId) {
     const videoCat: any = await VideoCategory.findById(courseDoc.videoCategoryId).lean();
     if (videoCat) {
+      // `count` rolls up the whole subtree (this folder + nested child folders)
+      // so the badge matches what the user finds after drilling in — same method
+      // as the catalog tabs and the tests count below. The inlined `list` stays
+      // this folder's DIRECT videos only.
+      const videoCountIds = await collectCategoryTreeIds(VideoCategory, videoCat);
       const [count, childCount, list] = await Promise.all([
-        Video.countDocuments({ videoCategoryId: videoCat._id, status: true }),
+        Video.countDocuments({ videoCategoryId: { $in: videoCountIds }, status: true }),
         VideoCategoryRelation.countDocuments({ parent: videoCat._id }),
         Video.find({ videoCategoryId: videoCat._id, status: true })
           .sort({ order: 1, createdAt: -1 })
@@ -149,7 +154,15 @@ export async function buildCourseDetails(
     .filter((cat: any) => cat && cat.status === true);
   const [materialChildCounts, materialCounts] = await Promise.all([
     Promise.all(activeMaterialCats.map((cat: any) => MaterialCategory.countDocuments({ parent: cat._id, status: true }))),
-    Promise.all(activeMaterialCats.map((cat: any) => Material.countDocuments({ materialCategoryId: cat._id, status: true }))),
+    // Roll each folder's count up through its nested child folders so the badge
+    // reflects everything reachable beneath it, not just direct materials —
+    // same method as the catalog tabs and the tests count below.
+    Promise.all(
+      activeMaterialCats.map(async (cat: any) => {
+        const ids = await collectCategoryTreeIds(MaterialCategory, cat);
+        return Material.countDocuments({ materialCategoryId: { $in: ids }, status: true });
+      })
+    ),
   ]);
   const materials: CategoryGroupDTO[] = activeMaterialCats.map((cat: any, i: number) => ({
     category: {

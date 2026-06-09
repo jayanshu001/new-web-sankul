@@ -16,6 +16,24 @@ const formatZodErrors = (issues: any[]) =>
     return acc;
   }, {});
 
+// Returns a slug that isn't already used by another video, appending -2, -3, …
+// to the requested base until it's free. Never throws — create/update should
+// silently uniquify rather than 409 on a slug clash. `excludeId` skips the row
+// being updated so re-saving an unchanged slug doesn't collide with itself.
+// Mirrors the uniqueSlug helper in videoCategory.controller.
+const uniqueVideoSlug = async (base: string, excludeId?: string): Promise<string> => {
+  const root = base || "video";
+  let candidate = root;
+  let n = 1;
+  const taken = async (slug: string) =>
+    Video.exists(excludeId ? { slug, _id: { $ne: excludeId } } : { slug });
+  while (await taken(candidate)) {
+    n += 1;
+    candidate = `${root}-${n}`;
+  }
+  return candidate;
+};
+
 const toItem = (v: any) => ({
   id: v._id,
   name: v.title,
@@ -104,13 +122,22 @@ export const listVideos = async (req: Request, res: Response) => {
 export const getVideoPreRequisites = async (_req: Request, res: Response) => {
   try {
     const categories = await VideoCategory.find({ status: true })
-      .select("_id title slug")
+      .select("_id title slug childCategoryIds")
       .sort({ order_by: 1, title: 1 })
       .lean();
     return res.status(200).json({
       success: true,
       data: {
-        categories: categories.map((c: any) => ({ id: c._id, name: c.title, slug: c.slug })),
+        // has_children flags parent folders so the FE can exclude them from the
+        // video-category dropdown (a video attaches to a leaf only), without a
+        // second call to the full category list. Mirrors the catalog feed's
+        // `havingChildDirectory` (both derive from childCategoryIds).
+        categories: categories.map((c: any) => ({
+          id: c._id,
+          name: c.title,
+          slug: c.slug,
+          has_children: (c.childCategoryIds?.length ?? 0) > 0,
+        })),
         types: [
           { value: "free", label: "Free" },
           { value: "paid", label: "Paid" },
@@ -158,14 +185,15 @@ export const createVideo = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Video category not found" });
     }
 
-    const slugDupe = await Video.exists({ slug: d.slug });
-    if (slugDupe) return res.status(409).json({ success: false, message: "Slug already exists" });
+    // Auto-uniquify instead of rejecting: a clashing slug gets -2/-3/… appended
+    // so video creation never fails on a duplicate slug.
+    const slug = await uniqueVideoSlug(d.slug);
 
     const platform = pickEnabledPlatform(d)!;
     const created = await Video.create({
       videoCategoryId: d.videoCategoryId,
       title: d.name,
-      slug: d.slug,
+      slug,
       topic: d.topic,
       order: d.order,
       priceType: d.type,
@@ -217,9 +245,8 @@ export const updateVideo = async (req: Request, res: Response) => {
     }
 
     if (d.slug && d.slug !== video.slug) {
-      const dupe = await Video.exists({ slug: d.slug, _id: { $ne: id } });
-      if (dupe) return res.status(409).json({ success: false, message: "Slug already exists" });
-      video.slug = d.slug;
+      // Auto-uniquify rather than 409 on a clash (excludes this row's own id).
+      video.slug = await uniqueVideoSlug(d.slug, id);
     }
 
     if (d.name !== undefined) video.title = d.name;
