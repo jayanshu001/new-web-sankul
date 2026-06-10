@@ -6,8 +6,30 @@ import { createVideoCategorySchema, updateVideoCategorySchema } from "./master.v
 
 export const getVideoCategories = async (req: Request, res: Response) => {
   try {
-    const categories = await VideoCategory.find().sort({ order_by: 1 });
-    res.status(200).json({ success: true, data: categories });
+    // Populate childCategoryIds so each row can carry a `child_categories`
+    // array (mirroring the admin /video-categories list) plus a `hasChildren`
+    // boolean. This lets clients (e.g. the Course / Live Course modal, which
+    // load via this endpoint) tell a parent category from a child without a
+    // separate admin call — the non-admin VideoCategory shape previously had no
+    // parent/child info at all. All pre-existing fields are preserved, so this
+    // is purely additive and backward-compatible.
+    const categories = await VideoCategory.find()
+      .populate("childCategoryIds", "_id title slug status order_by")
+      .sort({ order_by: 1 })
+      .lean();
+
+    const data = categories.map((c: any) => {
+      const children = Array.isArray(c.childCategoryIds) ? c.childCategoryIds : [];
+      return {
+        ...c,
+        // Populated child docs (or bare ids if a ref no longer resolves).
+        child_categories: children,
+        // A parent category is one that has at least one child.
+        hasChildren: children.length > 0,
+      };
+    });
+
+    res.status(200).json({ success: true, data });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

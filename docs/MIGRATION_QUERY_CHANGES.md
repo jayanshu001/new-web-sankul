@@ -15,6 +15,163 @@
 
 ---
 
+## 2026-06-10 — Free-materials & free-videos now also scan PAID products
+
+**File:** `src/client/free/free.controller.ts` — `listFreeMaterials`
+(`GET /api/v1/client/free-materials`) and `listFreeVideos`
+(`GET /api/v1/client/free-videos`).
+
+**What changed (query gate):** The product query in both handlers previously
+filtered `isPaid:false`, so free content (free materials / `priceType:"free"`
+videos) living inside a PAID course/package/live-course never surfaced. The
+product `isPaid` gate is **dropped** — both endpoints now scan ALL active
+products (`Package {active:true}`, `Course/LiveCourse {status:true}`), free and
+paid alike. The per-item free gate is unchanged and still decides inclusion:
+`Material {isPaid:false}` / `Video {priceType:"free"}`. Empty-branch pruning is
+unchanged, so a paid product with zero free items still doesn't appear.
+
+**Behavioural impact / QA:** A paid product that contains ≥1 free material/video
+now shows as a top-level entry (with only its free items nested). Counts grow
+accordingly. No schema/index change; same indexes as the prior tree entries.
+
+---
+
+## 2026-06-10 — Free-videos restructured to product-rooted recursive tree
+
+**File:** `src/client/free/free.controller.ts` — `listFreeVideos`
+(`GET /api/v1/client/free-videos`).
+
+**What changed (response + query shape):** Was a flat paginated `Video.find`
+list (videos whose category was in the assigned set, `priceType:"free"`). Now it
+mirrors the `/free-materials` product-rooted recursive tree:
+- **Top level is the free PRODUCT only** (course / package / live-course).
+- Video roots per product: Course/LiveCourse via scalar `videoCategoryId`;
+  Package via `PackageVideoCategoryRelation` (active) → `VideoCategoryRelation`
+  (parent + child are roots).
+- Each root is expanded to its full subtree via `VideoCategory.childCategoryIds`
+  (BFS, `status:true`, sorted `order_by`). Free videos (`status:true,
+  priceType:"free"`) are hung on whichever folder owns them; **every node carries
+  `videos[]` and `children[]`** recursed to the bottom. Empty branches pruned;
+  products with no free video anywhere dropped.
+
+**No longer uses** `resolveAssignedCategoryIds()` for this endpoint (gated on
+paid-OR-free assignment). Videos are returned as raw listing docs (same fields as
+before) — playback URLs are NOT included; the FE still fetches the encrypted
+stream from `/v1/lecture`, so the video-URL response contract is unchanged.
+
+**Queries:** `Package/Course/LiveCourse.find({free})`;
+`PackageVideoCategoryRelation.find({packageId:$in, active:true})` +
+`VideoCategoryRelation.find({_id:$in})`; iterative
+`VideoCategory.find({_id:$in, status:true})` to walk the tree; one
+`Video.find({videoCategoryId:$in, status:true, priceType:"free"})`. Existing
+indexes cover these (`VideoCategory.childCategoryIds`, `Video {videoCategoryId,
+status, order}`, `PackageVideoCategoryRelation {packageId, active}`).
+
+**FE must update:** response is no longer a flat video array — top entries expose
+`type`, `categories[]`, and recursive `children[]`/`videos[]` per node, with
+`videoCount` rolled up per node. A root assigned to multiple free products
+appears under each (intentional).
+
+---
+
+## 2026-06-10 — Non-admin video-categories list now carries child_categories / hasChildren
+
+**File:** `src/admin/master/videoCategory.controller.ts` — `getVideoCategories`
+(`GET /api/v1/admin/master/video-categories`).
+
+**What changed (query + response shape):** Was a bare
+`VideoCategory.find().sort({ order_by: 1 })` returning raw docs with
+`childCategoryIds` as unpopulated ObjectIds — the non-admin VideoCategory shape
+had no usable parent/child info, so clients (Course / Live Course modal) couldn't
+distinguish a parent category from a child. Now the query `.populate("childCategoryIds", "_id title slug status order_by").lean()`,
+and each row is augmented with:
+- `child_categories` — populated child docs (mirrors the admin
+  `/video-categories` list's `child_categories`).
+- `hasChildren` — boolean (`childCategoryIds.length > 0`); a parent is any
+  category with ≥1 child.
+
+**Backward-compat:** Purely additive — every pre-existing field is preserved
+(`...c` spread). No schema/index change; `childCategoryIds` already exists on the
+`VideoCategory` model. No backfill required. Clients filter parents via
+`hasChildren === true`.
+
+---
+
+## 2026-06-10 — Free-materials restructured to product-rooted recursive tree
+
+**File:** `src/client/free/free.controller.ts` — `listFreeMaterials`
+(`GET /api/v1/client/free-materials`).
+
+**What changed (response + query shape):** Was a 2-level "leaf categories grouped
+by root ancestor" list whose product `parent` was resolved per-leaf (buggy: a
+free material on a descendant of an assigned root had no direct product link, so
+it leaked as a `type:null` standalone top-level). Now:
+- **Top level is the free PRODUCT only** (course / package / live-course). A
+  category is never a top-level card.
+- Products are filtered to free (`isPaid:false`); each contributes its assigned
+  material-category roots (`materialCategories[].category`, skipping
+  `status:false` refs).
+- Each assigned root is **expanded to its full subtree** via `childCategoryIds`
+  (BFS, `status:true` only) — previously material roots were NOT expanded
+  (unlike video roots), which is why descendant materials were mis-attributed.
+- Free materials (`status:true,isPaid:false`) across the whole expanded set are
+  fetched once and hung on whichever node owns them; **every node carries both
+  `materials[]` and `children[]`**, recursed to the bottom. Empty branches
+  (no free material anywhere in the subtree) are pruned; products with zero
+  non-empty roots are dropped.
+
+**No longer uses** `resolveAssignedCategoryIds()` for this endpoint (that gated
+on paid-OR-free assignment); the free gate is now "material under a *free*
+product's assigned category subtree". Materials are shaped with
+`shapeMaterialForClient` to match `GET /materials/categories/:id/contents`.
+
+**Queries:** `Package/Course/LiveCourse.find({free})`; iterative
+`MaterialCategory.find({_id:$in, status:true})` to walk the tree; one
+`Material.find({materialCategoryId:$in, status:true, isPaid:false})`. Existing
+indexes cover these (`materialCategorySchema {parent,status,order}`, Material on
+`materialCategoryId`). Response keys changed — **FE must update**: top entries
+now expose `type` (`course|package|live-course`), `categories[]`, and recursive
+`children[]`/`materials[]` per node; the old per-child `parent`/`lessonCount`
+flat shape is gone (`materialCount` rolls up per node instead).
+
+**QA:** A root category assigned to multiple free products appears under each
+(intentional). Verify products without an `image` return `image:null` rather
+than erroring.
+
+---
+
+## 2026-06-10 — Free-tests drill-down now buckets on `startAt` instead of `createdAt`
+
+**File:** `src/client/free/free.controller.ts` — `listFreeTests`
+(`GET /api/v1/client/free-tests`).
+
+**Bug:** The year/month/week drill-down and the leaf list all bucketed and
+filtered on `createdAt`, while the sibling `GET /api/v1/client/quizzes/daily`
+(`exam.controller.ts`) buckets on the exam's scheduled `startAt`. A free test
+created in one month but scheduled (`startAt`) in another landed in the wrong
+bucket and was inconsistent between the two endpoints. The misleading code
+comment claimed "free tests have no scheduled `startAt`", but `Exam` does carry
+`startAt` (`models/exam/Exam.model.ts:49`, index at `:70`).
+
+**Query-level change:**
+- `baseMatch` gains `startAt: { $lte: endOfDay }` (was absent). This both bases
+  the rollup on the scheduled date and **excludes tests with a null `startAt`**
+  (and future-dated ones), matching quizzes/daily.
+- Level 1 years: `$group _id` `$year:"$createdAt"` → `$year:"$startAt"`.
+- Level 2 months: `$match` window + `$group` switched `createdAt` → `startAt`.
+- Level 3 weeks: `find`/`select`/bucket switched `createdAt` → `startAt`.
+- Level 4 list: window `createdAt` → `startAt`; sort `{orderBy:1, createdAt:-1}`
+  → `{orderBy:1, startAt:-1}`.
+
+**Behavioural impact / QA:** Counts and membership at every level shift from
+creation date to scheduled date. **Free tests with no `startAt` set will no
+longer appear** in this endpoint at all — confirm published free tests have
+`startAt` populated, or they vanish from the free-tests listing. Index
+`{ type:1, status:1, startAt:1 }` already exists and supports the new filter
+(query also constrains `categoryId`/`isPaid`/`status`).
+
+---
+
 ## 2026-06-09 — Package plan listing now excludes soft-detached (status:false) plans
 
 **File:** `src/admin/package/package.service.ts` — `listPackagePlans`
