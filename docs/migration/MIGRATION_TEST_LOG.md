@@ -29,7 +29,12 @@
 | Phase 2 — `popup` | ✅ | 2026-06-06 | `yarn migration:api:popup` (automated) |
 | Phase 2 — `customer-auth` | ✅ | 2026-06-06 | `yarn migration:api:customer-auth` (automated, real dump customer) |
 | Phase 2 — API automation (`api-tests/`) | ✅ | 2026-06-06 | + customer-auth — **82/82** (OTP generate/validate/refresh/logout against real ws_customer; issued token authenticates a protected route) |
-| Next module: _(catalog: course/package/video)_ | ⬜ | — | — |
+| Phase 2 — `customer-lookups` | ✅ | 2026-06-10 | Live-DB data path verified (12 states / 10 educations, exact DTO shapes); api-test authored + wired (`yarn migration:api:customer-lookups`). HTTP run pending live `yarn dev`. |
+| Phase 2 — `customer-address` | 🟡 | 2026-06-10 | Code complete, **flag OFF** (cityId→OfflineCity/cart). Live-DB repo CRUD verified (create→list→setDefault→update→delete, BigInt phone). No API test (Mongo still serves). |
+| Phase 2 — `customer-profile` | 🟡 | 2026-06-10 | Code complete, **flag OFF** (dashboard cross-module deps). Live-DB service verified (name split/join, goal hydration, derived isProfileCompleted). No API test (Mongo still serves). |
+| Phase 2 — `customer-bank-account` | 🟡 | 2026-06-10 | Code complete, **flag OFF** (referral withdrawal Mongo-coupled). Live-DB repo CRUD verified. No API test (Mongo still serves). |
+| Phase 2 — `offline-city` | ✅ | 2026-06-10 | **Enabled.** Cities-only (unblocks customer-address). Added `status`/`order` cols via DDL. Live-DB verified (2 cities; address cityId=2→"Ahmedabad" end-to-end through cart). api-test wired (`yarn migration:api:offline-city`); HTTP run pending live `yarn dev`. |
+| Next module: _(catalog: package→course→video; address flip deferred to commerce wave)_ | ⬜ | — | — |
 
 Update this table after each testing session.
 
@@ -428,5 +433,25 @@ _Free-form notes per testing session (environment, blockers, decisions)._
 - **Found & fixed two pre-existing HEAD regressions** (introduced by the `Migration Initiated`/merge commits, unrelated to this work): (1) `src/admin/cms/cms.controller.ts` had its banner-slider/testimonial/terms/version/app-update service imports clobbered back to model imports while keeping the new handler bodies → 25 tsc errors; restored the imports. (2) `package.json` lost the entire migration scripts block (`db:*`, `docs:*`, `migration:api*`, `prisma:generate`); restored from commit `fb52512` + added `customer-auth`. Also added the `Explore` banner key (added to the validation enum after the banner module was built).
 - tsc back to the 8 pre-existing baseline errors; none in migrated code.
 - **Next:** catalog (`course`/`package`/`video`) — read-heavy data backbone, large surface.
+
+### 2026-06-10 — Customer Module completion (lookups, address, profile, bank-account)
+
+Built the **remaining Customer Module** sub-modules. One enabled, three code-complete with flags OFF (each gated by a non-customer dependency, not by unbuilt code).
+
+- **`customer-lookups`** ✅ **enabled.** Wired `getStates`/`getEducations`/`getCharacteristic` (in `address.controller.ts`) to the previously-dead `customer-lookups.service`. Live-DB data path verified: **12 active states / 10 active educations**, exact DTO shapes (`{_id,name,stateCode}` / `{_id,name}`), no `active`/`status` leak. API test authored + wired (`yarn migration:api:customer-lookups`); HTTP run pending a live `yarn dev` (not bootable here — partial `node_modules`).
+- **`customer-address`** 🟡 **flag OFF** — `cityId` → OfflineCity (Mongo) + cart checkout resolve it; enable after OfflineCity/cart migrate. Live-DB repo CRUD verified (create→list→setDefault→update→delete for customer 472341; BigInt phone `9664796376` round-trips). Schema fixes: phone `Int`→`BigInt`; kept `label`/`is_default`/`city_id` to match live DB; `city` (NOT NULL) added to input/DTO.
+- **`customer-profile`** 🟡 **flag OFF** — dashboard aggregates non-customer collections; enable after those migrate (dashboard left on Mongo). Live-DB service verified (customer 472347): `"DIXIT PATEL"`→`["DIXIT","","PATEL"]`, goals `[7,8,12,13,14]`→named DTOs, `isProfileCompleted` derived, `facebook_id` not leaked. Decisions: split full_name; single `device` token; derived complete-flag; `facebookId` read-only.
+- **`customer-bank-account`** 🟡 **flag OFF** — referral `requestWithdrawal` embeds the bank account + reward-points txn (Mongo); enable after the withdrawal flow migrates. Live-DB repo CRUD verified (customer 472347). 4 CRUD handlers branched in `referral.controller.ts`.
+- **Shipping**: assessed as **not standalone** — `CustomerShipping` is a checkout snapshot inside cart/course-order flows; migrates with cart/orders. Prisma model (BigInt phones) is ready.
+- Docs: registry (`generate-migrated-modules.ts`) + schema-comparison generator updated and regenerated; `MIGRATED_MODULES.md` now shows 13 modules (lookups ✅ enabled, address/profile/bank ⏸ not in env).
+- **Note on verification:** a full `yarn typecheck` / `yarn migration:api` HTTP run wasn't possible in this environment (`node_modules` is partial; the dev server can't boot). All MySQL paths were instead verified directly against the live DB via `tsx` repo/service tests. Recommend running `yarn install && yarn typecheck && yarn dev` + `yarn migration:api:customer-lookups` to complete HTTP sign-off.
+
+### 2026-06-10 (cont.) — offline-city (unblocking address)
+
+- Migrated **`offline-city`** (cities only) to unblock `customer-address`. **D1:** added `status TINYINT DEFAULT 1` + `order INT DEFAULT 0` to `ws_offline_city` via DDL (preserve Mongo active-gating/ordering); Prisma `OfflineCity` updated + regenerated. **D2:** cities only (centers/batches/admin stay Mongo).
+- Wired `listCities` (`address.controller.ts`) + the cart `cityId`→name resolution (`cart.controller.ts`) on `isOfflineCityMysql()`. **Enabled** in env.
+- Live-DB verified: 2 cities (Ahmedabad/Gandhinagar), correct order/status; **end-to-end** a MySQL address `cityId=2` resolves to `"Ahmedabad"` through the cart path.
+- **D3 revised — `customer-address` stays OFF.** Found the cart (`cart.controller.ts:177`) and course-order (`course.service.ts:306`) still **read** `CustomerAddress` via Mongoose with ObjectId `addressId`. Flipping address ON (int ids, MySQL store) would break checkout. **Next step to flip address:** branch those 2 address reads on `isAddressMysql()`, then enable `customer-address`.
+- **Verification caveat:** HTTP `migration:api:offline-city` pending live `yarn dev` (partial `node_modules`); data path verified via `tsx`.
 
 *After each test session, update **Summary** at the top and add a row to [`MIGRATION_TRACKER.md`](./MIGRATION_TRACKER.md) §16 Changelog if the module is signed off.*

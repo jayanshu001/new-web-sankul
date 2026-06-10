@@ -21,6 +21,8 @@ import { runTermsClientApiTests } from "./terms/client.api.test.js";
 import { runPopupAdminApiTests } from "./popup/admin.api.test.js";
 import { runPopupClientApiTests } from "./popup/client.api.test.js";
 import { runCustomerAuthClientApiTests } from "./customer-auth/client.api.test.js";
+import { runCustomerLookupsClientApiTests } from "./customer-lookups/client.api.test.js";
+import { runOfflineCityClientApiTests } from "./offline-city/client.api.test.js";
 
 async function main() {
   console.log("Migrated modules:", MIGRATED_API_MODULES.map((m) => m.key).join(", "));
@@ -43,6 +45,8 @@ async function main() {
     runPopupAdminApiTests,
     runPopupClientApiTests,
     runCustomerAuthClientApiTests,
+    runCustomerLookupsClientApiTests,
+    runOfflineCityClientApiTests,
   ];
 
   let ok = true;

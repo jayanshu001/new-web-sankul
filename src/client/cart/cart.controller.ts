@@ -7,6 +7,10 @@ import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { CustomerShipping } from "../../models/customer/CustomerShipping.model";
 import { Customer } from "../../models/customer/Customer.model";
 import { OfflineCity } from "../../models/offline/OfflineCity.model";
+import {
+  isOfflineCityMysql,
+  resolveCityName,
+} from "../../modules/offline-city/offline-city.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -200,8 +204,15 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
 
     let cityName = "";
     if (address.cityId) {
-      const city = await OfflineCity.findById(address.cityId).select("name");
-      cityName = city?.name ?? "";
+      if (isOfflineCityMysql()) {
+        // MySQL offline-city: address.cityId is an int FK into ws_offline_city.
+        // (Enabled together with customer-address so the id space is consistent.)
+        const city = await resolveCityName(address.cityId as unknown as string | number);
+        cityName = city?.name ?? "";
+      } else {
+        const city = await OfflineCity.findById(address.cityId).select("name");
+        cityName = city?.name ?? "";
+      }
     }
     if (!cityName) {
       logger.warn("attachShippingToCart missing city", { traceId, customerId: userId, addressId });

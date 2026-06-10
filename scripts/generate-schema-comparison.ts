@@ -195,6 +195,23 @@ function main() {
       MIGRATED.includes("customer-auth")
     )
       status = "✅ Migrated";
+    if (
+      (table === "ws_customer_state" ||
+        table === "ws_customer_distict" ||
+        table === "ws_customer_education" ||
+        table === "ws_customer_target_goal") &&
+      MIGRATED.includes("customer-lookups")
+    )
+      status = "✅ Migrated";
+    // customer-profile reuses ws_customer (already migrated by customer-auth).
+    // address & bank-account code is complete but flags stay OFF (cross-module deps);
+    // mark "🟡 Code ready" so the table reflects build state without claiming live.
+    if (table === "ws_customer_address")
+      status = MIGRATED.includes("customer-address") ? "✅ Migrated" : "🟡 Code ready (flag off)";
+    if (table === "ws_customer_bank_account")
+      status = MIGRATED.includes("customer-bank-account") ? "✅ Migrated" : "🟡 Code ready (flag off)";
+    if (table === "ws_customer_shipping") status = "🟡 Prisma ready (part of cart/order)";
+    if (table === "ws_offline_city" && MIGRATED.includes("offline-city")) status = "✅ Migrated";
 
     let notes = "";
     if (mColl !== "—" && mColl !== table && best < 100) notes = "Collection name differs from MySQL table";

@@ -86,4 +86,20 @@ export const MIGRATED_API_MODULES = [
     ],
     yarnScript: "migration:api:customer-auth",
   },
+  {
+    key: "customer-lookups",
+    testFiles: ["customer-lookups/client.api.test.ts"],
+    endpoints: [
+      "GET client/address/states (+ ?search)",
+      "GET client/address/educations",
+      "GET client/address/characteristic (educations + goals)",
+    ],
+    yarnScript: "migration:api:customer-lookups",
+  },
+  {
+    key: "offline-city",
+    testFiles: ["offline-city/client.api.test.ts"],
+    endpoints: ["GET client/address/cities (+ ?search) — active, ordered"],
+    yarnScript: "migration:api:offline-city",
+  },
 ] as const;

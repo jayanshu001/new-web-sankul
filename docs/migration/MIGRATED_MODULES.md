@@ -1,6 +1,6 @@
 # Migrated modules (MySQL / Prisma)
 
-> **Generated:** 2026-06-06 — re-run `yarn docs:migrated-modules` when you add a module  
+> **Generated:** 2026-06-10 — re-run `yarn docs:migrated-modules` when you add a module  
 > **Scope:** Only modules with **repository → service → transformer** on **legacy MySQL** tables  
 > **Enable in runtime:** `MIGRATION_MYSQL_MODULES` in `.env`
 
@@ -10,9 +10,9 @@
 
 | | |
 |---|---|
-| **Total migrated (code complete)** | 9 |
-| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth` |
-| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth` |
+| **Total migrated (code complete)** | 14 |
+| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city` |
+| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city` |
 
 | # | Module key | Label | MySQL table | Mongo collection | Env | Detail |
 |---:|---|---|---|---|---|---|
@@ -25,6 +25,11 @@
 | 7 | `terms` | Terms & Conditions | `ws_termsandcondition` | `ws_terms_and_conditions` | ✅ enabled | [Detail](#terms) |
 | 8 | `popup` | Popup Notification | `ws_popup_notification` | `ws_popup_notifications` | ✅ enabled | [Detail](#popup) |
 | 9 | `customer-auth` | Customer Auth (OTP/token) | `ws_customer (+ ws_customer_otp, ws_customer_access_token)` | `ws_customers / ws_customer_otps / ws_customer_access_tokens` | ✅ enabled | [Detail](#customer-auth) |
+| 10 | `customer-lookups` | Customer Lookups (state/district/education/goal) | `ws_customer_state / ws_customer_distict / ws_customer_education / ws_customer_target_goal` | `ws_customer_states / ws_customer_districts / ws_customer_educations / ws_customer_target_goals` | ✅ enabled | [Detail](#customer-lookups) |
+| 11 | `customer-address` | Customer Address | `ws_customer_address` | `ws_customer_addresses` | ⏸ not in env | [Detail](#customer-address) |
+| 12 | `customer-profile` | Customer Profile | `ws_customer` | `ws_customers` | ⏸ not in env | [Detail](#customer-profile) |
+| 13 | `customer-bank-account` | Customer Bank Account | `ws_customer_bank_account` | `ws_customer_bank_accounts` | ⏸ not in env | [Detail](#customer-bank-account) |
+| 14 | `offline-city` | Offline City | `ws_offline_city` | `ws_offline_cities` | ✅ enabled | [Detail](#offline-city) |
 
 ---
 
@@ -32,7 +37,7 @@
 
 ```env
 DATABASE_URL=mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging
-MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth
+MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city
 ```
 
 - Toggle: `src/config/migration.ts` → `isMysqlModule("<key>")`
@@ -274,6 +279,141 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 - Collections `ws_customers/ws_customer_otps/ws_customer_access_tokens` → MySQL `ws_customer/ws_customer_otp/ws_customer_access_token`
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Customer / CustomerOtp / CustomerAccessToken`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 10. Customer Lookups (state/district/education/goal) {#customer-lookups}
+
+| | |
+|---|---|
+| **Module key** | `customer-lookups` |
+| **Phase** | 2 |
+| **Migrated** | 2026-06-10 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `CustomerState / CustomerDistict / CustomerEducation / CustomerTargetGoal` |
+| **MySQL table** | `ws_customer_state / ws_customer_distict / ws_customer_education / ws_customer_target_goal` |
+| **Mongo collection (legacy app)** | `ws_customer_states / ws_customer_districts / ws_customer_educations / ws_customer_target_goals` |
+| **Code** | `src/modules/customer-lookups/` |
+| **Data** | 12 active states, 10 active educations in staging |
+| **Smoke test** | `yarn migration:api:customer-lookups` |
+| **Admin API** | — |
+| **Client API** | GET `/api/v1/client/address/states` · `/educations` · `/characteristic` (educations) |
+
+**Transformer / schema notes:**
+
+- Wired into `src/client/address/address.controller.ts` (getStates/getEducations/getCharacteristic) — service was previously dead code
+- Ids returned as strings (`_id` Mongo-shape); `state_code`↔`stateCode`; district `state` int FK ↔ Mongo `stateId`
+- Controller projects to the exact Mongo contract (`{_id,name,stateCode}` / `{_id,name}`) so the `active`/`status` field isn't leaked
+- Goal here = `ws_customer_target_goal` (NOT the rich onboarding `Goal` collection, which stays on Mongo)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `CustomerState / CustomerDistict / CustomerEducation / CustomerTargetGoal`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 11. Customer Address {#customer-address}
+
+| | |
+|---|---|
+| **Module key** | `customer-address` |
+| **Phase** | 2 |
+| **Migrated** | 2026-06-10 |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Prisma model** | `CustomerAddress` |
+| **MySQL table** | `ws_customer_address` |
+| **Mongo collection (legacy app)** | `ws_customer_addresses` |
+| **Code** | `src/modules/customer-address/` |
+| **Data** | Verified create→list→setDefault→update→delete on live DB (customer 472341) |
+| **Smoke test** | `—  (flag OFF; verified via live-DB repo test)` |
+| **Admin API** | — |
+| **Client API** | GET `/api/v1/client/address` · GET `/:id` · POST `/` · PUT `/:id` · PATCH `/:id/default` · DELETE `/:id` |
+
+**Transformer / schema notes:**
+
+- FLAG OFF: not enabled in MIGRATION_MYSQL_MODULES — `cityId` → OfflineCity (Mongo) and cart checkout resolves it; enable once OfflineCity + cart migrate
+- Schema fix: `phone`/`alternate_phone` Int → BigInt (10-digit overflow); kept `label`/`is_default`/`city_id` to match live DB (NOT in original dump)
+- `city` column is NOT NULL and is what legacy data populates (`city_id` is NULL) — required string in input/DTO
+- MySQL path uses integer FK ids (own zod schemas `createAddressSchemaMysql`/`updateAddressSchemaMysql`); Mongo path keeps ObjectId regex
+- BigInt phones serialized to string in transformer; `setDefault` uses a Prisma transaction
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `CustomerAddress`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 12. Customer Profile {#customer-profile}
+
+| | |
+|---|---|
+| **Module key** | `customer-profile` |
+| **Phase** | 2 |
+| **Migrated** | 2026-06-10 |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Prisma model** | `Customer` |
+| **MySQL table** | `ws_customer` |
+| **Mongo collection (legacy app)** | `ws_customers` |
+| **Code** | `src/modules/customer-profile (branches src/client/profile/customer.service.ts)/` |
+| **Data** | Verified read/update on live DB (customer 472347 'DIXIT PATEL', goals [7,8,12,13,14]) |
+| **Smoke test** | `—  (flag OFF; verified via live-DB service test)` |
+| **Admin API** | — |
+| **Client API** | PUT `/api/v1/client/profile/update` · GET `/` · profile-picture · device-token · DELETE `/` (NOT dashboard — stays Mongo) |
+
+**Transformer / schema notes:**
+
+- FLAG OFF: dashboard aggregates non-customer collections (folders/subs/notifications/exams) → enable once those migrate; dashboard left on Mongo
+- Name: split `full_name` → first/middle/last on read, join on write (heuristic)
+- Goals: `goal` JSON int array ↔ [{_id,name}] hydrated from ws_customer_target_goal (order preserved)
+- isProfileCompleted: derived (full_name present), never stored
+- Device tokens: single `device` column (newest wins) — legacy parity, not the Mongo `firebaseTokens[]` array
+- facebookId: added to Prisma Customer (`@map("facebook_id")`), mapped read-only (not surfaced in DTO)
+- Get/update preserve the existing Redis profile cache; picture upsert/delete keep S3 cleanup; delete-account revokes MySQL tokens
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Customer`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 13. Customer Bank Account {#customer-bank-account}
+
+| | |
+|---|---|
+| **Module key** | `customer-bank-account` |
+| **Phase** | 2 |
+| **Migrated** | 2026-06-10 |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Prisma model** | `CustomerBankAccount` |
+| **MySQL table** | `ws_customer_bank_account` |
+| **Mongo collection (legacy app)** | `ws_customer_bank_accounts` |
+| **Code** | `src/modules/customer-bank-account (branches src/client/referral/referral.controller.ts)/` |
+| **Data** | Verified create→list→update→delete on live DB (customer 472347) |
+| **Smoke test** | `—  (flag OFF; verified via live-DB repo test)` |
+| **Admin API** | — |
+| **Client API** | GET/POST/PUT/DELETE bank-account CRUD in the referral/rewards flow |
+
+**Transformer / schema notes:**
+
+- FLAG OFF: referral `requestWithdrawal` embeds `bankAccount.toObject()` + reward-points txn (Mongo) — enable once the withdrawal/referral flow migrates
+- Live DB matches the Prisma model (incl. bank_name/branch_name/city) — no schema change needed
+- 4 CRUD handlers branched; `requestWithdrawal` deliberately left on Mongo (mixed-backend txn risk)
+- IFSC lookup (bank/branch/city) stays server-side in the controller; ids integer on MySQL path
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `CustomerBankAccount`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 14. Offline City {#offline-city}
+
+| | |
+|---|---|
+| **Module key** | `offline-city` |
+| **Phase** | 2 |
+| **Migrated** | 2026-06-10 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `OfflineCity` |
+| **MySQL table** | `ws_offline_city` |
+| **Mongo collection (legacy app)** | `ws_offline_cities` |
+| **Code** | `src/modules/offline-city (branches address.controller.listCities + cart.controller cityId resolution)/` |
+| **Data** | 2 cities in staging (Ahmedabad, Gandhinagar) |
+| **Smoke test** | `yarn migration:api:offline-city` |
+| **Admin API** | —  (admin offline CRUD stays Mongo this pass) |
+| **Client API** | GET `/api/v1/client/address/cities` (+ ?search) |
+
+**Transformer / schema notes:**
+
+- Scope: CITIES ONLY — migrated to unblock customer-address (its cityId → OfflineCity; cart resolves cityId→name)
+- Schema (D1): ADDED `status`/`order` columns to ws_offline_city via DDL to preserve Mongo active-gating + ordering (not in original dump)
+- Cart `attachShippingToCart` cityId→name resolution branches on isOfflineCityMysql()
+- Centers/batches/enquiry/admin remain on Mongo for a later offline pass
+- Verified end-to-end: a MySQL address cityId=2 resolves to 'Ahmedabad' through the cart path
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `OfflineCity`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
 ---
 

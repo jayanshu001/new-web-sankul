@@ -2,8 +2,8 @@
 
 > **Project:** `new-web-sankul` (modern stack)  
 > **Strategy reference:** [`legacy_system_migration_strategy.md`](./legacy_system_migration_strategy.md)  
-> **Last updated:** 2026-06-06  
-> **Current phase:** Phase 2 — Backend stabilization (**in progress**; 9 modules on MySQL: app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth. CMS group + customer auth done — next: catalog)  
+> **Last updated:** 2026-06-10  
+> **Current phase:** Phase 2 — Backend stabilization (**in progress**; 11 modules enabled on MySQL: app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city. CMS group + **Customer Module** done. customer-address/profile/bank-account code-complete, flags OFF — **address flip deferred to the commerce wave** (coupled to cart/course/shipping). Next: **catalog** (package→course→video))  
 > **Doc index:** [`README.md`](./README.md) (all migration docs live in this folder)  
 > **How to test:** [`testing-guide.md`](./testing-guide.md)  
 > **Test results log:** [`MIGRATION_TEST_LOG.md`](./MIGRATION_TEST_LOG.md) ← record Pass/Fail here
@@ -520,6 +520,8 @@ Legacy Prisma query (websankul-api-staging) as reference
 
 | Date | Phase | What was done |
 |------|-------|----------------|
+| 2026-06-10 | Phase 2 | **`offline-city` enabled** (cities only) to unblock `customer-address`. Added `status`/`order` columns to `ws_offline_city` (DDL); branched `listCities` + cart `cityId`→name resolution. Verified end-to-end (address cityId=2 → "Ahmedabad" via cart). **Found:** flipping `customer-address` ON also needs the cart/course address *reads* migrated (still Mongoose/ObjectId) — address stays OFF until that small follow-up. |
+| 2026-06-10 | Phase 2 | **Customer Module completed.** `customer-lookups` enabled (states/educations/characteristic wired in `address.controller.ts`; live-DB verified 12 states/10 educations). `customer-address`, `customer-profile`, `customer-bank-account` built dual-path, **flags OFF** (each gated by a non-customer dep: OfflineCity/cart, dashboard sources, referral withdrawal). Schema: address/shipping phone `Int`→`BigInt`; `facebook_id` mapped read-only on `Customer`. Shipping assessed as part of cart/order (not standalone). All MySQL paths verified vs live DB via `tsx`. Registry + schema-comparison generators updated; `MIGRATED_MODULES.md` → 13 modules. HTTP `migration:api` run pending live `yarn dev`. |
 | 2026-06-06 | Phase 2 | `customer-auth` on Prisma — OTP generate/resend/validate/logout/refresh (`ws_customer` + otp + access_token). Added nullable `refresh_token` column; `full_name`→`firstName`; service branched in place, `authenticate.ts` untouched. `migration:api` — **82/82** (issued MySQL token authenticates protected routes). |
 | 2026-06-06 | Fixes | Repaired two pre-existing HEAD regressions from the merge: restored clobbered service imports in `cms.controller.ts` (25 tsc errors) and the missing `package.json` migration scripts block; added the `Explore` banner key. |
 | 2026-06-06 | Phase 2 | `popup` on Prisma — `promoExpireAt`↔`promo_expire_at` date map; client active-popup query (status+expiry+newest). Confirmed S3 upload is DB-agnostic middleware. `migration:api` — **73/73**. Read-only/CMS group complete; `social-link` confirmed Mongo-only. |

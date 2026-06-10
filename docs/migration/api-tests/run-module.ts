@@ -22,6 +22,8 @@ import { runTermsClientApiTests } from "./terms/client.api.test.js";
 import { runPopupAdminApiTests } from "./popup/admin.api.test.js";
 import { runPopupClientApiTests } from "./popup/client.api.test.js";
 import { runCustomerAuthClientApiTests } from "./customer-auth/client.api.test.js";
+import { runCustomerLookupsClientApiTests } from "./customer-lookups/client.api.test.js";
+import { runOfflineCityClientApiTests } from "./offline-city/client.api.test.js";
 
 const moduleKey = process.argv[2]?.trim().toLowerCase();
 
@@ -35,6 +37,8 @@ const runners: Record<string, (() => Promise<boolean>)[]> = {
   terms: [runTermsAdminApiTests, runTermsClientApiTests],
   popup: [runPopupAdminApiTests, runPopupClientApiTests],
   "customer-auth": [runCustomerAuthClientApiTests],
+  "customer-lookups": [runCustomerLookupsClientApiTests],
+  "offline-city": [runOfflineCityClientApiTests],
 };
 
 async function main() {

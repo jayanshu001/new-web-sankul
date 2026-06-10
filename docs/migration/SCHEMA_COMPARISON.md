@@ -1,6 +1,6 @@
 # Schema comparison — Legacy MySQL vs MongoDB vs post-migration MySQL
 
-> **Generated:** 2026-06-06 (re-run `yarn docs:schema-comparison` after schema changes)  
+> **Generated:** 2026-06-10 (re-run `yarn docs:schema-comparison` after schema changes)  
 > **Migrated only:** [MIGRATED_MODULES.md](./MIGRATED_MODULES.md) · **Field-level detail:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md)  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Strategy:** [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
@@ -28,7 +28,7 @@
 
 ### Currently migrated modules (`MIGRATION_MYSQL_MODULES`)
 
-`app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth`
+`app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city`
 
 ---
 
@@ -49,14 +49,14 @@
 | 11 | CourseSubjectCategory | `ws_course_subject_category` (9 cols) | — | `ws_course_subject_category` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 12 | Customer | `ws_customer` (34 cols) | `ws_customers` | `ws_customer` | ✅ Migrated | Collection name differs from MySQL table |
 | 13 | CustomerAccessToken | `ws_customer_access_token` (9 cols) | `ws_customer_access_tokens` | `ws_customer_access_token` | ✅ Migrated | Collection name differs from MySQL table |
-| 14 | CustomerAddress | `ws_customer_address` (14 cols) | `ws_customer_addresses` | `ws_customer_address` | ⏳ Not migrated | Collection name differs from MySQL table |
-| 15 | CustomerBankAccount | `ws_customer_bank_account` (7 cols) | `ws_customer_bank_accounts` | `ws_customer_bank_account` | ⏳ Not migrated | Collection name differs from MySQL table |
-| 16 | CustomerDistict | `ws_customer_distict` (4 cols) | — | `ws_customer_distict` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 17 | CustomerEducation | `ws_customer_education` (3 cols) | `ws_customer_educations` | `ws_customer_education` | ⏳ Not migrated | Collection name differs from MySQL table |
+| 14 | CustomerAddress | `ws_customer_address` (17 cols) | `ws_customer_addresses` | `ws_customer_address` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
+| 15 | CustomerBankAccount | `ws_customer_bank_account` (10 cols) | `ws_customer_bank_accounts` | `ws_customer_bank_account` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
+| 16 | CustomerDistict | `ws_customer_distict` (4 cols) | — | `ws_customer_distict` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
+| 17 | CustomerEducation | `ws_customer_education` (3 cols) | `ws_customer_educations` | `ws_customer_education` | ✅ Migrated | Collection name differs from MySQL table |
 | 18 | CustomerOtp | `ws_customer_otp` (4 cols) | `ws_customer_otps` | `ws_customer_otp` | ✅ Migrated | Collection name differs from MySQL table |
-| 19 | CustomerShipping | `ws_customer_shipping` (14 cols) | `ws_customer_shippings` | `ws_customer_shipping` | ⏳ Not migrated | Collection name differs from MySQL table |
-| 20 | CustomerState | `ws_customer_state` (4 cols) | `ws_customer_states` | `ws_customer_state` | ⏳ Not migrated | Collection name differs from MySQL table |
-| 21 | CustomerTargetGoal | `ws_customer_target_goal` (4 cols) | `ws_customer_target_goals` | `ws_customer_target_goal` | ⏳ Not migrated | Collection name differs from MySQL table |
+| 19 | CustomerShipping | `ws_customer_shipping` (14 cols) | `ws_customer_shippings` | `ws_customer_shipping` | 🟡 Prisma ready (part of cart/order) | Collection name differs from MySQL table |
+| 20 | CustomerState | `ws_customer_state` (4 cols) | `ws_customer_states` | `ws_customer_state` | ✅ Migrated | Collection name differs from MySQL table |
+| 21 | CustomerTargetGoal | `ws_customer_target_goal` (4 cols) | `ws_customer_target_goals` | `ws_customer_target_goal` | ✅ Migrated | Collection name differs from MySQL table |
 | 22 | Department | `ws_department` (5 cols) | `ws_departments` | `ws_department` | ✅ Migrated | Collection name differs from MySQL table |
 | 23 | DepartmentContact | `ws_department_contact` (7 cols) | — | `ws_department_contact` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 24 | DynamicImage | `ws_dynamic_image` (2 cols) | `ws_dynamic_images` | `ws_dynamic_image` | ⏳ Not migrated | Collection name differs from MySQL table |
@@ -85,7 +85,7 @@
 | 47 | OfflineBannerSlider | `ws_offline_banner_slider` (6 cols) | `ws_offline_banner_slider` | `ws_offline_banner_slider` | ⏳ Not migrated |  |
 | 48 | OfflineBatch | `ws_offline_batch` (9 cols) | `ws_offline_batch` | `ws_offline_batch` | ⏳ Not migrated |  |
 | 49 | OfflineCenter | `ws_offline_center` (10 cols) | `ws_offline_center` | `ws_offline_center` | ⏳ Not migrated |  |
-| 50 | OfflineCity | `ws_offline_city` (5 cols) | `ws_offline_city` | `ws_offline_city` | ⏳ Not migrated |  |
+| 50 | OfflineCity | `ws_offline_city` (5 cols) | `ws_offline_city` | `ws_offline_city` | ✅ Migrated |  |
 | 51 | OfflineEnquiry | `ws_offline_enquiry` (8 cols) | `ws_offline_enquiry` | `ws_offline_enquiry` | ⏳ Not migrated |  |
 | 52 | Package | `ws_package` (15 cols) | `ws_packages` | `ws_package` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 53 | chat | `ws_package_chat` (5 cols) | `ws_package_chats` | `ws_package_chat` | ⏳ Not migrated | Collection name differs from MySQL table |

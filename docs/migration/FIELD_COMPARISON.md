@@ -1,6 +1,6 @@
 # Field comparison — module by module
 
-> **Generated:** 2026-06-06 — re-run `yarn docs:field-comparison` after schema changes  
+> **Generated:** 2026-06-10 — re-run `yarn docs:field-comparison` after schema changes  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Related:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md) (table inventory) · [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
 
@@ -16,7 +16,7 @@
 | **Prisma field** | Prisma model property; DB column via `@map` when different |
 | **Match** | ✅ aligned · ⚠️ rename · 🆕 Mongo-only · 🆕 MySQL-only · 🆕 Prisma-only |
 
-**Migrated modules (`MIGRATION_MYSQL_MODULES`):** `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth`
+**Migrated modules (`MIGRATION_MYSQL_MODULES`):** `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city`
 
 ---
 
@@ -911,7 +911,7 @@
 | 20 | `gender` | `varchar(10)` | NULL; DEFAULT NULL | `gender` | String | maxlength:10 | `gender` | String? | @db.VarChar(10) | ✅ |
 | 21 | `language` | `varchar(50)` | NULL; DEFAULT NULL | `language` | String | maxlength:50 | `language` | String? | @db.VarChar(50) | ✅ |
 | 22 | `goal` | `json` | NULL; DEFAULT NULL | `goals` | Types.ObjectId[] | — | `goal` | Json? | @db.Json | ✅ |
-| 23 | `facebook_id` | `varchar(255)` | NULL; DEFAULT '0' | — | — | — | — | — | — | 🆕 MySQL-only |
+| 23 | `facebook_id` | `varchar(255)` | NULL; DEFAULT '0' | — | — | — | `facebookId` | String? | @db.VarChar(255) | ✅ SQL+Prisma |
 | 24 | `verified` | `tinyint(1)` | NULL; DEFAULT '0' | `verified` | Boolean | required; false | `verified` | Boolean | — | ✅ |
 | 25 | `device` | `text` | NULL | — | — | — | `firebaseToken` | String? | @db.Text | ✅ SQL+Prisma |
 | 26 | `os_type` | `enum('android','ios')` | NOT NULL; DEFAULT 'android'; enum('android','ios') | `osType` | OsType | — | `os_type` | OsType | @default(android) | ✅ |
@@ -970,18 +970,21 @@
 |---:|---|---|---|---|---|---|---|---|---|---|
 | 1 | `id` | `int` | PK AI; NOT NULL | — | — | — | `id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
 | 2 | `name` | `varchar(50)` | NOT NULL | — | — | — | `name` | String | @db.VarChar(50) | ✅ SQL+Prisma |
-| 3 | `phone` | `bigint` | NOT NULL | — | — | — | `phone` | Int | — | ✅ SQL+Prisma |
-| 4 | `alternate_phone` | `bigint` | NULL; DEFAULT NULL | — | — | — | `alternate_phone` | Int? | — | ✅ SQL+Prisma |
+| 3 | `phone` | `bigint` | NOT NULL | — | — | — | `phone` | BigInt | — | ✅ SQL+Prisma |
+| 4 | `alternate_phone` | `bigint` | NULL; DEFAULT NULL | — | — | — | `alternate_phone` | BigInt? | — | ✅ SQL+Prisma |
 | 5 | `email` | `varchar(100)` | NULL; DEFAULT NULL | — | — | — | `email` | String | @db.VarChar(100) | ✅ SQL+Prisma |
 | 6 | `address` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci` | NOT NULL | — | — | — | `address` | String | @db.VarChar(255) | ✅ SQL+Prisma |
 | 7 | `address_2` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci` | NOT NULL | — | — | — | `address_2` | String | @db.VarChar(255) | ✅ SQL+Prisma |
 | 8 | `city` | `varchar(20)` | NOT NULL | — | — | — | `city` | String | @db.VarChar(20) | ✅ SQL+Prisma |
 | 9 | `state` | `int` | NULL; DEFAULT NULL | — | — | — | `state` | Int? | — | ✅ SQL+Prisma |
 | 10 | `pincode` | `int` | NOT NULL | — | — | — | `pincode` | Int | — | ✅ SQL+Prisma |
-| 11 | `user_id` | `int` | NOT NULL | — | — | — | `userId` | Int? | — | ✅ SQL+Prisma |
-| 12 | `status` | `tinyint(1)` | NOT NULL; DEFAULT '1' | — | — | — | `status` | Boolean? | — | ✅ SQL+Prisma |
-| 13 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `created_at` | DateTime? | — | ✅ SQL+Prisma |
-| 14 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `updated_at` | DateTime? | — | ✅ SQL+Prisma |
+| 11 | `label` | `varchar(20)` | NULL; DEFAULT NULL | — | — | — | `label` | String? | @db.VarChar(20) | ✅ SQL+Prisma |
+| 12 | `is_default` | `tinyint(1)` | NULL; DEFAULT '0' | — | — | — | `isDefault` | Boolean? | @default(false) | ✅ SQL+Prisma |
+| 13 | `city_id` | `int` | NULL; DEFAULT NULL | — | — | — | `cityId` | Int? | — | ✅ SQL+Prisma |
+| 14 | `user_id` | `int` | NOT NULL | — | — | — | `userId` | Int? | — | ✅ SQL+Prisma |
+| 15 | `status` | `tinyint(1)` | NOT NULL; DEFAULT '1' | — | — | — | `status` | Boolean? | — | ✅ SQL+Prisma |
+| 16 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `created_at` | DateTime? | — | ✅ SQL+Prisma |
+| 17 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `updated_at` | DateTime? | — | ✅ SQL+Prisma |
 
 ### 3.17 CustomerBankAccount — ⏳ Not migrated
 
@@ -1000,11 +1003,11 @@
 | 3 | `account_holder_name` | `varchar(150)` | NOT NULL | `accountHolderName` | String | required; maxlength:150 | `accountHolderName` | String | @db.VarChar(150) | ✅ |
 | 4 | `ifsc_code` | `varchar(50)` | NOT NULL | `ifscCode` | String | required; maxlength:11 | `ifscCode` | String | @db.VarChar(50) | ✅ |
 | 5 | `account_number` | `varchar(50)` | NOT NULL | `accountNumber` | String | required; maxlength:18 | `accountNumber` | String | — | ✅ |
-| 6 | `created_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `createdAt` | Date | — | `createdAt` | DateTime? | — | ✅ |
-| 7 | `updated_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `updatedAt` | Date | — | `updatedAt` | DateTime? | — | ✅ |
-| 8 | — | — | — | `bankName` | String | maxlength:150 | — | — | — | 🆕 Mongo-only |
-| 9 | — | — | — | `branchName` | String | maxlength:200 | — | — | — | 🆕 Mongo-only |
-| 10 | — | — | — | `city` | String | maxlength:100 | — | — | — | 🆕 Mongo-only |
+| 6 | `bank_name` | `varchar(150)` | NULL; DEFAULT NULL | `bankName` | String | maxlength:150 | `bankName` | String? | @db.VarChar(150) | ✅ |
+| 7 | `branch_name` | `varchar(200)` | NULL; DEFAULT NULL | `branchName` | String | maxlength:200 | `branchName` | String? | @db.VarChar(200) | ✅ |
+| 8 | `city` | `varchar(100)` | NULL; DEFAULT NULL | `city` | String | maxlength:100 | `city` | String? | @db.VarChar(100) | ✅ |
+| 9 | `created_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `createdAt` | Date | — | `createdAt` | DateTime? | — | ✅ |
+| 10 | `updated_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `updatedAt` | Date | — | `updatedAt` | DateTime? | — | ✅ |
 
 ### 3.18 CustomerDistict — ⏳ Not migrated
 
@@ -1069,8 +1072,8 @@
 |---:|---|---|---|---|---|---|---|---|---|---|
 | 1 | `id` | `int` | PK AI; NOT NULL | — | — | — | `id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
 | 2 | `name` | `varchar(50)` | NOT NULL | `name` | String | required; maxlength:50 | `name` | String | @db.VarChar(50) | ✅ |
-| 3 | `phone` | `bigint` | NOT NULL | `phone` | String | required; maxlength:15 | `phone` | Int | — | ✅ |
-| 4 | `alternate_phone` | `bigint` | NULL; DEFAULT NULL | `alternatePhone` | String | maxlength:15 | `alternate_phone` | Int? | — | ✅ |
+| 3 | `phone` | `bigint` | NOT NULL | `phone` | String | required; maxlength:15 | `phone` | BigInt | — | ✅ |
+| 4 | `alternate_phone` | `bigint` | NULL; DEFAULT NULL | `alternatePhone` | String | maxlength:15 | `alternate_phone` | BigInt? | — | ✅ |
 | 5 | `email` | `varchar(100)` | NULL; DEFAULT NULL | `email` | String | maxlength:100 | `email` | String | @db.VarChar(100) | ✅ |
 | 6 | `address` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci` | NOT NULL | `address` | String | required; maxlength:255 | `address` | String | @db.VarChar(255) | ✅ |
 | 7 | `address_2` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci` | NOT NULL | — | — | — | `address_2` | String | @db.VarChar(255) | ✅ SQL+Prisma |
@@ -3082,8 +3085,10 @@
 | 3 | `image` | `varchar(255) CHARACTER SET latin1 COLLATE latin1_swedish_ci` | NOT NULL | `image` | String | required; maxlength:500 | `image` | String | — | ✅ |
 | 4 | `created_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `createdAt` | Date | — | `createdAt` | DateTime | — | ✅ |
 | 5 | `updated_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `updatedAt` | Date | — | `updatedAt` | DateTime | — | ✅ |
-| 6 | — | — | — | `order` | Number | 0 | — | — | — | 🆕 Mongo-only |
-| 7 | — | — | — | `status` | Boolean | true | — | — | — | 🆕 Mongo-only |
+| 6 | — | — | — | — | — | — | `status` | Boolean | @default(true) | 🆕 Prisma-only |
+| 7 | — | — | — | — | — | — | `order` | Int | @default(0) | 🆕 Prisma-only |
+| 8 | — | — | — | `order` | Number | 0 | — | — | — | 🆕 Mongo-only |
+| 9 | — | — | — | `status` | Boolean | true | — | — | — | 🆕 Mongo-only |
 
 ### 9.5 OfflineEnquiry — ⏳ Not migrated
 

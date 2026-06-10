@@ -16,6 +16,15 @@ import { lookupIfsc } from "./ifsc";
 import { createContact, createFundAccount, createPayout } from "../payment/razorpayx";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isBankAccountMysql,
+  parseBankAccountId,
+  listBankAccounts as svcListBankAccounts,
+  getBankAccount as svcGetBankAccount,
+  createBankAccount as svcCreateBankAccount,
+  updateBankAccount as svcUpdateBankAccount,
+  deleteBankAccount as svcDeleteBankAccount,
+} from "../../modules/customer-bank-account/customer-bank-account.service";
 
 const MIN_WITHDRAWAL_AMOUNT = 500;
 
@@ -336,6 +345,15 @@ export const listBankAccounts = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) { logger.warn("listBankAccounts unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
+
+    if (isBankAccountMysql()) {
+      const cid = parseBankAccountId(String(customerId));
+      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
+      const accounts = await svcListBankAccounts(cid);
+      logger.info("listBankAccounts success", { traceId, customerId, count: accounts.length, source: "mysql" });
+      return res.status(200).json({ success: true, data: accounts });
+    }
+
     const accounts = await CustomerBankAccount.find({ customerId }).sort({ createdAt: -1 });
     logger.info("listBankAccounts success", { traceId, customerId, count: accounts.length });
     return res.status(200).json({ success: true, data: accounts });
@@ -358,6 +376,23 @@ export const createBankAccount = async (req: Request, res: Response) => {
     if (!ifscDetails) { logger.warn("createBankAccount invalid IFSC", { traceId, customerId, ifsc: parsed.ifscCode }); return res.status(400).json({ success: false, message: "Invalid IFSC code." }); }
 
     const { confirmAccountNumber: _confirm, ...rest } = parsed;
+
+    if (isBankAccountMysql()) {
+      const cid = parseBankAccountId(String(customerId));
+      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
+      const account = await svcCreateBankAccount({
+        customerId: cid,
+        accountHolderName: rest.accountHolderName,
+        ifscCode: rest.ifscCode,
+        accountNumber: rest.accountNumber,
+        bankName: ifscDetails.bankName,
+        branchName: ifscDetails.branchName,
+        city: ifscDetails.city,
+      });
+      logger.info("createBankAccount success", { traceId, customerId, accountId: account._id, source: "mysql" });
+      return res.status(201).json({ success: true, data: account });
+    }
+
     const account = await CustomerBankAccount.create({
       ...rest,
       customerId,
@@ -382,7 +417,6 @@ export const updateBankAccount = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) { logger.warn("updateBankAccount unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
-    if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("updateBankAccount invalid id", { traceId, customerId, accountId: id }); return res.status(400).json({ success: false, message: "Invalid bank account id." }); }
 
     const parsed = updateBankAccountSchema.parse(req.body);
     const { confirmAccountNumber: _confirm, ...rest } = parsed;
@@ -395,6 +429,19 @@ export const updateBankAccount = async (req: Request, res: Response) => {
       update.branchName = ifscDetails.branchName;
       update.city = ifscDetails.city;
     }
+
+    if (isBankAccountMysql()) {
+      const cid = parseBankAccountId(String(customerId));
+      const aid = parseBankAccountId(id);
+      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
+      if (!aid) { logger.warn("updateBankAccount invalid id", { traceId, customerId, accountId: id }); return res.status(400).json({ success: false, message: "Invalid bank account id." }); }
+      const result = await svcUpdateBankAccount(aid, cid, update);
+      if (!result.ok) { logger.warn("updateBankAccount not found", { traceId, customerId, accountId: id }); return res.status(result.status).json({ success: false, message: result.message }); }
+      logger.info("updateBankAccount success", { traceId, customerId, accountId: id, source: "mysql" });
+      return res.status(result.status).json({ success: true, data: result.data });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("updateBankAccount invalid id", { traceId, customerId, accountId: id }); return res.status(400).json({ success: false, message: "Invalid bank account id." }); }
 
     const account = await CustomerBankAccount.findOneAndUpdate(
       { _id: id, customerId },
@@ -419,6 +466,18 @@ export const deleteBankAccount = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) { logger.warn("deleteBankAccount unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
+
+    if (isBankAccountMysql()) {
+      const cid = parseBankAccountId(String(customerId));
+      const aid = parseBankAccountId(id);
+      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
+      if (!aid) { logger.warn("deleteBankAccount invalid id", { traceId, customerId, accountId: id }); return res.status(400).json({ success: false, message: "Invalid bank account id." }); }
+      const result = await svcDeleteBankAccount(aid, cid);
+      if (!result.ok) { logger.warn("deleteBankAccount not found", { traceId, customerId, accountId: id }); return res.status(result.status).json({ success: false, message: result.message }); }
+      logger.info("deleteBankAccount success", { traceId, customerId, accountId: id, source: "mysql" });
+      return res.status(200).json({ success: true, message: "Bank account deleted." });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("deleteBankAccount invalid id", { traceId, customerId, accountId: id }); return res.status(400).json({ success: false, message: "Invalid bank account id." }); }
 
     const account = await CustomerBankAccount.findOneAndDelete({ _id: id, customerId });

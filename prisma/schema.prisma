@@ -298,6 +298,9 @@ model Customer {
   referralCode              String?                     @map("referral_code")
   rewardPoints              Int?                        @map("reward_points")
   verified                  Boolean
+  // Legacy FB-login id. Currently "0" for all rows; mapped read-only (no FB
+  // write path exists). Default "0" matches the dump's column default.
+  facebookId                String?                     @default("0") @map("facebook_id") @db.VarChar(255)
   firebaseToken             String?                     @map("device") @db.Text
   os_type                   OsType                      @default(android)
   lastLogin                 DateTime?                   @map("last_login_date")
@@ -357,8 +360,8 @@ model CustomerAccessToken {
 model CustomerAddress {
   id              Int            @id @default(autoincrement())
   name            String         @db.VarChar(50)
-  phone           Int
-  alternate_phone Int?
+  phone           BigInt
+  alternate_phone BigInt?
   email           String         @db.VarChar(100)
   address         String         @db.VarChar(255)
   address_2       String         @db.VarChar(255)
@@ -367,7 +370,7 @@ model CustomerAddress {
   state           Int?           @map("state")
   pincode         Int
   label           String?        @db.VarChar(20)
-  isDefault       Boolean?       @map("is_default")
+  isDefault       Boolean?       @default(false) @map("is_default")
   cityId          Int?           @map("city_id")
   customer        Customer?      @relation(fields: [userId], references: [id])
   userId          Int?           @map("user_id")
@@ -381,8 +384,8 @@ model CustomerAddress {
 model CustomerShipping {
   id                        Int                         @id @default(autoincrement())
   name                      String                      @db.VarChar(50)
-  phone                     Int
-  alternate_phone           Int?
+  phone                     BigInt
+  alternate_phone           BigInt?
   email                     String                      @db.VarChar(100)
   address                   String                      @db.VarChar(255)
   address_2                 String                      @db.VarChar(255)
@@ -1341,6 +1344,8 @@ model OfflineCity {
   id        Int             @id @default(autoincrement())
   name      String          @map("name")
   image     String          @map("image")
+  status    Boolean         @default(true)
+  order     Int             @default(0) @map("order")
   createdAt DateTime        @map("created_at")
   updatedAt DateTime        @map("updated_at")
   centers   OfflineCenter[]

@@ -61,6 +61,9 @@ yarn dev
 ## Current status (summary)
 
 - **Phase 1:** MySQL + dump + Prisma — done  
-- **Phase 2:** CMS pilot + **FAQ** on MySQL — complete manual tests in test log; next: banners  
+- **Phase 2:** CMS group (app-update, version, faq, banner-slider, testimonial, department, terms, popup) + **Customer Module** on MySQL.  
+  - **Enabled (11):** the CMS group + `customer-auth` + `customer-lookups` + `offline-city`.  
+  - **Code-complete, flags OFF:** `customer-address`, `customer-profile`, `customer-bank-account`. Address is coupled to cart/course/shipping (still Mongo) — its **flip is deferred to the commerce wave** (enable together for a consistent id space). Code is done + verified; only the enable waits.  
+  - **Next:** catalog (package→course→video).  
 
-See [MIGRATION_TRACKER.md](./MIGRATION_TRACKER.md) for details.
+See [MIGRATION_TRACKER.md](./MIGRATION_TRACKER.md) for details and [MIGRATED_MODULES.md](./MIGRATED_MODULES.md) for the per-module registry.
