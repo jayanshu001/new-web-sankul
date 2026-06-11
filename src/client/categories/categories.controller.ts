@@ -9,7 +9,7 @@ import { collectCategoryTreeIds } from "../../utils/categoryTree";
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
-import { ExamStatus } from "../../models/enums";
+import { ExamStatus, ExamType } from "../../models/enums";
 import { Package } from "../../models/course/Package.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
@@ -395,7 +395,8 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
     }
 
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-    const filter: any = { categoryId: id, status: ExamStatus.PUBLISHED };
+    // Daily tests are surfaced through their own dedicated flow, not category listings.
+    const filter: any = { categoryId: id, status: ExamStatus.PUBLISHED, type: { $ne: ExamType.DAILY } };
     { const c = buildRegexCondition(search); if (c) filter.title = c; }
 
     const [list, total] = await Promise.all([

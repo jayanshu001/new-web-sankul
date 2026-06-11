@@ -90,10 +90,31 @@ const departmentCreateSchema = z.object({
 });
 const departmentUpdateSchema = departmentCreateSchema.partial();
 
-export const listDepartments = async (_req: Request, res: Response) => {
+export const listDepartments = async (req: Request, res: Response) => {
   try {
-    const data = await Department.find().sort({ order: 1 }).lean();
-    return res.status(200).json({ success: true, data });
+    const { search, status, page = "1", limit = "20" } =
+      req.query as Record<string, string>;
+
+    const filter: any = {};
+    Object.assign(filter, buildSearchFilter(search, ["name", "description"]));
+    // status maps to the boolean `active` field; accept both label and boolean forms.
+    if (status === "true" || status === "active") filter.active = true;
+    else if (status === "false" || status === "inactive") filter.active = false;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [data, total] = await Promise.all([
+      Department.find(filter).sort({ order: 1 }).skip(skip).limit(limitNum).lean(),
+      Department.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }

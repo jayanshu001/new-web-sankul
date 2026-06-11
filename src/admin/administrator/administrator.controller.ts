@@ -40,7 +40,9 @@ export const getAdministrators = async (req: Request, res: Response) => {
     const filters: any = { deleted: false };
 
     Object.assign(filters, buildSearchFilter(search, ["firstName", "lastName", "email"]));
-    if (status === "true" || status === "false") filters.status = status === "true";
+    // Accept boolean ("true"/"false") and label ("active"/"inactive") forms.
+    if (status === "true" || status === "active") filters.status = true;
+    else if (status === "false" || status === "inactive") filters.status = false;
     if (role) {
       if (ADMIN_ROLE_VALUES.includes(role)) filters.role = role;
       else if (mongoose.Types.ObjectId.isValid(role)) filters.roles = role;
@@ -64,12 +66,14 @@ export const getAdministrators = async (req: Request, res: Response) => {
     logger.info("getAdministrators success", { traceId, total });
     return res.status(200).json({
       success: true,
-      data,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
+      data: {
+        items: data,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
+        },
       },
     });
   } catch (error: any) {

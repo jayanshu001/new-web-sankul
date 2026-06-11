@@ -15,6 +15,82 @@
 
 ---
 
+## 2026-06-11 — Server-side pagination/search/status on educators & departments lists
+
+**Files:** `src/admin/master/educator.controller.ts` — `getEducators`;
+`src/admin/inquiry/inquiry.controller.ts` — `listDepartments`.
+
+**Change:** Both list endpoints now filter + paginate server-side instead of returning
+the full collection.
+
+- `GET /admin/master/educators`: was `find({ deleted: false }).sort(createdAt:-1)` with
+  no limit. Now applies `buildSearchFilter(search, ["name","email"])`, a `status` filter
+  (`active`/`true` → `status:true`, `inactive`/`false` → `status:false`) on the boolean
+  `status` field, `skip/limit` pagination, and `sortBy`/`sortOrder` (whitelist:
+  createdAt/updatedAt/name/email; default createdAt desc). Added `countDocuments(filters)`
+  for `total`. Filter still always includes `deleted: false`.
+- `GET /admin/departments`: was `find().sort(order:1)` with no limit. Now applies
+  `buildSearchFilter(search, ["name","description"])`, a `status` filter on the boolean
+  `active` field (same label/boolean mapping), `skip/limit`, default sort still `order:1`,
+  plus `countDocuments(filter)` for `total`.
+
+Both responses gained the standard `pagination: { total, page, limit, totalPages }` block
+(matching `getCustomers`). No schema/index change — `total` reflects the filtered count.
+Regression note: these endpoints now return a single page (default limit 20) rather than
+the whole collection — any caller that expected all rows must paginate.
+
+---
+
+## 2026-06-11 — `GET /administrators` status filter accepts label form + response reshape
+
+**File:** `src/admin/administrator/administrator.controller.ts` — `getAdministrators`.
+
+**Change:** The `status` query param now matches `active`/`inactive` in addition to the
+existing `true`/`false` (both map to the boolean `filters.status`). No new index — same
+`{ deleted: false, ... }` filter and `countDocuments` as before, so the filtered `total`
+semantics are unchanged. Response shape changed: rows + pagination are now nested under
+`data` as `data.items` and `data.pagination` (was `data` array + sibling `pagination`),
+matching the `data: { items, pagination }` convention used by video/exam list endpoints.
+No DB/schema change — listing behavior and filtered count are identical.
+
+---
+
+## 2026-06-11 — Exclude daily tests from `GET /client/exam-categories/:id/exams`
+
+**File:** `src/client/categories/categories.controller.ts` — `listExamsByCategory`.
+
+**Change:** Filter gained `type: { $ne: ExamType.DAILY }` (was
+`{ categoryId, status: PUBLISHED }`). Daily-type exams are now excluded from the client
+category exam listing; SUBJECT/MOCK/WEEKLY still appear. Consistent with the free-test
+listing which already restricts to `type: SUBJECT` (`free.controller.ts`).
+
+**Query semantics:** Both `list` and the `total`/`totalPages` count shrink by the number of
+daily exams in each category. Pagination/search otherwise unchanged. Daily tests are
+surfaced through their own dedicated flow.
+
+---
+
+## 2026-06-11 — Paginate `GET /admin/materials/categories` flat listing
+
+**File:** `src/admin/material/material.controller.ts` — `listCategories`.
+
+**Change:** The non-`tree` flat listing previously ignored `page`/`limit` and returned the
+full matching set via `MaterialCategory.find(filter).sort({ order, title })`. It now honors
+`page`/`limit` (`skip = (page-1)*limit`, `take = limit`), supports `sortBy`(`order`|`title`|
+`createdAt`)/`sortOrder`, and runs `find().skip().limit()` + `countDocuments(filter)` in
+parallel. Response is now the standard flat envelope `{ success, data: [...], pagination:
+{ total, page, limit, totalPages } }` — matching `listMaterials` and siblings.
+
+**Query semantics:** `total` is now a true count across all matching records (was implicitly
+the returned-page length). Search (`buildRegexCondition` on `title`) and `parent`/`status`
+filters unchanged. The `?tree=true` branch is **unchanged** — still returns the full nested
+tree unpaginated (the intended unbounded source for dropdowns/breadcrumbs).
+
+**QA:** `?page=1&limit=2` vs `?page=2&limit=2` return different pages; `?limit=2` vs
+`?limit=500` return different counts; `?search=` filters across all pages.
+
+---
+
 ## 2026-06-11 — Escape user input in all `$regex` text-search filters
 
 **New util:** `src/utils/searchFilter.ts` — shared helpers `escapeRegex`,
