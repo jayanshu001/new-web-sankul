@@ -212,6 +212,18 @@ function main() {
       status = MIGRATED.includes("customer-bank-account") ? "✅ Migrated" : "🟡 Code ready (flag off)";
     if (table === "ws_customer_shipping") status = "🟡 Prisma ready (part of cart/order)";
     if (table === "ws_offline_city" && MIGRATED.includes("offline-city")) status = "✅ Migrated";
+    // Catalog (package/course/video): code complete but flags stay OFF (int-vs-ObjectId
+    // id coupling with still-Mongo consumers + commerce-wave joins). Flip with commerce.
+    if (table === "ws_package_type")
+      status = MIGRATED.includes("catalog-package-type") ? "✅ Migrated" : "🟡 Code ready (flag off)";
+    if (table === "ws_package")
+      status = MIGRATED.includes("catalog-package") ? "✅ Migrated" : "🟡 Code ready (flag off)";
+    if (table === "ws_course" || table === "ws_course_subject_category")
+      status = MIGRATED.includes("catalog-course") ? "✅ Migrated" : "🟡 Code ready (flag off)";
+    if (table === "ws_video" || table === "ws_video_category")
+      status = MIGRATED.includes("catalog-video") ? "✅ Migrated" : "🟡 Code ready (flag off)";
+    if (table === "ws_video_category_relation" || table === "ws_video_category_package_relation")
+      status = "🟡 Prisma ready (deferred — D2)";
 
     let notes = "";
     if (mColl !== "—" && mColl !== table && best < 100) notes = "Collection name differs from MySQL table";

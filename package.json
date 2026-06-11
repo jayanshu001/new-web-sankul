@@ -36,6 +36,7 @@
     "migration:api:customer-auth": "tsx docs/migration/api-tests/run-module.ts customer-auth",
     "migration:api:customer-lookups": "tsx docs/migration/api-tests/run-module.ts customer-lookups",
     "migration:api:offline-city": "tsx docs/migration/api-tests/run-module.ts offline-city",
+    "migration:api:catalog": "tsx docs/migration/api-tests/run-module.ts catalog",
     "db:pull": "prisma db pull",
     "prisma:generate": "prisma generate"
   },

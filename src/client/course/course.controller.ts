@@ -17,6 +17,10 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { computeDaysLeft } from "../../utils/planDuration";
+import {
+  isCourseMysql,
+  listCourseCategoriesWithCounts,
+} from "../../modules/catalog-course/catalog-course.service";
 
 async function paginateCoursesWithPlans(
   baseFilters: any,
@@ -168,6 +172,16 @@ export const listCourseCategoriesHandler = async (req: Request, res: Response) =
   logger.info("listCourseCategoriesHandler invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
+    // NOTE: `catalog-course` is currently flag OFF (id-space coupling with
+    // still-Mongo course/category consumers + commerce joins on the listing
+    // endpoints). The branch is wired so the eventual flip — together with the
+    // commerce/dashboard wave — is a one-line env change.
+    if (isCourseMysql()) {
+      const data = await listCourseCategoriesWithCounts();
+      logger.info("listCourseCategoriesHandler success", { traceId, count: data.length, source: "mysql" });
+      return res.status(200).json({ success: true, data });
+    }
+
     const categories = await CourseSubjectCategory.find({ status: true })
       .sort({ order: 1, title: 1 })
       .lean();

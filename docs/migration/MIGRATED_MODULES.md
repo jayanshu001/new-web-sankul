@@ -1,6 +1,6 @@
 # Migrated modules (MySQL / Prisma)
 
-> **Generated:** 2026-06-10 — re-run `yarn docs:migrated-modules` when you add a module  
+> **Generated:** 2026-06-11 — re-run `yarn docs:migrated-modules` when you add a module  
 > **Scope:** Only modules with **repository → service → transformer** on **legacy MySQL** tables  
 > **Enable in runtime:** `MIGRATION_MYSQL_MODULES` in `.env`
 
@@ -10,9 +10,9 @@
 
 | | |
 |---|---|
-| **Total migrated (code complete)** | 14 |
+| **Total migrated (code complete)** | 18 |
 | **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city` |
-| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city` |
+| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video` |
 
 | # | Module key | Label | MySQL table | Mongo collection | Env | Detail |
 |---:|---|---|---|---|---|---|
@@ -30,6 +30,10 @@
 | 12 | `customer-profile` | Customer Profile | `ws_customer` | `ws_customers` | ⏸ not in env | [Detail](#customer-profile) |
 | 13 | `customer-bank-account` | Customer Bank Account | `ws_customer_bank_account` | `ws_customer_bank_accounts` | ⏸ not in env | [Detail](#customer-bank-account) |
 | 14 | `offline-city` | Offline City | `ws_offline_city` | `ws_offline_cities` | ✅ enabled | [Detail](#offline-city) |
+| 15 | `catalog-package-type` | Catalog · Package Type | `ws_package_type` | `ws_package_types` | ⏸ not in env | [Detail](#catalog-package-type) |
+| 16 | `catalog-package` | Catalog · Package | `ws_package` | `ws_packages` | ⏸ not in env | [Detail](#catalog-package) |
+| 17 | `catalog-course` | Catalog · Course | `ws_course / ws_course_subject_category` | `ws_courses / coursesubjectcategories` | ⏸ not in env | [Detail](#catalog-course) |
+| 18 | `catalog-video` | Catalog · Video (+ URL-encryption contract) | `ws_video / ws_video_category` | `videos / videocategories` | ⏸ not in env | [Detail](#catalog-video) |
 
 ---
 
@@ -37,7 +41,7 @@
 
 ```env
 DATABASE_URL=mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging
-MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city
+MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video
 ```
 
 - Toggle: `src/config/migration.ts` → `isMysqlModule("<key>")`
@@ -414,6 +418,109 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 - Verified end-to-end: a MySQL address cityId=2 resolves to 'Ahmedabad' through the cart path
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `OfflineCity`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 15. Catalog · Package Type {#catalog-package-type}
+
+| | |
+|---|---|
+| **Module key** | `catalog-package-type` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-11 |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Prisma model** | `PackageType` |
+| **MySQL table** | `ws_package_type` |
+| **Mongo collection (legacy app)** | `ws_package_types` |
+| **Code** | `src/modules/catalog-package (branches src/client/package/package.controller.ts listPackageTypes)/` |
+| **Data** | 6 package types in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | —  (admin package-type CRUD stays Mongo this pass) |
+| **Client API** | GET `/api/v1/client/packages/types` |
+
+**Transformer / schema notes:**
+
+- FLAG OFF: package-type ids are int (MySQL) vs ObjectId (Mongo); still-Mongo consumers (purchase-history, my-subscriptions, dashboard, categories, free, admin CRUD) join package-type ids — flipping /packages/types alone splits the id space. Flip WITH the commerce/dashboard wave
+- ws_package_type has only {id,name,created_at,updated_at}; Mongo PackageType adds order/active → synthesize order:0 + active:true to keep the response JSON shape identical
+- listPackageTypes branched on isPackageTypeMysql(); all other package endpoints stay Mongo (need commerce joins + Mongo-only fields)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageType`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 16. Catalog · Package {#catalog-package}
+
+| | |
+|---|---|
+| **Module key** | `catalog-package` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-11 |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Prisma model** | `Package` |
+| **MySQL table** | `ws_package` |
+| **Mongo collection (legacy app)** | `ws_packages` |
+| **Code** | `src/modules/catalog-package/` |
+| **Data** | 4 active packages in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | —  (ws_package reads built but NOT wired; flag OFF) |
+
+**Transformer / schema notes:**
+
+- FLAG OFF: ws_package is a STRUCTURAL SUBSET of Mongo ws_packages — missing subtitle/isPaid/isSmart/PlannerCourse/goalId/goalLabelId/examCountdown*/specificSubjects[]/materialCategories[]/examCategories[]/withMaterialText. Every client package endpoint also joins commerce-wave tables (PackageCourseEbookPrice plans, PackageCourseSubscription, PromoCode, PackageChat) → full /client/packages can't be reproduced this wave. Flip with commerce
+- Schema fix: Package.shareable_link String → String? (live DDL nullable); regenerated client v5.22.0
+- educator_id exists in the DDL but is absent from the Prisma Package model (NULL for all 4 rows) → transformer surfaces educatorId:null; add to Prisma + regen if a consumer needs it
+- Reads: findPackageById, listActivePackages, listActivePackagesByType (all active:true, order_by then id)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Package`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 17. Catalog · Course {#catalog-course}
+
+| | |
+|---|---|
+| **Module key** | `catalog-course` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-11 |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Prisma model** | `Course / CourseSubjectCategory` |
+| **MySQL table** | `ws_course / ws_course_subject_category` |
+| **Mongo collection (legacy app)** | `ws_courses / coursesubjectcategories` |
+| **Code** | `src/modules/catalog-course (branches src/client/course/course.controller.ts listCourseCategoriesHandler)/` |
+| **Data** | 1 course + 1 subject category in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | GET `/api/v1/client/courses/categories` (wired, flag OFF) |
+
+**Transformer / schema notes:**
+
+- FLAG OFF: course/subject-category ids int (MySQL) vs ObjectId (Mongo); still-Mongo listing/detail/dashboard consumers join those ids, and listing endpoints need commerce-wave joins (plans/subscriptions) + Mongo-only category groups. Flip with commerce
+- Schema fix: Course.image String → String? (live DDL nullable); regenerated
+- ws_course cols with no Prisma mapping: is_featured/purchase (enum 0/1), featured_order — Mongo has conceptual isPopular/isPaid + Mongo-only subtitle/embedded category groups; SQL enums not surfaced
+- listCourseCategoriesHandler branched on isCourseMysql() with per-category active-course counts (Prisma groupBy)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Course / CourseSubjectCategory`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 18. Catalog · Video (+ URL-encryption contract) {#catalog-video}
+
+| | |
+|---|---|
+| **Module key** | `catalog-video` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-11 |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Prisma model** | `Video / VideoCategory` |
+| **MySQL table** | `ws_video / ws_video_category` |
+| **Mongo collection (legacy app)** | `videos / videocategories` |
+| **Code** | `src/modules/catalog-video/` |
+| **Data** | 156 videos (all aws), 157 categories (152 active) in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx + URL-parity test)` |
+| **Admin API** | — |
+| **Client API** | —  (reads built; no safe standalone video-URL endpoint to wire; flag OFF) |
+
+**Transformer / schema notes:**
+
+- FLAG OFF: video/category ids int (MySQL) vs ObjectId (Mongo); lecture/free/dashboard-resume/progress/browse join those ids. lecture course-membership reads VideoCategory.courseId (Mongo-only); paid access checks PackageCourseSubscription (commerce-wave). Flip with commerce
+- URL CONTRACT parity PASS ✅: Video Prisma fields match the Mongo names, so a MySQL row fed into the SAME encryptVideoSource util yields an identical videoURL for a fixed token. Verified (token 1234567890123456, video 33089 aws): MySQL URL === Mongo URL, decrypt === aws_id. NEVER reimplement encryption
+- Module exposes getVideoEncryptInput()/toVideoEncryptInput() = the exact object encryptVideoSource consumes; coerces ''/null platform ids to undefined (live data stores '' for unused platform cols)
+- Video Prisma model CLEAN vs DDL (no schema change). D2 = DEFER ws_video_category_relation (2456) + ws_video_category_package_relation (6907): client builds groups from Mongo Package.specificSubjects[]/childCategoryIds, not these SQL joins
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Video / VideoCategory`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
 ---
 

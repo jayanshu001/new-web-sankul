@@ -64,6 +64,10 @@ yarn dev
 - **Phase 2:** CMS group (app-update, version, faq, banner-slider, testimonial, department, terms, popup) + **Customer Module** on MySQL.  
   - **Enabled (11):** the CMS group + `customer-auth` + `customer-lookups` + `offline-city`.  
   - **Code-complete, flags OFF:** `customer-address`, `customer-profile`, `customer-bank-account`. Address is coupled to cart/course/shipping (still Mongo) — its **flip is deferred to the commerce wave** (enable together for a consistent id space). Code is done + verified; only the enable waits.  
-  - **Next:** catalog (package→course→video).  
+- **Phase 3 (catalog):** read backbone **built dual-path, all 4 flags OFF** — `catalog-package-type`, `catalog-package` (`ws_package`/`ws_package_type`), `catalog-course` (`ws_course`/`ws_course_subject_category`), `catalog-video` (`ws_video`/`ws_video_category`).  
+  - **Video URL-encryption parity PASS** (fixed-token MySQL===Mongo URL, decrypt===aws_id; the module feeds the shared `encryptVideoSource` — encryption is never reimplemented).  
+  - Schema fixes: `Package.shareable_link` + `Course.image` → nullable. D2: video-category relation tables **deferred**. All paths verified vs live DB via `tsx`; api-test `yarn migration:api:catalog`.  
+  - The whole catalog id-space (int vs ObjectId) is joined by still-Mongo commerce/dashboard consumers, so **all 4 keys flip together with the commerce wave** — none can flip standalone.  
+  - **Next:** the **commerce/dashboard wave** (orders, subscriptions, promocodes, dashboard) — flips catalog + address/profile/bank ON together.  
 
 See [MIGRATION_TRACKER.md](./MIGRATION_TRACKER.md) for details and [MIGRATED_MODULES.md](./MIGRATED_MODULES.md) for the per-module registry.

@@ -102,4 +102,17 @@ export const MIGRATED_API_MODULES = [
     endpoints: ["GET client/address/cities (+ ?search) — active, ordered"],
     yarnScript: "migration:api:offline-city",
   },
+  {
+    // Catalog: 4 keys (catalog-package-type, catalog-package, catalog-course,
+    // catalog-video) — ALL flag OFF; tests assert endpoint contract always and
+    // MySQL-source specifics only when the relevant flag is enabled.
+    key: "catalog",
+    testFiles: ["catalog/client.api.test.ts"],
+    endpoints: [
+      "GET client/packages/types — package types (catalog-package-type)",
+      "GET client/courses/categories — subject categories + counts (catalog-course)",
+      "(video URL-encryption parity verified via tsx — no standalone HTTP endpoint)",
+    ],
+    yarnScript: "migration:api:catalog",
+  },
 ] as const;

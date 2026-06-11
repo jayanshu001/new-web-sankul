@@ -34,7 +34,11 @@
 | Phase 2 — `customer-profile` | 🟡 | 2026-06-10 | Code complete, **flag OFF** (dashboard cross-module deps). Live-DB service verified (name split/join, goal hydration, derived isProfileCompleted). No API test (Mongo still serves). |
 | Phase 2 — `customer-bank-account` | 🟡 | 2026-06-10 | Code complete, **flag OFF** (referral withdrawal Mongo-coupled). Live-DB repo CRUD verified. No API test (Mongo still serves). |
 | Phase 2 — `offline-city` | ✅ | 2026-06-10 | **Enabled.** Cities-only (unblocks customer-address). Added `status`/`order` cols via DDL. Live-DB verified (2 cities; address cityId=2→"Ahmedabad" end-to-end through cart). api-test wired (`yarn migration:api:offline-city`); HTTP run pending live `yarn dev`. |
-| Next module: _(catalog: package→course→video; address flip deferred to commerce wave)_ | ⬜ | — | — |
+| Phase 3 — `catalog-package-type` | 🟡 | 2026-06-11 | Code complete, **flag OFF** (int-vs-ObjectId type-id coupling across still-Mongo consumers). Live-DB tsx verified (6 types, synthesized order:0/active:true). `listPackageTypes` branched. api-test wired (`yarn migration:api:catalog`). |
+| Phase 3 — `catalog-package` | 🟡 | 2026-06-11 | Code complete, **flag OFF** (ws_package is a subset of Mongo + commerce-wave joins). Schema fix `shareable_link`→nullable. Live-DB tsx verified (4 packages, findById/byType). |
+| Phase 3 — `catalog-course` | 🟡 | 2026-06-11 | Code complete, **flag OFF** (id coupling + commerce joins). Schema fix `Course.image`→nullable. Live-DB tsx verified (1 course + 1 category w/ groupBy count). `listCourseCategoriesHandler` branched. |
+| Phase 3 — `catalog-video` | 🟡 | 2026-06-11 | Code complete, **flag OFF** (id coupling; lecture needs Mongo-only VideoCategory.courseId + commerce subs). `Video` model CLEAN. **URL-encryption parity PASS** (fixed-token MySQL===Mongo, decrypt===aws_id). D2: relation tables deferred. Live-DB tsx verified (152 active cats, 5 vids/cat 3105). |
+| Next module: _(commerce/dashboard wave — flips all 4 catalog keys + address/profile/bank together)_ | ⬜ | — | — |
 
 Update this table after each testing session.
 

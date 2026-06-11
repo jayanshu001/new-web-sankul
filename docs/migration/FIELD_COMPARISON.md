@@ -1,6 +1,6 @@
 # Field comparison — module by module
 
-> **Generated:** 2026-06-10 — re-run `yarn docs:field-comparison` after schema changes  
+> **Generated:** 2026-06-11 — re-run `yarn docs:field-comparison` after schema changes  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Related:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md) (table inventory) · [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
 
@@ -1850,7 +1850,7 @@
 | 3 | `educator_id` | `int` | NOT NULL | — | — | — | `courseEducatorId` | Int? | — | ✅ SQL+Prisma |
 | 4 | `vcategory_id` | `int` | NULL; DEFAULT NULL | — | — | — | `videoCategoryId` | Int? | — | ✅ SQL+Prisma |
 | 5 | `name` | `varchar(255)` | NULL; DEFAULT NULL | — | — | — | `name` | String? | — | ✅ SQL+Prisma |
-| 6 | `image` | `varchar(256)` | NULL; DEFAULT NULL | — | — | — | `image` | String | — | ✅ SQL+Prisma |
+| 6 | `image` | `varchar(256)` | NULL; DEFAULT NULL | — | — | — | `image` | String? | — | ✅ SQL+Prisma |
 | 7 | `description` | `text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NOT NULL | — | — | — | `description` | String | — | ✅ SQL+Prisma |
 | 8 | `order_by` | `int` | NOT NULL | — | — | — | `ordered` | Int | — | ✅ SQL+Prisma |
 | 9 | `shareable_link` | `varchar(256)` | NOT NULL | — | — | — | `shareableLink` | String | — | ✅ SQL+Prisma |
@@ -2014,7 +2014,7 @@
 | 2 | `name` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NOT NULL | `name` | string | — | `name` | String | — | ✅ |
 | 3 | `description` | `text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NOT NULL | `description` | string | — | `description` | String | — | ✅ |
 | 4 | `image` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NOT NULL | `image` | string | — | `image` | String | — | ✅ |
-| 5 | `shareable_link` | `varchar(256) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `shareableLink` | string | — | `shareable_link` | String | — | ✅ |
+| 5 | `shareable_link` | `varchar(256) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `shareableLink` | string | — | `shareable_link` | String? | — | ✅ |
 | 6 | `with_material` | `text CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NOT NULL | — | — | — | `withMaterial` | String | — | ✅ SQL+Prisma |
 | 7 | `without_material` | `text CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NOT NULL | — | — | — | `withoutMaterial` | String | — | ✅ SQL+Prisma |
 | 8 | `pc_material_id` | `int` | NULL; DEFAULT NULL | — | — | — | `pcMaterialId` | Int? | — | ✅ SQL+Prisma |

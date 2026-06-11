@@ -1,6 +1,6 @@
 # Schema comparison — Legacy MySQL vs MongoDB vs post-migration MySQL
 
-> **Generated:** 2026-06-10 (re-run `yarn docs:schema-comparison` after schema changes)  
+> **Generated:** 2026-06-11 (re-run `yarn docs:schema-comparison` after schema changes)  
 > **Migrated only:** [MIGRATED_MODULES.md](./MIGRATED_MODULES.md) · **Field-level detail:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md)  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Strategy:** [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
@@ -44,9 +44,9 @@
 | 6 | BookOrder | `ws_book_order` (19 cols) | `ws_book_orders` | `ws_book_order` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 7 | BookOrderItem | `ws_book_order_item` (9 cols) | — | `ws_book_order_item` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 8 | BookTracking | `ws_book_tracking` (5 cols) | — | `ws_book_tracking` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 9 | Course | `ws_course` (19 cols) | — | `ws_course` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
+| 9 | Course | `ws_course` (19 cols) | — | `ws_course` | 🟡 Code ready (flag off) | MySQL/Prisma only (no Mongoose model found) |
 | 10 | CourseEducator | `ws_course_educator` (12 cols) | — | `ws_course_educator` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 11 | CourseSubjectCategory | `ws_course_subject_category` (9 cols) | — | `ws_course_subject_category` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
+| 11 | CourseSubjectCategory | `ws_course_subject_category` (9 cols) | — | `ws_course_subject_category` | 🟡 Code ready (flag off) | MySQL/Prisma only (no Mongoose model found) |
 | 12 | Customer | `ws_customer` (34 cols) | `ws_customers` | `ws_customer` | ✅ Migrated | Collection name differs from MySQL table |
 | 13 | CustomerAccessToken | `ws_customer_access_token` (9 cols) | `ws_customer_access_tokens` | `ws_customer_access_token` | ✅ Migrated | Collection name differs from MySQL table |
 | 14 | CustomerAddress | `ws_customer_address` (17 cols) | `ws_customer_addresses` | `ws_customer_address` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
@@ -87,7 +87,7 @@
 | 49 | OfflineCenter | `ws_offline_center` (10 cols) | `ws_offline_center` | `ws_offline_center` | ⏳ Not migrated |  |
 | 50 | OfflineCity | `ws_offline_city` (5 cols) | `ws_offline_city` | `ws_offline_city` | ✅ Migrated |  |
 | 51 | OfflineEnquiry | `ws_offline_enquiry` (8 cols) | `ws_offline_enquiry` | `ws_offline_enquiry` | ⏳ Not migrated |  |
-| 52 | Package | `ws_package` (15 cols) | `ws_packages` | `ws_package` | ⏳ Not migrated | Collection name differs from MySQL table |
+| 52 | Package | `ws_package` (15 cols) | `ws_packages` | `ws_package` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
 | 53 | chat | `ws_package_chat` (5 cols) | `ws_package_chats` | `ws_package_chat` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 54 | PackageCourseEbookPrice | `ws_package_course_ebook_price` (13 cols) | — | `ws_package_course_ebook_price` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 55 | PackageCourseMaterial | `ws_package_course_material` (4 cols) | — | `ws_package_course_material` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
@@ -95,7 +95,7 @@
 | 57 | PackageCourseSubscription | `ws_package_course_subscription` (21 cols) | — | `ws_package_course_subscription` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 58 | PackageCourseSubscriptionTracking | `ws_package_course_subscription_tracking` (5 cols) | — | `ws_package_course_subscription_tracking` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 59 | PackageSpecificSubject | `ws_package_specific_subject` (7 cols) | — | `ws_package_specific_subject` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 60 | PackageType | `ws_package_type` (4 cols) | `ws_package_types` | `ws_package_type` | ⏳ Not migrated | Collection name differs from MySQL table |
+| 60 | PackageType | `ws_package_type` (4 cols) | `ws_package_types` | `ws_package_type` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
 | 61 | — | `ws_password_resets` (4 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 62 | PendriveCourse | `ws_pendrive_course` (24 cols) | — | `ws_pendrive_course` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 63 | PendriveCourseCart | `ws_pendrive_course_cart` (5 cols) | — | `ws_pendrive_course_cart` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
@@ -120,10 +120,10 @@
 | 82 | — | `ws_user_inquiry` (10 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 83 | AdminUser | `ws_users` (15 cols) | `ws_users` | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 84 | Version | `ws_versions` (3 cols) | `ws_versions` | `ws_versions` | ✅ Migrated |  |
-| 85 | Video | `ws_video` (14 cols) | — | `ws_video` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 86 | VideoCategory | `ws_video_category` (11 cols) | — | `ws_video_category` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 87 | PackageVideoCategoryRelation | `ws_video_category_package_relation` (6 cols) | — | `ws_video_category_package_relation` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 88 | VideoCategoryRelation | `ws_video_category_relation` (6 cols) | — | `ws_video_category_relation` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
+| 85 | Video | `ws_video` (14 cols) | — | `ws_video` | 🟡 Code ready (flag off) | MySQL/Prisma only (no Mongoose model found) |
+| 86 | VideoCategory | `ws_video_category` (11 cols) | — | `ws_video_category` | 🟡 Code ready (flag off) | MySQL/Prisma only (no Mongoose model found) |
+| 87 | PackageVideoCategoryRelation | `ws_video_category_package_relation` (6 cols) | — | `ws_video_category_package_relation` | 🟡 Prisma ready (deferred — D2) | MySQL/Prisma only (no Mongoose model found) |
+| 88 | VideoCategoryRelation | `ws_video_category_relation` (6 cols) | — | `ws_video_category_relation` | 🟡 Prisma ready (deferred — D2) | MySQL/Prisma only (no Mongoose model found) |
 | 89 | Inquiry | `ws_website_inquiry` (9 cols) | `ws_website_inquiry` | `ws_website_inquiry` | ⏳ Not migrated |  |
 | 90 | Goal | — | `(default goals)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/Goal.model.ts |
 | 91 | AdminAccessToken | — | `ws_admin_access_tokens` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/admin/AdminAccessToken.model.ts |

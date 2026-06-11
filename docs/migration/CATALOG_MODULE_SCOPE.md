@@ -87,3 +87,54 @@ the dashboard/commerce consumers — to be confirmed by the consumer audit in st
 - [ ] **Video:** URL/token parity verified Mongo-vs-MySQL via the shared encryption util
 - [ ] Consumer audit: no Mongo path joins a MySQL catalog id across the boundary (or co-flip planned)
 - [ ] Registry + schema-comparison generators; api-tests; test log; tracker; README; regen docs
+
+---
+
+## 7. Build outcome — decisions resolved + package DONE (2026-06-11)
+
+**Decisions (D1–D3) answered:**
+- **D1** = `package → course → video` ✅
+- **D2** (video-category relations) = decide during the video build (check which enabled client paths read the join tables first, then migrate-now vs defer).
+- **D3** = build all three dual-path with flags **OFF**, audit consumers, **flip together** with the commerce/dashboard wave (mirrors address deferral).
+
+### ✅ Package sub-module — built, verified, flags OFF
+Module: `src/modules/catalog-package/` (keys `catalog-package-type` + `catalog-package`). Built in two phases:
+- **Phase A** `ws_package_type` (6 rows) — `listPackageTypes` controller branched on `isPackageTypeMysql()`.
+- **Phase B** `ws_package` (4 rows) — repository/service/transformer/types built dual-path.
+
+**Schema fix:** `Package.shareable_link` `String` → `String?` (DDL is nullable); Prisma regenerated, package.json carets restored.
+
+**Key finding — BOTH flags stay OFF (not just `ws_package`):**
+1. *Field/commerce gap:* `ws_package` is a structural subset of Mongo `ws_packages`; full `/client/packages` needs Mongo-only fields + commerce-wave joins (plans/subscriptions/promo/chat). `ws_package` reads can't be enabled standalone.
+2. *`ws_package_type` id-space coupling:* type ids are int (MySQL) vs ObjectId (Mongo); still-Mongo consumers (`purchase-history`, `my-subscriptions`, `dashboard`, package detail/list, `categories`, `free`, admin CRUD) join package-type ids. Flipping only `/packages/types` to MySQL → inconsistent id space → broken FE.
+
+⇒ `catalog-package-type` + `catalog-package` flip **together with the commerce/dashboard wave**. Full detail: [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md) (2026-06-11 entry).
+
+### ✅ Course sub-module — built, verified, flag OFF
+Module: `src/modules/catalog-course/` (key `catalog-course`). Tables `ws_course` (1 row) + `ws_course_subject_category` (1 row).
+- **Schema fix:** `Course.image` `String` → `String?` (DDL nullable); regenerated.
+- **Wiring:** `listCourseCategoriesHandler` branched on `isCourseMysql()` (flag OFF).
+- **Stays OFF** for the same reasons as package: int-vs-ObjectId id coupling with still-Mongo course/category consumers + listing endpoints need commerce-wave joins (plans/subscriptions) and Mongo-only category groups. Flips with the commerce/dashboard wave.
+- **Verified (tsx):** categories+counts, course list/detail/by-category all correct. Full detail in the 2026-06-11 query-change entry.
+
+### ✅ Video sub-module — built, parity-proven, flag OFF
+Module: `src/modules/catalog-video/` (key `catalog-video`). Tables `ws_video` (156) + `ws_video_category` (157).
+- **Schema:** `Video` model CLEAN vs DDL — no Prisma change, no regen.
+- **D2 = DEFER** the relation tables (`ws_video_category_relation`, `ws_video_category_package_relation`): the client builds category groups from Mongo `Package.specificSubjects[]` + `childCategoryIds`, not these SQL joins. Migrate with the commerce/browse wave.
+- **URL contract parity PASS ✅:** fixed-token test (video 33089, aws) — MySQL `videoURL` === Mongo-shaped `videoURL`, `decrypt === aws_id`. The module exposes `getVideoEncryptInput()` returning the exact object the shared `encryptVideoSource` util consumes; encryption is NEVER reimplemented.
+- **Stays OFF:** int-vs-ObjectId id coupling (lecture/free/dashboard/progress/browse), `VideoCategory.courseId` Mongo-only, paid access = commerce-wave subscriptions. No controller wired (no safe standalone video-URL endpoint). Flips with the commerce/dashboard wave.
+- Full detail in the 2026-06-11 video query-change entry.
+
+---
+
+## 8. Catalog status — ALL THREE BUILT, all flags OFF (2026-06-11)
+
+| Sub-module | Key(s) | Tables | Built | Verified | Flag |
+|---|---|---|---|---|---|
+| package | `catalog-package-type`, `catalog-package` | ws_package_type, ws_package | ✅ | tsx | ⏸ OFF |
+| course | `catalog-course` | ws_course, ws_course_subject_category | ✅ | tsx | ⏸ OFF |
+| video | `catalog-video` | ws_video, ws_video_category | ✅ | tsx + URL parity | ⏸ OFF |
+
+**All four catalog keys flip TOGETHER with the commerce/dashboard wave** (D3) — the entire catalog id-space (package/course/video/category) moves from ObjectId to int at once, alongside the commerce tables (plans/subscriptions/orders) and dashboard consumers that join those ids. Deferred relation tables (`ws_video_category_relation`, `ws_video_category_package_relation`) migrate then too if the SQL category-tree is rebuilt.
+
+**Remaining for catalog:** per-module doc protocol (registry, schema-comparison, api-tests, test log, tracker, README, regen) — see [`MIGRATION_DOC_UPDATES.md`](./MIGRATION_DOC_UPDATES.md) scenario A.

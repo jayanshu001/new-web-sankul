@@ -952,7 +952,7 @@ model Package {
   name                      String
   description               String
   image                     String
-  shareable_link            String
+  shareable_link            String?
   withMaterial              String                      @map("with_material")
   withoutMaterial           String                      @map("without_material")
   material                  PackageCourseMaterial?      @relation(fields: [pcMaterialId], references: [id])
@@ -1070,7 +1070,7 @@ model Course {
   VideoCategory             VideoCategory?              @relation(fields: [videoCategoryId], references: [id])
   videoCategoryId           Int?                        @map("vcategory_id")
   name                      String?
-  image                     String
+  image                     String?
   description               String
   ordered                   Int                         @map("order_by")
   shareableLink             String                      @map("shareable_link")

@@ -24,6 +24,7 @@ import { runPopupClientApiTests } from "./popup/client.api.test.js";
 import { runCustomerAuthClientApiTests } from "./customer-auth/client.api.test.js";
 import { runCustomerLookupsClientApiTests } from "./customer-lookups/client.api.test.js";
 import { runOfflineCityClientApiTests } from "./offline-city/client.api.test.js";
+import { runCatalogClientApiTests } from "./catalog/client.api.test.js";
 
 const moduleKey = process.argv[2]?.trim().toLowerCase();
 
@@ -39,6 +40,7 @@ const runners: Record<string, (() => Promise<boolean>)[]> = {
   "customer-auth": [runCustomerAuthClientApiTests],
   "customer-lookups": [runCustomerLookupsClientApiTests],
   "offline-city": [runOfflineCityClientApiTests],
+  catalog: [runCatalogClientApiTests],
 };
 
 async function main() {

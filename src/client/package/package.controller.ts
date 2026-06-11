@@ -14,6 +14,10 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import {
+  isPackageTypeMysql,
+  listPackageTypes as listPackageTypesMysql,
+} from "../../modules/catalog-package/catalog-package.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -418,6 +422,14 @@ export const listPackageTypes = async (_req: Request, res: Response) => {
   logger.info("listPackageTypes invoked", { traceId, path: _req.originalUrl });
 
   try {
+    if (isPackageTypeMysql()) {
+      // ws_package_type has no `order`/`active` cols; the service synthesizes
+      // `order:0` + `active:true` so the response JSON stays shape-compatible.
+      const types = await listPackageTypesMysql();
+      logger.info("listPackageTypes success", { traceId, count: types.length, source: "mysql" });
+      return res.status(200).json({ success: true, data: types });
+    }
+
     const types = await PackageType.find({ active: true }).sort({ order: 1, name: 1 });
     logger.info("listPackageTypes success", { traceId, count: types.length });
     return res.status(200).json({ success: true, data: types });
