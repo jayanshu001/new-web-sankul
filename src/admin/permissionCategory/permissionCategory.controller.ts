@@ -8,6 +8,7 @@ import {
   listQuerySchema,
   sortFieldMap,
 } from "./permissionCategory.validation";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 const formatZodErrors = (issues: any[]) =>
   issues.reduce<Record<string, string>>((acc, i) => {
@@ -41,7 +42,7 @@ export const listPermissionCategories = async (req: Request, res: Response) => {
 
     const filter: any = {};
     if (typeof status === "boolean") filter.status = status;
-    if (search) filter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
 
     const sort: any = { [sortFieldMap[sort_by]]: sort_dir === "asc" ? 1 : -1 };
     const skip = (page - 1) * per_page;

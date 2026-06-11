@@ -13,6 +13,7 @@ import {
   bulkStatusSchema,
   bulkDeleteSchema,
 } from "./material.validation";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -185,7 +186,10 @@ export const listCategories = async (req: Request, res: Response) => {
     const filter: any = {};
     if (parent === "root" || parent === "null") filter.parent = null;
     else if (parent && mongoose.Types.ObjectId.isValid(parent)) filter.parent = parent;
-    if (search) filter.title = { $regex: search, $options: "i" };
+    {
+      const c = buildRegexCondition(search);
+      if (c) filter.title = c;
+    }
     if (status === "true" || status === "false") filter.status = status === "true";
 
     const categories = await MaterialCategory.find(filter).sort({ order: 1, title: 1 });
@@ -589,7 +593,10 @@ export const listMaterials = async (req: Request, res: Response) => {
     } = req.query as Record<string, string>;
 
     const filter: any = {};
-    if (search) filter.title = { $regex: search, $options: "i" };
+    {
+      const c = buildRegexCondition(search);
+      if (c) filter.title = c;
+    }
     if (materialCategoryId && mongoose.Types.ObjectId.isValid(materialCategoryId))
       filter.materialCategoryId = materialCategoryId;
     if (status === "true" || status === "false") filter.status = status === "true";

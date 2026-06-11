@@ -16,6 +16,7 @@ import {
   batchUpdateSchema,
   reorderSchema,
 } from "./offline.validation";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -366,13 +367,7 @@ export const listEnquiries = async (req: Request, res: Response) => {
       req.query as Record<string, string>;
     const filter: any = {};
     if (batchId && isObjectId(batchId)) filter.batchId = batchId;
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { mobile: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filter, buildSearchFilter(search, ["name", "mobile", "email"]));
     if (fromDate || toDate) {
       filter.createdAt = {};
       if (fromDate) filter.createdAt.$gte = new Date(fromDate);

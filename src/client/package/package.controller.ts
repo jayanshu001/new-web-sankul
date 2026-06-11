@@ -18,7 +18,8 @@ import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { collectCategoryTreeIds } from "../../utils/categoryTree";
-import { ExamStatus } from "../../models/enums";
+import { buildRegexCondition } from "../../utils/searchFilter";
+import { ExamStatus, ExamType } from "../../models/enums";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -63,9 +64,19 @@ async function buildExamCategoryEntry(cat: any) {
   if (!cat) return null;
   const categoryIds = await collectCategoryTreeIds(ExamCategory, cat);
   // Only PUBLISHED exams are client-visible, so drafts must not inflate the count.
+  // Also drop scheduled exams whose attempt window has ENDED (a past `endAt`);
+  // `subject` exams are always-available and always count. Mirrors the catalog
+  // `/tests` badge + the drill-in listing in exam.controller.
+  const now = new Date();
   const count = await Exam.countDocuments({
     categoryId: { $in: categoryIds },
     status: ExamStatus.PUBLISHED,
+    $or: [
+      { type: ExamType.SUBJECT },
+      { endAt: { $exists: false } },
+      { endAt: null },
+      { endAt: { $gte: now } },
+    ],
   });
   return {
     category: {
@@ -223,7 +234,7 @@ export const listPackages = async (req: Request, res: Response) => {
     } = req.query as Record<string, string>;
 
     const filter: any = { active: true };
-    if (search) filter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
     if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))
       filter.packageTypeId = packageTypeId;
     if (goalId && mongoose.Types.ObjectId.isValid(goalId)) filter.goalId = goalId;

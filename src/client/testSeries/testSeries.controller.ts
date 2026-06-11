@@ -18,6 +18,7 @@ import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -68,7 +69,7 @@ export const listTestSeries = async (req: Request, res: Response) => {
   try {
     const { search, page = "1", limit = "20" } = req.query as Record<string, string>;
     const filter: any = { status: true };
-    if (search) filter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
 
     const p = Math.max(1, parseInt(page, 10) || 1);
     const l = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));

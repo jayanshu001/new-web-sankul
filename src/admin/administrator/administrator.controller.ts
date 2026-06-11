@@ -12,6 +12,7 @@ import {
 } from "./administrator.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 const SALT_ROUNDS = 10;
 
@@ -38,13 +39,7 @@ export const getAdministrators = async (req: Request, res: Response) => {
     // Soft-deleted admins are never listed.
     const filters: any = { deleted: false };
 
-    if (search) {
-      filters.$or = [
-        { firstName: { $regex: search, $options: "i" } },
-        { lastName: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filters, buildSearchFilter(search, ["firstName", "lastName", "email"]));
     if (status === "true" || status === "false") filters.status = status === "true";
     if (role) {
       if (ADMIN_ROLE_VALUES.includes(role)) filters.role = role;

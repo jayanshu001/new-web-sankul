@@ -13,6 +13,7 @@ import { ExamResultDetail } from "../../models/exam/ExamResultDetail.model";
 import { ExamResultDetailAnalytics } from "../../models/exam/ExamResultDetailAnalytics.model";
 import { ExamStatus, ExamResultType, ExamType } from "../../models/enums";
 import { formatScheduledAt } from "../../utils/displayTime";
+import { buildRegexCondition } from "../../utils/searchFilter";
 import {
   createCategorySchema,
   updateCategorySchema,
@@ -62,7 +63,7 @@ export const getCategories = async (req: Request, res: Response) => {
     const filter: any = {};
     if (parentId === "root" || parentId === "null") filter.parentId = null;
     else if (parentId && isObjectId(parentId)) filter.parentId = parentId;
-    if (search) filter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
     if (status === "true" || status === "false") filter.status = status === "true";
 
     const categories = await ExamCategory.find(filter).sort({ orderBy: 1, name: 1 });
@@ -127,7 +128,7 @@ export const getCategoryPackages = async (req: Request, res: Response) => {
     const { page, per_page, skip } = parseListPaging(req.query as Record<string, string>);
 
     const filter: any = { "examCategories.category": id };
-    if (search) filter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
     if (status === "true" || status === "false") filter.active = status === "true";
 
     const [docs, total] = await Promise.all([
@@ -191,7 +192,7 @@ export const getCategoryCourses = async (req: Request, res: Response) => {
     const { page, per_page, skip } = parseListPaging(req.query as Record<string, string>);
 
     const filter: any = { "examCategories.category": id };
-    if (search) filter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
     if (status === "true" || status === "false") filter.status = status === "true";
 
     const [docs, total] = await Promise.all([
@@ -493,7 +494,7 @@ export const getExams = async (req: Request, res: Response) => {
     } = req.query as Record<string, string>;
 
     const filter: any = {};
-    if (search) filter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
     if (categoryId && isObjectId(categoryId)) filter.categoryId = categoryId;
     if (type) filter.type = type;
     if (status) filter.status = status;
@@ -794,7 +795,7 @@ export const getQuestions = async (req: Request, res: Response) => {
     const { examId, search, status, page = "1", limit = "50" } = req.query as Record<string, string>;
     const filter: any = {};
     if (examId && isObjectId(examId)) filter.examId = examId;
-    if (search) filter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
     if (status === "true" || status === "false") filter.status = status === "true";
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);

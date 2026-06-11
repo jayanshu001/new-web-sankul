@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
 import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 const HEX = /^#[0-9A-Fa-f]{6}$/;
 const TEN_YEARS_MS = 10 * 365 * 86_400_000;
@@ -151,7 +152,10 @@ export const adminListCountdowns = async (req: Request, res: Response) => {
         return res.status(400).json({ success: false, message: "Invalid categoryId." });
       filter.categoryId = categoryId;
     }
-    if (search.trim()) filter.title = { $regex: search.trim(), $options: "i" };
+    {
+      const c = buildRegexCondition(search);
+      if (c) filter.title = c;
+    }
     if (includePast === "false") {
       const now = new Date();
       filter.examDate = {

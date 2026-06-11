@@ -16,6 +16,7 @@ import {
 } from "./book.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 // ─── Books CRUD ───────────────────────────────────────────────────────────────
 
@@ -35,12 +36,7 @@ export const getBooks = async (req: Request, res: Response) => {
     } = req.query as Record<string, string>;
 
     const filter: any = {};
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { author: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filter, buildSearchFilter(search, ["name", "author"]));
     if (status === "true" || status === "false") filter.status = status === "true";
     if (language) filter.language = language;
     if (isMagazine === "true" || isMagazine === "false") filter.isMagazine = isMagazine === "true";

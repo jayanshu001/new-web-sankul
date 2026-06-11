@@ -25,6 +25,7 @@ import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { isNewItem } from "../../utils/isNew";
+import { buildRegexCondition, buildSearchFilter, buildSearchRegExp } from "../../utils/searchFilter";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -243,7 +244,7 @@ export const listFreeTests = async (req: Request, res: Response) => {
       // `startAt` (and any scheduled in the future), matching quizzes/daily.
       startAt: { $lte: endOfDay },
     };
-    if (search) baseMatch.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) baseMatch.title = c; }
 
     // ── Level 1: years ──
     if (yearQ === undefined) {
@@ -532,8 +533,8 @@ export const listFreeMaterials = async (req: Request, res: Response) => {
       })
       .filter(Boolean) as any[];
 
-    if (search) {
-      const re = new RegExp(search, "i");
+    const re = buildSearchRegExp(search);
+    if (re) {
       groups = groups.filter((g) => re.test(g.title));
     }
 
@@ -702,8 +703,8 @@ export const listFreeVideos = async (req: Request, res: Response) => {
       })
       .filter(Boolean) as any[];
 
-    if (search) {
-      const re = new RegExp(search, "i");
+    const re = buildSearchRegExp(search);
+    if (re) {
       groups = groups.filter((g) => re.test(g.title));
     }
 
@@ -741,12 +742,7 @@ export const listFreeEbooks = async (req: Request, res: Response) => {
     const { pageNum, limitNum, skip } = paginate(req);
 
     const filter: any = { status: true, isPaid: false };
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { author: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filter, buildSearchFilter(search, ["name", "author"]));
     if (language) filter.language = language;
 
     const [ebooks, total] = await Promise.all([
@@ -971,7 +967,7 @@ export const listFreeCourses = async (req: Request, res: Response) => {
 
     const { pageNum, limitNum, skip } = paginate(req);
     const baseUrl = resolveBase(req);
-    const nameRegex = search ? { $regex: search, $options: "i" } : undefined;
+    const nameRegex = buildRegexCondition(search) ?? undefined;
 
     const courseFilter: any = { status: true, isPaid: isPaidValue };
     const packageFilter: any = { active: true, isPaid: isPaidValue };

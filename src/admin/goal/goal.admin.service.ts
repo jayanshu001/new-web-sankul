@@ -1,4 +1,5 @@
 import logger from "../../utils/logger";
+import { buildSearchFilter } from "../../utils/searchFilter";
 import { Goal } from "../../models/Goal.model";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { redisClient } from "../../config/redis";
@@ -65,15 +66,8 @@ export const getGoals = async (query: {
   logger.info("getGoals service invoked", { traceId, query });
   const { search, isActive, page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc' } = query;
   
-  const filter: any = {};
-
   // Search by Goal Title OR specific Label Name
-  if (search) {
-    filter.$or = [
-      { title: { $regex: search, $options: "i" } },
-      { "labels.name": { $regex: search, $options: "i" } }
-    ];
-  }
+  const filter: any = { ...buildSearchFilter(search, ["title", "labels.name"]) };
 
   // Filter by Active status
   if (isActive !== undefined && isActive !== "") {

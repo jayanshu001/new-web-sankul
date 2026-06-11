@@ -8,6 +8,7 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { isNewItem } from "../../utils/isNew";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -26,10 +27,7 @@ export const listEbooks = async (req: Request, res: Response) => {
   try {
     const { search, language } = req.query as Record<string, string>;
     const filter: any = { status: true };
-    if (search) filter.$or = [
-      { name: { $regex: search, $options: "i" } },
-      { author: { $regex: search, $options: "i" } },
-    ];
+    Object.assign(filter, buildSearchFilter(search, ["name", "author"]));
     if (language) filter.language = language;
 
     const ebooks = await Ebook.find(filter).sort({ order: 1, createdAt: -1 }).lean();

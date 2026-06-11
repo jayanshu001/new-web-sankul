@@ -146,7 +146,9 @@ export const getDashboard = async (req: Request, res: Response) => {
     const now = new Date();
     const [banners, recentPackages, courses, trendingBooks, trendingEbooks, testimonial, courseCategories, examCountdownsRaw, dailyTestRaw, unreadNotifications] = await Promise.all([
       BannerSlider.find().sort({ orderBy: 1 }).populate("keyId").lean(),
-      Package.find({ active: true })
+      // Recently Added shows PAID packages only — free packages are surfaced
+      // through the free sections, not this paid-product carousel.
+      Package.find({ active: true, isPaid: true })
         .populate("packageTypeId", "_id name createdAt updatedAt")
         .sort({ createdAt: -1 })
         .limit(RECENTLY_ADDED_LIMIT)

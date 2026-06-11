@@ -62,9 +62,20 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
       .select("_id name image orderBy")
       .sort({ orderBy: 1, name: 1 });
 
+    // Hide scheduled exams whose attempt window has already ENDED so the list
+    // matches the catalog `/tests` badge: a `daily`/scheduled exam with an
+    // `endAt` in the past is over. `subject` exams are always-available (no
+    // window) and always show regardless of any stray date fields.
+    const now = new Date();
     const exams = await Exam.find({
       categoryId,
       status: ExamStatus.PUBLISHED,
+      $or: [
+        { type: ExamType.SUBJECT },
+        { endAt: { $exists: false } },
+        { endAt: null },
+        { endAt: { $gte: now } },
+      ],
     })
       .select("_id title type isPaid durationMinutes questionCount positiveMarks negativeMarks startAt language difficulty orderBy")
       .sort({ orderBy: 1, createdAt: -1 });

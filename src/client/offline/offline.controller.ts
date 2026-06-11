@@ -8,6 +8,7 @@ import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
 import { OfflineEnquiry } from "../../models/offline/OfflineEnquiry.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -136,7 +137,7 @@ export const listCenters = async (req: Request, res: Response) => {
     const { cityId, search } = req.query as Record<string, string>;
     const filter: any = { status: true };
     if (cityId && isObjectId(cityId)) filter.cityId = cityId;
-    if (search && search.trim()) filter.name = { $regex: search.trim(), $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
     const data = await OfflineCenter.find(filter)
       .populate({ path: "cityId", model: OfflineCity, select: "_id name" })
       .sort({ createdAt: -1 })
@@ -158,7 +159,7 @@ export const listBatches = async (req: Request, res: Response) => {
     const { centerId, cityId, upcoming, search } = req.query as Record<string, string>;
     const filter: any = { status: true };
     if (centerId && isObjectId(centerId)) filter.centerId = centerId;
-    if (search && search.trim()) filter.name = { $regex: search.trim(), $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
     if (upcoming === "true") filter.startAt = { $gt: new Date() };
 
     if (!centerId && cityId && isObjectId(cityId)) {

@@ -21,6 +21,7 @@ import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation
 import { Goal } from "../../models/Goal.model";
 import { HttpError } from "../../middlewares/errorHandler";
 import cache from "../../libs/cache";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -164,7 +165,7 @@ export const listPackages = async (query: ListPackagesQuery) => {
   } = query;
 
   const filter: any = {};
-  if (search) filter.name = { $regex: search, $options: "i" };
+  { const c = buildRegexCondition(search); if (c) filter.name = c; }
   if (active === "true" || active === "false") filter.active = active === "true";
   if (isPaid === "true" || isPaid === "false") filter.isPaid = isPaid === "true";
   if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))

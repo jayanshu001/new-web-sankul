@@ -5,6 +5,7 @@
 // integration, HttpError for predictable status codes.
 
 import mongoose, { Types } from "mongoose";
+import { buildRegexCondition } from "../../utils/searchFilter";
 import { LiveCourse, ILiveCourse } from "../../models/course/LiveCourse.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { PackageCategory } from "../../models/course/PackageCategory.model";
@@ -152,7 +153,8 @@ export const listLiveCourses = async (query: ListLiveCoursesQuery) => {
   const statusFilter = query.status;
 
   const filter: Record<string, any> = {};
-  if (search) filter.name = { $regex: search, $options: "i" };
+  const searchCond = buildRegexCondition(search);
+  if (searchCond) filter.name = searchCond;
   if (statusFilter === "true" || statusFilter === "false") {
     filter.status = statusFilter === "true";
   }

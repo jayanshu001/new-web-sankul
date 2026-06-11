@@ -17,6 +17,7 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 async function paginateCoursesWithPlans(
   baseFilters: any,
@@ -36,12 +37,7 @@ async function paginateCoursesWithPlans(
   if (isPopular === "true" || isPopular === "false") {
     filters.isPopular = isPopular === "true";
   }
-  if (search) {
-    filters.$or = [
-      { name: { $regex: search, $options: "i" } },
-      { description: { $regex: search, $options: "i" } },
-    ];
-  }
+  Object.assign(filters, buildSearchFilter(search, ["name", "description"]));
 
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
   const limitNum = Math.max(parseInt(limit, 10) || 10, 1);

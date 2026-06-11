@@ -20,6 +20,7 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { HttpError } from "../../middlewares/errorHandler";
 import cache from "../../libs/cache";
 import logger from "../../utils/logger";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
@@ -144,12 +145,7 @@ export const listCourses = async (query: ListCoursesQuery) => {
   } = query;
 
   const filter: any = {};
-  if (search) {
-    filter.$or = [
-      { name: { $regex: search, $options: "i" } },
-      { description: { $regex: search, $options: "i" } },
-    ];
-  }
+  Object.assign(filter, buildSearchFilter(search, ["name", "description"]));
   if (status === "true" || status === "false") filter.status = status === "true";
   if (isPaid === "true" || isPaid === "false") filter.isPaid = isPaid === "true";
   if (isPopular === "true" || isPopular === "false") filter.isPopular = isPopular === "true";

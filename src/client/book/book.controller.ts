@@ -14,6 +14,7 @@ import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { buildTrackingUrl, COURIER } from "../../config/courier";
 import { fetchLiveAWBData } from "../../libs/courier/tracking";
 import { isNewItem } from "../../utils/isNew";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -29,11 +30,9 @@ export const listBooks = async (req: Request, res: Response) => {
     const { search, language } = req.query as Record<string, string>;
 
     const filter: any = { status: true };
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { author: { $regex: search, $options: "i" } },
-      ];
+    {
+      const rx = buildRegexCondition(search);
+      if (rx) filter.$or = [{ name: rx }, { author: rx }];
     }
     if (language) filter.language = language;
 
@@ -99,9 +98,9 @@ export async function fetchTrendingBooksOnly(opts: TrendingOpts = {}) {
 
   const bookFilter: any = { status: true, isTrending: true };
   if (opts.language) bookFilter.language = opts.language;
-  if (opts.search) {
-    const rx = { $regex: opts.search, $options: "i" };
-    bookFilter.$or = [{ name: rx }, { author: rx }];
+  {
+    const rx = buildRegexCondition(opts.search);
+    if (rx) bookFilter.$or = [{ name: rx }, { author: rx }];
   }
   if (wantFree) bookFilter.discountedPrice = 0;
   else if (wantPaid) bookFilter.discountedPrice = { $gt: 0 };
@@ -139,9 +138,9 @@ export async function fetchTrendingEbooksOnly(opts: TrendingOpts = {}) {
 
   const ebookFilter: any = { status: true, isTrending: true };
   if (opts.language) ebookFilter.language = opts.language;
-  if (opts.search) {
-    const rx = { $regex: opts.search, $options: "i" };
-    ebookFilter.$or = [{ name: rx }, { author: rx }];
+  {
+    const rx = buildRegexCondition(opts.search);
+    if (rx) ebookFilter.$or = [{ name: rx }, { author: rx }];
   }
 
   const ebooks = await Ebook.find(ebookFilter).sort({ order: 1, createdAt: -1 }).lean();
@@ -221,10 +220,12 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
       bookFilter.language = language;
       ebookFilter.language = language;
     }
-    if (search) {
-      const rx = { $regex: search, $options: "i" };
-      bookFilter.$or = [{ name: rx }, { author: rx }];
-      ebookFilter.$or = [{ name: rx }, { author: rx }];
+    {
+      const rx = buildRegexCondition(search);
+      if (rx) {
+        bookFilter.$or = [{ name: rx }, { author: rx }];
+        ebookFilter.$or = [{ name: rx }, { author: rx }];
+      }
     }
     if (wantFree) {
       bookFilter.discountedPrice = 0;

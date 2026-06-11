@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { Role } from "../../models/admin/Role.model";
 import { Permission } from "../../models/admin/Permission.model";
 import { AdminUser } from "../../models/admin/AdminUser.model";
+import { buildRegexCondition } from "../../utils/searchFilter";
 import {
   createRoleSchema,
   updateRoleSchema,
@@ -87,7 +88,10 @@ export const listRoles = async (req: Request, res: Response) => {
 
     const filter: any = {};
     if (guard) filter.guardName = guard;
-    if (search) filter.name = { $regex: search, $options: "i" };
+    {
+      const c = buildRegexCondition(search);
+      if (c) filter.name = c;
+    }
 
     const sort: any = { [sortFieldMap[sort_by]]: sort_dir === "asc" ? 1 : -1 };
     const skip = (page - 1) * per_page;

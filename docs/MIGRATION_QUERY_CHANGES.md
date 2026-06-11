@@ -15,6 +15,156 @@
 
 ---
 
+## 2026-06-11 — Escape user input in all `$regex` text-search filters
+
+**New util:** `src/utils/searchFilter.ts` — shared helpers `escapeRegex`,
+`buildRegexCondition(search)` (trims + escapes → `{ $regex, $options:"i" }` or
+null), `buildSearchFilter(search, fields[])` (single field or `$or`), and
+`buildSearchRegExp(search)` (escaped `RegExp` for in-memory `.test()`).
+
+**What changed (query shape — escaping only, no result-set change for normal
+input):** Every list/search endpoint that built a MongoDB `$regex` (or
+`new RegExp`) directly from the raw `?search=` / `?q=` value now escapes the
+input first. Previously a search term containing regex metacharacters
+(`( ) [ ] { } . * + ? ^ $ | \`) — e.g. `January(2025)`, `(GSSSB)`, `C++`, `2025)`
+— produced `Regular expression is invalid` 500s, and crafted input (`(a+)+$`) was
+a ReDoS vector. After the fix those terms match **literally**.
+
+**Files touched (36):** admin — video, ebook.service, role, inquiry, plan,
+course.service, permissionCategory, testSeries, promocode (preserves
+`.toUpperCase()`), book, videoCategory, administrator, permission.service,
+material, package.service, examCountdown, customer, offline, exam, goal,
+promoter, live-course.service. client — ebook, course, free (incl. in-memory
+`new RegExp` → `buildSearchRegExp`), testSeries, catalog, address,
+material/entitlement, book, categories (13 call sites), package, examCountdown,
+offline, live-course. promoter — customer.
+
+**Not changed (already safe, left as-is):** the copy-title generator regexes in
+`material.controller.ts` / `videoCategory.controller.ts` (local `escape()` on a
+non-user base string); `notification.controller.ts` (escapes inline); and
+ebook-subscription / subscription / book(admin) / referral.service which already
+escape via `new RegExp(... .replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))`.
+
+**Migration/QA note:** No index or schema change. Behavior change is limited to
+search terms that contain regex metacharacters: they now match literally instead
+of throwing. Regression-check that normal alphanumeric searches return the same
+results as before.
+
+---
+
+## 2026-06-11 — Dashboard "Recently Added" is PAID packages only
+
+**File:** `src/client/dashboard/dashboard.controller.ts` — the `recentPackages`
+query feeding the home-screen "Recently Added" carousel.
+
+**What changed (filter gate):** Query was `Package.find({ active: true })`
+(top 5 by `createdAt` desc); now `Package.find({ active: true, isPaid: true })`.
+Free packages no longer appear in Recently Added (they surface via the free
+sections). Still packages-only (NOT courses), still `RECENTLY_ADDED_LIMIT = 5`.
+
+**Why:** Recently Added is a paid-product carousel; a free package
+(`GSRTC Conductor`) was leaking in. With the gate the freed slot is filled by the
+next paid package, so the section still shows up to 5.
+
+**Regression QA:** Confirm no `isPaid:false` package appears in the section; confirm
+it still returns up to 5. Reuses existing `active`/`createdAt` selectivity.
+
+---
+
+## 2026-06-11 — Category listings now inline each category's OWN direct materials
+
+**Files:**
+- `src/client/material/entitlement.ts` — new `listDirectMaterialsForCategory(categoryId, customerId, search?)`
+  helper: fetches the materials attached DIRECTLY to one category (not its
+  subtree), shaped via `shapeMaterialForClient` + `getPurchasedMaterialIds`
+  (isPaid/isPurchased + gated file/directLink). Sort `{order:1, createdAt:-1}`.
+- `src/client/catalog/catalog.controller.ts` — `getCatalogMaterials`
+  (`GET /client/catalog/:type/:id/materials`): each `list[]` entry now also
+  carries `materials: []` (the category's own direct materials).
+- `src/client/categories/categories.controller.ts` — `listMaterialCategoryChildren`
+  (`GET /client/material-categories/:id/children`): each child `list[]` entry now
+  carries `materials: []`, and the response adds `parentMaterials: []` for the
+  queried parent category's own direct materials.
+
+**What changed (response shape, not count semantics):** A material category can
+have BOTH child folders AND its own directly-attached materials (e.g. root
+"Current Affairs - Prasant Sir" has 2 child folders + 1 direct material). These
+endpoints previously returned only category meta + subtree `count`; they now also
+inline the direct materials so the FE doesn't need a follow-up call to discover
+them. `GET /client/material-categories/:id/materials` already returned the direct
+set as `data.list` — unchanged.
+
+**Note on `search`:** In both endpoints `search` continues to filter the
+CATEGORIES by title only — the inlined `materials` are each surviving category's
+full direct set (NOT re-filtered by the category search term).
+
+**Why:** FE needs to render a folder's own files alongside its sub-folders in one
+response. No count/badge change — `count` still rolls up the subtree.
+
+**Regression QA:** Verify a category with both children and own materials returns
+non-empty `materials`; verify gating (paid + unpurchased → `file`/`directLink`
+empty). Reuses existing `materialCategoryId/status` index.
+
+---
+
+## 2026-06-11 — REVERTED: free-only count gating on free products
+
+**Status:** This change was made and then **reverted in the same session** — it is
+NOT in the codebase. Recorded for history.
+
+**What it was:** Catalog tab counts (`getCatalogVideos/Materials/Tests`) and
+package-detail counts (`buildVideoCategoryGroup` / `buildMaterialCategoryGroup` /
+`buildExamCategoryEntry`) were briefly gated so that when the parent product is
+free (`isPaid === false`) only free content counted (videos `priceType:"free"`,
+materials/exams `isPaid:false`).
+
+**Why reverted:** Product decision — counts on a free course/package should count
+ALL assigned content (paid + free), not just the free subset. `loadParent` no
+longer returns `isFree`; the `isFree` param on the package builders was removed.
+
+The PUBLISHED + non-ended exam filter (next entry) was kept — only the
+paid/free gating was reverted.
+
+---
+
+## 2026-06-11 — Exam count/listing now hides ENDED scheduled exams
+
+**Files:**
+- `src/client/catalog/catalog.controller.ts` — `getCatalogTests`
+  (`GET /api/v1/client/catalog/:type/:id/tests`) per-category badge + `totals.items`.
+- `src/client/exam/exam.controller.ts` — `listExamsByCategory`
+  (`GET /api/v1/client/exams/categories/:categoryId/exams`) exam list.
+- `src/client/package/package.controller.ts` — `buildExamCategoryEntry`
+  (package detail tests count).
+
+**What changed (count/filter semantics):** Client-visible exam queries previously
+filtered only `{ status: PUBLISHED }`. They now additionally drop scheduled exams
+whose attempt window has **ended**, by adding:
+
+```js
+$or: [
+  { type: ExamType.SUBJECT },        // always-available, no window → always counts
+  { endAt: { $exists: false } },
+  { endAt: null },
+  { endAt: { $gte: now } },          // window still open
+]
+```
+
+So a `daily`/scheduled exam with `endAt` in the past is excluded; `subject` exams
+always count regardless of any stray date fields.
+
+**Why:** Ended quizzes were inflating the package `/tests` badge (observed: badge 5
+for `GSRTC Conductor` / `Gujarat Police` category, where 2 of the 5 published exams
+were ended `daily` tests → correct count is 3). Badge, drill-in listing, and package
+detail are kept consistent.
+
+**Regression QA:** Verify the `/tests` badge equals the drill-in exam list length for
+categories that mix `subject` and expired `daily` exams. No index change required, but
+queries now also touch `endAt` — existing `categoryId`/`status` indexes still cover the
+primary selectivity.
+
+---
+
 ## 2026-06-10 — Free-materials & free-videos now also scan PAID products
 
 **File:** `src/client/free/free.controller.ts` — `listFreeMaterials`

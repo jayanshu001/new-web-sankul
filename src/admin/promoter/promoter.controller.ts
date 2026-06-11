@@ -6,6 +6,7 @@ import { PromoCode } from "../../models/course/PromoCode.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { createPromoterSchema, updatePromoterSchema } from "./promoter.validation";
 import { buildPromoterOverview, buildAllPromotersOverview } from "../../promoter/dashboard/overview.service";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 const SALT_ROUNDS = 10;
@@ -14,14 +15,7 @@ const SALT_ROUNDS = 10;
 export const listPromoters = async (req: Request, res: Response) => {
   try {
     const { search, status, page = "1", limit = "20" } = req.query as Record<string, string>;
-    const filter: any = { isDelete: false };
-    if (search) {
-      filter.$or = [
-        { fullName: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-        { phone: { $regex: search, $options: "i" } },
-      ];
-    }
+    const filter: any = { isDelete: false, ...buildSearchFilter(search, ["fullName", "email", "phone"]) };
     if (status === "true" || status === "false") filter.status = status === "true";
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);

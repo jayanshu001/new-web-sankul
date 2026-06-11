@@ -10,6 +10,7 @@ import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscr
 import { Exam } from "../../models/exam/Exam.model";
 import { PackageCourseEbookPaymentType, PaymentMethod, PackageCourseEbookOrderStatus, PackageCourseEbookOrderType } from "../../models/enums";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { buildRegexCondition } from "../../utils/searchFilter";
 import logger from "../../utils/logger";
 import {
   createTestSeriesSchema,
@@ -48,7 +49,7 @@ export const listTestSeries = async (req: Request, res: Response) => {
     const { search, status, examCategoryId, page = "1", limit = "20" } =
       req.query as Record<string, string>;
     const filter: any = {};
-    if (search) filter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
     if (status === "true" || status === "false") filter.status = status === "true";
     if (examCategoryId && isObjectId(examCategoryId)) filter.examCategoryId = examCategoryId;
 

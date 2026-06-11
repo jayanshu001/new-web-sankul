@@ -27,13 +27,14 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { collapseProgressByVideo } from "../learning/collapseProgress";
 import { resolveVideoScope } from "../course/resolveVideoScope";
-import { getPurchasedMaterialIds, shapeMaterialForClient } from "../material/entitlement";
+import { getPurchasedMaterialIds, shapeMaterialForClient, listDirectMaterialsForCategory } from "../material/entitlement";
 import { LiveSession } from "../../models/course/LiveSession.model";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
 import { resolveVideoSource } from "../../utils/videoResolver";
 import { defaultListingQualities, qualitiesFromSessionRecordings } from "../../utils/videoQualities";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 // Row passthrough. The list now also embeds the encrypted playback envelope
 // (`request.files`, see listVideosByCategory) so the FE can download/play
@@ -128,7 +129,7 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
 
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const filter: any = { videoCategoryId: id, status: true };
-    if (search) filter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
     // Optional price filter. `?type=free` → only free videos, `?type=paid` →
     // only paid. Any other value is ignored (no filter). Maps to the Video
     // model's `priceType` field.
@@ -347,7 +348,7 @@ export const listMaterialsByCategory = async (req: Request, res: Response) => {
 
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const filter: any = { materialCategoryId: id, status: true };
-    if (search) filter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
     // Optional price filter. `?type=free` → only free materials, `?type=paid` →
     // only paid. Any other value is ignored (no filter). Maps to the Material
     // model's `isPaid` flag. Mirrors listVideosByCategory's `type`/priceType.
@@ -395,7 +396,7 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
 
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const filter: any = { categoryId: id, status: ExamStatus.PUBLISHED };
-    if (search) filter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
 
     const [list, total] = await Promise.all([
       Exam.find(filter).sort({ orderBy: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
@@ -441,7 +442,7 @@ export const listVideoCategoryChildren = async (req: Request, res: Response) => 
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
     const childFilter: any = { _id: { $in: childIds }, status: true };
-    if (search) childFilter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) childFilter.title = c; }
     const children = childIds.length
       ? await VideoCategory.find(childFilter)
           .sort({ order_by: 1 })
@@ -491,33 +492,44 @@ export const listMaterialCategoryChildren = async (req: Request, res: Response) 
     }
 
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const userId = req.user?.id;
     const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
     const childFilter: any = { _id: { $in: childIds }, status: true };
-    if (search) childFilter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) childFilter.title = c; }
     const children = childIds.length
       ? await MaterialCategory.find(childFilter)
           .sort({ order: 1 })
           .lean()
       : [];
 
+    // Inline each child's OWN direct materials (not its subtree) alongside its
+    // count, so a child that has both sub-folders and its own materials surfaces
+    // them here. Same shape as the materials listing (isPaid/isPurchased gated).
     const list = await Promise.all(
       children.map(async (cat: any) => {
-        const count = await Material.countDocuments({
-          materialCategoryId: cat._id,
-          status: true,
-        });
+        const [count, materials] = await Promise.all([
+          Material.countDocuments({ materialCategoryId: cat._id, status: true }),
+          // `search` filters the child CATEGORIES (above), not the inlined
+          // materials — return each surviving child's full direct material set.
+          listDirectMaterialsForCategory(cat._id, userId),
+        ]);
         return {
           category: {
             ...cat,
             havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
             count,
           },
+          materials,
         };
       })
     );
 
+    // The queried parent can itself have directly-attached materials (it has
+    // children AND its own materials). Surface those too.
+    const parentMaterials = await listDirectMaterialsForCategory(parent._id, userId);
+
     logger.info("listMaterialCategoryChildren success", { traceId, categoryId: id, childCount: list.length });
-    return res.status(200).json({ success: true, data: { parent, list } });
+    return res.status(200).json({ success: true, data: { parent, parentMaterials, list } });
   } catch (error: any) {
     logger.error("listMaterialCategoryChildren failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -546,7 +558,7 @@ export const listExamCategoryChildren = async (req: Request, res: Response) => {
     const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
     // ExamCategory's display field is `name` (not `title`), so search matches `name`.
     const childFilter: any = { _id: { $in: childIds }, status: true };
-    if (search) childFilter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) childFilter.name = c; }
     const children = childIds.length
       ? await ExamCategory.find(childFilter)
           .sort({ orderBy: 1 })
@@ -601,7 +613,7 @@ export const listPackagesByExamCountdownCategory = async (req: Request, res: Res
 
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const filter: any = { examCountdownCategoryIds: id, active: true };
-    if (search) filter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
 
     const [packages, total] = await Promise.all([
       Package.find(filter)
@@ -670,9 +682,9 @@ export const listProductsByExamCountdown = async (req: Request, res: Response) =
     const { pageNum, limitNum, skip, search } = parsePaging(req);
 
     const packageFilter: any = { examCountdownIds: id, active: true };
-    if (search) packageFilter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) packageFilter.name = c; }
     const liveFilter: any = { examCountdownIds: id, status: true };
-    if (search) liveFilter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) liveFilter.name = c; }
 
     const [packages, liveCourses] = await Promise.all([
       Package.find(packageFilter)
@@ -910,7 +922,7 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
     // an array field by element membership, so `{ examCountdownCategoryIds: id }`
     // returns every book/ebook whose array contains this category.
     const filter: any = { examCountdownCategoryIds: id, status: true };
-    if (search) filter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
 
     const [books, ebooks] = await Promise.all([
       Book.find(filter).lean(),
@@ -958,7 +970,7 @@ export const listBooksAndEbooksByExamCountdown = async (req: Request, res: Respo
 
     const { pageNum, limitNum, skip, search } = parsePaging(req);
     const filter: any = { examCountdownIds: id, status: true };
-    if (search) filter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
 
     const [books, ebooks] = await Promise.all([
       Book.find(filter).lean(),
@@ -993,7 +1005,7 @@ export const listPackageCategories = async (req: Request, res: Response) => {
 
   try {
     const filter: any = { status: true };
-    if (search) filter.title = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
 
     // Active recorded-package count per category, batched into a single
     // aggregation keyed by packageCategoryId, then looked up per row. Mirrors

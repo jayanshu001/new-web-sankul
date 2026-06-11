@@ -12,6 +12,7 @@ import { Goal } from "../../models/Goal.model";
 import { createAddressSchema, updateAddressSchema } from "./address.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 // ─── Addresses ────────────────────────────────────────────────────────────────
 
@@ -192,7 +193,7 @@ export const getStates = async (req: Request, res: Response) => {
   try {
     const { search } = req.query as Record<string, string>;
     const filter: any = { active: true };
-    if (search && search.trim()) filter.name = { $regex: search.trim(), $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
     const states = await CustomerState.find(filter)
       .select("_id name stateCode")
       .sort({ name: 1 });
@@ -228,7 +229,7 @@ export const listCities = async (req: Request, res: Response) => {
   try {
     const { search } = req.query as Record<string, string>;
     const filter: any = { status: true };
-    if (search && search.trim()) filter.name = { $regex: search.trim(), $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
     const data = await OfflineCity.find(filter).sort({ order: 1, name: 1 }).lean();
     logger.info("listCities success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });

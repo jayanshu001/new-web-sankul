@@ -4,6 +4,7 @@ import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
 import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -74,7 +75,7 @@ export const listCountdowns = async (req: Request, res: Response) => {
       }
       filter.categoryId = categoryId;
     }
-    if (search.trim()) filter.title = { $regex: search.trim(), $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
     if (includePast !== "true") filter.examDate = { $gte: todayUTC() };
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);

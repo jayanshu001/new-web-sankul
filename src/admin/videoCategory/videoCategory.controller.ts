@@ -5,6 +5,7 @@ import { Video } from "../../models/course/Video.model";
 import { Course } from "../../models/course/Course.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
+import { buildRegexCondition, buildSearchFilter } from "../../utils/searchFilter";
 import {
   createVideoCategorySchema,
   updateVideoCategorySchema,
@@ -71,12 +72,7 @@ export const listVideoCategories = async (req: Request, res: Response) => {
       parsed.data;
 
     const filter: any = {};
-    if (search) {
-      filter.$or = [
-        { title: { $regex: search, $options: "i" } },
-        { slug: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filter, buildSearchFilter(search, ["title", "slug"]));
     if (status === "true" || status === "false") filter.status = status === "true";
     if (educatorId) filter.educatorId = educatorId;
     if (childCategoryId) filter.childCategoryIds = childCategoryId;
@@ -164,7 +160,10 @@ export const listVideoCategoryCourses = async (req: Request, res: Response) => {
     const { search, status, page, per_page } = parsed.data;
 
     const filter: any = { videoCategoryId: id };
-    if (search) filter.name = { $regex: search, $options: "i" };
+    {
+      const c = buildRegexCondition(search);
+      if (c) filter.name = c;
+    }
     if (status === "true" || status === "false") filter.status = status === "true";
 
     const skip = (page - 1) * per_page;
@@ -217,13 +216,7 @@ export const listVideoCategoryVideos = async (req: Request, res: Response) => {
     const { search, status, platform, page, per_page } = parsed.data;
 
     const filter: any = { videoCategoryId: id };
-    if (search) {
-      filter.$or = [
-        { title: { $regex: search, $options: "i" } },
-        { slug: { $regex: search, $options: "i" } },
-        { topic: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filter, buildSearchFilter(search, ["title", "slug", "topic"]));
     if (status === "true" || status === "false") filter.status = status === "true";
     if (platform) filter.platform = platform;
 

@@ -10,6 +10,7 @@ import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { HttpError } from "../../middlewares/errorHandler";
 import { deleteFromS3FileUrl, isOwnBucketUrl } from "../../middlewares/upload";
 import cache from "../../libs/cache";
+import { buildRegexCondition, buildSearchFilter } from "../../utils/searchFilter";
 
 const assertObjectId = (id: string, label: string): void => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -53,14 +54,15 @@ export const listEbooks = async (query: ListEbooksQuery) => {
   const { search, author, publisher, language, status, page = "1", limit = "20" } = query;
 
   const filter: any = {};
-  if (search) {
-    filter.$or = [
-      { name: { $regex: search, $options: "i" } },
-      { author: { $regex: search, $options: "i" } },
-    ];
+  Object.assign(filter, buildSearchFilter(search, ["name", "author"]));
+  {
+    const c = buildRegexCondition(author);
+    if (c) filter.author = c;
   }
-  if (author) filter.author = { $regex: author, $options: "i" };
-  if (publisher) filter.publisher = { $regex: publisher, $options: "i" };
+  {
+    const c = buildRegexCondition(publisher);
+    if (c) filter.publisher = c;
+  }
   if (language) filter.language = language;
   if (status === "true" || status === "false") filter.status = status === "true";
 

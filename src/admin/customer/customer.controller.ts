@@ -12,6 +12,7 @@ import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscr
 import { BookOrder } from "../../models/book/BookOrder.model";
 import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSchema } from "./customer.validation";
 import { ensureDefaultFolders } from "../../client/folder/folder.controller";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 // ─── List & Get ───────────────────────────────────────────────────────────────
 
@@ -30,14 +31,7 @@ export const getCustomers = async (req: Request, res: Response) => {
 
     const filters: any = { isAccountDeleted: false };
 
-    if (search) {
-      filters.$or = [
-        { firstName: { $regex: search, $options: "i" } },
-        { lastName: { $regex: search, $options: "i" } },
-        { phoneNumber: { $regex: search, $options: "i" } },
-        { emailAddress: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filters, buildSearchFilter(search, ["firstName", "lastName", "phoneNumber", "emailAddress"]));
     if (status === "true" || status === "false") filters.status = status === "true";
     if (districtId && mongoose.Types.ObjectId.isValid(districtId)) filters.districtId = districtId;
     if (stateId && mongoose.Types.ObjectId.isValid(stateId)) filters.stateId = stateId;

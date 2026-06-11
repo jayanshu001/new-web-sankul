@@ -9,6 +9,7 @@ import {
   reorderSchema,
   sortFieldMap,
 } from "./video.validation";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 const formatZodErrors = (issues: any[]) =>
   issues.reduce<Record<string, string>>((acc, i) => {
@@ -84,13 +85,7 @@ export const listVideos = async (req: Request, res: Response) => {
       parsed.data;
 
     const filter: any = {};
-    if (search) {
-      filter.$or = [
-        { title: { $regex: search, $options: "i" } },
-        { slug: { $regex: search, $options: "i" } },
-        { topic: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filter, buildSearchFilter(search, ["title", "slug", "topic"]));
     if (status === "true" || status === "false") filter.status = status === "true";
     if (type) filter.priceType = type;
     if (platform) filter.platform = platform;

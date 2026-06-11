@@ -20,6 +20,7 @@ import {
   AppliesToType,
   PlanLinkInput,
 } from "./promocode.validation";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 const APPLIES_TO_MODEL = {
   package: Package,
@@ -162,7 +163,10 @@ export const getPromocodes = async (req: Request, res: Response) => {
     } = req.query as Record<string, string>;
 
     const filter: any = {};
-    if (search) filter.promocode = { $regex: search.toUpperCase(), $options: "i" };
+    {
+      const c = buildRegexCondition(search?.toUpperCase());
+      if (c) filter.promocode = c;
+    }
     if (status === "true" || status === "false") filter.status = status === "true";
     if (type === "public" || type === "private") filter.type = type;
     if (fromDate || toDate) {
@@ -498,9 +502,8 @@ export const getPromocodePlans = async (req: Request, res: Response) => {
       for (const lbl of g.labels ?? []) labelName.set(String(lbl._id), lbl.name);
     }
 
-    const nameFilter = search
-      ? { name: { $regex: search, $options: "i" } }
-      : {};
+    const nameCondition = buildRegexCondition(search);
+    const nameFilter = nameCondition ? { name: nameCondition } : {};
 
     const entities: any[] = [];
     const examTypes = new Map<string, string>();
