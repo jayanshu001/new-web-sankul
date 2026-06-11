@@ -9,7 +9,7 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamResult } from "../../models/exam/ExamResult.model";
-import { ExamStatus } from "../../models/enums";
+import { ExamStatus, ExamType } from "../../models/enums";
 import { Material } from "../../models/course/Material.model";
 import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { getPurchasedMaterialIds, shapeMaterialForClient } from "../material/entitlement";
@@ -236,6 +236,8 @@ export const listFreeTests = async (req: Request, res: Response) => {
     const baseMatch: any = {
       status: ExamStatus.PUBLISHED,
       isPaid: false,
+      // Only subject tests belong here; daily/mock/weekly are surfaced elsewhere.
+      type: ExamType.SUBJECT,
       categoryId: { $in: examCategoryIds },
       // Bucket on the scheduled date. This gate also excludes tests with a null
       // `startAt` (and any scheduled in the future), matching quizzes/daily.
