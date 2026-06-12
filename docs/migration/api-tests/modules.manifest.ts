@@ -115,4 +115,146 @@ export const MIGRATED_API_MODULES = [
     ],
     yarnScript: "migration:api:catalog",
   },
+  {
+    // Catalog · eBook (catalog-ebook) — WIRED behind isEbookMysql() (flag OFF).
+    // GET /client/ebooks + /:id compose ws_ebook + commerce-price (shared price
+    // table, ebook plans) + commerce-ebook-sub (entitlement). No separate
+    // ebook-price table/module. Verified via tsx.
+    key: "catalog-ebook",
+    testFiles: ["catalog-ebook/client.api.test.ts"],
+    endpoints: [
+      "GET client/ebooks — listing (ws_ebook + plans + purchase state)",
+      "GET client/ebooks/:id — detail",
+    ],
+    yarnScript: "migration:api:catalog-ebook",
+  },
+  {
+    // Catalog · Material (catalog-material) — WIRED behind isMaterialMysql()
+    // (flag OFF), category NAVIGATION only. GET /material-categories/:id/children
+    // = ws_material_category (children via SQL parent self-FK) + ws_material
+    // (per-child count). Item listing stays blocked (entitlement + LiveCourse +
+    // Mongo embeds). Verified via tsx.
+    key: "catalog-material",
+    testFiles: ["catalog-material/client.api.test.ts"],
+    endpoints: [
+      "GET client/material-categories/:id/children — category navigation (parent → children + counts)",
+    ],
+    yarnScript: "migration:api:catalog-material",
+  },
+  {
+    // Catalog · Exam (catalog-exam) — WIRED behind isExamMysql() (flag OFF),
+    // category NAVIGATION only (mirrors catalog-material). GET
+    // /exam-categories/:id/children = ws_exam_category (children via SQL
+    // parent_id self-FK, active=status&&!deleted) + ws_exam (UNCONDITIONAL count).
+    // Item/attempt surface not migrated. Verified via tsx.
+    key: "catalog-exam",
+    testFiles: ["catalog-exam/client.api.test.ts"],
+    endpoints: [
+      "GET client/exam-categories/:id/children — category navigation (parent → children + counts)",
+    ],
+    yarnScript: "migration:api:catalog-exam",
+  },
+  {
+    // Catalog · Book (catalog-book) — flag OFF, NOT wired (like catalog-package).
+    // Book DATA reads over ws_book; listBooks/getBookDetail enrich with cart qty
+    // + isPurchased from unmigrated ws_book_order/cart (int-vs-ObjectId), so it
+    // flips with the book-order/cart wave. Verified via tsx.
+    key: "catalog-book",
+    testFiles: ["catalog-book/client.api.test.ts"],
+    endpoints: [
+      "(no wired HTTP endpoint — book DATA reads verified via tsx; flips with the book-order/cart wave)",
+    ],
+    yarnScript: "migration:api:catalog-book",
+  },
+  {
+    // Offline · Center/Batch (offline-batch) — WIRED behind isOfflineBatchMysql()
+    // (flag OFF), browse reads. GET /client/offline/{centers,batches}(/:id) from
+    // ws_offline_center + ws_offline_batch (+ city). PUBLIC routes. Schema fixes:
+    // phone Int→BigInt (overflow), removed phantom status. Dashboard stays Mongo
+    // (OfflineBannerSlider); enquiry is a write path. Verified via tsx.
+    key: "offline-batch",
+    testFiles: ["offline-batch/client.api.test.ts"],
+    endpoints: [
+      "GET client/offline/centers (+ ?cityId/?search)",
+      "GET client/offline/batches (+ ?centerId/?cityId/?upcoming/?search)",
+      "GET client/offline/centers/:id · GET client/offline/batches/:id",
+    ],
+    yarnScript: "migration:api:offline-batch",
+  },
+  {
+    // Commerce 3a · Price (commerce-price) — flag OFF, read-only lookup over
+    // ws_package_course_ebook_price (1353). No standalone wired HTTP endpoint
+    // (every consumer joins int catalog + ObjectId subscription/order rows), so
+    // the data path is proven via tsx; the HTTP suite records that + a
+    // flag-gated placeholder. Flips with the commerce wave alongside catalog.
+    key: "commerce-price",
+    testFiles: ["commerce-price/client.api.test.ts"],
+    endpoints: [
+      "(no standalone HTTP endpoint — plan/pricing lookup verified via tsx; flips with catalog + 3a)",
+    ],
+    yarnScript: "migration:api:commerce-price",
+  },
+  {
+    // Commerce 3a · Subscription READ (commerce-subscription) — flag OFF,
+    // read-only entitlement source of truth over ws_package_course_subscription
+    // (2). No standalone HTTP endpoint (rows gate other consumers' access; joined
+    // on int catalog + int customer ids). Verified via tsx incl. the bigint
+    // `tracking` schema fix. Writes are 3b. Flips with catalog + 3a.
+    key: "commerce-subscription",
+    testFiles: ["commerce-subscription/client.api.test.ts"],
+    endpoints: [
+      "(no standalone HTTP endpoint — READ entitlement checks verified via tsx; writes are 3b; flips with catalog + 3a)",
+    ],
+    yarnScript: "migration:api:commerce-subscription",
+  },
+  {
+    // Commerce 3a · eBook Subscription READ (commerce-ebook-sub) — flag OFF,
+    // read-only ebook entitlement over ws_ebook_subscription (1). No standalone
+    // HTTP endpoint (rows gate ebook read/download access). Verified via tsx
+    // incl. the Prisma status/payment_type additions. Writes are 3b. Flips with
+    // catalog + 3a.
+    key: "commerce-ebook-sub",
+    testFiles: ["commerce-ebook-sub/client.api.test.ts"],
+    endpoints: [
+      "(no standalone HTTP endpoint — READ ebook entitlement checks verified via tsx; writes are 3b; flips with catalog + 3a)",
+    ],
+    yarnScript: "migration:api:commerce-ebook-sub",
+  },
+  {
+    // Commerce 3a · Promoter READ (commerce-promoter) — flag OFF, read-only
+    // promocode owner master over ws_promoter (114). No standalone HTTP endpoint
+    // (ids hydrate promocode owners). `password` never surfaced. Verified via tsx.
+    key: "commerce-promoter",
+    testFiles: ["commerce-promoter/client.api.test.ts"],
+    endpoints: [
+      "(no standalone HTTP endpoint — READ owner master verified via tsx; flips with catalog + 3a)",
+    ],
+    yarnScript: "migration:api:commerce-promoter",
+  },
+  {
+    // Commerce 3a · Promocode READ (commerce-promocode) — flag OFF, SQL-faithful
+    // over ws_promocode (2) + ws_promoted_package_course_ebook (5). The SQL
+    // tables do NOT carry the Mongo appliesTo/discountValue model the client
+    // applyPromocode reads → CANNOT serve that contract this wave; appliesTo
+    // reconciliation is a later effort. Verified via tsx.
+    key: "commerce-promocode",
+    testFiles: ["commerce-promocode/client.api.test.ts"],
+    endpoints: [
+      "(no standalone HTTP endpoint — SQL-faithful reads verified via tsx; NOT the client appliesTo contract; flips with catalog + 3a)",
+    ],
+    yarnScript: "migration:api:commerce-promocode",
+  },
+  {
+    // Commerce 3a · Educator READ (commerce-educator) — flag OFF, read-only full
+    // entity master over ws_course_educator (56). The FINAL 3a read module. No
+    // standalone HTTP endpoint of its own (served via the Mongo educator
+    // controller; ids embed in course listings). `password` never surfaced;
+    // bigint-unsigned id mapped Int (latent risk logged). Verified via tsx.
+    key: "commerce-educator",
+    testFiles: ["commerce-educator/client.api.test.ts"],
+    endpoints: [
+      "(no standalone HTTP endpoint — READ master + {_id,name,image} ref verified via tsx; flips with catalog + 3a)",
+    ],
+    yarnScript: "migration:api:commerce-educator",
+  },
 ] as const;

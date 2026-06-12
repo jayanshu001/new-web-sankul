@@ -60,10 +60,68 @@ export interface CourseDto {
   level: string;
   order: number;
   status: boolean;
+  /** Mongo `isPopular` ← SQL `is_featured` enum('0','1'); default false. */
+  isPopular: boolean;
+  /** Mongo `isPaid` ← SQL `purchase` enum('0','1'); NULL/'1' → true (Mongo default), '0' → false. */
+  isPaid: boolean;
   courseSubjectCategoryId: string | null;
   courseEducatorId: string | null;
   videoCategoryId: string | null;
   pcMaterialId: string | null;
   createdAt: Date | null;
   updatedAt: Date | null;
+}
+
+/** Lightweight populated ref ({_id, name} or {_id, title}) on a list item. */
+export interface CourseRefDto {
+  _id: string;
+  name?: string;
+  title?: string;
+}
+
+/** One plan row split bucket (withMaterial / withoutMaterial), Mongo-shaped. */
+export interface CoursePlanBuckets {
+  withMaterial: unknown[];
+  withoutMaterial: unknown[];
+}
+
+/**
+ * A course list item as `listCoursesHandler` returns it: the course row +
+ * populated educator/subject/video-category refs + plans split by material +
+ * the per-customer purchase state (isPurchased / daysLeft). Mirrors the Mongo
+ * `paginateCoursesWithPlans` output shape.
+ */
+export interface CourseListItemDto
+  extends Omit<CourseDto, "courseEducatorId" | "courseSubjectCategoryId" | "videoCategoryId"> {
+  courseEducatorId: CourseRefDto | string | null;
+  courseSubjectCategoryId: CourseRefDto | string | null;
+  videoCategoryId: CourseRefDto | string | null;
+  isPurchased: boolean;
+  daysLeft: number | null;
+  plans: CoursePlanBuckets;
+}
+
+/** Paginated course-listing envelope (matches the Mongo handler's `{data, pagination}`). */
+export interface PaginatedCourses {
+  data: CourseListItemDto[];
+  pagination: {
+    total: number;
+    page: number;
+    limit: number;
+    totalPages: number;
+  };
+}
+
+/** Options accepted by the paginated course listing (from the query string). */
+export interface ListCoursesOptions {
+  search?: string;
+  isPopular?: boolean;
+  page?: number;
+  limit?: number;
+  sortBy?: "createdAt" | "ordered" | "name";
+  sortOrder?: "asc" | "desc";
+  /** Resolved int customer id for purchase-state (C3 boundary). */
+  customerId?: number;
+  /** Restrict to a subject category (listCoursesByCategory). */
+  categoryId?: number;
 }

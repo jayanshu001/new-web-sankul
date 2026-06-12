@@ -8,6 +8,14 @@ import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
 import { OfflineEnquiry } from "../../models/offline/OfflineEnquiry.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isOfflineBatchMysql,
+  parseOfflineId,
+  listCenters as listCentersMysql,
+  listBatches as listBatchesMysql,
+  getCenterDetail as getCenterDetailMysql,
+  getBatchDetail as getBatchDetailMysql,
+} from "../../modules/offline-batch/offline-batch.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -134,6 +142,17 @@ export const listCenters = async (req: Request, res: Response) => {
 
   try {
     const { cityId, search } = req.query as Record<string, string>;
+
+    if (isOfflineBatchMysql()) {
+      const cid = cityId ? parseOfflineId(cityId) : null;
+      const data = await listCentersMysql({
+        cityId: cid ?? undefined,
+        search: search?.trim() || undefined,
+      });
+      logger.info("listCenters success", { traceId, count: data.length, source: "mysql" });
+      return res.status(200).json({ success: true, data });
+    }
+
     const filter: any = { status: true };
     if (cityId && isObjectId(cityId)) filter.cityId = cityId;
     if (search && search.trim()) filter.name = { $regex: search.trim(), $options: "i" };
@@ -156,6 +175,18 @@ export const listBatches = async (req: Request, res: Response) => {
 
   try {
     const { centerId, cityId, upcoming, search } = req.query as Record<string, string>;
+
+    if (isOfflineBatchMysql()) {
+      const data = await listBatchesMysql({
+        centerId: centerId ? parseOfflineId(centerId) ?? undefined : undefined,
+        cityId: cityId ? parseOfflineId(cityId) ?? undefined : undefined,
+        upcoming: upcoming === "true",
+        search: search?.trim() || undefined,
+      });
+      logger.info("listBatches success", { traceId, count: data.length, source: "mysql" });
+      return res.status(200).json({ success: true, data });
+    }
+
     const filter: any = { status: true };
     if (centerId && isObjectId(centerId)) filter.centerId = centerId;
     if (search && search.trim()) filter.name = { $regex: search.trim(), $options: "i" };
@@ -189,6 +220,15 @@ export const getCenterDetail = async (req: Request, res: Response) => {
   logger.info("getCenterDetail invoked", { traceId, path: req.originalUrl, centerId: id });
 
   try {
+    if (isOfflineBatchMysql()) {
+      const cid = parseOfflineId(id);
+      if (cid == null) { logger.warn("getCenterDetail invalid id (mysql)", { traceId, centerId: id }); return res.status(400).json({ success: false, message: "Invalid center id." }); }
+      const data = await getCenterDetailMysql(cid);
+      if (!data) { logger.warn("getCenterDetail not found (mysql)", { traceId, centerId: id }); return res.status(404).json({ success: false, message: "Center not found." }); }
+      logger.info("getCenterDetail success", { traceId, centerId: id, batchCount: data.batches.length, source: "mysql" });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) { logger.warn("getCenterDetail invalid id", { traceId, centerId: id }); return res.status(400).json({ success: false, message: "Invalid center id." }); }
 
     const center = await OfflineCenter.findOne({ _id: id, status: true })
@@ -215,6 +255,15 @@ export const getBatchDetail = async (req: Request, res: Response) => {
   logger.info("getBatchDetail invoked", { traceId, path: req.originalUrl, batchId: id });
 
   try {
+    if (isOfflineBatchMysql()) {
+      const bid = parseOfflineId(id);
+      if (bid == null) { logger.warn("getBatchDetail invalid id (mysql)", { traceId, batchId: id }); return res.status(400).json({ success: false, message: "Invalid batch id." }); }
+      const data = await getBatchDetailMysql(bid);
+      if (!data) { logger.warn("getBatchDetail not found (mysql)", { traceId, batchId: id }); return res.status(404).json({ success: false, message: "Batch not found." }); }
+      logger.info("getBatchDetail success", { traceId, batchId: id, source: "mysql" });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) { logger.warn("getBatchDetail invalid id", { traceId, batchId: id }); return res.status(400).json({ success: false, message: "Invalid batch id." }); }
 
     const batch = await OfflineBatch.findOne({ _id: id, status: true })

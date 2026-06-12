@@ -25,6 +25,16 @@ import { resolveVideoSource } from "../../utils/videoResolver";
 import { defaultListingQualities, qualitiesFromSessionRecordings } from "../../utils/videoQualities";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isMaterialMysql,
+  getCategoryChildren as getMaterialCategoryChildren,
+  parseMaterialCategoryId,
+} from "../../modules/catalog-material/catalog-material.service";
+import {
+  isExamMysql,
+  getCategoryChildren as getExamCategoryChildren,
+  parseExamCategoryId,
+} from "../../modules/catalog-exam/catalog-exam.service";
 
 // Row passthrough. The list now also embeds the encrypted playback envelope
 // (`request.files`, see listVideosByCategory) so the FE can download/play
@@ -470,6 +480,25 @@ export const listMaterialCategoryChildren = async (req: Request, res: Response) 
   logger.info("listMaterialCategoryChildren invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
+    // MySQL branch first — a MySQL category id is an int, so this precedes the
+    // ObjectId guard. Children resolve via the SQL `parent` self-FK (the Mongo
+    // `childCategoryIds[]` embed has no SQL column).
+    if (isMaterialMysql()) {
+      const catId = parseMaterialCategoryId(id);
+      if (catId == null) {
+        logger.warn("listMaterialCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
+        return res.status(400).json({ success: false, message: "Invalid category id." });
+      }
+      const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+      const result = await getMaterialCategoryChildren(catId, search || undefined);
+      if (!result) {
+        logger.warn("listMaterialCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
+        return res.status(404).json({ success: false, message: "Material category not found." });
+      }
+      logger.info("listMaterialCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
+      return res.status(200).json({ success: true, data: result });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listMaterialCategoryChildren invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
@@ -522,6 +551,24 @@ export const listExamCategoryChildren = async (req: Request, res: Response) => {
   logger.info("listExamCategoryChildren invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
+    // MySQL branch first — a MySQL category id is an int, so this precedes the
+    // ObjectId guard. Children resolve via the SQL `parent_id` self-FK.
+    if (isExamMysql()) {
+      const catId = parseExamCategoryId(id);
+      if (catId == null) {
+        logger.warn("listExamCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
+        return res.status(400).json({ success: false, message: "Invalid category id." });
+      }
+      const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+      const result = await getExamCategoryChildren(catId, search || undefined);
+      if (!result) {
+        logger.warn("listExamCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
+        return res.status(404).json({ success: false, message: "Exam category not found." });
+      }
+      logger.info("listExamCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
+      return res.status(200).json({ success: true, data: result });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listExamCategoryChildren invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });

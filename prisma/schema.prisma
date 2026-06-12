@@ -60,6 +60,14 @@ enum VideoType {
   paid
 }
 
+// ws_course `is_featured` / `purchase` are MySQL enum('0','1'). Prisma enum
+// identifiers cannot start with a digit, so the values are @map'd to '0'/'1'.
+// The transformer converts these to the Mongo booleans isPopular / isPaid.
+enum CourseFlag01 {
+  no  @map("0")
+  yes @map("1")
+}
+
 enum PackageCourseEbookOrderType {
   purchase
 }
@@ -474,7 +482,7 @@ model Book {
   list_price       Int
   discounted_price Int
   shipping_price   Int
-  order_by         Int
+  order_by         Int?
   language         String          @default("Gujarati")
   is_magazine      Boolean         @default(false)
   isCombo          Boolean         @default(false) @map("is_combo")
@@ -683,8 +691,8 @@ model PendriveCourseOrder {
 
 model ExamCategory {
   id                  Int                   @id @default(autoincrement())
-  name                String
-  image               String
+  name                String?
+  image               String?
   parent              Int                   @map("parent_id")
   status              Boolean
   order_by            Int
@@ -904,9 +912,9 @@ model EBook {
   name               String
   thumbnail          String
   image              String
-  description        String
+  description        String?
   termsAndConditions String                    @map("terms_and_conditions")
-  author             String
+  author             String?
   publisher          String?
   orderby            Int                       @map("order_by")
   language           EBookLanguage
@@ -1079,6 +1087,9 @@ model Course {
   material                  PackageCourseMaterial?      @relation(fields: [pcMaterialId], references: [id])
   pcMaterialId              Int?                        @map("pc_material_id")
   level                     String
+  purchase                  CourseFlag01?               @map("purchase")
+  is_featured               CourseFlag01?               @map("is_featured")
+  featured_order            Int?                        @map("featured_order")
   status                    Boolean
   createdAt                 DateTime?                   @map("created_at")
   updatedAt                 DateTime?                   @map("updated_at")
@@ -1204,7 +1215,7 @@ model PackageCourseSubscription {
   customerShipping                  CustomerShipping?                  @relation(fields: [shippingId], references: [id])
   shippingId                        Int?                               @map("shipping")
   packageCourseSubscriptionTracking PackageCourseSubscriptionTracking? @relation(fields: [trackingId], references: [id])
-  trackingId                        Int?                               @map("tracking")
+  trackingId                        BigInt?                            @map("tracking")
   startAt                           DateTime?                          @map("start_at")
   endAt                             DateTime?                          @map("end_at")
   amount                            Decimal?
@@ -1222,7 +1233,7 @@ model PackageCourseSubscription {
 }
 
 model PackageCourseSubscriptionTracking {
-  id                        Int                         @id @default(autoincrement())
+  id                        BigInt                      @id @default(autoincrement())
   PackageCourseOrder        PackageCourseOrder?         @relation(fields: [orderId], references: [id])
   orderId                   Int?                        @map("order")
   status                    String
@@ -1267,12 +1278,14 @@ model EBookSubscription {
   customerId Int?        @map("customer_id")
   eBook      EBook?      @relation(fields: [ebookId], references: [id])
   ebookId    Int?        @map("ebook_id")
-  price      Decimal
-  startAt    DateTime    @map("start_at")
-  endAt      DateTime    @map("end_at")
-  remarks    String?
-  createdAt  DateTime?   @map("created_at")
-  updatedAt  DateTime?   @map("updated_at")
+  price        Decimal
+  startAt      DateTime?                     @map("start_at")
+  endAt        DateTime?                     @map("end_at")
+  remarks      String?
+  payment_type PackageCourseEbookPaymentType
+  status       Boolean?
+  createdAt    DateTime?                     @map("created_at")
+  updatedAt    DateTime?                     @map("updated_at")
 
   @@map("ws_ebook_subscription")
 }
@@ -1281,9 +1294,9 @@ model EBookSubscription {
 
 model Promoter {
   id         Int         @id @default(autoincrement())
-  full_name  String
-  email      String
-  phone      String
+  full_name  String?
+  email      String?
+  phone      String?
   image      String?
   status     Boolean
   is_delete  Boolean
@@ -1298,11 +1311,11 @@ model Promocode {
   id                         Int                          @id @default(autoincrement())
   promoter                   Promoter?                    @relation(fields: [promoterId], references: [id])
   promoterId                 Int?                         @map("promoter_id")
-  promocode                  String
+  promocode                  String?
   title                      String?
   description                String?
-  promo_start_at             DateTime
-  promo_expire_at            DateTime
+  promo_start_at             DateTime?
+  promo_expire_at            DateTime?
   type                       PromocodeType
   status                     Boolean
   created_at                 DateTime?
@@ -1360,7 +1373,7 @@ model OfflineCenter {
   address   String         @map("address")
   latitude  Float          @map("latitude")
   longitude Float          @map("longitude")
-  phone     Int            @map("phone")
+  phone     BigInt         @map("phone")
   cityId    Int            @map("city_id")
   city      OfflineCity?   @relation(fields: [cityId], references: [id])
   createdAt DateTime       @map("created_at")
@@ -1379,7 +1392,6 @@ model OfflineBatch {
   duration       String           @map("duration")
   centerId       Int              @map("center_id")
   center         OfflineCenter?   @relation(fields: [centerId], references: [id])
-  status         Boolean
   createdAt      DateTime         @map("created_at")
   updatedAt      DateTime         @map("updated_at")
   OfflineEnquiry OfflineEnquiry[]
@@ -1393,10 +1405,11 @@ model OfflineEnquiry {
   customer      Customer?    @relation(fields: [userId], references: [id])
   name          String       @map("name")
   email         String       @map("email")
-  mobile        Int          @map("mobile")
+  mobile        BigInt       @map("mobile")
   qualification String       @map("qualification")
   batchId       Int          @map("batch_id")
   batch         OfflineBatch @relation(fields: [batchId], references: [id])
+  createdAt     DateTime?    @map("created_at")
 
   @@map("ws_offline_enquiry")
 }

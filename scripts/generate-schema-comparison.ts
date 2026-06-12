@@ -224,6 +224,33 @@ function main() {
       status = MIGRATED.includes("catalog-video") ? "✅ Migrated" : "🟡 Code ready (flag off)";
     if (table === "ws_video_category_relation" || table === "ws_video_category_package_relation")
       status = "🟡 Prisma ready (deferred — D2)";
+    // Commerce 3a (read-only): flips with the commerce wave alongside catalog.
+    if (table === "ws_package_course_ebook_price")
+      status = MIGRATED.includes("commerce-price") ? "✅ Migrated" : "🟡 Code ready (flag off)";
+    if (table === "ws_package_course_subscription")
+      status = MIGRATED.includes("commerce-subscription") ? "✅ Migrated" : "🟡 Code ready (flag off, read-only)";
+    if (table === "ws_ebook_subscription")
+      status = MIGRATED.includes("commerce-ebook-sub") ? "✅ Migrated" : "🟡 Code ready (flag off, read-only)";
+    if (table === "ws_promoter")
+      status = MIGRATED.includes("commerce-promoter") ? "✅ Migrated" : "🟡 Code ready (flag off, read-only)";
+    if (table === "ws_promocode" || table === "ws_promoted_package_course_ebook")
+      status = MIGRATED.includes("commerce-promocode") ? "✅ Migrated" : "🟡 Code ready (flag off, SQL-faithful)";
+    if (table === "ws_course_educator")
+      status = MIGRATED.includes("commerce-educator") ? "✅ Migrated" : "🟡 Code ready (flag off, read-only)";
+    if (table === "ws_ebook")
+      status = MIGRATED.includes("catalog-ebook") ? "✅ Migrated" : "🟡 Code ready (flag off, wired)";
+    if (table === "ws_material_category")
+      status = MIGRATED.includes("catalog-material") ? "✅ Migrated" : "🟡 Code ready (flag off, nav-only)";
+    if (table === "ws_material")
+      status = MIGRATED.includes("catalog-material") ? "✅ Migrated (nav counts)" : "🟡 Partial (nav counts; item listing blocked)";
+    if (table === "ws_exam_category")
+      status = MIGRATED.includes("catalog-exam") ? "✅ Migrated" : "🟡 Code ready (flag off, nav-only)";
+    if (table === "ws_exam")
+      status = MIGRATED.includes("catalog-exam") ? "✅ Migrated (nav counts)" : "🟡 Partial (nav counts; item/attempt blocked)";
+    if (table === "ws_book")
+      status = MIGRATED.includes("catalog-book") ? "✅ Migrated (data reads)" : "🟡 Code ready (flag off, not wired — order/cart deps)";
+    if (table === "ws_offline_center" || table === "ws_offline_batch")
+      status = MIGRATED.includes("offline-batch") ? "✅ Migrated (reads)" : "🟡 Code ready (flag off, wired reads)";
 
     let notes = "";
     if (mColl !== "—" && mColl !== table && best < 100) notes = "Collection name differs from MySQL table";

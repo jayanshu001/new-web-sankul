@@ -57,4 +57,54 @@ export const catalogCourseRepository = {
       where: { status: true, courseSubjectCategoryId: categoryId },
       orderBy: [{ ordered: "asc" }, { id: "desc" }],
     }),
+
+  /**
+   * Paginated active courses for the `listCourses` handler — supports the
+   * `isPopular` filter, name/description search, sort, and an optional category
+   * restriction. Includes the lightweight populated refs the handler embeds
+   * (`courseEducatorId` {_id,name}, `courseSubjectCategoryId`/`videoCategoryId`
+   * {_id,title}). Returns `[rows, total]`.
+   */
+  paginateActiveCourses: (args: {
+    where: {
+      isPopular?: boolean;
+      search?: string;
+      categoryId?: number;
+    };
+    orderBy: { field: "createdAt" | "ordered" | "name"; dir: "asc" | "desc" };
+    skip: number;
+    take: number;
+  }) => {
+    const where = {
+      status: true,
+      ...(args.where.isPopular != null
+        ? { is_featured: args.where.isPopular ? ("yes" as const) : ("no" as const) }
+        : {}),
+      ...(args.where.categoryId != null
+        ? { courseSubjectCategoryId: args.where.categoryId }
+        : {}),
+      ...(args.where.search
+        ? {
+            OR: [
+              { name: { contains: args.where.search } },
+              { description: { contains: args.where.search } },
+            ],
+          }
+        : {}),
+    };
+    return Promise.all([
+      prisma.course.findMany({
+        where,
+        orderBy: [{ [args.orderBy.field]: args.orderBy.dir }, { id: "desc" }],
+        skip: args.skip,
+        take: args.take,
+        include: {
+          educator: { select: { id: true, name: true } },
+          subject: { select: { id: true, title: true } },
+          VideoCategory: { select: { id: true, title: true } },
+        },
+      }),
+      prisma.course.count({ where }),
+    ]);
+  },
 };

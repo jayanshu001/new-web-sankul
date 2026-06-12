@@ -1,6 +1,6 @@
 # Migrated modules (MySQL / Prisma)
 
-> **Generated:** 2026-06-11 — re-run `yarn docs:migrated-modules` when you add a module  
+> **Generated:** 2026-06-12 — re-run `yarn docs:migrated-modules` when you add a module  
 > **Scope:** Only modules with **repository → service → transformer** on **legacy MySQL** tables  
 > **Enable in runtime:** `MIGRATION_MYSQL_MODULES` in `.env`
 
@@ -10,9 +10,9 @@
 
 | | |
 |---|---|
-| **Total migrated (code complete)** | 18 |
-| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city` |
-| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video` |
+| **Total migrated (code complete)** | 29 |
+| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, customer-address, customer-profile, customer-bank-account, offline-city, catalog-package-type, catalog-package, catalog-course, catalog-video, catalog-ebook, catalog-material, catalog-book, offline-batch, catalog-exam, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator` |
+| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator` |
 
 | # | Module key | Label | MySQL table | Mongo collection | Env | Detail |
 |---:|---|---|---|---|---|---|
@@ -26,14 +26,25 @@
 | 8 | `popup` | Popup Notification | `ws_popup_notification` | `ws_popup_notifications` | ✅ enabled | [Detail](#popup) |
 | 9 | `customer-auth` | Customer Auth (OTP/token) | `ws_customer (+ ws_customer_otp, ws_customer_access_token)` | `ws_customers / ws_customer_otps / ws_customer_access_tokens` | ✅ enabled | [Detail](#customer-auth) |
 | 10 | `customer-lookups` | Customer Lookups (state/district/education/goal) | `ws_customer_state / ws_customer_distict / ws_customer_education / ws_customer_target_goal` | `ws_customer_states / ws_customer_districts / ws_customer_educations / ws_customer_target_goals` | ✅ enabled | [Detail](#customer-lookups) |
-| 11 | `customer-address` | Customer Address | `ws_customer_address` | `ws_customer_addresses` | ⏸ not in env | [Detail](#customer-address) |
-| 12 | `customer-profile` | Customer Profile | `ws_customer` | `ws_customers` | ⏸ not in env | [Detail](#customer-profile) |
-| 13 | `customer-bank-account` | Customer Bank Account | `ws_customer_bank_account` | `ws_customer_bank_accounts` | ⏸ not in env | [Detail](#customer-bank-account) |
+| 11 | `customer-address` | Customer Address | `ws_customer_address` | `ws_customer_addresses` | ✅ enabled | [Detail](#customer-address) |
+| 12 | `customer-profile` | Customer Profile | `ws_customer` | `ws_customers` | ✅ enabled | [Detail](#customer-profile) |
+| 13 | `customer-bank-account` | Customer Bank Account | `ws_customer_bank_account` | `ws_customer_bank_accounts` | ✅ enabled | [Detail](#customer-bank-account) |
 | 14 | `offline-city` | Offline City | `ws_offline_city` | `ws_offline_cities` | ✅ enabled | [Detail](#offline-city) |
-| 15 | `catalog-package-type` | Catalog · Package Type | `ws_package_type` | `ws_package_types` | ⏸ not in env | [Detail](#catalog-package-type) |
-| 16 | `catalog-package` | Catalog · Package | `ws_package` | `ws_packages` | ⏸ not in env | [Detail](#catalog-package) |
-| 17 | `catalog-course` | Catalog · Course | `ws_course / ws_course_subject_category` | `ws_courses / coursesubjectcategories` | ⏸ not in env | [Detail](#catalog-course) |
-| 18 | `catalog-video` | Catalog · Video (+ URL-encryption contract) | `ws_video / ws_video_category` | `videos / videocategories` | ⏸ not in env | [Detail](#catalog-video) |
+| 15 | `catalog-package-type` | Catalog · Package Type | `ws_package_type` | `ws_package_types` | ✅ enabled | [Detail](#catalog-package-type) |
+| 16 | `catalog-package` | Catalog · Package | `ws_package` | `ws_packages` | ✅ enabled | [Detail](#catalog-package) |
+| 17 | `catalog-course` | Catalog · Course | `ws_course / ws_course_subject_category` | `ws_courses / coursesubjectcategories` | ✅ enabled | [Detail](#catalog-course) |
+| 18 | `catalog-video` | Catalog · Video (+ URL-encryption contract) | `ws_video / ws_video_category` | `videos / videocategories` | ✅ enabled | [Detail](#catalog-video) |
+| 19 | `catalog-ebook` | Catalog · eBook (+ listing/detail composition) | `ws_ebook` | `ws_ebooks` | ✅ enabled | [Detail](#catalog-ebook) |
+| 20 | `catalog-material` | Catalog · Material (category navigation) | `ws_material / ws_material_category` | `ws_materials / ws_material_categories` | ✅ enabled | [Detail](#catalog-material) |
+| 21 | `catalog-book` | Catalog · Book (physical-book store reads) | `ws_book` | `ws_books` | ✅ enabled | [Detail](#catalog-book) |
+| 22 | `offline-batch` | Offline · Center/Batch (browse reads) | `ws_offline_center / ws_offline_batch` | `ws_offline_centers / ws_offline_batches` | ✅ enabled | [Detail](#offline-batch) |
+| 23 | `catalog-exam` | Catalog · Exam (category navigation) | `ws_exam / ws_exam_category` | `ws_exams / ws_exam_categories` | ✅ enabled | [Detail](#catalog-exam) |
+| 24 | `commerce-price` | Commerce · Price (plan/pricing lookup) | `ws_package_course_ebook_price` | `ws_package_course_ebook_prices` | ✅ enabled | [Detail](#commerce-price) |
+| 25 | `commerce-subscription` | Commerce · Subscription (READ — entitlement source of truth) | `ws_package_course_subscription` | `ws_package_course_subscriptions` | ✅ enabled | [Detail](#commerce-subscription) |
+| 26 | `commerce-ebook-sub` | Commerce · eBook Subscription (READ — ebook entitlement) | `ws_ebook_subscription` | `ws_ebook_subscriptions` | ✅ enabled | [Detail](#commerce-ebook-sub) |
+| 27 | `commerce-promoter` | Commerce · Promoter (READ — promocode owner master) | `ws_promoter` | `ws_promoter` | ✅ enabled | [Detail](#commerce-promoter) |
+| 28 | `commerce-promocode` | Commerce · Promocode (READ — SQL-faithful, NOT the client appliesTo model) | `ws_promocode / ws_promoted_package_course_ebook` | `ws_promo_codes / (embedded)` | ✅ enabled | [Detail](#commerce-promocode) |
+| 29 | `commerce-educator` | Commerce · Educator (READ — full entity master) | `ws_course_educator` | `ws_course_educators` | ✅ enabled | [Detail](#commerce-educator) |
 
 ---
 
@@ -41,7 +52,7 @@
 
 ```env
 DATABASE_URL=mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging
-MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video
+MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator
 ```
 
 - Toggle: `src/config/migration.ts` → `isMysqlModule("<key>")`
@@ -317,7 +328,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `customer-address` |
 | **Phase** | 2 |
 | **Migrated** | 2026-06-10 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `CustomerAddress` |
 | **MySQL table** | `ws_customer_address` |
 | **Mongo collection (legacy app)** | `ws_customer_addresses` |
@@ -344,7 +355,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `customer-profile` |
 | **Phase** | 2 |
 | **Migrated** | 2026-06-10 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `Customer` |
 | **MySQL table** | `ws_customer` |
 | **Mongo collection (legacy app)** | `ws_customers` |
@@ -373,7 +384,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `customer-bank-account` |
 | **Phase** | 2 |
 | **Migrated** | 2026-06-10 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `CustomerBankAccount` |
 | **MySQL table** | `ws_customer_bank_account` |
 | **Mongo collection (legacy app)** | `ws_customer_bank_accounts` |
@@ -426,7 +437,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `catalog-package-type` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-11 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `PackageType` |
 | **MySQL table** | `ws_package_type` |
 | **Mongo collection (legacy app)** | `ws_package_types` |
@@ -451,7 +462,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `catalog-package` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-11 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `Package` |
 | **MySQL table** | `ws_package` |
 | **Mongo collection (legacy app)** | `ws_packages` |
@@ -477,22 +488,23 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `catalog-course` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-11 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `Course / CourseSubjectCategory` |
 | **MySQL table** | `ws_course / ws_course_subject_category` |
 | **Mongo collection (legacy app)** | `ws_courses / coursesubjectcategories` |
-| **Code** | `src/modules/catalog-course (branches src/client/course/course.controller.ts listCourseCategoriesHandler)/` |
+| **Code** | `src/modules/catalog-course (branches course.controller.ts listCourseCategoriesHandler + listCoursesHandler + listCoursesByCategoryHandler)/` |
 | **Data** | 1 course + 1 subject category in staging |
 | **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
 | **Admin API** | — |
-| **Client API** | GET `/api/v1/client/courses/categories` (wired, flag OFF) |
+| **Client API** | GET `/courses/categories` + GET `/courses` + GET `/courses/category/:id` (all wired, flag OFF) |
 
 **Transformer / schema notes:**
 
-- FLAG OFF: course/subject-category ids int (MySQL) vs ObjectId (Mongo); still-Mongo listing/detail/dashboard consumers join those ids, and listing endpoints need commerce-wave joins (plans/subscriptions) + Mongo-only category groups. Flip with commerce
-- Schema fix: Course.image String → String? (live DDL nullable); regenerated
-- ws_course cols with no Prisma mapping: is_featured/purchase (enum 0/1), featured_order — Mongo has conceptual isPopular/isPaid + Mongo-only subtitle/embedded category groups; SQL enums not surfaced
-- listCourseCategoriesHandler branched on isCourseMysql() with per-category active-course counts (Prisma groupBy)
+- FLAG OFF: course/subject-category ids int (MySQL) vs ObjectId (Mongo); still-Mongo detail/dashboard consumers join those ids. The LISTING endpoints are now fully covered (commerce-price + commerce-subscription built). Flip with the commerce cluster
+- Schema fix #1: Course.image String → String? (live DDL nullable)
+- Schema fix #2 (2026-06-12): added is_featured + purchase as Prisma enum CourseFlag01 (MySQL enum('0','1'), values @map'd to '0'/'1') + featured_order Int?. Transformer → Mongo isPopular (is_featured='1') / isPaid (purchase≠'0', honouring Mongo default true). isPopular is now a real filterable SQL column
+- WIRED listing composition (listCoursesWithPlans): paginated active courses + active plans split by material (commerce-price) + per-customer purchase state isPurchased/daysLeft (commerce-subscription, lifetime-aware: longest endAt wins, endAt null beats dated, matched by courseId OR planId). Mirrors the Mongo paginateCoursesWithPlans {data,pagination} exactly. paymentStatus:'verified' Mongo filter collapses to status=true (no SQL column)
+- listCourseCategoriesHandler branched on isCourseMysql() (Prisma groupBy counts); listCourses/listCoursesByCategory branch BEFORE the ObjectId guard (MySQL categoryId is int)
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Course / CourseSubjectCategory`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
@@ -503,7 +515,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `catalog-video` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-11 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `Video / VideoCategory` |
 | **MySQL table** | `ws_video / ws_video_category` |
 | **Mongo collection (legacy app)** | `videos / videocategories` |
@@ -521,6 +533,301 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 - Video Prisma model CLEAN vs DDL (no schema change). D2 = DEFER ws_video_category_relation (2456) + ws_video_category_package_relation (6907): client builds groups from Mongo Package.specificSubjects[]/childCategoryIds, not these SQL joins
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Video / VideoCategory`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 19. Catalog · eBook (+ listing/detail composition) {#catalog-ebook}
+
+| | |
+|---|---|
+| **Module key** | `catalog-ebook` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `EBook` |
+| **MySQL table** | `ws_ebook` |
+| **Mongo collection (legacy app)** | `ws_ebooks` |
+| **Code** | `src/modules/catalog-ebook (branches ebook.controller.ts listEbooks + getEbookDetail)/` |
+| **Data** | 2 ebooks in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | GET `/client/ebooks` + GET `/client/ebooks/:id` (wired, flag OFF) |
+
+**Transformer / schema notes:**
+
+- NO separate ebook-price module: there is no `ws_ebook_price` table — ebook pricing lives in the SHARED `ws_package_course_ebook_price` (ebook_id-owned rows), already covered by commerce-price (added listActivePricesByEbooks plural). The Mongo EbookPrice shape is a subset of the PriceDto
+- Mongo-only fields ABSENT from ws_ebook: isTrending/isPaid/examCountdownCategoryId/demoFileName/bookFileName. `isPaid` is DERIVED from plans (paid when ≥1 active plan price>0) — exactly the controller's documented fallback when the Mongo isPaid is absent (always, for SQL) → faithful. isTrending synthesized false
+- Schema fix: ws_ebook description + author are nullable in the DDL but Prisma typed non-nullable → relaxed to optional. Field renames: terms_and_conditions→termsAndConditions, order_by→order, demo_url→demoUrl, book_url→bookUrl
+- WIRED composition (listEbooksWithPlans / getEbookDetailWithPlans): active ebooks (name/author search + language filter) + active plans (commerce-price) + per-customer access window (commerce-ebook-sub.listActiveByCustomerForEbooks, strict status:true + endAt>now, latest wins). Computed details[]/isNew/isPurchased/daysLeft; the per-request deep link is supplied by a buildShareLink callback (HTTP concern stays in the controller). availablePromoCode always [] (ebooks aren't in the promo appliesTo model)
+- Wired BEFORE the ObjectId guards (MySQL ebook/customer ids are int). C3: customerId resolved to int at the boundary
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `EBook`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 20. Catalog · Material (category navigation) {#catalog-material}
+
+| | |
+|---|---|
+| **Module key** | `catalog-material` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Material / MaterialCategory` |
+| **MySQL table** | `ws_material / ws_material_category` |
+| **Mongo collection (legacy app)** | `ws_materials / ws_material_categories` |
+| **Code** | `src/modules/catalog-material (branches categories.controller.ts listMaterialCategoryChildren)/` |
+| **Data** | 226 materials, 5 material categories in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | GET `/client/material-categories/:id/children` (wired, flag OFF) |
+
+**Transformer / schema notes:**
+
+- SCOPED to category NAVIGATION only. Prisma Material + MaterialCategory models are clean (no schema fix)
+- ⚠ Item listing (listMaterialsByCategory) stays BLOCKED — its entitlement helper getPurchasedMaterialIds joins LiveCourse + LiveCourseSubscription (unmigrated) + the Mongo-only embedded materialCategories.category[] arrays on Course/Package/LiveCourse; ws_material also has no isPaid column. Not reproducible from SQL this pass
+- STRUCTURAL TRANSLATION: the Mongo MaterialCategory.childCategoryIds[] embed has NO SQL column — children resolve via the SQL `parent` self-FK (WHERE parent=id). havingChildDirectory = ≥1 row with parent=this.id (one distinct query, not N)
+- getCategoryChildren: parent + active children (order_by) + per-child active-material count + havingChildDirectory. Wired before the ObjectId guard (MySQL category id is int)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Material / MaterialCategory`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 21. Catalog · Book (physical-book store reads) {#catalog-book}
+
+| | |
+|---|---|
+| **Module key** | `catalog-book` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Book` |
+| **MySQL table** | `ws_book` |
+| **Mongo collection (legacy app)** | `ws_books` |
+| **Code** | `src/modules/catalog-book/` |
+| **Data** | 10 books in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | —  (book DATA reads built; NOT wired — needs book-order/cart on same id-space; flag OFF) |
+
+**Transformer / schema notes:**
+
+- FLAG OFF + NOT WIRED (like catalog-package): listBooks/getBookDetail enrich each book with per-customer cart qty (ws_book_cart*) + isPurchased (ws_book_order* by status) — those order/cart tables are NOT migrated. With book on int ids + orders on Mongo ObjectIds the keys can't match → flips with the book-order/cart wave
+- Module supplies book DATA + the data-only computed fields: isPaid (discountedPrice>0), key (isCombo?combo:individual), daysLeft (null — one-time purchase), isNew (createdAt window); the per-request deep link via a buildShareLink callback. Order/cart-derived qty + isPurchased are left to the caller
+- Schema fix: ws_book.order_by nullable in the DDL but Prisma typed non-null → relaxed to Int?
+- Mongo-only fields ABSENT from ws_book: packageIds[] (embedded M:N for the package-detail material(Book) tab — appliesTo-style, not reproducible), examCountdownCategoryId, termsAndConditions, bookUrl, publication, deliveryEta, isTrending. isTrending synthesized false; publication/deliveryEta synthesized to the Mongo defaults
+- Reads: getBookById / listBooksData (name+author search, language filter, order_by asc) / findBooksByIds (bulk hydration)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Book`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 22. Offline · Center/Batch (browse reads) {#offline-batch}
+
+| | |
+|---|---|
+| **Module key** | `offline-batch` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `OfflineCenter / OfflineBatch` |
+| **MySQL table** | `ws_offline_center / ws_offline_batch` |
+| **Mongo collection (legacy app)** | `ws_offline_centers / ws_offline_batches` |
+| **Code** | `src/modules/offline-batch (branches offline.controller.ts listCenters/listBatches/getCenterDetail/getBatchDetail)/` |
+| **Data** | 3 centers, 3 batches in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | GET `/client/offline/centers` + `/batches` + `/centers/:id` + `/batches/:id` (wired, flag OFF) |
+
+**Transformer / schema notes:**
+
+- READ only. submitEnquiry (POST → ws_offline_enquiry) is a WRITE path, NOT built. getOfflineDashboard left on Mongo (also reads the unmigrated OfflineBannerSlider). Cities come from the offline-city module
+- SCHEMA FIX (bigint overflow): OfflineCenter.phone was Int but the DDL is bigint (9099665555 overflows Int32) → would THROW on read; fixed to BigInt, DTO surfaces it as a STRING (Mongo stores phone as string). OfflineEnquiry.mobile also Int→BigInt (+ added created_at) for the future write path
+- SCHEMA FIX (phantom column): NO `status` column on ws_offline_batch OR ws_offline_center, but the Mongo handlers all filter {status:true} and Prisma OfflineBatch.status was a phantom field (mapped nothing) → removed. MySQL branch drops the status filter (all rows active) + synthesizes status:true in the DTO
+- image is a JSON column on ws_offline_center → mapped to Mongo `images: string[]`. SQL column TYPO: batch `discription` → Mongo `description`. center→city and batch→center→city relations populated
+- Wired before the ObjectId guards (MySQL ids are int). Reads: listCenters (city+search), listBatches (center/city/upcoming/search), getCenterDetail (+nested batches), getBatchDetail; + dashboard helpers getCentersWithBatchesByCities / listUpcomingBatches
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `OfflineCenter / OfflineBatch`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 23. Catalog · Exam (category navigation) {#catalog-exam}
+
+| | |
+|---|---|
+| **Module key** | `catalog-exam` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Exam / ExamCategory` |
+| **MySQL table** | `ws_exam / ws_exam_category` |
+| **Mongo collection (legacy app)** | `ws_exams / ws_exam_categories` |
+| **Code** | `src/modules/catalog-exam (branches categories.controller.ts listExamCategoryChildren)/` |
+| **Data** | 1 exam, 121 exam categories (118 active) in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | GET `/client/exam-categories/:id/children` (wired, flag OFF) |
+
+**Transformer / schema notes:**
+
+- SCOPED to category NAVIGATION only (mirrors catalog-material). Item listing/attempt surface (questions/options/results + entitlement) NOT built this pass
+- Schema fix: ExamCategory name/image nullable in the DDL but Prisma typed non-null → relaxed to String?
+- DIFFERENCES vs material: display field is `name` (not `title`) — DTO sets BOTH title+name to the column (Mongo handler does `title: cat.name`); ws_exam_category has a `deleted` flag → active = status=true AND deleted=false; the per-child exam count is UNCONDITIONAL (countDocuments({categoryId}) with no status filter — Mongo parity)
+- STRUCTURAL TRANSLATION: Mongo childCategoryIds[] embed → SQL parent_id self-FK (children = WHERE parent_id=id; havingChildDirectory via one distinct query). Wired before the ObjectId guard (MySQL category id is int)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Exam / ExamCategory`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 24. Commerce · Price (plan/pricing lookup) {#commerce-price}
+
+| | |
+|---|---|
+| **Module key** | `commerce-price` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageCourseEbookPrice` |
+| **MySQL table** | `ws_package_course_ebook_price` |
+| **Mongo collection (legacy app)** | `ws_package_course_ebook_prices` |
+| **Code** | `src/modules/commerce-price (+ ebook plural listActivePricesByEbooks)/` |
+| **Data** | 1353 plan rows in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | —  (read-only lookup built; not wired; flag OFF) |
+
+**Transformer / schema notes:**
+
+- FLAG OFF: Phase 3a read-only. Every price consumer joins int-id catalog (package/course/ebook) + ObjectId-id subscription/order rows → flips together with catalog + the rest of 3a in one consistent int id-space (the commerce-wave flip)
+- Prisma PackageCourseEbookPrice is a FAITHFUL 1:1 of the SQL table (all 13 cols, correct @maps) — NO schema fix required
+- DRIFT: owner cols (package_id/course_id/ebook_id) use `0` as the 'not this owner' sentinel, NOT only NULL — 927/1353 rows mix 0s + a real id. Transformer coalesces 0/null → null to match Mongo's null. Verified the >0 invariant holds: no row owns more than one entity
+- duration is DAYS not months (e.g. the '12 Month' plan row has duration:365) — surfaced raw; endAt computation (planDuration asDays/setDate) is the Phase 3b write boundary's concern, not this lookup's. material_price null → 0 (Mongo default)
+- Reads: findById / findActiveById / findByIds + listActiveBy{Package,Course,Ebook}(s), all active-only owner lists ordered by duration asc (mirrors the Mongo `.sort({duration:1})` plan listings)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseEbookPrice`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 25. Commerce · Subscription (READ — entitlement source of truth) {#commerce-subscription}
+
+| | |
+|---|---|
+| **Module key** | `commerce-subscription` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageCourseSubscription` |
+| **MySQL table** | `ws_package_course_subscription` |
+| **Mongo collection (legacy app)** | `ws_package_course_subscriptions` |
+| **Code** | `src/modules/commerce-subscription/` |
+| **Data** | 2 subscriptions in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | —  (READ entitlement checks built; not wired; flag OFF). Writes are 3b |
+
+**Transformer / schema notes:**
+
+- FLAG OFF + READ-ONLY: entitlement source of truth. Writes (create/extend on payment) are Phase 3b (verify.controller). Joined by int catalog + int customer id-space, read by still-Mongo consumers (lecture/progress/dashboard/purchase-history) → flips with catalog + 3a
+- SCHEMA FIX (bigint overflow): SQL `tracking` is bigint (~1.19e11, both staging rows overflow Int32) but Prisma mapped trackingId as Int? → would THROW on read. Fixed: PackageCourseSubscription.trackingId Int?→BigInt? + PackageCourseSubscriptionTracking.id Int→BigInt; regenerated v5.22.0. Transformer coerces bigint→number (lossless, < MAX_SAFE_INTEGER; null-guards >2^53)
+- Mongo↔SQL NAME divergence (critical): Mongo `packageId` = the PLAN ref = SQL `pcb_id` (planId); Mongo `targetPackageId` = the actual package = SQL `package_id` (packageId). DTO uses Mongo names so consumer predicates port 1:1
+- customer_id is INT here (C3 seam — varchar in order tables). In the migrated id-space the customer IS the int id, so the module takes/returns customerId as int; string→int resolution is the caller's boundary
+- Mongo-only commerce/promo fields (promocodeId/promoterId/paidAmount/paymentStatus/razorpay*) are NOT on this table (order row / 3b) → not produced. Active entitlement = status=true AND end_at>now
+- Reads: hasActive{Course,Package}Subscription + getActive… + findById + list{,Active}ByCustomer + countActiveBy{Package,Course} — mirror the dominant Mongo access-gate predicates
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseSubscription`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 26. Commerce · eBook Subscription (READ — ebook entitlement) {#commerce-ebook-sub}
+
+| | |
+|---|---|
+| **Module key** | `commerce-ebook-sub` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `EBookSubscription` |
+| **MySQL table** | `ws_ebook_subscription` |
+| **Mongo collection (legacy app)** | `ws_ebook_subscriptions` |
+| **Code** | `src/modules/commerce-ebook-sub/` |
+| **Data** | 1 ebook subscription in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | —  (READ entitlement checks built; not wired; flag OFF). Writes are 3b |
+
+**Transformer / schema notes:**
+
+- FLAG OFF + READ-ONLY: ebook entitlement source of truth. Writes (create on payment) are Phase 3b. Joined on int catalog (ebook) + int customer id-space, read by still-Mongo consumers (ebook read/list, downloads, dashboard) → flips with catalog + 3a
+- SCHEMA FIX: Prisma EBookSubscription model was MISSING `status` (tinyint, the entitlement flag) + `payment_type` (enum) that exist in the DDL — read contract impossible without `status`. Added `status Boolean?` + `payment_type PackageCourseEbookPaymentType`. Also relaxed `start_at`/`end_at` DateTime → DateTime? (DDL nullable). Regenerated v5.22.0
+- Active = status≠false (NULL treated as active, matching the column default 1 + Mongo default) AND end_at>now, latest endAt wins. price Decimal→number; owner `0` sentinel → null
+- customer_id is INT (C3 seam, same as package subscription) — module takes/returns customerId as int. Mongo-only promo fields (promocodeId/promoterId/referrerId) are on the order row / 3b → not produced
+- Reads: hasActiveEbookSubscription + getActive… + findById + findByOrderId + list{,Active}ByCustomer + countActiveByEbook — mirror the Mongo `findOne({customerId, ebookId, status:true, endAt:{$gt:now}})` access gate
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `EBookSubscription`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 27. Commerce · Promoter (READ — promocode owner master) {#commerce-promoter}
+
+| | |
+|---|---|
+| **Module key** | `commerce-promoter` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Promoter` |
+| **MySQL table** | `ws_promoter` |
+| **Mongo collection (legacy app)** | `ws_promoter` |
+| **Code** | `src/modules/commerce-promoter/` |
+| **Data** | 114 promoters in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | —  (READ master; not wired; flag OFF) |
+
+**Transformer / schema notes:**
+
+- FLAG OFF + READ-ONLY: promocode owner master. int (MySQL) vs ObjectId (Mongo) ids join still-Mongo promocode/subscription consumers → flips with catalog + 3a
+- SECURITY: `password` exists on the row (full entity, like ws_course_educator) but is NEVER surfaced in the DTO (Mongo model marks it select:false)
+- SCHEMA FIX: full_name/email/phone are nullable in the DDL but Prisma typed them non-nullable String → relaxed to String? (no NULLs in current data; guards a future NULL)
+- Name casing: Mongo camelCase (fullName/isDelete); DTO uses Mongo names. Active = status=true AND is_delete=false. Mongo lastLoginDate/lastLoginIp ≠ SQL last_seen_at → not produced
+- Reads: findById / findActiveById / findByIds (bulk owner hydration) / listActive (name+email search)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Promoter`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 28. Commerce · Promocode (READ — SQL-faithful, NOT the client appliesTo model) {#commerce-promocode}
+
+| | |
+|---|---|
+| **Module key** | `commerce-promocode` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Promocode / PromotedPackageCourseEbook` |
+| **MySQL table** | `ws_promocode / ws_promoted_package_course_ebook` |
+| **Mongo collection (legacy app)** | `ws_promo_codes / (embedded)` |
+| **Code** | `src/modules/commerce-promocode/` |
+| **Data** | 2 promocodes + 5 promoted plans in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | —  (SQL-faithful reads built; CANNOT serve client applyPromocode; flag OFF) |
+
+**Transformer / schema notes:**
+
+- ⚠ MODEL DIVERGENCE: the live Mongo PromoCode (ws_promo_codes) uses discountType/discountValue + appliesTo{type,ids[]}; the SQL tables have NONE of those — the discount is a per-plan promoter%/customer% split in ws_promoted_package_course_ebook (keyed by pcb_price_id=plan). The client applyPromocode/listPromocodes read the Mongo appliesTo shape, which CANNOT be reproduced from SQL. So this builds SQL-faithful reads ONLY, flag OFF (decision 2026-06-12); appliesTo reconciliation is a later effort
+- SCHEMA FIX: promocode/promo_start_at/promo_expire_at are nullable in the DDL but Prisma typed them non-nullable → relaxed to optional. title/description NOT NULL in DDL but Prisma optional (safe direction)
+- Valid = status=true AND promo_start_at<now<promo_expire_at; public listings add type='public', soonest-to-expire first. Code lookup uppercases (Mongo parity). Promoted plans included on single-promocode reads
+- Reads: findById (w/ plans) / findValidByCode / listActivePublic + countActivePublic (paginated) / listPromotedPlans
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Promocode / PromotedPackageCourseEbook`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 29. Commerce · Educator (READ — full entity master) {#commerce-educator}
+
+| | |
+|---|---|
+| **Module key** | `commerce-educator` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-12 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `CourseEducator` |
+| **MySQL table** | `ws_course_educator` |
+| **Mongo collection (legacy app)** | `ws_course_educators` |
+| **Code** | `src/modules/commerce-educator/` |
+| **Data** | 56 educators in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Admin API** | — |
+| **Client API** | —  (READ master + ref projection; not wired; flag OFF) |
+
+**Transformer / schema notes:**
+
+- FLAG OFF + READ-ONLY: a FULL entity (email/password/about/view/last_seen_at), NOT a join table (it was mis-grouped as a 'catalog relation' earlier). int (MySQL) vs ObjectId (Mongo) ids join still-Mongo course/educator consumers → flips with catalog + 3a (final 3a read module)
+- SECURITY: `password` (NOT NULL) on the row but NEVER surfaced — the client educator path does `.select('-password')`. DTO excludes it; the ref projection is `{_id,name,image}` only
+- ⚠ LATENT RISK (logged, deliberately NOT fixed): `id` is `bigint unsigned` but Prisma maps it `Int`. Current ids 20–85 (56 rows) → no overflow. Changing to BigInt would ripple into the Course.courseEducatorId FK + the built catalog-course module for zero present benefit — revisit (educator + Course FK together) only if ids approach 2^31
+- image nullable in DDL but Prisma non-nullable String → DTO surfaces image:string|null defensively (no NULLs in data). SQL `deleted` flag does NOT exist (Mongo soft-delete has no SQL counterpart) → active = status=true is the sole gate. last_seen_at/email_verified_at omitted (not needed for the public master)
+- Reads: findById / findActiveById / findByIds (bulk course-educator hydration) / listActive (name search) / findRefById ({_id,name,image} embed)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `CourseEducator`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
 ---
 

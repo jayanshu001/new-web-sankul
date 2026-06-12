@@ -1,6 +1,6 @@
 # Field comparison — module by module
 
-> **Generated:** 2026-06-11 — re-run `yarn docs:field-comparison` after schema changes  
+> **Generated:** 2026-06-12 — re-run `yarn docs:field-comparison` after schema changes  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Related:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md) (table inventory) · [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
 
@@ -1191,7 +1191,7 @@
 | 11 | `list_price` | `int` | NOT NULL | `listPrice` | number | — | `list_price` | Int | — | ✅ |
 | 12 | `discounted_price` | `int` | NOT NULL | `discountedPrice` | number | — | `discounted_price` | Int | — | ✅ |
 | 13 | `shipping_price` | `int` | NOT NULL; DEFAULT '0' | `shippingPrice` | number | — | `shipping_price` | Int | — | ✅ |
-| 14 | `order_by` | `int` | NULL; DEFAULT NULL | `orderBy` | number | — | `order_by` | Int | — | ✅ |
+| 14 | `order_by` | `int` | NULL; DEFAULT NULL | `orderBy` | number | — | `order_by` | Int? | — | ✅ |
 | 15 | `language` | `varchar(100)` | NOT NULL; DEFAULT 'Gujarati' | `language` | BookLanguage | string | — | `language` | String | — | ✅ |
 | 16 | `is_magazine` | `tinyint(1)` | NOT NULL; DEFAULT '0' | `isMagazine` | boolean | — | `is_magazine` | Boolean | @default(false) | ✅ |
 | 17 | `status` | `tinyint(1)` | NOT NULL; DEFAULT '1' | `status` | boolean | — | `active` | Boolean | @default(true) | ✅ |
@@ -1857,10 +1857,10 @@
 | 10 | `with_material` | `text` | NOT NULL | — | — | — | `withMaterial` | String | — | ✅ SQL+Prisma |
 | 11 | `without_material` | `text` | NOT NULL | — | — | — | `withoutMaterial` | String | — | ✅ SQL+Prisma |
 | 12 | `pc_material_id` | `int` | NULL; DEFAULT NULL | — | — | — | `pcMaterialId` | Int? | — | ✅ SQL+Prisma |
-| 13 | `featured_order` | `int` | NULL; DEFAULT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
+| 13 | `featured_order` | `int` | NULL; DEFAULT NULL | — | — | — | `featured_order` | Int? | — | ✅ SQL+Prisma |
 | 14 | `level` | `text` | NOT NULL | — | — | — | `level` | String | — | ✅ SQL+Prisma |
-| 15 | `purchase` | `enum('0','1')` | NULL; DEFAULT NULL; enum('0','1') | — | — | — | — | — | — | 🆕 MySQL-only |
-| 16 | `is_featured` | `enum('0','1')` | NULL; DEFAULT '0'; enum('0','1') | — | — | — | — | — | — | 🆕 MySQL-only |
+| 15 | `purchase` | `enum('0','1')` | NULL; DEFAULT NULL; enum('0','1') | — | — | — | `purchase` | CourseFlag01? | — | ✅ SQL+Prisma |
+| 16 | `is_featured` | `enum('0','1')` | NULL; DEFAULT '0'; enum('0','1') | — | — | — | `is_featured` | CourseFlag01? | — | ✅ SQL+Prisma |
 | 17 | `status` | `tinyint(1)` | NOT NULL | — | — | — | `status` | Boolean | — | ✅ SQL+Prisma |
 | 18 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `createdAt` | DateTime? | — | ✅ SQL+Prisma |
 | 19 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `updatedAt` | DateTime? | — | ✅ SQL+Prisma |
@@ -2162,7 +2162,7 @@
 | 6 | `pcb_id` | `int` | NULL; DEFAULT NULL | — | — | — | `planId` | Int? | — | ✅ SQL+Prisma |
 | 7 | `pc_material_id` | `int` | NULL; DEFAULT NULL | — | — | — | `pcMaterialId` | Int? | — | ✅ SQL+Prisma |
 | 8 | `shipping` | `int` | NULL; DEFAULT NULL | — | — | — | `shippingId` | Int? | — | ✅ SQL+Prisma |
-| 9 | `tracking` | `bigint` | NULL; DEFAULT NULL | — | — | — | `trackingId` | Int? | — | ✅ SQL+Prisma |
+| 9 | `tracking` | `bigint` | NULL; DEFAULT NULL | — | — | — | `trackingId` | BigInt? | — | ✅ SQL+Prisma |
 | 10 | `start_at` | `datetime` | NULL; DEFAULT NULL | — | — | — | `startAt` | DateTime? | — | ✅ SQL+Prisma |
 | 11 | `end_at` | `datetime` | NULL; DEFAULT NULL | — | — | — | `endAt` | DateTime? | — | ✅ SQL+Prisma |
 | 12 | `amount` | `double` | NULL; DEFAULT NULL | — | — | — | `amount` | Decimal? | — | ✅ SQL+Prisma |
@@ -2187,7 +2187,7 @@
 
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
-| 1 | `id` | `bigint` | PK AI; NOT NULL | — | — | — | `id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
+| 1 | `id` | `bigint` | PK AI; NOT NULL | — | — | — | `id` | BigInt | @id @default(autoincrement()) | ✅ SQL+Prisma |
 | 2 | `order` | `int` | NOT NULL | — | — | — | `orderId` | Int? | — | ✅ SQL+Prisma |
 | 3 | `status` | `varchar(25)` | NOT NULL; DEFAULT 'pending' | — | — | — | `status` | String | — | ✅ SQL+Prisma |
 | 4 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `created_at` | DateTime? | — | ✅ SQL+Prisma |
@@ -2608,9 +2608,9 @@
 | 2 | `name` | `varchar(256) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NOT NULL | — | — | — | `name` | String | — | ✅ SQL+Prisma |
 | 3 | `thumbnail` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_520_ci` | NOT NULL | — | — | — | `thumbnail` | String | — | ✅ SQL+Prisma |
 | 4 | `image` | `varchar(256)` | NOT NULL | — | — | — | `image` | String | — | ✅ SQL+Prisma |
-| 5 | `description` | `text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NULL | — | — | — | `description` | String | — | ✅ SQL+Prisma |
+| 5 | `description` | `text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NULL | — | — | — | `description` | String? | — | ✅ SQL+Prisma |
 | 6 | `terms_and_conditions` | `text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NOT NULL | — | — | — | `termsAndConditions` | String | — | ✅ SQL+Prisma |
-| 7 | `author` | `varchar(256) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NULL; DEFAULT NULL | — | — | — | `author` | String | — | ✅ SQL+Prisma |
+| 7 | `author` | `varchar(256) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NULL; DEFAULT NULL | — | — | — | `author` | String? | — | ✅ SQL+Prisma |
 | 8 | `publisher` | `varchar(256)` | NULL; DEFAULT NULL | — | — | — | `publisher` | String? | — | ✅ SQL+Prisma |
 | 9 | `order_by` | `int` | NOT NULL | — | — | — | `orderby` | Int | — | ✅ SQL+Prisma |
 | 10 | `language` | `enum('English','Gujarati','Hindi')` | NULL; DEFAULT 'Gujarati'; enum('English','Gujarati','Hindi') | — | — | — | `language` | EBookLanguage | — | ✅ SQL+Prisma |
@@ -2665,11 +2665,11 @@
 | 3 | `customer_id` | `int` | NOT NULL | — | — | — | `customerId` | Int? | — | ✅ SQL+Prisma |
 | 4 | `ebook_id` | `int` | NOT NULL | — | — | — | `ebookId` | Int? | — | ✅ SQL+Prisma |
 | 5 | `price` | `double(10,2)` | NOT NULL; DEFAULT '0.00' | — | — | — | `price` | Decimal | — | ✅ SQL+Prisma |
-| 6 | `start_at` | `datetime` | NULL; DEFAULT NULL | — | — | — | `startAt` | DateTime | — | ✅ SQL+Prisma |
-| 7 | `end_at` | `datetime` | NULL; DEFAULT NULL | — | — | — | `endAt` | DateTime | — | ✅ SQL+Prisma |
+| 6 | `start_at` | `datetime` | NULL; DEFAULT NULL | — | — | — | `startAt` | DateTime? | — | ✅ SQL+Prisma |
+| 7 | `end_at` | `datetime` | NULL; DEFAULT NULL | — | — | — | `endAt` | DateTime? | — | ✅ SQL+Prisma |
 | 8 | `remarks` | `text CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL | — | — | — | `remarks` | String? | — | ✅ SQL+Prisma |
-| 9 | `payment_type` | `enum('online','backend') CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NOT NULL; DEFAULT 'online'; enum('online','backend') | — | — | — | — | — | — | 🆕 MySQL-only |
-| 10 | `status` | `tinyint(1)` | NULL; DEFAULT '1' | — | — | — | — | — | — | 🆕 MySQL-only |
+| 9 | `payment_type` | `enum('online','backend') CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NOT NULL; DEFAULT 'online'; enum('online','backend') | — | — | — | `payment_type` | PackageCourseEbookPaymentType | — | ✅ SQL+Prisma |
+| 10 | `status` | `tinyint(1)` | NULL; DEFAULT '1' | — | — | — | `status` | Boolean? | — | ✅ SQL+Prisma |
 | 11 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `createdAt` | DateTime? | — | ✅ SQL+Prisma |
 | 12 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `updatedAt` | DateTime? | — | ✅ SQL+Prisma |
 
@@ -2756,8 +2756,8 @@
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
 | 1 | `id` | `int` | PK AI; NOT NULL | — | — | — | `id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
-| 2 | `name` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | — | — | — | `name` | String | — | ✅ SQL+Prisma |
-| 3 | `image` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | — | — | — | `image` | String | — | ✅ SQL+Prisma |
+| 2 | `name` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | — | — | — | `name` | String? | — | ✅ SQL+Prisma |
+| 3 | `image` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | — | — | — | `image` | String? | — | ✅ SQL+Prisma |
 | 4 | `parent_id` | `int` | NOT NULL; DEFAULT '0' | — | — | — | `parent` | Int | — | ✅ SQL+Prisma |
 | 5 | `status` | `tinyint(1)` | NOT NULL; DEFAULT '0' | — | — | — | `status` | Boolean | — | ✅ SQL+Prisma |
 | 6 | `order_by` | `int` | NOT NULL | — | — | — | `order_by` | Int | — | ✅ SQL+Prisma |
@@ -3040,9 +3040,8 @@
 | 7 | `center_id` | `int` | NOT NULL | `centerId` | ObjectId | required; ref:OfflineCenter | `centerId` | Int | — | ✅ |
 | 8 | `created_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `createdAt` | Date | — | `createdAt` | DateTime | — | ✅ |
 | 9 | `updated_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `updatedAt` | Date | — | `updatedAt` | DateTime | — | ✅ |
-| 10 | — | — | — | — | — | — | `status` | Boolean | — | 🆕 Prisma-only |
-| 11 | — | — | — | `description` | String | required | — | — | — | 🆕 Mongo-only |
-| 12 | — | — | — | `status` | Boolean | true | — | — | — | 🆕 Mongo-only |
+| 10 | — | — | — | `description` | String | required | — | — | — | 🆕 Mongo-only |
+| 11 | — | — | — | `status` | Boolean | true | — | — | — | 🆕 Mongo-only |
 
 ### 9.3 OfflineCenter — ⏳ Not migrated
 
@@ -3062,7 +3061,7 @@
 | 4 | `address` | `varchar(500) CHARACTER SET latin1 COLLATE latin1_swedish_ci` | NOT NULL | `address` | String | required | `address` | String | — | ✅ |
 | 5 | `latitude` | `double` | NOT NULL; DEFAULT '0' | `latitude` | Number | required | `latitude` | Float | — | ✅ |
 | 6 | `longitude` | `double` | NOT NULL; DEFAULT '0' | `longitude` | Number | required | `longitude` | Float | — | ✅ |
-| 7 | `phone` | `bigint` | NOT NULL | `phone` | String | required; maxlength:20 | `phone` | Int | — | ✅ |
+| 7 | `phone` | `bigint` | NOT NULL | `phone` | String | required; maxlength:20 | `phone` | BigInt | — | ✅ |
 | 8 | `city_id` | `int` | NOT NULL | `cityId` | ObjectId | required; ref:OfflineCity | `cityId` | Int | — | ✅ |
 | 9 | `created_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `createdAt` | Date | — | `createdAt` | DateTime | — | ✅ |
 | 10 | `updated_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `updatedAt` | Date | — | `updatedAt` | DateTime | — | ✅ |
@@ -3106,10 +3105,10 @@
 | 2 | `customer_id` | `int` | NOT NULL | `customerId` | ObjectId | null; ref:Customer | `userId` | Int? | — | ✅ |
 | 3 | `name` | `varchar(100)` | NOT NULL | `name` | String | required; maxlength:255 | `name` | String | — | ✅ |
 | 4 | `email` | `varchar(50)` | NOT NULL | `email` | String | required; maxlength:255 | `email` | String | — | ✅ |
-| 5 | `mobile` | `bigint` | NOT NULL | `mobile` | String | required; maxlength:20 | `mobile` | Int | — | ✅ |
+| 5 | `mobile` | `bigint` | NOT NULL | `mobile` | String | required; maxlength:20 | `mobile` | BigInt | — | ✅ |
 | 6 | `qualification` | `varchar(100)` | NOT NULL | `qualification` | String | required; maxlength:255 | `qualification` | String | — | ✅ |
 | 7 | `batch_id` | `int` | NOT NULL | `batchId` | ObjectId | required; ref:OfflineBatch | `batchId` | Int | — | ✅ |
-| 8 | `created_at` | `timestamp NULL` | NULL; DEFAULT CURRENT_TIMESTAMP | `createdAt` | Date | — | — | — | — | ✅ |
+| 8 | `created_at` | `timestamp NULL` | NULL; DEFAULT CURRENT_TIMESTAMP | `createdAt` | Date | — | `createdAt` | DateTime? | — | ✅ |
 | 9 | — | — | — | `remarks` | String | null | — | — | — | 🆕 Mongo-only |
 | 10 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
 
@@ -3154,10 +3153,10 @@
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
 | 1 | `id` | `int` | PK AI; NOT NULL | — | — | — | `id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
-| 2 | `full_name` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `fullName` | String | required; maxlength:255 | `full_name` | String | — | ✅ |
-| 3 | `email` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `email` | String | required; unique; maxlength:255 | `email` | String | — | ✅ |
+| 2 | `full_name` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `fullName` | String | required; maxlength:255 | `full_name` | String? | — | ✅ |
+| 3 | `email` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `email` | String | required; unique; maxlength:255 | `email` | String? | — | ✅ |
 | 4 | `password` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `password` | String | maxlength:255 | — | — | — | ✅ |
-| 5 | `phone` | `varchar(100) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `phone` | String | required; maxlength:20 | `phone` | String | — | ✅ |
+| 5 | `phone` | `varchar(100) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `phone` | String | required; maxlength:20 | `phone` | String? | — | ✅ |
 | 6 | `image` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `image` | String | null; maxlength:500 | `image` | String? | — | ✅ |
 | 7 | `status` | `tinyint(1)` | NOT NULL; DEFAULT '1' | `status` | Boolean | true | `status` | Boolean | — | ✅ |
 | 8 | `is_delete` | `tinyint(1)` | NOT NULL; DEFAULT '0' | `isDelete` | Boolean | false | `is_delete` | Boolean | — | ✅ |
@@ -3505,11 +3504,11 @@
 |---:|---|---|---|---|---|---|---|---|---|---|
 | 1 | `id` | `int` | PK AI; NOT NULL | — | — | — | `id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
 | 2 | `promoter_id` | `int` | NOT NULL | — | — | — | `promoterId` | Int? | — | ✅ SQL+Prisma |
-| 3 | `promocode` | `varchar(20) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | — | — | — | `promocode` | String | — | ✅ SQL+Prisma |
+| 3 | `promocode` | `varchar(20) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | — | — | — | `promocode` | String? | — | ✅ SQL+Prisma |
 | 4 | `title` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci` | NOT NULL | — | — | — | `title` | String? | — | ✅ SQL+Prisma |
 | 5 | `description` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci` | NOT NULL | — | — | — | `description` | String? | — | ✅ SQL+Prisma |
-| 6 | `promo_start_at` | `datetime` | NULL; DEFAULT NULL | — | — | — | `promo_start_at` | DateTime | — | ✅ SQL+Prisma |
-| 7 | `promo_expire_at` | `datetime` | NULL; DEFAULT NULL | — | — | — | `promo_expire_at` | DateTime | — | ✅ SQL+Prisma |
+| 6 | `promo_start_at` | `datetime` | NULL; DEFAULT NULL | — | — | — | `promo_start_at` | DateTime? | — | ✅ SQL+Prisma |
+| 7 | `promo_expire_at` | `datetime` | NULL; DEFAULT NULL | — | — | — | `promo_expire_at` | DateTime? | — | ✅ SQL+Prisma |
 | 8 | `type` | `enum('private','public') CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NOT NULL; DEFAULT 'private'; enum('private','public') | — | — | — | `type` | PromocodeType | — | ✅ SQL+Prisma |
 | 9 | `status` | `tinyint(1)` | NOT NULL; DEFAULT '1' | — | — | — | `status` | Boolean | — | ✅ SQL+Prisma |
 | 10 | `created_by` | `int` | NULL; DEFAULT NULL | — | — | — | — | — | — | 🆕 MySQL-only |

@@ -20,7 +20,35 @@ import { computeDaysLeft } from "../../utils/planDuration";
 import {
   isCourseMysql,
   listCourseCategoriesWithCounts,
+  listCoursesWithPlans,
+  parseCourseId,
 } from "../../modules/catalog-course/catalog-course.service";
+import type { ListCoursesOptions } from "../../modules/catalog-course/catalog-course.types";
+
+/**
+ * Map the listing query string → the MySQL `listCoursesWithPlans` options.
+ * `userId` in the migrated id-space is the int customer id (customer-auth); we
+ * parse it defensively so a stray ObjectId (while flag OFF) just yields no
+ * purchase-state rather than throwing.
+ */
+function toMysqlCourseOptions(
+  query: Record<string, string>,
+  userId?: string,
+  categoryId?: number
+): ListCoursesOptions {
+  const { search, isPopular, page, limit, sortBy, sortOrder } = query;
+  const custId = userId != null ? parseCourseId(String(userId)) : null;
+  return {
+    search: search?.trim() || undefined,
+    isPopular: isPopular === "true" ? true : isPopular === "false" ? false : undefined,
+    page: page ? parseInt(page, 10) || 1 : 1,
+    limit: limit ? parseInt(limit, 10) || 10 : 10,
+    sortBy: sortBy === "name" || sortBy === "ordered" ? sortBy : "createdAt",
+    sortOrder: sortOrder === "asc" ? "asc" : "desc",
+    customerId: custId ?? undefined,
+    categoryId,
+  };
+}
 
 async function paginateCoursesWithPlans(
   baseFilters: any,
@@ -151,6 +179,17 @@ export const listCoursesHandler = async (req: Request, res: Response) => {
   logger.info("listCoursesHandler invoked", { traceId, path: req.originalUrl, userId });
 
   try {
+    // MySQL branch (flag OFF until catalog-course flips with the commerce wave).
+    // Composes catalog-course + commerce-price + commerce-subscription; same
+    // {data, pagination} contract as the Mongo path below.
+    if (isCourseMysql()) {
+      const result = await listCoursesWithPlans(
+        toMysqlCourseOptions(req.query as Record<string, string>, userId)
+      );
+      logger.info("listCoursesHandler success", { traceId, userId, total: result.pagination.total, source: "mysql" });
+      return res.status(200).json({ success: true, ...result });
+    }
+
     const result = await paginateCoursesWithPlans({ status: true }, req.query as Record<string, string>, userId);
     logger.info("listCoursesHandler success", { traceId, userId, total: result.pagination.total });
     return res.status(200).json({ success: true, ...result });
@@ -222,6 +261,21 @@ export const listCoursesByCategoryHandler = async (req: Request, res: Response) 
   logger.info("listCoursesByCategoryHandler invoked", { traceId, path: req.originalUrl, userId, categoryId });
 
   try {
+    // MySQL branch first — when catalog-course is ON the categoryId is an int,
+    // so this must precede the ObjectId guard below.
+    if (isCourseMysql()) {
+      const catId = parseCourseId(categoryId);
+      if (catId == null) {
+        logger.warn("listCoursesByCategoryHandler invalid id (mysql)", { traceId, categoryId });
+        return failure(res, "Invalid categoryId.", 400);
+      }
+      const result = await listCoursesWithPlans(
+        toMysqlCourseOptions(req.query as Record<string, string>, userId, catId)
+      );
+      logger.info("listCoursesByCategoryHandler success", { traceId, userId, categoryId, total: result.pagination.total, source: "mysql" });
+      return res.status(200).json({ success: true, ...result });
+    }
+
     if (!Types.ObjectId.isValid(categoryId)) {
       logger.warn("listCoursesByCategoryHandler invalid id", { traceId, categoryId });
       return failure(res, "Invalid categoryId.", 400);

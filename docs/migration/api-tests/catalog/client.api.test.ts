@@ -84,6 +84,37 @@ export async function runCatalogClientApiTests(): Promise<boolean> {
       },
     },
 
+    // ── course listing (GET /client/courses) — composed w/ plans + purchase ─
+    {
+      name: "GET /api/v1/client/courses → { data[], pagination } with plans buckets",
+      fn: async () => {
+        const body = (await requestOk("GET", "/api/v1/client/courses?limit=10", { token })) as any;
+        if (!Array.isArray(body.data)) throw new Error("expected data[] of courses");
+        if (!body.pagination || typeof body.pagination.total !== "number")
+          throw new Error("expected pagination.total");
+        for (const c of body.data) {
+          if (!c._id || typeof c._id !== "string") throw new Error("course _id must be a non-empty string");
+          if (!c.plans || !Array.isArray(c.plans.withMaterial) || !Array.isArray(c.plans.withoutMaterial))
+            throw new Error("course missing plans.{withMaterial,withoutMaterial}");
+          if (typeof c.isPurchased !== "boolean") throw new Error("course missing boolean isPurchased");
+        }
+      },
+    },
+    {
+      name: "[catalog-course ON] /courses serves MySQL composition (isPopular/isPaid + plans split + purchase state)",
+      skip: !courseMysql,
+      fn: async () => {
+        const body = (await requestOk("GET", "/api/v1/client/courses?limit=10", { token })) as any;
+        const test = body.data.find((c: any) => String(c.name).toLowerCase() === "test" || c._id === "75");
+        if (!test) throw new Error("expected the staging course (id 75 / 'test')");
+        if (typeof test.isPopular !== "boolean" || typeof test.isPaid !== "boolean")
+          throw new Error("MySQL course must surface isPopular + isPaid (from is_featured/purchase enums)");
+        // staging course 75: 5 plans, all without_material.
+        if (test.plans.withoutMaterial.length < 1)
+          throw new Error("expected withoutMaterial plans for course 75 (commerce-price composition)");
+      },
+    },
+
     // ── video URL-encryption contract (no wired endpoint; flag OFF) ────────
     {
       name: "[catalog-video] URL-encryption parity verified via tsx (no standalone HTTP endpoint)",

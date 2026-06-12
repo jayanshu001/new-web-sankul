@@ -24,6 +24,17 @@ import { runCustomerAuthClientApiTests } from "./customer-auth/client.api.test.j
 import { runCustomerLookupsClientApiTests } from "./customer-lookups/client.api.test.js";
 import { runOfflineCityClientApiTests } from "./offline-city/client.api.test.js";
 import { runCatalogClientApiTests } from "./catalog/client.api.test.js";
+import { runCatalogEbookClientApiTests } from "./catalog-ebook/client.api.test.js";
+import { runCatalogMaterialClientApiTests } from "./catalog-material/client.api.test.js";
+import { runCatalogExamClientApiTests } from "./catalog-exam/client.api.test.js";
+import { runCatalogBookClientApiTests } from "./catalog-book/client.api.test.js";
+import { runOfflineBatchClientApiTests } from "./offline-batch/client.api.test.js";
+import { runCommercePriceClientApiTests } from "./commerce-price/client.api.test.js";
+import { runCommerceSubscriptionClientApiTests } from "./commerce-subscription/client.api.test.js";
+import { runCommerceEbookSubClientApiTests } from "./commerce-ebook-sub/client.api.test.js";
+import { runCommercePromoterClientApiTests } from "./commerce-promoter/client.api.test.js";
+import { runCommercePromocodeClientApiTests } from "./commerce-promocode/client.api.test.js";
+import { runCommerceEducatorClientApiTests } from "./commerce-educator/client.api.test.js";
 
 async function main() {
   console.log("Migrated modules:", MIGRATED_API_MODULES.map((m) => m.key).join(", "));
@@ -49,6 +60,17 @@ async function main() {
     runCustomerLookupsClientApiTests,
     runOfflineCityClientApiTests,
     runCatalogClientApiTests,
+    runCatalogEbookClientApiTests,
+    runCatalogMaterialClientApiTests,
+    runCatalogExamClientApiTests,
+    runCatalogBookClientApiTests,
+    runOfflineBatchClientApiTests,
+    runCommercePriceClientApiTests,
+    runCommerceSubscriptionClientApiTests,
+    runCommerceEbookSubClientApiTests,
+    runCommercePromoterClientApiTests,
+    runCommercePromocodeClientApiTests,
+    runCommerceEducatorClientApiTests,
   ];
 
   let ok = true;

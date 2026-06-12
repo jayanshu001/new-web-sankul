@@ -8,6 +8,13 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { isNewItem } from "../../utils/isNew";
+import {
+  isEbookMysql,
+  listEbooksWithPlans,
+  getEbookDetailWithPlans,
+  parseEbookId,
+} from "../../modules/catalog-ebook/catalog-ebook.service";
+import type { EBookLanguage } from "@prisma/client";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -25,6 +32,25 @@ export const listEbooks = async (req: Request, res: Response) => {
 
   try {
     const { search, language } = req.query as Record<string, string>;
+
+    // MySQL branch (flag OFF until the ebook cluster flips). Composes
+    // catalog-ebook + commerce-price (plans) + commerce-ebook-sub (entitlement);
+    // same `{ ebooks: [...] }` contract as the Mongo path below.
+    if (isEbookMysql()) {
+      const base = resolveBase(req);
+      const custId = (req as any).user?.id != null ? parseEbookId(String((req as any).user.id)) : null;
+      const data = await listEbooksWithPlans(
+        {
+          search: search?.trim() || undefined,
+          language: (language as EBookLanguage) || undefined,
+          customerId: custId ?? undefined,
+        },
+        (id) => buildShareUrl("ebooks", id, base)
+      );
+      logger.info("listEbooks success", { traceId, customerId, count: data.length, source: "mysql" });
+      return res.status(200).json({ success: true, data: { ebooks: data } });
+    }
+
     const filter: any = { status: true };
     if (search) filter.$or = [
       { name: { $regex: search, $options: "i" } },
@@ -155,6 +181,32 @@ export const getEbookDetail = async (req: Request, res: Response) => {
   logger.info("getEbookDetail invoked", { traceId, path: req.originalUrl, customerId, ebookId: id });
 
   try {
+    // MySQL branch first — a MySQL ebook id is an int, so this precedes the
+    // ObjectId guard. Ebooks aren't in the promocode appliesTo model, so the
+    // availablePromoCode list is always empty (same as the Mongo path).
+    if (isEbookMysql()) {
+      const ebookId = parseEbookId(id);
+      if (ebookId == null) {
+        logger.warn("getEbookDetail invalid id (mysql)", { traceId, customerId, ebookId: id });
+        return res.status(400).json({ success: false, message: "Please select valid ebook." });
+      }
+      const custId = customerId != null ? parseEbookId(String(customerId)) : null;
+      const ebookData = await getEbookDetailWithPlans(
+        ebookId,
+        { customerId: custId ?? undefined },
+        (eid) => buildShareUrl("ebooks", eid, resolveBase(req))
+      );
+      if (!ebookData) {
+        logger.warn("getEbookDetail not found (mysql)", { traceId, customerId, ebookId: id });
+        return res.status(404).json({ success: false, message: "Ebook not found." });
+      }
+      logger.info("getEbookDetail success", { traceId, customerId, ebookId: id, isPurchased: ebookData.isPurchased, source: "mysql" });
+      return res.status(200).json({
+        success: true,
+        data: { ebook: ebookData, availablePromoCode: [] },
+      });
+    }
+
     if (!isObjectId(id)) {
       logger.warn("getEbookDetail invalid id", { traceId, customerId, ebookId: id });
       return res.status(400).json({ success: false, message: "Please select valid ebook." });
