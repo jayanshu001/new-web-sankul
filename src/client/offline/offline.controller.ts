@@ -26,7 +26,7 @@ export const getOfflineDashboard = async (_req: Request, res: Response) => {
         .populate({
           path: "centerId",
           model: OfflineCenter,
-          populate: { path: "cityId", model: OfflineCity, select: "name" },
+          populate: { path: "cityId", model: OfflineCity, select: "name image" },
         })
         .sort({ startAt: 1 })
         .limit(10)
@@ -134,16 +134,30 @@ export const listCenters = async (req: Request, res: Response) => {
   logger.info("listCenters invoked", { traceId, path: req.originalUrl });
 
   try {
-    const { cityId, search } = req.query as Record<string, string>;
+    const { cityId, search, page = "1", limit = "20" } = req.query as Record<string, string>;
     const filter: any = { status: true };
     if (cityId && isObjectId(cityId)) filter.cityId = cityId;
     { const c = buildRegexCondition(search); if (c) filter.name = c; }
-    const data = await OfflineCenter.find(filter)
-      .populate({ path: "cityId", model: OfflineCity, select: "_id name" })
-      .sort({ createdAt: -1 })
-      .lean();
-    logger.info("listCenters success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [data, total] = await Promise.all([
+      OfflineCenter.find(filter)
+        .populate({ path: "cityId", model: OfflineCity, select: "_id name image" })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      OfflineCenter.countDocuments(filter),
+    ]);
+    logger.info("listCenters success", { traceId, count: data.length, total });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
   } catch (e: any) {
     logger.error("listCenters failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -156,7 +170,7 @@ export const listBatches = async (req: Request, res: Response) => {
   logger.info("listBatches invoked", { traceId, path: req.originalUrl });
 
   try {
-    const { centerId, cityId, upcoming, search } = req.query as Record<string, string>;
+    const { centerId, cityId, upcoming, search, page = "1", limit = "20" } = req.query as Record<string, string>;
     const filter: any = { status: true };
     if (centerId && isObjectId(centerId)) filter.centerId = centerId;
     { const c = buildRegexCondition(search); if (c) filter.name = c; }
@@ -167,16 +181,29 @@ export const listBatches = async (req: Request, res: Response) => {
       filter.centerId = { $in: centerIds };
     }
 
-    const data = await OfflineBatch.find(filter)
-      .populate({
-        path: "centerId",
-        model: OfflineCenter,
-        populate: { path: "cityId", model: OfflineCity, select: "_id name" },
-      })
-      .sort({ startAt: 1 })
-      .lean();
-    logger.info("listBatches success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [data, total] = await Promise.all([
+      OfflineBatch.find(filter)
+        .populate({
+          path: "centerId",
+          model: OfflineCenter,
+          populate: { path: "cityId", model: OfflineCity, select: "_id name image" },
+        })
+        .sort({ startAt: 1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      OfflineBatch.countDocuments(filter),
+    ]);
+    logger.info("listBatches success", { traceId, count: data.length, total });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
   } catch (e: any) {
     logger.error("listBatches failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

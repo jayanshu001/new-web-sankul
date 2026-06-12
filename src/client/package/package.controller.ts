@@ -229,12 +229,16 @@ export const listPackages = async (req: Request, res: Response) => {
       goalId,
       isSmartCourse,
       isPlannerCourse,
+      type,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
 
     const filter: any = { active: true };
     { const c = buildRegexCondition(search); if (c) filter.name = c; }
+    // type=paid -> only paid; type=free -> only free; omitted -> all.
+    if (type === "paid") filter.isPaid = true;
+    else if (type === "free") filter.isPaid = false;
     if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))
       filter.packageTypeId = packageTypeId;
     if (goalId && mongoose.Types.ObjectId.isValid(goalId)) filter.goalId = goalId;

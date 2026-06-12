@@ -227,11 +227,23 @@ export const listCities = async (req: Request, res: Response) => {
   logger.info("listCities invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { search } = req.query as Record<string, string>;
+    const { search, stateId } = req.query as Record<string, string>;
     const filter: any = { status: true };
     { const c = buildRegexCondition(search); if (c) filter.name = c; }
-    const data = await OfflineCity.find(filter).sort({ order: 1, name: 1 }).lean();
-    logger.info("listCities success", { traceId, count: data.length });
+    // Optional: scope to a single state. Invalid/absent stateId → all cities
+    // (backward-compatible). Combines with `search`.
+    if (stateId) {
+      if (!mongoose.Types.ObjectId.isValid(stateId)) {
+        logger.warn("listCities invalid stateId", { traceId, stateId });
+        return res.status(400).json({ success: false, message: "Invalid stateId." });
+      }
+      filter.stateId = stateId;
+    }
+    const data = await OfflineCity.find(filter)
+      .populate({ path: "stateId", model: CustomerState, select: "_id name stateCode" })
+      .sort({ order: 1, name: 1 })
+      .lean();
+    logger.info("listCities success", { traceId, count: data.length, stateId: stateId ?? null });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("listCities failed", { traceId, error: getErrorMessage(e), stack: e.stack });

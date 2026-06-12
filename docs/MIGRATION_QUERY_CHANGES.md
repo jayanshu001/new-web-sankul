@@ -15,6 +15,209 @@
 
 ---
 
+## 2026-06-12 — OfflineCity gains `stateId`; cities filterable by state
+
+**Files:** `src/models/offline/OfflineCity.model.ts`;
+`src/client/address/address.controller.ts` (`listCities`);
+`src/admin/offline/offline.controller.ts` (`listCities`, city create/update via schema);
+`src/admin/offline/offline.validation.ts` (`cityCreateSchema`);
+`src/migrations/2026-offlinecity-add-state-id.ts` (new).
+
+**Schema:** Added `stateId` (ref `CustomerState`, default `null`) to `ws_offline_city`
++ index `{ stateId: 1, status: 1, order: 1 }`. Previously cities had NO link to states.
+
+**Query-shape changes:**
+- Client `GET /address/cities` now accepts optional `?stateId=<id>` →
+  `filter.stateId`; invalid id → 400. Result populates `stateId` to `{_id,name,stateCode}`.
+  Omitting stateId returns all cities (backward-compatible).
+- Admin `GET /admin/address/cities` (impl in offline.controller) accepts `?stateId=` and
+  populates stateId. Admin city create/update now accept + persist `stateId`.
+
+**Migration (required to populate the field):**
+`src/migrations/2026-offlinecity-add-state-id.ts` sets `stateId: null` where absent
+(idempotent) and LISTS cities still missing a state — there is no DB source of truth for
+city→state, so each must be assigned by an admin (PUT /admin/address/cities/:id) or via
+the optional `CITY_STATE_MAP` env. Until assigned, a city won't appear under any
+`?stateId=` filter. FE doc: `docs/STATES_CITIES_CLIENT.md`.
+
+## 2026-06-12 — Admin test-series: defaultPlan on list, thumbnail-clear, paid-requires-plan
+
+**File:** `src/admin/testSeries/testSeries.controller.ts` (`listTestSeries`,
+`createTestSeries`, `updateTestSeries`).
+
+- **List `defaultPlan`:** `GET /admin/test-series` now runs one extra batched query —
+  `TestSeriesPrice.find({ testSeriesId: { $in }, status: true }).sort({ isDefault:-1, price:1 })`
+  — and attaches a `defaultPlan` (default, else cheapest active, else null) to each row.
+  One query for the whole page, not per-row.
+- **Thumbnail clear:** update now treats `thumbnail === ""` as `$unset: { thumbnail }`
+  (was: stored as `""`); missing field still = no change. Create drops an empty-string
+  thumbnail before insert.
+- **Paid-requires-plan guard (update only):** when the resulting `isFree === false`,
+  `updateTestSeries` runs `TestSeriesPrice.exists({ testSeriesId, status: true })` and
+  rejects with 422 if none. Not enforced on create (plans are added post-create). Update
+  also now reads the existing doc's `isFree` first (extra findById) to evaluate the guard
+  when the field isn't in the payload. **Data note:** any pre-existing paid series with no
+  active plan (found 1 in staging: "Reprehenderit moles") will be blocked from edits until
+  a plan is added or it's set free — escape path always exists.
+
+## 2026-06-12 — Video-playback BE bug fixes (progress upsert key, free-video reachability, lecture-note course-optional)
+
+**Files:** `src/client/course/progress.controller.ts` (`reportLectureProgress`);
+`src/client/lecture-note/lecture-note.controller.ts` (`authorizeRecorded`).
+
+**Bug 2 — progress upsert keyed on removed fields (CRITICAL):** Commit `bcfad2d`
+reverted `LectureProgress` to global-per-(customer,video) (unique partial index
+`uniq_customer_video`, no `containerType`/`containerId`/`scopeKind`), but
+`reportLectureProgress` still upserted on `{customerId, videoId, containerType,
+containerId}`. Mongoose strict mode threw "Path containerId is not in schema" on EVERY
+paid course/package/liveCourse heartbeat. **Query-shape change:** upsert filter +
+`$setOnInsert` now key on `{customerId, videoId}` only; container pointers
+(courseId/packageId/liveCourseId) are stamped via `$set` and only ADDED (never cleared),
+so multi-product watches accumulate pointers on the one row. Verified live
+`ws_lecture_progress`: 0 legacy-containerId rows, 0 duplicate (customer,video) groups —
+global upsert is safe.
+
+**Bug 3 — free videos rejected by scope reachability:** The `scope.kind` reachability
+check (all 3 branches) ran before the free/paid branch, returning 400 "Video is not part
+of the scoped X" for free videos whose package/course linkage lives in the free catalog
+rather than specificSubjects/relation rows. Now a free video (`priceType==='free'`)
+bypasses the strict reachability check (still confirms the scoped container exists);
+paid videos are unchanged.
+
+**Bug 1 — lecture note required a resolvable course:** `authorizeRecorded` 400'd
+"This lecture is not attached to a course." whenever no owning Course resolved. `courseId`
+is optional metadata on `LectureNote`. Now: free video → save with `courseId` (or null);
+paid video with resolvable course → still gated on active subscription; paid video with no
+resolvable course → saved scoped to videoId (`courseId:null`) instead of rejected.
+
+**Bug 1b — same bug in `lecture-audio-note.controller.ts` (added 2026-06-12):** the
+audio-note module has its own copy of `authorizeRecorded` (deliberate copy-paste), so
+`POST` and `GET /client/lecture-audio-notes` 400'd identically for no-course videos —
+including the LIST path, so free/current-affairs videos couldn't even display their audio
+notes. Same fix applied (course optional; free + no-course-paid allowed). Verified against
+free video `6a1ec3110c49baf08ac51a30`.
+
+**No index/schema change in code.** ⚠️ Separate cleanup needed (not done here): drop the
+orphaned per-container indexes still present on `ws_lecture_progress`
+(`uniq_customer_video_course/_package/_liveCourse/_legacy`, partial on the defunct
+`scopeKind`).
+
+## 2026-06-12 — Client test-series detail stops returning deprecated `examCategoryId`
+
+**File:** `src/client/testSeries/testSeries.controller.ts` — `getTestSeriesDetail`.
+
+**Change:** Response-shape only. The detail endpoint was spreading the full lean
+series doc, which leaked BOTH the deprecated single `examCategoryId` and the new
+populated `examCategoryIds`. Now destructures `examCategoryId` out before building the
+response, so only `examCategoryIds` (`[{ _id, name }]`) is returned. No DB/query change
+— `examCategoryId` is still stored and kept in sync on write during the migration
+window; it is just hidden from this client read. The list endpoint already omitted it
+(fixed `.select`).
+
+## 2026-06-12 — Live-course `endAt` computed as DAYS (was wrongly MONTHS)
+
+**Files:** `src/client/payment/verify.controller.ts` (live-course branch);
+`src/client/webhook/webhook.controller.ts` (live-course branch);
+`src/admin/live-course/live-course.subscription.controller.ts` (grant + extend);
+`src/models/course/LiveCoursePlan.model.ts`;
+`src/admin/live-course/live-course.plan.controller.ts` (validation label);
+`src/migrations/2026-livecourse-fix-endat-days.ts` (new).
+
+**Bug:** All 3 live-course fulfillment paths fed `LiveCoursePlan.duration` into
+`computeEndAt` WITHOUT `asDays:true`, so `duration` (DAYS) was applied via `setMonth`.
+A 180-day plan produced `startAt + 180 months` (~15 yrs) → `/client/live-courses`
+showed `daysLeft: 5479`. `asDays` is NOT a no-op in the helper — it switches
+`setDate` vs `setMonth`; only the live-course paths had missed it (ebook/course/
+test-series already passed it).
+
+**Code change:** All live-course callsites now pass `asDays: true`. Model + admin
+plan validation relabeled months → DAYS. Admin grant gains a `durationDays` override
+(preferred); legacy `durationMonths` override still honoured (months) for back-compat.
+No query-shape/index change.
+
+**Migration (required):** `src/migrations/2026-livecourse-fix-endat-days.ts` recomputes
+`endAt = startAt + plan.duration days` for verified, time-boxed live-course
+subscriptions whose stored span is clearly the months-bug result (span ≥ 2× and ≥31d
+over the day expectation). Idempotent; skips lifetime/unbounded rows and rows without a
+usable plan duration; logs every change. Supports `DRY_RUN=1`.
+Run: `MONGODB_URI="<uri>" npx tsx src/migrations/2026-livecourse-fix-endat-days.ts`
+(do a `DRY_RUN=1` pass first). The earlier `2026-subscription-enddate-days.ts` did NOT
+cover `ws_live_course_subscriptions`.
+
+## 2026-06-12 — TestSeries `examCategoryId` → `examCategoryIds` (array)
+
+**Files:** `src/models/testSeries/TestSeries.model.ts`;
+`src/admin/testSeries/testSeries.validation.ts`;
+`src/admin/testSeries/testSeries.controller.ts` (`listTestSeries`, `createTestSeries`,
+`updateTestSeries`);
+`src/migrations/2026-testseries-backfill-exam-category-ids.ts` (new).
+
+**Schema:** Added `examCategoryIds: [ObjectId]` (ref `ExamCategory`, default `[]`) to
+`ws_test_series`. The legacy single `examCategoryId` is **retained for the migration
+window** (controllers keep it in sync = first array entry; drop later). New index
+`{ examCategoryIds: 1, status: 1 }` added; the old `{ examCategoryId: 1, status: 1 }`
+index is kept until the field is dropped.
+
+**Migration (required):** `src/migrations/2026-testseries-backfill-exam-category-ids.ts`
+backfills `examCategoryIds = [examCategoryId]` for docs with a legacy single value, and
+sets `[]` where absent. Idempotent, forward-only.
+Run: `MONGODB_URI="<uri>" npx tsx src/migrations/2026-testseries-backfill-exam-category-ids.ts`.
+
+**Query-shape changes:**
+- `GET /admin/test-series` category filter: was `filter.examCategoryId = <id>`
+  (single equality). Now accepts `examCategoryIds` (repeated) or legacy
+  `examCategoryId`, and matches with
+  `$or: [{ examCategoryIds: { $in } }, { examCategoryId: { $in } }]` so both migrated
+  and un-migrated docs match. **Note:** introduces a top-level `$or` on this list —
+  watch for interaction if other `$or` filters are ever added here.
+- Create/Update now persist `examCategoryIds` (array) plus the synced legacy
+  `examCategoryId`. Validation accepts array / repeated multipart / `examCategoryIds[]`
+  bracket key / JSON-encoded string / single value.
+
+**Reads (admin):** List + detail return the raw lean doc, so `examCategoryIds` flows
+through automatically once backfilled; `examCategoryId` still returned during the window.
+
+**Reads (client):** `src/client/testSeries/testSeries.controller.ts` —
+`listTestSeries` projection (`.select`) widened to include `examCategoryIds`, and both
+`listTestSeries` + `getTestSeriesDetail` now `.populate("examCategoryIds", select
+"_id name")` so the client gets `[{ _id, name }]` instead of bare ids (no FE id→name
+lookup needed; deleted refs surface as `null` and should be filtered). FE doc:
+`docs/TEST_SERIES_CATEGORY_MIGRATION_CLIENT.md`.
+
+## 2026-06-12 — Offline city `image` added to populated projections
+
+**Files:** `src/client/offline/offline.controller.ts` — `getOfflineDashboard`,
+`listCenters`, `listBatches`.
+
+**Change:** Projection-only. The `OfflineCity` populate selects were widened from
+`"name"` / `"_id name"` to include `image` (cities have a required `image` field that
+was being stripped). Affects: dashboard upcoming-batches → center → city; centers list →
+city; batches list → center → city. No filter/index change; same documents, one more
+projected field. `getCenterDetail`/`getBatchDetail` already returned the full city.
+
+## 2026-06-12 — Offline client lists paginated + auth; test-series papers `isPaid` flags
+
+**Files:** `src/client/offline/offline.controller.ts` — `listCenters`, `listBatches`;
+`src/client/offline/offline.routes.ts`;
+`src/client/testSeries/testSeries.controller.ts` — `listSeriesPapers`.
+
+**Changes:**
+
+- `GET /client/offline/centers` & `GET /client/offline/batches`: were
+  `find(filter).sort(...).lean()` returning the full active collection. Now apply
+  `skip/limit` pagination with `page`/`limit` query params (`limit` clamped 1–100,
+  default 20) and run a parallel `countDocuments(filter)`. Response gains a
+  `pagination: { total, page, limit, totalPages }` object alongside `data`. Filter
+  contracts unchanged (`status:true` + cityId/centerId/search/upcoming as before).
+- Both offline list/detail routes (`/centers`, `/centers/:id`, `/batches`,
+  `/batches/:id`) now require `authenticate` + `requireRole("customer")` — previously
+  public. `POST /enquiry` keeps best-effort auth.
+- `GET /client/test-series/:id/papers` (`listSeriesPapers`): the populated `examId`
+  select now also pulls `isPaid` (no schema change — field already exists on `Exam`).
+  Response adds top-level `isPaid` (= `!series.isFree`) and, per paper, `isPaid`
+  (from `Exam.isPaid`) and `isLocked` (= paper.isPaid && !hasAccess). No new query or
+  index — same documents, additional projected field.
+
 ## 2026-06-11 — Server-side pagination/search/status on educators & departments lists
 
 **Files:** `src/admin/master/educator.controller.ts` — `getEducators`;

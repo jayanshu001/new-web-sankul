@@ -36,9 +36,14 @@ Auth: Bearer customer token. Required on every route.
         "title": "Online Mock test 2025",
         "description": "...",
         "thumbnail": "https://.../cover.png",
+        "examCategoryIds": [
+          { "_id": "66aa...", "name": "GPSC" },
+          { "_id": "66bb...", "name": "UPSC" }
+        ],
         "language": "gu",
         "paperCount": 5,
         "isFree": false,
+        "isPaid": true,
         "defaultPlan": {
           "_id": "...",
           "durationDays": 30,
@@ -46,7 +51,9 @@ Auth: Bearer customer token. Required on every route.
           "originalPrice": 300,
           "discountPct": 10
         },
-        "isPurchased": false
+        "isPurchased": false,
+        "daysLeft": null,
+        "shareableLink": "https://.../s/test-series/..."
       }
     ],
     "total": 12,
@@ -58,6 +65,11 @@ Auth: Bearer customer token. Required on every route.
 
 `defaultPlan` powers the price + "10% off" badge on the listing card.
 `isPurchased` is `true` when the customer has an active (un-expired) subscription.
+`examCategoryIds` is an **array of populated category objects** `{ _id, name }`
+(a series can belong to multiple categories). It may be `[]`. The deprecated
+singular `examCategoryId` is **no longer returned** by the client list/detail
+endpoints — read `examCategoryIds` only. See
+`TEST_SERIES_CATEGORY_MIGRATION_CLIENT.md` for the parser snippet.
 
 ---
 
@@ -68,7 +80,15 @@ Auth: Bearer customer token. Required on every route.
 ```json
 {
   "data": {
-    "series": { /* TestSeries */ },
+    "series": {
+      /* full TestSeries doc, plus: */
+      "examCategoryIds": [
+        { "_id": "66aa...", "name": "GPSC" },
+        { "_id": "66bb...", "name": "UPSC" }
+      ],
+      "isPaid": true,
+      "shareableLink": "https://.../s/test-series/..."
+    },
     "contentCategories": [
       { "_id": "...", "name": "GPSC Mains Lecture PDF", "icon": null, "orderBy": 0 }
     ],
@@ -106,6 +126,7 @@ papers count, language, validity from `prices[].durationDays`, description).
 ```json
 {
   "data": {
+    "isPaid": true,
     "hasAccess": true,
     "categories": [
       {
@@ -119,6 +140,7 @@ papers count, language, validity from `prices[].durationDays`, description).
             "exam": {
               "_id": "...",
               "title": "GPSC Mains Lecture PDF",
+              "isPaid": true,
               "durationMinutes": 10,
               "questionCount": 10,
               "positiveMarks": 1,
@@ -127,6 +149,8 @@ papers count, language, validity from `prices[].durationDays`, description).
               "difficulty": "medium"
             },
             "orderBy": 0,
+            "isPaid": true,
+            "isLocked": false,
             "attemptState": "retake",
             "lastResult": {
               "score": 7,
@@ -144,8 +168,14 @@ papers count, language, validity from `prices[].durationDays`, description).
 }
 ```
 
+- **`isPaid`** (top level) → `true` when the series is not free (= `!series.isFree`).
+  Drives the "paid series" badge / paywall on the Test Content tab.
 - **`hasAccess`** → render `Start` / `Retake` buttons live only when `true`.
   Free series (`series.isFree === true`) always return `hasAccess: true`.
+- **`paper.isPaid`** → the individual paper's own paid flag (from the Exam).
+- **`paper.isLocked`** → `true` when the paper is paid **and** the customer has no
+  access (`isPaid && !hasAccess`). Render a lock icon / "Buy to unlock" on these and
+  disable the Start button regardless of `attemptState`.
 - **`attemptState`** → `"start"` (button label "Start") or `"retake"` (button
   "Retake"). Mirrors the mockup's two states.
 - The actual question delivery + submission still uses the existing

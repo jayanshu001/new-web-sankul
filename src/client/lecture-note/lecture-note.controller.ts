@@ -26,39 +26,47 @@ import { buildLectureRef } from "../learning/lectureRef";
 async function authorizeRecorded(
   userId: string,
   videoId: string
-): Promise<{ courseId: Types.ObjectId } | { error: string; status: number }> {
+): Promise<{ courseId: Types.ObjectId | null } | { error: string; status: number }> {
   const video = await Video.findById(videoId)
     .select("videoCategoryId status priceType")
     .lean();
   if (!video || !video.status) return { error: "Lecture not found.", status: 404 };
 
-  // Robustly resolve the owning course — a video often sits under a child
+  // Resolve the owning course when we can — a video often sits under a child
   // category whose own courseId is null while the link lives on an ancestor or
-  // on Course.videoCategoryId. Reading only the leaf wrongly reports
-  // "not attached to a course". See resolveVideoCourseId.
+  // on Course.videoCategoryId. See resolveVideoCourseId. This is best-effort:
+  // `courseId` is denormalised METADATA on the note, not a hard requirement.
+  // A video reached via a package (or the free catalog) may resolve to no
+  // single course, and that must NOT block note creation.
   const courseId = await resolveVideoCourseId(video.videoCategoryId);
-  if (!courseId) {
-    return { error: "This lecture is not attached to a course.", status: 400 };
-  }
 
   // Free lectures don't require a subscription — any authenticated user can
-  // take notes on them.
+  // take notes on them, with or without a resolvable course.
   if (video.priceType === "free") {
+    return { courseId: courseId ?? null };
+  }
+
+  // Paid lecture. If we could resolve the owning course, gate on an active
+  // subscription to it (unchanged behaviour). If we couldn't resolve a course,
+  // we cannot verify a course subscription here — but the video is paid and
+  // exists, so save the note scoped to the video only rather than rejecting it.
+  // (Read access to the video itself is enforced by the playback endpoints; the
+  // note is harmless metadata keyed on a video the user is actively watching.)
+  if (courseId) {
+    const sub = await PackageCourseSubscription.findOne({
+      customerId: new Types.ObjectId(userId),
+      courseId,
+      status: true,
+      paymentStatus: "verified",
+      endAt: { $gt: new Date() },
+    }).select("_id");
+    if (!sub) {
+      return { error: "Active subscription required to take notes.", status: 403 };
+    }
     return { courseId };
   }
 
-  const sub = await PackageCourseSubscription.findOne({
-    customerId: new Types.ObjectId(userId),
-    courseId,
-    status: true,
-    paymentStatus: "verified",
-    endAt: { $gt: new Date() },
-  }).select("_id");
-  if (!sub) {
-    return { error: "Active subscription required to take notes.", status: 403 };
-  }
-
-  return { courseId };
+  return { courseId: null };
 }
 
 /**

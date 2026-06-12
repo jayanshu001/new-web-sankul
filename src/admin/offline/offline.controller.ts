@@ -5,6 +5,7 @@ import { OfflineCity } from "../../models/offline/OfflineCity.model";
 import { OfflineCenter } from "../../models/offline/OfflineCenter.model";
 import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
 import { OfflineEnquiry } from "../../models/offline/OfflineEnquiry.model";
+import { CustomerState } from "../../models/customer/CustomerState.model";
 import {
   bannerCreateSchema,
   bannerUpdateSchema,
@@ -97,10 +98,14 @@ export const reorderBanners = async (req: Request, res: Response) => {
 
 export const listCities = async (req: Request, res: Response) => {
   try {
-    const { status } = req.query as Record<string, string>;
+    const { status, stateId } = req.query as Record<string, string>;
     const filter: any = {};
     if (status === "true" || status === "false") filter.status = status === "true";
-    const data = await OfflineCity.find(filter).sort({ order: 1 }).lean();
+    if (stateId && isObjectId(stateId)) filter.stateId = stateId;
+    const data = await OfflineCity.find(filter)
+      .populate({ path: "stateId", model: CustomerState, select: "_id name stateCode" })
+      .sort({ order: 1 })
+      .lean();
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });

@@ -102,19 +102,25 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       //   (a) the scoped course carries the leaf/an-ancestor category id, or
       //   (b) the scoped course's downward videoCategoryId points at the leaf or
       //       an ancestor.
-      const [catWithCourse, downwardCourse] = await Promise.all([
-        ancestorIds.length
-          ? VideoCategory.findOne({ _id: { $in: ancestorIds }, courseId: scopeOid })
-              .select("_id")
-              .lean()
-          : Promise.resolve(null as any),
-        ancestorIds.length
-          ? Course.findOne({ _id: scopeOid, videoCategoryId: { $in: ancestorIds }, status: true })
-              .select("_id")
-              .lean()
-          : Promise.resolve(null as any),
-      ]);
-      const reachable = !!catWithCourse || !!downwardCourse;
+      // A FREE video is exempt from the strict membership check (see the package
+      // branch for the rationale) — its progress is valid regardless of how the
+      // category tree happens to link it; we only confirm the course exists below.
+      let reachable = isFree;
+      if (!reachable) {
+        const [catWithCourse, downwardCourse] = await Promise.all([
+          ancestorIds.length
+            ? VideoCategory.findOne({ _id: { $in: ancestorIds }, courseId: scopeOid })
+                .select("_id")
+                .lean()
+            : Promise.resolve(null as any),
+          ancestorIds.length
+            ? Course.findOne({ _id: scopeOid, videoCategoryId: { $in: ancestorIds }, status: true })
+                .select("_id")
+                .lean()
+            : Promise.resolve(null as any),
+        ]);
+        reachable = !!catWithCourse || !!downwardCourse;
+      }
       if (!reachable) {
         logger.warn("reportLectureProgress scope mismatch (course)", { traceId, userId, videoId, scope });
         return res.status(400).json({ success: false, message: "Video is not part of the scoped course." });
@@ -147,8 +153,13 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       //   (b) the expanded PackageVideoCategoryRelation tree — videos under any
       //       category that is an endpoint (parent or child) of a stored relation.
       // We test the video's own category PLUS all its ancestors against both.
-      let reachable = false;
-      if (ancestorIds.length) {
+      // A FREE video is exempt from the strict membership check: free package
+      // content is often surfaced via the free catalog rather than the package's
+      // specificSubjects/relation tree, so the linkage may legitimately be
+      // absent. Its progress is still valid (mirrors the free-videos endpoint);
+      // we only confirm the package exists below. Paid videos must be reachable.
+      let reachable = isFree;
+      if (!reachable && ancestorIds.length) {
         const [pkg, relRows] = await Promise.all([
           Package.findById(scopeOid).select("specificSubjects").lean<any>(),
           // A relation row counts if EITHER endpoint is one of the video's
@@ -216,8 +227,9 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       //       in listLiveCourseRecordings), or
       //   (b) the scoped live course's downward videoCategoryId root folder is
       //       the video's leaf category or one of its ancestors.
-      let reachable = false;
-      if (ancestorIds.length) {
+      // FREE video exempt from strict membership (see package branch rationale).
+      let reachable = isFree;
+      if (!reachable && ancestorIds.length) {
         const [folder, liveCourse] = await Promise.all([
           VideoCategory.findOne({ _id: { $in: ancestorIds }, liveCourseId: scopeOid })
             .select("_id")
@@ -262,18 +274,22 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
 
     // We never *un*complete a lecture — once completed: true, it stays true even
     // if a later heartbeat reports an earlier position (user re-watched the start).
-    // The row is keyed on (customer, video, container): watching the same video
-    // from a different product upserts a SEPARATE row, so each product keeps its
-    // own resume position and completion.
+    // Progress is GLOBAL per (customer, video): the same video reached through
+    // multiple products shares one row (see LectureProgress model + the unique
+    // `uniq_customer_video` index). The container pointer for the product the user
+    // is watching from is stamped via $set so the rollups still attribute it; we
+    // only ever ADD a pointer (never clear another product's), so a video watched
+    // under Course A then Package X ends with both courseId and packageId set.
     const setFields: any = {
       positionSec,
       durationSec,
       lastWatchedAt: now,
-      // Mirror the single container onto its typed pointer for the rollups.
-      courseId,
-      packageId,
-      liveCourseId,
     };
+    // Stamp only the pointer for the current scope — leave the others untouched
+    // so a prior container's attribution survives.
+    if (courseId) setFields.courseId = courseId;
+    if (packageId) setFields.packageId = packageId;
+    if (liveCourseId) setFields.liveCourseId = liveCourseId;
     if (completedNow) {
       setFields.completed = true;
       setFields.completedAt = now;
@@ -283,16 +299,12 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       {
         customerId: cid,
         videoId: new mongoose.Types.ObjectId(videoId),
-        containerType: scope.kind,
-        containerId: scopeOid,
       },
       {
         $set: setFields,
         $setOnInsert: {
           customerId: cid,
           videoId: new mongoose.Types.ObjectId(videoId),
-          containerType: scope.kind,
-          containerId: scopeOid,
         },
       },
       { new: true, upsert: true, setDefaultsOnInsert: true }

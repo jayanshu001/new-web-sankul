@@ -15,6 +15,7 @@ export const bannerUpdateSchema = bannerCreateSchema.partial();
 export const cityCreateSchema = z.object({
   name: z.string().min(1).max(100),
   image: z.string().min(1).max(500),
+  stateId: objectIdSchema.optional(),
   order: z.number().int().default(0),
   status: z.boolean().optional(),
 });

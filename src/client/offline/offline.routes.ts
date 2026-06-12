@@ -1,5 +1,5 @@
 import { Router } from "express";
-import authenticate from "../../middlewares/authenticate";
+import authenticate, { requireRole } from "../../middlewares/authenticate";
 import {
   getOfflineDashboard,
   // listCities,            // moved to /api/v1/client/address/cities
@@ -18,10 +18,11 @@ router.get("/", getOfflineDashboard);
 // Cities + centers-by-city moved to the address module — see address.routes.ts
 // router.get("/cities", listCities);
 // router.get("/cities/:cityId/centers", listCentersByCity);
-router.get("/centers", listCenters);
-router.get("/batches", listBatches);
-router.get("/centers/:id", getCenterDetail);
-router.get("/batches/:id", getBatchDetail);
+// Centers + batches require an authenticated customer (Bearer token).
+router.get("/centers", authenticate, requireRole("customer"), listCenters);
+router.get("/batches", authenticate, requireRole("customer"), listBatches);
+router.get("/centers/:id", authenticate, requireRole("customer"), getCenterDetail);
+router.get("/batches/:id", authenticate, requireRole("customer"), getBatchDetail);
 
 // Enquiry accepts both anonymous and authenticated — attempt to attach userId if present
 router.post("/enquiry", (req, res, next) => {

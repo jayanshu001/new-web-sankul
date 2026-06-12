@@ -143,15 +143,15 @@ export const paymentWebhook = async (req: Request, res: Response) => {
     const liveCourseSub = await LiveCourseSubscription.findOne({ razorpayOrderId });
     if (liveCourseSub) {
       if (liveCourseSub.paymentStatus !== "verified") {
-        // `duration` is stored as MONTHS — shared helper enforces the
-        // setMonth-honors-calendar-length contract uniformly.
+        // `duration` is stored as DAYS (see LiveCoursePlan) — use setDate, not
+        // setMonth. Mirrors the verify.controller live-course branch.
         const plan = await LiveCoursePlan.findById(liveCourseSub.planId)
           .select("duration")
           .lean();
-        const durationMonths = plan?.duration ?? 0;
+        const durationDays = plan?.duration ?? 0;
 
         const now = new Date();
-        const endAt = computeEndAt({ startAt: now, durationMonths });
+        const endAt = computeEndAt({ startAt: now, durationMonths: durationDays, asDays: true });
 
         liveCourseSub.paymentStatus = "verified";
         liveCourseSub.razorpayPaymentId = razorpayPaymentId;

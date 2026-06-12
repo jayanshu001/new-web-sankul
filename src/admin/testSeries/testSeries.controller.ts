@@ -32,10 +32,83 @@ function zodIssueResponse(res: Response, err: z.ZodError) {
   return failure(res, "Validation failed.", 422, { errors: messages });
 }
 
+// multipart/form-data clients may send the array as `examCategoryIds[]` (qs
+// bracket notation), which multer leaves under that literal key. Collapse it
+// onto `examCategoryIds` so validation sees a single shape. Mutates req.body.
+function normalizeExamCategoryIds(body: Record<string, any>) {
+  if (body["examCategoryIds[]"] !== undefined && body.examCategoryIds === undefined) {
+    body.examCategoryIds = body["examCategoryIds[]"];
+    delete body["examCategoryIds[]"];
+  }
+}
+
+// During the migration window we accept either the array (`examCategoryIds`) or
+// the legacy single field (`examCategoryId`) and keep both in sync on write, so
+// old and new readers stay correct. Returns the props to persist, or {} when the
+// caller sent neither (e.g. partial update untouched).
+function resolveCategoryWrite(
+  data: { examCategoryIds?: string[]; examCategoryId?: string | null }
+): { examCategoryIds?: any[]; examCategoryId?: any } {
+  if (data.examCategoryIds !== undefined) {
+    const ids = data.examCategoryIds;
+    return { examCategoryIds: ids, examCategoryId: ids[0] ?? null };
+  }
+  if (data.examCategoryId !== undefined) {
+    const single = data.examCategoryId;
+    return { examCategoryIds: single ? [single] : [], examCategoryId: single ?? null };
+  }
+  return {};
+}
+
 // Recompute denormalized paper count for a series.
 async function recomputePaperCount(testSeriesId: string | mongoose.Types.ObjectId) {
   const count = await TestSeriesExam.countDocuments({ testSeriesId, status: true });
   await TestSeries.updateOne({ _id: testSeriesId }, { $set: { paperCount: count } });
+}
+
+// A paid series (isFree === false) must have at least one active price plan, so
+// it never ends up unpurchasable. `isFreeNow` is the series' isFree AFTER this
+// write (so a partial update that doesn't touch isFree falls back to current).
+// Returns an error message to reject with, or null when the guard passes.
+async function assertPaidHasPlan(
+  testSeriesId: string | mongoose.Types.ObjectId,
+  isFreeNow: boolean
+): Promise<string | null> {
+  if (isFreeNow) return null;
+  const hasPlan = await TestSeriesPrice.exists({ testSeriesId, status: true });
+  if (!hasPlan) {
+    return "A paid test series must have at least one active price plan. Add a plan or mark the series free.";
+  }
+  return null;
+}
+
+// The default-plan preview each list row carries so the admin list doesn't have
+// to fetch /prices per series. Default plan wins, else cheapest active plan.
+async function buildDefaultPlanMap(seriesIds: mongoose.Types.ObjectId[]) {
+  const map = new Map<string, any>();
+  if (!seriesIds.length) return map;
+  const plans = await TestSeriesPrice.find({
+    testSeriesId: { $in: seriesIds },
+    status: true,
+  })
+    .select("_id name durationDays price originalPrice isDefault status testSeriesId")
+    .sort({ isDefault: -1, price: 1 })
+    .lean();
+  for (const p of plans as any[]) {
+    const k = String(p.testSeriesId);
+    if (!map.has(k)) {
+      map.set(k, {
+        _id: p._id,
+        name: p.name ?? null,
+        durationDays: p.durationDays,
+        price: p.price,
+        originalPrice: p.originalPrice ?? null,
+        isDefault: p.isDefault,
+        status: p.status,
+      });
+    }
+  }
+  return map;
 }
 
 // ─── Test Series CRUD ────────────────────────────────────────────────────────
@@ -46,12 +119,25 @@ export const listTestSeries = async (req: Request, res: Response) => {
   logger.info("listTestSeries invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { search, status, examCategoryId, page = "1", limit = "20" } =
-      req.query as Record<string, string>;
+    const { search, status, examCategoryId, examCategoryIds, page = "1", limit = "20" } =
+      req.query as Record<string, any>;
     const filter: any = {};
     { const c = buildRegexCondition(search); if (c) filter.title = c; }
     if (status === "true" || status === "false") filter.status = status === "true";
-    if (examCategoryId && isObjectId(examCategoryId)) filter.examCategoryId = examCategoryId;
+
+    // Accept `examCategoryId` (legacy single) or `examCategoryIds` (array via
+    // repeated query param). Match against the new array field, and—during the
+    // migration window—the legacy single field for not-yet-backfilled docs.
+    const rawCats = examCategoryIds ?? examCategoryId;
+    const catIds = (Array.isArray(rawCats) ? rawCats : rawCats ? [rawCats] : [])
+      .map(String)
+      .filter((c) => isObjectId(c));
+    if (catIds.length) {
+      filter.$or = [
+        { examCategoryIds: { $in: catIds } },
+        { examCategoryId: { $in: catIds } },
+      ];
+    }
 
     const p = Math.max(1, parseInt(page, 10) || 1);
     const l = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
@@ -65,8 +151,16 @@ export const listTestSeries = async (req: Request, res: Response) => {
       TestSeries.countDocuments(filter),
     ]);
 
+    // Attach a default-plan preview per row so the admin list doesn't fire a
+    // /prices request per series.
+    const defaultPlanByid = await buildDefaultPlanMap(rows.map((r) => r._id));
+    const data = rows.map((r) => ({
+      ...r,
+      defaultPlan: defaultPlanByid.get(String(r._id)) ?? null,
+    }));
+
     logger.info("listTestSeries success", { traceId, total });
-    return success(res, { data: rows, total, page: p, limit: l }, "Fetched.");
+    return success(res, { data, total, page: p, limit: l }, "Fetched.");
   } catch (err) {
     logger.error("listTestSeries failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list test series.", 500);
@@ -115,6 +209,7 @@ export const createTestSeries = async (req: Request, res: Response) => {
   try {
     const file = req.file as any;
     if (file?.location) req.body.thumbnail = file.location;
+    normalizeExamCategoryIds(req.body);
     let data: z.infer<typeof createTestSeriesSchema>;
     try {
       data = createTestSeriesSchema.parse(req.body);
@@ -122,7 +217,10 @@ export const createTestSeries = async (req: Request, res: Response) => {
       if (e instanceof z.ZodError) { logger.warn("createTestSeries validation failed", { traceId, issues: e.issues }); return zodIssueResponse(res, e); }
       throw e;
     }
-    const series = await TestSeries.create(data);
+    // An explicit empty-string thumbnail means "no thumbnail" — drop it so the
+    // doc is created without one rather than storing "".
+    if (data.thumbnail === "") delete (data as any).thumbnail;
+    const series = await TestSeries.create({ ...data, ...resolveCategoryWrite(data) });
     logger.info("createTestSeries success", { traceId, id: series._id });
     return success(res, { series }, "Test series created.", 201);
   } catch (err) {
@@ -141,6 +239,7 @@ export const updateTestSeries = async (req: Request, res: Response) => {
     if (!isObjectId(id)) { logger.warn("updateTestSeries invalid id", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
     const file = req.file as any;
     if (file?.location) req.body.thumbnail = file.location;
+    normalizeExamCategoryIds(req.body);
     let data: z.infer<typeof updateTestSeriesSchema>;
     try {
       data = updateTestSeriesSchema.parse(req.body);
@@ -148,7 +247,30 @@ export const updateTestSeries = async (req: Request, res: Response) => {
       if (e instanceof z.ZodError) { logger.warn("updateTestSeries validation failed", { traceId, id, issues: e.issues }); return zodIssueResponse(res, e); }
       throw e;
     }
-    const series = await TestSeries.findByIdAndUpdate(id, data, { new: true });
+
+    const existing = await TestSeries.findById(id).select("isFree").lean();
+    if (!existing) { logger.warn("updateTestSeries not found", { traceId, id }); return failure(res, "Test series not found.", 404); }
+
+    // Paid series must have at least one active price plan. Evaluate against the
+    // isFree value this update lands on (the incoming value if provided, else
+    // the stored one). Guarded here (not on create) because plans are added via
+    // the separate /prices endpoints AFTER the series exists.
+    const isFreeNow = data.isFree !== undefined ? !!data.isFree : !!existing.isFree;
+    const planErr = await assertPaidHasPlan(id, isFreeNow);
+    if (planErr) { logger.warn("updateTestSeries paid-without-plan", { traceId, id }); return failure(res, planErr, 422); }
+
+    // An empty-string thumbnail means "remove the thumbnail" — $unset it rather
+    // than storing "". A missing thumbnail field still means "no change".
+    const { thumbnail, ...rest } = data as any;
+    const setOps: any = { ...rest, ...resolveCategoryWrite(data) };
+    const updateDoc: any = { $set: setOps };
+    if (thumbnail === "") {
+      updateDoc.$unset = { thumbnail: "" };
+    } else if (thumbnail !== undefined) {
+      setOps.thumbnail = thumbnail;
+    }
+
+    const series = await TestSeries.findByIdAndUpdate(id, updateDoc, { new: true });
     if (!series) { logger.warn("updateTestSeries not found", { traceId, id }); return failure(res, "Test series not found.", 404); }
     logger.info("updateTestSeries success", { traceId, id });
     return success(res, { series }, "Test series updated.");

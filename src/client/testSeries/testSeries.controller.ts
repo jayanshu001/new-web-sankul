@@ -76,7 +76,8 @@ export const listTestSeries = async (req: Request, res: Response) => {
 
     const [rows, total] = await Promise.all([
       TestSeries.find(filter)
-        .select("_id title description thumbnail language paperCount isFree orderBy")
+        .select("_id title description thumbnail examCategoryIds language paperCount isFree orderBy")
+        .populate({ path: "examCategoryIds", model: "ExamCategory", select: "_id name" })
         .sort({ orderBy: 1, createdAt: -1 })
         .skip((p - 1) * l)
         .limit(l)
@@ -161,7 +162,9 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
   try {
     if (!isObjectId(id)) { logger.warn("getTestSeriesDetail invalid id", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
 
-    const series = await TestSeries.findOne({ _id: id, status: true }).lean();
+    const series = await TestSeries.findOne({ _id: id, status: true })
+      .populate({ path: "examCategoryIds", model: "ExamCategory", select: "_id name" })
+      .lean();
     if (!series) { logger.warn("getTestSeriesDetail not found", { traceId, id }); return failure(res, "Test series not found.", 404); }
 
     const [contentCategories, prices] = await Promise.all([
@@ -193,9 +196,13 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
 
     logger.info("getTestSeriesDetail success", { traceId, customerId, id, isPurchased });
     const shareableLink = buildShareUrl("test-series", id, resolveBase(req));
+    // Drop the deprecated single `examCategoryId` from the response — clients
+    // read the populated `examCategoryIds` array. The field is still kept in the
+    // DB / written on update during the migration window; we only hide it here.
+    const { examCategoryId: _deprecatedExamCategoryId, ...seriesOut } = series as any;
     return success(
       res,
-      { series: { ...series, isPaid: !series.isFree, shareableLink }, contentCategories, prices, isPaid: !series.isFree, isPurchased, activeSubscription, daysLeft, shareableLink },
+      { series: { ...seriesOut, isPaid: !series.isFree, shareableLink }, contentCategories, prices, isPaid: !series.isFree, isPurchased, activeSubscription, daysLeft, shareableLink },
       "Fetched."
     );
   } catch (e: any) {
@@ -221,6 +228,9 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
     // Check access — series-level subscription gates the "Start" buttons.
     let hasAccess = false;
     const series = await TestSeries.findById(id).select("isFree").lean();
+    // Series is paid when it is not free. Per-paper `isPaid` (below) comes from
+    // the Exam itself; this top-level flag reflects the series subscription gate.
+    const isPaid = !series?.isFree;
     if (series?.isFree) {
       hasAccess = true;
     } else if (customerId) {
@@ -237,7 +247,7 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
       .sort({ orderBy: 1, createdAt: 1 })
       .populate(
         "examId",
-        "_id title durationMinutes questionCount positiveMarks negativeMarks language difficulty status"
+        "_id title isPaid durationMinutes questionCount positiveMarks negativeMarks language difficulty status"
       )
       .lean();
 
@@ -272,10 +282,15 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
         .map((l: any) => {
           const exam = l.examId;
           const prev = exam ? resultByExam.get(String(exam._id)) : null;
+          // Per-paper paid flag comes from the Exam itself. A paper is locked
+          // when it is paid and the customer has no active series access.
+          const paperIsPaid = !!exam?.isPaid;
           return {
             linkId: l._id,
             exam,
             orderBy: l.orderBy,
+            isPaid: paperIsPaid,
+            isLocked: paperIsPaid && !hasAccess,
             attemptState: prev ? "retake" : "start",
             lastResult: prev ?? null,
           };
@@ -289,8 +304,8 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
       };
     });
 
-    logger.info("listSeriesPapers success", { traceId, customerId, id, hasAccess, categoryCount: grouped.length });
-    return success(res, { hasAccess, categories: grouped }, "Fetched.");
+    logger.info("listSeriesPapers success", { traceId, customerId, id, isPaid, hasAccess, categoryCount: grouped.length });
+    return success(res, { isPaid, hasAccess, categories: grouped }, "Fetched.");
   } catch (e: any) {
     logger.error("listSeriesPapers failed", { traceId, customerId, id, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed.", 500);

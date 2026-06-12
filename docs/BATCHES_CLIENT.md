@@ -2,9 +2,9 @@
 
 A batch is a scheduled offline cohort that runs at a specific center.
 
-> ⚠️ **Auth status (current code):** Browsing endpoints below are presently **public** (no Bearer token enforced). Per project policy all client routes should require auth — flag this if it's intentional vs. an oversight.
+> 🔒 **Auth (current code):** `GET /offline/batches` and `GET /offline/batches/:id` now require a **Bearer token** (authenticated customer). List endpoints are **paginated** — see the consolidated `OFFLINE_CLIENT.md` for the `page`/`limit` contract.
 >
-> `POST /enquiry` uses best-effort auth: it accepts both anonymous and authenticated callers; if a Bearer token is sent it is verified and `customerId` is attached to the enquiry.
+> `POST /enquiry` still uses best-effort auth: it accepts both anonymous and authenticated callers; if a Bearer token is sent it is verified and `customerId` is attached to the enquiry.
 
 ## Endpoints
 

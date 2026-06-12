@@ -2,7 +2,7 @@
 
 Centers are physical learning centers that belong to a city and host batches.
 
-> ⚠️ **Auth status (current code):** Browsing endpoints below are presently **public** (no Bearer token enforced) so the marketing site can surface them. Per project policy all client routes should require auth — flag this if it's intentional vs. an oversight.
+> 🔒 **Auth (current code):** `/offline/centers` and `/offline/centers/:id` now require a **Bearer token** (authenticated customer). The `/address/cities*` endpoints are unaffected by this change. List endpoints are **paginated** — see the consolidated `OFFLINE_CLIENT.md` for the `page`/`limit` contract.
 
 ## Endpoints
 

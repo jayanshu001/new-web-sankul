@@ -273,7 +273,8 @@ export const verifyPayment = async (req: Request, res: Response) => {
       }
 
       const plan = await LiveCoursePlan.findById(liveCourseSub.planId).select("duration").lean();
-      const durationMonths = plan?.duration ?? 0;
+      // `duration` is stored as DAYS (see LiveCoursePlan) — use setDate, not setMonth.
+      const durationDays = plan?.duration ?? 0;
       if (!plan) {
         logger.warn("verifyPayment: live-course plan lookup returned null", {
           subscriptionId: String(liveCourseSub._id),
@@ -296,7 +297,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
       }).sort({ endAt: -1 });
 
       if (existingActive) {
-        existingActive.endAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths, now });
+        existingActive.endAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
         existingActive.paidAmount = (existingActive.paidAmount || 0) + (liveCourseSub.paidAmount || 0);
         await existingActive.save();
 
@@ -322,7 +323,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         });
       }
 
-      const endAt = computeEndAt({ startAt: now, durationMonths });
+      const endAt = computeEndAt({ startAt: now, durationMonths: durationDays, asDays: true });
 
       liveCourseSub.paymentStatus = "verified";
       liveCourseSub.razorpayPaymentId = razorpay_payment_id;
@@ -338,7 +339,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         liveCourseId: String(liveCourseSub.liveCourseId),
         razorpay_order_id,
         razorpay_payment_id,
-        durationMonths,
+        durationDays,
         endAt: endAt.toISOString(),
       });
 
