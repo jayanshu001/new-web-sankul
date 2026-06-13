@@ -60,6 +60,25 @@ yarn dev
 
 ## Current status (summary)
 
+> **✅ 2026-06-13 — 0 MODULES LEFT TO MIGRATE.** All 34 read+write modules are built + wired, **all flag OFF**
+> (11 enabled, the rest dual-path dormant). The read side AND the Phase 3b write side are DONE. What remains is
+> **THE FLIP** (go-live: turn flags ON) + the **LiveCourse design** (Mongo-only, no SQL tables) + optional
+> low-value flat/D2 tables. **`RESUME_HERE.md` is the live single source of truth** — read it first. The
+> per-module detail below is the historical wave-by-wave record (newest waves at the bottom of this list).
+>
+> **Phase 3b write cluster (COMPLETE, flag OFF):**
+> - `commerce-order` — course purchase (order + subscription + tracking; dual-read fallback). tsx 28/28.
+> - `ebook-order` — ebook purchase (order + subscription; no tracking). tsx 28/28.
+> - `book-order` — book cart checkout (5 tables, line items, courier AWB via bigint AUTO_INCREMENT). tsx 25/25.
+> - `offline-enquiry` — lead-capture write (bigint mobile, anon→0 sentinel). tsx 10/10.
+> - `package-chat` — announcement chat READ+WRITE. **⚠ First additive schema ALTER** (`ws_package_chat`
+>   extended with media/sender/push — see `schema-changes/2026-06-13_extend_ws_package_chat.sql`). tsx 21/21.
+> - `catalog-book` — now **WIRED** (`GET /client/books` + `/books/:id`), unblocked by `book-order` migrating
+>   the cart/order tables it composes. tsx 12/12.
+>
+> All write paths use the **dual-read fallback in verify** (check MySQL first, fall through to Mongo on miss)
+> so a flag flip between create-order and verify can't orphan a payment.
+
 - **Phase 1:** MySQL + dump + Prisma — done  
 - **Phase 2:** CMS group (app-update, version, faq, banner-slider, testimonial, department, terms, popup) + **Customer Module** on MySQL.  
   - **Enabled (11):** the CMS group + `customer-auth` + `customer-lookups` + `offline-city`.  

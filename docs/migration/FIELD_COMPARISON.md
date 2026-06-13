@@ -1,6 +1,6 @@
 # Field comparison — module by module
 
-> **Generated:** 2026-06-12 — re-run `yarn docs:field-comparison` after schema changes  
+> **Generated:** 2026-06-13 — re-run `yarn docs:field-comparison` after schema changes  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Related:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md) (table inventory) · [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
 
@@ -1271,7 +1271,7 @@
 | 4 | `user_ip` | `varchar(255)` | NULL; DEFAULT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
 | 5 | `cart_id` | `varchar(255)` | NOT NULL | — | — | — | `cartId` | String | — | ✅ SQL+Prisma |
 | 6 | `shipping_id` | `int` | NOT NULL | `shippingId` | Types.ObjectId | — | `shippingId` | Int? | — | ✅ |
-| 7 | `tracking_id` | `bigint` | NULL; DEFAULT NULL | `trackingId` | string | — | `trackingId` | Int? | — | ✅ |
+| 7 | `tracking_id` | `bigint` | NULL; DEFAULT NULL | `trackingId` | string | — | `trackingId` | BigInt? | — | ✅ |
 | 8 | `order_type` | `enum('purchase')` | NOT NULL; enum('purchase') | `orderType` | BookOrderType | — | `orderType` | BookOrderType | — | ✅ |
 | 9 | `order_items` | `text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NULL | — | — | — | `orderItems` | String | — | ✅ SQL+Prisma |
 | 10 | `payment_method` | `varchar(50)` | NOT NULL; DEFAULT 'razorpay' | `paymentMethod` | PaymentMethod | — | `paymentMethod` | PaymentMethod | — | ✅ |
@@ -1341,7 +1341,7 @@
 
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
-| 1 | `tracking_id` | `bigint` | PK AI; NOT NULL | — | — | — | `tracking_id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
+| 1 | `tracking_id` | `bigint` | PK AI; NOT NULL | — | — | — | `tracking_id` | BigInt | @id @default(autoincrement()) | ✅ SQL+Prisma |
 | 2 | `order_id` | `varchar(255)` | NOT NULL | — | — | — | `orderId` | String | — | ✅ SQL+Prisma |
 | 3 | `status` | `varchar(10)` | NOT NULL; DEFAULT 'pending' | — | — | — | `status` | String | — | ✅ SQL+Prisma |
 | 4 | `created_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | — | — | — | `createdAt` | DateTime? | — | ✅ SQL+Prisma |

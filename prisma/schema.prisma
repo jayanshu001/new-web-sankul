@@ -522,7 +522,9 @@ model BookCartItem {
 }
 
 model BookTracking {
-  tracking_id Int         @id @default(autoincrement())
+  // tracking_id is BIGINT in the DDL (the courier AWB, ~1.19e11 — overflows
+  // Int32). Mapped Int would THROW on every read. BigInt; surfaced as number.
+  tracking_id BigInt      @id @default(autoincrement())
   orderId     String      @map("order_id")
   status      String
   createdAt   DateTime?   @map("created_at")
@@ -541,7 +543,7 @@ model BookOrder {
   shipping         CustomerShipping? @relation(fields: [shippingId], references: [id])
   shippingId       Int?              @map("shipping_id")
   BookTracking     BookTracking?     @relation(fields: [trackingId], references: [tracking_id])
-  trackingId       Int?              @map("tracking_id")
+  trackingId       BigInt?           @map("tracking_id") // BIGINT AWB (see BookTracking)
   orderType        BookOrderType     @map("order_type")
   orderItems       String            @map("order_items")
   paymentMethod    PaymentMethod     @map("payment_method")
@@ -932,15 +934,36 @@ model EBook {
 
 // ****************************PACKAGE MODULE******************************
 
-model chat {
-  id        Int       @id @default(autoincrement())
-  packageId Int       @map("package_id")
-  package   Package?  @relation(fields: [packageId], references: [id])
-  message   String
-  createdAt DateTime? @map("created_at")
-  updatedAt DateTime? @map("updated_at")
+// Package announcement chat. The legacy `ws_package_chat` was a stub (message
+// only); extended 2026-06-13 with media/sender/push columns to match the Mongo
+// PackageChat contract (see src/modules/package-chat).
+model PackageChat {
+  id         Int                 @id @default(autoincrement())
+  packageId  Int                 @map("package_id")
+  package    Package?            @relation(fields: [packageId], references: [id])
+  message    String
+  mediaUrl   String?             @map("media_url")
+  mediaType  PackageChatMediaType? @map("media_type")
+  senderType PackageChatSenderType @default(admin) @map("sender_type")
+  senderId   String?             @map("sender_id") // admin ObjectId (admin auth stays Mongo)
+  pushSent   Boolean             @default(false) @map("push_sent")
+  createdAt  DateTime?           @map("created_at")
+  updatedAt  DateTime?           @map("updated_at")
 
   @@map("ws_package_chat")
+}
+
+enum PackageChatMediaType {
+  image
+  video
+  pdf
+  audio
+  other
+}
+
+enum PackageChatSenderType {
+  admin
+  system
 }
 
 // ****************************PACKAGE MODULE******************************
@@ -978,7 +1001,7 @@ model Package {
   materialCategoryPackage   MaterialCategoryPackage[]
   plans                     PackageCourseEbookPrice[]
   packageCourseSubscription PackageCourseSubscription[]
-  chat                      chat[]
+  chat                      PackageChat[]
 
   @@map("ws_package")
 }

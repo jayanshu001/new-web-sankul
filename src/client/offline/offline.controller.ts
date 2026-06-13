@@ -16,8 +16,23 @@ import {
   getCenterDetail as getCenterDetailMysql,
   getBatchDetail as getBatchDetailMysql,
 } from "../../modules/offline-batch/offline-batch.service";
+import {
+  isOfflineEnquiryMysql,
+  enquiryBatchExists,
+  submitEnquiryMysql,
+} from "../../modules/offline-enquiry/offline-enquiry.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
+
+// MySQL enquiry: batchId is an INT (the migrated id-space), not an ObjectId.
+const enquiryMysqlSchema = z.object({
+  name: z.string().min(1).max(255),
+  email: z.string().email().max(255),
+  mobile: z.string().min(6).max(20),
+  qualification: z.string().min(1).max(255),
+  batchId: z.coerce.number().int().positive(),
+  remarks: z.string().max(2000).optional(), // accepted but dropped (no SQL col)
+});
 
 // GET /api/v1/client/offline — dashboard: banners + cities/centers/batches + upcoming batches
 export const getOfflineDashboard = async (_req: Request, res: Response) => {
@@ -299,6 +314,28 @@ export const submitEnquiry = async (req: Request, res: Response) => {
   logger.info("submitEnquiry invoked", { traceId, path: req.originalUrl, customerId: userId });
 
   try {
+    // ── MySQL enquiry write path (offline-enquiry, flag-gated) ───────────────
+    // Branch before the ObjectId schema parse — a MySQL batch id is an int.
+    // Anonymous-allowed (userId may be null → stored as the 0 sentinel).
+    if (isOfflineEnquiryMysql()) {
+      const data = enquiryMysqlSchema.parse(req.body);
+      if (!(await enquiryBatchExists(data.batchId))) {
+        logger.warn("submitEnquiry batch not found (mysql)", { traceId, batchId: data.batchId });
+        return res.status(404).json({ success: false, message: "Batch not found." });
+      }
+      const customerIdInt = userId != null ? Number(userId) : null; // C3 seam
+      const enquiry = await submitEnquiryMysql({
+        customerId: Number.isInteger(customerIdInt as number) ? (customerIdInt as number) : null,
+        name: data.name,
+        email: data.email,
+        mobile: data.mobile,
+        qualification: data.qualification,
+        batchId: data.batchId,
+      });
+      logger.info("submitEnquiry success (mysql)", { traceId, customerId: userId, batchId: data.batchId, enquiryId: enquiry._id });
+      return res.status(201).json({ success: true, data: enquiry });
+    }
+
     const data = enquirySchema.parse(req.body);
 
     const batch = await OfflineBatch.exists({ _id: data.batchId });

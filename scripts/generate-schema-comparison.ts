@@ -228,9 +228,21 @@ function main() {
     if (table === "ws_package_course_ebook_price")
       status = MIGRATED.includes("commerce-price") ? "✅ Migrated" : "🟡 Code ready (flag off)";
     if (table === "ws_package_course_subscription")
-      status = MIGRATED.includes("commerce-subscription") ? "✅ Migrated" : "🟡 Code ready (flag off, read-only)";
+      status = MIGRATED.includes("commerce-order")
+        ? "✅ Migrated (reads + course write)"
+        : "🟡 Code ready (flag off — reads + course WRITE built)";
+    if (table === "ws_package_course_order" || table === "ws_package_course_subscription_tracking")
+      status = MIGRATED.includes("commerce-order")
+        ? "✅ Migrated (course write path)"
+        : "🟡 Code ready (flag off, course WRITE built — commerce-order Phase 3b)";
     if (table === "ws_ebook_subscription")
-      status = MIGRATED.includes("commerce-ebook-sub") ? "✅ Migrated" : "🟡 Code ready (flag off, read-only)";
+      status = MIGRATED.includes("ebook-order")
+        ? "✅ Migrated (reads + ebook write)"
+        : "🟡 Code ready (flag off — reads + ebook WRITE built)";
+    if (table === "ws_ebook_order")
+      status = MIGRATED.includes("ebook-order")
+        ? "✅ Migrated (ebook write path)"
+        : "🟡 Code ready (flag off, ebook WRITE built — ebook-order Phase 3b)";
     if (table === "ws_promoter")
       status = MIGRATED.includes("commerce-promoter") ? "✅ Migrated" : "🟡 Code ready (flag off, read-only)";
     if (table === "ws_promocode" || table === "ws_promoted_package_course_ebook")
@@ -248,9 +260,27 @@ function main() {
     if (table === "ws_exam")
       status = MIGRATED.includes("catalog-exam") ? "✅ Migrated (nav counts)" : "🟡 Partial (nav counts; item/attempt blocked)";
     if (table === "ws_book")
-      status = MIGRATED.includes("catalog-book") ? "✅ Migrated (data reads)" : "🟡 Code ready (flag off, not wired — order/cart deps)";
+      status = MIGRATED.includes("catalog-book") ? "✅ Migrated (reads wired)" : "🟡 Code ready (flag off, WIRED — listBooks/getBookDetail compose book-order cart/purchase state)";
+    if (
+      table === "ws_book_order" ||
+      table === "ws_book_order_item" ||
+      table === "ws_book_cart" ||
+      table === "ws_book_cart_item" ||
+      table === "ws_book_tracking"
+    )
+      status = MIGRATED.includes("book-order")
+        ? "✅ Migrated (book write path)"
+        : "🟡 Code ready (flag off, book WRITE built — book-order Phase 3b)";
     if (table === "ws_offline_center" || table === "ws_offline_batch")
       status = MIGRATED.includes("offline-batch") ? "✅ Migrated (reads)" : "🟡 Code ready (flag off, wired reads)";
+    if (table === "ws_offline_enquiry")
+      status = MIGRATED.includes("offline-enquiry")
+        ? "✅ Migrated (write)"
+        : "🟡 Code ready (flag off, enquiry WRITE built — offline-enquiry Phase 3b)";
+    if (table === "ws_package_chat")
+      status = MIGRATED.includes("package-chat")
+        ? "✅ Migrated (read + write; schema EXTENDED)"
+        : "🟡 Code ready (flag off, READ+WRITE built; table EXTENDED — package-chat Phase 3b)";
 
     let notes = "";
     if (mColl !== "—" && mColl !== table && best < 100) notes = "Collection name differs from MySQL table";

@@ -2,7 +2,7 @@
 
 > **Purpose:** Cold-start context so any session can resume **exactly** here without losing flow, behaviour,
 > or any established rule. This is THE single source of truth for "where we are."
-> **Last updated:** 2026-06-12 · **Branch:** `migration` (NEVER merge to `main` until full sign-off)
+> **Last updated:** 2026-06-13 · **Branch:** `migration` (NEVER merge to `main` until full sign-off)
 > **Working dir:** `/Users/pratikzankat/new-web-sankul`
 > **On resume:** UPDATE THIS FILE as you go (don't create a new one). Pair it with the newest-first detailed
 > log [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md) — that log is the history; this file
@@ -22,25 +22,71 @@ the safety mechanism (gradual enable + instant rollback) the strategy doc requir
 
 ## 1. ⏸ WHERE WE ARE RIGHT NOW (the pause point)
 
-**29 modules built, all verified (tsx, flag OFF), repo typechecks clean. ~79 files uncommitted in the
-working tree — intentional (this whole migration has run uncommitted; commit only when the user asks).**
-We just finished `offline-batch` and paused to maintain this checkpoint.
+**34 modules built, all verified (tsx, flag OFF), repo typechecks clean. Commit only when the user asks.**
+We just finished **`package-chat`** — the LAST 3b write path — and paused to maintain this checkpoint.
 
-**The clean read-side / flat-table migration is essentially DONE.** What remains is three kinds of work,
-none of which is "migrate another simple read table":
-1. **Write paths (Phase 3b)** — `commerce-order` (Razorpay `verify.controller.ts`), book-order/cart,
-   ebook-order, offline-enquiry, package-chat. **Highest-leverage remaining work — the gate to a go-live.**
-2. **THE FLIP** — turn ON the flags for everything already built (one consistent int id-space). Nothing
-   built is live except the 11 enabled modules.
+### ✅ 0 MODULES LEFT TO MIGRATE
+**Every read module and every write module is built + wired (all flag OFF).** There is **no remaining
+read/write module to build.** The read side AND the Phase 3b write side are DONE. 🎉
+What is left is NOT module migration — it is: **(a) THE FLIP** (go-live: turn the flags ON), **(b) the
+LiveCourse architectural design** (Mongo-only, no SQL tables exist), and **(c)** optional low-value flat
+tables + D2 join tables that ride the flip. See §8 for the exhaustive list and §10 for first steps.
+
+**`package-chat` (built 2026-06-13, flag OFF) — ⚠ FIRST SCHEMA ADD:** package announcement chat (client read
++ admin write/delete) wired behind `isPackageChatMysql()`. `ws_package_chat` was a STUB (message only) that
+couldn't represent the Mongo PackageChat → **EXTENDED** via additive ALTER (media_url, media_type, sender_type,
+sender_id VARCHAR, push_sent) — see [`schema-changes/2026-06-13_extend_ws_package_chat.sql`](./schema-changes/2026-06-13_extend_ws_package_chat.sql)
+(prod-safe, run once). Prisma stub `chat`→`PackageChat` + enums. message↔text; sender_id holds the admin
+ObjectId (admin auth stays Mongo); list `id desc` tiebreak; read gates via commerce-subscription. tsx 21/21.
+
+**`catalog-book` WIRED (2026-06-13, flag OFF):** `GET /client/books` + `/books/:id` branch on `isBookMysql()`.
+catalog-book supplies book DATA + computed fields; the controller composes per-customer cart qty/cartId +
+isPurchased via NEW book-order read helpers (`getActiveCartState` / `getPurchasedBookIdSet`). Pure wiring (no
+new module) — `book-order` migrating the order/cart tables is what unblocked it. tsx 12/12.
+
+**`book-order` (built 2026-06-13, flag OFF):** book cart checkout — a DIFFERENT shape (5 tables, line items,
+courier AWB). Signed off in [`BOOK_ORDER_SCOPE.md`](./BOOK_ORDER_SCOPE.md). create-order (2-phase: preview cart
+→ Razorpay → txn writes `ws_book_order` + `ws_book_order_item`); verify (txn: insert `ws_book_tracking` whose
+bigint AUTO_INCREMENT is the AWB → order→verified + tracking_id → deactivate cart). **Read-breaking SCHEMA FIX:**
+tracking_id BIGINT Int→BigInt (both BookTracking + BookOrder), regenerated. customer_id is INT here. Tracking
+history synthesized in the DTO (SQL lacks the columns). tsx 25/25. **This UNBLOCKS catalog-book wiring.**
+
+**`ebook-order` (built 2026-06-13, flag OFF):** ebook write path, rides the commerce-order pattern.
+`create-order/ebook` writes `ws_ebook_order` (pending); verify's ebook branch runs ONE `$transaction`
+(order→complete + extend-or-create `ws_ebook_subscription`). NO tracking table (2 tables, not 3). The verify
+ebook branch returns the ORDER (`data.order`), not the sub. Drift: customer_id VARCHAR/INT split; **NO
+ebook_id on the order table** (re-derived from the plan); status enum strings identical (no translation);
+duration=DAYS. Dual-read fallback in verify. tsx 28/28. *(Note: `git status` showed CLEAN at this session's start, not the ~79
+uncommitted the prior checkpoint expected — the earlier migration work appears to have been committed since.
+Confirm the tree base before the next build.)*
+
+**`commerce-order` (built 2026-06-13, flag OFF):** course write path across BOTH endpoints. `create-order/course`
+writes `ws_package_course_order` (pending); verify's course branch runs ONE `$transaction` (order→complete +
+extend-or-create `ws_package_course_subscription` + `_subscription_tracking`). Resolves the one-doc→three-
+tables mismatch by merging order payment + subscription entitlement fields into the Mongo-shaped
+`data.subscription`. **Dual-read fallback** in verify (MySQL first, fall through to Mongo on miss) = the
+rollback safety net. Drift handled: customer_id VARCHAR/INT split, BigInt tracking, tracking.order→order.id,
+DAYS endAt. tsx **28/28**. See [`WRITE_PATH_SCOPE.md`](./WRITE_PATH_SCOPE.md) + changelog top entry.
+
+**The read-side migration is DONE; ALL write paths (Phase 3b) are DONE.** What remains (NOT module work):
+1. **Write paths (Phase 3b) — ✅ COMPLETE.** course (`commerce-order`) · ebook (`ebook-order`) · books
+   (`book-order`) · offline-enquiry · package-chat — all built + wired, flag OFF. live-course/test-series
+   verify branches stay deferred (NO SQL tables).
+2. **THE FLIP** — turn ON the flags for everything already built (one consistent int id-space).
 3. **Mongo-only architecture tail** — LiveCourse/LiveSession (NO SQL tables exist), Goal labels, PromoCode
    appliesTo, embedded arrays — needs a **design**, not a migration.
 
-### ➡ RECOMMENDED NEXT STEP (agreed direction, not yet started)
-**Scope the write-path (3b)** → write `WRITE_PATH_SCOPE.md`: analyse `verify.controller.ts` (569 lines,
-Razorpay), order/subscription writes, how flag-gating a *write* differs from a read, rollback story. Get
-sign-off, THEN build. **Do NOT write write-path code without the plan.**
-*(Alternatives the user may pick: build a smaller write path — book-order (would let catalog-book WIRE) or
-referral; or scope the LiveCourse/dashboard design; or fix the MIGRATED_MODULES.md generator quirk — §7.)*
+### ➡ RECOMMENDED NEXT STEP
+**THE FLIP** (go-live) — the read + write modules are all built and dual-path-verified, flag OFF. The
+remaining high-value work is turning the flags ON as one consistent int id-space cluster (catalog + commerce
+reads + the order/chat writes + the D2 join tables ride along). This needs a **flip plan** (sequencing,
+the one schema ADD to run on prod — `ws_package_chat`, rollback story) before flipping — scope it like the
+write paths. *(Alternatives: scope the LiveCourse/dashboard design — the last Mongo-only architecture piece;
+or pick off the low-value flat tables — ws_tag, ws_dynamic_image, etc.)*
+
+**Note on the schema add:** package-chat introduced the FIRST additive ALTER (`ws_package_chat`). The flip
+plan must include running [`schema-changes/2026-06-13_extend_ws_package_chat.sql`](./schema-changes/2026-06-13_extend_ws_package_chat.sql)
+on prod before enabling the `package-chat` flag.
 
 ---
 
@@ -55,19 +101,38 @@ it to this list.
 
 ---
 
-## 3. 📦 ALL 29 BUILT MODULES (`src/modules/<key>/`)
+## 3. 📦 ALL 34 BUILT MODULES (`src/modules/<key>/`)
 
 **CMS (8, LIVE):** app-update · version · faq · banner-slider · testimonial · department · terms · popup
 **Customer (6):** customer-auth (LIVE) · customer-lookups (LIVE) · offline-city (LIVE) · customer-address ·
 customer-profile · customer-bank-account *(last 3 flag OFF)*
 **Catalog (7, flag OFF):** catalog-package · catalog-course *(listing wired)* · catalog-video · catalog-ebook
 *(listing+detail wired)* · catalog-material *(nav wired)* · catalog-exam *(nav wired)* · catalog-book
-*(reads built, NOT wired)*
+*(listing+detail WIRED — composes book-order cart/purchase state)*
 **Commerce reads (6, flag OFF):** commerce-price · commerce-subscription · commerce-ebook-sub ·
 commerce-promoter · commerce-promocode · commerce-educator
 **Offline (1, flag OFF):** offline-batch *(center/batch browse reads wired)*
+**Commerce/Order WRITE (3, flag OFF):** **commerce-order** *(course)* · **ebook-order** *(ebook)* ·
+**book-order** *(book cart checkout — 5 tables, courier AWB)* — all: create-order + verify branch wired
+with dual-read fallback
+**Offline WRITE (1, flag OFF):** **offline-enquiry** *(lead-capture; POST /client/offline/enquiry wired,
+anonymous-allowed)*
+**Package WRITE (1, flag OFF):** **package-chat** *(announcement chat READ+WRITE; ws_package_chat EXTENDED;
+client read + admin write/delete wired)*
 
 ### Endpoints WIRED to a MySQL branch (behind their flag, still OFF)
+- `POST /client/payment/create-order/course` + course branch of `POST /client/payment/verify` (commerce-order
+  write path: pending order → `$transaction` extend-or-create subscription + tracking; dual-read fallback)
+- `POST /client/payment/create-order/ebook` + ebook branch of `POST /client/payment/verify` (ebook-order
+  write path: pending order → `$transaction` extend-or-create subscription; dual-read fallback)
+- `POST /client/payment/create-order` (book cart) + book branch of `POST /client/payment/verify` (book-order
+  write path: preview cart → order + item rows → `$transaction` AWB tracking + verified + cart off; dual-read)
+- `GET /client/books` + `GET /client/books/:id` (catalog-book data + computed fields, composing book-order
+  cart qty/cartId + isPurchased; branches before the ObjectId guard)
+- `POST /client/offline/enquiry` (offline-enquiry write: bigint mobile, anon→0 sentinel, remarks dropped;
+  branches before the ObjectId parse)
+- `GET /client/package/:packageId/chat` (package-chat read, subscription-gated via commerce-subscription) +
+  `POST`/`DELETE /admin/package/.../chat` (package-chat admin write/delete; ws_package_chat EXTENDED)
 - `GET /client/courses` + `/courses/category/:id` (catalog-course composition: rows + price + subscription)
 - `GET /client/courses/categories` · `GET /client/packages/types`
 - `GET /client/ebooks` + `/ebooks/:id` (catalog-ebook composition)
@@ -184,9 +249,12 @@ yarn migration:api:<key>      # one module
 
 ## 8. 📋 THE REMAINING WORK — definitive (from the schema-comparison audit)
 
-**Write paths (the 3b cluster):** `ws_package_course_order` + `ws_package_course_subscription_tracking`
-(Razorpay `verify.controller.ts`) · `ws_ebook_order` · `ws_book_order(_item)` + `ws_book_cart(_item)` +
-`ws_book_tracking` (would let catalog-book WIRE) · `ws_offline_enquiry` · `ws_package_chat`
+**Write paths (the 3b cluster):** ✅ `ws_package_course_order` + `_subscription` + `_subscription_tracking`
+(course; `commerce-order`). ✅ `ws_ebook_order` + `ws_ebook_subscription` (ebook; `ebook-order`). ✅
+`ws_book_order(_item)` + `ws_book_cart(_item)` + `ws_book_tracking` (books; `book-order` — unblocks
+catalog-book WIRE). ✅ `ws_offline_enquiry` (lead capture; `offline-enquiry`). ✅ `ws_package_chat`
+(announcement chat READ+WRITE; `package-chat` — table EXTENDED). **🎉 3b WRITE CLUSTER COMPLETE** — all
+built + wired, flag OFF.
 **Exam item/attempt:** `ws_exam_question(_option)` · `ws_exam_result(_detail)(_analytics)`
 **D2 join tables (ride the flip):** `ws_package_specific_subject` · `ws_package_course_material` ·
 `ws_material_category_course/package` · `ws_exam_category_course/package` · `ws_video_category_relation(+_package)`
@@ -195,8 +263,9 @@ yarn migration:api:<key>      # one module
 `ws_offline_banner_slider` · `ws_user_inquiry` · `ws_website_inquiry`
 **Mongo-only (design needed):** LiveCourse/LiveSession · Goal · PromoCode appliesTo
 
-**Reality:** what's left is overwhelmingly **writes + the go-live flip + one architectural design
-(LiveCourse)**. The easy read-side migration is done.
+**Reality:** the read side AND the write side (Phase 3b) are now DONE. What's left is **THE FLIP (go-live)**
++ one architectural design (**LiveCourse**) + the Mongo-only tail (Goal, PromoCode appliesTo) + a handful of
+low-value flat tables. No core read/write module migration remains.
 
 ---
 
@@ -223,17 +292,34 @@ yarn migration:api:<key>      # one module
 
 ## 10. ✅ FIRST STEPS WHEN YOU COME BACK
 
-1. Read this file top-to-bottom, then skim the top entries of [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md).
+**Where we are: 0 modules left to migrate.** All 34 read+write modules are built + wired, flag OFF. Don't go
+looking for "the next module to migrate" — there isn't one. The work now is THE FLIP and the LiveCourse design.
+
+1. Read this file top-to-bottom, then skim the top entries of [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md)
+   (newest = `package-chat`, the last write path).
 2. Confirm state:
-   - `git status --short` → expect ~79 uncommitted
-   - `grep MIGRATION_MYSQL_MODULES .env` → expect the 11 (§2)
+   - `grep MIGRATION_MYSQL_MODULES .env` → expect the 11 enabled (§2); everything else built is flag OFF
    - `npx tsc --noEmit -p tsconfig.json 2>&1 | grep -v "material.controller\|faq.service" | grep -c "error TS"` → expect 0
-3. Ask the user which direction (or proceed with the agreed one): **scope the write-path (3b)** is the
-   recommended next step — write `WRITE_PATH_SCOPE.md` first, get sign-off, then build. Don't write
-   write-path code blind.
-4. For any NEW module: follow §4 EXACTLY (schema-drift check FIRST, tsx verify, full doc protocol).
+   - `for m in commerce-order ebook-order book-order offline-enquiry package-chat; do ls src/modules/$m >/dev/null && echo "$m ✓"; done` → all 5 write modules present
+   - *(git note: the tree was CLEAN at the last session start — the earlier "~79 uncommitted" from the
+     original checkpoint no longer holds; the prior work was committed. Confirm `git status --short` before
+     any commit, and commit ONLY when the user asks.)*
+3. **Pick the direction with the user** (no module build remains). In recommended order:
+   - **THE FLIP (go-live)** — scope a flip plan FIRST (like the write paths): sequencing of the
+     catalog+commerce+order+chat cluster onto one int id-space, the D2 join tables that ride along, the ONE
+     prod schema ALTER to run (`schema-changes/2026-06-13_extend_ws_package_chat.sql`), and the rollback
+     story. See [`FLIP_SCOPE.md`](./FLIP_SCOPE.md) (the earlier 40/41-blocked audit — now unblocked). Get
+     sign-off, flip incrementally, verify each step via HTTP (`yarn dev` + `yarn migration:api`).
+   - **LiveCourse / LiveSession design** — the last Mongo-only architecture piece (NO SQL tables exist;
+     blocks dashboard + course/material detail + entitlement). Needs a schema-design doc, not a migration.
+   - **Low-value tail** (optional) — flat tables (`ws_tag`, `ws_dynamic_image`, `ws_image_notification`,
+     `ws_offline_banner_slider`, `ws_user_inquiry`, `ws_website_inquiry`), exam item/attempt, referral.
+4. If the user DOES ask for a new table/module anyway: follow §4 EXACTLY (schema-drift check FIRST, tsx
+   verify, full doc protocol). Note `package-chat` set the precedent that an additive ALTER is allowed when
+   a legacy table is a stub — capture any such ALTER under `schema-changes/` for prod.
 5. **After doing work: UPDATE THIS FILE** (§1 where-we-are, §3 module list, §8 remaining) + append a
-   newest-first entry to `../MIGRATION_QUERY_CHANGES.md`.
+   newest-first entry to [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md) + run the doc
+   protocol (§4.6).
 
 ---
 
@@ -248,9 +334,11 @@ yarn migration:api:<key>      # one module
 6. [`testing-guide.md`](./testing-guide.md) + [`MIGRATION_TEST_LOG.md`](./MIGRATION_TEST_LOG.md) — how to test and log results
 7. [`MIGRATION_DOC_UPDATES.md`](./MIGRATION_DOC_UPDATES.md) — what to update when you change code
 
-**To migrate the next module:** follow [`PRISMA_MODULE_FLOW.md`](./PRISMA_MODULE_FLOW.md) — Prisma model →
-repository → service branch → transformer → add the key to `MIGRATION_MYSQL_MODULES` (only when flipping ON).
-(See §4 for the exact build→verify→wire→document steps this project uses.)
+**There is no "next module" to migrate** — all 34 are built (§1). The flow doc
+[`PRISMA_MODULE_FLOW.md`](./PRISMA_MODULE_FLOW.md) (Prisma model → repository → service branch → transformer)
+remains the reference IF a new table is ever requested, and §4 has the exact build→verify→wire→document steps.
+Otherwise the live work is **THE FLIP** — flip a fully-wired cluster's keys ON **together** by adding them to
+`MIGRATION_MYSQL_MODULES` (§2), HTTP-verify, instant env-var rollback.
 
 ### Automated API tests (migrated modules)
 Folder: [`api-tests/`](./api-tests/) · details in [`api-tests/README.md`](./api-tests/README.md) +

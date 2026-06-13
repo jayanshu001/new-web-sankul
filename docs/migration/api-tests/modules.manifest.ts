@@ -155,14 +155,16 @@ export const MIGRATED_API_MODULES = [
     yarnScript: "migration:api:catalog-exam",
   },
   {
-    // Catalog · Book (catalog-book) — flag OFF, NOT wired (like catalog-package).
-    // Book DATA reads over ws_book; listBooks/getBookDetail enrich with cart qty
-    // + isPurchased from unmigrated ws_book_order/cart (int-vs-ObjectId), so it
-    // flips with the book-order/cart wave. Verified via tsx.
+    // Catalog · Book (catalog-book) — flag OFF, WIRED 2026-06-13 (unblocked by
+    // book-order). GET /client/books + /books/:id branch on isBookMysql(); the
+    // controller composes book DATA (catalog-book) + per-customer cart qty/cartId
+    // + isPurchased (book-order read helpers over the now-migrated ws_book_order/
+    // cart). Verified via tsx (12/12). HTTP needs the flip + yarn dev.
     key: "catalog-book",
     testFiles: ["catalog-book/client.api.test.ts"],
     endpoints: [
-      "(no wired HTTP endpoint — book DATA reads verified via tsx; flips with the book-order/cart wave)",
+      "GET client/books (data + qty + isPurchased + cartId)",
+      "GET client/books/:id (data + isPurchased)",
     ],
     yarnScript: "migration:api:catalog-book",
   },
@@ -256,5 +258,80 @@ export const MIGRATED_API_MODULES = [
       "(no standalone HTTP endpoint — READ master + {_id,name,image} ref verified via tsx; flips with catalog + 3a)",
     ],
     yarnScript: "migration:api:commerce-educator",
+  },
+  {
+    // Commerce 3b · Order WRITE (commerce-order) — flag OFF, FIRST write path
+    // (course purchase). Wired across create-order/course + the verify course
+    // branch. One Mongo doc → three SQL tables (order/subscription/tracking);
+    // create-order writes the pending order, verify writes sub+tracking in one
+    // $transaction with upsert-extend + idempotency + a dual-read fallback.
+    // Verified via tsx (28/28); HTTP needs Razorpay + the flip. Go-live = separate
+    // sign-off. See docs/migration/WRITE_PATH_SCOPE.md.
+    key: "commerce-order",
+    testFiles: ["commerce-order/client.api.test.ts"],
+    endpoints: [
+      "POST client/payment/create-order/course (writes ws_package_course_order pending)",
+      "POST client/payment/verify [course branch] (txn: order→complete + sub + tracking; flag OFF)",
+    ],
+    yarnScript: "migration:api:commerce-order",
+  },
+  {
+    // Ebook 3b · Order WRITE (ebook-order) — flag OFF, ebook purchase write path
+    // (rides the commerce-order pattern). Wired across create-order/ebook + the
+    // verify ebook branch. One Mongo doc → two SQL tables (order/subscription, no
+    // tracking); create-order writes the pending order, verify writes the sub in
+    // one $transaction with upsert-extend + idempotency + dual-read fallback.
+    // Verified via tsx (28/28); HTTP needs Razorpay + the flip. See
+    // docs/migration/WRITE_PATH_SCOPE.md.
+    key: "ebook-order",
+    testFiles: ["ebook-order/client.api.test.ts"],
+    endpoints: [
+      "POST client/payment/create-order/ebook (writes ws_ebook_order pending)",
+      "POST client/payment/verify [ebook branch] (txn: order→complete + subscription; flag OFF)",
+    ],
+    yarnScript: "migration:api:ebook-order",
+  },
+  {
+    // Book 3b · Order WRITE (book-order) — flag OFF, cart-checkout write path (5
+    // tables: order/order_item/cart/cart_item/tracking). Wired across create-order
+    // (book cart) + the verify book branch. create-order writes order + item rows;
+    // verify allocates the courier AWB (ws_book_tracking bigint AUTO_INCREMENT),
+    // flips order→verified, deactivates the cart. BigInt drift fixed. Tracking
+    // history synthesized in the DTO (SQL lacks the columns). Verified via tsx
+    // (25/25); HTTP needs Razorpay + the flip. Unblocks catalog-book wiring. See
+    // docs/migration/BOOK_ORDER_SCOPE.md.
+    key: "book-order",
+    testFiles: ["book-order/client.api.test.ts"],
+    endpoints: [
+      "POST client/payment/create-order (book cart → writes ws_book_order + item rows)",
+      "POST client/payment/verify [book branch] (txn: AWB tracking + order→verified + cart off; flag OFF)",
+    ],
+    yarnScript: "migration:api:book-order",
+  },
+  {
+    // Offline 3b · Enquiry WRITE (offline-enquiry) — flag OFF, small single-table
+    // lead-capture write. Wired POST /client/offline/enquiry (anonymous-allowed).
+    // Drift: mobile BIGINT (string↔BigInt), customer_id 0-sentinel for anonymous
+    // (NOT NULL col), no remarks column (dropped). Verified via tsx (10/10).
+    key: "offline-enquiry",
+    testFiles: ["offline-enquiry/client.api.test.ts"],
+    endpoints: [
+      "POST client/offline/enquiry (writes ws_offline_enquiry; anonymous-allowed; flag OFF)",
+    ],
+    yarnScript: "migration:api:offline-enquiry",
+  },
+  {
+    // Package 3b · Chat READ+WRITE (package-chat) — flag OFF. Announcement chat;
+    // the LAST 3b write path. ws_package_chat was EXTENDED (additive ALTER) to
+    // match the Mongo PackageChat (media/sender/push) — the first schema add in
+    // this migration. Client read (subscription-gated) + admin write/delete.
+    // Verified via tsx (21/21). HTTP needs the flip + yarn dev.
+    key: "package-chat",
+    testFiles: ["package-chat/client.api.test.ts"],
+    endpoints: [
+      "GET client/package/:packageId/chat (subscription-gated list)",
+      "POST admin/package/:id/chat · DELETE admin/package/chat/:messageId (flag OFF)",
+    ],
+    yarnScript: "migration:api:package-chat",
   },
 ] as const;

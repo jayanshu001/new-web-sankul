@@ -18,6 +18,11 @@ import {
   isPackageTypeMysql,
   listPackageTypes as listPackageTypesMysql,
 } from "../../modules/catalog-package/catalog-package.service";
+import {
+  isPackageChatMysql,
+  listChatMessagesMysql,
+} from "../../modules/package-chat/package-chat.service";
+import { hasActivePackageSubscription } from "../../modules/commerce-subscription/commerce-subscription.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -489,6 +494,36 @@ export const getChatMessages = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) { logger.warn("getChatMessages unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ── MySQL package-chat read (flag-gated) ─────────────────────────────────
+    // Branch before the ObjectId guard — a MySQL package id is an int. The
+    // subscription gate uses the MySQL commerce-subscription module (int ids).
+    if (isPackageChatMysql()) {
+      const packageIdInt = Number(packageId);
+      const customerIdInt = Number(customerId); // C3 seam
+      if (!Number.isInteger(packageIdInt) || packageIdInt <= 0) {
+        logger.warn("getChatMessages invalid id (mysql)", { traceId, customerId, packageId });
+        return res.status(400).json({ success: false, message: "Invalid package id." });
+      }
+      const activeMysql = await hasActivePackageSubscription(customerIdInt, packageIdInt);
+      if (!activeMysql) {
+        logger.warn("getChatMessages no active subscription (mysql)", { traceId, customerId, packageId });
+        return res.status(403).json({
+          success: false,
+          message: "You must have an active subscription to view package chat.",
+        });
+      }
+      const { page = "1", limit = "20" } = req.query as Record<string, string>;
+      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+      const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+      const { data, total } = await listChatMessagesMysql(packageIdInt, pageNum, limitNum);
+      logger.info("getChatMessages success (mysql)", { traceId, customerId, packageId, total });
+      return res.status(200).json({
+        success: true,
+        data,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
 
     if (!mongoose.Types.ObjectId.isValid(packageId)) { logger.warn("getChatMessages invalid id", { traceId, customerId, packageId }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 

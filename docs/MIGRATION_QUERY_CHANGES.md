@@ -4,6 +4,258 @@
 
 ---
 
+## 2026-06-13 — `package-chat` BUILT + WIRED (READ + WRITE, Phase 3b) — flag OFF · ⚠ FIRST SCHEMA ADD
+
+**What:** The LAST 3b write path. Package announcement chat (admin/system posts; subscription-gated client
+read). Wired the client READ + the admin WRITE behind `isPackageChatMysql()` (flag OFF):
+`GET /client/package/:packageId/chat` · `POST /admin/package/:id/chat` · `DELETE /admin/package/chat/:messageId`.
+
+### ⚠ SCHEMA CHANGE (the first additive ALTER in this migration)
+`ws_package_chat` was a legacy **STUB** (`id, package_id, message, timestamps`) — it could NOT represent the
+live Mongo PackageChat (media + sender + push), so migrating against it would have silently broken the chat
+response. Per sign-off, the table was **EXTENDED** (additive only, prod-safe):
+```
+ALTER TABLE ws_package_chat ADD media_url VARCHAR(1000) NULL,
+  ADD media_type ENUM('image','video','pdf','audio','other') NULL DEFAULT 'other',
+  ADD sender_type ENUM('admin','system') NOT NULL DEFAULT 'admin',
+  ADD sender_id VARCHAR(255) NULL, ADD push_sent TINYINT(1) NOT NULL DEFAULT 0;
+```
+The statement is captured in [`migration/schema-changes/2026-06-13_extend_ws_package_chat.sql`](migration/schema-changes/2026-06-13_extend_ws_package_chat.sql)
+(run once on prod — project uses manual ALTER + `prisma db pull`, no Prisma Migrate). Prisma: the stub `chat`
+model → **`PackageChat`** + enums `PackageChatMediaType`/`PackageChatSenderType`; Package back-relation
+`chat chat[]` → `chat PackageChat[]`; regenerated (pinned 5.22.0, carets re-checked intact).
+
+### Field mapping / drift
+- SQL `message` ↔ Mongo `text` (Mongo defaults text to ""; message is NOT NULL → store "" for media-only).
+- `sender_id` is **VARCHAR** — holds the admin ObjectId (admin auth stays Mongo), so string|null, not int.
+- `media_type`/`sender_type` modeled as Prisma enums. `push_sent` Boolean. `package_id` INT.
+- **list ordering:** Mongo sorts by `createdAt desc`; SQL `created_at` is second-granularity `datetime`, so
+  same-second posts tie → added `id desc` tiebreaker to preserve true insertion order (caught in tsx).
+- **subscription gate (client read):** the MySQL branch gates via commerce-subscription's
+  `hasActivePackageSubscription` (int ids) instead of the Mongo gate; branches before the ObjectId guard.
+
+### Verification
+tsx (`scripts/_tmp/verify-package-chat.ts`, flag OFF, live DB, package 3): **21/21 passed** — package
+existence guard, post (text / media-only→message="" / system sender), paginated list (newest-first +
+tiebreak) + total, delete (+ missing→false), field mapping. Created rows cleaned up; staging restored to 0.
+Typecheck 0 errors (ex 2 known). **Flag OFF — the 3b write cluster is now COMPLETE.**
+
+---
+
+## 2026-06-13 — `offline-enquiry` BUILT + WIRED (lead-capture write, Phase 3b) — flag OFF
+
+**What:** Small single-table write module `src/modules/offline-enquiry/` (batch enquiry). **Wired** behind
+`isOfflineEnquiryMysql()` (flag OFF): `POST /client/offline/enquiry`. No schema change — `OfflineEnquiry`
+model already existed (its `mobile` Int→BigInt fix landed in the offline-batch pass).
+
+### Drift handled
+- **`mobile` BIGINT:** input is a string; digits parsed → BigInt for the column, surfaced back as a string
+  in the DTO (Mongo shape). 12-digit numbers (e.g. with country code) overflow Int32 → BigInt required.
+- **anonymous vs NOT NULL customer_id:** the route is anonymous-allowed (best-effort auth; userId may be
+  null) but `ws_offline_enquiry.customer_id` is INT NOT NULL. Store the **`0` sentinel** for anonymous (no FK
+  enforced); the DTO maps 0 → null to keep the Mongo shape.
+- **no `remarks` column:** the Mongo enquiry accepts an optional `remarks`; SQL has no column. The validator
+  still accepts it (contract-stable) but it's DROPPED on the SQL write (documented gap — lead-capture sink).
+- **`batch_id` INT:** MySQL branch validates an int batch id + checks existence via offline-batch's table.
+  Wired before the ObjectId schema parse (MySQL batch id is an int).
+
+### Verification
+tsx (`scripts/_tmp/verify-offline-enquiry.ts`, flag OFF, live DB): **10/10 passed** — batch existence guard,
+authenticated write (BigInt mobile round-trip incl. 12-digit overflow case), anonymous write (0-sentinel ↔
+null), cleanup. Staging restored to 4 rows. Typecheck 0 errors (ex 2 known). **Flag OFF.**
+
+---
+
+## 2026-06-13 — `catalog-book` WIRED (book listing + detail) — flag OFF
+
+**What:** Wired the two book read endpoints that were built-but-blocked. `GET /client/books` (listBooks) +
+`GET /client/books/:id` (getBookDetail) now branch on `isBookMysql()`. No new module, no schema change — a
+pure wiring pass enabled by `book-order` landing (it migrated the order/cart tables the enrichment needs).
+
+### Why it was blocked, and why it's unblocked now
+listBooks/getBookDetail enrich each book with per-customer **cart qty/cartId** (ws_book_cart*) +
+**isPurchased** (ws_book_order* by fulfilled status). Those tables were Mongo-only until `book-order` (Phase
+3b) migrated them — now the int book id-space matches and the joins work.
+
+### Composition (catalog-book DATA + book-order STATE)
+- catalog-book `listBooksData`/`getBookById` supply the book data + data-only computed fields (isPaid, key,
+  daysLeft=null, isNew, shareableLink via callback).
+- NEW book-order read helpers compose the per-customer state: `getActiveCartState` (cartId = ws_book_cart
+  .cart_id + a bookId→qty map from ws_book_cart_item) and `getPurchasedBookIdSet` (ws_book_order_item book
+  ids joined to orders in verified/shipped/delivered). Repo reads added to book-order (it owns those tables).
+- Controller merges `qty` + `isPurchased` onto each book; response byte-identical to the Mongo branch.
+
+### Drift / parity notes
+- **status set:** purchased = order status in (verified, shipped, delivered) — same strings on SQL + Mongo.
+- **C3 seam:** customerId coerced `Number(req.user.id)`. Detail branches BEFORE the ObjectId guard (MySQL
+  book id is an int). `pages` already a number in the DTO (Mongo did `pages ?? 0`).
+
+### Verification
+tsx (`scripts/_tmp/verify-catalog-book-wired.ts`, flag OFF, live DB): **12/12 passed** — listBooksData (10
+books, computed fields, shareableLink), real active cart (customer 472339, book 7 qty=1) merge, isPurchased
+proven by seeding a verified order+item then cleaning up, detail composition (purchased true for buyer, false
+for non-buyer). Staging restored to 6/1. Typecheck 0 errors (ex 2 known). Registry + schema-comparison
+regenerated. **catalog-book flag still OFF** — flips with the catalog/commerce/order cluster.
+
+---
+
+## 2026-06-13 — `book-order` BUILT + WIRED (book cart-checkout write path, Phase 3b) — flag OFF
+
+**What:** Third write-path module `src/modules/book-order/` — a DIFFERENT shape (cart checkout → **5 tables**,
+line items, courier AWB counter). Scoped + signed off in [`migration/BOOK_ORDER_SCOPE.md`](migration/BOOK_ORDER_SCOPE.md).
+**Wired** behind `isBookOrderMysql()` (flag OFF): `POST /client/payment/create-order` (book cart) + the
+**book branch** of `POST /client/payment/verify`.
+
+### ⚠ SCHEMA FIX (read-breaking BigInt drift)
+`ws_book_tracking.tracking_id` + `ws_book_order.tracking_id` are **BIGINT** (the courier AWB, ~1.19e11 —
+overflows Int32) but Prisma mapped them **`Int`** → reads THREW. Fixed `BookTracking.tracking_id Int→BigInt`,
+`BookOrder.trackingId Int?→BigInt?`, regenerated (pinned 5.22.0; carets re-checked, intact). Surfaced as number.
+
+### The 5-table fan-out
+- **create-order (2 phases):** preview the cart (`ws_book_cart` + `ws_book_cart_item` child rows → totals
+  with the `ws_termsandcondition` module='book' free-shipping threshold = 500) → create Razorpay → ONE `$transaction`
+  writes `ws_book_order` (pending; `order_items` TEXT blob + cart_id + razorpay payload, all NOT NULL) **+
+  `ws_book_order_item` rows** (FK `order_id` = the VARCHAR business key).
+- **verify:** ONE `$transaction` — insert `ws_book_tracking` (bigint **AUTO_INCREMENT** = the AWB; live base
+  119400693004, no Counter needed) → flip order→verified + tracking_id + gateway_transaction_id → **deactivate
+  the cart** (`ws_book_cart.status=0`, matching user+shipping; cart_item rows kept, Mongo parity).
+
+### Drift handled
+- **customer_id is INT** on ws_book_order (NOT the VARCHAR split of course/ebook). order_id is the VARCHAR
+  business key (≠ int PK); item + tracking FK on the string.
+- **Embedded → child:** Mongo BookOrder.items[] → order_item rows (+ denormalized order_items JSON blob).
+- **Tracking history LOSS (signed-off D-B3):** `ws_book_tracking` is `{tracking_id,order_id,status}` — no
+  history/note/location. Persist the flat row; the DTO **synthesizes** the single verify entry
+  `[{status:'Order Placed', note:'Payment received', at}]`. Multi-step timeline = noted fidelity gap.
+- **varchar(10) status (caught in tsx):** "Order Placed" (12) overflows `ws_book_tracking.status` → store
+  short code "verified"; DTO carries the human text.
+
+### Dual-read fallback + verification
+verify checks MySQL first, falls through to the Mongo fan-out on miss. tsx (`scripts/_tmp/verify-book-order.ts`,
+flag OFF, live DB, seeded cart): **25/25 passed** — create→items snapshot, owner-lookup miss→null, verify
+(AWB allocation, BigInt no-overflow, tracking.order_id=VARCHAR key, cart deactivation, cart_item kept,
+synthesized history), idempotent re-verify (no second AWB). Created rows cleaned up; staging restored to
+6/1/2/2/3. Typecheck 0 errors (ex 2 known).
+
+### Scope
+book-order only (signed off); **wiring catalog-book is a clean follow-up** (its reads are built, were blocked
+on order/cart deps — now unblocked). **Flag OFF** — go-live needs separate sign-off.
+
+---
+
+## 2026-06-13 — `ebook-order` BUILT + WIRED (ebook write path, Phase 3b) — flag OFF
+
+**What:** Second write-path module `src/modules/ebook-order/` (ebook purchase). Rides the commerce-order
+pattern. **Wired** behind `isEbookOrderMysql()` (flag OFF): `POST /client/payment/create-order/ebook` +
+the **ebook branch** of `POST /client/payment/verify`. No schema change — `EBookOrder`/`EBookSubscription`
+Prisma models already existed and passed the drift check.
+
+### The split (one-doc → TWO tables — simpler than course, no tracking)
+- **create-order** writes **`ws_ebook_order`** only (status=pending). `unique_id` (NOT NULL) = the receipt id.
+- **verify** runs ONE `$transaction`: flip order→complete + razorpay_payment_id; then extend an active
+  `ws_ebook_subscription` (fold endAt +DAYS, sum price, repoint at the latest order) OR create a fresh one.
+- The verify ebook branch returns `data:{kind:"ebook", order}` — the ORDER, not the subscription — so the
+  DTO mirrors the Mongo EbookOrder doc.
+
+### Drift handled (verified vs live DDL + real rows)
+- **customer_id TYPE SPLIT:** order VARCHAR / subscription INT (C3 coercion `Number(req.user.id)`).
+- **NO `ebook_id` on the order table** — only `plan_id`; the ebook is **re-derived from the plan** at verify
+  + in the DTO (Mongo's EbookOrder carries ebookId; SQL doesn't).
+- **status enum IDENTICAL strings** ('pending'|'complete'|'cancel') on SQL + Mongo — no translation (unlike
+  course's paymentStatus map).
+- **`order_price`** is the paid amount (no separate discount col). **`duration` = DAYS**. **`payment_type`**
+  enum('online','backend') → 'online'.
+
+### Dual-read fallback (rollback safety)
+verify checks MySQL for the ebook order FIRST when flag ON; on miss falls through to the Mongo fan-out.
+
+### Verification
+tsx (`scripts/_tmp/verify-ebook-order.ts`, flag OFF, live DB, plan 1 / ebook 1 / 180 DAYS): **28/28 passed** —
+create→verify round-trip, owner-lookup miss→null, fresh grant (180-DAY endAt, ebook_id re-derived, order FK),
+idempotent re-verify (no dup sub), upsert-extend (reuses sub, +180 days, repoints at latest order, exactly 1
+active row). Created rows cleaned up; staging restored to 2 orders / 1 sub. Typecheck 0 errors (ex 2 known).
+
+### Scope
+EBOOK after COURSE (signed off). book-order next; live-course/test-series deferred (no SQL tables).
+**Flag OFF** — go-live needs separate sign-off.
+
+---
+
+## 2026-06-13 — `commerce-order` BUILT + WIRED (course write path, Phase 3b) — flag OFF
+
+**What:** Built the first **write-path** module `src/modules/commerce-order/` (course purchase) and
+**wired** both endpoints behind `isCommerceOrderMysql()` (flag OFF): `POST /client/payment/create-order/course`
+and the **course branch** of `POST /client/payment/verify`. No schema change needed — the 3 Prisma models
+(`PackageCourseOrder`, `PackageCourseSubscription`, `PackageCourseSubscriptionTracking`) already existed and
+passed the drift check.
+
+### The one-doc → three-tables write
+Mongo writes one `PackageCourseSubscription` doc (order + entitlement). SQL splits it:
+- **create-order** writes **`ws_package_course_order`** only (status=pending).
+- **verify** runs ONE `$transaction`: flip order→complete + razorpay_payment_id; then EITHER extend an
+  existing active course sub (fold endAt via DAYS planDuration + sum amount, no new row) OR create
+  `ws_package_course_subscription` + `ws_package_course_subscription_tracking`. The verify response merges
+  order payment fields + subscription entitlement fields into the Mongo-shaped `data.subscription`.
+
+### Drift handled (verified vs live DDL + real rows)
+- **customer_id TYPE SPLIT:** order table VARCHAR, subscription table INT — same logical id. Cast int→string
+  at the order boundary, int on the subscription. C3 seam coercion (`Number(req.user.id)`) at both controllers.
+- **`tracking` / tracking.id BIGINT** (~1.19e11, overflow Int32) — Prisma `BigInt`, surfaced as number.
+- **`tracking.order` FKs order.id**, not subscription.id (confirmed in tx + tsx).
+- **order.status enum ↔ Mongo paymentStatus:** pending↔pending, complete↔verified, cancel↔failed.
+- **Mongo↔SQL names:** Mongo `packageId`=plan=SQL `pcb_id`; `targetPackageId`=package=SQL `package_id`.
+- **`duration` = DAYS** — endAt via planDuration `asDays:true`.
+
+### Dual-read fallback (rollback safety, WRITE_PATH_SCOPE §3.2)
+verify checks MySQL for the course order FIRST when the flag is ON; on miss it **falls through to the Mongo
+fan-out**. So a flag flip between create-order and verify (or a pre-flip Mongo order) can't orphan a payment.
+
+### Verification
+tsx (`scripts/_tmp/verify-commerce-order.ts`, flag OFF, live DB): **28/28 passed** — create→verify round-trip,
+owner lookup + miss→null, fresh grant (DAYS endAt, BigInt tracking, tracking.order=order.id), idempotent
+re-verify (no dup sub), upsert-extend (reuses sub _id, +90 days, second order makes no new sub). All created
+rows cleaned up; staging restored to 3 orders / 2 subs / 3 tracking. Typecheck 0 errors (ex 2 known files).
+
+### Scope (signed off)
+COURSE only; ebook/book ride the same pattern next. live-course/test-series stay deferred (no SQL tables).
+**Flag stays OFF** — NOT added to `MIGRATION_MYSQL_MODULES` until a separate go-live sign-off.
+
+---
+
+## 2026-06-13 — Write-path (Phase 3b) SCOPED + signed off — no code yet
+
+**What:** Read the real 569-line `src/client/payment/verify.controller.ts` and the live SQL
+write tables; wrote [`migration/WRITE_PATH_SCOPE.md`](migration/WRITE_PATH_SCOPE.md) and got sign-off.
+**No write-path code written** (satisfies RESUME_HERE §1 "don't write write-path code without the plan").
+
+### Findings (correct the checkpoint's summary)
+- `verify` is a **5-way fulfillment dispatch** (book · course · ebook · live-course · test-series),
+  not "Razorpay + subscription". live-course & test-series hit **Mongo-only collections with NO SQL
+  tables** → stay deferred (§7). Real 3b target = **course** (ebook adjacent next).
+- **One-doc-vs-three-tables impedance mismatch:** Mongo `PackageCourseSubscription` carries order +
+  entitlement in one doc; SQL splits to `ws_package_course_order` → `ws_package_course_subscription`
+  → `ws_package_course_subscription_tracking`.
+- **Schema trap:** `ws_package_course_order.customer_id` is **VARCHAR(ObjectId)** but
+  `ws_package_course_subscription.customer_id` is **INT** — same logical id, two types across the two
+  tables in one write. Plus `subscription.tracking` + `tracking.id` are **BIGINT** (overflow class).
+- `tracking.order` column FKs **order.id**, not subscription.id.
+
+### Sign-off decisions
+- **Scope:** course path **ONLY** first (ebook/book ride the same pattern later).
+- **Flag:** `commerce-order`, gates create-order + verify end-to-end; **NOT** added to
+  `MIGRATION_MYSQL_MODULES` until a separate go-live sign-off.
+- **Rollback safety:** verify uses a **dual-read fallback** (query flagged store, fall back to the
+  other on miss) so a flag flip between create-order and verify can't orphan an in-flight payment.
+- create-order writes the `order` row only; verify writes `subscription`+`tracking` in one
+  `$transaction`; upsert-extend reproduced in SQL with the **DAYS** planDuration helper.
+
+### Next
+Build per WRITE_PATH_SCOPE §5: Prisma-model the 3 tables (varchar/int customer_id split, BigInt
+tracking, status/payment_type enums) → `src/modules/commerce-order/` → tsx verify (flag OFF) → wire
+behind `isMysqlModule("commerce-order")` with dual-read fallback → typecheck → full doc protocol.
+
+---
+
 ## 2026-06-12 — Offline center/batch browse reads wired (`offline-batch` built) — flag OFF
 
 **What:** Built `offline-batch` (`ws_offline_center` + `ws_offline_batch`) and **wired** the offline browse reads behind `isOfflineBatchMysql()` (flag OFF): `GET /client/offline/centers`, `/batches`, `/centers/:id`, `/batches/:id` (all PUBLIC routes). Cities come from the already-migrated `offline-city`.

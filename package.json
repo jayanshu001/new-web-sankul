@@ -48,6 +48,11 @@
     "migration:api:commerce-promoter": "tsx docs/migration/api-tests/run-module.ts commerce-promoter",
     "migration:api:commerce-promocode": "tsx docs/migration/api-tests/run-module.ts commerce-promocode",
     "migration:api:commerce-educator": "tsx docs/migration/api-tests/run-module.ts commerce-educator",
+    "migration:api:commerce-order": "tsx docs/migration/api-tests/run-module.ts commerce-order",
+    "migration:api:ebook-order": "tsx docs/migration/api-tests/run-module.ts ebook-order",
+    "migration:api:book-order": "tsx docs/migration/api-tests/run-module.ts book-order",
+    "migration:api:offline-enquiry": "tsx docs/migration/api-tests/run-module.ts offline-enquiry",
+    "migration:api:package-chat": "tsx docs/migration/api-tests/run-module.ts package-chat",
     "db:pull": "prisma db pull",
     "prisma:generate": "prisma generate"
   },

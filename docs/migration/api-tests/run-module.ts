@@ -36,6 +36,11 @@ import { runCommerceEbookSubClientApiTests } from "./commerce-ebook-sub/client.a
 import { runCommercePromoterClientApiTests } from "./commerce-promoter/client.api.test.js";
 import { runCommercePromocodeClientApiTests } from "./commerce-promocode/client.api.test.js";
 import { runCommerceEducatorClientApiTests } from "./commerce-educator/client.api.test.js";
+import { runCommerceOrderClientApiTests } from "./commerce-order/client.api.test.js";
+import { runEbookOrderClientApiTests } from "./ebook-order/client.api.test.js";
+import { runBookOrderClientApiTests } from "./book-order/client.api.test.js";
+import { runOfflineEnquiryClientApiTests } from "./offline-enquiry/client.api.test.js";
+import { runPackageChatClientApiTests } from "./package-chat/client.api.test.js";
 
 const moduleKey = process.argv[2]?.trim().toLowerCase();
 
@@ -63,6 +68,11 @@ const runners: Record<string, (() => Promise<boolean>)[]> = {
   "commerce-promoter": [runCommercePromoterClientApiTests],
   "commerce-promocode": [runCommercePromocodeClientApiTests],
   "commerce-educator": [runCommerceEducatorClientApiTests],
+  "commerce-order": [runCommerceOrderClientApiTests],
+  "ebook-order": [runEbookOrderClientApiTests],
+  "book-order": [runBookOrderClientApiTests],
+  "offline-enquiry": [runOfflineEnquiryClientApiTests],
+  "package-chat": [runPackageChatClientApiTests],
 };
 
 async function main() {

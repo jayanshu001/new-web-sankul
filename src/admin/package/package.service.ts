@@ -21,6 +21,14 @@ import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation
 import { Goal } from "../../models/Goal.model";
 import { HttpError } from "../../middlewares/errorHandler";
 import cache from "../../libs/cache";
+import {
+  isPackageChatMysql,
+  listChatMessagesMysql,
+  postChatMessageMysql,
+  deleteChatMessageMysql,
+  packageExists as packageChatPackageExists,
+  parsePackageChatId,
+} from "../../modules/package-chat/package-chat.service";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -624,9 +632,21 @@ export const expandSubjectsToRelations = async (packageId: string) => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const listChatMessages = async (packageId: string, query: PaginationQuery) => {
-  assertObjectId(packageId, "package");
   const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(query.limit ?? "50", 10) || 50, 1), 200);
+
+  // ── MySQL package-chat read (flag-gated) ───────────────────────────────────
+  if (isPackageChatMysql()) {
+    const pid = parsePackageChatId(packageId);
+    if (pid == null) throw new HttpError(400, "Invalid package id.");
+    const { data, total } = await listChatMessagesMysql(pid, pageNum, limitNum);
+    return {
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    };
+  }
+
+  assertObjectId(packageId, "package");
   const skip = (pageNum - 1) * limitNum;
 
   const [data, total] = await Promise.all([
@@ -654,10 +674,26 @@ export const postChatMessage = async (
   validated: any,
   adminId?: string
 ) => {
-  assertObjectId(packageId, "package");
   if (!validated.text && !validated.mediaUrl) {
     throw new HttpError(400, "Provide text or mediaUrl.");
   }
+
+  // ── MySQL package-chat write (flag-gated) ──────────────────────────────────
+  if (isPackageChatMysql()) {
+    const pid = parsePackageChatId(packageId);
+    if (pid == null) throw new HttpError(400, "Invalid package id.");
+    if (!(await packageChatPackageExists(pid))) throw new HttpError(404, "Package not found.");
+    return postChatMessageMysql({
+      packageId: pid,
+      text: validated.text,
+      mediaUrl: validated.mediaUrl,
+      mediaType: validated.mediaType,
+      senderId: adminId ?? null, // admin ObjectId string → varchar sender_id
+      senderType: "admin",
+    });
+  }
+
+  assertObjectId(packageId, "package");
   const exists = await Package.exists({ _id: packageId });
   if (!exists) throw new HttpError(404, "Package not found.");
 
@@ -674,6 +710,15 @@ export const postChatMessage = async (
 };
 
 export const deleteChatMessage = async (messageId: string) => {
+  // ── MySQL package-chat delete (flag-gated) ─────────────────────────────────
+  if (isPackageChatMysql()) {
+    const mid = parsePackageChatId(messageId);
+    if (mid == null) throw new HttpError(400, "Invalid message id.");
+    const ok = await deleteChatMessageMysql(mid);
+    if (!ok) throw new HttpError(404, "Message not found.");
+    return;
+  }
+
   assertObjectId(messageId, "message");
   const msg = await PackageChat.findByIdAndDelete(messageId).lean();
   if (!msg) throw new HttpError(404, "Message not found.");

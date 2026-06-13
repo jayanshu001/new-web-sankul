@@ -1,6 +1,6 @@
 # Migrated modules (MySQL / Prisma)
 
-> **Generated:** 2026-06-12 — re-run `yarn docs:migrated-modules` when you add a module  
+> **Generated:** 2026-06-13 — re-run `yarn docs:migrated-modules` when you add a module  
 > **Scope:** Only modules with **repository → service → transformer** on **legacy MySQL** tables  
 > **Enable in runtime:** `MIGRATION_MYSQL_MODULES` in `.env`
 
@@ -10,9 +10,9 @@
 
 | | |
 |---|---|
-| **Total migrated (code complete)** | 29 |
-| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, customer-address, customer-profile, customer-bank-account, offline-city, catalog-package-type, catalog-package, catalog-course, catalog-video, catalog-ebook, catalog-material, catalog-book, offline-batch, catalog-exam, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator` |
-| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator` |
+| **Total migrated (code complete)** | 34 |
+| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, customer-address, customer-profile, customer-bank-account, offline-city, catalog-package-type, catalog-package, catalog-course, catalog-video, catalog-ebook, catalog-material, catalog-book, offline-batch, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, catalog-exam, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator` |
+| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator` |
 
 | # | Module key | Label | MySQL table | Mongo collection | Env | Detail |
 |---:|---|---|---|---|---|---|
@@ -36,15 +36,20 @@
 | 18 | `catalog-video` | Catalog · Video (+ URL-encryption contract) | `ws_video / ws_video_category` | `videos / videocategories` | ✅ enabled | [Detail](#catalog-video) |
 | 19 | `catalog-ebook` | Catalog · eBook (+ listing/detail composition) | `ws_ebook` | `ws_ebooks` | ✅ enabled | [Detail](#catalog-ebook) |
 | 20 | `catalog-material` | Catalog · Material (category navigation) | `ws_material / ws_material_category` | `ws_materials / ws_material_categories` | ✅ enabled | [Detail](#catalog-material) |
-| 21 | `catalog-book` | Catalog · Book (physical-book store reads) | `ws_book` | `ws_books` | ✅ enabled | [Detail](#catalog-book) |
+| 21 | `catalog-book` | Catalog · Book (physical-book store reads — WIRED) | `ws_book` | `ws_books` | ✅ enabled | [Detail](#catalog-book) |
 | 22 | `offline-batch` | Offline · Center/Batch (browse reads) | `ws_offline_center / ws_offline_batch` | `ws_offline_centers / ws_offline_batches` | ✅ enabled | [Detail](#offline-batch) |
-| 23 | `catalog-exam` | Catalog · Exam (category navigation) | `ws_exam / ws_exam_category` | `ws_exams / ws_exam_categories` | ✅ enabled | [Detail](#catalog-exam) |
-| 24 | `commerce-price` | Commerce · Price (plan/pricing lookup) | `ws_package_course_ebook_price` | `ws_package_course_ebook_prices` | ✅ enabled | [Detail](#commerce-price) |
-| 25 | `commerce-subscription` | Commerce · Subscription (READ — entitlement source of truth) | `ws_package_course_subscription` | `ws_package_course_subscriptions` | ✅ enabled | [Detail](#commerce-subscription) |
-| 26 | `commerce-ebook-sub` | Commerce · eBook Subscription (READ — ebook entitlement) | `ws_ebook_subscription` | `ws_ebook_subscriptions` | ✅ enabled | [Detail](#commerce-ebook-sub) |
-| 27 | `commerce-promoter` | Commerce · Promoter (READ — promocode owner master) | `ws_promoter` | `ws_promoter` | ✅ enabled | [Detail](#commerce-promoter) |
-| 28 | `commerce-promocode` | Commerce · Promocode (READ — SQL-faithful, NOT the client appliesTo model) | `ws_promocode / ws_promoted_package_course_ebook` | `ws_promo_codes / (embedded)` | ✅ enabled | [Detail](#commerce-promocode) |
-| 29 | `commerce-educator` | Commerce · Educator (READ — full entity master) | `ws_course_educator` | `ws_course_educators` | ✅ enabled | [Detail](#commerce-educator) |
+| 23 | `commerce-order` | Commerce · Order (course WRITE path — Phase 3b) | `ws_package_course_order / ws_package_course_subscription / ws_package_course_subscription_tracking` | `ws_package_course_subscriptions (one doc carries order + entitlement)` | ✅ enabled | [Detail](#commerce-order) |
+| 24 | `ebook-order` | Ebook · Order (ebook WRITE path — Phase 3b) | `ws_ebook_order / ws_ebook_subscription` | `ws_ebook_orders / ws_ebook_subscriptions` | ✅ enabled | [Detail](#ebook-order) |
+| 25 | `book-order` | Book · Order (cart-checkout WRITE path — Phase 3b) | `ws_book_order / ws_book_order_item / ws_book_cart / ws_book_cart_item / ws_book_tracking` | `ws_book_orders / ws_book_carts (embedded items[]; embedded tracking{history[]})` | ✅ enabled | [Detail](#book-order) |
+| 26 | `offline-enquiry` | Offline · Enquiry (lead-capture WRITE — Phase 3b) | `ws_offline_enquiry` | `ws_offline_enquiries` | ✅ enabled | [Detail](#offline-enquiry) |
+| 27 | `package-chat` | Package · Chat (announcement READ + WRITE — Phase 3b) | `ws_package_chat (EXTENDED 2026-06-13)` | `ws_package_chats` | ✅ enabled | [Detail](#package-chat) |
+| 28 | `catalog-exam` | Catalog · Exam (category navigation) | `ws_exam / ws_exam_category` | `ws_exams / ws_exam_categories` | ✅ enabled | [Detail](#catalog-exam) |
+| 29 | `commerce-price` | Commerce · Price (plan/pricing lookup) | `ws_package_course_ebook_price` | `ws_package_course_ebook_prices` | ✅ enabled | [Detail](#commerce-price) |
+| 30 | `commerce-subscription` | Commerce · Subscription (READ — entitlement source of truth) | `ws_package_course_subscription` | `ws_package_course_subscriptions` | ✅ enabled | [Detail](#commerce-subscription) |
+| 31 | `commerce-ebook-sub` | Commerce · eBook Subscription (READ — ebook entitlement) | `ws_ebook_subscription` | `ws_ebook_subscriptions` | ✅ enabled | [Detail](#commerce-ebook-sub) |
+| 32 | `commerce-promoter` | Commerce · Promoter (READ — promocode owner master) | `ws_promoter` | `ws_promoter` | ✅ enabled | [Detail](#commerce-promoter) |
+| 33 | `commerce-promocode` | Commerce · Promocode (READ — SQL-faithful, NOT the client appliesTo model) | `ws_promocode / ws_promoted_package_course_ebook` | `ws_promo_codes / (embedded)` | ✅ enabled | [Detail](#commerce-promocode) |
+| 34 | `commerce-educator` | Commerce · Educator (READ — full entity master) | `ws_course_educator` | `ws_course_educators` | ✅ enabled | [Detail](#commerce-educator) |
 
 ---
 
@@ -52,7 +57,7 @@
 
 ```env
 DATABASE_URL=mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging
-MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator
+MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator
 ```
 
 - Toggle: `src/config/migration.ts` → `isMysqlModule("<key>")`
@@ -587,26 +592,27 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Material / MaterialCategory`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
-## 21. Catalog · Book (physical-book store reads) {#catalog-book}
+## 21. Catalog · Book (physical-book store reads — WIRED) {#catalog-book}
 
 | | |
 |---|---|
 | **Module key** | `catalog-book` |
 | **Phase** | 3 |
-| **Migrated** | 2026-06-12 |
+| **Migrated** | 2026-06-13 |
 | **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `Book` |
 | **MySQL table** | `ws_book` |
 | **Mongo collection (legacy app)** | `ws_books` |
-| **Code** | `src/modules/catalog-book/` |
+| **Code** | `src/modules/catalog-book (branches book.controller.ts listBooks + getBookDetail)/` |
 | **Data** | 10 books in staging |
-| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test)` |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test, 12/12 composition)` |
 | **Admin API** | — |
-| **Client API** | —  (book DATA reads built; NOT wired — needs book-order/cart on same id-space; flag OFF) |
+| **Client API** | GET `/client/books` + GET `/client/books/:id` (wired behind isBookMysql(), flag OFF) |
 
 **Transformer / schema notes:**
 
-- FLAG OFF + NOT WIRED (like catalog-package): listBooks/getBookDetail enrich each book with per-customer cart qty (ws_book_cart*) + isPurchased (ws_book_order* by status) — those order/cart tables are NOT migrated. With book on int ids + orders on Mongo ObjectIds the keys can't match → flips with the book-order/cart wave
+- NOW WIRED (2026-06-13): listBooks/getBookDetail branch on isBookMysql(). The per-customer cart qty/cartId + isPurchased enrichment is composed from the book-order read helpers (getActiveCartState / getPurchasedBookIdSet) — those order/cart tables migrated with book-order (Phase 3b), so the int book id-space now matches. Was previously blocked on exactly that dep
+- Composition: catalog-book supplies book DATA + data-only computed fields; the controller layers cart qty (ws_book_cart_item) + cartId (ws_book_cart.cart_id) + isPurchased (ws_book_order_item joined to orders in verified/shipped/delivered). C3 seam: customerId coerced Number(req.user.id). Detail branches before the ObjectId guard (MySQL book id is an int)
 - Module supplies book DATA + the data-only computed fields: isPaid (discountedPrice>0), key (isCombo?combo:individual), daysLeft (null — one-time purchase), isNew (createdAt window); the per-request deep link via a buildShareLink callback. Order/cart-derived qty + isPurchased are left to the caller
 - Schema fix: ws_book.order_by nullable in the DDL but Prisma typed non-null → relaxed to Int?
 - Mongo-only fields ABSENT from ws_book: packageIds[] (embedded M:N for the package-detail material(Book) tab — appliesTo-style, not reproducible), examCountdownCategoryId, termsAndConditions, bookUrl, publication, deliveryEta, isTrending. isTrending synthesized false; publication/deliveryEta synthesized to the Mongo defaults
@@ -641,7 +647,140 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `OfflineCenter / OfflineBatch`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
-## 23. Catalog · Exam (category navigation) {#catalog-exam}
+## 23. Commerce · Order (course WRITE path — Phase 3b) {#commerce-order}
+
+| | |
+|---|---|
+| **Module key** | `commerce-order` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-13 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageCourseOrder / PackageCourseSubscription / PackageCourseSubscriptionTracking` |
+| **MySQL table** | `ws_package_course_order / ws_package_course_subscription / ws_package_course_subscription_tracking` |
+| **Mongo collection (legacy app)** | `ws_package_course_subscriptions (one doc carries order + entitlement)` |
+| **Code** | `src/modules/commerce-order (branches course-payment.controller.ts createCourseOrderPayment + verify.controller.ts course branch)/` |
+| **Data** | 3 orders / 2 subs / 3 tracking in staging (restored after tsx cleanup) |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test, 28/28)` |
+| **Admin API** | — |
+| **Client API** | POST `/client/payment/create-order/course` + course branch of POST `/client/payment/verify` (wired, flag OFF) |
+
+**Transformer / schema notes:**
+
+- FIRST WRITE PATH (Phase 3b). Scope: COURSE only (signed off — WRITE_PATH_SCOPE.md). ebook/book ride the same pattern next; live-course/test-series verify branches deferred (NO SQL tables)
+- ONE-DOC→THREE-TABLES: Mongo writes one PackageCourseSubscription doc; SQL splits order (ws_package_course_order) vs entitlement (ws_package_course_subscription) vs trail (ws_package_course_subscription_tracking). create-order writes the order row only; verify writes subscription+tracking in ONE $transaction
+- DRIFT: customer_id TYPE SPLIT — order table VARCHAR, subscription table INT (same logical id; C3 seam coerces Number(req.user.id)). tracking + tracking.id are BIGINT (overflow Int32) → surfaced as number. tracking.order FKs order.id NOT subscription.id. order.status enum↔Mongo paymentStatus (pending↔pending, complete↔verified, cancel↔failed). duration=DAYS (planDuration asDays)
+- UPSERT-EXTEND reproduced in SQL: a second purchase folds endAt (+DAYS) + sums amount onto the active sub, no new row (no duplicate My-Subscriptions card). Idempotent re-verify returns the existing sub
+- DUAL-READ FALLBACK (rollback safety): verify checks MySQL for the course order FIRST when the flag is ON; on miss it falls through to the Mongo fan-out so a flag flip between create-order and verify can't orphan an in-flight payment. The verify response merges order payment fields + subscription entitlement fields into the Mongo-shaped data.subscription
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseOrder / PackageCourseSubscription / PackageCourseSubscriptionTracking`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 24. Ebook · Order (ebook WRITE path — Phase 3b) {#ebook-order}
+
+| | |
+|---|---|
+| **Module key** | `ebook-order` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-13 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `EBookOrder / EBookSubscription` |
+| **MySQL table** | `ws_ebook_order / ws_ebook_subscription` |
+| **Mongo collection (legacy app)** | `ws_ebook_orders / ws_ebook_subscriptions` |
+| **Code** | `src/modules/ebook-order (branches ebook-payment.controller.ts createEbookOrderPayment + verify.controller.ts ebook branch)/` |
+| **Data** | 2 orders / 1 sub in staging (restored after tsx cleanup) |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test, 28/28)` |
+| **Admin API** | — |
+| **Client API** | POST `/client/payment/create-order/ebook` + ebook branch of POST `/client/payment/verify` (wired, flag OFF) |
+
+**Transformer / schema notes:**
+
+- SECOND write path — rides the commerce-order pattern. Scope: EBOOK after COURSE. book-order next; live-course/test-series deferred (no SQL tables)
+- ONE-DOC→TWO-TABLES (no tracking, unlike course): create-order writes ws_ebook_order (pending; unique_id NOT NULL = receipt id); verify ONE $transaction flips order→complete + extend-or-create ws_ebook_subscription. The verify ebook branch returns data:{kind:'ebook',order} — the ORDER not the sub — so the DTO mirrors the Mongo EbookOrder doc
+- DRIFT: customer_id VARCHAR(order)/INT(sub) split (C3 coercion). NO ebook_id on the order table — only plan_id; ebook re-derived from the plan at verify + in the DTO. order.status enum strings IDENTICAL on SQL+Mongo ('pending'|'complete'|'cancel') → no translation. order_price = paid amount (no discount col). duration=DAYS. payment_type enum('online','backend')→online
+- UPSERT-EXTEND: second purchase folds endAt +DAYS, sums price, repoints the sub at the latest order, no new row. Idempotent re-verify returns the existing order DTO
+- DUAL-READ FALLBACK in verify (MySQL first, Mongo fan-out on miss) — same rollback safety as commerce-order
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `EBookOrder / EBookSubscription`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 25. Book · Order (cart-checkout WRITE path — Phase 3b) {#book-order}
+
+| | |
+|---|---|
+| **Module key** | `book-order` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-13 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `BookOrder / BookOrderItem / BookCart / BookCartItem / BookTracking` |
+| **MySQL table** | `ws_book_order / ws_book_order_item / ws_book_cart / ws_book_cart_item / ws_book_tracking` |
+| **Mongo collection (legacy app)** | `ws_book_orders / ws_book_carts (embedded items[]; embedded tracking{history[]})` |
+| **Code** | `src/modules/book-order (branches payment.controller.ts createBookOrderPayment + verify.controller.ts book branch)/` |
+| **Data** | 6 orders / 1 item / 2 carts / 2 cart-items / 3 tracking in staging (restored after tsx cleanup) |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test, 25/25)` |
+| **Admin API** | — |
+| **Client API** | POST `/client/payment/create-order` (book cart) + book branch of POST `/client/payment/verify` (wired, flag OFF) |
+
+**Transformer / schema notes:**
+
+- THIRD write path — a DIFFERENT shape (cart checkout → 5 tables, line items, courier AWB). Signed off in BOOK_ORDER_SCOPE.md. Completing it UNBLOCKS catalog-book wiring (reads built, were blocked on order/cart deps)
+- SCHEMA FIX (read-breaking BigInt): ws_book_tracking.tracking_id + ws_book_order.tracking_id are BIGINT (AWB ~1.19e11, overflow Int32) but Prisma mapped Int → reads THREW. Fixed BookTracking.tracking_id Int→BigInt + BookOrder.trackingId Int?→BigInt?, regenerated. Surfaced as number
+- create-order (2 phases): preview cart (ws_book_cart + cart_item child rows → totals w/ ws_termsandcondition module='book' free-shipping=500) → Razorpay → ONE $transaction writes ws_book_order (pending; order_items TEXT blob + cart_id + razorpay payload, all NOT NULL) + ws_book_order_item rows (FK order_id = VARCHAR business key)
+- verify: ONE $transaction — insert ws_book_tracking (bigint AUTO_INCREMENT = the AWB; base 119400693004, no Counter) → flip order→verified + tracking_id → deactivate cart (status=0, match user+shipping; cart_item rows KEPT, Mongo parity). customer_id is INT here (NOT the VARCHAR split of course/ebook)
+- Embedded→child: Mongo items[] → order_item rows (+ denormalized JSON blob). TRACKING HISTORY LOSS (signed-off D-B3): SQL ws_book_tracking has no history/note cols → persist flat row, DTO SYNTHESIZES the single verify entry [{status:'Order Placed',note:'Payment received',at}]. varchar(10) status → store short 'verified' (DTO carries human text). Dual-read fallback in verify
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `BookOrder / BookOrderItem / BookCart / BookCartItem / BookTracking`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 26. Offline · Enquiry (lead-capture WRITE — Phase 3b) {#offline-enquiry}
+
+| | |
+|---|---|
+| **Module key** | `offline-enquiry` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-13 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `OfflineEnquiry` |
+| **MySQL table** | `ws_offline_enquiry` |
+| **Mongo collection (legacy app)** | `ws_offline_enquiries` |
+| **Code** | `src/modules/offline-enquiry (branches offline.controller.ts submitEnquiry)/` |
+| **Data** | 4 enquiries in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test, 10/10)` |
+| **Admin API** | — |
+| **Client API** | POST `/client/offline/enquiry` (wired, flag OFF; anonymous-allowed) |
+
+**Transformer / schema notes:**
+
+- Small single-table lead-capture write. No schema change — OfflineEnquiry model existed (mobile Int→BigInt fix landed in the offline-batch pass)
+- DRIFT: mobile BIGINT — input string → digits parsed to BigInt for the column, surfaced back as string (12-digit/country-code numbers overflow Int32). batch_id INT — branch validates int + existence via offline-batch (before the ObjectId parse)
+- ANONYMOUS vs NOT NULL: route is anonymous-allowed (userId may be null) but customer_id is INT NOT NULL → store the 0 sentinel for anonymous (no FK enforced); DTO maps 0→null (Mongo shape)
+- NO remarks column: the Mongo enquiry accepts optional remarks; SQL has no column → validator accepts it (contract-stable) but it's DROPPED on the SQL write (documented gap)
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `OfflineEnquiry`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 27. Package · Chat (announcement READ + WRITE — Phase 3b) {#package-chat}
+
+| | |
+|---|---|
+| **Module key** | `package-chat` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-13 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageChat (+ enums PackageChatMediaType / PackageChatSenderType)` |
+| **MySQL table** | `ws_package_chat (EXTENDED 2026-06-13)` |
+| **Mongo collection (legacy app)** | `ws_package_chats` |
+| **Code** | `src/modules/package-chat (branches client package.controller.ts getChatMessages + admin package.service.ts listChatMessages/postChatMessage/deleteChatMessage)/` |
+| **Data** | 0 chats in staging |
+| **Smoke test** | `—  (flag OFF; verified via live-DB tsx test, 21/21)` |
+| **Admin API** | POST `/admin/package/:id/chat` · DELETE `/admin/package/chat/:messageId` (wired, flag OFF) |
+| **Client API** | GET `/client/package/:packageId/chat` (subscription-gated; wired, flag OFF) |
+
+**Transformer / schema notes:**
+
+- LAST 3b write path. ⚠ FIRST SCHEMA ADD: ws_package_chat was a STUB (message only) that couldn't represent the Mongo PackageChat (media/sender/push). EXTENDED via additive ALTER — media_url, media_type enum, sender_type enum, sender_id VARCHAR, push_sent (see docs/migration/schema-changes/2026-06-13_extend_ws_package_chat.sql). Stub Prisma model `chat`→`PackageChat`
+- Field map: SQL message↔Mongo text (NOT NULL → store '' for media-only). sender_id is VARCHAR (admin ObjectId; admin auth stays Mongo) → string|null. media_type/sender_type Prisma enums; push_sent Boolean; package_id INT
+- List ordering: created_at is second-granularity datetime → added `id desc` tiebreaker after `created_at desc` to preserve insertion order (Mongo's millisecond createdAt doesn't tie)
+- Client read gates via commerce-subscription hasActivePackageSubscription (int ids), branches before the ObjectId guard. Admin write/delete branch inside the admin service (centralized); parsePackageChatId guards the int id
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageChat (+ enums PackageChatMediaType / PackageChatSenderType)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 28. Catalog · Exam (category navigation) {#catalog-exam}
 
 | | |
 |---|---|
@@ -667,7 +806,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Exam / ExamCategory`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
-## 24. Commerce · Price (plan/pricing lookup) {#commerce-price}
+## 29. Commerce · Price (plan/pricing lookup) {#commerce-price}
 
 | | |
 |---|---|
@@ -694,7 +833,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseEbookPrice`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
-## 25. Commerce · Subscription (READ — entitlement source of truth) {#commerce-subscription}
+## 30. Commerce · Subscription (READ — entitlement source of truth) {#commerce-subscription}
 
 | | |
 |---|---|
@@ -722,7 +861,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseSubscription`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
-## 26. Commerce · eBook Subscription (READ — ebook entitlement) {#commerce-ebook-sub}
+## 31. Commerce · eBook Subscription (READ — ebook entitlement) {#commerce-ebook-sub}
 
 | | |
 |---|---|
@@ -749,7 +888,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `EBookSubscription`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
-## 27. Commerce · Promoter (READ — promocode owner master) {#commerce-promoter}
+## 32. Commerce · Promoter (READ — promocode owner master) {#commerce-promoter}
 
 | | |
 |---|---|
@@ -776,7 +915,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Promoter`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
-## 28. Commerce · Promocode (READ — SQL-faithful, NOT the client appliesTo model) {#commerce-promocode}
+## 33. Commerce · Promocode (READ — SQL-faithful, NOT the client appliesTo model) {#commerce-promocode}
 
 | | |
 |---|---|
@@ -802,7 +941,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Promocode / PromotedPackageCourseEbook`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
-## 29. Commerce · Educator (READ — full entity master) {#commerce-educator}
+## 34. Commerce · Educator (READ — full entity master) {#commerce-educator}
 
 | | |
 |---|---|

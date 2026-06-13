@@ -4,10 +4,12 @@
  * Module key: `catalog-book` (flag OFF). Reads `ws_book` and produces book DATA
  * + the data-only computed fields (isPaid/key/isNew/daysLeft/shareableLink).
  *
- * NOT wired this pass: `listBooks`/`getBookDetail` also enrich with per-customer
- * cart `qty` (ws_book_cart*) + `isPurchased` (ws_book_order* by status), and
- * those order/cart tables are NOT migrated — with book on int ids and orders on
- * Mongo ObjectIds the keys can't match. Flips with the book-order/cart wave.
+ * WIRED 2026-06-13: `listBooks`/`getBookDetail` now branch on `isBookMysql()`.
+ * The per-customer cart `qty`/`cartId` + `isPurchased` enrichment comes from the
+ * book-order module's read helpers (`getActiveCartState`/`getPurchasedBookIdSet`)
+ * — those order/cart tables migrated with `book-order` (Phase 3b), so the int
+ * book id-space now matches. This module still supplies only the book DATA +
+ * data-only computed fields; the controller composes the cart/purchase state.
  * The per-request deep link is supplied by a `buildShareLink` callback.
  */
 import { isMysqlModule } from "../../config/migration";

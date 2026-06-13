@@ -14,6 +14,15 @@ import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { buildTrackingUrl, COURIER } from "../../config/courier";
 import { fetchLiveAWBData } from "../../libs/courier/tracking";
 import { isNewItem } from "../../utils/isNew";
+import {
+  isBookMysql,
+  listBooksData,
+  getBookById,
+} from "../../modules/catalog-book/catalog-book.service";
+import {
+  getActiveCartState,
+  getPurchasedBookIdSet,
+} from "../../modules/book-order/book-order.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -27,6 +36,34 @@ export const listBooks = async (req: Request, res: Response) => {
 
   try {
     const { search, language } = req.query as Record<string, string>;
+
+    // ── MySQL book listing (catalog-book + book-order, flag-gated) ───────────
+    // catalog-book supplies the data + computed fields; book-order supplies the
+    // per-customer cart `qty`/`cartId` + `isPurchased`. Response byte-identical.
+    if (isBookMysql()) {
+      const base = resolveBase(req);
+      const buildShareLink = (bid: string) => buildShareUrl("books", bid, base);
+      const rows = await listBooksData({ search, language }, buildShareLink);
+
+      let cartId: string | null = null;
+      let qtyByBookId = new Map<string, number>();
+      let purchasedSet = new Set<string>();
+      const customerIdInt = Number(customerId); // C3 seam
+      if (customerId && Number.isInteger(customerIdInt)) {
+        const cart = await getActiveCartState(customerIdInt);
+        cartId = cart.cartId;
+        qtyByBookId = cart.qtyByBookId;
+        purchasedSet = await getPurchasedBookIdSet(customerIdInt);
+      }
+
+      const decoratedMysql = rows.map((b) => ({
+        ...b,
+        qty: qtyByBookId.get(b._id) ?? 0,
+        isPurchased: purchasedSet.has(b._id),
+      }));
+      logger.info("listBooks success (mysql)", { traceId, customerId, count: decoratedMysql.length });
+      return res.status(200).json({ success: true, data: { cartId, books: decoratedMysql } });
+    }
 
     const filter: any = { status: true };
     if (search) {
@@ -387,6 +424,30 @@ export const getBookDetail = async (req: Request, res: Response) => {
   logger.info("getBookDetail invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
+    // ── MySQL book detail (catalog-book + book-order, flag-gated) ────────────
+    // Branch before the ObjectId guard — a MySQL book id is an int.
+    if (isBookMysql()) {
+      const bookIdInt = Number(id);
+      if (!Number.isInteger(bookIdInt) || bookIdInt <= 0) {
+        logger.warn("getBookDetail invalid id (mysql)", { traceId, customerId, id });
+        return res.status(400).json({ success: false, message: "Invalid book id." });
+      }
+      const base = resolveBase(req);
+      const dto = await getBookById(bookIdInt, (bid) => buildShareUrl("books", bid, base));
+      if (!dto) {
+        logger.warn("getBookDetail not found (mysql)", { traceId, customerId, id });
+        return res.status(404).json({ success: false, message: "Book not found." });
+      }
+      let isPurchased = false;
+      const customerIdInt = Number(customerId); // C3 seam
+      if (customerId && Number.isInteger(customerIdInt)) {
+        const purchased = await getPurchasedBookIdSet(customerIdInt);
+        isPurchased = purchased.has(dto._id);
+      }
+      logger.info("getBookDetail success (mysql)", { traceId, customerId, id, isPurchased });
+      return res.status(200).json({ success: true, data: { ...dto, isPurchased } });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("getBookDetail invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid book id." });

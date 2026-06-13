@@ -23,6 +23,21 @@ import {
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isCommerceOrderMysql,
+  findCourseOrderForVerify,
+  verifyCourseOrderMysql,
+} from "../../modules/commerce-order/commerce-order.service";
+import {
+  isEbookOrderMysql,
+  findEbookOrderForVerify,
+  verifyEbookOrderMysql,
+} from "../../modules/ebook-order/ebook-order.service";
+import {
+  isBookOrderMysql,
+  findBookOrderForVerify,
+  verifyBookOrderMysql,
+} from "../../modules/book-order/book-order.service";
 
 const verifySchema = z.object({
   razorpay_order_id: z.string().min(1),
@@ -71,6 +86,108 @@ export const verifyPayment = async (req: Request, res: Response) => {
         success: false,
         message: "Signature verification failed.",
       });
+    }
+
+    // ── MySQL course write path (commerce-order, flag-gated) ─────────────────
+    // DUAL-READ FALLBACK (WRITE_PATH_SCOPE §3.2): when the flag is ON, look for a
+    // MySQL course order owning this razorpay id FIRST. If found, fulfill in
+    // MySQL. If NOT found, fall through to the Mongo fan-out below — this is the
+    // rollback safety net: an order created in Mongo before the flip (or a
+    // non-course order) still verifies correctly. The fallback is read-only.
+    if (isCommerceOrderMysql()) {
+      // C3 seam: req.user.id is the int customer id in the migrated id-space;
+      // coerce the string-typed token subject to int at this boundary.
+      const customerIdInt = Number(userId);
+      const mysqlCourseOrder = Number.isInteger(customerIdInt)
+        ? await findCourseOrderForVerify(razorpay_order_id, customerIdInt)
+        : null;
+      if (mysqlCourseOrder) {
+        if (mysqlCourseOrder.paymentStatus !== "pending") {
+          logger.info("verifyPayment: course order already verified (idempotent, mysql)", {
+            orderId: mysqlCourseOrder.id,
+            razorpay_order_id,
+          });
+        }
+        const subscription = await verifyCourseOrderMysql(
+          mysqlCourseOrder,
+          razorpay_payment_id
+        );
+        logger.info("verifyPayment: course subscription activated (mysql)", {
+          orderId: mysqlCourseOrder.id,
+          subscriptionId: subscription._id,
+          customerId: subscription.customerId,
+          razorpay_order_id,
+          razorpay_payment_id,
+          endAt: subscription.endAt?.toISOString?.(),
+        });
+        return res.status(200).json({
+          success: true,
+          data: { kind: "course", subscription },
+        });
+      }
+      // miss → fall through to the Mongo fan-out (dual-read fallback).
+    }
+
+    // ── MySQL ebook write path (ebook-order, flag-gated) ─────────────────────
+    // Same dual-read fallback as course: check MySQL first, fall through to Mongo
+    // on miss. Returns the Mongo-shaped EbookOrder as data.order (the ebook
+    // branch returns the ORDER, not the subscription).
+    if (isEbookOrderMysql()) {
+      const customerIdInt = Number(userId);
+      const mysqlEbookOrder = Number.isInteger(customerIdInt)
+        ? await findEbookOrderForVerify(razorpay_order_id, customerIdInt)
+        : null;
+      if (mysqlEbookOrder) {
+        if (mysqlEbookOrder.status !== "pending") {
+          logger.info("verifyPayment: ebook order already verified (idempotent, mysql)", {
+            orderId: mysqlEbookOrder.id,
+            razorpay_order_id,
+          });
+        }
+        const order = await verifyEbookOrderMysql(mysqlEbookOrder, razorpay_payment_id);
+        logger.info("verifyPayment: ebook order activated (mysql)", {
+          orderId: mysqlEbookOrder.id,
+          customerId: order.customerId,
+          ebookId: order.ebookId,
+          razorpay_order_id,
+          razorpay_payment_id,
+        });
+        return res.status(200).json({
+          success: true,
+          data: { kind: "ebook", order },
+        });
+      }
+      // miss → fall through to the Mongo fan-out (dual-read fallback).
+    }
+
+    // ── MySQL book write path (book-order, flag-gated) ───────────────────────
+    // Same dual-read fallback. Returns the Mongo-shaped BookOrder as data.order.
+    if (isBookOrderMysql()) {
+      const customerIdInt = Number(userId);
+      const mysqlBookOrder = Number.isInteger(customerIdInt)
+        ? await findBookOrderForVerify(razorpay_order_id, customerIdInt)
+        : null;
+      if (mysqlBookOrder) {
+        if (mysqlBookOrder.status !== "pending") {
+          logger.info("verifyPayment: book order already verified (idempotent, mysql)", {
+            orderId: mysqlBookOrder.id,
+            razorpay_order_id,
+          });
+        }
+        const order = await verifyBookOrderMysql(mysqlBookOrder, razorpay_payment_id);
+        logger.info("verifyPayment: book order verified (mysql)", {
+          orderId: mysqlBookOrder.id,
+          customerId: order.customerId,
+          trackingId: order.tracking.trackingId,
+          razorpay_order_id,
+          razorpay_payment_id,
+        });
+        return res.status(200).json({
+          success: true,
+          data: { kind: "book", order },
+        });
+      }
+      // miss → fall through to the Mongo fan-out (dual-read fallback).
     }
 
     // Find which local entity owns this Razorpay order. It's exactly one of
