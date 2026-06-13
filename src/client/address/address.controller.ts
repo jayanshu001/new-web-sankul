@@ -13,6 +13,7 @@ import { createAddressSchema, updateAddressSchema } from "./address.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 
 // ─── Addresses ────────────────────────────────────────────────────────────────
 
@@ -22,12 +23,21 @@ export const getMyAddresses = async (req: Request, res: Response) => {
   logger.info("getMyAddresses invoked", { traceId, path: req.originalUrl, customerId });
 
   try {
-    const addresses = await CustomerAddress.find({ customerId, status: true })
-      .populate("stateId")
-      .populate("cityId")
-      .sort({ createdAt: -1 });
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const filter: any = { customerId, status: true };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
+
+    const [addresses, total] = await Promise.all([
+      CustomerAddress.find(filter)
+        .populate("stateId")
+        .populate("cityId")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      CustomerAddress.countDocuments(filter),
+    ]);
     logger.info("getMyAddresses success", { traceId, customerId, count: addresses.length });
-    return res.status(200).json({ success: true, data: addresses });
+    return res.status(200).json({ success: true, data: addresses, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("getMyAddresses failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -191,14 +201,15 @@ export const getStates = async (req: Request, res: Response) => {
   logger.info("getStates invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { search } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
     const filter: any = { active: true };
     { const c = buildRegexCondition(search); if (c) filter.name = c; }
-    const states = await CustomerState.find(filter)
-      .select("_id name stateCode")
-      .sort({ name: 1 });
+    const [states, total] = await Promise.all([
+      CustomerState.find(filter).select("_id name stateCode").sort({ name: 1 }).skip(skip).limit(limit),
+      CustomerState.countDocuments(filter),
+    ]);
     logger.info("getStates success", { traceId, count: states.length });
-    return res.status(200).json({ success: true, data: states });
+    return res.status(200).json({ success: true, data: states, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("getStates failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -227,7 +238,8 @@ export const listCities = async (req: Request, res: Response) => {
   logger.info("listCities invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { search, stateId } = req.query as Record<string, string>;
+    const { stateId } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
     const filter: any = { status: true };
     { const c = buildRegexCondition(search); if (c) filter.name = c; }
     // Optional: scope to a single state. Invalid/absent stateId → all cities
@@ -239,12 +251,17 @@ export const listCities = async (req: Request, res: Response) => {
       }
       filter.stateId = stateId;
     }
-    const data = await OfflineCity.find(filter)
-      .populate({ path: "stateId", model: CustomerState, select: "_id name stateCode" })
-      .sort({ order: 1, name: 1 })
-      .lean();
+    const [data, total] = await Promise.all([
+      OfflineCity.find(filter)
+        .populate({ path: "stateId", model: CustomerState, select: "_id name stateCode" })
+        .sort({ order: 1, name: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      OfflineCity.countDocuments(filter),
+    ]);
     logger.info("listCities success", { traceId, count: data.length, stateId: stateId ?? null });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listCities failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -262,7 +279,14 @@ export const listCentersByCity = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid city id." });
     }
 
-    const centers = await OfflineCenter.find({ cityId, status: true }).lean();
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const filter: any = { cityId, status: true };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
+
+    const [centers, total] = await Promise.all([
+      OfflineCenter.find(filter).sort({ name: 1 }).skip(skip).limit(limit).lean(),
+      OfflineCenter.countDocuments(filter),
+    ]);
     const centerIds = centers.map((c) => c._id);
     const batches = await OfflineBatch.find({ centerId: { $in: centerIds }, status: true })
       .sort({ startAt: 1 })
@@ -279,23 +303,27 @@ export const listCentersByCity = async (req: Request, res: Response) => {
     }));
 
     logger.info("listCentersByCity success", { traceId, cityId, centerCount: centers.length, batchCount: batches.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listCentersByCity failed", { traceId, cityId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
-export const getEducations = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("getEducations invoked", { traceId, path: _req.originalUrl });
+export const getEducations = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("getEducations invoked", { traceId, path: req.originalUrl });
 
   try {
-    const educations = await CustomerEducation.find({ status: true })
-      .select("_id name")
-      .sort({ name: 1 });
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const filter: any = { status: true };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
+    const [educations, total] = await Promise.all([
+      CustomerEducation.find(filter).select("_id name").sort({ name: 1 }).skip(skip).limit(limit),
+      CustomerEducation.countDocuments(filter),
+    ]);
     logger.info("getEducations success", { traceId, count: educations.length });
-    return res.status(200).json({ success: true, data: educations });
+    return res.status(200).json({ success: true, data: educations, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("getEducations failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

@@ -15,6 +15,7 @@ import { buildTrackingUrl, COURIER } from "../../config/courier";
 import { fetchLiveAWBData } from "../../libs/courier/tracking";
 import { isNewItem } from "../../utils/isNew";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -27,7 +28,8 @@ export const listBooks = async (req: Request, res: Response) => {
   logger.info("listBooks invoked", { traceId, path: req.originalUrl, customerId });
 
   try {
-    const { search, language } = req.query as Record<string, string>;
+    const { language } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
     const filter: any = { status: true };
     {
@@ -36,7 +38,10 @@ export const listBooks = async (req: Request, res: Response) => {
     }
     if (language) filter.language = language;
 
-    const books = await Book.find(filter).sort({ orderBy: 1, createdAt: -1 });
+    const [books, total] = await Promise.all([
+      Book.find(filter).sort({ orderBy: 1, createdAt: -1 }).skip(skip).limit(limit),
+      Book.countDocuments(filter),
+    ]);
 
     let cartMap = new Map<string, number>();
     let cartId: string | null = null;
@@ -77,7 +82,7 @@ export const listBooks = async (req: Request, res: Response) => {
     });
 
     logger.info("listBooks success", { traceId, customerId, count: decorated.length });
-    return res.status(200).json({ success: true, data: { cartId, books: decorated } });
+    return res.status(200).json({ success: true, data: { cartId, books: decorated }, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listBooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

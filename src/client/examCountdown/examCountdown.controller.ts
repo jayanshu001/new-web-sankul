@@ -5,6 +5,7 @@ import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownC
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -36,17 +37,25 @@ function shapeRow(doc: any) {
 }
 
 // GET /client/exam-countdowns/categories
-export const listCategories = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listCategories invoked", { traceId, path: _req.originalUrl });
+export const listCategories = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listCategories invoked", { traceId, path: req.originalUrl });
 
   try {
-    const data = await ExamCountdownCategory.find({ status: true })
-      .sort({ order: 1, name: 1 })
-      .select("_id name colorHex order")
-      .lean();
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const filter: any = { status: true };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
+    const [data, total] = await Promise.all([
+      ExamCountdownCategory.find(filter)
+        .sort({ order: 1, name: 1 })
+        .select("_id name colorHex order")
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      ExamCountdownCategory.countDocuments(filter),
+    ]);
     logger.info("listCategories success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listCategories failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

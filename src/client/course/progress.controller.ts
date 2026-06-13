@@ -8,12 +8,11 @@ import { Course } from "../../models/course/Course.model";
 import { Package } from "../../models/course/Package.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
-import { PackageVideoCategoryRelation } from "../../models/course/PackageVideoCategoryRelation.model";
-import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { LiveCourse } from "../../models/course/LiveCourse.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { resolveScopedReachableVideoCategoryIds } from "./scopeReachableCategories";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -65,23 +64,30 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
     const scopeOid = new mongoose.Types.ObjectId(scope.id);
     const isFree = (video as any).priceType === "free";
 
-    // Resolve the set of video categories this video sits under (leaf + every
-    // ancestor) so we can confirm the video is genuinely reachable from the
-    // scoped container. The walk is bounded — most trees are 2-3 levels deep.
-    const ancestorIds: any[] = [];
-    if (video.videoCategoryId) {
-      ancestorIds.push(video.videoCategoryId);
-      let cursorIds: any[] = [video.videoCategoryId];
-      for (let depth = 0; depth < 5 && cursorIds.length; depth++) {
-        const parents = await VideoCategoryRelation.find({
-          child: { $in: cursorIds },
-        })
-          .select("parent")
-          .lean();
-        cursorIds = parents.map((p) => p.parent);
-        for (const pid of cursorIds) ancestorIds.push(pid);
-      }
-    }
+    // Confirm the video is genuinely reachable from the scoped container by
+    // asking the SAME question the catalog answers when it lists a video under
+    // a product: walk the category tree DOWNWARD off every category the product
+    // links (via childCategoryIds) and check whether the video's leaf category
+    // falls inside that set. Using the catalog's own resolver keeps the two in
+    // lockstep — a video listed under a product is always accepted for progress
+    // there, even when it's shared across MORE THAN ONE product (its second
+    // linkage is often expressed only through nested childCategoryIds, which the
+    // old upward VideoCategoryRelation walk missed → a false "not part of"
+    // 400). See resolveScopedReachableVideoCategoryIds.
+    const reachableCategoryIds = await resolveScopedReachableVideoCategoryIds(
+      scope.kind,
+      scopeOid
+    );
+    const leafCategoryId = video.videoCategoryId
+      ? String(video.videoCategoryId)
+      : null;
+    // A FREE video is exempt from the strict membership check (free content is
+    // often surfaced via the free catalog rather than the product's linkage
+    // tree, so the linkage may legitimately be absent). Paid videos must be
+    // reachable. Each branch below still confirms the product exists / the user
+    // is subscribed.
+    const videoReachable =
+      isFree || (!!leafCategoryId && reachableCategoryIds.has(leafCategoryId));
 
     // The container the row attaches to is decided ENTIRELY by `scope`. We
     // validate two things before trusting it: (1) the user is entitled to that
@@ -94,34 +100,11 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
     let liveCourseId: any = null;
 
     if (scope.kind === "course") {
-      // Reachability: is the video reachable from the scoped course? A video can
-      // legitimately belong to more than one course (shared categories), so we
-      // ask "is THIS course one of them?" rather than "is the single resolved
-      // course equal to this one?". The course ⇄ category link, like the package
-      // one, exists in several forms — accept any:
-      //   (a) the scoped course carries the leaf/an-ancestor category id, or
-      //   (b) the scoped course's downward videoCategoryId points at the leaf or
-      //       an ancestor.
-      // A FREE video is exempt from the strict membership check (see the package
-      // branch for the rationale) — its progress is valid regardless of how the
-      // category tree happens to link it; we only confirm the course exists below.
-      let reachable = isFree;
-      if (!reachable) {
-        const [catWithCourse, downwardCourse] = await Promise.all([
-          ancestorIds.length
-            ? VideoCategory.findOne({ _id: { $in: ancestorIds }, courseId: scopeOid })
-                .select("_id")
-                .lean()
-            : Promise.resolve(null as any),
-          ancestorIds.length
-            ? Course.findOne({ _id: scopeOid, videoCategoryId: { $in: ancestorIds }, status: true })
-                .select("_id")
-                .lean()
-            : Promise.resolve(null as any),
-        ]);
-        reachable = !!catWithCourse || !!downwardCourse;
-      }
-      if (!reachable) {
+      // Reachability decided by the shared catalog resolver above. A video can
+      // legitimately belong to more than one course (shared categories); the
+      // resolver expands the scoped course's linked roots downward and the leaf
+      // membership test confirms THIS course is one of them.
+      if (!videoReachable) {
         logger.warn("reportLectureProgress scope mismatch (course)", { traceId, userId, videoId, scope });
         return res.status(400).json({ success: false, message: "Video is not part of the scoped course." });
       }
@@ -145,54 +128,13 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       }
       courseId = scopeOid;
     } else if (scope.kind === "package") {
-      // Reachability: is the video inside the scoped package? A package links
-      // its subjects two ways and a video can hang off either, so we accept
-      // EITHER path (matching how the catalog actually lists package videos):
-      //   (a) the embedded Package.specificSubjects[].category — the linked
-      //       subject roots (and videos directly under a linked leaf), and
-      //   (b) the expanded PackageVideoCategoryRelation tree — videos under any
-      //       category that is an endpoint (parent or child) of a stored relation.
-      // We test the video's own category PLUS all its ancestors against both.
-      // A FREE video is exempt from the strict membership check: free package
-      // content is often surfaced via the free catalog rather than the package's
-      // specificSubjects/relation tree, so the linkage may legitimately be
-      // absent. Its progress is still valid (mirrors the free-videos endpoint);
-      // we only confirm the package exists below. Paid videos must be reachable.
-      let reachable = isFree;
-      if (!reachable && ancestorIds.length) {
-        const [pkg, relRows] = await Promise.all([
-          Package.findById(scopeOid).select("specificSubjects").lean<any>(),
-          // A relation row counts if EITHER endpoint is one of the video's
-          // categories — the catalog read (free.controller) treats both `parent`
-          // and `child` of a stored relation as in-package, so we mirror that to
-          // avoid a false 400 for a video filed on the parent side of a relation.
-          VideoCategoryRelation.find({
-            $or: [{ child: { $in: ancestorIds } }, { parent: { $in: ancestorIds } }],
-          })
-            .select("_id")
-            .lean(),
-        ]);
-
-        // (a) direct subject link
-        const ancestorSet = new Set(ancestorIds.map((a) => String(a)));
-        const directLinked = (pkg?.specificSubjects ?? []).some(
-          (s: any) => s?.category && ancestorSet.has(String(s.category))
-        );
-
-        // (b) relation-tree link
-        let relationLinked = false;
-        if (!directLinked && relRows.length) {
-          const pkgRel = await PackageVideoCategoryRelation.findOne({
-            packageId: scopeOid,
-            videoCategoryRelationId: { $in: relRows.map((r) => r._id) },
-            active: true,
-          }).select("_id").lean();
-          relationLinked = !!pkgRel;
-        }
-
-        reachable = directLinked || relationLinked;
-      }
-      if (!reachable) {
+      // Reachability decided by the shared catalog resolver above, which expands
+      // BOTH package linkage forms (specificSubjects roots + the
+      // PackageVideoCategoryRelation tree, both relation endpoints) downward via
+      // childCategoryIds — exactly how the catalog lists package videos. The leaf
+      // membership test then confirms the video is inside THIS package, even when
+      // it is shared across multiple packages.
+      if (!videoReachable) {
         logger.warn("reportLectureProgress scope mismatch (package)", { traceId, userId, videoId, scope });
         return res.status(400).json({ success: false, message: "Video is not part of the scoped package." });
       }
@@ -220,27 +162,12 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       }
       packageId = scopeOid;
     } else {
-      // liveCourse — reachability via either linkage form (matching how the
-      // recordings list resolves a live course's videos):
-      //   (a) one of the video's categories carries liveCourseId === scoped
-      //       course (the canonical form: `VideoCategory.find({ liveCourseId })`
-      //       in listLiveCourseRecordings), or
-      //   (b) the scoped live course's downward videoCategoryId root folder is
-      //       the video's leaf category or one of its ancestors.
-      // FREE video exempt from strict membership (see package branch rationale).
-      let reachable = isFree;
-      if (!reachable && ancestorIds.length) {
-        const [folder, liveCourse] = await Promise.all([
-          VideoCategory.findOne({ _id: { $in: ancestorIds }, liveCourseId: scopeOid })
-            .select("_id")
-            .lean(),
-          LiveCourse.findOne({ _id: scopeOid, videoCategoryId: { $in: ancestorIds }, status: true })
-            .select("_id")
-            .lean(),
-        ]);
-        reachable = !!folder || !!liveCourse;
-      }
-      if (!reachable) {
+      // liveCourse — reachability decided by the shared catalog resolver above,
+      // which expands both linkage forms (categories carrying liveCourseId + the
+      // course's downward videoCategoryId root) downward via childCategoryIds,
+      // matching how the recordings list resolves a live course's videos. The
+      // leaf membership test then confirms the video is inside THIS live course.
+      if (!videoReachable) {
         logger.warn("reportLectureProgress scope mismatch (liveCourse)", { traceId, userId, videoId, scope });
         return res.status(400).json({ success: false, message: "Video is not part of the scoped live course." });
       }

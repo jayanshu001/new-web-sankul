@@ -7,7 +7,13 @@ export interface IEbookOrder extends Document {
   planId?: mongoose.Types.ObjectId | null;
   paymentMethod: PaymentMethod;
   orderType: PackageCourseEbookOrderType;
+  // `orderPrice` is the amount actually charged (post-discount). The promo
+  // money-trail below records what was discounted, mirroring the
+  // package/course/live-course subscriptions.
   orderPrice: number;
+  promocodeId?: mongoose.Types.ObjectId | null;
+  originalAmount?: number | null;
+  discountAmount?: number | null;
   razorpayOrderId?: string | null;
   razorpayPaymentId?: string | null;
   ipAddress?: string | null;
@@ -25,6 +31,9 @@ const ebookOrderSchema: Schema = new Schema(
     paymentMethod: { type: String, enum: Object.values(PaymentMethod), required: true },
     orderType: { type: String, enum: Object.values(PackageCourseEbookOrderType), default: PackageCourseEbookOrderType.PURCHASE },
     orderPrice: { type: Number, required: true },
+    promocodeId: { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
+    originalAmount: { type: Number, default: null },
+    discountAmount: { type: Number, default: null },
     razorpayOrderId: { type: String, default: null },
     razorpayPaymentId: { type: String, default: null },
     ipAddress: { type: String, default: null },

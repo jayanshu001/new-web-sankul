@@ -16,6 +16,13 @@ export interface IPackageCourseSubscription extends Document {
   promocodeId?: mongoose.Types.ObjectId | null;
   promoterId?: mongoose.Types.ObjectId | null;
   referrerId?: mongoose.Types.ObjectId | null;
+  // Promo money-trail (mirrors LiveCourseSubscription). When a promo code is
+  // applied: `originalAmount` is the plan price before discount, `discountAmount`
+  // is what the code took off, and `paidAmount` is what was actually charged
+  // (original - discount). With no promo, original/discount stay null and
+  // paidAmount === plan price.
+  originalAmount?: number | null;
+  discountAmount?: number | null;
   paidAmount?: number | null;
   customerPercentage?: number | null;
   promoterPercentage?: number | null;
@@ -44,6 +51,8 @@ const packageCourseSubscriptionSchema: Schema = new Schema(
     promocodeId: { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
     promoterId: { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
     referrerId: { type: Schema.Types.ObjectId, ref: "Customer", default: null },
+    originalAmount: { type: Number, default: null },
+    discountAmount: { type: Number, default: null },
     paidAmount: { type: Number, default: null },
     customerPercentage: { type: Number, default: null },
     promoterPercentage: { type: Number, default: null },

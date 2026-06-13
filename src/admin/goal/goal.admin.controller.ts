@@ -87,7 +87,13 @@ export const updateGoalHandler = async (req: Request, res: Response) => {
     const { title, labels, isActive } = req.body;
 
     const file = req.file as any;
-    const image = file?.location;
+    // Image resolution for update, three cases:
+    //   - file uploaded        → use its URL (replace)
+    //   - empty `image` field  → "" sentinel → clear (service unsets it)
+    //   - field absent         → undefined  → leave unchanged
+    let image: string | undefined;
+    if (file?.location) image = file.location;
+    else if (req.body.image === "") image = "";
 
     const result = await updateGoal(String(id), {
       title: title !== undefined ? String(title) : undefined,

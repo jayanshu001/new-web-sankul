@@ -4,6 +4,8 @@ import { z } from "zod";
 import { Course } from "../../models/course/Course.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
+import { resolveLivePromo } from "../live-course/promo";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -15,6 +17,15 @@ const createCourseOrderSchema = z.object({
   // We deliberately key on this rather than (courseId, duration) because the
   // PackageCourseEbookPrice row is the single source of truth for the price.
   packageId: objectId,
+  // Optional delivery address (a CustomerAddress._id) for "With Materials"
+  // plans, which ship physical material to the buyer. Always optional at the
+  // schema level so existing callers are unaffected; when supplied it must be an
+  // address the customer owns. Stored on the subscription as customerShippingId,
+  // mirroring the admin create-subscription flow.
+  customerShippingId: objectId.optional(),
+  // Optional promo code. Re-validated server-side against THIS course and the
+  // Razorpay order charged for the reduced amount. Mirrors the live-course flow.
+  promocode: z.string().trim().min(1).optional(),
 });
 
 // POST /api/v1/client/payment/create-order/course
@@ -37,7 +48,18 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
       });
     }
 
-    const { packageId } = createCourseOrderSchema.parse(req.body);
+    const { packageId, customerShippingId, promocode } = createCourseOrderSchema.parse(req.body);
+
+    // Validate the delivery address (when supplied) belongs to this customer.
+    // Optional throughout — only checked if the FE sent one. Mirrors the admin
+    // subscription flow's ownership check.
+    if (customerShippingId) {
+      const addr = await CustomerAddress.findOne({ _id: customerShippingId, customerId }).select("_id");
+      if (!addr) {
+        logger.warn("createCourseOrderPayment address not owned", { traceId, customerId, customerShippingId });
+        return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
+      }
+    }
 
     const plan = await PackageCourseEbookPrice.findOne({ _id: packageId, status: true });
     if (!plan) { logger.warn("createCourseOrderPayment plan not found", { traceId, customerId, packageId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }
@@ -53,6 +75,35 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
     const course = await Course.findOne({ _id: plan.courseId, status: true });
     if (!course) { logger.warn("createCourseOrderPayment course not found", { traceId, customerId, courseId: plan.courseId }); return res.status(404).json({ success: false, message: "Course not found or inactive." }); }
 
+    // Resolve the promo code (if any) against THIS course and derive the amount
+    // to charge. Re-validated here — the /promocodes/apply preview is never
+    // trusted. Mirrors createLiveCourseOrderPayment.
+    let chargeAmount = plan.price;
+    let promocodeId: string | null = null;
+    let originalAmount: number | null = null;
+    let discountAmount: number | null = null;
+    if (promocode) {
+      const { result, error } = await resolveLivePromo(promocode, plan.price, {
+        type: "course",
+        id: String(plan.courseId),
+      });
+      if (error || !result) {
+        logger.warn("createCourseOrderPayment promo rejected", { traceId, customerId, promocode, error });
+        return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
+      }
+      if (result.finalAmount < 1) {
+        logger.warn("createCourseOrderPayment promo zeroes amount", { traceId, customerId, promocode });
+        return res.status(400).json({
+          success: false,
+          message: "This promo code reduces the price below the minimum payable amount. Please contact support.",
+        });
+      }
+      chargeAmount = result.finalAmount;
+      promocodeId = String(result.promo._id);
+      originalAmount = result.originalAmount;
+      discountAmount = result.discountAmount;
+    }
+
     // Re-purchasing an active plan is an "Extend Validity" action, NOT a
     // double-buy error. We create a fresh pending row regardless; /payment/verify
     // folds the purchased window onto the existing active subscription (extending
@@ -64,15 +115,23 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
       customerId,
       courseId: plan.courseId,
       packageId: plan._id,
-      paidAmount: plan.price,
+      promocodeId,
+      originalAmount,
+      discountAmount,
+      paidAmount: chargeAmount,
       paymentStatus: "pending",
       status: true,
+      // Stamp the material/shipping intent from the chosen plan + request. Both
+      // optional: a "Without Materials" plan stays withMaterial:false and a
+      // null address, unchanged from before.
+      withMaterial: !!plan.withMaterial,
+      customerShippingId: customerShippingId ?? null,
     });
 
     const receiptId = `course-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const rzpOrder = await createRazorpayOrder(rp, {
-      amount: Math.round(plan.price * 100), // paise
+      amount: Math.round(chargeAmount * 100), // paise
       currency: "INR",
       receipt: receiptId,
       notes: {
@@ -81,20 +140,22 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
         courseId: String(plan.courseId),
         packageId: String(plan._id),
         customerId: String(customerId),
+        ...(promocodeId ? { promocodeId } : {}),
       },
     });
 
     subscription.razorpayOrderId = rzpOrder.id;
     await subscription.save();
 
-    logger.info("createCourseOrderPayment success", { traceId, customerId, subscriptionId: subscription._id, razorpayOrderId: rzpOrder.id, amount: plan.price });
+    logger.info("createCourseOrderPayment success", { traceId, customerId, subscriptionId: subscription._id, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
     return res.status(201).json({
       success: true,
       data: {
         subscriptionId: subscription._id,
         receiptId,
         razorpay: razorpayResponseFor(rzpOrder),
-        amountInRupees: plan.price,
+        // Amount actually charged (post-discount); plan.price is the pre-discount MRP.
+        amountInRupees: chargeAmount,
         course: {
           _id: course._id,
           name: course.name,
@@ -104,6 +165,9 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
           duration: plan.duration,
           price: plan.price,
         },
+        promo: promocodeId
+          ? { promocodeId, originalAmount, discountAmount, finalAmount: chargeAmount }
+          : null,
       },
     });
   } catch (e: any) {

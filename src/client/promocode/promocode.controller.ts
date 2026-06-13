@@ -2,6 +2,10 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { PromoCode } from "../../models/course/PromoCode.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
+import { Package } from "../../models/course/Package.model";
+import { Course } from "../../models/course/Course.model";
+import { Ebook } from "../../models/ebook/Ebook.model";
+import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { Customer } from "../../models/customer/Customer.model";
 import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
 import { applyPromocodeSchema } from "./promocode.validation";
@@ -10,6 +14,32 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
 const isObjectId = (v?: string | null) => !!v && mongoose.Types.ObjectId.isValid(v);
+
+// Resolve what a given id ACTUALLY is, independent of which request field it
+// arrived in. The FE sends a different entity each time (package / course /
+// ebook) and historically had to file it under the exactly-matching field —
+// a `package` id sent as `course` produced a misleading "not applicable"
+// error. We instead detect the type from the id itself so the field name no
+// longer has to be correct. Checks the cheapest/most-common first.
+//
+// Returns the detected entity type + the id, or null if the id matches no
+// package/course/ebook. (liveCourse and test-series promos use their own
+// planId-based endpoints — /payment/apply-promo/* — and are out of scope here.)
+async function detectEntity(
+  id: string
+): Promise<{ type: "package" | "course" | "ebook"; id: string } | null> {
+  if (!isObjectId(id)) return null;
+  const oid = new mongoose.Types.ObjectId(id);
+  const [pkg, course, ebook] = await Promise.all([
+    Package.exists({ _id: oid }),
+    Course.exists({ _id: oid }),
+    Ebook.exists({ _id: oid }),
+  ]);
+  if (pkg) return { type: "package", id };
+  if (course) return { type: "course", id };
+  if (ebook) return { type: "ebook", id };
+  return null;
+}
 
 type PlanDoc = any;
 
@@ -68,32 +98,67 @@ export const applyPromocode = async (req: Request, res: Response) => {
   try {
     const parsed = applyPromocodeSchema.parse(req.body);
     const { promocode } = parsed;
-    const packageId = parsed.package || null;
-    const courseId = parsed.course || null;
-    const ebookId = parsed.ebook || null;
 
-    const planFilter: any = { status: true };
-    let cartType: "package" | "course" | null = null;
-    let cartId: string | null = null;
-    if (isObjectId(packageId)) {
-      planFilter.packageId = packageId;
-      cartType = "package";
-      cartId = packageId!;
-    } else if (isObjectId(courseId)) {
-      planFilter.courseId = courseId;
-      cartType = "course";
-      cartId = courseId!;
-    } else if (isObjectId(ebookId)) {
-      planFilter.ebookId = ebookId;
-      // Ebooks are not part of the new appliesTo model — promocode path will
-      // reject, only the referral-code path can discount ebook plans.
-    } else {
+    // Preferred unified `targetId`, then the legacy per-type fields. We don't
+    // trust the field name OR the supplied `targetType` — the id's true entity
+    // type is detected below, so a mislabelled target can't break the apply.
+    const rawId =
+      parsed.targetId || parsed.package || parsed.course || parsed.ebook || null;
+    if (!isObjectId(rawId)) {
       logger.warn("applyPromocode invalid selection", { traceId, customerId: userId, promocode });
       return res.status(400).json({ success: false, message: "Invalid course selection!" });
     }
 
+    // liveCourse / testSeries discounts are previewed via their own dedicated,
+    // plan-based endpoints. If the FE explicitly targets one of those, point it
+    // there with a clear message instead of a confusing "not applicable" (this
+    // endpoint only knows the package/course/ebook appliesTo model).
+    if (parsed.targetType === "liveCourse" || parsed.targetType === "testSeries") {
+      const endpoint =
+        parsed.targetType === "liveCourse"
+          ? "/payment/apply-promo/live-course"
+          : "/payment/apply-promo/test-series";
+      logger.warn("applyPromocode wrong endpoint for target", { traceId, customerId: userId, promocode, targetType: parsed.targetType });
+      return res.status(400).json({
+        success: false,
+        message: `Use ${endpoint} to apply a promo code to a ${parsed.targetType}.`,
+      });
+    }
+
+    const entity = await detectEntity(rawId!);
+    if (!entity) {
+      logger.warn("applyPromocode id matches no entity", { traceId, customerId: userId, promocode, rawId });
+      return res.status(404).json({
+        success: false,
+        message: "No package, course, or ebook found for the selected item.",
+      });
+    }
+
+    const planFilter: any = { status: true };
+    // cartType drives the appliesTo coverage check. Ebook is now part of the
+    // appliesTo model, but its plans live in a SEPARATE collection (EbookPrice),
+    // so it's loaded on its own path below rather than via planFilter.
+    let cartType: "package" | "course" | "ebook" | null = null;
+    let cartId: string | null = null;
+    if (entity.type === "package") {
+      planFilter.packageId = entity.id;
+      cartType = "package";
+      cartId = entity.id;
+    } else if (entity.type === "course") {
+      planFilter.courseId = entity.id;
+      cartType = "course";
+      cartId = entity.id;
+    } else {
+      // ebook — plans come from EbookPrice (loaded below), and the promocode
+      // path now covers ebooks via appliesTo.
+      cartType = "ebook";
+      cartId = entity.id;
+    }
+
     const pricingPlans: PlanDoc[] = (
-      await PackageCourseEbookPrice.find(planFilter).sort({ duration: 1 }).lean()
+      entity.type === "ebook"
+        ? await EbookPrice.find({ ebookId: entity.id, status: true }).sort({ duration: 1 }).lean()
+        : await PackageCourseEbookPrice.find(planFilter).sort({ duration: 1 }).lean()
     ).map((p) => ({ ...p }));
 
     if (!pricingPlans.length) { logger.warn("applyPromocode no pricing plans", { traceId, customerId: userId, cartType, cartId }); return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." }); }
@@ -153,7 +218,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
         success: true,
         data: {
           promocode: referralCustomer.referralCode,
-          key: packageId ? "package" : courseId ? "course" : "ebook",
+          key: entity.type,
           plans: splitByMaterial(pricingPlans),
         },
       });

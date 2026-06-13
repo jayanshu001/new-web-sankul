@@ -5,7 +5,13 @@ import { ExamType } from "../../models/enums";
 
 export const createCategorySchema = z.object({
   name: z.string().min(1).max(255),
-  image: z.string().max(500).optional(),
+  // URL (set), absence (unchanged), or null / "" (clear). On update the
+  // controller turns a null/empty value into a $unset so the FE can remove the
+  // category image via JSON `image: null` or an empty multipart field.
+  image: z.preprocess(
+    (v) => (v === "" ? null : v),
+    z.string().max(500).nullable().optional()
+  ),
   parentId: z.string().nullable().optional(),
   childCategoryIds: z.array(z.string()).optional(),
   orderBy: z.coerce.number().int().optional(),
@@ -29,7 +35,13 @@ export const createExamSchema = z
     negativeMarks: z.coerce.number(),
     startAt: z.coerce.date().optional(),
     endAt: z.coerce.date().optional(),
-    solutionPdfUrl: z.string().max(500).optional(),
+    // Accept a URL (set), absence (leave unchanged), or null / "" (clear). The
+    // controller translates a null/empty value into a $unset so the FE can
+    // remove an attached solution PDF via JSON `solutionPdfUrl: null`.
+    solutionPdfUrl: z.preprocess(
+      (v) => (v === "" ? null : v),
+      z.string().max(500).nullable().optional()
+    ),
     sendPush: z.coerce.boolean().optional(),
     isPaid: z.coerce.boolean().optional(),
     status: z.coerce.boolean().optional(),

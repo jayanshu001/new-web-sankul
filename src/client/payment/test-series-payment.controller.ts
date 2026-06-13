@@ -48,10 +48,10 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
       });
     }
 
-    // Test series isn't in the appliesTo enum yet — promocodes won't match.
-    // Until the enum is extended, this branch returns "not valid for this item".
+    // Test series is now a first-class appliesTo type, so a promo created with
+    // appliesTo.type:"testSeries" matches here.
     const { result, error } = await resolveLivePromo(promocode, plan.price, {
-      type: "liveCourse",
+      type: "testSeries",
       id: String(plan.testSeriesId),
     });
     if (error || !result) {
@@ -131,7 +131,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
     let promocodeId: string | null = null;
     if (promocode) {
       const { result, error } = await resolveLivePromo(promocode, plan.price, {
-        type: "liveCourse",
+        type: "testSeries",
         id: String(plan.testSeriesId),
       });
       if (error || !result) {

@@ -8,6 +8,7 @@ import {
   PackageCourseEbookOrderType,
   PaymentMethod,
 } from "../../models/enums";
+import { resolveLivePromo } from "../live-course/promo";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -17,6 +18,10 @@ const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 const createEbookOrderSchema = z.object({
   // EbookPrice._id — the plan/duration row drives both price and access window.
   planId: objectId,
+  // Optional promo code. Re-validated server-side against THIS ebook (ebook is
+  // now part of the promo appliesTo model) and the Razorpay order charged for
+  // the reduced amount. Mirrors the live-course / package / course flows.
+  promocode: z.string().trim().min(1).optional(),
 });
 
 // POST /api/v1/client/payment/create-order/ebook
@@ -39,7 +44,7 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
       });
     }
 
-    const { planId } = createEbookOrderSchema.parse(req.body);
+    const { planId, promocode } = createEbookOrderSchema.parse(req.body);
 
     const plan = await EbookPrice.findOne({ _id: planId, status: true });
     if (!plan) { logger.warn("createEbookOrderPayment plan not found", { traceId, customerId, planId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }
@@ -54,6 +59,34 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
     const ebook = await Ebook.findOne({ _id: plan.ebookId, status: true });
     if (!ebook) { logger.warn("createEbookOrderPayment ebook not found", { traceId, customerId, ebookId: plan.ebookId }); return res.status(404).json({ success: false, message: "Ebook not found or inactive." }); }
 
+    // Resolve the promo code (if any) against THIS ebook and derive the amount to
+    // charge. Re-validated here — the /promocodes/apply preview is never trusted.
+    let chargeAmount = plan.price;
+    let promocodeId: string | null = null;
+    let originalAmount: number | null = null;
+    let discountAmount: number | null = null;
+    if (promocode) {
+      const { result, error } = await resolveLivePromo(promocode, plan.price, {
+        type: "ebook",
+        id: String(plan.ebookId),
+      });
+      if (error || !result) {
+        logger.warn("createEbookOrderPayment promo rejected", { traceId, customerId, promocode, error });
+        return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
+      }
+      if (result.finalAmount < 1) {
+        logger.warn("createEbookOrderPayment promo zeroes amount", { traceId, customerId, promocode });
+        return res.status(400).json({
+          success: false,
+          message: "This promo code reduces the price below the minimum payable amount. Please contact support.",
+        });
+      }
+      chargeAmount = result.finalAmount;
+      promocodeId = String(result.promo._id);
+      originalAmount = result.originalAmount;
+      discountAmount = result.discountAmount;
+    }
+
     // Re-purchasing an active ebook is an "Extend Validity" action, NOT a
     // double-buy error. We create a fresh pending order regardless; /payment/verify
     // (and the webhook) folds the purchased days onto the existing active
@@ -65,14 +98,17 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
       planId: plan._id,
       paymentMethod: PaymentMethod.RAZORPAY,
       orderType: PackageCourseEbookOrderType.PURCHASE,
-      orderPrice: plan.price,
+      orderPrice: chargeAmount,
+      promocodeId,
+      originalAmount,
+      discountAmount,
       status: PackageCourseEbookOrderStatus.PENDING,
     });
 
     const receiptId = `ebook-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const rzpOrder = await createRazorpayOrder(rp, {
-      amount: Math.round(plan.price * 100), // paise
+      amount: Math.round(chargeAmount * 100), // paise
       currency: "INR",
       receipt: receiptId,
       notes: {
@@ -81,20 +117,22 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
         ebookId: String(plan.ebookId),
         planId: String(plan._id),
         customerId: String(customerId),
+        ...(promocodeId ? { promocodeId } : {}),
       },
     });
 
     order.razorpayOrderId = rzpOrder.id;
     await order.save();
 
-    logger.info("createEbookOrderPayment success", { traceId, customerId, orderId: order._id, razorpayOrderId: rzpOrder.id, amount: plan.price });
+    logger.info("createEbookOrderPayment success", { traceId, customerId, orderId: order._id, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
     return res.status(201).json({
       success: true,
       data: {
         ebookOrderId: order._id,
         receiptId,
         razorpay: razorpayResponseFor(rzpOrder),
-        amountInRupees: plan.price,
+        // Amount actually charged (post-discount); plan.price is the pre-discount MRP.
+        amountInRupees: chargeAmount,
         ebook: {
           _id: ebook._id,
           name: (ebook as any).name,
@@ -104,6 +142,9 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
           duration: plan.duration,
           price: plan.price,
         },
+        promo: promocodeId
+          ? { promocodeId, originalAmount, discountAmount, finalAmount: chargeAmount }
+          : null,
       },
     });
   } catch (e: any) {

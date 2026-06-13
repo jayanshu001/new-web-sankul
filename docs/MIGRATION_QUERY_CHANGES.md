@@ -15,6 +15,297 @@
 
 ---
 
+## 2026-06-13 — Standard search/page/limit added to remaining client list endpoints
+
+**Files:** new `src/utils/listQuery.ts`; `src/client/address/address.controller.ts`
+(getMyAddresses, getStates, listCities, listCentersByCity, getEducations);
+`src/client/book/book.controller.ts` (listBooks);
+`src/client/course/course.controller.ts` (listCourseCategoriesHandler);
+`src/client/exam/exam.controller.ts` (listCategories);
+`src/client/examCountdown/examCountdown.controller.ts` (listCategories);
+`src/client/ebook/ebook.controller.ts` (listEbooks, listMySubscriptions);
+`src/client/folder/folder.controller.ts` (folder list);
+`src/client/offline/offline.controller.ts` (listCities).
+
+**Query-shape:** 13 flat-list client endpoints that lacked search and/or
+pagination now accept the project-standard `search`, `page`, `limit` via a new
+shared `parseListQuery` helper (page default 1; limit default 20, cap 100; search
+trimmed → regex on the entity's name/title via buildRegexCondition). Each now
+runs a `countDocuments(filter)` alongside the paged `find` and returns a
+**backward-compatible** `pagination: { total, page, limit, totalPages }` sibling —
+the existing `data` shape is unchanged (e.g. `data:{ebooks:[]}`, `data:{cartId,
+books:[]}`), so current FE reads keep working; `pagination` is additive.
+
+Grouped/drill-down/hierarchical list endpoints (catalog videos/materials/tests,
+category-children, live-course recordings, lecture-notes saved-materials, etc.)
+were deliberately LEFT ALONE to avoid breaking their response contracts.
+
+**QA:** confirm each endpoint still returns its original `data` shape when called
+with no params; confirm `?search=&page=&limit=` filter/paginate correctly. No
+schema/index change.
+
+---
+
+## 2026-06-13 — TestSeries added to the promo appliesTo model (admin picker + checkout)
+
+**Files:** `src/models/course/PromoCode.model.ts`,
+`src/admin/promocode/promocode.validation.ts`,
+`src/admin/promocode/promocode.controller.ts`,
+`src/client/payment/test-series-payment.controller.ts`,
+`src/client/testSeries/testSeries.controller.ts`.
+
+**`appliesTo.type` enum gains `testSeries`** (now full set:
+package|course|liveCourse|ebook|testSeries). Updated every site: PromoCode type +
+schema enum; admin `APPLIES_TO_TYPES`; `APPLIES_TO_MODEL` (+TestSeries);
+`PLAN_KIND_BY_TYPE`; `getPromocodePlans` requested-list (now derived from one
+ALL_TYPES list).
+
+**Admin picker** `GET /admin/promocodes/plans?type=testSeries`:
+`loadPlansForEntities` testSeries branch loads `TestSeriesPrice`
+(`ws_test_series_prices`) by `testSeriesId`, mapping `durationDays → duration`.
+TestSeries' display field is `title` (not `name`) — search/select/output
+normalise `title → name` so the grouped shape is uniform. Same for the detail
+echo `populateAppliesTo` (selects `title thumbnail`, returns `{_id,name,image}`).
+
+**Checkout — removed the `liveCourse` hack:** test-series promo resolution
+(create-order, the preview endpoint, and testSeries previewCheckout) previously
+passed `resolveLivePromo({type:"liveCourse", id:testSeriesId})`. All three now use
+`type:"testSeries"`. **Safe:** 0 existing test-series promos in DB (verified), so
+no migration. **Live check:** picker returns 3 test-series entities with plans in
+the exact `{examTypes,entities[{id,name,type,plans[]}]}` shape, durationDays→duration.
+
+---
+
+## 2026-06-13 — Ebook added to the promo appliesTo model + ebook create-order redemption
+
+**Files:** `src/models/course/PromoCode.model.ts`,
+`src/admin/promocode/promocode.validation.ts`,
+`src/admin/promocode/promocode.controller.ts`,
+`src/client/promocode/promocode.controller.ts`,
+`src/client/payment/ebook-payment.controller.ts`,
+`src/models/ebook/EbookOrder.model.ts`.
+
+**Cross-cutting change — `appliesTo.type` enum gains `ebook`** (was
+`package|course|liveCourse`). Updated EVERY definition site: PromoCode type +
+schema enum; admin `APPLIES_TO_TYPES`; admin `APPLIES_TO_MODEL` (+Ebook) and
+`PLAN_KIND_BY_TYPE`; admin `getPromocodePlans` requested-list;
+`loadPlansForEntities` ebook branch loads from **`ws_ebook_prices` (EbookPrice)**,
+NOT `ws_package_course_ebook_prices` (which holds ZERO ebook rows — verified).
+
+**Apply preview** (`/client/promocodes/apply`): ebook now runs the promocode path
+(previously referral-only). Ebook plans loaded from `EbookPrice`; `cartType`
+"ebook" drives `promoCovers`.
+
+**Create-order** (`/payment/create-order/ebook`): accepts optional `promocode`,
+re-validates via `resolveLivePromo({type:'ebook', id:ebookId})`, charges the
+discounted amount. `EbookOrder` gains `promocodeId` + `originalAmount` +
+`discountAmount` (default null; `orderPrice` = charged amount). Response gains
+`promo`.
+
+**QA:** admin can now create a promo with `appliesTo.type:"ebook"`; 0 such promos
+exist yet, so create one to test end-to-end. Confirm package/course/liveCourse
+promo creation + apply still work (enum widened, not changed).
+
+---
+
+## 2026-06-13 — Promo redemption added to course + package create-order
+
+**Files:** `src/client/payment/package-payment.controller.ts`,
+`src/client/payment/course-payment.controller.ts`,
+`src/models/customer/PackageCourseSubscription.model.ts`.
+
+**Bug:** `/payment/create-order/package` and `/course` IGNORED promo codes —
+they always charged `plan.price`, so an applied promo never reduced the Razorpay
+amount. (`/promocodes/apply` is preview-only; the order must re-apply.) live-course
++ test-series already did this; package/course/ebook did not.
+
+**Fix:** package + course create-order now accept an optional `promocode`,
+re-validate it server-side via `resolveLivePromo({type:'package'|'course', id})`
+(the preview is never trusted), and build the Razorpay order + subscription
+`paidAmount` from the discounted amount. Sub-₹1 results are rejected (Razorpay
+minimum).
+
+**Schema:** `PackageCourseSubscription` gains `originalAmount` + `discountAmount`
+(Number, default null) for the promo money-trail (it already had `promocodeId` +
+`paidAmount`). No backfill — nulls cover existing rows. Response gains a `promo`
+object when a code is applied; `amountInRupees` is now the CHARGED (post-discount)
+amount, `plan.price` is the pre-discount MRP.
+
+**Ebook — now DONE too (separate entry below).** test-series already applied promos.
+
+**Live check:** plan `…7fbe` (₹1500) + `WEBSANKUL70` → Razorpay ₹1500 → ₹450.
+
+---
+
+## 2026-06-13 — Promocode apply: unified { targetType, targetId } contract + auto-detect
+
+**Files:** `src/client/promocode/promocode.controller.ts`,
+`src/client/promocode/promocode.validation.ts`.
+
+**Contract:** `POST /client/promocodes/apply` now accepts a unified, self-describing
+pair `{ targetType: package|course|ebook|liveCourse|testSeries, targetId }` —
+the FE sends the same shape for every entity. Legacy per-type fields
+(`package`/`course`/`ebook`) still accepted as a deprecated fallback. `targetType`
+`liveCourse`/`testSeries` return a 400 redirecting to the dedicated
+`/payment/apply-promo/*` endpoints (those use a different plan-based model).
+
+**Behaviour/query-shape:** `POST /client/promocodes/apply` no longer trusts which
+request field (`package` / `course` / `ebook`) the id arrived in. A new
+`detectEntity(id)` resolves the id's REAL type via `Package.exists` /
+`Course.exists` / `Ebook.exists` (parallel), then drives the plan lookup
+(`PackageCourseEbookPrice` by packageId/courseId/ebookId) and the `appliesTo`
+coverage check. Previously a correct id sent under the wrong field (e.g. a
+package id in `course`) produced `find({courseId: <packageId>})` → 0 plans →
+misleading "This promocode is not applicable for this item." Now the field name
+is irrelevant. New 404 message when the id matches no package/course/ebook. New
+reads: `ws_packages`, `ws_courses`, `ws_ebooks` (existence checks) per apply
+call. liveCourse + test-series promos are unchanged (separate planId-based
+`/payment/apply-promo/*` endpoints). **Live check:** the reported failing payload
+(`course: <a package id>`) now resolves to the package and applies 70%.
+
+---
+
+## 2026-06-13 — Profile dashboard subscription count now matches My Subscriptions
+
+**Files:** `src/client/profile/dashboard.controller.ts`.
+
+**Query-shape:** `getProfileDashboardCounts` (`GET /client/profile/dashboard`)
+previously computed `activePlans` as a raw
+`PackageCourseSubscription.countDocuments({ status, paymentStatus:'verified' })`
+— **course/package only, no `endAt` filter, no dedup**. It disagreed with the
+My Subscriptions screen (which is active-only + deduped + spans three types).
+
+Now a new `countActiveSubscriptions(cid, now)` helper applies the SAME rules as
+my-subscriptions.controller.ts:
+- course+package: `paymentStatus:'verified'` + `status:true` + `endAt>now`,
+  deduped by `courseId`/`targetPackageId` → the `course` bucket.
+- test_series (`ws_test_series_subscriptions`): `status:true` + `endAt>now`,
+  dedup by `testSeriesId`.
+- ebook (`ws_ebook_subscriptions`): `status:true` + `endAt>now`, dedup by
+  `ebookId`.
+
+`activePlans` is now the correct deduped active TOTAL across all three types
+(headline number kept for backward-compat). Response gains
+`subscriptionsByType: { course, test_series, ebook }` for per-tab badges. New
+reads hit `ws_test_series_subscriptions` + `ws_ebook_subscriptions`. No schema
+change. **Live check:** a sample customer went from old `4` → correct `5`
+(old count missed an active ebook sub). Keep in lockstep with my-subscriptions.
+
+---
+
+## 2026-06-13 — Clearable image/PDF fields on exam, exam-category, goal
+
+**Files:** `src/admin/exam/exam.validation.ts`, `src/admin/exam/exam.controller.ts`,
+`src/admin/goal/goal.admin.controller.ts`, `src/admin/goal/goal.admin.service.ts`.
+
+**Validation/write-shape (no schema/index change):**
+- `updateExam` (`PUT /admin/exams/:id`): `solutionPdfUrl` now accepts
+  `null`/`""` → translated to `$unset` (was: string/file only, null rejected).
+  Old S3 file deleted best-effort. `current` select now also reads
+  `solutionPdfUrl`.
+- `updateCategory` (`PUT /admin/exams/categories/:id`): `image` now accepts
+  `null`/`""` (JSON or empty multipart) → `$unset` + S3 cleanup.
+- `updateGoal` (`PUT /admin/goals/:id`): empty multipart `image` field now
+  clears the icon (stored `null`, old S3 deleted); previously only a file upload
+  was honoured, so clearing was impossible.
+
+Stored documents unchanged in shape — `solutionPdfUrl` / `image` simply become
+absent/null when cleared. No backfill. **QA:** confirm a normal update WITHOUT
+these fields still leaves them untouched (regression risk: an over-eager unset).
+Items "filter exams by status" and "clear ebook demoUrl/bookUrl" needed NO change
+— already supported. See `docs/BE_CLEAR_FIELDS_CHECKLIST.md`.
+
+---
+
+## 2026-06-13 — my-subscriptions gains `type` param (course | test_series | ebook)
+
+**Files:** `src/client/my-subscriptions/my-subscriptions.controller.ts`.
+
+**Query-shape:** `GET /client/my-subscriptions` now takes an optional `type`
+(default `course`). It selects the data source:
+- `course` → `ws_package_course_subscriptions` (course + package, verified +
+  active + dedup — unchanged from before; this is the default so old no-`type`
+  callers are unaffected).
+- `test_series` → `ws_test_series_subscriptions` (active = `status:true` +
+  `endAt > now`; **no** paymentStatus column).
+- `ebook` → `ws_ebook_subscriptions` (same active rule; no paymentStatus column).
+
+All three dedup to the furthest-out `endAt` per target and return one shared card
+envelope; the `action` object gained `testSeriesId` + `ebookId` keys (always
+present, null when not applicable). New reads hit `ws_test_series_subscriptions`
+and `ws_ebook_subscriptions` (+ `ws_test_series`, `ws_ebooks` for display
+fields). No schema/index change — these collections already exist and are
+indexed on `{customerId, status, endAt}` / `{customerId}` + `{endAt}`.
+
+**QA:** regress the no-`type` call (must equal old course+package output);
+verify `type=test_series` and `type=ebook` return active rows; verify an invalid
+`type` returns 400.
+
+---
+
+## 2026-06-13 — Optional delivery address on create-order (With Materials)
+
+**Files:** `src/models/customer/LiveCourseSubscription.model.ts` (new fields);
+`src/client/payment/course-payment.controller.ts`,
+`src/client/payment/package-payment.controller.ts`,
+`src/client/payment/live-course-payment.controller.ts`.
+
+**Schema:** `LiveCourseSubscription` gains two **optional** fields —
+`withMaterial: Boolean (default false)` and `customerShippingId: ObjectId
+(ref CustomerShipping, default null, stores a CustomerAddress._id)`. Mirrors the
+fields already present on `PackageCourseSubscription`. No backfill needed —
+defaults cover existing rows. Schema is `strict:"throw"`, so the fields had to be
+declared before the controllers could write them.
+
+**Query-shape:** all three client create-order endpoints
+(`/create-order/course|package|live-course`) now accept an **optional**
+`customerShippingId`. When present they run an ownership check —
+`CustomerAddress.findOne({ _id: customerShippingId, customerId })` — and reject
+with 400 if not owned. The address + `withMaterial` are persisted on the created
+subscription. course/package derive `withMaterial` from the chosen plan
+(`PackageCourseEbookPrice.withMaterial`); live-course takes it from the request
+(LiveCoursePlan has no material flag). Fully backward-compatible: callers that
+omit `customerShippingId` are unaffected.
+
+**QA:** verify existing create-order calls (no `customerShippingId`) still
+succeed; verify a foreign address id is rejected; confirm the new live-course
+fields persist. Behaviour mirrors `src/admin/subscription/subscription.controller.ts`.
+
+---
+
+## 2026-06-13 — Lecture-progress reachability now uses catalog tree model (fixes false "not part of scoped <product>")
+
+**Files:** `src/client/course/scopeReachableCategories.ts` (new);
+`src/client/course/progress.controller.ts` (`reportLectureProgress`).
+
+**Problem:** A video linked to **more than one** course/package/live-course was
+listed by the catalog yet rejected by the heartbeat with
+`"Video is not part of the scoped <product>."` (HTTP 400). Two code paths
+answered "is this video in this product?" using **different tree
+representations** that aren't always in sync:
+- Catalog (`free.controller`, `catalog.controller`): walks **downward** off each
+  linked root via `VideoCategory.childCategoryIds` (`collectCategoryTreeIds`).
+- Progress controller: walked **upward** from the video's leaf via
+  `VideoCategoryRelation` (`child→parent`) rows. The second product's linkage,
+  typically expressed only through nested `childCategoryIds`, was invisible.
+
+**Change (query-shape):** `reportLectureProgress` no longer builds `ancestorIds`
+from `VideoCategoryRelation`. It now calls the new
+`resolveScopedReachableVideoCategoryIds(scope.kind, scopeOid)`, which gathers the
+product's linked roots (course/liveCourse: `videoCategoryId` + categories tagged
+with `courseId`/`liveCourseId`; package: `specificSubjects[].category` + both
+endpoints of each `PackageVideoCategoryRelation`→`VideoCategoryRelation`) and
+expands each downward via `collectCategoryTreeIds`. Reachability is now a single
+leaf-membership test: `reachableSet.has(video.videoCategoryId)`. Free videos
+remain exempt. Invariant restored: **if a video is listed under a product, its
+progress is accepted there.** Applies to all three scope kinds.
+
+**QA:** regress lecture-progress POST for videos shared across multiple
+products, and for videos linked only via `childCategoryIds` (no relation row at
+the leaf's direct parent). No schema/index change.
+
+---
+
 ## 2026-06-12 — OfflineCity gains `stateId`; cities filterable by state
 
 **Files:** `src/models/offline/OfflineCity.model.ts`;

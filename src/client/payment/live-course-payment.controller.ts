@@ -3,6 +3,7 @@ import { z } from "zod";
 import { LiveCourse } from "../../models/course/LiveCourse.model";
 import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
+import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { resolveLivePromo } from "../live-course/promo";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
@@ -16,6 +17,13 @@ const createOrderSchema = z.object({
   // Optional. When present, a promo-level discount is applied to the plan
   // price and the Razorpay order is created for the reduced amount.
   promocode: z.string().trim().min(1).optional(),
+  // Optional "With Materials" support. `customerShippingId` is a delivery
+  // address (CustomerAddress._id), validated for ownership only when sent;
+  // `withMaterial` marks the order as shipping physical material. Both optional
+  // so existing callers are unaffected. (LiveCoursePlan carries no material
+  // flag, so withMaterial comes from the request rather than the plan.)
+  withMaterial: z.boolean().optional(),
+  customerShippingId: objectId.optional(),
 });
 
 const applyPromoSchema = z.object({
@@ -98,7 +106,15 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       });
     }
 
-    const { planId, promocode } = createOrderSchema.parse(req.body);
+    const { planId, promocode, withMaterial, customerShippingId } = createOrderSchema.parse(req.body);
+
+    if (customerShippingId) {
+      const addr = await CustomerAddress.findOne({ _id: customerShippingId, customerId }).select("_id");
+      if (!addr) {
+        logger.warn("createLiveCourseOrderPayment address not owned", { traceId, customerId, customerShippingId });
+        return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
+      }
+    }
 
     const plan = await LiveCoursePlan.findOne({ _id: planId, status: true });
     if (!plan) { logger.warn("createLiveCourseOrderPayment plan not found", { traceId, customerId, planId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }
@@ -161,6 +177,8 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       paidAmount: chargeAmount,
       paymentStatus: "pending",
       status: true,
+      withMaterial: !!withMaterial,
+      customerShippingId: customerShippingId ?? null,
     });
 
     const receiptId = `live-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;

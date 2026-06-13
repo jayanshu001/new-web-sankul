@@ -5,7 +5,7 @@
 
 Two endpoints:
 - `GET  /api/v1/client/promocodes` — list active public promocodes (for a "available offers" screen).
-- `POST /api/v1/client/promocodes/apply` — preview the discounted plan prices for a specific package/course/ebook before checkout. No state is changed; this is a price-preview call.
+- `POST /api/v1/client/promocodes/apply` — preview the discounted plan prices before checkout. Send a unified `{ targetType, targetId }` pair (see Request). No state is changed; this is a price-preview call.
 
 ## 1. List active promocodes
 `GET /api/v1/client/promocodes`
@@ -53,11 +53,36 @@ For every pricing plan the promo covers:
 Referral codes are unaffected — they continue to use `ReferralProgram.referralDiscount`.
 
 ## Request
+
+**Preferred — one unified, self-describing pair for every entity:**
 ```json
 {
   "promocode": "WELCOME10",
-  "package": "<packageId>"   // or "course": "<courseId>"  or "ebook": "<ebookId>"
+  "targetType": "package",      // "package" | "course" | "ebook"
+  "targetId": "<entityId>"
 }
+```
+
+Send the same shape no matter what's in the cart — only `targetType` and
+`targetId` change. The backend **detects the entity's real type from the id**, so
+even a wrong `targetType` (or a misfiled legacy field) still resolves correctly;
+`targetType` is only a hint.
+
+Promo codes now apply to **package, course, AND ebook** (ebook was added to the
+`appliesTo` model). The discount flows through to the Razorpay amount at
+checkout — `/payment/create-order/{package,course,ebook}` each accept an optional
+`promocode` and charge the reduced amount.
+
+**`targetType: "liveCourse"` / `"testSeries"`** are not previewed here — this
+endpoint covers the package/course/ebook discount model. If you send one, you get
+a `400` pointing you to the right endpoint:
+`/payment/apply-promo/live-course` or `/payment/apply-promo/test-series`
+(both keyed by `planId`).
+
+**Legacy (still accepted, deprecated):** the old per-type fields work as a
+fallback —
+```json
+{ "promocode": "WELCOME10", "package": "<packageId>" }   // or "course" / "ebook"
 ```
 
 ## Response 200 (promo-level discount applied)

@@ -4,9 +4,13 @@ import { PromoCode } from "../../models/course/PromoCode.model";
 import { Package } from "../../models/course/Package.model";
 import { Course } from "../../models/course/Course.model";
 import { LiveCourse } from "../../models/course/LiveCourse.model";
+import { Ebook } from "../../models/ebook/Ebook.model";
+import { TestSeries } from "../../models/testSeries/TestSeries.model";
+import { TestSeriesPrice } from "../../models/testSeries/TestSeriesPrice.model";
 import { Goal } from "../../models/Goal.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
+import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import {
   PromotedPackageCourseEbook,
   PromotedPlanKind,
@@ -26,6 +30,8 @@ const APPLIES_TO_MODEL = {
   package: Package,
   course: Course,
   liveCourse: LiveCourse,
+  ebook: Ebook,
+  testSeries: TestSeries,
 } as const;
 
 const APPLIES_TO_POPULATE_FIELDS = "_id name image";
@@ -40,6 +46,8 @@ const PLAN_KIND_BY_TYPE: Record<AppliesToType, PromotedPlanKind> = {
   package: "price",
   course: "price",
   liveCourse: "livePlan",
+  ebook: "price",
+  testSeries: "price",
 };
 
 interface ResolvedPlan {
@@ -74,6 +82,44 @@ async function loadPlansForEntities(
       kind: "livePlan" as const,
     }));
   }
+  if (type === "ebook") {
+    // Ebook plans live in their OWN collection (EbookPrice / ws_ebook_prices),
+    // keyed by ebookId — NOT PackageCourseEbookPrice (which carries zero ebook
+    // rows). Mirror the live-course branch.
+    const rows = await EbookPrice.find({
+      ebookId: { $in: entityIds },
+      status: true,
+    })
+      .select("_id ebookId duration price")
+      .lean();
+    return rows.map((r: any) => ({
+      id: String(r._id),
+      entityId: String(r.ebookId),
+      duration: r.duration,
+      price: r.price,
+      withMaterial: false,
+      kind: "price" as const,
+    }));
+  }
+  if (type === "testSeries") {
+    // Test-series plans live in TestSeriesPrice (ws_test_series_prices), keyed by
+    // testSeriesId. Their duration field is `durationDays` — normalise to the
+    // common `duration` the picker UI expects.
+    const rows = await TestSeriesPrice.find({
+      testSeriesId: { $in: entityIds },
+      status: true,
+    })
+      .select("_id testSeriesId durationDays price")
+      .lean();
+    return rows.map((r: any) => ({
+      id: String(r._id),
+      entityId: String(r.testSeriesId),
+      duration: r.durationDays,
+      price: r.price,
+      withMaterial: false,
+      kind: "price" as const,
+    }));
+  }
   const key = type === "package" ? "packageId" : "courseId";
   const rows = await PackageCourseEbookPrice.find({
     [key]: { $in: entityIds },
@@ -103,13 +149,22 @@ async function assertAppliesToExists(appliesTo: { type: AppliesToType; ids: stri
 
 async function populateAppliesTo(doc: any) {
   if (!doc?.appliesTo?.ids?.length) return doc;
-  const Model = APPLIES_TO_MODEL[doc.appliesTo.type as AppliesToType] as any;
+  const type = doc.appliesTo.type as AppliesToType;
+  const Model = APPLIES_TO_MODEL[type] as any;
   if (!Model) return doc;
+  // TestSeries' display field is `title`; pull it and normalise to `name` so the
+  // populated shape (`{ _id, name, image }`) is identical across all types and
+  // the FE edit form rehydrates uniformly.
+  const selectFields = type === "testSeries" ? "_id title thumbnail" : APPLIES_TO_POPULATE_FIELDS;
   const records = await Model.find({ _id: { $in: doc.appliesTo.ids } })
-    .select(APPLIES_TO_POPULATE_FIELDS)
+    .select(selectFields)
     .lean();
+  const normalised =
+    type === "testSeries"
+      ? records.map((r: any) => ({ _id: r._id, name: r.title ?? null, image: r.thumbnail ?? null }))
+      : records;
   const obj = typeof doc.toObject === "function" ? doc.toObject() : doc;
-  obj.appliesTo = { type: doc.appliesTo.type, ids: records };
+  obj.appliesTo = { type: doc.appliesTo.type, ids: normalised };
   return obj;
 }
 
@@ -490,10 +545,10 @@ export const getPromocodePlans = async (req: Request, res: Response) => {
   try {
     const { type, examTypeId, search } = req.query as Record<string, string>;
 
-    const requested: AppliesToType[] =
-      type === "package" || type === "course" || type === "liveCourse"
-        ? [type]
-        : ["package", "course", "liveCourse"];
+    const ALL_TYPES: AppliesToType[] = ["package", "course", "liveCourse", "ebook", "testSeries"];
+    const requested: AppliesToType[] = ALL_TYPES.includes(type as AppliesToType)
+      ? [type as AppliesToType]
+      : ALL_TYPES;
 
     // Build the goalLabel -> name map (packages' exam types) once.
     const goals = await Goal.find({}).select("_id title labels").lean();
@@ -503,17 +558,27 @@ export const getPromocodePlans = async (req: Request, res: Response) => {
     }
 
     const nameCondition = buildRegexCondition(search);
-    const nameFilter = nameCondition ? { name: nameCondition } : {};
 
     const entities: any[] = [];
     const examTypes = new Map<string, string>();
 
     for (const t of requested) {
       const Model = APPLIES_TO_MODEL[t] as any;
+      // TestSeries names its display field `title`; every other entity uses
+      // `name`. Search + select the right field per type, then normalise to
+      // `name` in the output below so the picker shape stays uniform.
+      const nameField = t === "testSeries" ? "title" : "name";
+      const nameFilter = nameCondition ? { [nameField]: nameCondition } : {};
       // Package uses `active`; course/liveCourse use `status`. Don't over-filter:
       // load all matching the name filter so the picker can still show them.
       const docs = await Model.find(nameFilter)
-        .select(t === "package" ? "_id name goalLabelId" : "_id name")
+        .select(
+          t === "package"
+            ? "_id name goalLabelId"
+            : t === "testSeries"
+            ? "_id title"
+            : "_id name"
+        )
         .lean();
       if (!docs.length) continue;
 
@@ -539,7 +604,7 @@ export const getPromocodePlans = async (req: Request, res: Response) => {
 
         const entity: any = {
           id: String(d._id),
-          name: d.name,
+          name: t === "testSeries" ? d.title : d.name,
           type: t,
           plans: entityPlans.map((p) => ({
             id: p.id,

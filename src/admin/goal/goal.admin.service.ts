@@ -118,7 +118,7 @@ export const getGoals = async (query: {
 
 export const updateGoal = async (
   id: string,
-  data: { title?: string; labels?: any; image?: string; isActive?: boolean | string },
+  data: { title?: string; labels?: any; image?: string | null; isActive?: boolean | string },
   traceId?: string
 ) => {
   logger.info("updateGoal service invoked", { traceId, id, data });
@@ -133,13 +133,16 @@ export const updateGoal = async (
   if (data.labels !== undefined) goal.labels = parseLabels(data.labels) as any;
 
   if (data.image !== undefined) {
-    if (goal.image && goal.image !== data.image) {
-      // Trigger background cleanup of the old icon from DO Spaces
+    // "" is the clear sentinel from the controller (empty multipart field) →
+    // store null. A non-empty value replaces the image. Either way, delete the
+    // old icon from Spaces when it actually changed.
+    const nextImage = data.image === "" ? null : data.image;
+    if (goal.image && goal.image !== nextImage) {
       deleteFromS3FileUrl(goal.image).catch((err) =>
         logger.error("updateGoal service failed deleting old image", { traceId, id, error: (err as Error).message })
       );
     }
-    goal.image = data.image;
+    goal.image = nextImage as any;
   }
 
   if (data.isActive !== undefined) {

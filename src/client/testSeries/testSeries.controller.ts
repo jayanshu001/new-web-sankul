@@ -346,7 +346,7 @@ export const previewCheckout = async (req: Request, res: Response) => {
     let promoMeta: any = null;
     if (body.promocode) {
       const { result, error } = await resolveLivePromo(body.promocode, plan.price, {
-        type: "liveCourse",
+        type: "testSeries",
         id: String(plan.testSeriesId),
       });
       if (error || !result) { logger.warn("previewCheckout promo rejected", { traceId, customerId, promocode: body.promocode, error }); return failure(res, error ?? "Invalid promo code.", 400); }

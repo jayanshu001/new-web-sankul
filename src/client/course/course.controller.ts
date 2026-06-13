@@ -17,7 +17,8 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { computeDaysLeft } from "../../utils/planDuration";
-import { buildSearchFilter } from "../../utils/searchFilter";
+import { buildSearchFilter, buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 
 async function paginateCoursesWithPlans(
   baseFilters: any,
@@ -164,9 +165,14 @@ export const listCourseCategoriesHandler = async (req: Request, res: Response) =
   logger.info("listCourseCategoriesHandler invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const categories = await CourseSubjectCategory.find({ status: true })
-      .sort({ order: 1, title: 1 })
-      .lean();
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const filter: any = { status: true };
+    { const c = buildRegexCondition(search); if (c) filter.title = c; }
+
+    const [categories, total] = await Promise.all([
+      CourseSubjectCategory.find(filter).sort({ order: 1, title: 1 }).skip(skip).limit(limit).lean(),
+      CourseSubjectCategory.countDocuments(filter),
+    ]);
 
     const ids = categories.map((c: any) => c._id);
     const counts = ids.length
@@ -184,7 +190,7 @@ export const listCourseCategoriesHandler = async (req: Request, res: Response) =
     }));
 
     logger.info("listCourseCategoriesHandler success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (err) {
     logger.error("listCourseCategoriesHandler failed", {
       traceId,

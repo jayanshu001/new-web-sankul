@@ -17,6 +17,8 @@ import {
 } from "./exam.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 const norm = (s: string) => (s ?? "").trim().toLowerCase();
@@ -30,15 +32,22 @@ export const listCategories = async (req: Request, res: Response) => {
 
   try {
     const { parentId } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
     const filter: any = { status: true };
     if (!parentId || parentId === "root") filter.parentId = null;
     else if (isObjectId(parentId)) filter.parentId = parentId;
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
 
-    const categories = await ExamCategory.find(filter)
-      .select("_id name image parentId orderBy")
-      .sort({ orderBy: 1, name: 1 });
+    const [categories, total] = await Promise.all([
+      ExamCategory.find(filter)
+        .select("_id name image parentId orderBy")
+        .sort({ orderBy: 1, name: 1 })
+        .skip(skip)
+        .limit(limit),
+      ExamCategory.countDocuments(filter),
+    ]);
     logger.info("listCategories success", { traceId, count: categories.length });
-    return res.status(200).json({ success: true, data: categories });
+    return res.status(200).json({ success: true, data: categories, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listCategories failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

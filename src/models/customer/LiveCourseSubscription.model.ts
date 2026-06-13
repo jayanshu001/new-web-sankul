@@ -16,6 +16,13 @@ export interface ILiveCourseSubscription extends Document {
   discountAmount?: number | null;
   paidAmount?: number | null;
   paymentStatus: "pending" | "verified" | "failed";
+  // Physical-material fulfillment for "With Materials" plans. `withMaterial`
+  // marks the order as shipping material; `customerShippingId` is the delivery
+  // address (a CustomerAddress._id). Both optional — a normal online-only live
+  // course leaves withMaterial:false and a null address. Mirrors the equivalent
+  // fields on PackageCourseSubscription.
+  withMaterial?: boolean;
+  customerShippingId?: mongoose.Types.ObjectId | null;
   razorpayOrderId?: string | null;
   razorpayPaymentId?: string | null;
   paidAt?: Date | null;
@@ -40,6 +47,8 @@ const liveCourseSubscriptionSchema: Schema = new Schema(
       enum: ["pending", "verified", "failed"],
       default: "pending",
     },
+    withMaterial:       { type: Boolean, default: false },
+    customerShippingId: { type: Schema.Types.ObjectId, ref: "CustomerShipping", default: null },
     razorpayOrderId:   { type: String, default: null, maxlength: 100 },
     razorpayPaymentId: { type: String, default: null, maxlength: 100 },
     paidAt:            { type: Date,   default: null },

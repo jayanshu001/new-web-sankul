@@ -349,6 +349,19 @@ export const updateCategory = async (req: Request, res: Response) => {
     const { childCategoryIds, ...catFields } = data;
     const update: any = { ...catFields };
 
+    // Clearing the category image: null (or "" normalised to null by the schema)
+    // means "remove it". Translate to a $unset and best-effort delete the old S3
+    // object after the write. A real URL / uploaded file is set normally; an
+    // absent field leaves the existing image untouched.
+    const unset: Record<string, ""> = {};
+    let orphanImageUrl: string | null = null;
+    if (catFields.image === null) {
+      delete update.image;
+      unset.image = "";
+      const existing = await ExamCategory.findById(id).select("image").lean();
+      orphanImageUrl = (existing as any)?.image ?? null;
+    }
+
     let cascadeNeeded = false;
     let oldAncestors: mongoose.Types.ObjectId[] = [];
     let newAncestors: mongoose.Types.ObjectId[] = [];
@@ -407,8 +420,13 @@ export const updateCategory = async (req: Request, res: Response) => {
       cascadeNeeded = ancestorsChanged;
     }
 
-    const cat = await ExamCategory.findByIdAndUpdate(id, { $set: update }, { new: true });
+    const mutation: any = { $set: update };
+    if (Object.keys(unset).length) mutation.$unset = unset;
+    const cat = await ExamCategory.findByIdAndUpdate(id, mutation, { new: true });
     if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
+
+    // Best-effort S3 cleanup after the write commits.
+    if (orphanImageUrl) deleteFromS3FileUrl(orphanImageUrl).catch(() => {});
 
     if (cascadeNeeded) {
       // Every descendant had `oldAncestors + [id]` as the prefix of its ancestors[].
@@ -657,7 +675,7 @@ export const updateExam = async (req: Request, res: Response) => {
     // Same no-overlap rule as createExam. The payload is partial, so resolve the
     // effective type/window by merging the update over the current doc, then look
     // for any OTHER daily test whose window overlaps it.
-    const current = await Exam.findById(id).select("type startAt endAt status").lean();
+    const current = await Exam.findById(id).select("type startAt endAt status solutionPdfUrl").lean();
     if (!current) return res.status(404).json({ success: false, message: "Exam not found." });
     const effectiveType = data.type ?? current.type;
     const effectiveStartAt = data.startAt ?? current.startAt;
@@ -686,12 +704,28 @@ export const updateExam = async (req: Request, res: Response) => {
     const set: any = { ...data };
     if (data.categoryId !== undefined) set.categoryId = data.categoryId || null;
     if (data.status !== undefined) set.status = mapStatusFlagToEnum(data.status);
-    const exam = await Exam.findByIdAndUpdate(
-      id,
-      { $set: set },
-      { new: true }
-    );
+
+    // Clearing the solution PDF: a null (or empty, normalised to null by the
+    // schema) `solutionPdfUrl` means "remove it". Translate to a $unset and
+    // best-effort delete the old S3 object after the write. A real URL is set
+    // normally; an absent field leaves the existing value untouched.
+    const unset: Record<string, ""> = {};
+    let orphanPdfUrl: string | null = null;
+    if (data.solutionPdfUrl === null) {
+      delete set.solutionPdfUrl;
+      unset.solutionPdfUrl = "";
+      orphanPdfUrl = (current as any).solutionPdfUrl ?? null;
+    }
+
+    const mutation: any = { $set: set };
+    if (Object.keys(unset).length) mutation.$unset = unset;
+    const exam = await Exam.findByIdAndUpdate(id, mutation, { new: true });
     if (!exam) return res.status(404).json({ success: false, message: "Exam not found." });
+
+    // Best-effort S3 cleanup after the DB write commits — never fail the request
+    // over an orphaned file.
+    if (orphanPdfUrl) deleteFromS3FileUrl(orphanPdfUrl).catch(() => {});
+
     return res.status(200).json({ success: true, data: exam });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });

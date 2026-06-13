@@ -9,6 +9,7 @@ import { OfflineEnquiry } from "../../models/offline/OfflineEnquiry.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -81,14 +82,20 @@ export const getOfflineDashboard = async (_req: Request, res: Response) => {
 };
 
 // GET /api/v1/client/offline/cities
-export const listCities = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listCities invoked", { traceId, path: _req.originalUrl });
+export const listCities = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listCities invoked", { traceId, path: req.originalUrl });
 
   try {
-    const data = await OfflineCity.find({ status: true }).sort({ order: 1 }).lean();
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const filter: any = { status: true };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
+    const [data, total] = await Promise.all([
+      OfflineCity.find(filter).sort({ order: 1 }).skip(skip).limit(limit).lean(),
+      OfflineCity.countDocuments(filter),
+    ]);
     logger.info("listCities success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listCities failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

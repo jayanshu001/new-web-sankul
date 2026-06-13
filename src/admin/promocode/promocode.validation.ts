@@ -21,7 +21,7 @@ const discountErr = {
   path: ["discountValue"],
 };
 
-export const APPLIES_TO_TYPES = ["package", "course", "liveCourse"] as const;
+export const APPLIES_TO_TYPES = ["package", "course", "liveCourse", "ebook", "testSeries"] as const;
 export type AppliesToType = (typeof APPLIES_TO_TYPES)[number];
 
 export const appliesToSchema = z.object({

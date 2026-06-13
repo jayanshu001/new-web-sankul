@@ -9,6 +9,7 @@ import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { isNewItem } from "../../utils/isNew";
 import { buildSearchFilter } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -25,12 +26,16 @@ export const listEbooks = async (req: Request, res: Response) => {
   logger.info("listEbooks invoked", { traceId, path: req.originalUrl, customerId });
 
   try {
-    const { search, language } = req.query as Record<string, string>;
+    const { language } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
     const filter: any = { status: true };
     Object.assign(filter, buildSearchFilter(search, ["name", "author"]));
     if (language) filter.language = language;
 
-    const ebooks = await Ebook.find(filter).sort({ order: 1, createdAt: -1 }).lean();
+    const [ebooks, total] = await Promise.all([
+      Ebook.find(filter).sort({ order: 1, createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Ebook.countDocuments(filter),
+    ]);
     const ebookIds = ebooks.map((e) => e._id);
 
     const plans = await EbookPrice.find({
@@ -101,7 +106,7 @@ export const listEbooks = async (req: Request, res: Response) => {
     });
 
     logger.info("listEbooks success", { traceId, customerId, count: data.length });
-    return res.status(200).json({ success: true, data: { ebooks: data } });
+    return res.status(200).json({ success: true, data: { ebooks: data }, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listEbooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -116,15 +121,27 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
 
   try {
     const now = new Date();
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
-    const subs = await EbookSubscription.find({
-      customerId: userId,
-      endAt: { $gt: now },
-      status: true,
-    })
-      .populate("ebookId")
-      .sort({ endAt: 1 })
-      .lean();
+    // Optional search by ebook name/author — resolve matching ebook ids first,
+    // then scope the subscription query to them (the searchable text lives on
+    // the populated Ebook, not the subscription row).
+    const baseFilter: any = { customerId: userId, endAt: { $gt: now }, status: true };
+    const searchFilter = buildSearchFilter(search, ["name", "author"]);
+    if (Object.keys(searchFilter).length) {
+      const matchedIds = await Ebook.find({ status: true, ...searchFilter }).select("_id").lean();
+      baseFilter.ebookId = { $in: matchedIds.map((e: any) => e._id) };
+    }
+
+    const [subs, total] = await Promise.all([
+      EbookSubscription.find(baseFilter)
+        .populate("ebookId")
+        .sort({ endAt: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      EbookSubscription.countDocuments(baseFilter),
+    ]);
 
     const base = resolveBase(req);
     const subscriptions = subs
@@ -138,7 +155,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       }));
 
     logger.info("listMySubscriptions success", { traceId, customerId: userId, count: subscriptions.length });
-    return res.status(200).json({ success: true, data: { subscriptions } });
+    return res.status(200).json({ success: true, data: { subscriptions }, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listMySubscriptions failed", { traceId, customerId: userId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
