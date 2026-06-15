@@ -8,6 +8,8 @@ import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
 import { OfflineEnquiry } from "../../models/offline/OfflineEnquiry.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   isOfflineBatchMysql,
   parseOfflineId,
@@ -162,7 +164,7 @@ export const listCenters = async (req: Request, res: Response) => {
   logger.info("listCenters invoked", { traceId, path: req.originalUrl });
 
   try {
-    const { cityId, search } = req.query as Record<string, string>;
+    const { cityId, search, page = "1", limit = "20" } = req.query as Record<string, string>;
 
     if (isOfflineBatchMysql()) {
       const cid = cityId ? parseOfflineId(cityId) : null;
@@ -209,7 +211,7 @@ export const listBatches = async (req: Request, res: Response) => {
   logger.info("listBatches invoked", { traceId, path: req.originalUrl });
 
   try {
-    const { centerId, cityId, upcoming, search } = req.query as Record<string, string>;
+    const { centerId, cityId, upcoming, search, page = "1", limit = "20" } = req.query as Record<string, string>;
 
     if (isOfflineBatchMysql()) {
       const data = await listBatchesMysql({

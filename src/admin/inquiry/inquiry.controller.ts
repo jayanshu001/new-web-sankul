@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { z } from "zod";
 import { Inquiry } from "../../models/system/Inquiry.model";
 import { isMysqlModule } from "../../config/migration";
+import { buildSearchFilter } from "../../utils/searchFilter";
 import {
   listDepartments as listDepartmentsService,
   createDepartment as createDepartmentService,

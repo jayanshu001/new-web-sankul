@@ -14,6 +14,8 @@ import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { buildTrackingUrl, COURIER } from "../../config/courier";
 import { fetchLiveAWBData } from "../../libs/courier/tracking";
 import { isNewItem } from "../../utils/isNew";
+import { buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   isBookMysql,
   listBooksData,
@@ -35,7 +37,8 @@ export const listBooks = async (req: Request, res: Response) => {
   logger.info("listBooks invoked", { traceId, path: req.originalUrl, customerId });
 
   try {
-    const { search, language } = req.query as Record<string, string>;
+    const { language } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
     // ── MySQL book listing (catalog-book + book-order, flag-gated) ───────────
     // catalog-book supplies the data + computed fields; book-order supplies the

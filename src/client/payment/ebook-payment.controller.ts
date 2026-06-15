@@ -27,6 +27,10 @@ const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 const createEbookOrderSchema = z.object({
   // EbookPrice._id — the plan/duration row drives both price and access window.
   planId: objectId,
+  // Optional promo code. Re-validated server-side against THIS ebook (ebook is
+  // now part of the promo appliesTo model) and the Razorpay order charged for
+  // the reduced amount. Mirrors the live-course / package / course flows.
+  promocode: z.string().trim().min(1).optional(),
 });
 
 // MySQL ebook write path: the plan id is an INT (the migrated id-space).
@@ -66,7 +70,7 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
       return createEbookOrderMysqlPath(req, res, { traceId, customerId: customerIdInt, rp });
     }
 
-    const { planId } = createEbookOrderSchema.parse(req.body);
+    const { planId, promocode } = createEbookOrderSchema.parse(req.body);
 
     const plan = await EbookPrice.findOne({ _id: planId, status: true });
     if (!plan) { logger.warn("createEbookOrderPayment plan not found", { traceId, customerId, planId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }

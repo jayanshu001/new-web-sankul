@@ -26,6 +26,15 @@ const createCourseOrderSchema = z.object({
   // We deliberately key on this rather than (courseId, duration) because the
   // PackageCourseEbookPrice row is the single source of truth for the price.
   packageId: objectId,
+  // Optional delivery address (a CustomerAddress._id) for "With Materials"
+  // plans, which ship physical material to the buyer. Always optional at the
+  // schema level so existing callers are unaffected; when supplied it must be an
+  // address the customer owns. Stored on the subscription as customerShippingId,
+  // mirroring the admin create-subscription flow.
+  customerShippingId: objectId.optional(),
+  // Optional promo code. Re-validated server-side against THIS course and the
+  // Razorpay order charged for the reduced amount. Mirrors the live-course flow.
+  promocode: z.string().trim().min(1).optional(),
 });
 
 // MySQL course write path: the plan id is an INT (the migrated id-space), not an
@@ -70,7 +79,18 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
       return createCourseOrderMysqlPath(req, res, { traceId, customerId: customerIdInt, rp });
     }
 
-    const { packageId } = createCourseOrderSchema.parse(req.body);
+    const { packageId, customerShippingId, promocode } = createCourseOrderSchema.parse(req.body);
+
+    // Validate the delivery address (when supplied) belongs to this customer.
+    // Optional throughout — only checked if the FE sent one. Mirrors the admin
+    // subscription flow's ownership check.
+    if (customerShippingId) {
+      const addr = await CustomerAddress.findOne({ _id: customerShippingId, customerId }).select("_id");
+      if (!addr) {
+        logger.warn("createCourseOrderPayment address not owned", { traceId, customerId, customerShippingId });
+        return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
+      }
+    }
 
     const plan = await PackageCourseEbookPrice.findOne({ _id: packageId, status: true });
     if (!plan) { logger.warn("createCourseOrderPayment plan not found", { traceId, customerId, packageId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }

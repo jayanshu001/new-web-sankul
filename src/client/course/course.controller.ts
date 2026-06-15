@@ -17,6 +17,8 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { buildSearchFilter, buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   isCourseMysql,
   listCourseCategoriesWithCounts,
@@ -216,6 +218,8 @@ export const listCourseCategoriesHandler = async (req: Request, res: Response) =
       return res.status(200).json({ success: true, data });
     }
 
+    const { page, limit } = parseListQuery(req.query);
+
     const categories = await CourseSubjectCategory.find({ status: true })
       .sort({ order: 1, title: 1 })
       .lean();
@@ -236,7 +240,7 @@ export const listCourseCategoriesHandler = async (req: Request, res: Response) =
     }));
 
     logger.info("listCourseCategoriesHandler success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(data.length, page, limit) });
   } catch (err) {
     logger.error("listCourseCategoriesHandler failed", {
       traceId,

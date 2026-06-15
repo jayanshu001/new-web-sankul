@@ -6,6 +6,7 @@ import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { Material } from "../../models/course/Material.model";
 import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { collectCategoryTreeIds } from "../../utils/categoryTree";
+import { buildRegexCondition } from "../../utils/searchFilter";
 import { Exam } from "../../models/exam/Exam.model";
 import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";

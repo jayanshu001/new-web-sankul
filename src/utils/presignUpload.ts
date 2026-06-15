@@ -108,7 +108,10 @@ export const buildPresignedUpload = async (
     ACL: "public-read", // match the rest of the bucket's public-CDN model
   });
 
-  const uploadUrl = await getSignedUrl(s3Config, command, {
+  // s3Config is an S3Client; a duplicate @aws-sdk/client-s3 in the dep tree
+  // surfaces two incompatible S3Client type declarations, so cast at the call
+  // site (runtime is unaffected — same client instance).
+  const uploadUrl = await getSignedUrl(s3Config as any, command, {
     expiresIn: PRESIGN_EXPIRY_SECONDS,
   });
 

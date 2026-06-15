@@ -269,8 +269,9 @@ export const createCategory = async (req: Request, res: Response) => {
       if (attachErr) throw new Error("__attach_abort__");
     });
 
-    if (attachErr) {
-      return res.status(attachErr.status).json({ success: false, message: attachErr.message });
+    const attachResult = attachErr as AttachError | null;
+    if (attachResult) {
+      return res.status(attachResult.status).json({ success: false, message: attachResult.message });
     }
 
     const cat = await MaterialCategory.findById(createdId);
@@ -352,8 +353,9 @@ export const updateCategory = async (req: Request, res: Response) => {
     });
 
     if (notFound) return res.status(404).json({ success: false, message: "Category not found." });
-    if (attachErr) {
-      return res.status(attachErr.status).json({ success: false, message: attachErr.message });
+    const attachResult = attachErr as AttachError | null;
+    if (attachResult) {
+      return res.status(attachResult.status).json({ success: false, message: attachResult.message });
     }
 
     const fresh = await MaterialCategory.findById(id);

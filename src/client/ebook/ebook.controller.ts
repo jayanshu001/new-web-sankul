@@ -8,6 +8,8 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { isNewItem } from "../../utils/isNew";
+import { buildSearchFilter } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   isEbookMysql,
   listEbooksWithPlans,
@@ -31,7 +33,8 @@ export const listEbooks = async (req: Request, res: Response) => {
   logger.info("listEbooks invoked", { traceId, path: req.originalUrl, customerId });
 
   try {
-    const { search, language } = req.query as Record<string, string>;
+    const { language } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
     // MySQL branch (flag OFF until the ebook cluster flips). Composes
     // catalog-ebook + commerce-price (plans) + commerce-ebook-sub (entitlement);

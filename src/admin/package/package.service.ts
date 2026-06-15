@@ -20,6 +20,7 @@ import { Book } from "../../models/book/Book.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { Goal } from "../../models/Goal.model";
 import { HttpError } from "../../middlewares/errorHandler";
+import { buildRegexCondition } from "../../utils/searchFilter";
 import cache from "../../libs/cache";
 import {
   isPackageChatMysql,

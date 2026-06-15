@@ -17,6 +17,8 @@ import {
 } from "./address.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { isMysqlModule } from "../../config/migration";
 import {
   listStates as lookupListStates,
@@ -80,10 +82,19 @@ export const getMyAddresses = async (req: Request, res: Response) => {
       return res.status(200).json({ success: true, data: addresses });
     }
 
-    const addresses = await CustomerAddress.find({ customerId, status: true })
-      .populate("stateId")
-      .populate("cityId")
-      .sort({ createdAt: -1 });
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const filter: any = { customerId, status: true };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
+
+    const [addresses, total] = await Promise.all([
+      CustomerAddress.find(filter)
+        .populate("stateId")
+        .populate("cityId")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit),
+      CustomerAddress.countDocuments(filter),
+    ]);
     logger.info("getMyAddresses success", { traceId, customerId, count: addresses.length });
     return res.status(200).json({ success: true, data: addresses, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
@@ -347,8 +358,8 @@ export const getStates = async (req: Request, res: Response) => {
   logger.info("getStates invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { search } = req.query as Record<string, string>;
-    const term = search && search.trim() ? search.trim() : undefined;
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const term = search;
 
     if (isMysqlModule(LOOKUPS_MODULE)) {
       const rows = await lookupListStates({ activeOnly: true, search: term });
@@ -359,10 +370,11 @@ export const getStates = async (req: Request, res: Response) => {
     }
 
     const filter: any = { active: true };
-    if (term) filter.name = { $regex: term, $options: "i" };
-    const states = await CustomerState.find(filter)
-      .select("_id name stateCode")
-      .sort({ name: 1 });
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
+    const [states, total] = await Promise.all([
+      CustomerState.find(filter).select("_id name stateCode").sort({ name: 1 }).skip(skip).limit(limit),
+      CustomerState.countDocuments(filter),
+    ]);
     logger.info("getStates success", { traceId, count: states.length });
     return res.status(200).json({ success: true, data: states, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
@@ -393,7 +405,8 @@ export const listCities = async (req: Request, res: Response) => {
   logger.info("listCities invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { search } = req.query as Record<string, string>;
+    const { stateId } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
     if (isOfflineCityMysql()) {
       const data = await svcListActiveCities(search);
@@ -484,9 +497,13 @@ export const getEducations = async (req: Request, res: Response) => {
       return res.status(200).json({ success: true, data: educations });
     }
 
-    const educations = await CustomerEducation.find({ status: true })
-      .select("_id name")
-      .sort({ name: 1 });
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const filter: any = { status: true };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
+    const [educations, total] = await Promise.all([
+      CustomerEducation.find(filter).select("_id name").sort({ name: 1 }).skip(skip).limit(limit),
+      CustomerEducation.countDocuments(filter),
+    ]);
     logger.info("getEducations success", { traceId, count: educations.length });
     return res.status(200).json({ success: true, data: educations, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {

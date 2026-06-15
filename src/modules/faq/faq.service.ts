@@ -53,7 +53,7 @@ export const listFaqs = async (opts?: {
     .lean();
   return docs.map((d) => ({
     _id: String(d._id),
-    typeId: d.typeId as FaqTypeDto | string,
+    typeId: d.typeId as unknown as FaqTypeDto | string,
     question: d.question,
     answer: d.answer,
     createdAt: d.createdAt,
@@ -74,7 +74,7 @@ export const getFaqById = async (id: string): Promise<FaqDto | null> => {
   if (!doc) return null;
   return {
     _id: String(doc._id),
-    typeId: doc.typeId as FaqTypeDto | string,
+    typeId: doc.typeId as unknown as FaqTypeDto | string,
     question: doc.question,
     answer: doc.answer,
     createdAt: doc.createdAt,
@@ -99,7 +99,7 @@ export const createFaq = async (
   const lean = await FAQ.findById(doc._id).populate("typeId", "_id title").lean();
   return {
     _id: String(lean!._id),
-    typeId: lean!.typeId as FaqTypeDto | string,
+    typeId: lean!.typeId as unknown as FaqTypeDto | string,
     question: lean!.question,
     answer: lean!.answer,
     createdAt: lean!.createdAt,
@@ -135,7 +135,7 @@ export const updateFaq = async (
   if (!doc) return null;
   return {
     _id: String(doc._id),
-    typeId: doc.typeId as FaqTypeDto | string,
+    typeId: doc.typeId as unknown as FaqTypeDto | string,
     question: doc.question,
     answer: doc.answer,
     createdAt: doc.createdAt,
