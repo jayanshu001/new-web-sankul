@@ -1,11 +1,11 @@
-import { assertServerUp, requireMysqlModule } from "../_lib/auth.js";
+import { assertServerUp, getCustomerToken, requireMysqlModule } from "../_lib/auth.js";
 import { requestOk } from "../_lib/http.js";
 import { runTests } from "../_lib/runner.js";
 
 /**
  * offline-city (client) — cities served from MySQL (ws_offline_city) via
  * src/client/address/address.controller.ts `listCities` when `offline-city` is
- * enabled. Public endpoint (no auth). Scope: cities only.
+ * enabled. Requires a Bearer token (mock customer JWT). Scope: cities only.
  */
 
 type City = { _id?: string; name?: string; image?: string; status?: boolean; order?: number };
@@ -18,7 +18,8 @@ export async function runOfflineCityClientApiTests(): Promise<boolean> {
     {
       name: "GET /api/v1/client/address/cities → array of active cities (order, then name)",
       fn: async () => {
-        const json = await requestOk("GET", "/api/v1/client/address/cities");
+        const token = await getCustomerToken();
+        const json = await requestOk("GET", "/api/v1/client/address/cities", { token });
         const list = json.data as City[];
         if (!Array.isArray(list)) throw new Error("expected an array of cities");
         if (!list.length) throw new Error("expected at least one active city (staging has 2)");
@@ -38,10 +39,11 @@ export async function runOfflineCityClientApiTests(): Promise<boolean> {
     {
       name: "GET /api/v1/client/address/cities?search=<known> → filtered subset",
       fn: async () => {
-        const all = (await requestOk("GET", "/api/v1/client/address/cities")).data as City[];
+        const token = await getCustomerToken();
+        const all = (await requestOk("GET", "/api/v1/client/address/cities", { token })).data as City[];
         if (!all.length) return;
         const term = all[0].name!.slice(0, 3);
-        const filtered = (await requestOk("GET", "/api/v1/client/address/cities", { query: { search: term } }))
+        const filtered = (await requestOk("GET", "/api/v1/client/address/cities", { token, query: { search: term } }))
           .data as City[];
         if (!Array.isArray(filtered)) throw new Error("search must return an array");
         if (filtered.length > all.length) throw new Error("search returned more rows than the full list");

@@ -24,6 +24,7 @@
     "docs:schema-comparison": "tsx scripts/generate-schema-comparison.ts",
     "docs:field-comparison": "tsx scripts/generate-field-comparison.ts",
     "docs:migrated-modules": "tsx scripts/generate-migrated-modules.ts",
+    "migration:api:auth": "tsx docs/migration/api-tests/mint-jwt.ts",
     "migration:api": "tsx docs/migration/api-tests/run-all.ts",
     "migration:api:app-update": "tsx docs/migration/api-tests/run-module.ts app-update",
     "migration:api:version": "tsx docs/migration/api-tests/run-module.ts version",

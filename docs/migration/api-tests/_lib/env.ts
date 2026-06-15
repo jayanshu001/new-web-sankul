@@ -22,6 +22,12 @@ export const config = {
   customerOtp: process.env.MIGRATION_TEST_CUSTOMER_OTP ?? "5786",
   /** Write tests (PUT/POST/DELETE) run by default; set MIGRATION_API_SKIP_WRITE=true to skip. */
   skipWrite: process.env.MIGRATION_API_SKIP_WRITE === "true",
+  /**
+   * Default false → authenticated tests use the mock JWT stored in
+   * api-tests/.auth.json. Set MIGRATION_TEST_REAL_LOGIN=true to authenticate
+   * via real admin login / customer OTP instead.
+   */
+  realLogin: process.env.MIGRATION_TEST_REAL_LOGIN === "true",
   mysqlModules: (process.env.MIGRATION_MYSQL_MODULES ?? "").split(",").map((s) => s.trim()).filter(Boolean),
   staging: {
     appUpdateLatestVersion: Number(process.env.MIGRATION_EXPECT_APP_UPDATE_VERSION ?? "4235200"),

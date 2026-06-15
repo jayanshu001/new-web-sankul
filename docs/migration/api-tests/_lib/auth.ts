@@ -1,6 +1,7 @@
 import { config } from "./env.js";
 import { requestOk } from "./http.js";
 import { mintAdminToken, mintCustomerToken } from "./mint-auth.js";
+import { storedAdminToken, storedCustomerToken } from "./token-store.js";
 
 export async function assertServerUp(): Promise<void> {
   const res = await fetch(`${config.baseUrl}/healthz`);
@@ -9,7 +10,15 @@ export async function assertServerUp(): Promise<void> {
   }
 }
 
+/**
+ * Admin JWT for authenticated APIs.
+ *
+ * Default: use the mock JWT persisted in api-tests/.auth.json (minted once
+ * before the suites run). Set MIGRATION_TEST_REAL_LOGIN=true to instead log in
+ * with real credentials / OTP.
+ */
 export async function getAdminToken(): Promise<string> {
+  if (!config.realLogin) return storedAdminToken();
   if (config.adminEmail && config.adminPassword) {
     try {
       const json = await requestOk("POST", "/api/v1/admin/auth/login", {
@@ -24,8 +33,14 @@ export async function getAdminToken(): Promise<string> {
   return mintAdminToken();
 }
 
-/** Customer JWT via OTP (phone must be in TESTING_PHONE_NUMBERS or use static OTP flow). */
+/**
+ * Customer JWT for authenticated APIs.
+ *
+ * Default: the mock JWT from api-tests/.auth.json. Set
+ * MIGRATION_TEST_REAL_LOGIN=true to instead authenticate via the OTP flow.
+ */
 export async function getCustomerToken(): Promise<string> {
+  if (!config.realLogin) return storedCustomerToken();
   if (config.customerPhone) {
     try {
       await requestOk("POST", "/api/v1/client/auth/otp/generate", {

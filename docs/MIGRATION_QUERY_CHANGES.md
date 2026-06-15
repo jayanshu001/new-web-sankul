@@ -4,6 +4,30 @@
 
 ---
 
+## 2026-06-15 — 🚀 FULL FLIP enabled in this env (all 30 module keys ON) + full HTTP suite green
+
+**What:** Turned ON every built module flag in `.env` `MIGRATION_MYSQL_MODULES` (was 12, now all 30:
+added `catalog-course,catalog-video,catalog-ebook,catalog-exam,catalog-material,catalog-book,offline-batch,
+commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator,
+commerce-order,ebook-order,book-order,offline-enquiry,package-chat`). Restarted `yarn dev`, ran `yarn migration:api`.
+
+**Result:** **All suites passed — zero fallout.** Every previously flag-gated `skip: !xMysql` test now runs +
+passes. The 13 remaining SKIPs are all hardcoded `skip: true` placeholders with **no HTTP endpoint** (catalog-video
+URL encryption; commerce-price/subscription/ebook-sub/promoter/promocode/educator READ masters returned only nested;
+commerce-order/ebook-order/book-order write-paths needing a real Razorpay callback; offline-enquiry/package-chat
+writes) — not flag-controllable; data paths already proven via tsx. They stay skipped by design.
+
+**No schema/query change** — this is a config flip only. Earlier this session: regenerated Prisma client (fixed
+93 stale `@prisma/client` typecheck errors), added the api-tests **mock-JWT store** (`_lib/token-store.ts`,
+`mint-jwt.ts`, `yarn migration:api:auth`) + **auto API-doc-on-pass** (`_lib/capture.ts`, `_lib/doc-writer.ts` →
+`api-tests/<module>/API_DOC.md`), and attached `getCustomerToken()` to the offline-batch/offline-city/customer-lookups
+client tests that were 401ing (their routes now require a Bearer token).
+
+**⚠ Prod caveat:** this `.env` must NOT ship to production as-is until the `ws_package_chat` ALTER
+(`migration/schema-changes/2026-06-13_extend_ws_package_chat.sql`) is run on the prod DB. Rollback = remove keys + restart.
+
+---
+
 ## 2026-06-13 — `package-chat` BUILT + WIRED (READ + WRITE, Phase 3b) — flag OFF · ⚠ FIRST SCHEMA ADD
 
 **What:** The LAST 3b write path. Package announcement chat (admin/system posts; subscription-gated client

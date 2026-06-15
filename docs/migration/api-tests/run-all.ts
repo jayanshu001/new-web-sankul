@@ -4,6 +4,7 @@
  *   yarn migration:api
  */
 import { MIGRATED_API_MODULES } from "./modules.manifest.js";
+import { ensureAuthStore } from "./_lib/token-store.js";
 import { runAppUpdateApiTests } from "./app-update/admin.api.test.js";
 import { runAppUpdateClientApiTests } from "./app-update/client.api.test.js";
 import { runVersionAdminApiTests } from "./version/admin.api.test.js";
@@ -43,6 +44,9 @@ import { runPackageChatClientApiTests } from "./package-chat/client.api.test.js"
 
 async function main() {
   console.log("Migrated modules:", MIGRATED_API_MODULES.map((m) => m.key).join(", "));
+
+  // Mint + store the mock JWTs before any authenticated API runs.
+  await ensureAuthStore();
 
   const suites = [
     runAppUpdateApiTests,

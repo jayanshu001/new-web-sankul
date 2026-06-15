@@ -1,4 +1,5 @@
 import { config } from "./env.js";
+import { record } from "./capture.js";
 
 export type ApiJson = {
   success?: boolean;
@@ -52,6 +53,17 @@ export async function request(
   } catch {
     throw new ApiTestError(`Non-JSON response (${res.status})`, res.status, raw);
   }
+
+  // Record for per-module API docs (no-op outside a capture window).
+  record({
+    method,
+    path: path.startsWith("http") ? new URL(path).pathname : path,
+    query: options.query,
+    requestHeaders: headers,
+    requestBody: options.body,
+    responseStatus: res.status,
+    responseBody: json,
+  });
 
   return { status: res.status, json, raw };
 }

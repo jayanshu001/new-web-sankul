@@ -1,4 +1,4 @@
-import { assertServerUp, requireMysqlModule } from "../_lib/auth.js";
+import { assertServerUp, getCustomerToken, requireMysqlModule } from "../_lib/auth.js";
 import { requestOk } from "../_lib/http.js";
 import { runTests } from "../_lib/runner.js";
 
@@ -7,8 +7,9 @@ import { runTests } from "../_lib/runner.js";
  * from MySQL (ws_customer_state / ws_customer_education / ws_customer_target_goal)
  * via src/client/address/address.controller.ts when `customer-lookups` is enabled.
  *
- * These endpoints are PUBLIC (no auth in address.routes.ts), so no token needed.
- * Contract parity asserted: states → { _id, name, stateCode }; educations → { _id, name }.
+ * These endpoints require a Bearer token (mock customer JWT from the api-tests
+ * auth store). Contract parity asserted: states → { _id, name, stateCode };
+ * educations → { _id, name }.
  */
 
 type State = { _id?: string; name?: string; stateCode?: string };
@@ -22,7 +23,8 @@ export async function runCustomerLookupsClientApiTests(): Promise<boolean> {
     {
       name: "GET /api/v1/client/address/states → array of { _id, name, stateCode }",
       fn: async () => {
-        const json = await requestOk("GET", "/api/v1/client/address/states");
+        const token = await getCustomerToken();
+        const json = await requestOk("GET", "/api/v1/client/address/states", { token });
         const list = json.data as State[];
         if (!Array.isArray(list)) throw new Error("expected an array of states");
         if (!list.length) throw new Error("expected at least one active state (staging has 12)");
@@ -39,10 +41,11 @@ export async function runCustomerLookupsClientApiTests(): Promise<boolean> {
     {
       name: "GET /api/v1/client/address/states?search=<known> → filtered subset",
       fn: async () => {
-        const all = (await requestOk("GET", "/api/v1/client/address/states")).data as State[];
+        const token = await getCustomerToken();
+        const all = (await requestOk("GET", "/api/v1/client/address/states", { token })).data as State[];
         if (!all.length) return;
         const term = all[0].name!.slice(0, 3);
-        const filtered = (await requestOk("GET", "/api/v1/client/address/states", { query: { search: term } }))
+        const filtered = (await requestOk("GET", "/api/v1/client/address/states", { token, query: { search: term } }))
           .data as State[];
         if (!Array.isArray(filtered)) throw new Error("search must return an array");
         if (filtered.length > all.length) throw new Error("search returned more rows than the full list");
@@ -56,7 +59,8 @@ export async function runCustomerLookupsClientApiTests(): Promise<boolean> {
     {
       name: "GET /api/v1/client/address/educations → array of { _id, name }",
       fn: async () => {
-        const json = await requestOk("GET", "/api/v1/client/address/educations");
+        const token = await getCustomerToken();
+        const json = await requestOk("GET", "/api/v1/client/address/educations", { token });
         const list = json.data as Education[];
         if (!Array.isArray(list)) throw new Error("expected an array of educations");
         if (!list.length) throw new Error("expected at least one active education (staging has 10)");
@@ -71,7 +75,8 @@ export async function runCustomerLookupsClientApiTests(): Promise<boolean> {
     {
       name: "GET /api/v1/client/address/characteristic → { educations, goals }",
       fn: async () => {
-        const json = await requestOk("GET", "/api/v1/client/address/characteristic");
+        const token = await getCustomerToken();
+        const json = await requestOk("GET", "/api/v1/client/address/characteristic", { token });
         const data = json.data as { educations?: Education[]; goals?: unknown[] };
         if (!data || !Array.isArray(data.educations)) throw new Error("characteristic.educations must be an array");
         if (!Array.isArray(data.goals)) throw new Error("characteristic.goals must be an array");

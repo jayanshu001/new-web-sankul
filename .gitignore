@@ -18,3 +18,9 @@ __pycache__/
 
 # Stray uploaded player scripts at repo root
 /*-player-script.js
+
+# Migration API test mock JWTs (test-only, short-lived)
+docs/migration/api-tests/.auth.json
+
+# Per-module API-doc capture sidecar (regenerated each run)
+docs/migration/api-tests/*/.api-doc-calls.json

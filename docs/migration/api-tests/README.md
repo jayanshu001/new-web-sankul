@@ -73,6 +73,26 @@ Full endpoint list: [API_COVERAGE.md](./API_COVERAGE.md)
 
 ---
 
+## Mock JWT (authentication)
+
+Every authenticated API (admin + client) needs a Bearer token. The runner mints
+a **mock admin JWT + mock customer JWT once, before any API runs**, and stores
+them in `api-tests/.auth.json`. Every authenticated test then reuses that stored
+token — no per-suite re-minting, no live login required.
+
+- **Automatic:** `yarn migration:api` and `yarn migration:api:<module>` both call
+  `ensureAuthStore()` first — it (re)generates `.auth.json` if missing or older
+  than 50 min (minted JWTs last 1h).
+- **Manual (re)generate:** `yarn migration:api:auth`
+- **Store file:** `docs/migration/api-tests/.auth.json` — `{ admin, customer, mintedAt }`.
+  Git-ignored; test-only short-lived tokens, never commit it.
+- **Requires** `JWT_ACCESS_SECRET` in `.env` and Redis up (the mock token is also
+  written to a Redis session key, matching production auth middleware).
+- **Use real login instead of the mock JWT:** set `MIGRATION_TEST_REAL_LOGIN=true`
+  (then admin email/password or customer OTP env vars apply as before).
+
+---
+
 ## Folder layout
 
 ```txt

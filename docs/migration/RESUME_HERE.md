@@ -2,7 +2,7 @@
 
 > **Purpose:** Cold-start context so any session can resume **exactly** here without losing flow, behaviour,
 > or any established rule. This is THE single source of truth for "where we are."
-> **Last updated:** 2026-06-13 · **Branch:** `migration` (NEVER merge to `main` until full sign-off)
+> **Last updated:** 2026-06-15 (FULL FLIP enabled in this env — see §2) · **Branch:** `migration` (NEVER merge to `main` until full sign-off)
 > **Working dir:** `/Users/pratikzankat/new-web-sankul`
 > **On resume:** UPDATE THIS FILE as you go (don't create a new one). Pair it with the newest-first detailed
 > log [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md) — that log is the history; this file
@@ -90,14 +90,22 @@ on prod before enabling the `package-chat` flag.
 
 ---
 
-## 2. 🟢 CURRENTLY ENABLED (live on MySQL) — 11 modules
+## 2. 🟢 CURRENTLY ENABLED (live on MySQL) — FULL FLIP (2026-06-15, this env)
 
-`.env` → `MIGRATION_MYSQL_MODULES`:
+> **⚠ STATE CHANGED:** as of 2026-06-15 **all built modules are flag ON in this environment** (local/staging).
+> This is effectively THE FLIP, done in `.env` for end-to-end HTTP test coverage. Instant rollback = remove
+> keys from the list below and restart. **Do NOT carry this `.env` to production** without first running the
+> `ws_package_chat` ALTER (`schema-changes/2026-06-13_extend_ws_package_chat.sql`) on the prod DB.
+
+`.env` → `MIGRATION_MYSQL_MODULES` (all 30 keys ON):
 ```
-app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,offline-city
+app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,offline-city,catalog-package-type,catalog-course,catalog-video,catalog-ebook,catalog-exam,catalog-material,catalog-book,offline-batch,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator,commerce-order,ebook-order,book-order,offline-enquiry,package-chat
 ```
-Everything else built is **flag OFF** (dual-path code present, dormant, tsx-verified). Flipping a key = add
-it to this list.
+Full `yarn migration:api` run after the flip: **every suite passed** (no fallout). The only remaining
+SKIPs are hardcoded `skip: true` placeholders with **no HTTP endpoint** (video URL encryption; the
+commerce READ masters that are only returned nested; the order write-paths that need a real Razorpay
+callback; offline-enquiry/package-chat writes) — these are NOT flag-controllable and stay skipped by design
+(data paths proven via tsx). To roll a single module back: remove its key and restart `yarn dev`.
 
 ---
 
@@ -298,7 +306,7 @@ looking for "the next module to migrate" — there isn't one. The work now is TH
 1. Read this file top-to-bottom, then skim the top entries of [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md)
    (newest = `package-chat`, the last write path).
 2. Confirm state:
-   - `grep MIGRATION_MYSQL_MODULES .env` → expect the 11 enabled (§2); everything else built is flag OFF
+   - `grep MIGRATION_MYSQL_MODULES .env` → as of 2026-06-15 expect ALL 30 keys enabled (§2 — the full flip in this env), NOT the old 11
    - `npx tsc --noEmit -p tsconfig.json 2>&1 | grep -v "material.controller\|faq.service" | grep -c "error TS"` → expect 0
    - `for m in commerce-order ebook-order book-order offline-enquiry package-chat; do ls src/modules/$m >/dev/null && echo "$m ✓"; done` → all 5 write modules present
    - *(git note: the tree was CLEAN at the last session start — the earlier "~79 uncommitted" from the

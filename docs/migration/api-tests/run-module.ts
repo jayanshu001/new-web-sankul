@@ -5,6 +5,7 @@
  *   tsx docs/migration/api-tests/run-module.ts app-update
  */
 import { MIGRATED_API_MODULES } from "./modules.manifest.js";
+import { ensureAuthStore } from "./_lib/token-store.js";
 import { runAppUpdateApiTests } from "./app-update/admin.api.test.js";
 import { runAppUpdateClientApiTests } from "./app-update/client.api.test.js";
 import { runVersionAdminApiTests } from "./version/admin.api.test.js";
@@ -81,6 +82,9 @@ async function main() {
     console.error("Modules:", Object.keys(runners).join(", "));
     process.exit(1);
   }
+
+  // Mint + store the mock JWTs before any authenticated API runs.
+  await ensureAuthStore();
 
   let ok = true;
   for (const run of runners[moduleKey]) {
