@@ -8,8 +8,10 @@ if (!process.env.DO_ACCESS_KEY_ID || !process.env.DO_SECRET_ACCESS_KEY) {
   console.warn("⚠️ DigitalOcean Spaces credentials are not configured in .env!");
 }
 
+export const DO_BUCKET = process.env.DO_BUCKET || "websankul-staging";
+
 // Initialize the S3 Client (configured for DigitalOcean Spaces)
-const s3Config = new S3Client({
+export const s3Config = new S3Client({
   endpoint: process.env.DO_ENDPOINT || "https://blr1.digitaloceanspaces.com",
   region: process.env.DO_DEFAULT_REGION || "blr1",
   credentials: {
@@ -189,6 +191,26 @@ export const uploadQuestionImages = multer({
     cb(new Error("Invalid image type. Only PNG, JPG, JPEG, WebP are allowed."));
   },
 });
+
+/**
+ * True if `url` points at OUR Spaces bucket — i.e. its host is
+ * `<DO_BUCKET>.<endpoint-host>`. `deleteFromS3FileUrl` keys off the URL path
+ * against DO_BUCKET, so only own-bucket URLs are safe to pass to it; an
+ * externally-hosted link must never be sent for deletion. Use this to guard
+ * "delete the replaced old file" cleanup paths.
+ */
+export const isOwnBucketUrl = (url?: string | null): boolean => {
+  if (!url) return false;
+  try {
+    const endpoint = (
+      process.env.DO_ENDPOINT || "https://blr1.digitaloceanspaces.com"
+    ).replace(/\/+$/, "");
+    const ownHost = `${DO_BUCKET}.${new URL(endpoint).host}`;
+    return new URL(url).host === ownHost;
+  } catch {
+    return false;
+  }
+};
 
 /**
  * Utility function to delete an object from DigitalOcean Spaces given its public URL.

@@ -10,6 +10,9 @@ import { fetchTrendingBooksOnly, fetchTrendingEbooksOnly } from "../book/book.co
 import { Video } from "../../models/course/Video.model";
 import { resolveFreeCategoryIds } from "../free/free.controller";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
+import { Exam } from "../../models/exam/Exam.model";
+import { ExamResult } from "../../models/exam/ExamResult.model";
+import { ExamType, ExamStatus } from "../../models/enums";
 import { Notification } from "../../models/system/Notification.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -140,9 +143,12 @@ export const getDashboard = async (req: Request, res: Response) => {
   logger.info("getDashboard invoked", { traceId, path: req.originalUrl, customerId: userId });
 
   try {
-    const [banners, recentPackages, courses, trendingBooks, trendingEbooks, testimonial, courseCategories, examCountdownsRaw, unreadNotifications] = await Promise.all([
+    const now = new Date();
+    const [banners, recentPackages, courses, trendingBooks, trendingEbooks, testimonial, courseCategories, examCountdownsRaw, dailyTestRaw, unreadNotifications] = await Promise.all([
       BannerSlider.find().sort({ orderBy: 1 }).populate("keyId").lean(),
-      Package.find({ active: true })
+      // Recently Added shows PAID packages only — free packages are surfaced
+      // through the free sections, not this paid-product carousel.
+      Package.find({ active: true, isPaid: true })
         .populate("packageTypeId", "_id name createdAt updatedAt")
         .sort({ createdAt: -1 })
         .limit(RECENTLY_ADDED_LIMIT)
@@ -159,6 +165,18 @@ export const getDashboard = async (req: Request, res: Response) => {
         .populate("categoryId", "_id name colorHex")
         .sort({ examDate: 1, order: 1 })
         .limit(EXAM_COUNTDOWN_LIMIT)
+        .lean(),
+      // Latest currently-live daily test: published, of type DAILY, and within
+      // its [startAt, endAt] availability window right now. Exactly one is shown;
+      // once the window's endAt passes it drops out and the next live test (if
+      // any) takes its place. When none is live, the section is omitted entirely.
+      Exam.findOne({
+        type: ExamType.DAILY,
+        status: ExamStatus.PUBLISHED,
+        startAt: { $lte: now },
+        endAt: { $gte: now },
+      })
+        .sort({ startAt: -1 })
         .lean(),
       // Same visibility filter as GET /client/notifications so the badge here
       // can never disagree with the list.
@@ -296,6 +314,45 @@ export const getDashboard = async (req: Request, res: Response) => {
     if (banners.length) dashboard.push({ title: "Banner", type: "banner", data: banners });
     if (examCountdowns.length)
       dashboard.push({ title: "Exam Countdown", type: "exam-countdown", data: examCountdowns });
+    if (dailyTestRaw) {
+      // isAttempt / lastResult mirror GET /client/quizzes/daily: false + null until
+      // the user has a submitted (status:true) ExamResult for this daily test. The
+      // latest attempt (by submittedAt, then attemptNumber) becomes lastResult.
+      // Logged-out users always see false / null.
+      let isAttempt = false;
+      let lastResult: {
+        _id: any;
+        attemptNumber: number;
+        score: number;
+        timing: any;
+        submittedAt: Date | null | undefined;
+      } | null = null;
+      if (userId) {
+        const last = await ExamResult.findOne({
+          customerId: new mongoose.Types.ObjectId(userId),
+          examId: dailyTestRaw._id,
+          status: true,
+        })
+          .sort({ submittedAt: -1, attemptNumber: -1 })
+          .select("_id attemptNumber score timing submittedAt")
+          .lean();
+        if (last) {
+          isAttempt = true;
+          lastResult = {
+            _id: last._id,
+            attemptNumber: last.attemptNumber,
+            score: last.score,
+            timing: last.timing,
+            submittedAt: last.submittedAt,
+          };
+        }
+      }
+      dashboard.push({
+        title: "Daily Test",
+        type: "daily-test",
+        data: { ...dailyTestRaw, isAttempt, lastResult },
+      });
+    }
     if (recentlyAddedWithDaysLeft.length)
       dashboard.push({ title: "Recently Added", type: "package", data: recentlyAddedWithDaysLeft });
     if (coursesWithPlans.length) dashboard.push({ title: "Course Subjects", type: "course", data: coursesWithPlans });

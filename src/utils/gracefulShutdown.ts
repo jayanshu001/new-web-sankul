@@ -23,6 +23,7 @@ import { disconnectPrisma } from "../config/prisma";
 import { hasMysqlMigrationModules } from "../config/migration";
 import { redisClient } from "../config/redis";
 import { shutdownNotificationScheduler } from "../admin/notification/scheduler";
+import { shutdownPdfUploadScheduler } from "../admin/pdfUpload/pdfUpload.scheduler";
 import logger from "./logger";
 
 const DRAIN_MS = Number(process.env.SHUTDOWN_DRAIN_MS) || 25_000;
@@ -93,6 +94,17 @@ export const installGracefulShutdown = (hooks: ShutdownHooks): void => {
         await shutdownNotificationScheduler();
       } catch (err) {
         logger.warn("Notification scheduler shutdown error", {
+          err: (err as Error).message,
+        });
+      }
+
+      // Drain the PDF upload worker too — its close() waits for the active
+      // upload to finish before returning, so the in-flight PDF isn't lost.
+      try {
+        logger.info("Draining PDF upload scheduler.");
+        await shutdownPdfUploadScheduler();
+      } catch (err) {
+        logger.warn("PDF upload scheduler shutdown error", {
           err: (err as Error).message,
         });
       }

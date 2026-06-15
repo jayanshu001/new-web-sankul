@@ -19,6 +19,10 @@ import type { RequestHandler } from "express";
 import mongoose from "mongoose";
 import { redisClient } from "../config/redis";
 import { isShuttingDown } from "../utils/gracefulShutdown";
+import {
+  getPdfUploadQueueOrNull,
+  getPdfUploadWorkerOrNull,
+} from "../admin/pdfUpload/pdfUpload.scheduler";
 
 const PING_TIMEOUT_MS = 1_500;
 
@@ -114,5 +118,74 @@ export const readinessHandler: RequestHandler = async (_req, res) => {
     status: allOk ? "ready" : "degraded",
     checks,
     timestamp: new Date().toISOString(),
+  });
+};
+
+/**
+ * Public, unauthenticated full-status report. Unlike /readyz (which is a tight
+ * pass/fail probe for the LB), this returns a human-readable snapshot of the
+ * whole service: DB + Redis connectivity, the PDF-upload BullMQ queue's
+ * per-state job counts, and whether its worker is running. Always returns 200
+ * with the report — it's a dashboard endpoint, not a probe, so a degraded
+ * dependency shows up in the body rather than as an HTTP failure.
+ *
+ * Mounted BEFORE the global rate limiter (see app.ts) and with no auth, so it
+ * can be scraped by an uptime monitor. It leaks only connection booleans and
+ * queue depths — nothing sensitive.
+ */
+export const healthReportHandler: RequestHandler = async (_req, res) => {
+  // --- MongoDB ---
+  let mongoDB: "connected" | "disconnected" = "disconnected";
+  try {
+    if (mongoose.connection.readyState === 1) {
+      await withTimeout(
+        mongoose.connection.db!.admin().ping() as unknown as Promise<unknown>,
+        PING_TIMEOUT_MS,
+        "mongo"
+      );
+      mongoDB = "connected";
+    }
+  } catch {
+    mongoDB = "disconnected";
+  }
+
+  // --- Redis ---
+  let redis: "connected" | "disconnected" = "disconnected";
+  try {
+    const reply = await withTimeout(redisClient.ping(), PING_TIMEOUT_MS, "redis");
+    redis = reply === "PONG" ? "connected" : "disconnected";
+  } catch {
+    redis = "disconnected";
+  }
+
+  // --- BullMQ PDF-upload queue ---
+  const queue = getPdfUploadQueueOrNull();
+  let workerPdfEmailQueue: "connected" | "disconnected" = "disconnected";
+  let counts: Record<string, number> = {};
+  if (queue) {
+    try {
+      counts = await withTimeout(queue.getJobCounts(), PING_TIMEOUT_MS, "queueCounts");
+      workerPdfEmailQueue = "connected";
+    } catch {
+      workerPdfEmailQueue = "disconnected";
+    }
+  }
+
+  // --- BullMQ worker ---
+  const worker = getPdfUploadWorkerOrNull();
+  const workerPdfEmailWorker = worker?.isRunning() ? "running" : "stopped";
+
+  res.status(200).json({
+    service: "web-sankul-api",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    database: { mongoDB, redis },
+    messageQueue: {
+      workerPdfEmailQueue,
+      counts,
+    },
+    otherWorkers: {
+      workerPdfEmailWorker,
+    },
   });
 };

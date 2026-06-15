@@ -1,15 +1,20 @@
 # My Subscriptions — Client API
 
-Drives the **My Subscriptions** library screen — the user's *currently-active* course/package subscriptions, with a per-card **View Course** action and a **Days Left** indicator.
+Drives the **My Subscriptions** library screen — the user's *currently-active*
+subscriptions for a requested `type`, with a per-card action target and a
+**Days Left** indicator. Sorted expiring-soonest first. Every `type` returns the
+**same card shape**, so the FE renders one list and switches only on
+`action.kind`.
 
-This is a distinct endpoint from Purchase History → Subscriptions tab. They share the same underlying data (`PackageCourseSubscription`) but differ on filter, sort, and per-card payload:
+This is a distinct endpoint from Purchase History → Subscriptions tab. They
+share underlying data but differ on filter, sort, and per-card payload:
 
 | | Purchase History (Subs tab) | My Subscriptions |
 |---|---|---|
-| **Purpose** | Records of every verified course purchase | The user's active library |
-| **Filter** | `paymentStatus = "verified"` (all time) | `paymentStatus = "verified"` AND `endAt > now` |
+| **Purpose** | Records of every verified purchase | The user's active library |
+| **Filter** | verified (all time) | active: verified AND `endAt > now` |
 | **Sort** | `createdAt desc` (newest first) | `endAt asc` (expiring soonest first) |
-| **Card focus** | `amount`, `purchasedAt`, receipt | `daysLeft`, banner, **View Course** action |
+| **Card focus** | `amount`, `purchasedAt`, receipt | `daysLeft`, action target |
 
 ---
 
@@ -19,19 +24,50 @@ This is a distinct endpoint from Purchase History → Subscriptions tab. They sh
 
 **Auth:** `Authorization: Bearer <token>` required.
 
-### Query
+### Query params
 
-- `page` (default `1`, min `1`)
-- `limit` (default `20`, min `1`, max `100`)
+| Param | Type | Default | Notes |
+|---|---|---|---|
+| `type` | `course` \| `test_series` \| `ebook` | `course` | Which library to return. |
+| `page` | int ≥ 1 | `1` | |
+| `limit` | int 1–100 | `20` | |
 
-### Response — `200 OK`
+### What each `type` returns
+
+| `type` | Returns | `action.kind` values |
+|---|---|---|
+| `course` | **Course AND Package** subscriptions together | `course`, `package` |
+| `test_series` | Test-series subscriptions | `test_series` |
+| `ebook` | eBook subscriptions | `ebook` |
+
+> `type` defaults to `course`, so an existing call with **no** `type` behaves
+> exactly as before (course + package combined). The `course` tab is the
+> intentional combined course-and-package view — each card says which it is via
+> `action.kind`.
+
+**Active** means `status: true` and `endAt` in the future. Course/package
+additionally require `paymentStatus: "verified"` (test-series and ebook rows
+have no payment-status column — the row existing means access was granted).
+Duplicate active rows for the same target (legacy data or a validity-extend that
+landed as a new row) are collapsed to the one with the furthest-out `endAt`.
+
+---
+
+## Request
+
+```http
+GET /api/v1/client/my-subscriptions?type=course&page=1&limit=20
+Authorization: Bearer <token>
+```
+
+## Response — `200 OK`
 
 ```json
 {
   "success": true,
   "data": [
     {
-      "_id": "65f...",
+      "_id": "6a1acf94dde3e6309cbc646b",
       "title": "PSI Constable 2.0 Live Batch",
       "author": "WebSankul",
       "thumbnail": "https://.../banner.jpg",
@@ -40,52 +76,85 @@ This is a distinct endpoint from Purchase History → Subscriptions tab. They sh
       "startAt": "2026-03-01T08:00:00.000Z",
       "endAt": "2026-05-20T08:00:00.000Z",
       "action": {
-        "kind": "course",
-        "courseId": "65f...",
-        "packageId": null,
-        "planId": "65f..."
+        "kind": "package",
+        "courseId": null,
+        "packageId": "6a180ffc9a0b2e62786a2f0c",
+        "planId": "6a1acf80dde3e6309cbc6410",
+        "testSeriesId": null,
+        "ebookId": null
       },
-      "meta": {
-        "duration": 90,
-        "packageName": "Live Batch"
-      }
+      "meta": { "duration": 90, "packageName": "Live Batch" }
     }
   ],
-  "pagination": {
-    "total": 3,
-    "page": 1,
-    "limit": 20,
-    "totalPages": 1
-  }
+  "pagination": { "total": 17, "page": 1, "limit": 20, "totalPages": 1 }
 }
 ```
 
-### Errors
+---
 
-| Status | Cause |
-|---|---|
-| 401 | `Unauthorized.` |
-| 500 | Server error |
+## Card fields (identical across all types)
+
+| Field | Type | Notes |
+|---|---|---|
+| `_id` | string | The **subscription row** id (not the product id). |
+| `title` | string | Course/package/ebook name, or test-series title. |
+| `author` | string \| null | Course or ebook author; null for package/test-series. |
+| `thumbnail` | string \| null | Best available product image; may be null. |
+| `badge` | string \| null | Course/package: `PackageType.name` (e.g. "Live Class", "Recorded Class"). Test-series: `"Test Series"`. eBook: `"eBook"`. |
+| `daysLeft` | int \| null | Whole days until `endAt`, ceiling-rounded (23h59m → 1). Never negative (expired rows are filtered out); `0` means "expires today". |
+| `startAt` / `endAt` | date \| null | Subscription window, ISO 8601 UTC. |
+| `action` | object | Deep-link target. See below. |
+| `meta` | object | Type-specific extras. `{}` for test-series/ebook. Course/package: `{ duration, packageName }`. |
+
+### `action` — building the deep link
+
+`action.kind` tells the FE which screen to open. The relevant ids are populated
+per kind; the rest are `null`. **All five keys are present in every card** so
+the shape is stable:
+
+| `kind` | Populated ids | FE opens |
+|---|---|---|
+| `course` | `courseId`, `planId` | Course player |
+| `package` | `packageId`, `planId` | Package landing |
+| `test_series` | `testSeriesId`, `planId` | Test-series screen |
+| `ebook` | `ebookId` | eBook reader/detail |
+
+> The API returns ids, **not** URLs — the route lives in the app.
+
+> `meta.duration` is the plan's stored `duration` value (see the plan model for
+> its unit on each product); use `startAt`/`endAt` for an exact remaining-time
+> bar rather than deriving from `duration`.
 
 ---
 
-## Field Notes
+## Errors
 
-- **`title`** — falls back to package name if the course name is missing. Practically always the course name.
-- **`thumbnail`** — `Course.thumbnail || Course.image`. May be `null` if neither is set.
-- **`badge`** — `PackageType.name`. Exact strings depend on admin config (e.g. `Live Class`, `Recorded Class`, `Subject Course`).
-- **`daysLeft`** — integer days until `endAt`, ceiling-rounded. A subscription ending in 23h59m reads `1` (matches the "9 Days Left" copy in the mockup). Never negative — expired subscriptions are filtered out before this point, so a `0` here means "expires today". Falls naturally below 30 when less than a month remains on a multi-month plan.
-- **`action.kind`** — `"course"` or `"package"`. Tells the frontend which screen to open.
-- **`action.courseId` / `action.packageId`** — exactly one is set, matching `action.kind`. The frontend builds its in-app route (course player vs package landing) from the populated id. `action.planId` is the underlying `PackageCourseEbookPrice._id` if you need it.
-- **`meta.duration`** — original plan duration in **months** (from `EbookPrice`/`PackageCourseEbookPrice.duration`). Useful if the UI wants to render a progress bar — convert to days first (`monthsToDays`) or compare against `startAt`/`endAt` directly.
+| Status | Body | Cause |
+|---|---|---|
+| 400 | `{ success:false, message, errors:[...] }` | Invalid `type` (not one of the three) or bad `page`/`limit`. |
+| 401 | `{ success:false, message:"Unauthorized." }` | Missing/expired token. |
+| 500 | `{ success:false, message }` | Server error. |
+
+Empty library returns `200` with `data: []` and `totalPages: 0` — not an error.
 
 ---
 
-## Frontend Integration Notes
+## Frontend integration notes
 
-1. **Cards render directly from the row** — no extra lookups needed.
-2. **"View Course" tap** → navigate to your course-player route using `action.courseId` (and optionally `action.packageId` if the player needs to know the plan).
-3. **Empty state** — `data: []`, `pagination.total = 0`. Show a CTA back to the course catalog.
+1. **One list component** — branch only on `action.kind`; the envelope is
+   identical across types. Use `badge` for any type-specific chip styling.
+2. **Three tabs** → call with `type=course`, `type=test_series`, `type=ebook`.
+   Paginate each independently; `total`/`totalPages` are per-`type` (post-dedup).
+3. **Tap action** → navigate using the populated id(s) for that `kind`.
 4. **Sort is server-side** (expiring-soonest first). Don't re-sort client-side.
-5. **Pagination is independent** of the Purchase History screen — fresh state per screen.
+5. **Empty state** — `data: []`, `total: 0`. Show a catalog CTA.
 6. **Dates** are ISO 8601 UTC; display in user locale.
+
+---
+
+## Backend reference
+
+- Controller: `src/client/my-subscriptions/my-subscriptions.controller.ts`
+  (`buildCourseAndPackageCards` / `buildTestSeriesCards` / `buildEbookCards`).
+- Sources: `ws_package_course_subscriptions`, `ws_test_series_subscriptions`,
+  `ws_ebook_subscriptions`.

@@ -2,7 +2,12 @@ import mongoose, { Schema, Document } from "mongoose";
 import { PromocodeType } from "../enums";
 
 export type PromoDiscountType = "flat" | "percentage";
-export type PromoAppliesToType = "package" | "course" | "liveCourse";
+export type PromoAppliesToType =
+  | "package"
+  | "course"
+  | "liveCourse"
+  | "ebook"
+  | "testSeries";
 
 export interface IPromoCode extends Document {
   type: PromocodeType;
@@ -40,7 +45,7 @@ const promoCodeSchema: Schema = new Schema(
     // SchemaType descriptor and choke on `default: null`. Optional by design —
     // older rows pre-migration may not have it yet.
     appliesTo: {
-      type: { type: String, enum: ["package", "course", "liveCourse"] },
+      type: { type: String, enum: ["package", "course", "liveCourse", "ebook", "testSeries"] },
       ids: { type: [Schema.Types.ObjectId], default: [] },
     },
   },

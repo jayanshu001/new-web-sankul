@@ -156,7 +156,7 @@ export async function generateEbookReceipt(orderId: string, customerId: string):
   if (!customer) throw new Error("Customer not found.");
 
   const validity = plan?.duration
-    ? `${plan.duration} month${plan.duration > 1 ? "s" : ""}`
+    ? `${plan.duration} day${plan.duration > 1 ? "s" : ""}`
     : "-";
 
   const items = [
@@ -191,7 +191,7 @@ export async function generateEbookReceipt(orderId: string, customerId: string):
 // ebook/book receipts so all three invoices look identical. A "course order" is
 // a PackageCourseSubscription, which is either a course (courseId) or a package
 // (targetPackageId); the plan lives in `packageId` → PackageCourseEbookPrice.
-// Plan `duration` is in DAYS for course/package plans (unlike ebook = months).
+// Plan `duration` is in DAYS for course/package plans (same as ebook plans).
 // Builds the receipt HTML (fetch order → assemble data → render EJS) without
 // rasterising it. Split out so callers can run renderPdfFromHtml themselves.
 export async function buildCourseReceiptHtml(orderId: string, customerId: string): Promise<string> {
@@ -252,7 +252,7 @@ export async function buildCourseReceiptHtml(orderId: string, customerId: string
 // ebook/book receipts so all three invoices look identical. A "course order" is
 // a PackageCourseSubscription, which is either a course (courseId) or a package
 // (targetPackageId); the plan lives in `packageId` → PackageCourseEbookPrice.
-// Plan `duration` is in DAYS for course/package plans (unlike ebook = months).
+// Plan `duration` is in DAYS for course/package plans (same as ebook plans).
 export async function generateCourseReceipt(orderId: string, customerId: string): Promise<Buffer> {
   const html = await buildCourseReceiptHtml(orderId, customerId);
   return renderPdfFromHtml(html);

@@ -14,6 +14,10 @@ import { LiveSession } from "../../models/course/LiveSession.model";
 import { defaultListingQualities, qualitiesFromSessionRecordings } from "../../utils/videoQualities";
 import logger from "../../utils/logger";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { collectCategoryTreeIds } from "../../utils/categoryTree";
+import { ExamStatus, ExamType } from "../../models/enums";
+import { listDirectMaterialsForCategory } from "../material/entitlement";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Unified catalog tabs for the three product types (course / package /
@@ -148,10 +152,14 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
     const list = await Promise.all(
       selected.map(async (cat: any) => {
         const videoFilter: any = { videoCategoryId: cat._id, status: true };
-        if (search) videoFilter.title = { $regex: search, $options: "i" };
+        { const c = buildRegexCondition(search); if (c) videoFilter.title = c; }
 
+        // count rolls up the whole subtree (this folder + any nested child
+        // folders) so the badge matches what the user finds after drilling in;
+        // the inlined `videos` stay this folder's direct items only.
+        const countCategoryIds = await collectCategoryTreeIds(VideoCategory, cat);
         const [count, videos] = await Promise.all([
-          Video.countDocuments({ videoCategoryId: cat._id, status: true }),
+          Video.countDocuments({ videoCategoryId: { $in: countCategoryIds }, status: true }),
           Video.find(videoFilter).sort({ order: 1, createdAt: -1 }).lean(),
         ]);
 
@@ -226,20 +234,37 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
             count,
           },
           list: videoList,
+          // Internal only (stripped before responding): the subtree category ids
+          // this group counted, used to compute a de-duplicated grand total.
+          _countCategoryIds: countCategoryIds,
         };
       })
     );
 
-    const totalItems = list.reduce((n, g) => n + (g.category.count ?? 0), 0);
+    // totals.items must NOT be a naive sum of per-group counts: when a package
+    // assigns both a parent folder AND one of its descendants as separate
+    // subjects, their subtrees overlap and the same video would be counted in
+    // both groups. Count DISTINCT videos across the union of all groups'
+    // subtree category ids instead. (Per-group `count` badges keep their own
+    // subtree total — overlap there is expected and correct for the badge.)
+    const unionCategoryIds = Array.from(
+      new Set(list.flatMap((g) => g._countCategoryIds.map((c: any) => String(c))))
+    );
+    const totalItems = unionCategoryIds.length
+      ? await Video.countDocuments({ videoCategoryId: { $in: unionCategoryIds }, status: true })
+      : 0;
 
-    logger.info("getCatalogVideos success", { traceId, type, id, groups: list.length });
+    // Drop the internal field before responding.
+    const responseList = list.map(({ _countCategoryIds, ...rest }) => rest);
+
+    logger.info("getCatalogVideos success", { traceId, type, id, groups: responseList.length });
     return success(
       res,
       {
         parent: { _id: id, type, name: parent.name },
-        list,
+        list: responseList,
         availableCategories,
-        totals: { categories: list.length, items: totalItems },
+        totals: { categories: responseList.length, items: totalItems },
       },
       "Video categories fetched."
     );
@@ -269,9 +294,26 @@ export const getCatalogMaterials = async (req: Request, res: Response) => {
       matchesSearch(c.title, search)
     );
 
-    const counts = await Promise.all(
-      cats.map((c: any) => Material.countDocuments({ materialCategoryId: c._id, status: true }))
-    );
+    // Roll each folder's count up through its nested child folders so the badge
+    // reflects everything reachable beneath it, not just direct materials.
+    // Alongside the subtree count, inline each folder's OWN direct materials so
+    // a category that has both child folders AND its own materials surfaces
+    // them here (FE no longer needs a separate call just to discover them).
+    const userId = req.user?.id;
+    const [counts, directMaterials] = await Promise.all([
+      Promise.all(
+        cats.map(async (c: any) => {
+          const ids = await collectCategoryTreeIds(MaterialCategory, c);
+          return Material.countDocuments({ materialCategoryId: { $in: ids }, status: true });
+        })
+      ),
+      // `search` here filters CATEGORIES by title (above); the inlined
+      // materials are the category's full direct set, not re-filtered by the
+      // category search term.
+      Promise.all(
+        cats.map((c: any) => listDirectMaterialsForCategory(c._id, userId))
+      ),
+    ]);
 
     const list = cats.map((cat: any, i: number) => ({
       category: {
@@ -280,6 +322,7 @@ export const getCatalogMaterials = async (req: Request, res: Response) => {
         havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
         count: counts[i],
       },
+      materials: directMaterials[i],
     }));
     const totalItems = counts.reduce((n, c) => n + c, 0);
 
@@ -320,8 +363,31 @@ export const getCatalogTests = async (req: Request, res: Response) => {
       matchesSearch(c.name, search)
     );
 
+    // Roll each folder's count up through its nested child folders so the badge
+    // reflects every reachable exam, not just those on the folder directly.
+    // Count only PUBLISHED exams — drafts are never shown to clients (see the
+    // listing in categories.controller / exam.controller), so counting them
+    // would overstate the badge.
+    //
+    // Also drop scheduled exams whose attempt window has already ENDED: a
+    // `daily`/scheduled exam with an `endAt` in the past is over and must not
+    // inflate the badge. `subject` exams are always-available (no window), so
+    // they always count regardless of any stray date fields.
+    const now = new Date();
     const counts = await Promise.all(
-      cats.map((c: any) => Exam.countDocuments({ categoryId: c._id }))
+      cats.map(async (c: any) => {
+        const ids = await collectCategoryTreeIds(ExamCategory, c);
+        return Exam.countDocuments({
+          categoryId: { $in: ids },
+          status: ExamStatus.PUBLISHED,
+          $or: [
+            { type: ExamType.SUBJECT },
+            { endAt: { $exists: false } },
+            { endAt: null },
+            { endAt: { $gte: now } },
+          ],
+        });
+      })
     );
 
     const list = cats.map((cat: any, i: number) => ({

@@ -22,12 +22,38 @@ const numish = z.preprocess(
   z.number()
 );
 
+// Array of ObjectIds tolerant of every transport shape:
+//   - JSON body:            ["id1","id2"]            (real array)
+//   - multipart repeated:   examCategoryIds=id1&...  (multer → array, or single string)
+//   - JSON-encoded string:  '["id1","id2"]'          (some form clients)
+// The bracket-suffixed `examCategoryIds[]` key is normalized to `examCategoryIds`
+// in the controller before this runs.
+const objectIdArray = z.preprocess((v) => {
+  if (v == null || v === "") return undefined;
+  if (Array.isArray(v)) return v.filter((x) => x != null && x !== "");
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (s.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(s);
+        if (Array.isArray(parsed)) return parsed.filter((x) => x != null && x !== "");
+      } catch {
+        /* fall through to single-value wrap */
+      }
+    }
+    return [s];
+  }
+  return v;
+}, z.array(objectId));
+
 // ─── Test Series ─────────────────────────────────────────────────────────────
 
 export const createTestSeriesSchema = z.object({
   title: z.string().trim().min(1).max(255),
   description: z.string().trim().optional(),
   thumbnail: z.string().trim().max(500).optional(),
+  examCategoryIds: objectIdArray.optional(),
+  // @deprecated — still accepted from old clients; folded into examCategoryIds in the controller.
   examCategoryId: objectId.optional().nullable(),
   language: z.enum(Object.values(ExamLanguage) as [string, ...string[]]).optional(),
   isFree: boolish.optional(),

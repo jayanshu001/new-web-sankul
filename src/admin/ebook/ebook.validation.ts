@@ -8,12 +8,37 @@ const zBool = z.preprocess(
   z.boolean()
 );
 
+// Accepts an array of ids, a single id string, or a JSON-stringified array
+// (multipart form-data flattens arrays — the controller also reassembles the
+// bracketed `field[]` keys before this runs), and normalizes to string[].
+// Empty string / empty array clears the links; each entry must be an ObjectId.
+const zObjectIdArray = z.preprocess((v) => {
+  if (v === undefined) return undefined;
+  if (Array.isArray(v)) return v.filter((s) => s !== "");
+  if (typeof v === "string") {
+    const s = v.trim();
+    if (s === "") return [];
+    if (s.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(s);
+        return Array.isArray(parsed) ? parsed.filter((x) => x !== "") : [s];
+      } catch {
+        return [s];
+      }
+    }
+    return [s];
+  }
+  return v;
+}, z.array(z.string().regex(objectIdRegex, "Invalid id")));
+
 export const createEbookSchema = z.object({
   name: z.string().min(1, "Name is required"),
   examCountdownCategoryId: z.preprocess(
     (v) => (v === "" || v === "null" ? null : v),
     z.string().regex(objectIdRegex, "Invalid examCountdownCategoryId").nullable().optional()
   ),
+  examCountdownCategoryIds: zObjectIdArray.optional(),
+  examCountdownIds: zObjectIdArray.optional(),
   description: z.string().min(1, "Description is required"),
   author: z.string().min(1, "Author is required"),
   publisher: z.string().min(1, "Publisher is required"),

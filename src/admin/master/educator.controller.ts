@@ -9,11 +9,49 @@ import { Package } from "../../models/course/Package.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { createEducatorSchema, updateEducatorSchema } from "./master.validation";
+import { buildSearchFilter } from "../../utils/searchFilter";
+
+const EDUCATOR_SORT_FIELDS = new Set(["createdAt", "updatedAt", "name", "email"]);
 
 export const getEducators = async (req: Request, res: Response) => {
   try {
-    const educators = await CourseEducator.find({ deleted: false }).sort({ createdAt: -1 });
-    res.status(200).json({ success: true, data: educators });
+    const {
+      search,
+      status,
+      sortBy,
+      sortOrder,
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string>;
+
+    // Soft-deleted educators are never listed.
+    const filters: any = { deleted: false };
+
+    Object.assign(filters, buildSearchFilter(search, ["name", "email"]));
+    // status maps to the boolean `status` field; accept both label and boolean forms.
+    if (status === "true" || status === "active") filters.status = true;
+    else if (status === "false" || status === "inactive") filters.status = false;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const sortField = sortBy && EDUCATOR_SORT_FIELDS.has(sortBy) ? sortBy : "createdAt";
+    const sortDir = sortOrder === "asc" ? 1 : -1;
+
+    const [data, total] = await Promise.all([
+      CourseEducator.find(filters)
+        .sort({ [sortField]: sortDir })
+        .skip(skip)
+        .limit(limitNum),
+      CourseEducator.countDocuments(filters),
+    ]);
+
+    res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

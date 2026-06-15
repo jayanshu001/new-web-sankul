@@ -4,6 +4,7 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { Customer } from "../../models/customer/Customer.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 // GET /api/v1/promoter/customers — unique customers attributed to this promoter
 export const listMyCustomers = async (req: Request, res: Response) => {
@@ -29,14 +30,7 @@ export const listMyCustomers = async (req: Request, res: Response) => {
     const customerIds = Array.from(customerIdsSet);
 
     const filter: any = { _id: { $in: customerIds }, isAccountDeleted: false };
-    if (search) {
-      filter.$or = [
-        { firstName: { $regex: search, $options: "i" } },
-        { lastName: { $regex: search, $options: "i" } },
-        { phoneNumber: { $regex: search, $options: "i" } },
-        { emailAddress: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filter, buildSearchFilter(search, ["firstName", "lastName", "phoneNumber", "emailAddress"]));
 
     const [data, total] = await Promise.all([
       Customer.find(filter)

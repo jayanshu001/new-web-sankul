@@ -6,6 +6,8 @@ import { Material } from "../../models/course/Material.model";
 import { Video } from "../../models/course/Video.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildRegexCondition } from "../../utils/searchFilter";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 
 const KIND_MODELS: Record<FolderItemKind, mongoose.Model<any>> = {
   material: Material,
@@ -60,9 +62,18 @@ function makeFolderController(type: FolderType) {
 
       await ensureDefaultFolders(uid);
 
-      const folders = await Folder.find({ customerId: uid, type })
-        .sort({ isDefaultFolder: -1, createdAt: -1 })
-        .lean();
+      const { search, page, limit, skip } = parseListQuery(req.query);
+      const filter: any = { customerId: uid, type };
+      { const c = buildRegexCondition(search); if (c) filter.name = c; }
+
+      const [folders, total] = await Promise.all([
+        Folder.find(filter)
+          .sort({ isDefaultFolder: -1, createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        Folder.countDocuments(filter),
+      ]);
       const counts = await FolderItem.aggregate([
         { $match: { customerId: new Types.ObjectId(uid), kind: allowedKind } },
         { $group: { _id: "$folderId", count: { $sum: 1 } } },
@@ -75,7 +86,7 @@ function makeFolderController(type: FolderType) {
         itemCount: countByFolder.get(String(f._id)) ?? 0,
       }));
       logger.info(`${type}Folder list success`, { traceId, customerId: uid, count: data.length });
-      return res.status(200).json({ success: true, data });
+      return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
     } catch (error: any) {
       logger.error(`${type}Folder list failed`, { traceId, customerId: uid, error: getErrorMessage(error), stack: error.stack });
       return res.status(500).json({ success: false, message: error.message });

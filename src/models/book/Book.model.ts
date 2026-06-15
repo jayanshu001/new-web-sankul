@@ -4,6 +4,12 @@ import { BookLanguage } from "../enums";
 export interface IBook extends Document {
   name: string;
   examCountdownCategoryId?: Types.ObjectId | null;
+  // Multi-select exam-countdown links. `examCountdownCategoryIds` is the
+  // many-to-many successor to the legacy single `examCountdownCategoryId`
+  // (which stays for back-compat); `examCountdownIds` links to specific exam
+  // events. Both default to [] — an empty array means "cleared".
+  examCountdownCategoryIds: Types.ObjectId[];
+  examCountdownIds: Types.ObjectId[];
   // Packages this physical book is offered as material for. Many-to-many:
   // a book can belong to several packages and a package to several books.
   // Stored on the Book (mirrors PromoCode.appliesTo.ids) so the package
@@ -16,6 +22,12 @@ export interface IBook extends Document {
   termsAndConditions?: string;
   demoUrl?: string;
   bookUrl?: string;
+  // Original (human-readable) filenames of the uploaded PDFs, captured from the
+  // multipart upload's `file.originalname`. The S3 URL only carries the
+  // timestamp-prefixed key (e.g. `1781000928537-demoUrl.pdf`), so these mirror
+  // the Ebook model's demoFileName/bookFileName to surface the real name in the API.
+  demoFileName?: string;
+  bookFileName?: string;
   weight?: number;
   pages?: number;
   dynamicLink?: string;
@@ -42,6 +54,14 @@ const BookSchema = new Schema<IBook>(
       ref: "ExamCountdownCategory",
       default: null,
     },
+    examCountdownCategoryIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "ExamCountdownCategory" }],
+      default: [],
+    },
+    examCountdownIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: "ExamCountdown" }],
+      default: [],
+    },
     packageIds: {
       type: [Schema.Types.ObjectId],
       ref: "Package",
@@ -55,6 +75,8 @@ const BookSchema = new Schema<IBook>(
     termsAndConditions: { type: String, default: null },
     demoUrl: { type: String, maxlength: 500 },
     bookUrl: { type: String, maxlength: 500 },
+    demoFileName: { type: String, maxlength: 500, default: null },
+    bookFileName: { type: String, maxlength: 500, default: null },
     weight: { type: Number, default: 0 },
     pages: { type: Number, default: 0 },
     dynamicLink: { type: String, maxlength: 500 },
@@ -75,6 +97,8 @@ const BookSchema = new Schema<IBook>(
 
 BookSchema.index({ status: 1, orderBy: 1 });
 BookSchema.index({ examCountdownCategoryId: 1, status: 1, orderBy: 1 });
+BookSchema.index({ examCountdownCategoryIds: 1, status: 1, orderBy: 1 });
+BookSchema.index({ examCountdownIds: 1, status: 1, orderBy: 1 });
 BookSchema.index({ status: 1, isTrending: 1, orderBy: 1 });
 // Supports the package detail "material (Book)" tab: books linked to a package.
 BookSchema.index({ packageIds: 1, status: 1, orderBy: 1 });

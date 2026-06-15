@@ -22,7 +22,10 @@ const grantSchema = z
   .object({
     customerId:     objectId,
     planId:         objectId,
-    // Optional overrides. endAt wins over durationMonths wins over plan.duration.
+    // Optional overrides. Precedence: endAt > durationDays > durationMonths > plan.duration.
+    // `plan.duration` is DAYS (see LiveCoursePlan). `durationDays` is the preferred
+    // override; `durationMonths` is kept for backward compat with older callers.
+    durationDays:   z.number().int().positive().optional(),
     durationMonths: z.number().int().positive().optional(),
     startAt:        z.string().trim().optional(),
     endAt:          z.string().trim().optional(),
@@ -187,11 +190,15 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
       const d = new Date(validated.endAt);
       if (isNaN(d.getTime())) { logger.warn("grantLiveCourseSubscription invalid endAt", { traceId, endAt: validated.endAt }); return failure(res, "endAt must be a valid date.", 422); }
       endAt = d;
+    } else if (validated.durationDays != null) {
+      // Explicit days override (preferred).
+      endAt = computeEndAt({ startAt, durationMonths: validated.durationDays, asDays: true });
+    } else if (validated.durationMonths != null) {
+      // Legacy months override — honoured for backward compat.
+      endAt = computeEndAt({ startAt, durationMonths: validated.durationMonths });
     } else {
-      // `duration` is stored as MONTHS — delegate to shared helper that honours
-      // calendar-month length via setMonth (matches webhook/verify/subscription).
-      const months = validated.durationMonths ?? plan.duration;
-      endAt = computeEndAt({ startAt, durationMonths: months });
+      // `plan.duration` is stored as DAYS (see LiveCoursePlan) — use setDate.
+      endAt = computeEndAt({ startAt, durationMonths: plan.duration, asDays: true });
     }
     if (endAt.getTime() <= startAt.getTime()) {
       logger.warn("grantLiveCourseSubscription endAt before startAt", { traceId, startAt, endAt });
@@ -215,9 +222,14 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
           }).sort({ endAt: -1 });
 
     if (existing) {
-      // Stack the plan's duration onto whatever time is left on the row.
-      const months = validated.durationMonths ?? plan.duration;
-      existing.endAt = extendEndAt({ currentEndAt: existing.endAt, durationMonths: months, now });
+      // Stack the plan's duration (DAYS) onto whatever time is left on the row.
+      // Days override wins; legacy months override honoured; else plan.duration (days).
+      existing.endAt =
+        validated.durationDays != null
+          ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: validated.durationDays, asDays: true, now })
+          : validated.durationMonths != null
+            ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: validated.durationMonths, now })
+            : extendEndAt({ currentEndAt: existing.endAt, durationMonths: plan.duration, asDays: true, now });
       existing.planId = validated.planId as any;
       existing.paidAt = now;
       await existing.save();

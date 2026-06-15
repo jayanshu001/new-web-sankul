@@ -6,8 +6,11 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { PackageChat } from "../../models/course/PackageChat.model";
 import { Video } from "../../models/course/Video.model";
+import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { Material } from "../../models/course/Material.model";
+import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import { Exam } from "../../models/exam/Exam.model";
+import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
 import { Goal } from "../../models/Goal.model";
 import logger from "../../utils/logger";
@@ -31,7 +34,11 @@ const resolveBase = (req: Request) =>
 
 async function buildVideoCategoryGroup(cat: any) {
   if (!cat) return null;
-  const count = await Video.countDocuments({ videoCategoryId: cat._id, status: true });
+  const categoryIds = await collectCategoryTreeIds(VideoCategory, cat);
+  const count = await Video.countDocuments({
+    videoCategoryId: { $in: categoryIds },
+    status: true,
+  });
   return {
     category: {
       ...cat,
@@ -44,7 +51,11 @@ async function buildVideoCategoryGroup(cat: any) {
 
 async function buildMaterialCategoryGroup(cat: any) {
   if (!cat) return null;
-  const count = await Material.countDocuments({ materialCategoryId: cat._id, status: true });
+  const categoryIds = await collectCategoryTreeIds(MaterialCategory, cat);
+  const count = await Material.countDocuments({
+    materialCategoryId: { $in: categoryIds },
+    status: true,
+  });
   return {
     category: {
       ...cat,
@@ -57,7 +68,22 @@ async function buildMaterialCategoryGroup(cat: any) {
 
 async function buildExamCategoryEntry(cat: any) {
   if (!cat) return null;
-  const count = await Exam.countDocuments({ categoryId: cat._id });
+  const categoryIds = await collectCategoryTreeIds(ExamCategory, cat);
+  // Only PUBLISHED exams are client-visible, so drafts must not inflate the count.
+  // Also drop scheduled exams whose attempt window has ENDED (a past `endAt`);
+  // `subject` exams are always-available and always count. Mirrors the catalog
+  // `/tests` badge + the drill-in listing in exam.controller.
+  const now = new Date();
+  const count = await Exam.countDocuments({
+    categoryId: { $in: categoryIds },
+    status: ExamStatus.PUBLISHED,
+    $or: [
+      { type: ExamType.SUBJECT },
+      { endAt: { $exists: false } },
+      { endAt: null },
+      { endAt: { $gte: now } },
+    ],
+  });
   return {
     category: {
       ...cat,
@@ -209,12 +235,16 @@ export const listPackages = async (req: Request, res: Response) => {
       goalId,
       isSmartCourse,
       isPlannerCourse,
+      type,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
 
     const filter: any = { active: true };
-    if (search) filter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
+    // type=paid -> only paid; type=free -> only free; omitted -> all.
+    if (type === "paid") filter.isPaid = true;
+    else if (type === "free") filter.isPaid = false;
     if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))
       filter.packageTypeId = packageTypeId;
     if (goalId && mongoose.Types.ObjectId.isValid(goalId)) filter.goalId = goalId;
@@ -281,7 +311,9 @@ export const listPackagesByType = async (req: Request, res: Response) => {
 
 // Returns a map of packageId -> latest-expiring active subscription's endAt
 // (Date | null). `null` means lifetime; absence means not purchased.
-async function purchasedPackageEndAtMap(customerId: string | undefined, packageIds: any[]): Promise<Map<string, Date | null>> {
+// Exported so other listing endpoints (e.g. exam-countdown product listings in
+// categories.controller) can compute isPurchased/daysLeft with the same contract.
+export async function purchasedPackageEndAtMap(customerId: string | undefined, packageIds: any[]): Promise<Map<string, Date | null>> {
   if (!customerId || packageIds.length === 0) return new Map();
   const now = new Date();
   const planIds = await PackageCourseEbookPrice.find({ packageId: { $in: packageIds } }).distinct("_id");

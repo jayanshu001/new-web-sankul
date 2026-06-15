@@ -6,6 +6,7 @@ import { Package } from "../../models/course/Package.model";
 import { LiveCourse } from "../../models/course/LiveCourse.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 type Id = mongoose.Types.ObjectId | string;
 
@@ -187,6 +188,28 @@ export function shapeMaterialForClient(m: any, ownedIds: Set<string>) {
     file: gated ? "" : obj.file ?? "",
     directLink: gated ? "" : obj.directLink ?? "",
   };
+}
+
+/**
+ * Fetch the materials attached DIRECTLY to a single category (not its subtree)
+ * and shape them for the client (isPaid/isPurchased + gated file/directLink).
+ * Shared by the category-listing endpoints that inline a category's own
+ * materials alongside its child folders. Returns [] when the category has none.
+ *
+ * `search` (optional) filters by title, mirroring the standalone materials
+ * listing. Sort matches `listMaterialsByCategory` (order asc, then newest).
+ */
+export async function listDirectMaterialsForCategory(
+  categoryId: Id,
+  customerId: string | undefined,
+  search?: string
+): Promise<ReturnType<typeof shapeMaterialForClient>[]> {
+  const filter: any = { materialCategoryId: categoryId, status: true };
+  { const c = buildRegexCondition(search); if (c) filter.title = c; }
+  const rawList = await Material.find(filter).sort({ order: 1, createdAt: -1 }).lean();
+  if (rawList.length === 0) return [];
+  const ownedIds = await getPurchasedMaterialIds(customerId, rawList as any);
+  return rawList.map((m) => shapeMaterialForClient(m, ownedIds));
 }
 
 /**

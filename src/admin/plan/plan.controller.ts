@@ -9,6 +9,7 @@ import {
   bulkStatusSchema,
   bulkDeleteSchema,
 } from "./plan.validation";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -67,7 +68,7 @@ export const listPlans = async (req: Request, res: Response) => {
     if (isDefault === "true" || isDefault === "false") filter.isDefault = isDefault === "true";
     if (withMaterial === "true" || withMaterial === "false")
       filter.withMaterial = withMaterial === "true";
-    if (search) filter.name = { $regex: search, $options: "i" };
+    { const c = buildRegexCondition(search); if (c) filter.name = c; }
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);

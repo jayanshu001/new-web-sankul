@@ -22,14 +22,7 @@ export const listInquiries = async (req: Request, res: Response) => {
     const filter: any = {};
     if (course) filter.course = course;
     if (mode) filter.mode = mode;
-    if (search) {
-      filter.$or = [
-        { description: { $regex: search, $options: "i" } },
-        { name: { $regex: search, $options: "i" } },
-        { mobile: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filter, buildSearchFilter(search, ["description", "name", "mobile", "email"]));
     if (fromDate || toDate) {
       filter.createdAt = {};
       if (fromDate) filter.createdAt.$gte = new Date(fromDate);

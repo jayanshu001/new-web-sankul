@@ -12,6 +12,7 @@ import {
 } from "./administrator.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 const SALT_ROUNDS = 10;
 
@@ -38,14 +39,10 @@ export const getAdministrators = async (req: Request, res: Response) => {
     // Soft-deleted admins are never listed.
     const filters: any = { deleted: false };
 
-    if (search) {
-      filters.$or = [
-        { firstName: { $regex: search, $options: "i" } },
-        { lastName: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-      ];
-    }
-    if (status === "true" || status === "false") filters.status = status === "true";
+    Object.assign(filters, buildSearchFilter(search, ["firstName", "lastName", "email"]));
+    // Accept boolean ("true"/"false") and label ("active"/"inactive") forms.
+    if (status === "true" || status === "active") filters.status = true;
+    else if (status === "false" || status === "inactive") filters.status = false;
     if (role) {
       if (ADMIN_ROLE_VALUES.includes(role)) filters.role = role;
       else if (mongoose.Types.ObjectId.isValid(role)) filters.roles = role;
@@ -69,12 +66,14 @@ export const getAdministrators = async (req: Request, res: Response) => {
     logger.info("getAdministrators success", { traceId, total });
     return res.status(200).json({
       success: true,
-      data,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
+      data: {
+        items: data,
+        pagination: {
+          total,
+          page: pageNum,
+          limit: limitNum,
+          totalPages: Math.ceil(total / limitNum),
+        },
       },
     });
   } catch (error: any) {

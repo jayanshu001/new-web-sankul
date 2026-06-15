@@ -27,11 +27,13 @@ const zObjectIdArray = z.preprocess((v) => {
     return [s];
   }
   return v;
-}, z.array(z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), "Invalid package id.")));
+}, z.array(z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), "Invalid id.")));
 
 export const createBookSchema = z.object({
   name: z.string().min(1).max(255),
   examCountdownCategoryId: z.string().nullable().optional(),
+  examCountdownCategoryIds: zObjectIdArray.optional(),
+  examCountdownIds: zObjectIdArray.optional(),
   packageIds: zObjectIdArray.optional(),
   thumbnail: z.string().max(500).optional(),
   author: z.string().max(150).optional(),
@@ -39,6 +41,8 @@ export const createBookSchema = z.object({
   description: z.string().optional(),
   termsAndConditions: z.string().optional().nullable(),
   demoUrl: z.string().max(500).optional(),
+  demoFileName: z.string().max(500).optional().nullable(),
+  bookFileName: z.string().max(500).optional().nullable(),
   weight: z.coerce.number().int().nonnegative().optional(),
   pages: z.coerce.number().int().nonnegative().optional(),
   dynamicLink: z.string().max(500).optional(),

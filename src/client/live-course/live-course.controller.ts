@@ -10,6 +10,7 @@ import { PackageCategory } from "../../models/course/PackageCategory.model";
 import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { hasAccessToAnyLiveCourse, buildPurchaseOptions, getDaysLeftForLiveCourses, getDaysLeftMapForLiveCourses } from "./entitlement";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { buildRegexCondition } from "../../utils/searchFilter";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import cache from "../../libs/cache";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
@@ -132,7 +133,8 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
 
     const query: Record<string, any> = { status: true };
-    if (search) query.name = { $regex: search, $options: "i" };
+    const searchCond = buildRegexCondition(search);
+    if (searchCond) query.name = searchCond;
 
     const [rows, total] = await Promise.all([
       LiveCourse.find(query)
@@ -244,7 +246,8 @@ export const listUpcomingLiveBatches = async (req: Request, res: Response) => {
       status: true,
       startTime: { $ne: null, $gte: now },
     };
-    if (search) baseQuery.name = { $regex: search, $options: "i" };
+    const searchCond = buildRegexCondition(search);
+    if (searchCond) baseQuery.name = searchCond;
 
     // The list query layers the optional category filter on top of the base
     // "upcoming" criteria. The tab bar (below) is derived from the base query

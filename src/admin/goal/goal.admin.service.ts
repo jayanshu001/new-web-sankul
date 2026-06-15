@@ -1,4 +1,5 @@
 import logger from "../../utils/logger";
+import { buildSearchFilter } from "../../utils/searchFilter";
 import { Goal } from "../../models/Goal.model";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { redisClient } from "../../config/redis";
@@ -65,15 +66,8 @@ export const getGoals = async (query: {
   logger.info("getGoals service invoked", { traceId, query });
   const { search, isActive, page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc' } = query;
   
-  const filter: any = {};
-
   // Search by Goal Title OR specific Label Name
-  if (search) {
-    filter.$or = [
-      { title: { $regex: search, $options: "i" } },
-      { "labels.name": { $regex: search, $options: "i" } }
-    ];
-  }
+  const filter: any = { ...buildSearchFilter(search, ["title", "labels.name"]) };
 
   // Filter by Active status
   if (isActive !== undefined && isActive !== "") {
@@ -124,7 +118,7 @@ export const getGoals = async (query: {
 
 export const updateGoal = async (
   id: string,
-  data: { title?: string; labels?: any; image?: string; isActive?: boolean | string },
+  data: { title?: string; labels?: any; image?: string | null; isActive?: boolean | string },
   traceId?: string
 ) => {
   logger.info("updateGoal service invoked", { traceId, id, data });
@@ -139,13 +133,16 @@ export const updateGoal = async (
   if (data.labels !== undefined) goal.labels = parseLabels(data.labels) as any;
 
   if (data.image !== undefined) {
-    if (goal.image && goal.image !== data.image) {
-      // Trigger background cleanup of the old icon from DO Spaces
+    // "" is the clear sentinel from the controller (empty multipart field) →
+    // store null. A non-empty value replaces the image. Either way, delete the
+    // old icon from Spaces when it actually changed.
+    const nextImage = data.image === "" ? null : data.image;
+    if (goal.image && goal.image !== nextImage) {
       deleteFromS3FileUrl(goal.image).catch((err) =>
         logger.error("updateGoal service failed deleting old image", { traceId, id, error: (err as Error).message })
       );
     }
-    goal.image = data.image;
+    goal.image = nextImage as any;
   }
 
   if (data.isActive !== undefined) {

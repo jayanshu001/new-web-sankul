@@ -66,15 +66,16 @@ export const listBooks = async (req: Request, res: Response) => {
     }
 
     const filter: any = { status: true };
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { author: { $regex: search, $options: "i" } },
-      ];
+    {
+      const rx = buildRegexCondition(search);
+      if (rx) filter.$or = [{ name: rx }, { author: rx }];
     }
     if (language) filter.language = language;
 
-    const books = await Book.find(filter).sort({ orderBy: 1, createdAt: -1 });
+    const [books, total] = await Promise.all([
+      Book.find(filter).sort({ orderBy: 1, createdAt: -1 }).skip(skip).limit(limit),
+      Book.countDocuments(filter),
+    ]);
 
     let cartMap = new Map<string, number>();
     let cartId: string | null = null;
@@ -115,7 +116,7 @@ export const listBooks = async (req: Request, res: Response) => {
     });
 
     logger.info("listBooks success", { traceId, customerId, count: decorated.length });
-    return res.status(200).json({ success: true, data: { cartId, books: decorated } });
+    return res.status(200).json({ success: true, data: { cartId, books: decorated }, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listBooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -136,9 +137,9 @@ export async function fetchTrendingBooksOnly(opts: TrendingOpts = {}) {
 
   const bookFilter: any = { status: true, isTrending: true };
   if (opts.language) bookFilter.language = opts.language;
-  if (opts.search) {
-    const rx = { $regex: opts.search, $options: "i" };
-    bookFilter.$or = [{ name: rx }, { author: rx }];
+  {
+    const rx = buildRegexCondition(opts.search);
+    if (rx) bookFilter.$or = [{ name: rx }, { author: rx }];
   }
   if (wantFree) bookFilter.discountedPrice = 0;
   else if (wantPaid) bookFilter.discountedPrice = { $gt: 0 };
@@ -176,9 +177,9 @@ export async function fetchTrendingEbooksOnly(opts: TrendingOpts = {}) {
 
   const ebookFilter: any = { status: true, isTrending: true };
   if (opts.language) ebookFilter.language = opts.language;
-  if (opts.search) {
-    const rx = { $regex: opts.search, $options: "i" };
-    ebookFilter.$or = [{ name: rx }, { author: rx }];
+  {
+    const rx = buildRegexCondition(opts.search);
+    if (rx) ebookFilter.$or = [{ name: rx }, { author: rx }];
   }
 
   const ebooks = await Ebook.find(ebookFilter).sort({ order: 1, createdAt: -1 }).lean();
@@ -258,10 +259,12 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
       bookFilter.language = language;
       ebookFilter.language = language;
     }
-    if (search) {
-      const rx = { $regex: search, $options: "i" };
-      bookFilter.$or = [{ name: rx }, { author: rx }];
-      ebookFilter.$or = [{ name: rx }, { author: rx }];
+    {
+      const rx = buildRegexCondition(search);
+      if (rx) {
+        bookFilter.$or = [{ name: rx }, { author: rx }];
+        ebookFilter.$or = [{ name: rx }, { author: rx }];
+      }
     }
     if (wantFree) {
       bookFilter.discountedPrice = 0;

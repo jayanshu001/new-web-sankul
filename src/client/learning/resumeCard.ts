@@ -8,7 +8,12 @@ import { Course } from "../../models/course/Course.model";
 import { Video } from "../../models/course/Video.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { CourseEducator } from "../../models/course/CourseEducator.model";
+import { Package } from "../../models/course/Package.model";
 import { resolveVideoCourseId } from "../course/resolveVideoCourse";
+import {
+  resolveSubscribedPackageForVideo,
+  resolveScopedReachableVideoCategoryIds,
+} from "../course/scopeReachableCategories";
 
 // Shared "Resume Now" card builder. Produces the same shape as the
 // /learning/progress/my hero card, but scoped to the parent course / live
@@ -33,6 +38,97 @@ const daysLeftOf = (endAt?: Date | null, now: Date = new Date()) =>
 const percentOf = (done: number, total: number) =>
   total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
 
+/**
+ * Package-scoped "Resume Now" card for a recorded video that belongs to no
+ * single Course but lives inside a package the customer is subscribed to.
+ * Mirrors the course card's shape (type:"package") so the FE renders it the
+ * same way; progress is rolled up by `packageId` and the total-lectures bar is
+ * the count of active videos under the package's reachable category tree
+ * (same downward childCategoryIds reachability the catalog/progress use).
+ */
+async function buildPackageResumeCard(
+  cid: Types.ObjectId,
+  fallbackVideoId: string,
+  pkg: { packageId: Types.ObjectId; endAt: Date | null },
+  now: Date
+): Promise<any | null> {
+  const packageId = pkg.packageId;
+
+  const [pkgDoc, rollup, reachableCats] = await Promise.all([
+    Package.findOne({ _id: packageId, active: true })
+      .select("_id name image educatorId")
+      .populate({ path: "educatorId", model: CourseEducator, select: "name image" })
+      .lean<any>(),
+    LectureProgress.aggregate([
+      { $match: { customerId: cid, packageId } },
+      { $sort: { lastWatchedAt: -1 } },
+      {
+        $group: {
+          _id: "$packageId",
+          lastWatchedAt: { $first: "$lastWatchedAt" },
+          lastVideoId: { $first: "$videoId" },
+          lastPositionSec: { $first: "$positionSec" },
+          lastDurationSec: { $first: "$durationSec" },
+          completedCount: { $sum: { $cond: ["$completed", 1, 0] } },
+        },
+      },
+    ]),
+    // Reachable category ids for this package — total = active videos filed on
+    // any of them. Same set the catalog/progress reachability uses.
+    resolveScopedReachableVideoCategoryIds("package", packageId),
+  ]);
+
+  if (!pkgDoc) return null;
+
+  const catIds = Array.from(reachableCats).map((id) => new Types.ObjectId(id));
+  const totalLectures = catIds.length
+    ? await Video.countDocuments({ videoCategoryId: { $in: catIds }, status: true })
+    : 0;
+
+  const r = rollup[0];
+  const lastVideoId = r?.lastVideoId ?? new Types.ObjectId(fallbackVideoId);
+
+  const v = await Video.findById(lastVideoId)
+    .select("title topic videoCategoryId")
+    .lean<any>();
+  const chapter = v?.videoCategoryId
+    ? await VideoCategory.findById(v.videoCategoryId).select("title").lean<any>()
+    : null;
+
+  return {
+    type: "package",
+    id: String(pkgDoc._id),
+    courseId: null,
+    liveCourseId: null,
+    packageId: String(pkgDoc._id),
+    title: pkgDoc.name,
+    subtitle: pkgDoc.educatorId?.name ? `By ${pkgDoc.educatorId.name}` : null,
+    educator: educatorOf(pkgDoc.educatorId),
+    thumbnail: pkgDoc.image ?? null,
+    daysLeft: daysLeftOf(pkg.endAt, now),
+    subscriptionEndAt: pkg.endAt ?? null,
+    percentCompleted: percentOf(r?.completedCount ?? 0, totalLectures),
+    completedLectures: r?.completedCount ?? 0,
+    totalLectures,
+    lastWatchedAt: r?.lastWatchedAt ?? null,
+    lecture: v
+      ? {
+          _id: String(v._id),
+          title: v.title,
+          topic: v.topic ?? null,
+          videoCategoryId: v.videoCategoryId ? String(v.videoCategoryId) : null,
+          chapterTitle: chapter?.title ?? null,
+        }
+      : null,
+    resume: {
+      videoId: String(lastVideoId),
+      liveSessionId: null,
+      positionSec: r?.lastPositionSec ?? 0,
+      durationSec: r?.lastDurationSec ?? 0,
+    },
+  };
+}
+
 export async function buildResumeNextCard(input: Input): Promise<any | null> {
   const cid = new mongoose.Types.ObjectId(input.userId);
   const now = new Date();
@@ -49,7 +145,21 @@ export async function buildResumeNextCard(input: Input): Promise<any | null> {
     // `resumeNext: null` even when the lecture clearly belongs to a course.
     // Mirrors buildLectureRef, which already uses this resolver.
     const courseId = (await resolveVideoCourseId(video.videoCategoryId)) ?? undefined;
-    if (!courseId) return null;
+    // No owning Course? The video may still live inside a package the customer is
+    // subscribed to (package-only content). Build a package-scoped resume card
+    // instead of giving up — otherwise notes/audio-notes on package lectures
+    // always returned `resumeNext: null`. (Course resolution takes priority: a
+    // video reachable from both a course and a package keeps its course card.)
+    if (!courseId) {
+      const pkg = await resolveSubscribedPackageForVideo(
+        cid,
+        video.videoCategoryId as Types.ObjectId | null,
+        new Types.ObjectId(input.videoId),
+        now
+      );
+      if (!pkg) return null;
+      return buildPackageResumeCard(cid, input.videoId, pkg, now);
+    }
 
     const [course, sub, rollup, total] = await Promise.all([
       Course.findOne({ _id: courseId, status: true })

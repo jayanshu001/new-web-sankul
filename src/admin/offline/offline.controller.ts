@@ -5,6 +5,7 @@ import { OfflineCity } from "../../models/offline/OfflineCity.model";
 import { OfflineCenter } from "../../models/offline/OfflineCenter.model";
 import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
 import { OfflineEnquiry } from "../../models/offline/OfflineEnquiry.model";
+import { CustomerState } from "../../models/customer/CustomerState.model";
 import {
   bannerCreateSchema,
   bannerUpdateSchema,
@@ -16,6 +17,7 @@ import {
   batchUpdateSchema,
   reorderSchema,
 } from "./offline.validation";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -96,10 +98,14 @@ export const reorderBanners = async (req: Request, res: Response) => {
 
 export const listCities = async (req: Request, res: Response) => {
   try {
-    const { status } = req.query as Record<string, string>;
+    const { status, stateId } = req.query as Record<string, string>;
     const filter: any = {};
     if (status === "true" || status === "false") filter.status = status === "true";
-    const data = await OfflineCity.find(filter).sort({ order: 1 }).lean();
+    if (stateId && isObjectId(stateId)) filter.stateId = stateId;
+    const data = await OfflineCity.find(filter)
+      .populate({ path: "stateId", model: CustomerState, select: "_id name stateCode" })
+      .sort({ order: 1 })
+      .lean();
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
@@ -366,13 +372,7 @@ export const listEnquiries = async (req: Request, res: Response) => {
       req.query as Record<string, string>;
     const filter: any = {};
     if (batchId && isObjectId(batchId)) filter.batchId = batchId;
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { mobile: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filter, buildSearchFilter(search, ["name", "mobile", "email"]));
     if (fromDate || toDate) {
       filter.createdAt = {};
       if (fromDate) filter.createdAt.$gte = new Date(fromDate);

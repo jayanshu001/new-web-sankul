@@ -13,6 +13,7 @@ import {
   bulkStatusSchema,
   bulkDeleteSchema,
 } from "./material.validation";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -185,11 +186,32 @@ export const listCategories = async (req: Request, res: Response) => {
     const filter: any = {};
     if (parent === "root" || parent === "null") filter.parent = null;
     else if (parent && mongoose.Types.ObjectId.isValid(parent)) filter.parent = parent;
-    if (search) filter.title = { $regex: search, $options: "i" };
+    {
+      const c = buildRegexCondition(search);
+      if (c) filter.title = c;
+    }
     if (status === "true" || status === "false") filter.status = status === "true";
 
-    const categories = await MaterialCategory.find(filter).sort({ order: 1, title: 1 });
-    return res.status(200).json({ success: true, data: categories });
+    const { page = "1", limit = "20", sortBy, sortOrder } = req.query as Record<string, string>;
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const sort: any =
+      sortBy === "order" || sortBy === "title" || sortBy === "createdAt"
+        ? { [sortBy]: sortOrder === "desc" ? -1 : 1, title: 1 }
+        : { order: 1, title: 1 };
+
+    const [data, total] = await Promise.all([
+      MaterialCategory.find(filter).sort(sort).skip(skip).limit(limitNum),
+      MaterialCategory.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -589,7 +611,10 @@ export const listMaterials = async (req: Request, res: Response) => {
     } = req.query as Record<string, string>;
 
     const filter: any = {};
-    if (search) filter.title = { $regex: search, $options: "i" };
+    {
+      const c = buildRegexCondition(search);
+      if (c) filter.title = c;
+    }
     if (materialCategoryId && mongoose.Types.ObjectId.isValid(materialCategoryId))
       filter.materialCategoryId = materialCategoryId;
     if (status === "true" || status === "false") filter.status = status === "true";

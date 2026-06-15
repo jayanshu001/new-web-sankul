@@ -41,15 +41,34 @@ Validation errors return HTTP 422 with `data.errors` (zod messages).
 ## 1. Test Series CRUD
 
 ### List
-`GET /api/v1/admin/test-series?search=&status=&examCategoryId=&page=1&limit=20`
+`GET /api/v1/admin/test-series?search=&status=&examCategoryIds=&page=1&limit=20`
 
 `data` → `{ data: TestSeries[], total, page, limit }`
+
+Each row carries a **`defaultPlan`** preview so the list doesn't need a per-series
+`/prices` call — the default plan, or the cheapest active plan when none is marked
+default, or `null` if the series has no active plan:
+
+```json
+"defaultPlan": {
+  "_id": "...", "name": null, "durationDays": 30,
+  "price": 49, "originalPrice": null, "isDefault": false, "status": true
+}
+```
+
+**Category filter:** pass `examCategoryIds` one or more times
+(`?examCategoryIds=<id>&examCategoryIds=<id>`); a series matches if it belongs to
+**any** of them. The legacy single param `?examCategoryId=<id>` is still accepted.
+Both match migrated (`examCategoryIds`) and not-yet-migrated (`examCategoryId`) docs.
 
 ### Detail
 `GET /api/v1/admin/test-series/:id`
 
 `data` → `{ series, contentCategories[], prices[], papers[] }`
 `papers[].examId` is populated with title/duration/etc.
+`series.examCategoryIds` is an **array** of ExamCategory ObjectId strings (not
+populated by default). The deprecated `series.examCategoryId` is still returned
+during the migration window — prefer `examCategoryIds`.
 
 ### Create
 `POST /api/v1/admin/test-series` — `multipart/form-data`, field `thumbnail` (image, optional).
@@ -58,10 +77,12 @@ Body fields (all optional unless noted):
 
 | field          | type    | notes                                                  |
 | -------------- | ------- | ------------------------------------------------------ |
-| title          | string  | **required**, max 255                                  |
-| description    | string  |                                                        |
-| examCategoryId | objectId| optional link to global ExamCategory                   |
-| language       | enum    | `en` / `gu` / `hi` / `bilingual` (default `gu`)        |
+| title           | string    | **required**, max 255                                 |
+| description     | string    |                                                       |
+| thumbnail       | string    | image url; send `""` to remove (see note). A file upload sets it. |
+| examCategoryIds | objectId[]| optional links to global ExamCategory (see note below)|
+| examCategoryId  | objectId  | **deprecated** — legacy single link; still accepted   |
+| language        | enum      | `en` / `gu` / `hi` / `bilingual` (default `gu`)       |
 | isFree         | boolean | when true, all customers get access without payment    |
 | instructions   | string  |                                                        |
 | policy         | string  |                                                        |
@@ -71,6 +92,31 @@ Body fields (all optional unless noted):
 ### Update
 `PUT /api/v1/admin/test-series/:id` — same shape as create, all fields optional.
 Thumbnail re-upload supported via `multipart`.
+
+> **Remove thumbnail:** send `thumbnail: ""` (empty string) to clear/unset the stored
+> thumbnail. A **missing** `thumbnail` field = "no change"; an **empty string** = "remove".
+> Uploading a new file replaces it as before.
+>
+> **Paid requires a plan:** if `isFree` resolves to `false` for the series (the value you
+> send, or the stored value if you don't send it), the update is **rejected with 422**
+> unless the series already has ≥1 active price plan. Add a plan via the `/prices`
+> endpoints first, or set `isFree: true`. (Not enforced on create, since plans are added
+> after the series exists.)
+
+> **Sending `examCategoryIds`:**
+> - **JSON body** (no thumbnail change): send a real JSON array —
+>   `{ "examCategoryIds": ["<id1>", "<id2>"] }`.
+> - **`multipart/form-data`** (thumbnail uploaded): repeat the field — either
+>   `examCategoryIds=<id1>` + `examCategoryIds=<id2>`, or the bracketed
+>   `examCategoryIds[]=<id1>` + `examCategoryIds[]=<id2>`. The server normalizes
+>   both, and also accepts a single value or a JSON-encoded string.
+> - Omit the field to leave it unchanged on update; send `[]` to clear it.
+> - Each entry must be a valid ExamCategory ObjectId (24-hex). The field is
+>   optional — omitting it on create stores `[]`.
+>
+> During the migration window the server keeps the deprecated single
+> `examCategoryId` in sync (set to the first array entry) so old readers stay
+> correct.
 
 ### Delete
 `DELETE /api/v1/admin/test-series/:id`

@@ -13,6 +13,7 @@ import { AdminUser } from "../../models/admin/AdminUser.model";
 import { sortFieldMap } from "./permission.validation";
 import { HttpError } from "../../middlewares/errorHandler";
 import cache from "../../libs/cache";
+import { buildRegexCondition } from "../../utils/searchFilter";
 
 const assertObjectId = (id: string, label: string): void => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -72,7 +73,7 @@ export const listPermissions = async (input: ListPermissionsInput) => {
   const filter: any = {};
   if (guard) filter.guardName = guard;
   if (category_id) filter.categoryId = category_id;
-  if (search) filter.name = { $regex: search, $options: "i" };
+  { const c = buildRegexCondition(search); if (c) filter.name = c; }
 
   const sort: any = { [sortFieldMap[sort_by]]: sort_dir === "asc" ? 1 : -1 };
   const skip = (page - 1) * per_page;

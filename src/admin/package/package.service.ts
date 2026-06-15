@@ -172,7 +172,7 @@ export const listPackages = async (query: ListPackagesQuery) => {
   } = query;
 
   const filter: any = {};
-  if (search) filter.name = { $regex: search, $options: "i" };
+  { const c = buildRegexCondition(search); if (c) filter.name = c; }
   if (active === "true" || active === "false") filter.active = active === "true";
   if (isPaid === "true" || isPaid === "false") filter.isPaid = isPaid === "true";
   if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))
@@ -427,7 +427,11 @@ export const reorderEmbedded = async (
 
 export const listPackagePlans = async (packageId: string) => {
   assertObjectId(packageId, "package");
-  return PackageCourseEbookPrice.find({ packageId })
+  // Exclude soft-detached plans (status:false set by detachPlan). The row is
+  // intentionally kept — PackageCourseSubscription.packageId references the plan
+  // row, so hard-deleting would orphan a buyer's subscription — but a detached
+  // plan must not reappear in the package's plan list / Edit modal.
+  return PackageCourseEbookPrice.find({ packageId, status: true })
     .sort({ duration: 1 })
     .lean();
 };
@@ -447,6 +451,12 @@ export const attachPlansToPackage = async (packageId: string, planIds: string[])
 export const detachPlan = async (packageId: string, planId: string) => {
   assertObjectId(packageId, "package");
   assertObjectId(planId, "plan");
+  // Soft-detach: a plan row is owned 1:1 by its package (scalar packageId), and
+  // PackageCourseSubscription.packageId references THIS row, so we can't hard-
+  // delete without orphaning a buyer's subscription. We flip status:false; the
+  // filter on `_id + packageId` guarantees we only touch this package's plan,
+  // and listPackagePlans excludes status:false so it won't reappear. Matches the
+  // live-course delete endpoint's "toggle status off when subscriptions exist".
   await PackageCourseEbookPrice.updateOne(
     { _id: planId, packageId },
     { $set: { status: false } }

@@ -16,6 +16,7 @@ import {
 } from "./book.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 // ─── Books CRUD ───────────────────────────────────────────────────────────────
 
@@ -35,12 +36,7 @@ export const getBooks = async (req: Request, res: Response) => {
     } = req.query as Record<string, string>;
 
     const filter: any = {};
-    if (search) {
-      filter.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { author: { $regex: search, $options: "i" } },
-      ];
-    }
+    Object.assign(filter, buildSearchFilter(search, ["name", "author"]));
     if (status === "true" || status === "false") filter.status = status === "true";
     if (language) filter.language = language;
     if (isMagazine === "true" || isMagazine === "false") filter.isMagazine = isMagazine === "true";
@@ -74,10 +70,10 @@ export const getBookById = async (req: Request, res: Response) => {
 
   try {
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("getBookById invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
-    const book = await Book.findById(id).populate(
-      "examCountdownCategoryId",
-      "_id name colorHex"
-    );
+    const book = await Book.findById(id)
+      .populate("examCountdownCategoryId", "_id name colorHex")
+      .populate("examCountdownCategoryIds", "_id name colorHex")
+      .populate("examCountdownIds", "_id title examDate");
     if (!book) { logger.warn("getBookById not found", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
     logger.info("getBookById success", { traceId, id });
     return res.status(200).json({ success: true, data: book });
@@ -87,30 +83,46 @@ export const getBookById = async (req: Request, res: Response) => {
   }
 };
 
+// Maps an uploaded PDF field to the body key that stores its original
+// (human-readable) filename — mirrors the Ebook model's demoFileName/bookFileName.
+const PDF_FILENAME_KEY: Record<string, string> = {
+  demoUrl: "demoFileName",
+  bookUrl: "bookFileName",
+};
+
 const mergeUploadedFiles = (req: Request) => {
   const files = req.files as Record<string, Express.MulterS3.File[]> | undefined;
   if (!files) return;
-  for (const field of ["image", "thumbnail", "demoUrl"]) {
+  for (const field of ["image", "thumbnail", "demoUrl", "bookUrl"]) {
     const f = files[field]?.[0] as any;
     if (f?.location) req.body[field] = f.location;
+    // The S3 key is timestamp-prefixed; preserve the original upload name so the
+    // API can show "GPL Technical Book.pdf" instead of "1781000928537-demoUrl.pdf".
+    const nameKey = PDF_FILENAME_KEY[field];
+    if (nameKey && f?.originalname) req.body[nameKey] = f.originalname;
   }
 };
 
-// Multipart form-data flattens `packageIds[0]=a&packageIds[1]=b` into literal
-// keys; reassemble them into a real array before validation. (The Zod schema
-// also accepts a JSON-stringified array or a single string, so this only needs
-// to handle the indexed-key form.)
-const coercePackageIds = (req: Request) => {
+// Multipart form-data flattens `field[0]=a&field[1]=b` (and the bare
+// `field[]=a&field[]=b` form) into literal keys; reassemble them into a real
+// array before validation. (The Zod schema also accepts a JSON-stringified
+// array or a single string, so this only needs to handle the bracketed-key
+// form.) Applies to every array-of-id field the frontend may send.
+const ARRAY_BODY_FIELDS = ["packageIds", "examCountdownCategoryIds", "examCountdownIds"] as const;
+
+const coerceArrayFields = (req: Request) => {
   const body = req.body as Record<string, any>;
-  if (Array.isArray(body.packageIds)) return;
-  const indexedKeys = Object.keys(body).filter((k) => k.startsWith("packageIds["));
-  if (!indexedKeys.length) return;
-  const arr = indexedKeys.map((k) => {
-    const v = body[k];
-    delete body[k];
-    return v;
-  });
-  body.packageIds = arr.filter((v) => v !== "");
+  for (const field of ARRAY_BODY_FIELDS) {
+    if (Array.isArray(body[field])) continue;
+    const bracketKeys = Object.keys(body).filter((k) => k.startsWith(`${field}[`));
+    if (!bracketKeys.length) continue;
+    const arr = bracketKeys.map((k) => {
+      const v = body[k];
+      delete body[k];
+      return v;
+    });
+    body[field] = arr.filter((v) => v !== "");
+  }
 };
 
 export const createBook = async (req: Request, res: Response) => {
@@ -119,10 +131,13 @@ export const createBook = async (req: Request, res: Response) => {
 
   try {
     mergeUploadedFiles(req);
-    coercePackageIds(req);
+    coerceArrayFields(req);
     const data = createBookSchema.parse(req.body);
-    if (data.examCountdownCategoryId && !mongoose.Types.ObjectId.isValid(data.examCountdownCategoryId)) { logger.warn("createBook invalid examCountdownCategoryId", { traceId }); return res.status(400).json({ success: false, message: "Invalid examCountdownCategoryId." }); }
-    (data as any).examCountdownCategoryId = data.examCountdownCategoryId || null;
+    // Legacy single field is now a derived mirror of examCountdownCategoryIds[0]
+    // (admin no longer sends a meaningful single value). Kept in sync so the one
+    // remaining reader stays correct until the field is dropped. See
+    // docs/MIGRATION_QUERY_CHANGES.md.
+    (data as any).examCountdownCategoryId = data.examCountdownCategoryIds?.[0] ?? null;
     if (data.discountedPrice > data.listPrice) {
       logger.warn("createBook discount exceeds list", { traceId });
       return res.status(400).json({
@@ -148,11 +163,17 @@ export const updateBook = async (req: Request, res: Response) => {
   try {
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("updateBook invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     mergeUploadedFiles(req);
-    coercePackageIds(req);
+    coerceArrayFields(req);
     const data = updateBookSchema.parse(req.body);
-    if (data.examCountdownCategoryId !== undefined) {
-      if (data.examCountdownCategoryId && !mongoose.Types.ObjectId.isValid(data.examCountdownCategoryId)) { logger.warn("updateBook invalid examCountdownCategoryId", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid examCountdownCategoryId." }); }
-      (data as any).examCountdownCategoryId = data.examCountdownCategoryId || null;
+    // Keep the legacy single field in sync with examCountdownCategoryIds[0], but
+    // ONLY when the array is present in this payload — otherwise an update that
+    // doesn't touch countdowns would wipe the single field. See
+    // docs/MIGRATION_QUERY_CHANGES.md.
+    if (data.examCountdownCategoryIds !== undefined) {
+      (data as any).examCountdownCategoryId = data.examCountdownCategoryIds[0] ?? null;
+    } else {
+      // Don't let a stale single value the admin still sends override the arrays.
+      delete (data as any).examCountdownCategoryId;
     }
     if (
       data.discountedPrice !== undefined &&
