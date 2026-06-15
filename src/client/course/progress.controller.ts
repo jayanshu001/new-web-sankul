@@ -356,6 +356,10 @@ export const listMyCoursesForResume = async (req: Request, res: Response) => {
         const course = courseById.get(String(p._id));
         if (!course) return null; // course was deleted/disabled — skip
         const sub = subByCourse.get(String(p._id));
+        // Only surface courses the user STILL has an active, paid, non-expired
+        // subscription to. Progress rows outlive entitlement (expired/refunded
+        // subs), so without this gate the list would leak unpurchased courses.
+        if (!sub) return null;
         const total = totalByCourse.get(String(p._id)) ?? 0;
         const daysLeft = computeDaysLeft(sub?.endAt ?? null, now);
         const percent = total > 0 ? Math.min(100, Math.round((p.completedCount / total) * 100)) : 0;
@@ -373,8 +377,9 @@ export const listMyCoursesForResume = async (req: Request, res: Response) => {
 
     // The hero "Resume Now" card. We expand the *single* most recent lecture
     // across all courses and include enough metadata to render the big card
-    // without a follow-up call.
-    const top = perCourse[0];
+    // without a follow-up call. Restrict to entitled courses so the hero never
+    // points at a course whose subscription has expired.
+    const top = perCourse.find((p) => subByCourse.has(String(p._id)));
     let resumeNext: any = null;
     if (top) {
       const [lastVideo, lastCourse] = await Promise.all([

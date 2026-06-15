@@ -5,6 +5,8 @@ import { OfflineCity } from "../../models/offline/OfflineCity.model";
 import { OfflineCenter } from "../../models/offline/OfflineCenter.model";
 import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
 import { OfflineEnquiry } from "../../models/offline/OfflineEnquiry.model";
+import { OfflineBatchEnquiry } from "../../models/offline/OfflineBatchEnquiry.model";
+import { Customer } from "../../models/customer/Customer.model";
 import { CustomerState } from "../../models/customer/CustomerState.model";
 import {
   bannerCreateSchema,
@@ -410,6 +412,58 @@ export const deleteEnquiry = async (req: Request, res: Response) => {
     const doc = await OfflineEnquiry.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ success: false, message: "Enquiry not found." });
     return res.status(200).json({ success: true, message: "Enquiry deleted." });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// ─── Batch Enquiries (offline-batch "Register" form) ─────────────────────────
+
+export const listBatchEnquiries = async (req: Request, res: Response) => {
+  try {
+    const { batchId, search, fromDate, toDate, page = "1", limit = "20" } =
+      req.query as Record<string, string>;
+    const filter: any = {};
+    if (batchId && isObjectId(batchId)) filter.batchId = batchId;
+    Object.assign(filter, buildSearchFilter(search, ["name", "mobile", "email"]));
+    if (fromDate || toDate) {
+      filter.createdAt = {};
+      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
+      if (toDate) filter.createdAt.$lte = new Date(toDate);
+    }
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    const [data, total] = await Promise.all([
+      OfflineBatchEnquiry.find(filter)
+        .populate({ path: "batchId", model: OfflineBatch, select: "name startAt" })
+        .populate({ path: "customerId", model: Customer, select: "name mobile email" })
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limitNum)
+        .lean(),
+      OfflineBatchEnquiry.countDocuments(filter),
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+export const deleteBatchEnquiry = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const doc = await OfflineBatchEnquiry.findByIdAndDelete(id);
+    if (!doc) return res.status(404).json({ success: false, message: "Batch enquiry not found." });
+    return res.status(200).json({ success: true, message: "Batch enquiry deleted." });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }

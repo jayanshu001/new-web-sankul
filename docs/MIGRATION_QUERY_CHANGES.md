@@ -15,6 +15,87 @@
 
 ---
 
+## 2026-06-15 — Study material: persist original upload filename
+
+**Files:** `src/models/course/Material.model.ts`;
+`src/admin/material/material.validation.ts`;
+`src/admin/material/material.controller.ts` (applyUploadedFile, duplicateCategory clone).
+
+**Schema field added:** `originalName` (string, maxlength 500, optional) on `ws_materials`.
+Captured from `req.file.originalname` on create AND update; preserved when materials are
+cloned via duplicate-category. The stored `file` URL ends in a server-generated key
+(`<timestamp>-file.pdf`), so this is the only record of the admin's real filename
+(e.g. `bhaag-1-gujarat-Constable.pdf`).
+
+**Backfill:** NOT possible — original names were never captured for existing rows.
+`originalName` will be absent on pre-change materials; FE must fall back to the URL's
+last path segment when it's missing (current behaviour). No data migration required;
+list/detail responses return the full doc so the field flows through automatically.
+
+---
+
+## 2026-06-15 — "Resume / My learning" listings gated to paid + purchased only
+
+**Files:** `src/client/learning/progress.controller.ts` (listMyLearningProgress —
+course/package/live loops); `src/client/dashboard/dashboard.controller.ts`
+(getResumeDashboard — resumeLecture/recentCourse/recentPackage);
+`src/client/course/progress.controller.ts` (listMyCoursesForResume).
+
+**Query-shape / filter contract:** These listings are built from `LectureProgress`
+(watch history), which OUTLIVES entitlement. Previously the subscription lookup was used
+only to compute `daysLeft`, so expired/refunded/free containers leaked into the list. Now
+each card is shown ONLY when the container is `isPaid: true` AND the user has an active,
+verified, non-expired subscription (`PackageCourseSubscription` / `LiveCourseSubscription`
+with `status: true`, `paymentStatus: "verified"`, `endAt > now` — course/package on
+dashboard also allow lifetime `endAt: null`). Added `isPaid` to the container `.select()`
+and an `if (!isPaid || !sub) continue` (or `&&` guard) in each loop.
+
+**Backfill:** NONE — read-time filter against live subscription rows; no stored/derived
+flag on progress docs to migrate. Old LectureProgress rows are simply ignored at read time
+when no qualifying subscription backs them.
+
+**Known gap (not yet changed):** `GET /client/packages/my` still lacks the
+`paymentStatus: "verified"` check and does not gate on `isPaid`.
+
+---
+
+## 2026-06-15 — Exam-category exams listing returns per-user attempt data
+
+**Files:** `src/client/categories/categories.controller.ts` (listExamsByCategory).
+
+**Query added:** `GET /client/exam-categories/:id/exams` now queries `ExamResult`
+(`status: true`, latest per exam) for the authenticated customer and decorates each exam
+with `isCompleted` + `lastResult`, mirroring the existing exam.controller listing contract.
+No-op for anonymous callers.
+
+---
+
+## 2026-06-15 — Offline batch enquiry module (new collection + endpoints)
+
+**Files:** new `src/models/offline/OfflineBatchEnquiry.model.ts`;
+`src/client/offline/offline.controller.ts` (submitBatchEnquiry);
+`src/client/offline/offline.routes.ts`;
+`src/admin/offline/offline.controller.ts` (listBatchEnquiries, deleteBatchEnquiry);
+`src/admin/offline/offline.routes.ts`.
+
+**New collection:** `ws_offline_batch_enquiry`. Fields: `customerId` (ref Customer, nullable),
+`name`, `email`, `mobile`, `qualification` (enum `post_graduate|graduate|10_plus_2|other`),
+`otherQualification` (string|null, only set when qualification=`other`), `batchId` (ref OfflineBatch),
+timestamps.
+
+**Indexes:** `{ batchId: 1, createdAt: -1 }`, `{ customerId: 1 }` — both need creating on cutover.
+
+**Queries added:**
+- Client `POST /client/offline/batch-enquiry` — `OfflineBatch.exists({_id})` guard + `create`. Auth REQUIRED (customer Bearer token).
+- Admin `GET /admin/offline/batch-enquiries` — filter on `batchId` + `buildSearchFilter(search, [name,mobile,email])` + `createdAt` range; populates `batchId` and `customerId`; paginated; sort `createdAt: -1`.
+- Admin `DELETE /admin/offline/batch-enquiries/:id`.
+
+**Note:** Parallel to the existing `OfflineEnquiry` (`ws_offline_enquiry`) module — NOT a replacement. Distinct collection, distinct routes.
+
+**Docs:** `docs/OFFLINE_BATCH_ENQUIRY_CLIENT.md`, `docs/OFFLINE_BATCH_ENQUIRY_ADMIN.md`.
+
+---
+
 ## 2026-06-13 — Standard search/page/limit added to remaining client list endpoints
 
 **Files:** new `src/utils/listQuery.ts`; `src/client/address/address.controller.ts`

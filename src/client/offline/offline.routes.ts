@@ -9,6 +9,7 @@ import {
   getCenterDetail,
   getBatchDetail,
   submitEnquiry,
+  submitBatchEnquiry,
 } from "./offline.controller";
 
 const router = Router();
@@ -35,5 +36,8 @@ router.post("/enquiry", (req, res, next) => {
   }
   return next();
 }, submitEnquiry);
+
+// Offline-batch "Register" form — auth REQUIRED (Bearer token, customer role).
+router.post("/batch-enquiry", authenticate, requireRole("customer"), submitBatchEnquiry);
 
 export default router;

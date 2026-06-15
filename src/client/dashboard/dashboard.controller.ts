@@ -435,7 +435,7 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
       const lcId = liveRow.liveCourseId as Types.ObjectId;
       const [lc, lcSub, lastRow, totalRow, completedCount] = await Promise.all([
         LiveCourse.findOne({ _id: lcId, status: true })
-          .select("_id name image courseEducatorId")
+          .select("_id name image isPaid courseEducatorId")
           .populate({
             path: "courseEducatorId",
             model: CourseEducator,
@@ -466,7 +466,10 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
         }),
       ]);
 
-      if (lc) {
+      // Show ONLY when the live course is paid AND purchased (active, verified,
+      // non-expired subscription). Progress rows outlive entitlement, so without
+      // this gate the resume card leaks free / expired / unpurchased courses.
+      if (lc && lc.isPaid && lcSub) {
         const totalLectures = totalRow[0]?.total ?? 0;
         // % on the purple card is for the *current lecture being resumed*,
         // not the live course as a whole. The course-wide rollup lives in
@@ -579,7 +582,7 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
       const courseId = courseRow.courseId as Types.ObjectId;
       const [course, sub, lastRow, totalRow, completedCount] = await Promise.all([
         Course.findOne({ _id: courseId, status: true })
-          .select("_id name image courseEducatorId")
+          .select("_id name image isPaid courseEducatorId")
           .populate({
             path: "courseEducatorId",
             model: CourseEducator,
@@ -631,7 +634,8 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
         }),
       ]);
 
-      if (course) {
+      // Paid AND purchased only — see the live block above.
+      if (course && course.isPaid && sub) {
         const totalLectures = totalRow[0]?.total ?? 0;
         // Lecture-level % + min-left for the card (see resumeLecture for
         // the rationale). Course-wide rollup is still in
@@ -728,7 +732,7 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
       const pkgId = packageRow.packageId as Types.ObjectId;
       const [pkg, sub, lastRow] = await Promise.all([
         Package.findOne({ _id: pkgId, active: true })
-          .select("_id name image")
+          .select("_id name image isPaid")
           .lean<any>(),
         PackageCourseSubscription.findOne({
           customerId: cid,
@@ -747,7 +751,8 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
           .lean<any>(),
       ]);
 
-      if (pkg) {
+      // Paid AND purchased only — see the live block above.
+      if (pkg && pkg.isPaid && sub) {
         // % done across the whole package, mirroring learning rollup logic.
         const [completedCount, totalLecturesRow] = await Promise.all([
           LectureProgress.countDocuments({

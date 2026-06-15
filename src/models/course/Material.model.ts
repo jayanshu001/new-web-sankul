@@ -5,6 +5,10 @@ export interface IMaterial extends Document {
   description?: string;
   materialCategoryId: mongoose.Types.ObjectId;
   file: string;
+  // The admin's original upload filename (e.g. "bhaag-1-gujarat-Constable.pdf").
+  // The stored `file` URL ends in a server-generated key, so this is the only
+  // way the FE can show the name the admin actually uploaded.
+  originalName?: string;
   directLink?: string;
   thumbnail?: string;
   fileSize?: number;
@@ -29,6 +33,7 @@ const materialSchema = new Schema<IMaterial>(
       required: true,
     },
     file: { type: String, required: true, maxlength: 1000 },
+    originalName: { type: String, maxlength: 500 },
     directLink: { type: String, default: "", maxlength: 1000 },
     thumbnail: { type: String, maxlength: 500 },
     fileSize: { type: Number, default: 0 },

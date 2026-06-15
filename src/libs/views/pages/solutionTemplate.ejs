@@ -3,9 +3,9 @@
 <head>
   <meta charset="utf-8" />
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Hind+Vadodara&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Gujarati:wght@400;600;700&family=Noto+Sans+Devanagari:wght@400;600;700&display=block');
     * { box-sizing: border-box; }
-    body { font-family: Segoe UI, Hind Vadodara, sans-serif; color: #1a1a1a; margin: 0; padding: 0; }
+    body { font-family: "Segoe UI", "Noto Sans Gujarati", "Noto Sans Devanagari", sans-serif; color: #1a1a1a; margin: 0; padding: 0; }
     .wrap { padding: 30px 30px 20px 30px; }
     .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #27a9e1; padding-bottom: 14px; margin-bottom: 18px; }
     .header .brand img { height: 26px; margin-bottom: 8px; }
@@ -110,11 +110,12 @@
             <span class="badge skipped">Skipped</span>
           <% } %>
         </div>
-        <div class="qtext"><%= q.title %></div>
+        <%# question/option/answer are admin rich-text (HTML) so render raw; escaping would print the tags literally %>
+        <div class="qtext"><%- q.title %></div>
         <ul class="opts">
           <% q.options.forEach(function(o) { %>
             <li class="<%= o.isCorrect ? 'correct' : (o.isSelect && !o.isCorrect ? 'selected-wrong' : '') %>">
-              <span><%= o.name %></span>
+              <span><%- o.name %></span>
               <span>
                 <% if (o.isSelect) { %><span class="tag you">Your Answer</span><% } %>
                 <% if (o.isCorrect) { %><span class="tag ans">Correct</span><% } %>
@@ -123,8 +124,8 @@
           <% }); %>
         </ul>
         <div class="foot">
-          <span>Correct Answer: <strong><%= q.correctAnswer || '-' %></strong></span>
-          <span>Your Answer: <strong><%= q.selectedAnswer || 'Not Answered' %></strong></span>
+          <span>Correct Answer: <strong><%- q.correctAnswer || '-' %></strong></span>
+          <span>Your Answer: <strong><%- q.selectedAnswer || 'Not Answered' %></strong></span>
         </div>
       </div>
     <% }); %>
