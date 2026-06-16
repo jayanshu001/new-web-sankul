@@ -9,8 +9,12 @@ const promocodeBase = z.object({
   promo_expire_at: z.string().min(1),
   type: z.enum([PromocodeType.PUBLIC, PromocodeType.PRIVATE]).default(PromocodeType.PRIVATE),
   status: z.boolean().optional(),
+  // Legacy global discount. The admin panel moved to a per-plan percentage
+  // model (see `plans[].customerPercentage`), so these are now OPTIONAL — the FE
+  // no longer sends them for new item-specific codes. Kept (defaulted) for
+  // backward compatibility with legacy codes that still carry a global discount.
   discountType: z.enum(["flat", "percentage"]).default("percentage"),
-  discountValue: z.number().nonnegative("discountValue must be >= 0"),
+  discountValue: z.number().nonnegative("discountValue must be >= 0").optional().default(0),
   promoterId: z.string().regex(/^[0-9a-fA-F]{24}$/).nullable().optional(),
 });
 
@@ -48,12 +52,23 @@ export const planLinkSchema = z.object({
 
 export type PlanLinkInput = z.infer<typeof planLinkSchema>;
 
+// Per-plan customerPercentage is now the real checkout discount, so at least one
+// plan must carry a positive customer % (0 < x <= 100). Codes with no positive
+// customer % would silently discount nothing.
+const hasPositiveCustomerPct = (plans?: Array<{ customerPercentage?: number }>) =>
+  Array.isArray(plans) && plans.some((p) => (p.customerPercentage ?? 0) > 0);
+const positivePctErr = {
+  message: "At least one plan must have a customerPercentage greater than 0 (and <= 100).",
+  path: ["plans"],
+};
+
 export const createPromocodeSchema = promocodeBase
   .extend({
     appliesTo: appliesToSchema,
     plans: z.array(planLinkSchema).optional().default([]),
   })
-  .refine(validateDiscount, discountErr);
+  .refine(validateDiscount, discountErr)
+  .refine((d) => hasPositiveCustomerPct(d.plans), positivePctErr);
 
 export const updatePromocodeSchema = promocodeBase
   .partial()
@@ -61,7 +76,10 @@ export const updatePromocodeSchema = promocodeBase
     appliesTo: appliesToSchema.optional(),
     plans: z.array(planLinkSchema).optional(),
   })
-  .refine(validateDiscount, discountErr);
+  .refine(validateDiscount, discountErr)
+  // On update, only enforce the positive-% rule when `plans` is actually being
+  // changed (present). A partial update that doesn't touch plans is left alone.
+  .refine((d) => d.plans === undefined || hasPositiveCustomerPct(d.plans), positivePctErr);
 
 export const togglePromocodeStatusSchema = z.object({
   status: z.boolean(),

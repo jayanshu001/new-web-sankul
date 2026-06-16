@@ -1,9 +1,14 @@
 import { Request, Response } from "express";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
+import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
+import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { Customer } from "../../models/customer/Customer.model";
 import { Course } from "../../models/course/Course.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
+import { TestSeries } from "../../models/testSeries/TestSeries.model";
+import { LiveCourse } from "../../models/course/LiveCourse.model";
+import { unionAllPromoterSubsStages, promoterScopeMatch } from "../shared/promoterSubscriptions";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -30,6 +35,13 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       if (toDate) dateFilter.createdAt.$lte = new Date(toDate);
     }
 
+    const paginate = (total: number) => ({
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    });
+
     if (type === "ebook") {
       const filter = { promoterId, ...dateFilter };
       const [data, total] = await Promise.all([
@@ -43,11 +55,39 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
         EbookSubscription.countDocuments(filter),
       ]);
       logger.info("listMySubscriptions success (ebook)", { traceId, promoterId, total });
-      return res.status(200).json({
-        success: true,
-        data,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
+      return res.status(200).json({ success: true, data, pagination: paginate(total) });
+    }
+
+    if (type === "testSeries") {
+      const filter = { promoterId, ...dateFilter };
+      const [data, total] = await Promise.all([
+        TestSeriesSubscription.find(filter)
+          .populate({ path: "customerId", model: Customer, select: "firstName lastName phoneNumber" })
+          .populate({ path: "testSeriesId", model: TestSeries, select: "title" })
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limitNum)
+          .lean(),
+        TestSeriesSubscription.countDocuments(filter),
+      ]);
+      logger.info("listMySubscriptions success (testSeries)", { traceId, promoterId, total });
+      return res.status(200).json({ success: true, data, pagination: paginate(total) });
+    }
+
+    if (type === "liveCourse") {
+      const filter = { promoterId, ...dateFilter };
+      const [data, total] = await Promise.all([
+        LiveCourseSubscription.find(filter)
+          .populate({ path: "customerId", model: Customer, select: "firstName lastName phoneNumber" })
+          .populate({ path: "liveCourseId", model: LiveCourse, select: "name" })
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limitNum)
+          .lean(),
+        LiveCourseSubscription.countDocuments(filter),
+      ]);
+      logger.info("listMySubscriptions success (liveCourse)", { traceId, promoterId, total });
+      return res.status(200).json({ success: true, data, pagination: paginate(total) });
     }
 
     const filter = { promoterId, ...dateFilter };
@@ -83,12 +123,14 @@ export const subscriptionReport = async (req: Request, res: Response) => {
 
   try {
     if (!promoterId) { logger.warn("subscriptionReport unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
-    const mongoose = await import("mongoose");
-    const oid = mongoose.default.Types.ObjectId.createFromHexString(promoterId);
+    const scope = promoterScopeMatch(promoterId);
 
-    const [byCourse, byMonth] = await Promise.all([
+    // byCourse stays course/package-only (it groups by courseId, which has no
+    // analogue for the other product types). byMonth and byType now span ALL 4
+    // collections so revenue/commission totals reconcile with the dashboard.
+    const [byCourse, byMonth, byType] = await Promise.all([
       PackageCourseSubscription.aggregate([
-        { $match: { promoterId: oid } },
+        { $match: scope },
         {
           $group: {
             _id: "$courseId",
@@ -96,9 +138,14 @@ export const subscriptionReport = async (req: Request, res: Response) => {
             revenue: { $sum: "$paidAmount" },
             commission: {
               $sum: {
-                $multiply: [
-                  { $ifNull: ["$paidAmount", 0] },
-                  { $divide: [{ $ifNull: ["$promoterPercentage", 0] }, 100] },
+                $ifNull: [
+                  "$promoterCommission",
+                  {
+                    $multiply: [
+                      { $ifNull: ["$paidAmount", 0] },
+                      { $divide: [{ $ifNull: ["$promoterPercentage", 0] }, 100] },
+                    ],
+                  },
                 ],
               },
             },
@@ -116,7 +163,7 @@ export const subscriptionReport = async (req: Request, res: Response) => {
         { $sort: { count: -1 } },
       ]),
       PackageCourseSubscription.aggregate([
-        { $match: { promoterId: oid } },
+        ...unionAllPromoterSubsStages(scope),
         {
           $group: {
             _id: {
@@ -124,24 +171,29 @@ export const subscriptionReport = async (req: Request, res: Response) => {
               month: { $month: "$createdAt" },
             },
             count: { $sum: 1 },
-            revenue: { $sum: "$paidAmount" },
-            commission: {
-              $sum: {
-                $multiply: [
-                  { $ifNull: ["$paidAmount", 0] },
-                  { $divide: [{ $ifNull: ["$promoterPercentage", 0] }, 100] },
-                ],
-              },
-            },
+            revenue: { $sum: "$amount" },
+            commission: { $sum: "$commission" },
           },
         },
         { $sort: { "_id.year": -1, "_id.month": -1 } },
         { $limit: 12 },
       ]),
+      PackageCourseSubscription.aggregate([
+        ...unionAllPromoterSubsStages(scope),
+        {
+          $group: {
+            _id: "$productType",
+            count: { $sum: 1 },
+            revenue: { $sum: "$amount" },
+            commission: { $sum: "$commission" },
+          },
+        },
+        { $sort: { count: -1 } },
+      ]),
     ]);
 
     logger.info("subscriptionReport success", { traceId, promoterId, courseCount: byCourse.length, monthCount: byMonth.length });
-    return res.status(200).json({ success: true, data: { byCourse, byMonth } });
+    return res.status(200).json({ success: true, data: { byCourse, byMonth, byType } });
   } catch (e: any) {
     logger.error("subscriptionReport failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

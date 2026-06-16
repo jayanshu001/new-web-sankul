@@ -6,6 +6,8 @@ import { Course } from "../../models/course/Course.model";
 import { LiveCourse } from "../../models/course/LiveCourse.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
+import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
+import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -40,7 +42,9 @@ export const listMyPromocodes = async (req: Request, res: Response) => {
     const data = await PromoCode.find({ promoterId }).sort({ createdAt: -1 }).lean();
 
     const ids = data.map((p) => p._id);
-    const [courseUsage, ebookUsage] = await Promise.all([
+    // Usage now spans all 4 subscription collections (course/package, ebook,
+    // test-series, live-course), so a code used on any product is reflected.
+    const [courseUsage, ebookUsage, testSeriesUsage, liveCourseUsage] = await Promise.all([
       PackageCourseSubscription.aggregate([
         { $match: { promocodeId: { $in: ids } } },
         { $group: { _id: "$promocodeId", count: { $sum: 1 }, revenue: { $sum: "$paidAmount" } } },
@@ -49,10 +53,18 @@ export const listMyPromocodes = async (req: Request, res: Response) => {
         { $match: { promocodeId: { $in: ids } } },
         { $group: { _id: "$promocodeId", count: { $sum: 1 }, revenue: { $sum: "$price" } } },
       ]),
+      TestSeriesSubscription.aggregate([
+        { $match: { promocodeId: { $in: ids } } },
+        { $group: { _id: "$promocodeId", count: { $sum: 1 }, revenue: { $sum: "$price" } } },
+      ]),
+      LiveCourseSubscription.aggregate([
+        { $match: { promocodeId: { $in: ids } } },
+        { $group: { _id: "$promocodeId", count: { $sum: 1 }, revenue: { $sum: "$paidAmount" } } },
+      ]),
     ]);
 
     const usageMap: Record<string, { count: number; revenue: number }> = {};
-    [...courseUsage, ...ebookUsage].forEach((row: any) => {
+    [...courseUsage, ...ebookUsage, ...testSeriesUsage, ...liveCourseUsage].forEach((row: any) => {
       const k = String(row._id);
       usageMap[k] ||= { count: 0, revenue: 0 };
       usageMap[k].count += row.count;

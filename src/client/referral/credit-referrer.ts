@@ -9,7 +9,7 @@ interface CreditOpts {
   buyerId: Types.ObjectId | string;
   orderId: Types.ObjectId | string;
   paidAmount: number;
-  source: "course" | "package" | "ebook";
+  source: "course" | "package" | "ebook" | "liveCourse" | "testSeries";
 }
 
 // Credits the referrer with `ReferralProgram.referralReward` % of paidAmount.

@@ -27,6 +27,28 @@ import {
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
+// The Customer model stores firstName/middleName/lastName, phoneNumber and
+// emailAddress — there is no flat `name`/`phone`/`email`. The admin FE renders
+// `name || phone || email || id`, so after populating the real fields we shape
+// the customer into that contract (with a `name` composed from the name parts)
+// so the table shows the customer's name instead of a bare ObjectId.
+const POPULATE_CUSTOMER = "firstName middleName lastName phoneNumber emailAddress";
+const shapeCustomer = (c: any) => {
+  if (!c || typeof c !== "object") return c; // unpopulated (bare id) or null — leave as-is
+  const name = [c.firstName, c.middleName, c.lastName]
+    .filter((p) => typeof p === "string" && p.trim())
+    .join(" ")
+    .trim();
+  return {
+    _id: c._id,
+    name: name || null,
+    phone: c.phoneNumber ?? null,
+    email: c.emailAddress ?? null,
+  };
+};
+const withShapedCustomer = (rows: any[]) =>
+  rows.map((r) => ({ ...r, customerId: shapeCustomer(r.customerId) }));
+
 function zodIssueResponse(res: Response, err: z.ZodError) {
   const messages = err.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);
   return failure(res, "Validation failed.", 422, { errors: messages });
@@ -714,12 +736,12 @@ export const listSubscriptions = async (req: Request, res: Response) => {
         .skip((p - 1) * l)
         .limit(l)
         .populate("testSeriesId", "title")
-        .populate("customerId", "name phone email")
+        .populate("customerId", POPULATE_CUSTOMER)
         .lean(),
       TestSeriesSubscription.countDocuments(filter),
     ]);
     logger.info("listSubscriptions success", { traceId, total });
-    return success(res, { data: rows, total, page: p, limit: l }, "Fetched.");
+    return success(res, { data: withShapedCustomer(rows), total, page: p, limit: l }, "Fetched.");
   } catch (err) {
     logger.error("listSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list subscriptions.", 500);
@@ -852,12 +874,12 @@ export const listOrders = async (req: Request, res: Response) => {
         .skip((p - 1) * l)
         .limit(l)
         .populate("testSeriesId", "title")
-        .populate("customerId", "name phone email")
+        .populate("customerId", POPULATE_CUSTOMER)
         .lean(),
       TestSeriesOrder.countDocuments(filter),
     ]);
     logger.info("listOrders success", { traceId, total });
-    return success(res, { data: rows, total, page: p, limit: l }, "Fetched.");
+    return success(res, { data: withShapedCustomer(rows), total, page: p, limit: l }, "Fetched.");
   } catch (err) {
     logger.error("listOrders failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list orders.", 500);

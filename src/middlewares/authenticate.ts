@@ -5,6 +5,7 @@ import { redisClient } from "../config/redis";
 import { verifyAccessToken } from "../utils/jwtSigner";
 import { isRevoked, UserType } from "../libs/tokenRevocation";
 import { updateContext } from "../utils/requestContext";
+import { Customer } from "../models/customer/Customer.model";
 
 // Augment Request to carry the decoded token payload
 declare module "express-serve-static-core" {
@@ -51,7 +52,27 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
     // independently invalidate a token.
     const userType = (decoded.type ?? "customer") as UserType;
     if (await isRevoked(userType, decoded.id, decoded.iat)) {
-      return failure(res, "Session was revoked. Please log in again.", 401);
+      // The revocation cutoff only knows the token is dead, not WHY. For
+      // customers, re-read live DB state so we can surface the precise reason
+      // (disabled by admin / deleted / generic logout-all). This DB hit only
+      // happens on the already-revoked path, so it costs nothing in steady
+      // state. Clients should branch on `data.reason`, not the message text.
+      if (userType === "customer") {
+        const customer = await Customer.findById(decoded.id).select("status isAccountDeleted");
+        if (!customer || customer.isAccountDeleted) {
+          return failure(res, "This account no longer exists. Please contact support.", 401, {}, {
+            reason: "ACCOUNT_DELETED",
+          });
+        }
+        if (!customer.status) {
+          return failure(res, "Your account has been disabled. Please contact support.", 401, {}, {
+            reason: "ACCOUNT_DISABLED",
+          });
+        }
+      }
+      return failure(res, "Session was revoked. Please log in again.", 401, {}, {
+        reason: "SESSION_REVOKED",
+      });
     }
 
     // Enforce 1 active device rule for customers

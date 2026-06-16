@@ -108,12 +108,14 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
         logger.warn("reportLectureProgress scope mismatch (course)", { traceId, userId, videoId, scope });
         return res.status(400).json({ success: false, message: "Video is not part of the scoped course." });
       }
-      if (isFree) {
-        const scopedCourse = await Course.findOne({ _id: scopeOid, status: true }).select("_id").lean();
-        if (!scopedCourse) {
-          return res.status(404).json({ success: false, message: "Course not found." });
-        }
-      } else {
+      const scopedCourse = await Course.findOne({ _id: scopeOid, status: true }).select("_id isPaid").lean();
+      if (!scopedCourse) {
+        return res.status(404).json({ success: false, message: "Course not found." });
+      }
+      // Allow progress without a subscription when EITHER the video itself is
+      // free OR its parent course is free (isPaid:false). Only a paid video in a
+      // paid course requires an active subscription.
+      if (!isFree && (scopedCourse as any).isPaid !== false) {
         const sub = await PackageCourseSubscription.findOne({
           customerId: cid,
           courseId: scopeOid,
@@ -138,16 +140,15 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
         logger.warn("reportLectureProgress scope mismatch (package)", { traceId, userId, videoId, scope });
         return res.status(400).json({ success: false, message: "Video is not part of the scoped package." });
       }
-      // Free videos inside a paid package are watchable without purchasing it,
-      // so their progress must persist too — only confirm the package exists.
-      // Paid videos still require an active subscription. (Mirrors the `course`
+      // Allow progress without a subscription when EITHER the video itself is
+      // free OR its parent package is free (isPaid:false). Only a paid video in
+      // a paid package requires an active subscription. (Mirrors the `course`
       // scope rule above.)
-      if (isFree) {
-        const scopedPackage = await Package.findOne({ _id: scopeOid, active: true }).select("_id").lean();
-        if (!scopedPackage) {
-          return res.status(404).json({ success: false, message: "Package not found." });
-        }
-      } else {
+      const scopedPackage = await Package.findOne({ _id: scopeOid, active: true }).select("_id isPaid").lean();
+      if (!scopedPackage) {
+        return res.status(404).json({ success: false, message: "Package not found." });
+      }
+      if (!isFree && (scopedPackage as any).isPaid !== false) {
         const sub = await PackageCourseSubscription.findOne({
           customerId: cid,
           targetPackageId: scopeOid,
@@ -171,16 +172,15 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
         logger.warn("reportLectureProgress scope mismatch (liveCourse)", { traceId, userId, videoId, scope });
         return res.status(400).json({ success: false, message: "Video is not part of the scoped live course." });
       }
-      // Free recorded lectures inside a paid live course are watchable without
-      // purchasing it, so their progress must persist too — only confirm the
-      // live course exists. Paid lectures still require an active subscription.
-      // (Mirrors the `course` scope rule above.)
-      if (isFree) {
-        const scopedLiveCourse = await LiveCourse.findOne({ _id: scopeOid, status: true }).select("_id").lean();
-        if (!scopedLiveCourse) {
-          return res.status(404).json({ success: false, message: "Live course not found." });
-        }
-      } else {
+      // Allow progress without a subscription when EITHER the video itself is
+      // free OR its parent live course is free (isPaid:false). Only a paid
+      // lecture in a paid live course requires an active subscription. (Mirrors
+      // the `course` scope rule above.)
+      const scopedLiveCourse = await LiveCourse.findOne({ _id: scopeOid, status: true }).select("_id isPaid").lean();
+      if (!scopedLiveCourse) {
+        return res.status(404).json({ success: false, message: "Live course not found." });
+      }
+      if (!isFree && (scopedLiveCourse as any).isPaid !== false) {
         const sub = await LiveCourseSubscription.findOne({
           customerId: cid,
           liveCourseId: scopeOid,

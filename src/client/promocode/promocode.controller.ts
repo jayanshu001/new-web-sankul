@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { PromoCode } from "../../models/course/PromoCode.model";
+import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { Package } from "../../models/course/Package.model";
 import { Course } from "../../models/course/Course.model";
@@ -9,7 +10,7 @@ import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { Customer } from "../../models/customer/Customer.model";
 import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
 import { applyPromocodeSchema } from "./promocode.validation";
-import { promoCovers, computePromoDiscount } from "./applies-to";
+import { promoCovers, loadPlanDiscountMap, resolvePlanDiscount, countPlanLinks } from "./applies-to";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -78,10 +79,35 @@ export const listPromocodes = async (req: Request, res: Response) => {
       PromoCode.countDocuments(filter),
     ]);
 
+    // The discount is now per-plan (`customerPercentage` in the link table), so
+    // the legacy top-level discountValue is stale. We keep the SAME fields the
+    // app reads, but populate them from the new model: discountType is always
+    // "percentage" and discountValue is the code's representative (max) customer
+    // %, i.e. the "up to X% off" figure. Codes with no plan rows (legacy) keep
+    // their stored top-level discountValue/discountType as a fallback.
+    const codeIds = data.map((p: any) => p._id);
+    const maxPctByCode = new Map<string, number>();
+    if (codeIds.length) {
+      const agg = await PromotedPackageCourseEbook.aggregate([
+        { $match: { promocodeId: { $in: codeIds } } },
+        { $group: { _id: "$promocodeId", maxPct: { $max: "$customerPercentage" } } },
+      ]);
+      for (const r of agg) maxPctByCode.set(String(r._id), Number(r.maxPct ?? 0));
+    }
+
+    const shaped = data.map((p: any) => {
+      const perPlanMax = maxPctByCode.get(String(p._id)) ?? 0;
+      if (perPlanMax > 0) {
+        return { ...p, discountType: "percentage", discountValue: perPlanMax };
+      }
+      // Legacy fallback: no per-plan rows → keep the stored top-level discount.
+      return p;
+    });
+
     logger.info("listPromocodes success", { traceId, total });
     return res.status(200).json({
       success: true,
-      data,
+      data: shaped,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
@@ -242,24 +268,54 @@ export const applyPromocode = async (req: Request, res: Response) => {
         .json({ success: false, message: "This promocode is not valid for this course!" });
     }
 
-    const promoDiscountType = promo!.discountType;
-    const promoDiscountValue = Number(promo!.discountValue ?? 0);
-    if (!(promoDiscountValue > 0)) {
+    // Per-plan discount + SCOPE. The real discount for each plan comes from its
+    // own customerPercentage (link table). If the code has ANY link rows it is
+    // "per-plan scoped": ONLY plans with a row are discounted; plans without a
+    // row get no offer (even though the parent entity is covered). Codes with
+    // ZERO link rows are legacy — entity-level scope + top-level discount.
+    const [planDiscountMap, totalLinks] = await Promise.all([
+      loadPlanDiscountMap(String(promo!._id), pricingPlans.map((p) => String(p._id))),
+      countPlanLinks(String(promo!._id)),
+    ]);
+    const perPlanScoped = totalLinks > 0;
+
+    let anyDiscount = false;
+    pricingPlans.forEach((plan) => {
+      plan.orginalPrice = plan.price;
+
+      // Per-plan-scoped code, but this plan has no link row → out of scope.
+      // Mark it explicitly so the FE can show a "not applicable" message on this
+      // specific plan (the covered plans below still get their discount).
+      if (perPlanScoped && !planDiscountMap.has(String(plan._id))) {
+        plan.offerAvailable = false;
+        plan.offerApplicable = false;
+        plan.offerReason = "This promo code is not valid for this plan.";
+        return;
+      }
+
+      const resolved = resolvePlanDiscount(promo!, String(plan._id), plan.price, planDiscountMap);
+      if (resolved.amount > 0) anyDiscount = true;
+      plan.offerAvailable = resolved.amount > 0;
+      plan.offerApplicable = resolved.amount > 0;
+      plan.offerReason = resolved.amount > 0 ? null : "This promo code is not valid for this plan.";
+      plan.discountType = "percentage";
+      if (resolved.appliedPercentage !== null) {
+        plan.discountValue = resolved.appliedPercentage;
+        plan.offerPercentage = resolved.appliedPercentage;
+      } else {
+        // Legacy flat discount — no meaningful per-plan percentage to surface.
+        plan.discountType = promo!.discountType;
+        plan.discountValue = Number(promo!.discountValue ?? 0);
+      }
+      plan.price = Math.max(0, plan.price - resolved.amount);
+    });
+
+    if (!anyDiscount) {
       logger.warn("applyPromocode zero discount", { traceId, customerId: userId, promocode: code });
       return res
         .status(400)
-        .json({ success: false, message: "This promocode has no discount configured." });
+        .json({ success: false, message: "This promocode is not valid for this plan." });
     }
-
-    pricingPlans.forEach((plan) => {
-      plan.orginalPrice = plan.price;
-      plan.offerAvailable = true;
-      plan.discountType = promoDiscountType;
-      plan.discountValue = promoDiscountValue;
-      const discount = computePromoDiscount(promo!, plan.price);
-      if (promoDiscountType === "percentage") plan.offerPercentage = promoDiscountValue;
-      plan.price = Math.max(0, plan.price - discount);
-    });
 
     const first = pricingPlans[0];
     const id = first.packageId || first.courseId || first.ebookId;

@@ -12,9 +12,22 @@ export interface ILiveCourseSubscription extends Document {
   // amount actually charged (originalAmount - discountAmount). When no promo
   // is used, originalAmount/discountAmount stay null and paidAmount === price.
   promocodeId?: mongoose.Types.ObjectId | null;
+  promoterId?: mongoose.Types.ObjectId | null;
+  // Promoter commission locked in at purchase (currency). See
+  // PackageCourseSubscription for the rationale.
+  promoterPercentage?: number | null;
+  promoterCommission?: number | null;
+  // Referral trail. Set when the buyer redeemed a customer's referralCode:
+  // `referrerId` is the customer credited on a successful purchase (via
+  // creditReferrer), `customerPercentage` is the referral discount % the buyer
+  // received. Both null for a plain or promocode purchase.
+  referrerId?: mongoose.Types.ObjectId | null;
+  customerPercentage?: number | null;
   originalAmount?: number | null;
   discountAmount?: number | null;
   paidAmount?: number | null;
+  // Wallet ("coin") applied; debited from rewardPoints at /verify success.
+  coinsUsed?: number | null;
   paymentStatus: "pending" | "verified" | "failed";
   // Physical-material fulfillment for "With Materials" plans. `withMaterial`
   // marks the order as shipping material; `customerShippingId` is the delivery
@@ -39,9 +52,15 @@ const liveCourseSubscriptionSchema: Schema = new Schema(
     endAt:         { type: Date,    default: null },
     status:        { type: Boolean, default: true },
     promocodeId:    { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
+    promoterId:     { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
+    promoterPercentage: { type: Number, default: null },
+    promoterCommission: { type: Number, default: null },
+    referrerId:         { type: Schema.Types.ObjectId, ref: "Customer", default: null },
+    customerPercentage: { type: Number, default: null },
     originalAmount: { type: Number, default: null },
     discountAmount: { type: Number, default: null },
     paidAmount:    { type: Number,  default: null },
+    coinsUsed:     { type: Number,  default: null },
     paymentStatus: {
       type: String,
       enum: ["pending", "verified", "failed"],
@@ -64,6 +83,7 @@ const liveCourseSubscriptionSchema: Schema = new Schema(
 );
 
 liveCourseSubscriptionSchema.index({ customerId: 1, liveCourseId: 1, paymentStatus: 1, endAt: 1 });
+liveCourseSubscriptionSchema.index({ promoterId: 1, createdAt: -1 });
 
 export const LiveCourseSubscription = mongoose.model<ILiveCourseSubscription>(
   "LiveCourseSubscription",

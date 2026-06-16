@@ -7,7 +7,7 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
-import { promoCovers, computePromoDiscount } from "../promocode/applies-to";
+import { promoCovers, loadPlanDiscountMap, resolvePlanDiscount, countPlanLinks, PlanLinkPercentages } from "../promocode/applies-to";
 import { Customer } from "../../models/customer/Customer.model";
 import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
 import { Course } from "../../models/course/Course.model";
@@ -35,6 +35,14 @@ interface PriceResolution {
   promoterId: Types.ObjectId | null;
   referrerId: Types.ObjectId | null;
   customerPercentage: number | null;
+  // Promoter commission for this purchase: the per-plan promoter % and the
+  // currency amount (= finalPrice × % / 100). 0 when no promoter / legacy code.
+  promoterPercentage: number;
+  promoterCommission: number;
+  // Set when a `promocode` WAS supplied but does not apply (invalid / not covered
+  // / out of per-plan scope). The caller must reject the order with this message
+  // instead of silently charging full price.
+  error?: string;
 }
 
 async function resolveFinalPrice(opts: {
@@ -42,14 +50,17 @@ async function resolveFinalPrice(opts: {
   cart: { type: "package" | "course" | "liveCourse"; id: string } | null;
   promocodeRaw?: string;
   userId?: string;
+  planId?: string;
 }): Promise<PriceResolution> {
-  const { basePrice, cart, promocodeRaw, userId } = opts;
+  const { basePrice, cart, promocodeRaw, userId, planId } = opts;
   const empty: PriceResolution = {
     finalPrice: basePrice,
     promocodeId: null,
     promoterId: null,
     referrerId: null,
     customerPercentage: null,
+    promoterPercentage: 0,
+    promoterCommission: 0,
   };
   if (!promocodeRaw) return empty;
   const code = promocodeRaw.toUpperCase();
@@ -67,15 +78,35 @@ async function resolveFinalPrice(opts: {
   ]);
 
   if (promo) {
-    if (!cart) return empty;
-    if (!promoCovers(promo, cart)) return empty;
-    const discount = computePromoDiscount(promo, basePrice);
+    // A code WAS supplied and matches a real promo. Any failure below is a
+    // rejection the caller must surface — NOT a silent full-price order.
+    if (!cart || !promoCovers(promo, cart)) {
+      return { ...empty, error: "This promo code is not valid for this item." };
+    }
+    // Per-plan SCOPE: a code with link rows is valid ONLY for its linked plans;
+    // an uncovered plan is rejected (even if the parent entity is covered).
+    // Legacy codes (no rows) keep entity-level scope + top-level discount.
+    const [planDiscountMap, totalLinks] = await Promise.all([
+      planId ? loadPlanDiscountMap(String(promo._id), [planId]) : Promise.resolve(new Map<string, PlanLinkPercentages>()),
+      countPlanLinks(String(promo._id)),
+    ]);
+    if (totalLinks > 0 && (!planId || !planDiscountMap.has(String(planId)))) {
+      return { ...empty, error: "This promo code is not valid for this plan." };
+    }
+    const resolved = resolvePlanDiscount(promo, String(planId ?? ""), basePrice, planDiscountMap);
+    if (!(resolved.amount > 0)) {
+      return { ...empty, error: "This promo code has no discount configured." };
+    }
+    const finalPrice = Math.max(0, basePrice - resolved.amount);
     return {
-      finalPrice: Math.max(0, basePrice - discount),
+      ...empty,
+      finalPrice,
       promocodeId: promo._id as Types.ObjectId,
       promoterId: (promo.promoterId ?? null) as Types.ObjectId | null,
       referrerId: null,
-      customerPercentage: promo.discountType === "percentage" ? promo.discountValue : null,
+      customerPercentage: resolved.appliedPercentage,
+      promoterPercentage: resolved.promoterPercentage,
+      promoterCommission: Math.max(0, Math.round((finalPrice * resolved.promoterPercentage) / 100)),
     };
   }
 
@@ -95,7 +126,8 @@ async function resolveFinalPrice(opts: {
     return { ...empty, referrerId: referralCustomer._id as Types.ObjectId };
   }
 
-  return empty;
+  // A code was supplied but matched neither a live promo nor a valid referral.
+  return { ...empty, error: "Invalid or expired promo code." };
 }
 
 // POST /api/v1/client/orders/course
@@ -127,9 +159,14 @@ export const placeCourseOrder = async (req: Request, res: Response) => {
     const priceResolution = await resolveFinalPrice({
       basePrice: plan.price,
       cart: cartEntityId && cartType ? { type: cartType, id: String(cartEntityId) } : null,
+      planId: String(plan._id),
       promocodeRaw: data.promocode,
       userId,
     });
+    if (priceResolution.error) {
+      logger.warn("placeCourseOrder promo rejected", { traceId, customerId: userId, promocode: data.promocode, error: priceResolution.error });
+      return res.status(400).json({ success: false, message: priceResolution.error });
+    }
     const { finalPrice } = priceResolution;
 
     const isFree = finalPrice === 0 || data.paymentMethod === PaymentMethod.FREE;
@@ -159,7 +196,8 @@ export const placeCourseOrder = async (req: Request, res: Response) => {
       referrerId: priceResolution.referrerId,
       paidAmount: finalPrice,
       customerPercentage: priceResolution.customerPercentage,
-      promoterPercentage: 0,
+      promoterPercentage: priceResolution.promoterPercentage,
+      promoterCommission: priceResolution.promoterCommission,
     });
 
     if (paymentDone && priceResolution.referrerId) {
@@ -211,9 +249,14 @@ export const placeEbookOrder = async (req: Request, res: Response) => {
     const priceResolution = await resolveFinalPrice({
       basePrice: plan.price,
       cart: null,
+      planId: String(plan._id),
       promocodeRaw: data.promocode,
       userId,
     });
+    if (priceResolution.error) {
+      logger.warn("placeEbookOrder promo rejected", { traceId, customerId: userId, promocode: data.promocode, error: priceResolution.error });
+      return res.status(400).json({ success: false, message: priceResolution.error });
+    }
     const { finalPrice } = priceResolution;
 
     const isFree = finalPrice === 0 || data.paymentMethod === PaymentMethod.FREE;
@@ -254,6 +297,8 @@ export const placeEbookOrder = async (req: Request, res: Response) => {
         status: true,
         promocodeId: priceResolution.promocodeId,
         promoterId: priceResolution.promoterId,
+        promoterPercentage: priceResolution.promoterPercentage,
+        promoterCommission: priceResolution.promoterCommission,
         referrerId: priceResolution.referrerId,
       });
 

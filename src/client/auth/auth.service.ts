@@ -451,13 +451,18 @@ export async function refreshCustomerToken(refreshToken: string, traceId?: strin
       return { ok: false, message: "Invalid or revoked refresh token." };
     }
 
-    const customer = await Customer.findOne({ _id: customerId, isAccountDeleted: false, status: true }).select(
-      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified isProfileCompleted firebaseToken osType loginCount isLoggedIn"
+    const customer = await Customer.findOne({ _id: customerId }).select(
+      "+otp otpExpiresAt triedOtp firstName middleName lastName emailAddress profilePicture phone2 dob gender stateId districtId city educationId language goals referralCode rewardPoints verified isProfileCompleted firebaseToken osType loginCount isLoggedIn status isAccountDeleted"
     );
 
-    if (!customer) {
-      logger.warn("refreshCustomerToken service user not found", { traceId, customerId });
-      return { ok: false, message: "User not found or disabled." };
+    if (!customer || customer.isAccountDeleted) {
+      logger.warn("refreshCustomerToken service account deleted/not found", { traceId, customerId });
+      return { ok: false, message: "This account no longer exists. Please contact support." };
+    }
+
+    if (!customer.status) {
+      logger.warn("refreshCustomerToken service account disabled", { traceId, customerId });
+      return { ok: false, message: "Your account has been disabled. Please contact support." };
     }
 
     // Invalidate old token pair

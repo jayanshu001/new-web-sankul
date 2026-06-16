@@ -9,6 +9,7 @@ import {
   PaymentMethod,
 } from "../../models/enums";
 import { resolveLivePromo } from "../live-course/promo";
+import { validateCoin } from "../referral/wallet-debit";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -22,6 +23,9 @@ const createEbookOrderSchema = z.object({
   // now part of the promo appliesTo model) and the Razorpay order charged for
   // the reduced amount. Mirrors the live-course / package / course flows.
   promocode: z.string().trim().min(1).optional(),
+  // Optional wallet ("coin") amount in rupees. Validated (≤ balance, ≤ 50% of
+  // plan price), subtracted from the charge, debited at /verify success.
+  coin: z.number().int().min(0).optional(),
 });
 
 // POST /api/v1/client/payment/create-order/ebook
@@ -44,7 +48,7 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
       });
     }
 
-    const { planId, promocode } = createEbookOrderSchema.parse(req.body);
+    const { planId, promocode, coin: coinRaw } = createEbookOrderSchema.parse(req.body);
 
     const plan = await EbookPrice.findOne({ _id: planId, status: true });
     if (!plan) { logger.warn("createEbookOrderPayment plan not found", { traceId, customerId, planId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }
@@ -65,11 +69,14 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
     let promocodeId: string | null = null;
     let originalAmount: number | null = null;
     let discountAmount: number | null = null;
+    let promoterId: string | null = null;
+    let promoterPercentage: number | null = null;
+    let promoterCommission: number | null = null;
     if (promocode) {
       const { result, error } = await resolveLivePromo(promocode, plan.price, {
         type: "ebook",
         id: String(plan.ebookId),
-      });
+      }, String(plan._id));
       if (error || !result) {
         logger.warn("createEbookOrderPayment promo rejected", { traceId, customerId, promocode, error });
         return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
@@ -81,10 +88,35 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
           message: "This promo code reduces the price below the minimum payable amount. Please contact support.",
         });
       }
+      // Referral codes for course/package/ebook are redeemed through the
+      // /orders flow. This Razorpay create-order path only handles promocodes.
+      if (result.referrerId) {
+        logger.warn("createEbookOrderPayment referral code on payment path", { traceId, customerId, promocode });
+        return res.status(400).json({ success: false, message: "Referral codes can't be applied here." });
+      }
       chargeAmount = result.finalAmount;
-      promocodeId = String(result.promo._id);
+      promocodeId = result.promo ? String(result.promo._id) : null;
       originalAmount = result.originalAmount;
       discountAmount = result.discountAmount;
+      promoterId = result.promo?.promoterId ? String(result.promo.promoterId) : null;
+      promoterPercentage = result.promoterPercentage;
+      promoterCommission = result.promoterCommission;
+    }
+
+    // Wallet ("coin"): validate + subtract. Recorded now, debited at /verify.
+    const coinCheck = await validateCoin(customerId, plan.price, coinRaw);
+    if ("error" in coinCheck) {
+      logger.warn("createEbookOrderPayment coin rejected", { traceId, customerId, coin: coinRaw, error: coinCheck.error });
+      return res.status(400).json({ success: false, message: coinCheck.error });
+    }
+    const coinsUsed = coinCheck.coin;
+    chargeAmount = Math.max(0, chargeAmount - coinsUsed);
+    if (chargeAmount < 1) {
+      logger.warn("createEbookOrderPayment amount below minimum after wallet", { traceId, customerId, planId });
+      return res.status(400).json({
+        success: false,
+        message: "Amount after discount and wallet is below the minimum payable. Please reduce wallet usage.",
+      });
     }
 
     // Re-purchasing an active ebook is an "Extend Validity" action, NOT a
@@ -102,6 +134,10 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
       promocodeId,
       originalAmount,
       discountAmount,
+      promoterId,
+      promoterPercentage,
+      promoterCommission,
+      coinsUsed,
       status: PackageCourseEbookOrderStatus.PENDING,
     });
 

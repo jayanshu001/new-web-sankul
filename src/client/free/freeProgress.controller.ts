@@ -4,6 +4,11 @@ import { z } from "zod";
 import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { Video } from "../../models/course/Video.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
+import { Course } from "../../models/course/Course.model";
+import { LiveCourse } from "../../models/course/LiveCourse.model";
+import { Package } from "../../models/course/Package.model";
+import { PackageVideoCategoryRelation } from "../../models/course/PackageVideoCategoryRelation.model";
+import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -114,6 +119,74 @@ export const reportFreeVideoProgress = async (req: Request, res: Response) => {
 // is the full list. Mirrors the shape of /learning/progress/my so the FE can
 // reuse the same resume card.
 // ---------------------------------------------------------------------------
+interface FreeScope {
+  // VideoCategory ids under any free product's tree — a video is "free-parented"
+  // iff its videoCategoryId is in here.
+  categoryIds: Set<string>;
+  // Free product ids, used to match container LectureProgress rows (which carry
+  // courseId / packageId / liveCourseId pointers, not source:"free").
+  courseIds: Set<string>;
+  packageIds: Set<string>;
+  liveCourseIds: Set<string>;
+}
+
+// Build the set of VideoCategory ids that belong to a FREE product
+// (Course/LiveCourse/Package with isPaid:false), PLUS the free product ids
+// themselves. Walks each free product's root category tree down childCategoryIds,
+// exactly like the free-videos listing — but restricted to free parents.
+// Mirrors free.controller.ts steps 1–2.
+async function freeProductScope(): Promise<FreeScope> {
+  const [freePackages, freeCourses, freeLiveCourses] = await Promise.all([
+    Package.find({ active: true, isPaid: false }).select("_id").lean(),
+    Course.find({ status: true, isPaid: false }).select("_id videoCategoryId").lean(),
+    LiveCourse.find({ status: true, isPaid: false }).select("_id videoCategoryId").lean(),
+  ]);
+
+  const courseIds = new Set<string>((freeCourses as any[]).map((c) => String(c._id)));
+  const packageIds = new Set<string>((freePackages as any[]).map((p) => String(p._id)));
+  const liveCourseIds = new Set<string>((freeLiveCourses as any[]).map((lc) => String(lc._id)));
+
+  const rootIds = new Set<string>();
+  for (const c of freeCourses as any[]) if (c.videoCategoryId) rootIds.add(String(c.videoCategoryId));
+  for (const lc of freeLiveCourses as any[]) if (lc.videoCategoryId) rootIds.add(String(lc.videoCategoryId));
+
+  // Packages reach roots through their active video-category relations.
+  const freePkgIds = (freePackages as any[]).map((p) => p._id);
+  if (freePkgIds.length) {
+    const pkgRels = await PackageVideoCategoryRelation.find({ packageId: { $in: freePkgIds }, active: true })
+      .select("videoCategoryRelationId")
+      .lean();
+    const relIds = [...new Set((pkgRels as any[]).map((r) => String(r.videoCategoryRelationId)))].map(
+      (id) => new mongoose.Types.ObjectId(id)
+    );
+    if (relIds.length) {
+      const rels = await VideoCategoryRelation.find({ _id: { $in: relIds } }).select("parent child").lean();
+      for (const r of rels as any[]) {
+        if (r.parent) rootIds.add(String(r.parent));
+        if (r.child) rootIds.add(String(r.child));
+      }
+    }
+  }
+
+  const categoryIds = new Set<string>(rootIds);
+  // Expand each root to its full active subtree (BFS down childCategoryIds).
+  let toLoad = [...rootIds].map((id) => new mongoose.Types.ObjectId(id));
+  while (toLoad.length) {
+    const batch = await VideoCategory.find({ _id: { $in: toLoad }, status: true })
+      .select("_id childCategoryIds")
+      .lean();
+    const next: mongoose.Types.ObjectId[] = [];
+    for (const cat of batch as any[]) {
+      for (const k of (cat.childCategoryIds ?? []) as any[]) {
+        const ks = String(k);
+        if (!categoryIds.has(ks)) { categoryIds.add(ks); next.push(new mongoose.Types.ObjectId(ks)); }
+      }
+    }
+    toLoad = next;
+  }
+  return { categoryIds, courseIds, packageIds, liveCourseIds };
+}
+
 export const listFreeVideoResume = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
@@ -127,9 +200,27 @@ export const listFreeVideoResume = async (req: Request, res: Response) => {
 
     const cid = new mongoose.Types.ObjectId(userId);
 
-    // Recent free-video activity, newest first. This is a "resume" list, not
-    // exhaustive history — cap it like /courses/my does.
-    const rows = await LectureProgress.find({ customerId: cid, source: "free" })
+    // The free resume feed shows any video whose PARENT product is free
+    // (isPaid:false). That's two kinds of progress rows:
+    //   (a) standalone free videos      → source:"free" (no container pointer)
+    //   (b) videos watched IN a free     → container heartbeat stamps
+    //       course/package/liveCourse      courseId/packageId/liveCourseId
+    //                                       (source stays null). Includes PAID
+    //                                       videos inside a free parent, which
+    //                                       are now allowed to save progress.
+    // Build the free-product scope first so we can match both row kinds.
+    const freeScope = await freeProductScope();
+    const toOids = (s: Set<string>) => [...s].map((id) => new mongoose.Types.ObjectId(id));
+
+    const rows = await LectureProgress.find({
+      customerId: cid,
+      $or: [
+        { source: "free" },
+        { courseId: { $in: toOids(freeScope.courseIds) } },
+        { packageId: { $in: toOids(freeScope.packageIds) } },
+        { liveCourseId: { $in: toOids(freeScope.liveCourseIds) } },
+      ],
+    })
       .select("videoId positionSec durationSec completed lastWatchedAt")
       .sort({ lastWatchedAt: -1 })
       .limit(20)
@@ -142,15 +233,26 @@ export const listFreeVideoResume = async (req: Request, res: Response) => {
 
     const videoIds = rows.map((r) => r.videoId).filter(Boolean);
 
-    // Only surface videos that are still live AND still free — a video flipped
-    // to paid or disabled since the user watched it shouldn't appear in the
-    // free feed (tapping it would 403 at /courses/lecture). Populate the
-    // category for the card thumbnail/chapter, since Video carries no image.
-    const videos = await Video.find({ _id: { $in: videoIds }, status: true, priceType: "free" })
+    // Surface videos that are still live and whose category belongs to a free
+    // product. We do NOT filter on priceType — a PAID video inside a FREE
+    // parent is valid free content (its progress is allowed by the container
+    // heartbeat). The free-category gate is what keeps out videos whose parent
+    // is paid (e.g. a free video also watched inside a paid course).
+    const videos = await Video.find({ _id: { $in: videoIds }, status: true })
       .select("_id title topic videoCategoryId")
       .populate("videoCategoryId", "_id title image")
       .lean();
-    const videoById = new Map(videos.map((v: any) => [String(v._id), v]));
+    // Keep only videos whose category belongs to a free product.
+    const videoById = new Map(
+      videos
+        .filter((v: any) => {
+          const catId = v.videoCategoryId && typeof v.videoCategoryId === "object"
+            ? String(v.videoCategoryId._id)
+            : String(v.videoCategoryId);
+          return freeScope.categoryIds.has(catId);
+        })
+        .map((v: any) => [String(v._id), v])
+    );
 
     const percentOf = (pos: number, dur: number) =>
       dur > 0 ? Math.min(100, Math.round((pos / dur) * 100)) : 0;

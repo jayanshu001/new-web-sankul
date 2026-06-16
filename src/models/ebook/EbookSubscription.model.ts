@@ -13,6 +13,10 @@ export interface IEbookSubscription extends Document {
   status: boolean;
   promocodeId?: mongoose.Types.ObjectId | null;
   promoterId?: mongoose.Types.ObjectId | null;
+  // Promoter commission locked in at purchase (currency). See
+  // PackageCourseSubscription for the rationale.
+  promoterPercentage?: number | null;
+  promoterCommission?: number | null;
   referrerId?: mongoose.Types.ObjectId | null;
   createdAt: Date;
   updatedAt: Date;
@@ -31,6 +35,8 @@ const ebookSubscriptionSchema: Schema = new Schema(
     status: { type: Boolean, default: true },
     promocodeId: { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
     promoterId: { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
+    promoterPercentage: { type: Number, default: null },
+    promoterCommission: { type: Number, default: null },
     referrerId: { type: Schema.Types.ObjectId, ref: "Customer", default: null },
   },
   {

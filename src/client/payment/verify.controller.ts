@@ -21,6 +21,8 @@ import {
   PackageCourseEbookPaymentType,
 } from "../../models/enums";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { creditReferrer } from "../referral/credit-referrer";
+import { applyWalletDebit } from "../referral/wallet-debit";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -167,6 +169,20 @@ export const verifyPayment = async (req: Request, res: Response) => {
         });
       }
 
+      // Wallet debit: deduct the coins applied at create-order from the buyer's
+      // rewardPoints + write a debit ledger row. Idempotent on (orderId, debit),
+      // deduct-what's-available. Keyed on this pending row's _id, which is stable
+      // across the merge-extend below. Course/package referral isn't handled here.
+      if (courseSub.coinsUsed && courseSub.coinsUsed > 0) {
+        await applyWalletDebit({
+          customerId: courseSub.customerId,
+          orderId: courseSub._id as any,
+          coin: courseSub.coinsUsed,
+          source: courseSub.courseId ? "course" : "package",
+          traceId,
+        });
+      }
+
       // Look up the plan to compute access window. `duration` is stored as
       // DAYS (matches the webhook fulfillment path and the ebook/test-series
       // branches). The shared helper applies setDate via `asDays:true` so a
@@ -209,6 +225,12 @@ export const verifyPayment = async (req: Request, res: Response) => {
       if (existingActive) {
         existingActive.endAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
         existingActive.paidAmount = (existingActive.paidAmount || 0) + (courseSub.paidAmount || 0);
+        // Accumulate promoter commission (currency) across re-purchases — sum the
+        // amount, not the %, so a merged row with mixed promoter %s stays correct.
+        existingActive.promoterCommission =
+          (existingActive.promoterCommission || 0) + (courseSub.promoterCommission || 0);
+        if (courseSub.promoterId) existingActive.promoterId = courseSub.promoterId;
+        if (courseSub.promoterPercentage != null) existingActive.promoterPercentage = courseSub.promoterPercentage;
         await existingActive.save();
 
         // Retire the just-paid pending row: record the payment + a pointer to
@@ -272,6 +294,17 @@ export const verifyPayment = async (req: Request, res: Response) => {
         });
       }
 
+      // Wallet debit (see course branch). Idempotent, deduct-what's-available.
+      if (liveCourseSub.coinsUsed && liveCourseSub.coinsUsed > 0) {
+        await applyWalletDebit({
+          customerId: liveCourseSub.customerId,
+          orderId: liveCourseSub._id as any,
+          coin: liveCourseSub.coinsUsed,
+          source: "liveCourse",
+          traceId,
+        });
+      }
+
       const plan = await LiveCoursePlan.findById(liveCourseSub.planId).select("duration").lean();
       // `duration` is stored as DAYS (see LiveCoursePlan) — use setDate, not setMonth.
       const durationDays = plan?.duration ?? 0;
@@ -307,6 +340,19 @@ export const verifyPayment = async (req: Request, res: Response) => {
         liveCourseSub.status = false;
         await liveCourseSub.save();
 
+        // Credit the referrer (if this purchase used a referral code). Idempotent
+        // on the order id (the superseded sub row), so a webhook/verify retry
+        // won't double-credit.
+        if (liveCourseSub.referrerId) {
+          await creditReferrer({
+            referrerId: liveCourseSub.referrerId,
+            buyerId: liveCourseSub.customerId,
+            orderId: liveCourseSub._id as any,
+            paidAmount: liveCourseSub.paidAmount ?? 0,
+            source: "liveCourse",
+          });
+        }
+
         logger.info("verifyPayment: live-course subscription extended existing", {
           subscriptionId: String(existingActive._id),
           supersededId: String(liveCourseSub._id),
@@ -331,6 +377,16 @@ export const verifyPayment = async (req: Request, res: Response) => {
       liveCourseSub.startAt = now;
       liveCourseSub.endAt = endAt;
       await liveCourseSub.save();
+
+      if (liveCourseSub.referrerId) {
+        await creditReferrer({
+          referrerId: liveCourseSub.referrerId,
+          buyerId: liveCourseSub.customerId,
+          orderId: liveCourseSub._id as any,
+          paidAmount: liveCourseSub.paidAmount ?? 0,
+          source: "liveCourse",
+        });
+      }
 
       logger.info("verifyPayment: live-course subscription activated", {
         subscriptionId: String(liveCourseSub._id),
@@ -359,6 +415,17 @@ export const verifyPayment = async (req: Request, res: Response) => {
           success: true,
           data: { kind: "ebook", order: ebookOrder },
           message: "Already verified.",
+        });
+      }
+
+      // Wallet debit (see course branch). Idempotent, deduct-what's-available.
+      if (ebookOrder.coinsUsed && ebookOrder.coinsUsed > 0) {
+        await applyWalletDebit({
+          customerId: ebookOrder.customerId,
+          orderId: ebookOrder._id as any,
+          coin: ebookOrder.coinsUsed,
+          source: "ebook",
+          traceId,
         });
       }
 
@@ -398,6 +465,14 @@ export const verifyPayment = async (req: Request, res: Response) => {
           now: startAt,
         });
         existingActive.price = (existingActive.price || 0) + (ebookOrder.orderPrice || 0);
+        // Accumulate promoter commission across re-purchases. We sum the
+        // currency amount (locked in per order), NOT the percentage, so a
+        // merged row with mixed promoter %s stays correct. promoterId of the
+        // latest paid order wins for attribution.
+        existingActive.promoterCommission =
+          (existingActive.promoterCommission || 0) + (ebookOrder.promoterCommission || 0);
+        if (ebookOrder.promoterId) existingActive.promoterId = ebookOrder.promoterId;
+        if (ebookOrder.promoterPercentage != null) existingActive.promoterPercentage = ebookOrder.promoterPercentage;
         // Point the row at the most recent paid order so the invoice/receipt
         // chain follows the latest payment.
         existingActive.orderId = ebookOrder._id;
@@ -434,6 +509,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
         endAt,
         paymentType: PackageCourseEbookPaymentType.ONLINE,
         status: true,
+        promocodeId: ebookOrder.promocodeId ?? null,
+        promoterId: ebookOrder.promoterId ?? null,
+        promoterPercentage: ebookOrder.promoterPercentage ?? null,
+        promoterCommission: ebookOrder.promoterCommission ?? null,
       });
 
       logger.info("verifyPayment: ebook order activated", {
@@ -463,6 +542,17 @@ export const verifyPayment = async (req: Request, res: Response) => {
           success: true,
           data: { kind: "test-series", order: testSeriesOrder },
           message: "Already verified.",
+        });
+      }
+
+      // Wallet debit (see course branch). Idempotent, deduct-what's-available.
+      if (testSeriesOrder.coinsUsed && testSeriesOrder.coinsUsed > 0) {
+        await applyWalletDebit({
+          customerId: testSeriesOrder.customerId,
+          orderId: testSeriesOrder._id as any,
+          coin: testSeriesOrder.coinsUsed,
+          source: "testSeries",
+          traceId,
         });
       }
 
@@ -505,7 +595,23 @@ export const verifyPayment = async (req: Request, res: Response) => {
         existingActive.price = (existingActive.price || 0) + (testSeriesOrder.orderPrice || 0);
         existingActive.orderId = testSeriesOrder._id;
         if (testSeriesOrder.promocodeId) existingActive.promocodeId = testSeriesOrder.promocodeId;
+        // Accumulate promoter commission (currency) across re-purchases. See the
+        // ebook branch for the rationale (sum amount, not %).
+        existingActive.promoterCommission =
+          (existingActive.promoterCommission || 0) + (testSeriesOrder.promoterCommission || 0);
+        if (testSeriesOrder.promoterId) existingActive.promoterId = testSeriesOrder.promoterId;
+        if (testSeriesOrder.promoterPercentage != null) existingActive.promoterPercentage = testSeriesOrder.promoterPercentage;
         await existingActive.save();
+
+        if (testSeriesOrder.referrerId) {
+          await creditReferrer({
+            referrerId: testSeriesOrder.referrerId,
+            buyerId: testSeriesOrder.customerId,
+            orderId: testSeriesOrder._id as any,
+            paidAmount: testSeriesOrder.orderPrice ?? 0,
+            source: "testSeries",
+          });
+        }
 
         logger.info("verifyPayment: test-series subscription extended existing", {
           orderId: String(testSeriesOrder._id),
@@ -536,8 +642,21 @@ export const verifyPayment = async (req: Request, res: Response) => {
         endAt,
         paymentType: PackageCourseEbookPaymentType.ONLINE,
         promocodeId: testSeriesOrder.promocodeId ?? null,
+        promoterId: testSeriesOrder.promoterId ?? null,
+        promoterPercentage: testSeriesOrder.promoterPercentage ?? null,
+        promoterCommission: testSeriesOrder.promoterCommission ?? null,
         status: true,
       });
+
+      if (testSeriesOrder.referrerId) {
+        await creditReferrer({
+          referrerId: testSeriesOrder.referrerId,
+          buyerId: testSeriesOrder.customerId,
+          orderId: testSeriesOrder._id as any,
+          paidAmount: testSeriesOrder.orderPrice ?? 0,
+          source: "testSeries",
+        });
+      }
 
       logger.info("verifyPayment: test-series order activated", {
         orderId: String(testSeriesOrder._id),

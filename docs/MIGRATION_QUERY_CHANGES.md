@@ -15,6 +15,352 @@
 
 ---
 
+## 2026-06-16 — Admin test-series/ebook customer populate: correct field names
+
+**Files:** `src/admin/testSeries/testSeries.controller.ts` (listSubscriptions,
+listOrders), `src/admin/ebook/ebook-subscription.controller.ts`
+(getEbookSubscriptionById).
+
+**Change:** these endpoints populated `customerId` with field names that DON'T
+exist on the Customer schema — test-series used `name phone email`, the ebook
+detail used `full_name mobile email`. Mongoose silently returns `{ _id }` only,
+so the admin table fell back to showing a bare ObjectId. Corrected the `.select`
+to the real fields `firstName middleName lastName phoneNumber emailAddress`. The
+two test-series listings additionally shape the populated customer into
+`{ _id, name, phone, email }` (name = joined name parts) to match the FE's
+`name || phone || email || id` contract without an FE change. No DB change — pure
+query `.select` / response-shape fix. Course/package/live-course/book/exam
+listings already used the correct fields.
+
+---
+
+## 2026-06-16 — Wallet ("coin") deduction in payment flow
+
+**Files:** new `src/client/referral/wallet-debit.ts` (validateCoin +
+applyWalletDebit, mirrors credit-referrer.ts); 5 create-order controllers
+(course, package, ebook, live-course, test-series payment) accept+validate+apply
+`coin`; `src/client/payment/verify.controller.ts` + `webhook.controller.ts`
+debit at fulfillment. Models gained `coinsUsed`: PackageCourseSubscription,
+LiveCourseSubscription, EbookOrder, TestSeriesOrder.
+
+**Behaviour:** create-order accepts optional `coin` (rupees, integer). Validated:
+`0 ≤ coin ≤ min(floor(planPrice/2), customer.rewardPoints)` (400 with message on
+fail). Razorpay charge = `planPrice − promoDiscount − coin` (test-series:
+breakdown total − coin). `coinsUsed` persisted on the pending order/sub. At
+/verify (and webhook for ebook/live) success, `applyWalletDebit` atomically
+`$inc rewardPoints: -debit` + writes a ReferralTransaction (type:DEBIT). Idempotent
+on (orderId, customerId, debit) — safe under verify/webhook double-fire. Deduct-
+what's-available: if balance dropped since create-order, debits min(coin,balance)
+and logs (never blocks provisioning — buyer already paid the reduced amount).
+
+**Query changes:** new ReferralTransaction debit rows + Customer.rewardPoints
+`$inc` decrements at verify. New reads: Customer.rewardPoints at create-order
+(validation) and verify (debit). No schema migration / backfill (coinsUsed
+defaults null). No new index.
+
+---
+
+## 2026-06-16 — Referral codes for live-course & test-series (schema + query)
+
+**Files:** `src/models/customer/LiveCourseSubscription.model.ts`,
+`src/models/testSeries/TestSeriesOrder.model.ts` (new schema fields);
+`src/client/live-course/promo.ts` (new query); `src/client/payment/*.controller.ts`,
+`src/client/payment/verify.controller.ts`, `src/client/webhook/webhook.controller.ts`,
+`src/client/testSeries/testSeries.controller.ts` (callers); `src/client/referral/credit-referrer.ts`.
+
+**Schema additions (need NO backfill — all default null):**
+- `ws_live_course_subscriptions`: `referrerId` (ObjectId→Customer, default null),
+  `customerPercentage` (Number, default null).
+- `ws_test_series_orders`: `referrerId` (ObjectId→Customer, default null),
+  `customerPercentage` (Number, default null).
+
+**Query change:** `resolveLivePromo()` (shared by every plan-based payment path —
+live-course, test-series, course, package, ebook) now, when a code matches no
+active `PromoCode`, falls back to a referral lookup:
+`Customer.findOne({ referralCode: <CODE>, isAccountDeleted:false, status:true })`
++ `ReferralProgram.findOne({ name:"student", status:true })`. On a match it returns
+a referral-shaped result (`promo:null`, `referrerId` set) so live-course /
+test-series checkout honours referral codes (50% buyer discount + 20% referrer
+reward on purchase, credited via `creditReferrer` at /verify and the live-course
+webhook). course/package/ebook **payment** create-order paths explicitly reject
+referral codes (those redeem through `/orders`).
+
+**Regression QA:** referral apply-promo + purchase for live-course and test-series;
+confirm `creditReferrer` is idempotent (verify + webhook fire on same order id).
+
+---
+
+## 2026-06-16 — Lecture progress: free parent product bypasses subscription
+
+**Files:** `src/client/course/progress.controller.ts` (reportLectureProgress —
+all 3 scope branches).
+
+**Change:** `POST /client/courses/lectures/:videoId/progress` previously required
+an active subscription for any PAID video, even if the parent course/package/
+liveCourse was free (isPaid:false). Now each scope branch loads the scoped
+parent (already loaded `_id`; now also `isPaid`) and skips the subscription
+check when `isFree || parent.isPaid === false`. Only a paid video inside a paid
+parent still requires a subscription (existing 403). Parent-not-found 404s
+unchanged. No extra query (the parent doc was already fetched in the free
+branch; we just also select isPaid and apply it to the paid branch). No
+schema/index/migration change.
+
+---
+
+## 2026-06-16 — Free-videos resume: scope to free-parent products (both row kinds)
+
+**Files:** `src/client/free/freeProgress.controller.ts` (listFreeVideoResume +
+`freeProductScope` helper, formerly freeProductCategoryIds).
+
+**Rule:** `GET /client/free-videos/resume` now shows any watched video whose
+PARENT product is free (Course/Package/LiveCourse isPaid:false) — and ONLY those.
+Two fixes in one:
+  1. (earlier bug) a `priceType:"free"` video watched inside a PAID product no
+     longer leaks in — gated by the free-product category set.
+  2. a PAID video inside a FREE parent (now allowed to save progress via the
+     container heartbeat) DOES show — the `priceType:"free"` video filter was
+     dropped.
+
+**Query change:** row query broadened from `{source:"free"}` to
+`$or: [ source:"free", courseId ∈ freeCourses, packageId ∈ freePackages,
+liveCourseId ∈ freeLiveCourses ]` (container heartbeats stamp
+courseId/packageId/liveCourseId with source=null, so source:"free" alone missed
+them). Helper now also returns the free product-id sets. Video query drops
+`priceType:"free"`; the free-category gate is the sole parent-is-free test. New
+reads of free Course/LiveCourse/Package + category trees per call (bounded;
+resume capped at 20 rows). No schema/index/migration change.
+
+---
+
+## 2026-06-16 — Promoter dashboards span all 5 products (union 4 sub collections)
+
+**Files:** new `src/promoter/shared/promoterSubscriptions.ts` (union helper +
+scope match); `src/promoter/dashboard/overview.service.ts`;
+`src/promoter/dashboard/dashboard.controller.ts`;
+`src/promoter/subscription/subscription.controller.ts`;
+`src/promoter/promocode/promocode.controller.ts`;
+`src/promoter/customer/customer.controller.ts`.
+
+**Problem:** commission/sales were RECORDED on ebook/test-series/live-course
+subscriptions but promoter dashboards only queried PackageCourseSubscription
+(some also EbookSubscription) — so those purchases never appeared.
+
+**Change:** all promoter earnings/sales/customer queries now span the 4
+subscription collections via `$unionWith` (ws_package_course_subscriptions ∪
+ws_ebook_subscriptions ∪ ws_test_series_subscriptions ∪
+ws_live_course_subscriptions), normalised to a common `{ amount, commission,
+productType }` shape (amount = paidAmount for package/live, price for
+ebook/test; commission = promoterCommission with paidAmount×% legacy fallback).
+Specifics: dashboard totals/revenue/commission/recents + per-product breakdown;
+overview totals/chart/recents; subscriptions report adds `byType` + byMonth
+union (byCourse stays course-only); subscriptions list adds
+`?type=testSeries|liveCourse`; promocode usage adds test-series + live-course;
+customers list/detail union all 4 AND fix the detail 404 gate (a customer who
+bought only test-series/live-course used to 404). Commission aggregation shape
+changed to `$sum "$commission"` on the normalised stream.
+
+**No schema/index/migration change** (relies on the promoterId indexes added in
+the commission change). Response shape additions: new summary fields
+(testSeriesSubscriptionCount, liveCourseRevenue, etc.), recents now carry
+`productType` instead of a typed course ref, customer detail adds
+testSeriesSubscriptions/liveCourseSubscriptions arrays.
+
+---
+
+## 2026-06-16 — offerApplicable/offerReason flags on all apply-promo endpoints
+
+**Files:** `src/client/payment/live-course-payment.controller.ts`
+(applyLiveCoursePromo); `src/client/payment/test-series-payment.controller.ts`
+(applyTestSeriesPromo); `src/client/promocode/promocode.controller.ts`
+(applyPromocode — now sets offerReason:null on applicable plans too).
+
+**Response-only change:** the dedicated single-plan previews
+(`/payment/apply-promo/live-course`, `/payment/apply-promo/test-series`) now
+return `offerApplicable:true` + `offerReason:null` on success, matching the
+per-plan flags `/promocodes/apply` already returns. These endpoints stay 400 +
+message on out-of-scope/invalid (single-plan → reject, not flag). No request,
+schema, or query change.
+
+---
+
+## 2026-06-16 — Promoter commission recorded on purchase (all 5 products)
+
+**Files:** resolver `src/client/promocode/applies-to.ts` (loadPlanDiscountMap now
+selects promoterPercentage; resolvePlanDiscount returns it);
+`src/client/live-course/promo.ts` (resolveLivePromo returns promoterPercentage +
+promoterCommission); `src/client/orders/orders.controller.ts`
+(resolveFinalPrice). Models: added `promoterCommission` to
+PackageCourseSubscription; `promoterPercentage`+`promoterCommission` to
+EbookSubscription; `promoterId`+`promoterPercentage`+`promoterCommission` to
+TestSeriesSubscription (+index) & LiveCourseSubscription (+index); same trio to
+EbookOrder & TestSeriesOrder (carriers). Writes: all 5 payment controllers +
+orders flow stamp commission at create; `verify.controller` & `webhook.controller`
+copy order→subscription and ACCUMULATE promoterCommission on the re-purchase
+merge (sum amount, not %). Aggregations:
+`src/promoter/{dashboard/overview.service,dashboard/dashboard.controller,subscription/subscription.controller}.ts`
+now `$sum $ifNull(promoterCommission, paidAmount×%)` — prefer the locked-in
+amount, legacy fallback for old rows.
+
+**Why:** promoterPercentage lived only on the `PromotedPackageCourseEbook` link
+row and was NEVER recorded at purchase (subscriptions hardcoded
+promoterPercentage:0), so promoter dashboards showed zero commission. Now each
+sale locks in `promoterCommission = chargedAmount × promoterPercentage / 100`.
+Storing the AMOUNT (not just %) keeps merged re-purchase rows correct.
+
+**Query/index changes:** new indexes `{promoterId:1, createdAt:-1}` on
+TestSeriesSubscription & LiveCourseSubscription. Promoter commission aggregations
+changed shape (see above). New collection reads: link-row promoterPercentage at
+checkout.
+
+**Migration (required):** `src/migrations/2026-promoter-commission-backfill.ts`
+backfills promoterId/promoterPercentage/promoterCommission on PAST subscriptions
+(all 4 models) by matching `(promocodeId, planId)` → link row. Idempotent (skips
+rows already carrying promoterCommission). Ebook joins planId via EbookOrder.
+**Promoter reporting still scoped to PackageCourseSubscription** (course+package)
+for now — ebook/test-series/live commission is recorded in the DB but not yet
+surfaced in promoter dashboards (deferred).
+
+---
+
+## 2026-06-16 — Orders flow: reject invalid promo instead of silent full price
+
+**Files:** `src/client/orders/orders.controller.ts` (`resolveFinalPrice`,
+`placeCourseOrder`, `placeEbookOrder`).
+
+**Bug:** `POST /client/orders/{course,ebook}` placed the order at FULL PRICE with
+NO error when a supplied promocode was invalid / not-covered / out of per-plan
+scope (`resolveFinalPrice` returned `empty` silently). User saw a successful
+order, no rejection.
+
+**Fix:** `resolveFinalPrice` now returns an optional `error` for every rejection
+case (invalid/expired code, entity not covered, out-of-plan-scope, zero
+discount); both order handlers return `400 { message }` when present. Behaviour
+unchanged when no code is sent, or for valid codes/referrals. Messages match the
+payment-controller wording ("not valid for this plan", etc.).
+
+---
+
+## 2026-06-16 — Promocode: per-plan-within-entity scope enforcement
+
+**Files:** `src/client/promocode/applies-to.ts` (new `countPlanLinks`);
+`src/client/live-course/promo.ts` (`resolveLivePromo`);
+`src/client/promocode/promocode.controller.ts` (applyPromocode);
+`src/client/orders/orders.controller.ts` (`resolveFinalPrice`).
+
+**Rule change (was "entity-level only", now per-plan):** A code is valid for a
+plan ONLY if a `(promocodeId, planId)` row exists in
+`ws_promoted_package_course_ebooks` — rejected on any plan without one, EVEN when
+the parent entity is in `appliesTo.ids`. Implemented via a new
+`countDocuments({ promocodeId })` ("does this code have link rows?") + the
+existing per-plan `$in` lookup.
+
+**Legacy-safe:** codes with ZERO link rows keep entity-level scope + top-level
+discount (unchanged) — so old codes aren't broken. Only codes that HAVE per-plan
+rows are per-plan-scoped. Checkout/apply (live, test-series, course, package,
+ebook + legacy orders) reject out-of-scope plans with "not valid for this plan";
+the apply preview marks uncovered plans `offerAvailable: false` +
+`offerApplicable: false` + `offerReason: "This promo code is not valid for this
+plan."` (covered plans get `offerApplicable: true`), so the FE can show a
+per-plan rejection message while still discounting the covered plans. No
+schema/index change, no backfill.
+
+---
+
+## 2026-06-16 — Client promocode list: discountValue from per-plan model
+
+**Files:** `src/client/promocode/promocode.controller.ts` (`listPromocodes`).
+
+**Change:** `GET /client/promocodes` was returning the stale legacy top-level
+`discountValue`/`discountType`. Now (same fields, app reads them) it returns
+`discountType: "percentage"` and `discountValue` = the code's representative
+(MAX) per-plan `customerPercentage`, via a new `$group`/`$max` aggregation on
+`PromotedPackageCourseEbook` keyed by promocodeId. Codes with NO per-plan rows
+(legacy) fall back to their stored top-level discount. No data change required
+(the "old values" were a projection issue, not bad data); no schema/index change.
+
+---
+
+## 2026-06-16 — Promocode plans endpoint: per-entity goalId/goalName
+
+**Files:** `src/admin/promocode/promocode.controller.ts` (`getPromocodePlans`).
+
+**Change:** `GET /admin/promocodes/plans` now returns `goalId` + `goalName` on
+each **package** entity (omitted when absent → FE "Ungrouped"). `goalId` matches
+`GET /admin/goals` ids. Source: `Package.goalId` (→ `Goal._id`), falling back to
+deriving the goal from `Package.goalLabelId` when goalId unset. Added optional
+`goalId` query param for server-side filtering (alongside existing `examTypeId`).
+
+**Data-model limit (not a bug):** ONLY `Package` has a goal field in the schema.
+Course / LiveCourse / Ebook / TestSeries have no goal link, so they never carry
+`goalId` and always fall into "Ungrouped". Legacy `examTypeId`/`examTypeName`
+(= package `goalLabelId`) unchanged. No schema/index change, no backfill.
+
+---
+
+## 2026-06-16 — Promocode GET /:id: resolve planId for ebook & testSeries links
+
+**Files:** `src/admin/promocode/promocode.controller.ts` (`loadPlanLinks`).
+
+**Bug:** `GET /admin/promocodes/:id` returned `plans[].planId: null` for ebook
+and test-series codes. Cause: link rows store `planKind: "price"` for
+package/course **AND** ebook/testSeries, but `loadPlanLinks` only looked price
+ids up in `PackageCourseEbookPrice`. Ebook plans live in `EbookPrice`,
+test-series plans in `TestSeriesPrice` → not found → planId null (percentages
+were always saved correctly; write path was fine).
+
+**Fix:** price-kind links now resolved against all three collections
+(PackageCourseEbookPrice → EbookPrice → TestSeriesPrice) with parent-entity name
+popul. (Ebook→`name`, TestSeries→`title` normalised to `name`). Affects
+package/course (unchanged), liveCourse (unchanged), ebook + testSeries (fixed).
+No write change, no backfill needed — affects fresh AND legacy codes equally.
+
+---
+
+## 2026-06-16 — Promocode create/update: discountValue now optional
+
+**Files:** `src/admin/promocode/promocode.validation.ts` (`promocodeBase`).
+
+**Contract change:** `discountValue` on `POST /admin/promocodes` (create) and the
+update endpoint was a REQUIRED number — admin panel moved to the per-plan model
+and stopped sending it, so create/update were 400-ing with
+`discountValue: Required`. Now `optional().default(0)`. `discountType` already
+defaulted to `"percentage"`. Legacy columns stay on the model (defaulted) for
+backward compat; reads still return them. No schema/index change.
+
+---
+
+## 2026-06-16 — Promocode discount: per-plan customerPercentage at checkout
+
+**Files:** `src/client/promocode/applies-to.ts` (new `loadPlanDiscountMap`,
+`resolvePlanDiscount`); `src/client/promocode/promocode.controller.ts`
+(applyPromocode); `src/client/live-course/promo.ts` (`resolveLivePromo` gains
+optional `planId`); `src/client/payment/{course,live-course,test-series,ebook,package}-payment.controller.ts`;
+`src/client/testSeries/testSeries.controller.ts`; `src/client/orders/orders.controller.ts`
+(`resolveFinalPrice` gains `planId`); `src/admin/promocode/promocode.validation.ts`.
+
+**Query-level change:** Checkout discount no longer reads ONLY the top-level
+`PromoCode.discountValue`/`discountType`. It now reads the per-plan
+`customerPercentage` from the `ws_promoted_package_course_ebooks`
+(`PromotedPackageCourseEbook`) link table via a new `$in` query on
+`{ promocodeId, planId: { $in: [...] } }` (uses the existing
+`{ promocodeId:1, planId:1 }` unique index). 
+
+**Resolution rule (per plan):** `discount = customerPercentage off plan.price`
+when a link row exists for `(promocodeId, planId)`; **else** legacy fallback to
+top-level `discountValue`/`discountType`. Affects every checkout/apply path
+(package, course, liveCourse, testSeries, ebook + legacy orders flow).
+
+**Validation change:** admin create/update now rejects unless ≥1 plan has
+`0 < customerPercentage <= 100` (update only enforces when `plans` is present).
+
+**QA / regression:** Test side-by-side (a) a legacy code with top-level
+`discountValue` and NO link rows → must hit the fallback branch and discount as
+before; (b) a new per-plan code → must discount by each plan's
+`customerPercentage`. `promoterPercentage` is intentionally still stored-but-unapplied
+(commission wiring deferred). No index or schema field added; no backfill needed.
+
+---
+
 ## 2026-06-15 — Study material: persist original upload filename
 
 **Files:** `src/models/course/Material.model.ts`;

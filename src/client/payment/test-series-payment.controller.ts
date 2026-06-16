@@ -9,6 +9,7 @@ import {
   PaymentMethod,
 } from "../../models/enums";
 import { resolveLivePromo } from "../live-course/promo";
+import { validateCoin } from "../referral/wallet-debit";
 import { _shared } from "../testSeries/testSeries.controller";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
@@ -19,6 +20,9 @@ const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 const createOrderSchema = z.object({
   planId: objectId,
   promocode: z.string().trim().min(1).optional(),
+  // Optional wallet ("coin") amount in rupees. Validated (≤ balance, ≤ 50% of
+  // plan price), subtracted from the charge, debited at /verify success.
+  coin: z.number().int().min(0).optional(),
 });
 
 const applyPromoSchema = z.object({
@@ -53,7 +57,7 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
     const { result, error } = await resolveLivePromo(promocode, plan.price, {
       type: "testSeries",
       id: String(plan.testSeriesId),
-    });
+    }, String(plan._id), customerId);
     if (error || !result) {
       logger.warn("applyTestSeriesPromo promo rejected", { traceId, customerId, planId, promocode, error });
       return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
@@ -62,20 +66,26 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
     const bd = _shared.computeBreakdown(
       plan.price,
       result.discountAmount,
-      String(result.promo._id)
+      result.promo ? String(result.promo._id) : null
     );
 
-    logger.info("applyTestSeriesPromo success", { traceId, customerId, planId, promocode, total: bd.totalAmount });
+    logger.info("applyTestSeriesPromo success", { traceId, customerId, planId, promocode, total: bd.totalAmount, isReferral: !!result.referrerId });
     return res.status(200).json({
       success: true,
       data: {
         planId: String(plan._id),
         testSeriesId: String(plan.testSeriesId),
-        promocode: result.promo.promocode,
-        promocodeId: String(result.promo._id),
+        promocode: result.promo ? result.promo.promocode : promocode.trim().toUpperCase(),
+        promocodeId: result.promo ? String(result.promo._id) : null,
+        isReferral: !!result.referrerId,
         discountType: result.discountType,
         discountValue: result.discountValue,
         breakdown: bd,
+        // Per-plan applicability flags — same contract as /promocodes/apply.
+        // Single-plan endpoint: a reachable success is always applicable;
+        // out-of-scope/invalid plans are rejected with a 400 above.
+        offerApplicable: true,
+        offerReason: null,
       },
     });
   } catch (e: any) {
@@ -105,7 +115,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       });
     }
 
-    const { planId, promocode } = createOrderSchema.parse(req.body);
+    const { planId, promocode, coin: coinRaw } = createOrderSchema.parse(req.body);
 
     const plan = await TestSeriesPrice.findOne({ _id: planId, status: true });
     if (!plan) { logger.warn("createTestSeriesOrderPayment plan not found", { traceId, customerId, planId }); return res.status(404).json({ success: false, message: "Plan not found or inactive." }); }
@@ -129,26 +139,47 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
     // Re-validate promo and compute the breakdown server-side.
     let discountAmount = 0;
     let promocodeId: string | null = null;
+    let promoterId: string | null = null;
+    let promoterPercentage: number | null = null;
+    let promoterCommission: number | null = null;
+    let referrerId: string | null = null;
+    let customerPercentage: number | null = null;
     if (promocode) {
       const { result, error } = await resolveLivePromo(promocode, plan.price, {
         type: "testSeries",
         id: String(plan.testSeriesId),
-      });
+      }, String(plan._id), customerId);
       if (error || !result) {
         logger.warn("createTestSeriesOrderPayment promo rejected", { traceId, customerId, promocode, error });
         return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
       }
       discountAmount = result.discountAmount;
-      promocodeId = String(result.promo._id);
+      // promo is null on the referral path; referrerId is set instead.
+      promocodeId = result.promo ? String(result.promo._id) : null;
+      promoterId = result.promo?.promoterId ? String(result.promo.promoterId) : null;
+      promoterPercentage = result.promoterPercentage;
+      promoterCommission = result.promoterCommission;
+      referrerId = result.referrerId ? String(result.referrerId) : null;
+      customerPercentage = result.customerPercentage;
     }
     const bd = _shared.computeBreakdown(plan.price, discountAmount, promocodeId);
 
-    if (bd.totalAmount < 1) {
-      logger.warn("createTestSeriesOrderPayment below minimum", { traceId, customerId, totalAmount: bd.totalAmount });
+    // Wallet ("coin"): validate against balance + 50%-of-plan-price cap, then
+    // subtract from the breakdown total. Recorded now, debited at /verify.
+    const coinCheck = await validateCoin(customerId, plan.price, coinRaw);
+    if ("error" in coinCheck) {
+      logger.warn("createTestSeriesOrderPayment coin rejected", { traceId, customerId, coin: coinRaw, error: coinCheck.error });
+      return res.status(400).json({ success: false, message: coinCheck.error });
+    }
+    const coinsUsed = coinCheck.coin;
+    const chargeAmount = Math.max(0, bd.totalAmount - coinsUsed);
+
+    if (chargeAmount < 1) {
+      logger.warn("createTestSeriesOrderPayment below minimum", { traceId, customerId, totalAmount: bd.totalAmount, coinsUsed });
       return res.status(400).json({
         success: false,
         message:
-          "Final amount is below the minimum payable. Please contact support.",
+          "Final amount is below the minimum payable. Please reduce wallet usage or contact support.",
       });
     }
 
@@ -158,19 +189,25 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       planId: plan._id,
       paymentMethod: PaymentMethod.RAZORPAY,
       orderType: PackageCourseEbookOrderType.PURCHASE,
-      orderPrice: bd.totalAmount,
+      orderPrice: chargeAmount,
       basePrice: bd.basePrice,
       discountAmount: bd.discountAmount,
       gstAmount: bd.gstAmount,
       handlingFee: bd.handlingFee,
       promocodeId,
+      promoterId,
+      promoterPercentage,
+      promoterCommission,
+      referrerId,
+      customerPercentage,
+      coinsUsed,
       status: PackageCourseEbookOrderStatus.PENDING,
     });
 
     const receiptId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const rzpOrder = await createRazorpayOrder(rp, {
-      amount: Math.round(bd.totalAmount * 100),
+      amount: Math.round(chargeAmount * 100),
       currency: "INR",
       receipt: receiptId,
       notes: {
@@ -186,14 +223,14 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
     order.razorpayOrderId = rzpOrder.id;
     await order.save();
 
-    logger.info("createTestSeriesOrderPayment success", { traceId, customerId, orderId: order._id, razorpayOrderId: rzpOrder.id, amount: bd.totalAmount });
+    logger.info("createTestSeriesOrderPayment success", { traceId, customerId, orderId: order._id, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
     return res.status(201).json({
       success: true,
       data: {
         testSeriesOrderId: order._id,
         receiptId,
         razorpay: razorpayResponseFor(rzpOrder),
-        amountInRupees: bd.totalAmount,
+        amountInRupees: chargeAmount,
         breakdown: bd,
         testSeries: { _id: series._id, title: series.title },
         plan: {

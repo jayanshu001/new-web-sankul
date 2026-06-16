@@ -26,6 +26,14 @@ export interface IPackageCourseSubscription extends Document {
   paidAmount?: number | null;
   customerPercentage?: number | null;
   promoterPercentage?: number | null;
+  // Promoter's commission for this sale in currency, locked in at purchase
+  // (= paidAmount × promoterPercentage / 100). Accumulated on re-purchase merge.
+  // Dashboards sum THIS rather than re-deriving %×amount, so a merged row with
+  // mixed promoter %s stays correct.
+  promoterCommission?: number | null;
+  // Wallet ("coin"/rewardPoints) applied to this purchase. Recorded at
+  // create-order; actually debited from the customer at /verify success.
+  coinsUsed?: number | null;
   paymentStatus: "pending" | "verified" | "failed";
   paymentMethod?: string | null;
   withMaterial?: boolean;
@@ -56,6 +64,8 @@ const packageCourseSubscriptionSchema: Schema = new Schema(
     paidAmount: { type: Number, default: null },
     customerPercentage: { type: Number, default: null },
     promoterPercentage: { type: Number, default: null },
+    promoterCommission: { type: Number, default: null },
+    coinsUsed: { type: Number, default: null },
     paymentStatus: {
       type: String,
       enum: ["pending", "verified", "failed"],

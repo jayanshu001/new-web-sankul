@@ -1,8 +1,8 @@
 import mongoose from "mongoose";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { PromoCode } from "../../models/course/PromoCode.model";
-import { Course } from "../../models/course/Course.model";
 import { Customer } from "../../models/customer/Customer.model";
+import { unionAllPromoterSubsStages } from "../shared/promoterSubscriptions";
 import logger from "../../utils/logger";
 
 export type RangeKey = "today" | "week" | "month" | "year" | "all" | "custom";
@@ -125,50 +125,43 @@ async function buildOverview(promoterId: string | undefined, opts: OverviewOptio
     baseMatch.promocodeId = mongoose.Types.ObjectId.createFromHexString(promocodeId);
   }
 
-  // Recents share the same window/scope as totals & chart so the three agree.
-  const recentMatch: Record<string, unknown> = { ...baseMatch };
+  // All promoter earnings now span 4 subscription collections (course/package,
+  // ebook, test-series, live-course). The union helper normalises each to a
+  // common { amount, commission, productType, ... } shape so totals/chart/recents
+  // include every product, not just course/package.
+  const unionStages = unionAllPromoterSubsStages(baseMatch);
 
-  const [totalsAgg, seriesAgg, recent] = await Promise.all([
+  const [totalsAgg, seriesAgg, recentAgg] = await Promise.all([
     PackageCourseSubscription.aggregate([
-      { $match: baseMatch },
+      ...unionStages,
       {
         $group: {
           _id: null,
           subscriptions: { $sum: 1 },
-          earnings: { $sum: { $ifNull: ["$paidAmount", 0] } },
-          commission: {
-            $sum: {
-              $multiply: [
-                { $ifNull: ["$paidAmount", 0] },
-                { $divide: [{ $ifNull: ["$promoterPercentage", 0] }, 100] },
-              ],
-            },
-          },
+          earnings: { $sum: "$amount" },
+          commission: { $sum: "$commission" },
         },
       },
     ]),
     PackageCourseSubscription.aggregate([
-      { $match: baseMatch },
+      ...unionStages,
       {
         $group: {
           _id: { $dateToString: { format: fmt, date: "$createdAt" } },
           subscriptions: { $sum: 1 },
-          earnings: { $sum: { $ifNull: ["$paidAmount", 0] } },
+          earnings: { $sum: "$amount" },
         },
       },
       { $sort: { _id: 1 } },
     ]),
-    PackageCourseSubscription.find(recentMatch)
-      .populate({
-        path: "customerId",
-        model: Customer,
-        select: "firstName lastName phoneNumber",
-      })
-      .populate({ path: "courseId", model: Course, select: "name" })
-      .populate({ path: "promocodeId", model: PromoCode, select: "promocode" })
-      .sort({ createdAt: -1 })
-      .limit(5)
-      .lean(),
+    // Recents: union, sort, take 5, then resolve customer + promocode names
+    // (common to all product types). The entity name varies per product, so we
+    // surface `productType` instead of a single typed entity ref.
+    PackageCourseSubscription.aggregate([
+      ...unionStages,
+      { $sort: { createdAt: -1 } },
+      { $limit: 5 },
+    ]),
   ]);
 
   const totals = totalsAgg[0] || { subscriptions: 0, earnings: 0, commission: 0 };
@@ -177,10 +170,24 @@ async function buildOverview(promoterId: string | undefined, opts: OverviewOptio
     subscriptions: row.subscriptions,
     earnings: row.earnings,
   }));
-  const recentSubscriptions = recent.map((s: any) => {
-    const c = s.customerId as any;
-    const course = s.courseId as any;
-    const promo = s.promocodeId as any;
+
+  // Resolve customer + promocode display fields for the 5 recent rows in two
+  // batched lookups (aggregation already unioned across collections).
+  const recentCustomerIds = recentAgg.map((r: any) => r.customerId).filter(Boolean);
+  const recentPromoIds = recentAgg.map((r: any) => r.promocodeId).filter(Boolean);
+  const [recentCustomers, recentPromos] = await Promise.all([
+    recentCustomerIds.length
+      ? Customer.find({ _id: { $in: recentCustomerIds } }).select("firstName lastName phoneNumber").lean()
+      : [],
+    recentPromoIds.length
+      ? PromoCode.find({ _id: { $in: recentPromoIds } }).select("promocode").lean()
+      : [],
+  ]);
+  const custMap = new Map(recentCustomers.map((c: any) => [String(c._id), c]));
+  const promoMap = new Map(recentPromos.map((p: any) => [String(p._id), p]));
+  const recentSubscriptions = recentAgg.map((s: any) => {
+    const c = s.customerId ? custMap.get(String(s.customerId)) : null;
+    const promo = s.promocodeId ? promoMap.get(String(s.promocodeId)) : null;
     const name = c
       ? `${c.firstName ?? ""} ${c.lastName ?? ""}`.trim() || "Unknown"
       : "Unknown";
@@ -191,9 +198,9 @@ async function buildOverview(promoterId: string | undefined, opts: OverviewOptio
         name,
         phoneNumber: c?.phoneNumber ?? null,
       },
-      course: course ? { id: String(course._id), name: course.name ?? "" } : null,
+      productType: s.productType,
       promocode: promo?.promocode ?? null,
-      amount: s.paidAmount ?? 0,
+      amount: s.amount ?? 0,
       status: s.status ? "complete" : "pending",
       createdAt: s.createdAt,
     };

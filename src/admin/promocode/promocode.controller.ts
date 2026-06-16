@@ -287,10 +287,23 @@ async function loadPlanLinks(promocodeId: mongoose.Types.ObjectId) {
   const priceIds = links.filter((l: any) => l.planKind !== "livePlan").map((l: any) => l.planId);
   const liveIds = links.filter((l: any) => l.planKind === "livePlan").map((l: any) => l.planId);
 
-  const [priceRows, liveRows] = await Promise.all([
+  // `planKind === "price"` is intentionally coarse: package/course plans live in
+  // PackageCourseEbookPrice, BUT ebook plans live in EbookPrice and test-series
+  // plans in TestSeriesPrice (all stored as kind "price"). So a price-kind link
+  // must be resolved against ALL THREE collections, or ebook/testSeries links
+  // come back with planId: null. We normalise each to a common row shape.
+  const [pkgCourseRows, ebookRows, tsRows, liveRows] = await Promise.all([
     priceIds.length
       ? PackageCourseEbookPrice.find({ _id: { $in: priceIds } })
           .select("_id duration price withMaterial packageId courseId ebookId")
+          .lean()
+      : [],
+    priceIds.length
+      ? EbookPrice.find({ _id: { $in: priceIds } }).select("_id duration price ebookId").lean()
+      : [],
+    priceIds.length
+      ? TestSeriesPrice.find({ _id: { $in: priceIds } })
+          .select("_id durationDays price testSeriesId")
           .lean()
       : [],
     liveIds.length
@@ -301,13 +314,17 @@ async function loadPlanLinks(promocodeId: mongoose.Types.ObjectId) {
   ]);
 
   // Resolve parent entity names in one pass per collection.
-  const pkgIds = priceRows.filter((r: any) => r.packageId).map((r: any) => r.packageId);
-  const courseIds = priceRows.filter((r: any) => r.courseId).map((r: any) => r.courseId);
+  const pkgIds = pkgCourseRows.filter((r: any) => r.packageId).map((r: any) => r.packageId);
+  const courseIds = pkgCourseRows.filter((r: any) => r.courseId).map((r: any) => r.courseId);
+  const ebookIds = ebookRows.map((r: any) => r.ebookId);
+  const tsIds = tsRows.map((r: any) => r.testSeriesId);
   const liveCourseIds = liveRows.map((r: any) => r.liveCourseId);
 
-  const [pkgs, courses, liveCourses] = await Promise.all([
+  const [pkgs, courses, ebooks, testSeriesList, liveCourses] = await Promise.all([
     pkgIds.length ? Package.find({ _id: { $in: pkgIds } }).select("_id name").lean() : [],
     courseIds.length ? Course.find({ _id: { $in: courseIds } }).select("_id name").lean() : [],
+    ebookIds.length ? Ebook.find({ _id: { $in: ebookIds } }).select("_id name").lean() : [],
+    tsIds.length ? TestSeries.find({ _id: { $in: tsIds } }).select("_id title").lean() : [],
     liveCourseIds.length
       ? LiveCourse.find({ _id: { $in: liveCourseIds } }).select("_id name").lean()
       : [],
@@ -317,15 +334,23 @@ async function loadPlanLinks(promocodeId: mongoose.Types.ObjectId) {
     new Map(list.map((d: any) => [String(d._id), { _id: d._id, name: d.name }]));
   const pkgMap = nameOf(pkgs);
   const courseMap = nameOf(courses);
+  const ebookMap = nameOf(ebooks);
+  // TestSeries' display field is `title`; normalise to `name` for a uniform shape.
+  const tsMap = new Map(
+    testSeriesList.map((d: any) => [String(d._id), { _id: d._id, name: d.title ?? null }])
+  );
   const liveMap = nameOf(liveCourses);
 
-  const priceMap = new Map(priceRows.map((r: any) => [String(r._id), r]));
+  const pkgCourseMap = new Map(pkgCourseRows.map((r: any) => [String(r._id), r]));
+  const ebookPriceMap = new Map(ebookRows.map((r: any) => [String(r._id), r]));
+  const tsPriceMap = new Map(tsRows.map((r: any) => [String(r._id), r]));
   const liveMapRows = new Map(liveRows.map((r: any) => [String(r._id), r]));
 
   return links.map((l: any) => {
     let planId: any = null;
+    const key = String(l.planId);
     if (l.planKind === "livePlan") {
-      const r = liveMapRows.get(String(l.planId));
+      const r = liveMapRows.get(key);
       if (r) {
         planId = {
           _id: r._id,
@@ -335,18 +360,29 @@ async function loadPlanLinks(promocodeId: mongoose.Types.ObjectId) {
           liveCourse: liveMap.get(String(r.liveCourseId)) ?? null,
         };
       }
-    } else {
-      const r = priceMap.get(String(l.planId));
-      if (r) {
-        planId = {
-          _id: r._id,
-          duration: r.duration,
-          price: r.price,
-          withMaterial: !!r.withMaterial,
-        };
-        if (r.packageId) planId.packageId = pkgMap.get(String(r.packageId)) ?? null;
-        else if (r.courseId) planId.courseId = courseMap.get(String(r.courseId)) ?? null;
-      }
+    } else if (pkgCourseMap.has(key)) {
+      const r: any = pkgCourseMap.get(key);
+      planId = { _id: r._id, duration: r.duration, price: r.price, withMaterial: !!r.withMaterial };
+      if (r.packageId) planId.packageId = pkgMap.get(String(r.packageId)) ?? null;
+      else if (r.courseId) planId.courseId = courseMap.get(String(r.courseId)) ?? null;
+    } else if (ebookPriceMap.has(key)) {
+      const r: any = ebookPriceMap.get(key);
+      planId = {
+        _id: r._id,
+        duration: r.duration,
+        price: r.price,
+        withMaterial: false,
+        ebookId: ebookMap.get(String(r.ebookId)) ?? null,
+      };
+    } else if (tsPriceMap.has(key)) {
+      const r: any = tsPriceMap.get(key);
+      planId = {
+        _id: r._id,
+        duration: r.durationDays,
+        price: r.price,
+        withMaterial: false,
+        testSeriesId: tsMap.get(String(r.testSeriesId)) ?? null,
+      };
     }
     return {
       _id: l._id,
@@ -543,18 +579,31 @@ export const bulkDelete = async (req: Request, res: Response) => {
 // and fall into the client-side "Ungrouped" bucket (field omitted).
 export const getPromocodePlans = async (req: Request, res: Response) => {
   try {
-    const { type, examTypeId, search } = req.query as Record<string, string>;
+    const { type, examTypeId, goalId, search } = req.query as Record<string, string>;
 
     const ALL_TYPES: AppliesToType[] = ["package", "course", "liveCourse", "ebook", "testSeries"];
     const requested: AppliesToType[] = ALL_TYPES.includes(type as AppliesToType)
       ? [type as AppliesToType]
       : ALL_TYPES;
 
-    // Build the goalLabel -> name map (packages' exam types) once.
+    // Build goal lookups once:
+    //  - labelName:  goalLabelId -> label name   (legacy `examType*`, packages)
+    //  - goalTitle:  goalId      -> goal title    (new `goalName`)
+    //  - labelToGoal: goalLabelId -> goalId       (fallback when a package set
+    //                 goalLabelId but not the top-level goalId)
+    // NOTE: only Package carries any goal link in the schema. Course / LiveCourse
+    // / Ebook / TestSeries have NO goal field, so they never get goalId and fall
+    // into the FE's "Ungrouped" bucket. This is a data-model limit, not a bug.
     const goals = await Goal.find({}).select("_id title labels").lean();
     const labelName = new Map<string, string>();
+    const goalTitle = new Map<string, string>();
+    const labelToGoal = new Map<string, string>();
     for (const g of goals as any[]) {
-      for (const lbl of g.labels ?? []) labelName.set(String(lbl._id), lbl.name);
+      goalTitle.set(String(g._id), g.title);
+      for (const lbl of g.labels ?? []) {
+        labelName.set(String(lbl._id), lbl.name);
+        labelToGoal.set(String(lbl._id), String(g._id));
+      }
     }
 
     const nameCondition = buildRegexCondition(search);
@@ -574,7 +623,7 @@ export const getPromocodePlans = async (req: Request, res: Response) => {
       const docs = await Model.find(nameFilter)
         .select(
           t === "package"
-            ? "_id name goalLabelId"
+            ? "_id name goalLabelId goalId"
             : t === "testSeries"
             ? "_id title"
             : "_id name"
@@ -597,8 +646,24 @@ export const getPromocodePlans = async (req: Request, res: Response) => {
         const labelId = t === "package" && d.goalLabelId ? String(d.goalLabelId) : null;
         const examName = labelId ? labelName.get(labelId) : undefined;
 
+        // Resolve the entity's goal (packages only). Prefer the explicit
+        // top-level goalId; fall back to deriving it from goalLabelId so a
+        // package that only set the label still groups correctly. The result
+        // matches the ids returned by GET /admin/goals.
+        const resolvedGoalId =
+          t === "package"
+            ? d.goalId
+              ? String(d.goalId)
+              : labelId
+              ? labelToGoal.get(labelId) ?? null
+              : null
+            : null;
+        const goalName = resolvedGoalId ? goalTitle.get(resolvedGoalId) : undefined;
+
         // Apply the examTypeId filter (packages only; others have no exam type).
         if (examTypeId && labelId !== examTypeId) continue;
+        // Apply the optional goalId filter (packages only; others have no goal).
+        if (goalId && resolvedGoalId !== goalId) continue;
 
         if (labelId && examName) examTypes.set(labelId, examName);
 
@@ -616,6 +681,12 @@ export const getPromocodePlans = async (req: Request, res: Response) => {
         if (labelId && examName) {
           entity.examTypeId = labelId;
           entity.examTypeName = examName;
+        }
+        // Per FE contract: omit goalId entirely when absent → entity is
+        // "Ungrouped" and shows only under "All exam goals".
+        if (resolvedGoalId) {
+          entity.goalId = resolvedGoalId;
+          if (goalName) entity.goalName = goalName;
         }
         entities.push(entity);
       }

@@ -5,6 +5,7 @@ import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { resolveLivePromo } from "../live-course/promo";
+import { validateCoin } from "../referral/wallet-debit";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -24,6 +25,9 @@ const createOrderSchema = z.object({
   // flag, so withMaterial comes from the request rather than the plan.)
   withMaterial: z.boolean().optional(),
   customerShippingId: objectId.optional(),
+  // Optional wallet ("coin") amount in rupees. Validated (≤ balance, ≤ 50% of
+  // plan price), subtracted from the charge, debited at /verify success.
+  coin: z.number().int().min(0).optional(),
 });
 
 const applyPromoSchema = z.object({
@@ -58,25 +62,33 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
     const { result, error } = await resolveLivePromo(promocode, plan.price, {
       type: "liveCourse",
       id: String(plan.liveCourseId),
-    });
+    }, String(plan._id), customerId);
     if (error || !result) {
       logger.warn("applyLiveCoursePromo promo rejected", { traceId, customerId, planId, promocode, error });
       return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
     }
 
-    logger.info("applyLiveCoursePromo success", { traceId, customerId, planId, promocode, finalAmount: result.finalAmount });
+    logger.info("applyLiveCoursePromo success", { traceId, customerId, planId, promocode, finalAmount: result.finalAmount, isReferral: !!result.referrerId });
     return res.status(200).json({
       success: true,
       data: {
         planId: String(plan._id),
         liveCourseId: String(plan.liveCourseId),
-        promocode: result.promo.promocode,
-        promocodeId: String(result.promo._id),
+        // For a referral code, echo the code itself (there's no promocode doc).
+        promocode: result.promo ? result.promo.promocode : promocode.trim().toUpperCase(),
+        promocodeId: result.promo ? String(result.promo._id) : null,
+        // Marks a referral redemption so the FE can label "Referral discount".
+        isReferral: !!result.referrerId,
         discountType: result.discountType,
         discountValue: result.discountValue,
         originalAmount: result.originalAmount,
         discountAmount: result.discountAmount,
         finalAmount: result.finalAmount,
+        // Per-plan applicability flags — same contract as /promocodes/apply.
+        // This endpoint is single-plan, so a reachable success is always
+        // applicable; out-of-scope/invalid plans are rejected with a 400 above.
+        offerApplicable: true,
+        offerReason: null,
       },
     });
   } catch (e: any) {
@@ -106,7 +118,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       });
     }
 
-    const { planId, promocode, withMaterial, customerShippingId } = createOrderSchema.parse(req.body);
+    const { planId, promocode, withMaterial, customerShippingId, coin: coinRaw } = createOrderSchema.parse(req.body);
 
     if (customerShippingId) {
       const addr = await CustomerAddress.findOne({ _id: customerShippingId, customerId }).select("_id");
@@ -141,12 +153,17 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
     let promocodeId: string | null = null;
     let originalAmount: number | null = null;
     let discountAmount: number | null = null;
+    let promoterId: string | null = null;
+    let promoterPercentage: number | null = null;
+    let promoterCommission: number | null = null;
+    let referrerId: string | null = null;
+    let customerPercentage: number | null = null;
 
     if (promocode) {
       const { result, error } = await resolveLivePromo(promocode, plan.price, {
         type: "liveCourse",
         id: String(plan.liveCourseId),
-      });
+      }, String(plan._id), customerId);
       if (error || !result) {
         logger.warn("createLiveCourseOrderPayment promo rejected", { traceId, customerId, promocode, error });
         return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
@@ -162,9 +179,32 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         });
       }
       chargeAmount = result.finalAmount;
-      promocodeId = String(result.promo._id);
       originalAmount = result.originalAmount;
       discountAmount = result.discountAmount;
+      // promo is null on the referral path; referrerId is set instead. The
+      // referrer is credited at verify/webhook time via creditReferrer.
+      promocodeId = result.promo ? String(result.promo._id) : null;
+      promoterId = result.promo?.promoterId ? String(result.promo.promoterId) : null;
+      promoterPercentage = result.promoterPercentage;
+      promoterCommission = result.promoterCommission;
+      referrerId = result.referrerId ? String(result.referrerId) : null;
+      customerPercentage = result.customerPercentage;
+    }
+
+    // Wallet ("coin"): validate + subtract. Recorded now, debited at /verify.
+    const coinCheck = await validateCoin(customerId, plan.price, coinRaw);
+    if ("error" in coinCheck) {
+      logger.warn("createLiveCourseOrderPayment coin rejected", { traceId, customerId, coin: coinRaw, error: coinCheck.error });
+      return res.status(400).json({ success: false, message: coinCheck.error });
+    }
+    const coinsUsed = coinCheck.coin;
+    chargeAmount = Math.max(0, chargeAmount - coinsUsed);
+    if (chargeAmount < 1) {
+      logger.warn("createLiveCourseOrderPayment amount below minimum after wallet", { traceId, customerId, planId });
+      return res.status(400).json({
+        success: false,
+        message: "Amount after discount and wallet is below the minimum payable. Please reduce wallet usage.",
+      });
     }
 
     const subscription = await LiveCourseSubscription.create({
@@ -172,6 +212,12 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       liveCourseId: plan.liveCourseId,
       planId: plan._id,
       promocodeId,
+      promoterId,
+      promoterPercentage,
+      promoterCommission,
+      referrerId,
+      customerPercentage,
+      coinsUsed,
       originalAmount,
       discountAmount,
       paidAmount: chargeAmount,

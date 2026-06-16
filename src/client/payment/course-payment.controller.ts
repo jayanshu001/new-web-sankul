@@ -6,6 +6,7 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { resolveLivePromo } from "../live-course/promo";
+import { validateCoin } from "../referral/wallet-debit";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -26,6 +27,10 @@ const createCourseOrderSchema = z.object({
   // Optional promo code. Re-validated server-side against THIS course and the
   // Razorpay order charged for the reduced amount. Mirrors the live-course flow.
   promocode: z.string().trim().min(1).optional(),
+  // Optional wallet ("coin") amount in rupees to apply. Validated server-side
+  // (≤ balance, ≤ 50% of plan price); subtracted from the Razorpay charge and
+  // debited from rewardPoints at /verify success. 0 / omitted = wallet not used.
+  coin: z.number().int().min(0).optional(),
 });
 
 // POST /api/v1/client/payment/create-order/course
@@ -48,7 +53,7 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
       });
     }
 
-    const { packageId, customerShippingId, promocode } = createCourseOrderSchema.parse(req.body);
+    const { packageId, customerShippingId, promocode, coin: coinRaw } = createCourseOrderSchema.parse(req.body);
 
     // Validate the delivery address (when supplied) belongs to this customer.
     // Optional throughout — only checked if the FE sent one. Mirrors the admin
@@ -82,11 +87,14 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
     let promocodeId: string | null = null;
     let originalAmount: number | null = null;
     let discountAmount: number | null = null;
+    let promoterId: string | null = null;
+    let promoterPercentage: number | null = null;
+    let promoterCommission: number | null = null;
     if (promocode) {
       const { result, error } = await resolveLivePromo(promocode, plan.price, {
         type: "course",
         id: String(plan.courseId),
-      });
+      }, String(plan._id));
       if (error || !result) {
         logger.warn("createCourseOrderPayment promo rejected", { traceId, customerId, promocode, error });
         return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
@@ -98,10 +106,37 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
           message: "This promo code reduces the price below the minimum payable amount. Please contact support.",
         });
       }
+      // Referral codes for course/package/ebook are redeemed through the
+      // /orders flow (which stamps referrerId + credits the referrer). This
+      // Razorpay create-order path only handles marketing promocodes.
+      if (result.referrerId) {
+        logger.warn("createCourseOrderPayment referral code on payment path", { traceId, customerId, promocode });
+        return res.status(400).json({ success: false, message: "Referral codes can't be applied here." });
+      }
       chargeAmount = result.finalAmount;
-      promocodeId = String(result.promo._id);
+      promocodeId = result.promo ? String(result.promo._id) : null;
       originalAmount = result.originalAmount;
       discountAmount = result.discountAmount;
+      promoterId = result.promo?.promoterId ? String(result.promo.promoterId) : null;
+      promoterPercentage = result.promoterPercentage;
+      promoterCommission = result.promoterCommission;
+    }
+
+    // Wallet ("coin"): validate against balance + 50%-of-plan-price cap, then
+    // subtract from the charge. Recorded now; debited at /verify success.
+    const coinCheck = await validateCoin(customerId, plan.price, coinRaw);
+    if ("error" in coinCheck) {
+      logger.warn("createCourseOrderPayment coin rejected", { traceId, customerId, coin: coinRaw, error: coinCheck.error });
+      return res.status(400).json({ success: false, message: coinCheck.error });
+    }
+    const coinsUsed = coinCheck.coin;
+    chargeAmount = Math.max(0, chargeAmount - coinsUsed);
+    if (chargeAmount < 1) {
+      logger.warn("createCourseOrderPayment amount below minimum after wallet", { traceId, customerId, packageId });
+      return res.status(400).json({
+        success: false,
+        message: "Amount after discount and wallet is below the minimum payable. Please reduce wallet usage.",
+      });
     }
 
     // Re-purchasing an active plan is an "Extend Validity" action, NOT a
@@ -116,6 +151,10 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
       courseId: plan.courseId,
       packageId: plan._id,
       promocodeId,
+      promoterId,
+      promoterPercentage,
+      promoterCommission,
+      coinsUsed,
       originalAmount,
       discountAmount,
       paidAmount: chargeAmount,

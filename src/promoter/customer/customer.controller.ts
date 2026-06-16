@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
+import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
+import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { Customer } from "../../models/customer/Customer.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -20,13 +22,18 @@ export const listMyCustomers = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
-    const [courseCustomerIds, ebookCustomerIds] = await Promise.all([
+    // Attribution spans all 4 subscription collections.
+    const [courseCustomerIds, ebookCustomerIds, tsCustomerIds, liveCustomerIds] = await Promise.all([
       PackageCourseSubscription.distinct("customerId", { promoterId }),
       EbookSubscription.distinct("customerId", { promoterId }),
+      TestSeriesSubscription.distinct("customerId", { promoterId }),
+      LiveCourseSubscription.distinct("customerId", { promoterId }),
     ]);
 
     const customerIdsSet = new Set<string>();
-    [...courseCustomerIds, ...ebookCustomerIds].forEach((id: any) => customerIdsSet.add(String(id)));
+    [...courseCustomerIds, ...ebookCustomerIds, ...tsCustomerIds, ...liveCustomerIds].forEach(
+      (id: any) => customerIdsSet.add(String(id))
+    );
     const customerIds = Array.from(customerIdsSet);
 
     const filter: any = { _id: { $in: customerIds }, isAccountDeleted: false };
@@ -64,12 +71,18 @@ export const getMyCustomerDetail = async (req: Request, res: Response) => {
   try {
     if (!promoterId) { logger.warn("getMyCustomerDetail unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // Ensure this customer is actually attributed to this promoter
-    const hasSub = await PackageCourseSubscription.exists({ customerId, promoterId });
-    const hasEbook = await EbookSubscription.exists({ customerId, promoterId });
-    if (!hasSub && !hasEbook) { logger.warn("getMyCustomerDetail not attributed", { traceId, promoterId, customerId }); return res.status(404).json({ success: false, message: "Customer not found." }); }
+    // Ensure this customer is actually attributed to this promoter — across ALL
+    // 4 product types (a customer who bought ONLY test-series / live-course used
+    // to 404 here).
+    const [hasSub, hasEbook, hasTs, hasLive] = await Promise.all([
+      PackageCourseSubscription.exists({ customerId, promoterId }),
+      EbookSubscription.exists({ customerId, promoterId }),
+      TestSeriesSubscription.exists({ customerId, promoterId }),
+      LiveCourseSubscription.exists({ customerId, promoterId }),
+    ]);
+    if (!hasSub && !hasEbook && !hasTs && !hasLive) { logger.warn("getMyCustomerDetail not attributed", { traceId, promoterId, customerId }); return res.status(404).json({ success: false, message: "Customer not found." }); }
 
-    const [customer, courseSubs, ebookSubs] = await Promise.all([
+    const [customer, courseSubs, ebookSubs, testSeriesSubs, liveCourseSubs] = await Promise.all([
       Customer.findById(customerId)
         .select("firstName lastName phoneNumber emailAddress city gender createdAt")
         .lean(),
@@ -81,12 +94,26 @@ export const getMyCustomerDetail = async (req: Request, res: Response) => {
         .populate({ path: "ebookId", select: "name author" })
         .sort({ createdAt: -1 })
         .lean(),
+      TestSeriesSubscription.find({ customerId, promoterId })
+        .populate({ path: "testSeriesId", select: "title" })
+        .sort({ createdAt: -1 })
+        .lean(),
+      LiveCourseSubscription.find({ customerId, promoterId })
+        .populate({ path: "liveCourseId", select: "name" })
+        .sort({ createdAt: -1 })
+        .lean(),
     ]);
 
     logger.info("getMyCustomerDetail success", { traceId, promoterId, customerId, courseSubs: courseSubs.length, ebookSubs: ebookSubs.length });
     return res.status(200).json({
       success: true,
-      data: { customer, courseSubscriptions: courseSubs, ebookSubscriptions: ebookSubs },
+      data: {
+        customer,
+        courseSubscriptions: courseSubs,
+        ebookSubscriptions: ebookSubs,
+        testSeriesSubscriptions: testSeriesSubs,
+        liveCourseSubscriptions: liveCourseSubs,
+      },
     });
   } catch (e: any) {
     logger.error("getMyCustomerDetail failed", { traceId, promoterId, customerId, error: getErrorMessage(e), stack: e.stack });

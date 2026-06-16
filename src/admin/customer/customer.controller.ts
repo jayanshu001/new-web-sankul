@@ -10,9 +10,12 @@ import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscrip
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
+import { CustomerAccessToken } from "../../models/customer/CustomerAccessToken.model";
 import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSchema } from "./customer.validation";
 import { ensureDefaultFolders } from "../../client/folder/folder.controller";
 import { buildSearchFilter } from "../../utils/searchFilter";
+import { revokeAllTokensForUser } from "../../libs/tokenRevocation";
+import { redisClient } from "../../config/redis";
 
 // ─── List & Get ───────────────────────────────────────────────────────────────
 
@@ -237,6 +240,17 @@ export const deleteCustomer = async (req: Request, res: Response) => {
     );
     if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
 
+    // Immediately cut off the deleted customer's active sessions. Mirrors the
+    // self-delete path in client/profile/customer.service.ts.
+    //  1. Coarse JWT revocation cutoff: makes the authenticate middleware's
+    //     isRevoked() check reject the still-valid access token on the next
+    //     request, instead of waiting up to 7d for it to expire naturally.
+    //  2. Deactivate stored token rows so refresh can't mint new tokens.
+    //  3. Clear the Redis single-device session pointer.
+    await revokeAllTokensForUser("customer", id);
+    await CustomerAccessToken.updateMany({ customerId: id }, { active: false, deleted: true });
+    await redisClient.del(`customer_session:${id}`);
+
     return res.status(200).json({ success: true, message: "Customer deleted successfully" });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
@@ -256,7 +270,21 @@ export const toggleCustomerStatus = async (req: Request, res: Response) => {
     customer.status = !customer.status;
     await customer.save();
 
-    return res.status(200).json({ success: true, data: { status: customer.status } });
+    // When disabling, force the customer out immediately — same revocation the
+    // delete path uses. Re-enabling needs no token action (they log in fresh).
+    if (!customer.status) {
+      await revokeAllTokensForUser("customer", id);
+      await CustomerAccessToken.updateMany({ customerId: id }, { active: false, deleted: true });
+      await redisClient.del(`customer_session:${id}`);
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: { status: customer.status },
+      message: customer.status
+        ? "Customer enabled successfully."
+        : "Customer disabled. All active sessions have been logged out.",
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
