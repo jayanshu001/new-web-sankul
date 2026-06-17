@@ -14,6 +14,7 @@ import { ExamResultDetailAnalytics } from "../../models/exam/ExamResultDetailAna
 import { ExamStatus, ExamResultType, ExamType } from "../../models/enums";
 import { formatScheduledAt } from "../../utils/displayTime";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import * as adminExam from "../../modules/admin-exam/admin-exam.service";
 import {
   createCategorySchema,
   updateCategorySchema,
@@ -511,6 +512,15 @@ export const getExams = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+
+    // ─── MySQL branch (ws_exam) ───────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const { items, total } = await adminExam.listExams({ search, categoryId, type, status, isPaid, page: pageNum, limit: limitNum });
+      return res.status(200).json({ success: true, data: items, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
+    }
+
     const filter: any = {};
     { const c = buildRegexCondition(search); if (c) filter.title = c; }
     if (categoryId && isObjectId(categoryId)) filter.categoryId = categoryId;
@@ -518,8 +528,6 @@ export const getExams = async (req: Request, res: Response) => {
     if (status) filter.status = status;
     if (isPaid === "true" || isPaid === "false") filter.isPaid = isPaid === "true";
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
     const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
@@ -544,6 +552,16 @@ export const getExams = async (req: Request, res: Response) => {
 export const getExamById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const numId = adminExam.parseExamId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid exam id." });
+      const data = await adminExam.getExamById(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Exam not found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
     const exam = await Exam.findById(id).populate("categoryId", "_id name");
@@ -827,13 +845,20 @@ function validateAnswerAmongOptions(answer: string, options: { name: string }[])
 export const getQuestions = async (req: Request, res: Response) => {
   try {
     const { examId, search, status, page = "1", limit = "50" } = req.query as Record<string, string>;
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const { items, total } = await adminExam.listQuestions({ examId, search, status, page: pageNum, limit: limitNum });
+      return res.status(200).json({ success: true, data: items, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
+    }
+
     const filter: any = {};
     if (examId && isObjectId(examId)) filter.examId = examId;
     { const c = buildRegexCondition(search); if (c) filter.title = c; }
     if (status === "true" || status === "false") filter.status = status === "true";
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
     const skip = (pageNum - 1) * limitNum;
 
     const [questions, total] = await Promise.all([
@@ -867,6 +892,16 @@ export const getQuestions = async (req: Request, res: Response) => {
 export const getQuestionById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const numId = adminExam.parseExamId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid question id." });
+      const data = await adminExam.getQuestionById(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Question not found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid question id." });
     const q = await ExamQuestion.findById(id).lean();
@@ -1204,12 +1239,21 @@ export const reorderQuestions = async (req: Request, res: Response) => {
 export const getExamSubmissions = async (req: Request, res: Response) => {
   try {
     const examId = req.params.examId as string;
-    if (!isObjectId(examId))
-      return res.status(400).json({ success: false, message: "Invalid exam id." });
-
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const numId = adminExam.parseExamId(examId);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid exam id." });
+      const { items, total } = await adminExam.getExamSubmissions(numId, pageNum, limitNum);
+      return res.status(200).json({ success: true, data: items, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
+    }
+
+    if (!isObjectId(examId))
+      return res.status(400).json({ success: false, message: "Invalid exam id." });
+
     const skip = (pageNum - 1) * limitNum;
 
     const filter = { examId };
@@ -1236,6 +1280,15 @@ export const getExamSubmissions = async (req: Request, res: Response) => {
 export const getExamAnalytics = async (req: Request, res: Response) => {
   try {
     const examId = req.params.examId as string;
+
+    // ─── MySQL branch (raw SQL aggregates) ────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const numId = adminExam.parseExamId(examId);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid exam id." });
+      const data = await adminExam.getExamAnalytics(numId);
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(examId))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
 
@@ -1326,6 +1379,16 @@ export const getExamAnalytics = async (req: Request, res: Response) => {
 export const getResultById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const numId = adminExam.parseExamId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid result id." });
+      const data = await adminExam.getResultById(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Result not found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid result id." });
     const result = await ExamResult.findById(id)
@@ -1343,6 +1406,16 @@ export const getResultById = async (req: Request, res: Response) => {
 export const invalidateResult = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const numId = adminExam.parseExamId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid result id." });
+      const data = await adminExam.invalidateResult(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Result not found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid result id." });
     const result = await ExamResult.findByIdAndUpdate(
@@ -1361,6 +1434,15 @@ export const invalidateResult = async (req: Request, res: Response) => {
 export const getCustomerAnalytics = async (req: Request, res: Response) => {
   try {
     const customerId = req.params.customerId as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const numId = adminExam.parseExamId(customerId);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid customer id." });
+      const data = await adminExam.getCustomerAnalytics(numId);
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(customerId))
       return res.status(400).json({ success: false, message: "Invalid customer id." });
     const analytics = await ExamResultDetailAnalytics.findOne({ customerId });

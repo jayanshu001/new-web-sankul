@@ -14,6 +14,7 @@ import {
   categoryVideosQuerySchema,
   sortFieldMap,
 } from "./videoCategory.validation";
+import * as vcat from "../../modules/admin-master/admin-master.service";
 
 const formatZodErrors = (issues: any[]) =>
   issues.reduce<Record<string, string>>((acc, i) => {
@@ -71,6 +72,12 @@ export const listVideoCategories = async (req: Request, res: Response) => {
     const { search, status, educatorId, childCategoryId, page, per_page, sort_by, sort_dir } =
       parsed.data;
 
+    // ─── MySQL branch (ws_video_category; childCategoryId filter not supported) ──
+    if (vcat.isAdminMasterMysql()) {
+      const { items, total } = await vcat.fullVcList({ search, status, educatorId, page, per_page, sort_by, sort_dir });
+      return res.status(200).json({ success: true, data: { items, pagination: { page, per_page, total } } });
+    }
+
     const filter: any = {};
     Object.assign(filter, buildSearchFilter(search, ["title", "slug"]));
     if (status === "true" || status === "false") filter.status = status === "true";
@@ -103,6 +110,9 @@ export const listVideoCategories = async (req: Request, res: Response) => {
 // GET /pre-requisites
 export const getVideoCategoryPreRequisites = async (_req: Request, res: Response) => {
   try {
+    if (vcat.isAdminMasterMysql()) {
+      return res.status(200).json({ success: true, data: await vcat.fullVcPreRequisites() });
+    }
     const [categories, educators] = await Promise.all([
       VideoCategory.find().select("_id title").sort({ title: 1 }).lean(),
       CourseEducator.find({ status: true }).select("_id name").sort({ name: 1 }).lean(),
@@ -123,6 +133,16 @@ export const getVideoCategoryPreRequisites = async (_req: Request, res: Response
 export const getVideoCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (vcat.isAdminMasterMysql()) {
+      const numId = vcat.parseMasterId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+      const data = await vcat.fullVcGet(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Video Category not found" });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
     }
@@ -141,6 +161,19 @@ export const getVideoCategory = async (req: Request, res: Response) => {
 export const listVideoCategoryCourses = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (vcat.isAdminMasterMysql()) {
+      const numId = vcat.parseMasterId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+      if (!(await vcat.fullVcCategoryExists(numId))) return res.status(404).json({ success: false, message: "Video Category not found" });
+      const parsed = categoryCoursesQuerySchema.safeParse(req.query);
+      if (!parsed.success) return res.status(422).json({ success: false, message: "Validation failed", errors: formatZodErrors(parsed.error.issues) });
+      const { search, status, page, per_page } = parsed.data;
+      const { items, total } = await vcat.listCategoryCourses(numId, { search, status, page, per_page });
+      return res.status(200).json({ success: true, data: { items, meta: buildMeta(page, per_page, total) } });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
     }
@@ -197,6 +230,19 @@ export const listVideoCategoryCourses = async (req: Request, res: Response) => {
 export const listVideoCategoryVideos = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (vcat.isAdminMasterMysql()) {
+      const numId = vcat.parseMasterId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+      if (!(await vcat.fullVcCategoryExists(numId))) return res.status(404).json({ success: false, message: "Video Category not found" });
+      const parsed = categoryVideosQuerySchema.safeParse(req.query);
+      if (!parsed.success) return res.status(422).json({ success: false, message: "Validation failed", errors: formatZodErrors(parsed.error.issues) });
+      const { search, status, platform, page, per_page } = parsed.data;
+      const { items, total } = await vcat.listCategoryVideos(numId, { search, status, platform, page, per_page });
+      return res.status(200).json({ success: true, data: { items, meta: buildMeta(page, per_page, total) } });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
     }
@@ -273,6 +319,16 @@ export const createVideoCategory = async (req: Request, res: Response) => {
       });
     }
 
+    // ─── MySQL branch (childCategoryIds NOT writable — single-parent model) ──
+    if (vcat.isAdminMasterMysql()) {
+      const r = await vcat.fullVcCreate(data);
+      if (!r.ok) {
+        if (r.reason === "slug") return res.status(409).json({ success: false, message: "Slug already exists" });
+        return res.status(422).json({ success: false, message: "Invalid educatorId" });
+      }
+      return res.status(201).json({ success: true, message: "Video Category created successfully", data: r.data });
+    }
+
     const slugDupe = await VideoCategory.exists({ slug: data.slug });
     if (slugDupe) {
       return res.status(409).json({ success: false, message: "Slug already exists" });
@@ -338,6 +394,17 @@ export const updateVideoCategory = async (req: Request, res: Response) => {
     }
     const data = parsed.data;
 
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (vcat.isAdminMasterMysql()) {
+      const numId = vcat.parseMasterId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+      const r = await vcat.fullVcUpdate(numId, data);
+      if (r === "not_found") return res.status(404).json({ success: false, message: "Video Category not found" });
+      if (r === "slug") return res.status(409).json({ success: false, message: "Slug already exists" });
+      if (r === "educator") return res.status(422).json({ success: false, message: "Invalid educatorId" });
+      return res.status(200).json({ success: true, message: "Video Category updated successfully", data: r });
+    }
+
     const cat = await VideoCategory.findById(id);
     if (!cat) return res.status(404).json({ success: false, message: "Video Category not found" });
 
@@ -401,6 +468,17 @@ export const updateVideoCategory = async (req: Request, res: Response) => {
 export const deleteVideoCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (vcat.isAdminMasterMysql()) {
+      const numId = vcat.parseMasterId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+      const r = await vcat.fullVcDelete(numId);
+      if (r === "not_found") return res.status(404).json({ success: false, message: "Video Category not found" });
+      if (r === "in_use") return res.status(409).json({ success: false, message: "Video Category is in use by videos or other categories and cannot be deleted" });
+      return res.status(200).json({ success: true, message: "Video Category deleted successfully", data: {} });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
     }
@@ -592,6 +670,16 @@ export const duplicateVideoCategory = async (req: Request, res: Response) => {
 export const toggleVideoCategoryStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (vcat.isAdminMasterMysql()) {
+      const numId = vcat.parseMasterId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+      const s = await vcat.fullVcToggle(numId);
+      if (s === null) return res.status(404).json({ success: false, message: "Video Category not found" });
+      return res.status(200).json({ success: true, data: { status: s } });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
     }

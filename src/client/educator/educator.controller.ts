@@ -8,6 +8,11 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import {
+  isClientEducatorMysql,
+  parseEducatorId,
+  getEducatorWithCourses,
+} from "../../modules/client-educator/client-educator.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -30,6 +35,18 @@ export const getEducatorWithCoursesHandler = async (
   });
 
   try {
+    // ─── MySQL branch (ws_course_educator + ws_course + plans + subs) ──────
+    if (isClientEducatorMysql()) {
+      const eid = parseEducatorId(educatorId);
+      if (!eid) return failure(res, "Please select valid educator", 400);
+      const cid = userId ? parseEducatorId(userId) : null;
+      const base = resolveBase(req);
+      const data = await getEducatorWithCourses(eid, cid, (kind, id) => buildShareUrl(kind, id, base));
+      if (!data) return failure(res, "Educator not found", 404);
+      logger.info("getEducatorWithCoursesHandler success (sql)", { traceId, userId, educatorId, totalCourses: data.totalCourses });
+      return success(res, data, "Educator details fetched successfully.", 200);
+    }
+
     if (!Types.ObjectId.isValid(educatorId)) {
       logger.warn("getEducatorWithCoursesHandler invalid id", { traceId, userId, educatorId });
       return failure(res, "Please select valid educator", 400);

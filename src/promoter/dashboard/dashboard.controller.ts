@@ -9,6 +9,12 @@ import { Customer } from "../../models/customer/Customer.model";
 import { buildPromoterOverview } from "./overview.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isPromoterDataMysql,
+  parsePromoterId,
+  buildPromoterDashboard,
+  buildPromoterOverview as buildPromoterOverviewSql,
+} from "../../modules/promoter-data/promoter-data.service";
 
 // GET /api/v1/promoter/dashboard
 export const getDashboard = async (req: Request, res: Response) => {
@@ -18,6 +24,15 @@ export const getDashboard = async (req: Request, res: Response) => {
 
   try {
     if (!promoterId) { logger.warn("getDashboard unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (isPromoterDataMysql()) {
+      const pid = parsePromoterId(promoterId);
+      if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
+      const data = await buildPromoterDashboard(pid);
+      logger.info("getDashboard success (sql)", { traceId, promoterId, subscriptionCount: data.summary.subscriptionCount });
+      return res.status(200).json({ success: true, data });
+    }
 
     const now = new Date();
 
@@ -122,6 +137,16 @@ export const getDashboardOverview = async (req: Request, res: Response) => {
     if (!promoterId) { logger.warn("getDashboardOverview unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { range, startDate, endDate, promocodeId } = req.query as Record<string, string>;
+
+    // ─── MySQL branch (promocodeId scope not supported on SQL — see note) ───
+    if (isPromoterDataMysql()) {
+      const pid = parsePromoterId(promoterId);
+      if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
+      const data = await buildPromoterOverviewSql(pid, range, { startDate, endDate });
+      logger.info("getDashboardOverview success (sql)", { traceId, promoterId });
+      return res.status(200).json({ success: true, data });
+    }
+
     const data = await buildPromoterOverview(promoterId, range, traceId, { startDate, endDate, promocodeId });
     logger.info("getDashboardOverview success", { traceId, promoterId });
     return res.status(200).json({ success: true, data });

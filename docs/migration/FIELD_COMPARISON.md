@@ -1,6 +1,6 @@
 # Field comparison — module by module
 
-> **Generated:** 2026-06-13 — re-run `yarn docs:field-comparison` after schema changes  
+> **Generated:** 2026-06-17 — re-run `yarn docs:field-comparison` after schema changes  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Related:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md) (table inventory) · [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
 
@@ -16,7 +16,7 @@
 | **Prisma field** | Prisma model property; DB column via `@map` when different |
 | **Match** | ✅ aligned · ⚠️ rename · 🆕 Mongo-only · 🆕 MySQL-only · 🆕 Prisma-only |
 
-**Migrated modules (`MIGRATION_MYSQL_MODULES`):** `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city`
+**Migrated modules (`MIGRATION_MYSQL_MODULES`):** `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city, catalog-package-type, catalog-course, catalog-video, catalog-ebook, catalog-exam, catalog-material, catalog-book, offline-batch, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, admin-auth, customer-profile, customer-bank-account, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video`
 
 ---
 
@@ -24,7 +24,7 @@
 
 | # | Module | Entities | Jump |
 |---:|---|---|---|
-| 1 | System / CMS | 20 | [Jump](#module-system) |
+| 1 | System / CMS | 21 | [Jump](#module-system) |
 | 2 | Admin & permissions | 5 | [Jump](#module-admin) |
 | 3 | Customer & auth | 23 | [Jump](#module-customer) |
 | 4 | Books & orders | 8 | [Jump](#module-book) |
@@ -47,7 +47,7 @@
 
 ## 1. System / CMS
 
-> Module key: `system` — 20 entities
+> Module key: `system` — 21 entities
 
 ### 1.1 ActivityLog — 🆕 Mongo-only
 
@@ -160,7 +160,36 @@
 | 21 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
 | 22 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
 
-### 1.6 SocialLink — 🆕 Mongo-only
+### 1.6 PdfUploadJob — 🆕 Mongo-only
+
+| | |
+|---|---|
+| **Prisma model** | PdfUploadJob |
+| **Legacy MySQL** | — |
+| **MongoDB** | `(default pdfuploadjobs)` |
+| **Post-migration MySQL** | — |
+| **Mongoose** | `src/models/system/PdfUploadJob.model.ts` |
+
+| # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
+|---:|---|---|---|---|---|---|---|---|---|---|
+| 1 | — | — | — | `batchId` | String | required | — | — | — | 🆕 Mongo-only |
+| 2 | — | — | — | `index` | Number | required | — | — | — | 🆕 Mongo-only |
+| 3 | — | — | — | `uploadedBy` | String | required | — | — | — | 🆕 Mongo-only |
+| 4 | — | — | — | `ebookId` | ObjectId | required; ref:Ebook | — | — | — | 🆕 Mongo-only |
+| 5 | — | — | — | `targetField` | PdfUploadTargetField | — | — | — | — | 🆕 Mongo-only |
+| 6 | — | — | — | `fileName` | string | — | — | — | — | 🆕 Mongo-only |
+| 7 | — | — | — | `tempPath` | string | — | — | — | — | 🆕 Mongo-only |
+| 8 | — | — | — | `fileSize` | number | — | — | — | — | 🆕 Mongo-only |
+| 9 | — | — | — | `status` | PdfUploadJobStatus | — | — | — | — | 🆕 Mongo-only |
+| 10 | — | — | — | `progress` | number | — | — | — | — | 🆕 Mongo-only |
+| 11 | — | — | — | `fileUrl` | string | null | — | — | — | — | 🆕 Mongo-only |
+| 12 | — | — | — | `failureReason` | string | null | — | — | — | — | 🆕 Mongo-only |
+| 13 | — | — | — | `startedAt` | Date | null | — | — | — | — | 🆕 Mongo-only |
+| 14 | — | — | — | `finishedAt` | Date | null | — | — | — | — | 🆕 Mongo-only |
+| 15 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 16 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
+
+### 1.7 SocialLink — 🆕 Mongo-only
 
 | | |
 |---|---|
@@ -181,7 +210,7 @@
 | 7 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
 | 8 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
 
-### 1.7 SocialLinkType — 🆕 Mongo-only
+### 1.8 SocialLinkType — 🆕 Mongo-only
 
 | | |
 |---|---|
@@ -197,7 +226,7 @@
 | 2 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
 | 3 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
 
-### 1.8 TermsAndConditions — 🆕 Mongo-only
+### 1.9 TermsAndConditions — 🆕 Mongo-only
 
 | | |
 |---|---|
@@ -214,7 +243,7 @@
 | 3 | — | — | — | `freeShippingMinimumOrderAmount` | Number | required | — | — | — | 🆕 Mongo-only |
 | 4 | — | — | — | `status` | Boolean | required; true | — | — | — | 🆕 Mongo-only |
 
-### 1.9 AppUpdate — ✅ Migrated
+### 1.10 AppUpdate — ✅ Migrated
 
 | | |
 |---|---|
@@ -232,7 +261,7 @@
 | 4 | `isUpdateAvailble` | `tinyint(1)` | NOT NULL | — | — | — | `isUpdateAvailble` | Boolean | — | ⚠️ check |
 | 5 | — | — | — | `isUpdateAvailable` | boolean | — | — | — | — | 🆕 Mongo-only |
 
-### 1.10 BannerSlider — ⏳ Not migrated
+### 1.11 BannerSlider — ⏳ Not migrated
 
 | | |
 |---|---|
@@ -253,7 +282,7 @@
 | 7 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | `updated_at` | DateTime? | — | ✅ |
 | 8 | — | — | — | `keyRef` | String | — | — | — | — | 🆕 Mongo-only |
 
-### 1.11 Department — ⏳ Not migrated
+### 1.12 Department — ⏳ Not migrated
 
 | | |
 |---|---|
@@ -274,7 +303,7 @@
 | 7 | — | — | — | `description` | string | — | — | — | — | 🆕 Mongo-only |
 | 8 | — | — | — | `contacts` | IDepartmentContact[] | — | — | — | — | 🆕 Mongo-only |
 
-### 1.12 DepartmentContact — ⏳ Not migrated
+### 1.13 DepartmentContact — ⏳ Not migrated
 
 | | |
 |---|---|
@@ -293,7 +322,7 @@
 | 6 | `order` | `int` | NOT NULL; DEFAULT '0' | — | — | — | `order` | Int | — | ✅ SQL+Prisma |
 | 7 | `active` | `tinyint(1)` | NOT NULL; DEFAULT '1' | — | — | — | `active` | Boolean | — | ✅ SQL+Prisma |
 
-### 1.13 DynamicImage — ⏳ Not migrated
+### 1.14 DynamicImage — ⏳ Not migrated
 
 | | |
 |---|---|
@@ -308,7 +337,7 @@
 | 1 | `id` | `int` | PK AI; NOT NULL | — | — | — | `id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
 | 2 | `logo` | `varchar(250)` | NOT NULL | `logo` | String | required | `logo` | String | — | ✅ |
 
-### 1.14 FAQ — ✅ Migrated
+### 1.15 FAQ — ✅ Migrated
 
 | | |
 |---|---|
@@ -329,7 +358,7 @@
 | 7 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | `updated_at` | DateTime? | — | ✅ |
 | 8 | — | — | — | `typeId` | ObjectId | required; ref:FaqType | — | — | — | 🆕 Mongo-only |
 
-### 1.15 ImageNotification — ⏳ Not migrated
+### 1.16 ImageNotification — ⏳ Not migrated
 
 | | |
 |---|---|
@@ -346,7 +375,7 @@
 | 3 | `redirect_url` | `varchar(256)` | NULL; DEFAULT NULL | `redirectUrl` | String | — | `redirect_url` | String? | — | ✅ |
 | 4 | `active` | `tinyint(1)` | NOT NULL; DEFAULT '1' | `active` | Boolean | required; true | `active` | Boolean | — | ✅ |
 
-### 1.16 PopupNotifications — ⏳ Not migrated
+### 1.17 PopupNotifications — ⏳ Not migrated
 
 | | |
 |---|---|
@@ -369,7 +398,7 @@
 | 9 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | `created_at` | DateTime? | — | ✅ |
 | 10 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | `updated_at` | DateTime? | — | ✅ |
 
-### 1.17 TermsAndConditions — ⏳ Not migrated
+### 1.18 TermsAndConditions — ⏳ Not migrated
 
 | | |
 |---|---|
@@ -386,7 +415,7 @@
 | 4 | `freeShippingMinimumOrderAmount` | `int` | NOT NULL; DEFAULT '0' | — | — | — | `freeShippingMinimumOrderAmount` | Int | — | ⚠️ check |
 | 5 | `status` | `tinyint(1)` | NULL; DEFAULT NULL | — | — | — | `status` | Boolean | — | ✅ SQL+Prisma |
 
-### 1.18 Testimonial — ⏳ Not migrated
+### 1.19 Testimonial — ⏳ Not migrated
 
 | | |
 |---|---|
@@ -405,7 +434,7 @@
 | 5 | `rating` | `int` | NOT NULL | `rating` | Number | required; min:1 | `rating` | Int | — | ✅ |
 | 6 | — | — | — | `description` | String | required | — | — | — | 🆕 Mongo-only |
 
-### 1.19 Version — ✅ Migrated
+### 1.20 Version — ✅ Migrated
 
 | | |
 |---|---|
@@ -421,7 +450,7 @@
 | 2 | `latestVersionCode` | `int` | NULL; DEFAULT NULL | `latestVersionCode` | Number | required | `latestVersionCode` | Int | — | ✅ |
 | 3 | `lastSupportedVersionCode` | `int` | NULL; DEFAULT NULL | `lastSupportedVersionCode` | Number | required | `lastSupportedVersionCode` | Int | — | ✅ |
 
-### 1.20 Inquiry — ⏳ Not migrated
+### 1.21 Inquiry — ⏳ Not migrated
 
 | | |
 |---|---|
@@ -494,42 +523,42 @@
 | 5 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
 | 6 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
 
-### 2.3 Permission — ⏳ Not migrated
+### 2.3 AdminPermissionRow — ⏳ Not migrated
 
 | | |
 |---|---|
-| **Prisma model** | Permission |
+| **Prisma model** | AdminPermissionRow |
 | **Legacy MySQL** | `ws_permissions` |
 | **MongoDB** | `ws_permissions` |
-| **Post-migration MySQL** | — |
+| **Post-migration MySQL** | `ws_permissions` |
 | **Mongoose** | `src/models/admin/Permission.model.ts` |
 
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
-| 1 | `id` | `bigint UNSIGNED` | PK AI; NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
-| 2 | `name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `name` | String | required; maxlength:255 | — | — | — | ✅ |
-| 3 | `guard_name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `guardName` | String | required; maxlength:255 | — | — | — | ✅ |
-| 4 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | — | — | — | ✅ |
-| 5 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | — | — | — | ✅ |
+| 1 | `id` | `bigint UNSIGNED` | PK AI; NOT NULL | — | — | — | `id` | BigInt | @id @default(autoincrement()) @db.UnsignedBigInt | ✅ SQL+Prisma |
+| 2 | `name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `name` | String | required; maxlength:255 | `name` | String | @db.VarChar(255) | ✅ |
+| 3 | `guard_name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `guardName` | String | required; maxlength:255 | `guardName` | String | @db.VarChar(255) | ✅ |
+| 4 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | `createdAt` | DateTime? | — | ✅ |
+| 5 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | `updatedAt` | DateTime? | — | ✅ |
 | 6 | — | — | — | `categoryId` | Types.ObjectId | — | — | — | — | 🆕 Mongo-only |
 
-### 2.4 Role — ⏳ Not migrated
+### 2.4 AdminRoleRow — ⏳ Not migrated
 
 | | |
 |---|---|
-| **Prisma model** | Role |
+| **Prisma model** | AdminRoleRow |
 | **Legacy MySQL** | `ws_roles` |
 | **MongoDB** | `ws_roles` |
-| **Post-migration MySQL** | — |
+| **Post-migration MySQL** | `ws_roles` |
 | **Mongoose** | `src/models/admin/Role.model.ts` |
 
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
-| 1 | `id` | `bigint UNSIGNED` | PK AI; NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
-| 2 | `name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `name` | String | required; maxlength:255 | — | — | — | ✅ |
-| 3 | `guard_name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `guardName` | String | required; maxlength:255 | — | — | — | ✅ |
-| 4 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | — | — | — | ✅ |
-| 5 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | — | — | — | ✅ |
+| 1 | `id` | `bigint UNSIGNED` | PK AI; NOT NULL | — | — | — | `id` | BigInt | @id @default(autoincrement()) @db.UnsignedBigInt | ✅ SQL+Prisma |
+| 2 | `name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `name` | String | required; maxlength:255 | `name` | String | @db.VarChar(255) | ✅ |
+| 3 | `guard_name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `guardName` | String | required; maxlength:255 | `guardName` | String | @db.VarChar(255) | ✅ |
+| 4 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | `createdAt` | DateTime? | — | ✅ |
+| 5 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | `updatedAt` | DateTime? | — | ✅ |
 | 6 | — | — | — | `permissions` | Schema.Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
 
 ### 2.5 AdminUser — ⏳ Not migrated
@@ -539,30 +568,34 @@
 | **Prisma model** | AdminUser |
 | **Legacy MySQL** | `ws_users` |
 | **MongoDB** | `ws_users` |
-| **Post-migration MySQL** | — |
+| **Post-migration MySQL** | `ws_users` |
 | **Mongoose** | `src/models/admin/AdminUser.model.ts` |
 
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
-| 1 | `id` | `bigint UNSIGNED` | PK AI; NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
-| 2 | `first_name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `firstName` | String | required; maxlength:100 | — | — | — | ✅ |
-| 3 | `last_name` | `varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NULL; DEFAULT NULL | `lastName` | String | maxlength:100 | — | — | — | ✅ |
-| 4 | `email` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `email` | String | required; maxlength:255 | — | — | — | ✅ |
-| 5 | `image` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `image` | String | — | — | — | — | ✅ |
-| 6 | `email_verified_at` | `timestamp NULL` | NULL; DEFAULT NULL | `emailVerifiedAt` | Date | — | — | — | — | ✅ |
-| 7 | `password` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `password` | String | required | — | — | — | ✅ |
-| 8 | `last_login_date` | `datetime` | NULL; DEFAULT NULL | `lastLoginDate` | Date | — | — | — | — | ✅ |
-| 9 | `last_login_ip` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NULL; DEFAULT NULL | `lastLoginIp` | string | — | — | — | — | ✅ |
-| 10 | `last_seen_at` | `timestamp NULL` | NULL; DEFAULT NULL | `lastSeenAt` | Date | — | — | — | — | ✅ |
-| 11 | `status` | `enum('0','1') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL; DEFAULT '1'; enum('0','1') | `status` | boolean | — | — | — | — | ✅ |
-| 12 | `remember_token` | `varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NULL; DEFAULT NULL | `rememberToken` | string | — | — | — | — | ✅ |
-| 13 | `is_dark` | `enum('0','1') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL; DEFAULT '0'; enum('0','1') | `isDark` | boolean | — | — | — | — | ✅ |
-| 14 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | — | — | — | ✅ |
-| 15 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | — | — | — | ✅ |
-| 16 | — | — | — | `role` | AdminRole | — | — | — | — | 🆕 Mongo-only |
-| 17 | — | — | — | `deleted` | boolean | — | — | — | — | 🆕 Mongo-only |
-| 18 | — | — | — | `roles` | Schema.Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
-| 19 | — | — | — | `permissions` | Schema.Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
+| 1 | `id` | `bigint UNSIGNED` | PK AI; NOT NULL | — | — | — | `id` | BigInt | @id @default(autoincrement()) @db.UnsignedBigInt | ✅ SQL+Prisma |
+| 2 | `first_name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `firstName` | String | required; maxlength:100 | `firstName` | String | @db.VarChar(255) | ✅ |
+| 3 | `last_name` | `varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NULL; DEFAULT NULL | `lastName` | String | maxlength:100 | `lastName` | String? | @db.VarChar(100) | ✅ |
+| 4 | `email` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `email` | String | required; maxlength:255 | `email` | String | @unique @db.VarChar(255) | ✅ |
+| 5 | `image` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `image` | String | — | `image` | String | @db.VarChar(255) | ✅ |
+| 6 | `email_verified_at` | `timestamp NULL` | NULL; DEFAULT NULL | `emailVerifiedAt` | Date | — | `emailVerifiedAt` | DateTime? | — | ✅ |
+| 7 | `password` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | `password` | String | required | `password` | String | @db.VarChar(255) | ✅ |
+| 8 | `last_login_date` | `datetime` | NULL; DEFAULT NULL | `lastLoginDate` | Date | — | `lastLoginDate` | DateTime? | — | ✅ |
+| 9 | `last_login_ip` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NULL; DEFAULT NULL | `lastLoginIp` | string | — | `lastLoginIp` | String? | @db.VarChar(255) | ✅ |
+| 10 | `last_seen_at` | `timestamp NULL` | NULL; DEFAULT NULL | `lastSeenAt` | Date | — | `lastSeenAt` | DateTime? | — | ✅ |
+| 11 | `status` | `enum('0','1') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL; DEFAULT '1'; enum('0','1') | `status` | boolean | — | `status` | AdminStatusFlag | @default(active) | ✅ |
+| 12 | `remember_token` | `varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NULL; DEFAULT NULL | `rememberToken` | string | — | `rememberToken` | String? | @db.VarChar(100) | ✅ |
+| 13 | `is_dark` | `enum('0','1') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL; DEFAULT '0'; enum('0','1') | `isDark` | boolean | — | `isDark` | AdminDarkFlag | @default(light) | ✅ |
+| 14 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | `createdAt` | DateTime? | — | ✅ |
+| 15 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | `updatedAt` | DateTime? | — | ✅ |
+| 16 | — | — | — | — | — | — | `inactive` |  | — | 🆕 Prisma-only |
+| 17 | — | — | — | — | — | — | `active` |  | — | 🆕 Prisma-only |
+| 18 | — | — | — | — | — | — | `light` |  | — | 🆕 Prisma-only |
+| 19 | — | — | — | — | — | — | `dark` |  | — | 🆕 Prisma-only |
+| 20 | — | — | — | `role` | AdminRole | — | — | — | — | 🆕 Mongo-only |
+| 21 | — | — | — | `deleted` | boolean | — | — | — | — | 🆕 Mongo-only |
+| 22 | — | — | — | `roles` | Schema.Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
+| 23 | — | — | — | `permissions` | Schema.Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
 
 
 <a id="module-customer"></a>
@@ -753,11 +786,13 @@
 | 9 | — | — | — | `discountAmount` | Number | null | — | — | — | 🆕 Mongo-only |
 | 10 | — | — | — | `paidAmount` | Number | null | — | — | — | 🆕 Mongo-only |
 | 11 | — | — | — | `paymentStatus` | "pending" | "verified" | "failed" | — | — | — | — | 🆕 Mongo-only |
-| 12 | — | — | — | `razorpayOrderId` | string | null | — | — | — | — | 🆕 Mongo-only |
-| 13 | — | — | — | `razorpayPaymentId` | string | null | — | — | — | — | 🆕 Mongo-only |
-| 14 | — | — | — | `paidAt` | Date | null | — | — | — | — | 🆕 Mongo-only |
-| 15 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
-| 16 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 12 | — | — | — | `withMaterial` | boolean | — | — | — | — | 🆕 Mongo-only |
+| 13 | — | — | — | `customerShippingId` | mongoose.Types.ObjectId | null | — | — | — | — | 🆕 Mongo-only |
+| 14 | — | — | — | `razorpayOrderId` | string | null | — | — | — | — | 🆕 Mongo-only |
+| 15 | — | — | — | `razorpayPaymentId` | string | null | — | — | — | — | 🆕 Mongo-only |
+| 16 | — | — | — | `paidAt` | Date | null | — | — | — | — | 🆕 Mongo-only |
+| 17 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 18 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
 
 ### 3.9 LiveSessionAttendance — 🆕 Mongo-only
 
@@ -846,18 +881,20 @@
 | 10 | — | — | — | `promocodeId` | ObjectId | null; ref:PromoCode | — | — | — | 🆕 Mongo-only |
 | 11 | — | — | — | `promoterId` | ObjectId | null; ref:Promoter | — | — | — | 🆕 Mongo-only |
 | 12 | — | — | — | `referrerId` | ObjectId | null; ref:Customer | — | — | — | 🆕 Mongo-only |
-| 13 | — | — | — | `paidAmount` | Number | null | — | — | — | 🆕 Mongo-only |
-| 14 | — | — | — | `customerPercentage` | Number | null | — | — | — | 🆕 Mongo-only |
-| 15 | — | — | — | `promoterPercentage` | Number | null | — | — | — | 🆕 Mongo-only |
-| 16 | — | — | — | `paymentStatus` | "pending" | "verified" | "failed" | — | — | — | — | 🆕 Mongo-only |
-| 17 | — | — | — | `paymentMethod` | string | null | — | — | — | — | 🆕 Mongo-only |
-| 18 | — | — | — | `withMaterial` | boolean | — | — | — | — | 🆕 Mongo-only |
-| 19 | — | — | — | `remark` | string | null | — | — | — | — | 🆕 Mongo-only |
-| 20 | — | — | — | `razorpayOrderId` | string | null | — | — | — | — | 🆕 Mongo-only |
-| 21 | — | — | — | `razorpayPaymentId` | string | null | — | — | — | — | 🆕 Mongo-only |
-| 22 | — | — | — | `paidAt` | Date | null | — | — | — | — | 🆕 Mongo-only |
-| 23 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
-| 24 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 13 | — | — | — | `originalAmount` | Number | null | — | — | — | 🆕 Mongo-only |
+| 14 | — | — | — | `discountAmount` | Number | null | — | — | — | 🆕 Mongo-only |
+| 15 | — | — | — | `paidAmount` | Number | null | — | — | — | 🆕 Mongo-only |
+| 16 | — | — | — | `customerPercentage` | Number | null | — | — | — | 🆕 Mongo-only |
+| 17 | — | — | — | `promoterPercentage` | Number | null | — | — | — | 🆕 Mongo-only |
+| 18 | — | — | — | `paymentStatus` | "pending" | "verified" | "failed" | — | — | — | — | 🆕 Mongo-only |
+| 19 | — | — | — | `paymentMethod` | string | null | — | — | — | — | 🆕 Mongo-only |
+| 20 | — | — | — | `withMaterial` | boolean | — | — | — | — | 🆕 Mongo-only |
+| 21 | — | — | — | `remark` | string | null | — | — | — | — | 🆕 Mongo-only |
+| 22 | — | — | — | `razorpayOrderId` | string | null | — | — | — | — | 🆕 Mongo-only |
+| 23 | — | — | — | `razorpayPaymentId` | string | null | — | — | — | — | 🆕 Mongo-only |
+| 24 | — | — | — | `paidAt` | Date | null | — | — | — | — | 🆕 Mongo-only |
+| 25 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 26 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
 
 ### 3.13 Wishlist — 🆕 Mongo-only
 
@@ -1199,12 +1236,16 @@
 | 19 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | `created_at` | DateTime? | — | ✅ |
 | 20 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | `updated_at` | DateTime? | — | ✅ |
 | 21 | — | — | — | `examCountdownCategoryId` | Types.ObjectId | null | — | — | — | — | 🆕 Mongo-only |
-| 22 | — | — | — | `packageIds` | Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
-| 23 | — | — | — | `termsAndConditions` | string | — | — | — | — | 🆕 Mongo-only |
-| 24 | — | — | — | `bookUrl` | string | — | — | — | — | 🆕 Mongo-only |
-| 25 | — | — | — | `publication` | string | — | — | — | — | 🆕 Mongo-only |
-| 26 | — | — | — | `deliveryEta` | string | — | — | — | — | 🆕 Mongo-only |
-| 27 | — | — | — | `isTrending` | boolean | — | — | — | — | 🆕 Mongo-only |
+| 22 | — | — | — | `examCountdownCategoryIds` | Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
+| 23 | — | — | — | `examCountdownIds` | Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
+| 24 | — | — | — | `packageIds` | Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
+| 25 | — | — | — | `termsAndConditions` | string | — | — | — | — | 🆕 Mongo-only |
+| 26 | — | — | — | `bookUrl` | string | — | — | — | — | 🆕 Mongo-only |
+| 27 | — | — | — | `demoFileName` | string | — | — | — | — | 🆕 Mongo-only |
+| 28 | — | — | — | `bookFileName` | string | — | — | — | — | 🆕 Mongo-only |
+| 29 | — | — | — | `publication` | string | — | — | — | — | 🆕 Mongo-only |
+| 30 | — | — | — | `deliveryEta` | string | — | — | — | — | 🆕 Mongo-only |
+| 31 | — | — | — | `isTrending` | boolean | — | — | — | — | 🆕 Mongo-only |
 
 ### 4.4 BookCart — ⏳ Not migrated
 
@@ -1533,7 +1574,7 @@
 |---:|---|---|---|---|---|---|---|---|---|---|
 | 1 | — | — | — | `liveCourseId` | ObjectId | required; ref:LiveCourse | — | — | — | 🆕 Mongo-only |
 | 2 | — | — | — | `name` | String | null | — | — | — | 🆕 Mongo-only |
-| 3 | — | — | — | `duration` | Number | required; min:1  | — | — | — | 🆕 Mongo-only |
+| 3 | — | — | — | `duration` | number | — | — | — | — | 🆕 Mongo-only |
 | 4 | — | — | — | `price` | Number | required; min:0  | — | — | — | 🆕 Mongo-only |
 | 5 | — | — | — | `originalPrice` | Number | null; min:0  | — | — | — | 🆕 Mongo-only |
 | 6 | — | — | — | `isDefault` | Boolean | false | — | — | — | 🆕 Mongo-only |
@@ -1880,12 +1921,12 @@
 | 2 | `email_address` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | — | — | — | `email` | String | — | ✅ SQL+Prisma |
 | 3 | `password` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | — | — | — | `password` | String | — | ✅ SQL+Prisma |
 | 4 | `name` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | — | — | — | `name` | String | — | ✅ SQL+Prisma |
-| 5 | `image` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NULL; DEFAULT NULL | — | — | — | `image` | String | — | ✅ SQL+Prisma |
+| 5 | `image` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NULL; DEFAULT NULL | — | — | — | `image` | String? | — | ✅ SQL+Prisma |
 | 6 | `about` | `longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | — | — | — | `about` | String | — | ✅ SQL+Prisma |
 | 7 | `view` | `int` | NOT NULL; DEFAULT '0' | — | — | — | `view` | Int | — | ✅ SQL+Prisma |
 | 8 | `status` | `tinyint(1)` | NOT NULL; DEFAULT '1' | — | — | — | `status` | Boolean | — | ✅ SQL+Prisma |
-| 9 | `last_seen_at` | `date` | NULL; DEFAULT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
-| 10 | `email_verified_at` | `date` | NULL; DEFAULT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
+| 9 | `last_seen_at` | `date` | NULL; DEFAULT NULL | — | — | — | `lastSeenAt` | DateTime? | @db.Date | ✅ SQL+Prisma |
+| 10 | `email_verified_at` | `date` | NULL; DEFAULT NULL | — | — | — | `emailVerifiedAt` | DateTime? | @db.Date | ✅ SQL+Prisma |
 | 11 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `createdAt` | DateTime? | — | ✅ SQL+Prisma |
 | 12 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `updatedAt` | DateTime? | — | ✅ SQL+Prisma |
 
@@ -2044,11 +2085,11 @@
 | 32 | — | — | — | `examCategories` | IPackageCategoryRef[] | — | — | — | — | 🆕 Mongo-only |
 | 33 | — | — | — | `notificationTopic` | string | — | — | — | — | 🆕 Mongo-only |
 
-### 5.29 chat — ⏳ Not migrated
+### 5.29 PackageChat — ⏳ Not migrated
 
 | | |
 |---|---|
-| **Prisma model** | chat |
+| **Prisma model** | PackageChat |
 | **Legacy MySQL** | `ws_package_chat` |
 | **MongoDB** | `ws_package_chats` |
 | **Post-migration MySQL** | `ws_package_chat` |
@@ -2061,12 +2102,17 @@
 | 3 | `message` | `text CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | — | — | — | `message` | String | — | ✅ SQL+Prisma |
 | 4 | `created_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `createdAt` | Date | — | `createdAt` | DateTime? | — | ✅ |
 | 5 | `updated_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `updatedAt` | Date | — | `updatedAt` | DateTime? | — | ✅ |
-| 6 | — | — | — | `text` | String | "" | — | — | — | 🆕 Mongo-only |
-| 7 | — | — | — | `mediaUrl` | String | maxlength:1000 | — | — | — | 🆕 Mongo-only |
-| 8 | — | — | — | `mediaType` | PackageChatMediaType | — | — | — | — | 🆕 Mongo-only |
-| 9 | — | — | — | `senderType` | PackageChatSenderType | — | — | — | — | 🆕 Mongo-only |
-| 10 | — | — | — | `senderId` | Types.ObjectId | null | — | — | — | — | 🆕 Mongo-only |
-| 11 | — | — | — | `pushSent` | boolean | — | — | — | — | 🆕 Mongo-only |
+| 6 | — | — | — | — | — | — | `mediaUrl` | String? | — | 🆕 Prisma-only |
+| 7 | — | — | — | — | — | — | `mediaType` | PackageChatMediaType? | — | 🆕 Prisma-only |
+| 8 | — | — | — | — | — | — | `senderType` | PackageChatSenderType | @default(admin) | 🆕 Prisma-only |
+| 9 | — | — | — | — | — | — | `senderId` | String? | — | 🆕 Prisma-only |
+| 10 | — | — | — | — | — | — | `pushSent` | Boolean | @default(false) | 🆕 Prisma-only |
+| 11 | — | — | — | `text` | String | "" | — | — | — | 🆕 Mongo-only |
+| 12 | — | — | — | `mediaUrl` | String | maxlength:1000 | — | — | — | 🆕 Mongo-only |
+| 13 | — | — | — | `mediaType` | PackageChatMediaType | — | — | — | — | 🆕 Mongo-only |
+| 14 | — | — | — | `senderType` | PackageChatSenderType | — | — | — | — | 🆕 Mongo-only |
+| 15 | — | — | — | `senderId` | Types.ObjectId | null | — | — | — | — | 🆕 Mongo-only |
+| 16 | — | — | — | `pushSent` | boolean | — | — | — | — | 🆕 Mongo-only |
 
 ### 5.30 PackageCourseEbookPrice — ⏳ Not migrated
 
@@ -2418,10 +2464,10 @@
 | 1 | `id` | `int` | PK AI; NOT NULL | — | — | — | `id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
 | 2 | `title` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NOT NULL | — | — | — | `title` | String | — | ✅ SQL+Prisma |
 | 3 | `slug` | `varchar(255)` | NOT NULL | — | — | — | `slug` | String | — | ✅ SQL+Prisma |
-| 4 | `parent` | `int` | NOT NULL; DEFAULT '0' | — | — | — | — | — | — | 🆕 MySQL-only |
-| 5 | `educator_id` | `int` | NOT NULL; DEFAULT '0' | — | — | — | — | — | — | 🆕 MySQL-only |
+| 4 | `parent` | `int` | NOT NULL; DEFAULT '0' | — | — | — | `parent` | Int? | — | ✅ SQL+Prisma |
+| 5 | `educator_id` | `int` | NOT NULL; DEFAULT '0' | — | — | — | `educatorId` | Int? | — | ✅ SQL+Prisma |
 | 6 | `image` | `varchar(255)` | NOT NULL; DEFAULT ' ' | — | — | — | `image` | String | — | ✅ SQL+Prisma |
-| 7 | `pdf` | `varchar(255)` | NOT NULL; DEFAULT ' ' | — | — | — | — | — | — | 🆕 MySQL-only |
+| 7 | `pdf` | `varchar(255)` | NOT NULL; DEFAULT ' ' | — | — | — | `pdf` | String? | — | ✅ SQL+Prisma |
 | 8 | `order_by` | `int` | NOT NULL | — | — | — | `order_by` | Int | — | ✅ SQL+Prisma |
 | 9 | `status` | `tinyint(1)` | NOT NULL; DEFAULT '1' | — | — | — | `status` | Boolean | — | ✅ SQL+Prisma |
 | 10 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `created_at` | DateTime? | — | ✅ SQL+Prisma |
@@ -2484,24 +2530,30 @@
 |---:|---|---|---|---|---|---|---|---|---|---|
 | 1 | — | — | — | `name` | String | required | — | — | — | 🆕 Mongo-only |
 | 2 | — | — | — | `examCountdownCategoryId` | mongoose.Types.ObjectId | null | — | — | — | — | 🆕 Mongo-only |
-| 3 | — | — | — | `description` | string | — | — | — | — | 🆕 Mongo-only |
-| 4 | — | — | — | `author` | string | — | — | — | — | 🆕 Mongo-only |
-| 5 | — | — | — | `publisher` | string | — | — | — | — | 🆕 Mongo-only |
-| 6 | — | — | — | `language` | EBookLanguage | — | — | — | — | 🆕 Mongo-only |
-| 7 | — | — | — | `order` | number | — | — | — | — | 🆕 Mongo-only |
-| 8 | — | — | — | `image` | string | — | — | — | — | 🆕 Mongo-only |
-| 9 | — | — | — | `thumbnail` | string | — | — | — | — | 🆕 Mongo-only |
-| 10 | — | — | — | `demoUrl` | string | — | — | — | — | 🆕 Mongo-only |
-| 11 | — | — | — | `bookUrl` | string | — | — | — | — | 🆕 Mongo-only |
-| 12 | — | — | — | `demoFileName` | string | — | — | — | — | 🆕 Mongo-only |
-| 13 | — | — | — | `bookFileName` | string | — | — | — | — | 🆕 Mongo-only |
-| 14 | — | — | — | `link` | string | — | — | — | — | 🆕 Mongo-only |
-| 15 | — | — | — | `termsAndConditions` | string | — | — | — | — | 🆕 Mongo-only |
-| 16 | — | — | — | `isTrending` | boolean | — | — | — | — | 🆕 Mongo-only |
-| 17 | — | — | — | `isPaid` | boolean | — | — | — | — | 🆕 Mongo-only |
-| 18 | — | — | — | `status` | boolean | — | — | — | — | 🆕 Mongo-only |
-| 19 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
-| 20 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 3 | — | — | — | `examCountdownCategoryIds` | mongoose.Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
+| 4 | — | — | — | `examCountdownIds` | mongoose.Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
+| 5 | — | — | — | `description` | string | — | — | — | — | 🆕 Mongo-only |
+| 6 | — | — | — | `author` | string | — | — | — | — | 🆕 Mongo-only |
+| 7 | — | — | — | `publisher` | string | — | — | — | — | 🆕 Mongo-only |
+| 8 | — | — | — | `language` | EBookLanguage | — | — | — | — | 🆕 Mongo-only |
+| 9 | — | — | — | `order` | number | — | — | — | — | 🆕 Mongo-only |
+| 10 | — | — | — | `image` | string | — | — | — | — | 🆕 Mongo-only |
+| 11 | — | — | — | `thumbnail` | string | — | — | — | — | 🆕 Mongo-only |
+| 12 | — | — | — | `demoUrl` | string | — | — | — | — | 🆕 Mongo-only |
+| 13 | — | — | — | `bookUrl` | string | — | — | — | — | 🆕 Mongo-only |
+| 14 | — | — | — | `demoFileName` | string | — | — | — | — | 🆕 Mongo-only |
+| 15 | — | — | — | `bookFileName` | string | — | — | — | — | 🆕 Mongo-only |
+| 16 | — | — | — | `bookUploadStatus` | EbookUploadStatus | — | — | — | — | 🆕 Mongo-only |
+| 17 | — | — | — | `bookUploadProgress` | number | — | — | — | — | 🆕 Mongo-only |
+| 18 | — | — | — | `demoUploadStatus` | EbookUploadStatus | — | — | — | — | 🆕 Mongo-only |
+| 19 | — | — | — | `demoUploadProgress` | number | — | — | — | — | 🆕 Mongo-only |
+| 20 | — | — | — | `link` | string | — | — | — | — | 🆕 Mongo-only |
+| 21 | — | — | — | `termsAndConditions` | string | — | — | — | — | 🆕 Mongo-only |
+| 22 | — | — | — | `isTrending` | boolean | — | — | — | — | 🆕 Mongo-only |
+| 23 | — | — | — | `isPaid` | boolean | — | — | — | — | 🆕 Mongo-only |
+| 24 | — | — | — | `status` | boolean | — | — | — | — | 🆕 Mongo-only |
+| 25 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 26 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
 
 ### 6.2 EbookDownload — 🆕 Mongo-only
 
@@ -2537,13 +2589,16 @@
 | 4 | — | — | — | `paymentMethod` | String | required | — | — | — | 🆕 Mongo-only |
 | 5 | — | — | — | `orderType` | String | PackageCourseEbookOrderType.PURCHASE | — | — | — | 🆕 Mongo-only |
 | 6 | — | — | — | `orderPrice` | Number | required | — | — | — | 🆕 Mongo-only |
-| 7 | — | — | — | `razorpayOrderId` | String | null | — | — | — | 🆕 Mongo-only |
-| 8 | — | — | — | `razorpayPaymentId` | String | null | — | — | — | 🆕 Mongo-only |
-| 9 | — | — | — | `ipAddress` | String | null | — | — | — | 🆕 Mongo-only |
-| 10 | — | — | — | `transactionId` | String | null | — | — | — | 🆕 Mongo-only |
-| 11 | — | — | — | `status` | String | PackageCourseEbookOrderStatus.PENDING | — | — | — | 🆕 Mongo-only |
-| 12 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
-| 13 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 7 | — | — | — | `promocodeId` | ObjectId | null; ref:PromoCode | — | — | — | 🆕 Mongo-only |
+| 8 | — | — | — | `originalAmount` | Number | null | — | — | — | 🆕 Mongo-only |
+| 9 | — | — | — | `discountAmount` | Number | null | — | — | — | 🆕 Mongo-only |
+| 10 | — | — | — | `razorpayOrderId` | String | null | — | — | — | 🆕 Mongo-only |
+| 11 | — | — | — | `razorpayPaymentId` | String | null | — | — | — | 🆕 Mongo-only |
+| 12 | — | — | — | `ipAddress` | String | null | — | — | — | 🆕 Mongo-only |
+| 13 | — | — | — | `transactionId` | String | null | — | — | — | 🆕 Mongo-only |
+| 14 | — | — | — | `status` | String | PackageCourseEbookOrderStatus.PENDING | — | — | — | 🆕 Mongo-only |
+| 15 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 16 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
 
 ### 6.4 EbookPrice — 🆕 Mongo-only
 
@@ -2719,7 +2774,7 @@
 | 3 | `exam_category_id` | `int` | NOT NULL | — | — | — | `examCategoryId` | Int? | — | ✅ SQL+Prisma |
 | 4 | `is_paid` | `tinyint(1)` | NOT NULL; DEFAULT '0' | `isPaid` | boolean | — | `isPaid` | Boolean | — | ✅ |
 | 5 | `title` | `text CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci` | NULL | `title` | String | required; maxlength:255 | `name` | String | — | ✅ |
-| 6 | `description` | `text` | NULL | `description` | String | — | `description` | String | — | ✅ |
+| 6 | `description` | `text` | NULL | `description` | String | — | `description` | String? | — | ✅ |
 | 7 | `time` | `int` | NOT NULL | — | — | — | `time` | Int | — | ✅ SQL+Prisma |
 | 8 | `questions` | `int` | NOT NULL | — | — | — | `numberOfQuestions` | Int | — | ✅ SQL+Prisma |
 | 9 | `positive_marks` | `decimal(10,2)` | NOT NULL; DEFAULT '1.00' | `positiveMarks` | number | — | `positiveMarks` | Decimal | — | ✅ |
@@ -3086,8 +3141,9 @@
 | 5 | `updated_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `updatedAt` | Date | — | `updatedAt` | DateTime | — | ✅ |
 | 6 | — | — | — | — | — | — | `status` | Boolean | @default(true) | 🆕 Prisma-only |
 | 7 | — | — | — | — | — | — | `order` | Int | @default(0) | 🆕 Prisma-only |
-| 8 | — | — | — | `order` | Number | 0 | — | — | — | 🆕 Mongo-only |
-| 9 | — | — | — | `status` | Boolean | true | — | — | — | 🆕 Mongo-only |
+| 8 | — | — | — | `stateId` | ObjectId | null; ref:CustomerState | — | — | — | 🆕 Mongo-only |
+| 9 | — | — | — | `order` | Number | 0 | — | — | — | 🆕 Mongo-only |
+| 10 | — | — | — | `status` | Boolean | true | — | — | — | 🆕 Mongo-only |
 
 ### 9.5 OfflineEnquiry — ⏳ Not migrated
 
@@ -3155,14 +3211,14 @@
 | 1 | `id` | `int` | PK AI; NOT NULL | — | — | — | `id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
 | 2 | `full_name` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `fullName` | String | required; maxlength:255 | `full_name` | String? | — | ✅ |
 | 3 | `email` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `email` | String | required; unique; maxlength:255 | `email` | String? | — | ✅ |
-| 4 | `password` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `password` | String | maxlength:255 | — | — | — | ✅ |
+| 4 | `password` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `password` | String | maxlength:255 | `password` | String? | — | ✅ |
 | 5 | `phone` | `varchar(100) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `phone` | String | required; maxlength:20 | `phone` | String? | — | ✅ |
 | 6 | `image` | `varchar(255) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin` | NULL; DEFAULT NULL | `image` | String | null; maxlength:500 | `image` | String? | — | ✅ |
 | 7 | `status` | `tinyint(1)` | NOT NULL; DEFAULT '1' | `status` | Boolean | true | `status` | Boolean | — | ✅ |
 | 8 | `is_delete` | `tinyint(1)` | NOT NULL; DEFAULT '0' | `isDelete` | Boolean | false | `is_delete` | Boolean | — | ✅ |
 | 9 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | `created_at` | DateTime? | — | ✅ |
 | 10 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | `updated_at` | DateTime? | — | ✅ |
-| 11 | `last_seen_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
+| 11 | `last_seen_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | `lastSeenAt` | DateTime? | @db.Date | ✅ SQL+Prisma |
 | 12 | — | — | — | `lastLoginDate` | Date | null | — | — | — | 🆕 Mongo-only |
 | 13 | — | — | — | `lastLoginIp` | String | null; maxlength:100 | — | — | — | 🆕 Mongo-only |
 
@@ -3303,6 +3359,8 @@
 | 8 | `status` | `enum('pending','successful') CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL; enum('pending','successful') | — | — | — | `status` | RefferalTransactionStatus | — | ✅ SQL+Prisma |
 | 9 | `created_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | — | — | — | `createdAt` | DateTime? | — | ✅ SQL+Prisma |
 | 10 | `updated_at` | `datetime` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | — | — | — | `updatedAt` | DateTime? | — | ✅ SQL+Prisma |
+| 11 | — | — | — | — | — | — | `providerRef` | String? | @db.VarChar(255) | 🆕 Prisma-only |
+| 12 | — | — | — | — | — | — | `failureReason` | String? | @db.VarChar(500) | 🆕 Prisma-only |
 
 
 <a id="module-testSeries"></a>
@@ -3326,16 +3384,17 @@
 | 1 | — | — | — | `title` | String | required; maxlength:255 | — | — | — | 🆕 Mongo-only |
 | 2 | — | — | — | `description` | String | — | — | — | — | 🆕 Mongo-only |
 | 3 | — | — | — | `thumbnail` | String | maxlength:500 | — | — | — | 🆕 Mongo-only |
-| 4 | — | — | — | `examCategoryId` | ObjectId | null; ref:ExamCategory | — | — | — | 🆕 Mongo-only |
-| 5 | — | — | — | `language` | ExamLanguage | — | — | — | — | 🆕 Mongo-only |
-| 6 | — | — | — | `paperCount` | number | — | — | — | — | 🆕 Mongo-only |
-| 7 | — | — | — | `isFree` | boolean | — | — | — | — | 🆕 Mongo-only |
-| 8 | — | — | — | `instructions` | string | — | — | — | — | 🆕 Mongo-only |
-| 9 | — | — | — | `policy` | string | — | — | — | — | 🆕 Mongo-only |
-| 10 | — | — | — | `orderBy` | number | — | — | — | — | 🆕 Mongo-only |
-| 11 | — | — | — | `status` | boolean | — | — | — | — | 🆕 Mongo-only |
-| 12 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
-| 13 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 4 | — | — | — | `examCategoryIds` | Types.ObjectId[] | — | — | — | — | 🆕 Mongo-only |
+| 5 | — | — | — | `examCategoryId` | Types.ObjectId | null | — | — | — | — | 🆕 Mongo-only |
+| 6 | — | — | — | `language` | ExamLanguage | — | — | — | — | 🆕 Mongo-only |
+| 7 | — | — | — | `paperCount` | number | — | — | — | — | 🆕 Mongo-only |
+| 8 | — | — | — | `isFree` | boolean | — | — | — | — | 🆕 Mongo-only |
+| 9 | — | — | — | `instructions` | string | — | — | — | — | 🆕 Mongo-only |
+| 10 | — | — | — | `policy` | string | — | — | — | — | 🆕 Mongo-only |
+| 11 | — | — | — | `orderBy` | number | — | — | — | — | 🆕 Mongo-only |
+| 12 | — | — | — | `status` | boolean | — | — | — | — | 🆕 Mongo-only |
+| 13 | — | — | — | `createdAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 14 | — | — | — | `updatedAt` | Date | — | — | — | — | 🆕 Mongo-only |
 
 ### 12.2 TestSeriesContentCategory — 🆕 Mongo-only
 
@@ -3618,35 +3677,35 @@
 | 2 | `migration` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
 | 3 | `batch` | `int` | NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
 
-### 15.3 — — ⏳ Not migrated
+### 15.3 AdminModelHasPermission — ⏳ Not migrated
 
 | | |
 |---|---|
-| **Prisma model** | — |
+| **Prisma model** | AdminModelHasPermission |
 | **Legacy MySQL** | `ws_model_has_permissions` |
 | **MongoDB** | — |
-| **Post-migration MySQL** | — |
+| **Post-migration MySQL** | `ws_model_has_permissions` |
 
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
-| 1 | `permission_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
-| 2 | `model_type` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
-| 3 | `model_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
+| 1 | `permission_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | `permissionId` | BigInt | @db.UnsignedBigInt | ✅ SQL+Prisma |
+| 2 | `model_type` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | — | — | — | `modelType` | String | @db.VarChar(255) | ✅ SQL+Prisma |
+| 3 | `model_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | `modelId` | BigInt | @db.UnsignedBigInt | ✅ SQL+Prisma |
 
-### 15.4 — — ⏳ Not migrated
+### 15.4 AdminModelHasRole — ⏳ Not migrated
 
 | | |
 |---|---|
-| **Prisma model** | — |
+| **Prisma model** | AdminModelHasRole |
 | **Legacy MySQL** | `ws_model_has_roles` |
 | **MongoDB** | — |
-| **Post-migration MySQL** | — |
+| **Post-migration MySQL** | `ws_model_has_roles` |
 
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
-| 1 | `role_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
-| 2 | `model_type` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
-| 3 | `model_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
+| 1 | `role_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | `roleId` | BigInt | @db.UnsignedBigInt | ✅ SQL+Prisma |
+| 2 | `model_type` | `varchar(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci` | NOT NULL | — | — | — | `modelType` | String | @db.VarChar(255) | ✅ SQL+Prisma |
+| 3 | `model_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | `modelId` | BigInt | @db.UnsignedBigInt | ✅ SQL+Prisma |
 
 ### 15.5 — — ⏳ Not migrated
 
@@ -3686,19 +3745,19 @@
 | 9 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
 | 10 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
 
-### 15.7 — — ⏳ Not migrated
+### 15.7 AdminRoleHasPermission — ⏳ Not migrated
 
 | | |
 |---|---|
-| **Prisma model** | — |
+| **Prisma model** | AdminRoleHasPermission |
 | **Legacy MySQL** | `ws_role_has_permissions` |
 | **MongoDB** | — |
-| **Post-migration MySQL** | — |
+| **Post-migration MySQL** | `ws_role_has_permissions` |
 
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
-| 1 | `permission_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
-| 2 | `role_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | — | — | — | 🆕 MySQL-only |
+| 1 | `permission_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | `permissionId` | BigInt | @db.UnsignedBigInt | ✅ SQL+Prisma |
+| 2 | `role_id` | `bigint UNSIGNED` | PK; NOT NULL | — | — | — | `roleId` | BigInt | @db.UnsignedBigInt | ✅ SQL+Prisma |
 
 
 <a id="module-other"></a>

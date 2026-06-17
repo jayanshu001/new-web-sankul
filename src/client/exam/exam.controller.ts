@@ -19,6 +19,17 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildRegexCondition } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import {
+  isClientExamMysql,
+  parseExamId,
+  listExamsByCategory as svcListExamsByCategory,
+  getExamQuestions as svcGetExamQuestions,
+  listMyResults as svcListMyResults,
+  saveAnswers as svcSaveAnswers,
+  getSolution as svcGetSolution,
+  getSolutionAnalytics as svcGetSolutionAnalytics,
+  getDailyExams as svcGetDailyExams,
+} from "../../modules/client-exam/client-exam.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 const norm = (s: string) => (s ?? "").trim().toLowerCase();
@@ -62,6 +73,16 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
   logger.info("listExamsByCategory invoked", { traceId, path: req.originalUrl, customerId, categoryId });
 
   try {
+    // ─── MySQL branch (ws_exam + ws_exam_category) ────────────────────────
+    if (isClientExamMysql()) {
+      const catId = parseExamId(categoryId);
+      if (!catId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const cid = customerId ? parseExamId(customerId) : null;
+      const data = await svcListExamsByCategory(catId, cid);
+      logger.info("listExamsByCategory success (sql)", { traceId, customerId, categoryId, examCount: data.exams.length });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(categoryId)) {
       logger.warn("listExamsByCategory invalid id", { traceId, categoryId });
       return res.status(400).json({ success: false, message: "Invalid category id." });
@@ -175,6 +196,14 @@ export const getDailyExams = async (req: Request, res: Response) => {
     }
     if (weekQ !== undefined && (yearQ === undefined || monthQ === undefined)) {
       return res.status(400).json({ success: false, message: "`week` requires `year` and `month`." });
+    }
+
+    // ─── MySQL branch (daily-exam drill-down) ─────────────────────────────
+    if (isClientExamMysql()) {
+      const cid = customerId ? parseExamId(customerId) : null;
+      const r = await svcGetDailyExams({ year: yearQ, month: monthQ, week: weekQ, customerId: cid });
+      logger.info("getDailyExams success (sql)", { traceId, customerId, level: r.level });
+      return res.status(200).json({ success: true, data: { level: r.level, items: r.data } });
     }
 
     const baseMatch: any = {
@@ -327,6 +356,16 @@ export const getExamQuestions = async (req: Request, res: Response) => {
   logger.info("getExamQuestions invoked", { traceId, path: req.originalUrl, examId: id, userId: req.user?.id });
 
   try {
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (isClientExamMysql()) {
+      const numId = parseExamId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+      const data = await svcGetExamQuestions(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Exam not found or not published." });
+      logger.info("getExamQuestions success (sql)", { traceId, examId: id, questionCount: data.questions.length });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) {
       logger.warn("getExamQuestions invalid id", { traceId, examId: id });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
@@ -421,6 +460,29 @@ export const saveAnswers = async (req: Request, res: Response) => {
     if (!customerId) {
       logger.warn("saveAnswers unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    // ─── MySQL branch (ws_exam_result + _detail; scoring write) ───────────
+    if (isClientExamMysql()) {
+      const cid = parseExamId(customerId);
+      const body = req.body ?? {};
+      const examId = parseExamId(String(body.examId ?? ""));
+      const timing = typeof body.timing === "string" ? body.timing : "";
+      const test = Array.isArray(body.test) ? body.test : null;
+      if (!cid || !examId || !test || !/^\d{1,3}:\d{2}(:\d{2})?$/.test(timing)) {
+        return res.status(400).json({ success: false, message: "Invalid submission payload." });
+      }
+      const parsedTest = test.map((t: any) => ({ questionId: parseExamId(String(t?.questionId ?? "")), answerId: parseExamId(String(t?.answerId ?? "")) }));
+      if (parsedTest.some((t: { questionId: number | null; answerId: number | null }) => !t.questionId || !t.answerId)) {
+        return res.status(400).json({ success: false, message: "Invalid question/answer id in submission." });
+      }
+      const result = await svcSaveAnswers(cid, {
+        examId, timing, ratting: body.ratting ?? null,
+        test: parsedTest as Array<{ questionId: number; answerId: number }>,
+      });
+      if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
+      logger.info("saveAnswers success (sql)", { traceId, customerId, examId, rank: result.rank });
+      return res.status(200).json({ success: true, data: { examResult: result.examResult, rank: result.rank } });
     }
 
     const data = saveAnswersSchema.parse(req.body);
@@ -597,6 +659,19 @@ export const getSolutionByExam = async (req: Request, res: Response) => {
       logger.warn("getSolutionByExam unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (isClientExamMysql()) {
+      const cid = parseExamId(customerId);
+      const eid = parseExamId(examId);
+      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+      const attemptId = req.query.attemptId ? parseExamId(String(req.query.attemptId)) ?? undefined : undefined;
+      const data = await svcGetSolution(cid, eid, attemptId);
+      if (!data) return res.status(404).json({ success: false, message: "No submitted attempt found." });
+      logger.info("getSolutionByExam success (sql)", { traceId, customerId, examId, questionCount: data.length });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(examId)) {
       logger.warn("getSolutionByExam invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
@@ -669,6 +744,18 @@ export const getSolutionAnalyticsByExam = async (req: Request, res: Response) =>
       logger.warn("getSolutionAnalyticsByExam unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (isClientExamMysql()) {
+      const cid = parseExamId(customerId);
+      const eid = parseExamId(examId);
+      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+      const attemptId = req.query.attemptId ? parseExamId(String(req.query.attemptId)) ?? undefined : undefined;
+      const data = await svcGetSolutionAnalytics(cid, eid, attemptId);
+      if (!data) return res.status(404).json({ success: false, message: "No submitted attempt found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(examId)) {
       logger.warn("getSolutionAnalyticsByExam invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
@@ -771,6 +858,20 @@ export const listMyResults = async (req: Request, res: Response) => {
     const { page = "1", limit = "20", examId } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+
+    // ─── MySQL branch (ws_exam_result) ────────────────────────────────────
+    if (isClientExamMysql()) {
+      const cid = parseExamId(customerId);
+      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+      const { items, total } = await svcListMyResults(cid, pageNum, limitNum);
+      logger.info("listMyResults success (sql)", { traceId, customerId, total });
+      return res.status(200).json({
+        success: true,
+        data: items,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     const skip = (pageNum - 1) * limitNum;
 
     const filter: any = { customerId, status: true };

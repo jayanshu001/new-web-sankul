@@ -25,6 +25,18 @@ import {
   updateBankAccount as svcUpdateBankAccount,
   deleteBankAccount as svcDeleteBankAccount,
 } from "../../modules/customer-bank-account/customer-bank-account.service";
+import {
+  isReferralMysql,
+  parseCustomerId as parseRefCustomerId,
+  getRewardsOverview as svcRewardsOverview,
+  listTransactions as svcListTransactions,
+  getTransaction as svcGetTransaction,
+  getRewardPoints as svcGetRewardPoints,
+  createWithdrawal as svcCreateWithdrawal,
+  attachProviderRef as svcAttachProviderRef,
+  refundWithdrawal as svcRefundWithdrawal,
+  generateReferralCode as svcGenerateReferralCode,
+} from "../../modules/referral/referral.service";
 
 const MIN_WITHDRAWAL_AMOUNT = 500;
 
@@ -37,6 +49,15 @@ export const getRewardsOverview = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) { logger.warn("getRewardsOverview unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
+
+    // ─── MySQL branch (ws_customer + ws_refferal_program) ─────────────────
+    if (isReferralMysql()) {
+      const cid = parseRefCustomerId(customerId);
+      if (!cid) return res.status(404).json({ success: false, message: "Invalid user." });
+      const data = await svcRewardsOverview(cid);
+      if (!data) return res.status(404).json({ success: false, message: "Invalid user." });
+      return res.status(200).json({ success: true, data });
+    }
 
     const customer = await Customer.findOne({
       _id: customerId,
@@ -82,6 +103,20 @@ export const getMyTransactions = async (req: Request, res: Response) => {
     const { page = "1", limit = "20", type } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    // ─── MySQL branch (ws_refferal_transaction) ───────────────────────────
+    if (isReferralMysql()) {
+      const cid = parseRefCustomerId(customerId);
+      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
+      const { items, total } = await svcListTransactions(cid, { type, page: pageNum, limit: limitNum });
+      logger.info("getMyTransactions success (sql)", { traceId, customerId, total });
+      return res.status(200).json({
+        success: true,
+        data: items,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     const skip = (pageNum - 1) * limitNum;
 
     const filter: any = { customerId };
@@ -116,6 +151,16 @@ export const getTransactionById = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) { logger.warn("getTransactionById unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (isReferralMysql()) {
+      const cid = parseRefCustomerId(customerId);
+      const tid = Number(id);
+      if (!cid || !Number.isInteger(tid) || tid <= 0) return res.status(400).json({ success: false, message: "Invalid transaction id." });
+      const t = await svcGetTransaction(tid, cid);
+      if (!t) return res.status(404).json({ success: false, message: "Transaction not found." });
+      return res.status(200).json({ success: true, data: t });
+    }
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("getTransactionById invalid id", { traceId, customerId, transactionId: id });
@@ -155,6 +200,47 @@ export const requestWithdrawal = async (req: Request, res: Response) => {
         success: false,
         message: `Your withdrawal request must be greater than or equal to ₹${MIN_WITHDRAWAL_AMOUNT}.`,
       });
+    }
+
+    // ─── MySQL branch (ws_customer + ws_customer_bank_account + ws_refferal_transaction) ───
+    if (isReferralMysql()) {
+      const cid = parseRefCustomerId(customerId);
+      const baId = parseBankAccountId(bankAccountId);
+      if (!cid) return res.status(404).json({ success: false, message: "Invalid user." });
+      if (!baId) return res.status(400).json({ success: false, message: "Invalid bank account id." });
+
+      const points = await svcGetRewardPoints(cid);
+      if (points === null) return res.status(404).json({ success: false, message: "Invalid user." });
+      if (amount > points) {
+        return res.status(400).json({ success: false, message: "Your withdrawal request must be less than or equal to your reward points." });
+      }
+
+      const bankAccount = await svcGetBankAccount(baId, cid);
+      if (!bankAccount) return res.status(404).json({ success: false, message: "Bank account not found." });
+
+      // Atomic: decrement points + create pending DEBIT txn.
+      const txn = await svcCreateWithdrawal({ customerId: cid, amount, bankAccount: bankAccount as any });
+
+      // Razorpay payout outside the DB tx; refund + mark failed on error.
+      try {
+        const contact = await createContact({ name: (bankAccount as any).accountHolderName || `${cid}`, referenceId: `cust_${cid}` });
+        const fundAccount = await createFundAccount({
+          contactId: contact.id,
+          accountHolderName: (bankAccount as any).accountHolderName,
+          ifsc: (bankAccount as any).ifscCode,
+          accountNumber: (bankAccount as any).accountNumber,
+        });
+        const payout = await createPayout({ fundAccountId: fundAccount.id, amountInPaise: amount * 100, referenceId: `txn_${txn._id}`, narration: "Reward withdrawal" });
+        await svcAttachProviderRef(Number(txn._id), payout.id);
+        txn.providerRef = payout.id;
+      } catch (payoutErr: any) {
+        logger.error("requestWithdrawal payout failed (sql)", { traceId, customerId, transactionId: txn._id, error: payoutErr?.message });
+        await svcRefundWithdrawal({ transactionId: Number(txn._id), customerId: cid, amount, reason: payoutErr?.message ?? "Payout could not be initiated." });
+        return res.status(502).json({ success: false, message: "Withdrawal could not be initiated. Please try again." });
+      }
+
+      logger.info("requestWithdrawal success (sql)", { traceId, customerId, transactionId: txn._id, amount });
+      return res.status(201).json({ success: true, data: txn });
     }
 
     if (!mongoose.Types.ObjectId.isValid(bankAccountId)) {
@@ -279,6 +365,25 @@ export const generateReferralCode = async (req: Request, res: Response) => {
 
     const { referralCode } = generateReferralCodeSchema.parse(req.body);
     const code = referralCode.toUpperCase();
+
+    const blacklistHitEarly = BLACKLISTED_REFERRAL_WORDS.some((word) => code.includes(word));
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (isReferralMysql()) {
+      const cid = parseRefCustomerId(customerId);
+      if (!cid) return res.status(404).json({ success: false, message: "Invalid user." });
+      if (blacklistHitEarly) {
+        return res.status(400).json({ success: false, message: "Referral code is not available, please try another one." });
+      }
+      const result = await svcGenerateReferralCode(cid, code);
+      if (!result.ok) {
+        if (result.reason === "not_found") return res.status(404).json({ success: false, message: "Invalid user." });
+        if (result.reason === "already") return res.status(400).json({ success: false, message: "You can't generate referral code again." });
+        return res.status(400).json({ success: false, message: "Referral code is not available, please try another one." });
+      }
+      logger.info("generateReferralCode success (sql)", { traceId, customerId, code });
+      return res.status(200).json({ success: true, data: result.data });
+    }
 
     const customer = await Customer.findOne({
       _id: customerId,

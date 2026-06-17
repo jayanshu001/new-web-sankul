@@ -1,6 +1,6 @@
 # Migrated modules (MySQL / Prisma)
 
-> **Generated:** 2026-06-13 — re-run `yarn docs:migrated-modules` when you add a module  
+> **Generated:** 2026-06-17 — re-run `yarn docs:migrated-modules` when you add a module  
 > **Scope:** Only modules with **repository → service → transformer** on **legacy MySQL** tables  
 > **Enable in runtime:** `MIGRATION_MYSQL_MODULES` in `.env`
 
@@ -10,9 +10,9 @@
 
 | | |
 |---|---|
-| **Total migrated (code complete)** | 34 |
-| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, customer-address, customer-profile, customer-bank-account, offline-city, catalog-package-type, catalog-package, catalog-course, catalog-video, catalog-ebook, catalog-material, catalog-book, offline-batch, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, catalog-exam, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator` |
-| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator` |
+| **Total migrated (code complete)** | 48 |
+| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, customer-address, customer-profile, customer-bank-account, offline-city, catalog-package-type, catalog-package, catalog-course, catalog-video, catalog-ebook, catalog-material, catalog-book, offline-batch, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, catalog-exam, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, admin-auth, customer-admin-crud, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video` |
+| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator,admin-auth,customer-admin-crud,educator-auth,promoter-auth,promoter-data,referral,admin-rbac,client-exam,client-cart,admin-exam,client-educator,admin-plan,admin-master,admin-video` |
 
 | # | Module key | Label | MySQL table | Mongo collection | Env | Detail |
 |---:|---|---|---|---|---|---|
@@ -50,6 +50,20 @@
 | 32 | `commerce-promoter` | Commerce · Promoter (READ — promocode owner master) | `ws_promoter` | `ws_promoter` | ✅ enabled | [Detail](#commerce-promoter) |
 | 33 | `commerce-promocode` | Commerce · Promocode (READ — SQL-faithful, NOT the client appliesTo model) | `ws_promocode / ws_promoted_package_course_ebook` | `ws_promo_codes / (embedded)` | ✅ enabled | [Detail](#commerce-promocode) |
 | 34 | `commerce-educator` | Commerce · Educator (READ — full entity master) | `ws_course_educator` | `ws_course_educators` | ✅ enabled | [Detail](#commerce-educator) |
+| 35 | `admin-auth` | Admin Auth + Administrator CRUD (ws_users) | `ws_users (+ ws_admin_access_tokens, ws_roles, ws_permissions, ws_model_has_roles, ws_model_has_permissions)` | `ws_users (+ ws_admin_access_tokens, roles, permissions)` | ✅ enabled | [Detail](#admin-auth) |
+| 36 | `customer-admin-crud` | Admin · Customer CRUD (ws_customer) | `ws_customer` | `ws_customers` | ✅ enabled | [Detail](#customer-admin-crud) |
+| 37 | `educator-auth` | Educator Auth + Admin Educator Master CRUD (ws_course_educator) | `ws_course_educator (+ ws_educator_access_tokens)` | `ws_course_educators (+ ws_educator_access_tokens)` | ✅ enabled | [Detail](#educator-auth) |
+| 38 | `promoter-auth` | Promoter Auth (ws_promoter) | `ws_promoter (+ ws_promoter_access_tokens)` | `ws_promoter (+ ws_promoter_access_tokens)` | ✅ enabled | [Detail](#promoter-auth) |
+| 39 | `promoter-data` | Promoter Analytics (customers/subscriptions/dashboard/promocode) | `ws_package_course_subscription / ws_ebook_subscription (joined via order.promocode JSON)` | `ws_package_course_subscriptions / ws_ebook_subscriptions / ws_promo_codes` | ✅ enabled | [Detail](#promoter-data) |
+| 40 | `referral` | Referral (rewards/withdrawal/program — client + admin + webhook) | `ws_refferal_program / ws_refferal_transaction (+ ws_customer)` | `ws_refferal_programs / ws_refferal_transactions` | ✅ enabled | [Detail](#referral) |
+| 41 | `admin-rbac` | Admin RBAC (roles + permissions management) | `ws_roles / ws_permissions / ws_role_has_permissions` | `roles / permissions / permissioncategories` | ✅ enabled | [Detail](#admin-rbac) |
+| 42 | `client-exam` | Client Exam (reads + saveAnswers scoring write) | `ws_exam / ws_exam_category / ws_exam_question(_option) / ws_exam_result(_detail)(_analytics)` | `ws_exams / ws_exam_categories / ws_exam_questions / ws_exam_results` | ✅ enabled | [Detail](#client-exam) |
+| 43 | `client-cart` | Client Book Cart (add/update/remove/shipping/get) | `ws_book_cart / ws_book_cart_item` | `ws_book_carts (embedded items[])` | ✅ enabled | [Detail](#client-cart) |
+| 44 | `admin-exam` | Admin Exam (reads: exams/questions/submissions/analytics) | `ws_exam / ws_exam_question(_option) / ws_exam_result(_detail)(_analytics)` | `ws_exams / ws_exam_questions / ws_exam_results` | ✅ enabled | [Detail](#admin-exam) |
+| 45 | `client-educator` | Client Educator detail (profile + courses + plans) | `ws_course_educator / ws_course / ws_package_course_ebook_price / ws_package_course_subscription` | `ws_course_educators / ws_courses` | ✅ enabled | [Detail](#client-educator) |
+| 46 | `admin-plan` | Admin Plan CRUD (PackageCourseEbookPrice) | `ws_package_course_ebook_price` | `ws_package_course_ebook_prices` | ✅ enabled | [Detail](#admin-plan) |
+| 47 | `admin-master` | Admin Master sub-catalog CRUD + full videoCategory (pc-material / subject / video categories) | `ws_package_course_material / ws_course_subject_category / ws_video_category` | `ws_package_course_materials / coursesubjectcategories / videocategories` | ✅ enabled | [Detail](#admin-master) |
+| 48 | `admin-video` | Admin Video CRUD (ws_video) | `ws_video` | `videos` | ✅ enabled | [Detail](#admin-video) |
 
 ---
 
@@ -57,7 +71,7 @@
 
 ```env
 DATABASE_URL=mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging
-MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator
+MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator,admin-auth,customer-admin-crud,educator-auth,promoter-auth,promoter-data,referral,admin-rbac,client-exam,client-cart,admin-exam,client-educator,admin-plan,admin-master,admin-video
 ```
 
 - Toggle: `src/config/migration.ts` → `isMysqlModule("<key>")`
@@ -967,6 +981,376 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 - Reads: findById / findActiveById / findByIds (bulk course-educator hydration) / listActive (name search) / findRefById ({_id,name,image} embed)
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `CourseEducator`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 35. Admin Auth + Administrator CRUD (ws_users) {#admin-auth}
+
+| | |
+|---|---|
+| **Module key** | `admin-auth` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `AdminUser / AdminAccessToken / AdminRoleRow / AdminPermissionRow / AdminModelHasRole / AdminModelHasPermission` |
+| **MySQL table** | `ws_users (+ ws_admin_access_tokens, ws_roles, ws_permissions, ws_model_has_roles, ws_model_has_permissions)` |
+| **Mongo collection (legacy app)** | `ws_users (+ ws_admin_access_tokens, roles, permissions)` |
+| **Code** | `src/modules/admin-auth (branches src/admin/auth/admin.auth.service.ts + src/admin/administrator/administrator.controller.ts)/` |
+| **Data** | 3 admins in staging |
+| **Smoke test** | `—  (verified via live-DB tsx; HTTP login verified)` |
+| **Admin API** | POST `/admin/auth/login` · `/refresh` · DELETE `/logout` · POST `/change-password` · PUT `/profile` · CRUD `/admin/administrators` (+ `/pre-requisites`, `/:id/status`) |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- ⚠ OVERTURNS the earlier 'Laravel admin/RBAC is OUT OF SCOPE / stays Mongo' decision — admin auth + administrator management are now on SQL. Login authenticates against ws_users (NOT Mongo).
+- Passwords are Laravel `$2y$` bcrypt — bcryptjs `compare` verifies them as-is (treats $2y$ === $2b$). All existing admins log in with current passwords.
+- ws_users has NO `role` and NO `deleted` column. role/roles/permissions resolved from the spatie pivots (ws_model_has_roles → ws_roles, model_type `App\\Models\\User`); `role` string DERIVED from role names (super→super_admin, editor→editor, else admin). 'delete' = status='0' + revoke tokens (row retained).
+- status/is_dark are enum('0','1') → Prisma enums AdminStatusFlag{inactive=0,active=1} / AdminDarkFlag{light=0,dark=1}.
+- DDL ADD: created ws_admin_access_tokens (mirrors ws_customer_access_token). JWT payload + Redis admin_session:{id} unchanged; numeric id stringified into the token.
+- Administrator CRUD: list (search+status+role filter, paginated), get, create, update, delete(disable), toggle-status, pre-requisites (roles dropdown from ws_roles). Validation relaxed to accept numeric spatie role id alongside the 24-hex ObjectId.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `AdminUser / AdminAccessToken / AdminRoleRow / AdminPermissionRow / AdminModelHasRole / AdminModelHasPermission`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 36. Admin · Customer CRUD (ws_customer) {#customer-admin-crud}
+
+| | |
+|---|---|
+| **Module key** | `customer-admin-crud` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Customer (+ CustomerState/CustomerDistict/CustomerEducation lookups)` |
+| **MySQL table** | `ws_customer` |
+| **Mongo collection (legacy app)** | `ws_customers` |
+| **Code** | `src/modules/admin-customer (branches src/admin/customer/customer.controller.ts)/` |
+| **Data** | 27 customers in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | GET `/admin/customers` (list) · `/:id` · `/pre-requisites` · `/states/:id/districts` · POST `/` · PUT `/:id` · DELETE `/:id` · PATCH `/:id/status` |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Gated by the existing `customer-auth` flag (admin customer management flips together with customer auth). Single MODULE constant = 'customer-auth'.
+- ws_customer stores a single `full_name` — API exposes firstName/middleName/lastName. compose on write, split on read.
+- state/district are NOT NULL (no default) → cleared/absent values write 0 (legacy sentinel, matches customer-auth createStub), never NULL. education_id nullable. Create uses Prisma unchecked input to set raw FK columns.
+- FK ids are Int (not ObjectId) → list filters + create/update accept numeric ids; validation relaxed. dob→birthDate, profile_picture, phone_2→phone2, goal(JSON)←goals[]. Changing phone resets is_phone_verified.
+- Subscription/order/address aggregate handlers (course/ebook subs, addresses, getCustomerDetails) return empty on the SQL branch — those models aren't migrated yet.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Customer (+ CustomerState/CustomerDistict/CustomerEducation lookups)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 37. Educator Auth + Admin Educator Master CRUD (ws_course_educator) {#educator-auth}
+
+| | |
+|---|---|
+| **Module key** | `educator-auth` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `CourseEducator (extended) / EducatorAccessToken` |
+| **MySQL table** | `ws_course_educator (+ ws_educator_access_tokens)` |
+| **Mongo collection (legacy app)** | `ws_course_educators (+ ws_educator_access_tokens)` |
+| **Code** | `src/modules/educator-auth (branches src/educator/auth/educator.auth.service.ts + src/admin/master/educator.controller.ts)/` |
+| **Data** | 56 educators in staging |
+| **Smoke test** | `—  (verified via live-DB tsx; HTTP educator list + admin login verified)` |
+| **Admin API** | GET `/admin/master/educators` (list, sort+search+status, paginated) · `/:id/details` · POST `/` · PUT `/:id` · DELETE `/:id` |
+| **Client API** | POST `/educator/auth/login` · `/token/refresh` · DELETE `/logout` · GET/PUT `/auth/me` · POST `/auth/change-password` |
+
+**Transformer / schema notes:**
+
+- ⚠ MIXED PASSWORD HASHES: 40 rows are legacy 32-char MD5, 16 are bcrypt ($2). The Mongo branch only did bcrypt.compare (would lock out the 40 MD5 educators). verifyEducatorPassword tries bcrypt first, then md5(input)===stored for 32-hex hashes. Empty-string MD5 (d41d8cd9…) = 'no password', never matches. Password CHANGE always writes bcrypt (upgrades legacy on change).
+- DDL ADD: created ws_educator_access_tokens (mirrors the admin/customer token tables). JWT payload {id,email,role:'educator',type:'educator'} + Redis educator_session:{id} + 1-device middleware rule all unchanged.
+- Extended Prisma CourseEducator: image → nullable; added last_seen_at/email_verified_at + the accessTokens relation. (commerce-educator READ module unaffected.)
+- Admin master CRUD: list has an `id` SECONDARY SORT tiebreaker — 37/56 rows share NULL updated_at, so without it the order is arbitrary and pagination drifts (a row on two pages). With it: every educator appears exactly once across pages.
+- ws_course_educator has NO `deleted` column → admin delete = status=false + revoke tokens (row retained). password is NOT NULL but create validation makes it optional → store '' (no-login) when absent, bcrypt when provided. getEducatorDetails associations (courses/live-courses/packages/sessions) return empty on SQL (those models unmigrated).
+- Image-clear (PUT educator): updateEducatorSchema overrides image → z.string().url().nullable().optional() so explicit null clears it (omit=keep, URL=set); Mongo fallback maps null→'' (model image:required). Create still requires a URL.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `CourseEducator (extended) / EducatorAccessToken`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 38. Promoter Auth (ws_promoter) {#promoter-auth}
+
+| | |
+|---|---|
+| **Module key** | `promoter-auth` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Promoter (extended) / PromoterAccessToken` |
+| **MySQL table** | `ws_promoter (+ ws_promoter_access_tokens)` |
+| **Mongo collection (legacy app)** | `ws_promoter (+ ws_promoter_access_tokens)` |
+| **Code** | `src/modules/promoter-auth (branches src/promoter/auth/promoter.auth.service.ts)/` |
+| **Data** | 114 promoters in staging (only 1 has a password) |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | POST `/promoter/auth/login` · `/token/refresh` · DELETE `/logout` · GET/PUT `/auth/me` · POST `/auth/change-password` |
+
+**Transformer / schema notes:**
+
+- Wave 1 of the Mongo-only push. Mirrors educator-auth. New `ws_promoter_access_tokens` (DDL ADD → schema-changes/2026-06-17_create_ws_promoter_access_tokens.sql).
+- Extended Prisma `Promoter`: added password + lastSeenAt (@map last_seen_at) + accessTokens relation; new PromoterAccessToken model. commerce-promoter READ transformer still excludes password (safe).
+- verifyPromoterPassword (bcrypt then 32-hex MD5) — only 1/114 promoters has a password (bcrypt); the rest are admin-created with no login. ws_promoter has NO last_login_date/_ip cols → touchLogin writes last_seen_at.
+- JWT {id,email,role:'promoter',type:'promoter'} + Redis promoter_session:{id} unchanged; numeric id stringified.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Promoter (extended) / PromoterAccessToken`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 39. Promoter Analytics (customers/subscriptions/dashboard/promocode) {#promoter-data}
+
+| | |
+|---|---|
+| **Module key** | `promoter-data` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `(raw SQL over ws_package_course_order/subscription, ws_ebook_order/subscription, ws_promocode, ws_customer)` |
+| **MySQL table** | `ws_package_course_subscription / ws_ebook_subscription (joined via order.promocode JSON)` |
+| **Mongo collection (legacy app)** | `ws_package_course_subscriptions / ws_ebook_subscriptions / ws_promo_codes` |
+| **Code** | `src/modules/promoter-data (branches src/promoter/{customer,subscription,dashboard,promocode}/)/` |
+| **Data** | promoter 130 → 2 subs, ₹15,300, commission ₹765, 2 customers |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | GET `/promoter/customers`(+`/:id`) · `/promoter/subscriptions`(+`/report`) · `/promoter/dashboard`(+`/overview`) · `/promoter/promocodes`(+`/:id`) |
+
+**Transformer / schema notes:**
+
+- ⚠ ATTRIBUTION DIVERGENCE: SQL subscription tables have NO promoter_id/promoter_percentage/paid_amount. `ws_*_order.promocode` is a JSON snapshot embedding promoterId + promotedPackageCourseEbook[0].promoterPercentage → attribute via JSON_EXTRACT($.promoterId) joined order.id = subscription.order_id.
+- All raw SQL (prisma.$queryRawUnsafe, bound params) — Prisma can't express JSON-path filters or DATE_FORMAT time-bucket grouping. revenue = subscription.amount/price; commission = amount * pct/100.
+- Overview chart buckets: today→hour, week/month→day, year/all→month, custom→derived by span. Separate flag from promoter-auth.
+- Limitation: promocode appliesTo not representable from SQL (returns empty, like commerce-promocode); overview promocodeId scope param ignored on SQL.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `(raw SQL over ws_package_course_order/subscription, ws_ebook_order/subscription, ws_promocode, ws_customer)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 40. Referral (rewards/withdrawal/program — client + admin + webhook) {#referral}
+
+| | |
+|---|---|
+| **Module key** | `referral` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `RefferalProgram / RefferalTransaction (+ Customer reward fields)` |
+| **MySQL table** | `ws_refferal_program / ws_refferal_transaction (+ ws_customer)` |
+| **Mongo collection (legacy app)** | `ws_refferal_programs / ws_refferal_transactions` |
+| **Code** | `src/modules/referral (branches src/client/referral/{referral,content}.controller.ts + src/admin/referral/referral.service.ts + src/webhooks/razorpay-payout.controller.ts)/` |
+| **Data** | 1 program; transactions created on withdrawal/adjust |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | program CRUD `/admin/referral/programs` · `/transactions` · `/withdrawals`(+`/csv`) · `/referrers` · PATCH withdrawal status · reject · adjust rewards |
+| **Client API** | GET `/client/referral/rewards` · `/transactions`(+`/:id`) · `/status` · POST `/withdraw` · `/generate-code`; webhook `/razorpay-payout` |
+
+**Transformer / schema notes:**
+
+- Wave 2 (Mongo-only push) — client + admin + webhook all on SQL. DDL on ws_refferal_transaction: +provider_ref +failure_reason cols + `status` enum widened with `failed` (schema-changes/2026-06-17_*).
+- Withdrawal: atomic Prisma $transaction (decrement ws_customer.reward_points + create pending DEBIT txn) → RazorpayX payout → on failure, atomic refund (re-credit points + mark txn failed). Mixed-backend risk gone (customer+bank+txn all SQL).
+- Webhook (razorpay-payout): flips a pending withdrawal by provider_ref → successful, or refunds points (DEBIT) + marks failed; idempotent (non-pending skipped). Mongo-only utr/providerPayload NOT persisted (not in response contract).
+- Admin (branched in src/admin/referral/referral.service.ts): program CRUD, txn list (w/ customer), updateWithdrawalStatus, rejectWithdrawal+refund, withdrawalsReport + CSV (raw SQL JSON_EXTRACT over bank_account), adjustCustomerRewards (atomic), listReferrers per-customer GROUP BY rollup. listReferrers pagination total is approximated.
+- ⚠ getTerms/getFaqs + admin FAQ/Term CRUD STAY on Mongo — ws_referral_faq/ws_referral_term have NO SQL tables (Mongo-only content).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `RefferalProgram / RefferalTransaction (+ Customer reward fields)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 41. Admin RBAC (roles + permissions management) {#admin-rbac}
+
+| | |
+|---|---|
+| **Module key** | `admin-rbac` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `AdminRoleRow / AdminPermissionRow / AdminRoleHasPermission (+ AdminModelHasRole)` |
+| **MySQL table** | `ws_roles / ws_permissions / ws_role_has_permissions` |
+| **Mongo collection (legacy app)** | `roles / permissions / permissioncategories` |
+| **Code** | `src/modules/admin-rbac (branches src/admin/role/role.controller.ts + src/admin/permission/permission.service.ts)/` |
+| **Data** | 31 roles, 115 permissions, 143 pivot rows |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | CRUD `/admin/roles` (+`/:id/permissions`) · CRUD `/admin/permissions` (+`/tree`, `/:id/roles`) |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 3 (Mongo-only push). spatie tables admin-auth already READS; this adds management writes. Prisma: +created_at/updated_at on AdminRoleRow/AdminPermissionRow + new AdminRoleHasPermission pivot model (no DDL — tables existed).
+- Role create/update/syncPermissions WRITE ws_role_has_permissions directly (delete-all + insert in a $transaction), validating permission ids belong to the role's guard. deleteRole cascades the pivot + ws_model_has_roles (no DB FK cascade in legacy schema). roleInUse checks ws_model_has_roles.
+- Permission `category` is DERIVED from the name prefix (`bannerslider.create` → `bannerslider`); the tree groups by it. Permission create/update ignore category_id on SQL.
+- ⚠ Mongo-only gaps: ws_permission_categories has NO SQL table → the permissionCategory CRUD controller STAYS Mongo; the Mongo permission category object {id,title,slug} becomes a derived string on SQL.
+- ids are bigint unsigned; surfaced as String/Number (small values, like commerce-educator). guard_name is a real column (default 'web').
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `AdminRoleRow / AdminPermissionRow / AdminRoleHasPermission (+ AdminModelHasRole)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 42. Client Exam (reads + saveAnswers scoring write) {#client-exam}
+
+| | |
+|---|---|
+| **Module key** | `client-exam` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Exam / ExamCategory / ExamQuestion / ExamQuestionOption / ExamResult / ExamResultDetail / ExamResultDetailAnalytics` |
+| **MySQL table** | `ws_exam / ws_exam_category / ws_exam_question(_option) / ws_exam_result(_detail)(_analytics)` |
+| **Mongo collection (legacy app)** | `ws_exams / ws_exam_categories / ws_exam_questions / ws_exam_results` |
+| **Code** | `src/modules/client-exam (branches src/client/exam/exam.controller.ts)/` |
+| **Data** | 1 exam, 1 question, 5 options, 2 results in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | —  (admin exam reads pending — Wave 4 remainder) |
+| **Client API** | GET `/client/exams/category/:id` · `/exams/:id/questions` · `/exams/my/attempts` · `/exams/:id/solution(/analytics)` · `/quizzes/daily`; POST `/save/answers` |
+
+**Transformer / schema notes:**
+
+- Wave 4 (Mongo-only push) — full CLIENT exam surface: reads + the saveAnswers scoring WRITE. ⚠ Test Series (ws_test_series*) + ExamCountdown (ws_exam_countdown*) have NO SQL tables → MONGO-ONLY, excluded (like LiveCourse).
+- Schema fix: Exam.description String→String? (1 NULL row would throw). Result tables use the legacy qresult_* column prefix (mapped in Prisma).
+- getExamQuestions NEVER surfaces the question `answer` during an attempt. listExamsByCategory hides scheduled exams past endAt + decorates per-customer isCompleted/lastResult. getDailyExams = year→month→week→tests drill-down (raw SQL grouping).
+- saveAnswers (WRITE): norm(option.name)===norm(question.answer)→true/false, 'skip'→skip; point +pos/−|neg|/0; inserts ws_exam_result + ws_exam_result_detail in a $transaction, recomputes ws_exam_result_detail_analytics, computes rank by best-score-per-customer. SQL-side numeric-id payload validation. Verified exact vs live DB.
+- Mongo-only drops on SQL: attemptNumber/inProgress/startedAt/submittedAt (no columns; qresult_attempt = attempt COUNT). getSolutionDownloadByExam (PDF via generateExamSolutionPdf) stays Mongo. Admin exam reads/CRUD are the pending Wave-4 remainder.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Exam / ExamCategory / ExamQuestion / ExamQuestionOption / ExamResult / ExamResultDetail / ExamResultDetailAnalytics`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 43. Client Book Cart (add/update/remove/shipping/get) {#client-cart}
+
+| | |
+|---|---|
+| **Module key** | `client-cart` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `BookCart / BookCartItem (+ CustomerShipping, CustomerAddress, Book)` |
+| **MySQL table** | `ws_book_cart / ws_book_cart_item` |
+| **Mongo collection (legacy app)** | `ws_book_carts (embedded items[])` |
+| **Code** | `src/modules/client-cart (branches src/client/cart/cart.controller.ts)/` |
+| **Data** | 2 carts in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | POST `/client/cart` · PATCH `/cart/items/:bookId` · DELETE `/cart/items/:bookId` · POST `/cart/shipping` · GET `/cart` |
+
+**Transformer / schema notes:**
+
+- Wave 5 (first slice). Mongo BookCart embeds items[]; SQL splits into ws_book_cart (one active row/customer, active=`status` column) + ws_book_cart_item (cartId→cart.id, bookId→`item_id`). Reuses the BookCart/BookCartItem Prisma models book-order already uses (no schema change).
+- cart_id is a NOT-NULL VARCHAR business key → generated `cart-<base36>` (matches existing rows like cart-124dhc...). getCart computes the same totals summary as Mongo (subtotal/listTotal/discount/itemCount/shipping/shippingWaived/total).
+- attachShippingToCart find-or-creates a ws_customer_shipping row (userId, phone BigInt, state Int, pincode Int, address_2/email/city NOT NULL) + resolves city via the offline-city module; stamps shipping_id onto the cart.
+- SQL branch validates numeric ids (the Mongo path's zod enforces 24-hex ObjectId). add re-uses an existing line via increment; verified add/increment/get-totals/update/remove cycle vs live DB.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `BookCart / BookCartItem (+ CustomerShipping, CustomerAddress, Book)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 44. Admin Exam (reads: exams/questions/submissions/analytics) {#admin-exam}
+
+| | |
+|---|---|
+| **Module key** | `admin-exam` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Exam / ExamQuestion / ExamQuestionOption / ExamResult / ExamResultDetail / ExamResultDetailAnalytics` |
+| **MySQL table** | `ws_exam / ws_exam_question(_option) / ws_exam_result(_detail)(_analytics)` |
+| **Mongo collection (legacy app)** | `ws_exams / ws_exam_questions / ws_exam_results` |
+| **Code** | `src/modules/admin-exam (branches src/admin/exam/exam.controller.ts)/` |
+| **Data** | 1 exam, 2 results in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | GET `/admin/exams`(+`/:id`) · `/admin/exams/questions`(+`/:id`) · `/admin/exams/:examId/submissions` · `/:examId/analytics` · `/results/:id` · `/analytics/customer/:id`; PATCH `/results/:id/invalidate` |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 4 admin slice — READ surface + invalidateResult. Reuses the ws_exam* tables (shared with client-exam); exam categories are already on catalog-exam. No DDL.
+- Admin DOES see the question `answer` (the client attempt view hides it). getExams supports search/category/type/status/isPaid filters; getQuestions returns options.
+- getExamAnalytics uses raw SQL over the qresult_* columns: overall (totalCandidates/avgScore/max/min/avgAccuracy) + per-question (correct/wrong/skipped/accuracy, sorted hardest-first).
+- Deferred (stay Mongo): admin exam/question CRUD writes + getSolutionDownloadByExam (PDF via generateExamSolutionPdf). Test Series + ExamCountdown remain Mongo-only (no SQL tables).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Exam / ExamQuestion / ExamQuestionOption / ExamResult / ExamResultDetail / ExamResultDetailAnalytics`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 45. Client Educator detail (profile + courses + plans) {#client-educator}
+
+| | |
+|---|---|
+| **Module key** | `client-educator` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `CourseEducator / Course / PackageCourseEbookPrice / PackageCourseSubscription` |
+| **MySQL table** | `ws_course_educator / ws_course / ws_package_course_ebook_price / ws_package_course_subscription` |
+| **Mongo collection (legacy app)** | `ws_course_educators / ws_courses` |
+| **Code** | `src/modules/client-educator (branches src/client/educator/educator.controller.ts)/` |
+| **Data** | educator 20 → 1 course / 5 plans in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | GET `/client/educators/:id` |
+
+**Transformer / schema notes:**
+
+- Wave 5 client read. Composes already-migrated tables (no DDL): educator profile + their active courses + per-course plans split with/withoutMaterial + per-course daysLeft from active subscriptions (lifetime-aware: null endAt beats dated, latest wins) + fire-and-forget view++.
+- Course relation fields are `educator`/`subject`; CourseSubjectCategory exposes `title` (not name).
+- ⚠ Sibling client reads STAY Mongo: client material (entitlement helper needs LiveCourse + Mongo embedded materialCategories[]; ws_material has no isPaid/ancestors) and client search/globalSearch (includes LiveCourse — no SQL table). wishlist/folder/lecture-note(s)/free-progress also Mongo-only (no SQL tables).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `CourseEducator / Course / PackageCourseEbookPrice / PackageCourseSubscription`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 46. Admin Plan CRUD (PackageCourseEbookPrice) {#admin-plan}
+
+| | |
+|---|---|
+| **Module key** | `admin-plan` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageCourseEbookPrice (+ PromotedPackageCourseEbook, PackageCourseSubscription)` |
+| **MySQL table** | `ws_package_course_ebook_price` |
+| **Mongo collection (legacy app)** | `ws_package_course_ebook_prices` |
+| **Code** | `src/modules/admin-plan (branches src/admin/plan/plan.controller.ts)/` |
+| **Data** | 1353 plans in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | CRUD `/admin/plans` (+ `/:id/toggle`, `/:id/default`, `/bulk/status`, `/bulk/delete`, `/:id/clone`) |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 5 first admin catalog CRUD module. All 10 handlers (list/get/create/update/delete/toggle/markAsDefault/bulkStatus/bulkDelete/clone). No DDL.
+- A plan is owned by exactly ONE of course/package/ebook. Unused owner ids are stored as EITHER NULL or 0 (legacy mix) → treat NULL-or-0 as 'not owned'; on write set the chosen owner + 0 the other two; entityType filter uses `>0`.
+- Single-default-per-entity invariant: after any create/update/markAsDefault that sets isDefault, clearSiblingDefaults flips all OTHER plans of the same owner to isDefault=false.
+- deletePlan blocked when the plan has subscribers (ws_package_course_subscription.packageId); on delete/bulkDelete also cascades ws_promoted_package_course_ebook rows (planId=pcb_price_id). clone forces isDefault=false. Verified the full lifecycle vs live DB.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseEbookPrice (+ PromotedPackageCourseEbook, PackageCourseSubscription)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 47. Admin Master sub-catalog CRUD + full videoCategory (pc-material / subject / video categories) {#admin-master}
+
+| | |
+|---|---|
+| **Module key** | `admin-master` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageCourseMaterial / CourseSubjectCategory / VideoCategory` |
+| **MySQL table** | `ws_package_course_material / ws_course_subject_category / ws_video_category` |
+| **Mongo collection (legacy app)** | `ws_package_course_materials / coursesubjectcategories / videocategories` |
+| **Code** | `src/modules/admin-master (branches src/admin/pc-material/ + src/admin/master/{material,subjectCategory,videoCategory}.controller.ts + the FULL src/admin/videoCategory/videoCategory.controller.ts)/` |
+| **Data** | 1 pc-material, 1 subject-cat, 157 video-cats |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | CRUD `/admin/pc-materials` · `/admin/master/{materials,subject-categories,video-categories}` · full `/admin/video-categories` (+ `/:id/courses`, `/:id/videos`, `/:id/status`) |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 5 admin small-master CRUD. PackageCourseMaterial (ws_package_course_material) is TITLE-ONLY in SQL — pc-material AND master/material share it; master/material's image/isActive fields are dropped on the SQL branch.
+- VideoCategory list resolves child_categories + hasChildren from the `parent` self-FK (Mongo populated childCategoryIds). Schema: added parent/educatorId(@map educator_id)/pdf to the VideoCategory Prisma model (were absent) — all NOT NULL w/ default 0/'' in the DB, so the service coerces to 0/'' on write (never null). catalog-video reads unaffected (additive nullable fields).
+- ⚠ master/packageCategory STAYS Mongo — ws_package_category does not exist in SQL. VideoCategory delete's ws_video_category_relation (D2) cleanup is deferred (relations not migrated).
+- FULL admin videoCategory controller also branched here (list/prereqs/get/create/update/toggle/delete + courses-list + videos-list). ⚠ Mongo childCategoryIds[] is a DAG; SQL has only a single `parent` FK → children DERIVED from parent, childCategoryIds NOT writable on SQL. The `duplicate` (BFS DAG clone + courseId/liveCourseId, no SQL cols) STAYS Mongo.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseMaterial / CourseSubjectCategory / VideoCategory`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 48. Admin Video CRUD (ws_video) {#admin-video}
+
+| | |
+|---|---|
+| **Module key** | `admin-video` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-17 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Video (+ VideoCategory)` |
+| **MySQL table** | `ws_video` |
+| **Mongo collection (legacy app)** | `videos` |
+| **Code** | `src/modules/admin-video (branches src/admin/video/video.controller.ts)/` |
+| **Data** | 156 videos in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | GET `/admin/videos` · `/pre-requisites` · `/:id` · POST `/` · PUT `/:id` · DELETE `/:id` · PATCH `/:id/status` · POST `/reorder` |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 5 admin CRUD. All 8 handlers. platform = youtube|vimeo|aws with ONLY the matching *_id column populated (others nulled on create / platform-switch).
+- slug auto-uniquify: append -2/-3/… until free (never 409), excludeId on update. video-category existence validated on create + re-link. prereqs `has_children` derived from the VideoCategory `parent` self-FK. toItem response shape (id/name/slug/order/topic/type/status/video_category/platform/{youtube,vimeo,aws}+ids) matches the Mongo branch.
+- priceType is the VideoType enum (free|paid). SQL-side numeric category ids. No schema change (Video model was clean).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Video (+ VideoCategory)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
 ---
 

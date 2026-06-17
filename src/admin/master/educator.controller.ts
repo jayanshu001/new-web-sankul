@@ -10,8 +10,25 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { createEducatorSchema, updateEducatorSchema } from "./master.validation";
 import { buildSearchFilter } from "../../utils/searchFilter";
+import bcrypt from "bcryptjs";
+import { isMysqlModule } from "../../config/migration";
+import { educatorAuthRepository as eduRepo } from "../../modules/educator-auth/educator-auth.repository";
+import { toEducatorListDto } from "../../modules/educator-auth/educator-auth.transformer";
 
 const EDUCATOR_SORT_FIELDS = new Set(["createdAt", "updatedAt", "name", "email"]);
+// Admin educator master shares the educator-auth migration flag.
+const MODULE = "educator-auth";
+
+const parseEducatorIntId = (id: string): number | null => {
+  const n = Number(id);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+const parseEducatorStatus = (status?: string): boolean | undefined => {
+  if (status === "true" || status === "active") return true;
+  if (status === "false" || status === "inactive") return false;
+  return undefined;
+};
 
 export const getEducators = async (req: Request, res: Response) => {
   try {
@@ -24,6 +41,32 @@ export const getEducators = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const sortField = sortBy && EDUCATOR_SORT_FIELDS.has(sortBy) ? sortBy : "createdAt";
+
+    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      const statusFilter = parseEducatorStatus(status);
+      const sortDirSql = sortOrder === "asc" ? "asc" : "desc";
+      const [rows, total] = await Promise.all([
+        eduRepo.listAdmin({
+          search,
+          status: statusFilter,
+          sortBy: sortField,
+          sortDir: sortDirSql,
+          skip: (pageNum - 1) * limitNum,
+          take: limitNum,
+        }),
+        eduRepo.countAdmin({ search, status: statusFilter }),
+      ]);
+      return res.status(200).json({
+        success: true,
+        data: rows.map(toEducatorListDto),
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     // Soft-deleted educators are never listed.
     const filters: any = { deleted: false };
 
@@ -32,11 +75,8 @@ export const getEducators = async (req: Request, res: Response) => {
     if (status === "true" || status === "active") filters.status = true;
     else if (status === "false" || status === "inactive") filters.status = false;
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
-    const sortField = sortBy && EDUCATOR_SORT_FIELDS.has(sortBy) ? sortBy : "createdAt";
     const sortDir = sortOrder === "asc" ? 1 : -1;
 
     const [data, total] = await Promise.all([
@@ -63,6 +103,27 @@ export const createEducator = async (req: Request, res: Response) => {
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = createEducatorSchema.parse(req.body);
+
+    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      if (await eduRepo.emailInUse(validatedData.email)) {
+        return res.status(409).json({ success: false, message: "Educator with this email already exists." });
+      }
+      // password column is NOT NULL; hash when provided, else store "" (no login).
+      const password = validatedData.password
+        ? await bcrypt.hash(validatedData.password, 10)
+        : "";
+      const created = await eduRepo.createAdmin({
+        name: validatedData.name,
+        email: validatedData.email,
+        password,
+        image: validatedData.image,
+        about: validatedData.about,
+        status: validatedData.status,
+      });
+      return res.status(201).json({ success: true, data: toEducatorListDto(created) });
+    }
+
     const educator = new CourseEducator(validatedData);
     await educator.save();
     res.status(201).json({ success: true, data: educator });
@@ -75,14 +136,43 @@ export const createEducator = async (req: Request, res: Response) => {
 export const updateEducator = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Educator ID" });
-    }
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = updateEducatorSchema.parse(req.body);
-    const educator = await CourseEducator.findByIdAndUpdate(id, validatedData, { new: true });
+
+    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      const numId = parseEducatorIntId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Educator ID" });
+      const existing = await eduRepo.findById(numId);
+      if (!existing) return res.status(404).json({ success: false, message: "Educator not found" });
+
+      if (validatedData.email && (await eduRepo.emailInUse(validatedData.email, numId))) {
+        return res.status(409).json({ success: false, message: "Email already in use." });
+      }
+      const password = validatedData.password
+        ? await bcrypt.hash(validatedData.password, 10)
+        : undefined;
+      const updated = await eduRepo.updateAdmin(numId, {
+        name: validatedData.name,
+        email: validatedData.email,
+        password,
+        image: validatedData.image,
+        about: validatedData.about,
+        status: validatedData.status,
+      });
+      return res.status(200).json({ success: true, data: toEducatorListDto(updated) });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Educator ID" });
+    }
+    // Mongo `image` is required:true → represent "cleared" as "" (null would
+    // fail validation). SQL branch keeps true null since that column is nullable.
+    const mongoUpdate =
+      validatedData.image === null ? { ...validatedData, image: "" } : validatedData;
+    const educator = await CourseEducator.findByIdAndUpdate(id, mongoUpdate, { new: true });
     if (!educator) return res.status(404).json({ success: false, message: "Educator not found" });
     res.status(200).json({ success: true, data: educator });
   } catch (error: any) {
@@ -96,6 +186,33 @@ export const updateEducator = async (req: Request, res: Response) => {
 export const getEducatorDetails = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
+    // Profile from SQL; course/live-course/package/session associations depend
+    // on models not yet migrated, so they return empty until those land.
+    if (isMysqlModule(MODULE)) {
+      const numId = parseEducatorIntId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Educator ID" });
+      const row = await eduRepo.findById(numId);
+      if (!row) return res.status(404).json({ success: false, message: "Educator not found" });
+      return res.status(200).json({
+        success: true,
+        data: {
+          profile: toEducatorListDto(row),
+          associations: {
+            courses: [], liveCourses: [], liveCourseFolders: [],
+            liveSessions: [], videoCategories: [], packages: [],
+          },
+          summary: {
+            totals: { courses: 0, liveCourses: 0, liveCourseFolders: 0, liveSessions: 0, videoCategories: 0, packages: 0 },
+            active: { courses: 0, liveCourses: 0, packages: 0 },
+            totalSubscribers: 0,
+            totalSessionsConducted: 0,
+          },
+        },
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Educator ID" });
     }
@@ -226,6 +343,18 @@ export const getEducatorDetails = async (req: Request, res: Response) => {
 export const deleteEducator = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      const numId = parseEducatorIntId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Educator ID" });
+      const existing = await eduRepo.findById(numId);
+      if (!existing) return res.status(404).json({ success: false, message: "Educator not found" });
+      // No `deleted` column in SQL → disable + revoke tokens, retain the row.
+      await eduRepo.disableAdmin(numId);
+      return res.status(200).json({ success: true, message: "Educator deleted successfully" });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Educator ID" });
     }

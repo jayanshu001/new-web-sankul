@@ -4,6 +4,594 @@
 
 ---
 
+## 2026-06-17 — 🎞 Wave 5: admin `videoCategory` (full) CRUD on SQL
+
+**What:** The full admin videoCategory controller (`src/admin/videoCategory/`, distinct from the simpler master
+one) on SQL — implemented by extending `src/modules/admin-master/` (repo + service); branches on the existing
+`isAdminMasterMysql()` flag. No DDL (the parent/educator_id fields were added with the earlier admin-master work).
+
+**Wired (9 of 10 handlers):** list (search/status/educator filters, paginated, child_categories + educator
+populated), pre-requisites (categories + active educators), get, create, update, toggle, delete (blocked if
+videos or child categories reference it), listVideoCategoryCourses, listVideoCategoryVideos.
+
+**⚠ Architectural divergence (user-approved):** Mongo `VideoCategory.childCategoryIds[]` is a DAG (a category
+can have many children AND be a child of multiple parents) + a `courseId/liveCourseId` field; SQL
+`ws_video_category` has only a SINGLE `parent` self-FK and no course/liveCourse columns. So on the SQL branch:
+children are DERIVED from each child's `parent`; **childCategoryIds is NOT a writable field** (single-parent
+model — create/update ignore it). The **`duplicate` handler (BFS DAG clone) STAYS on Mongo** — it can't be
+reproduced from a single-parent schema.
+
+**Verified (tsx vs live DB):** list 157 categories, prereqs (157 cats + 55 educators), relation lists
+(category 2926 → 6 videos), create/slug-dupe-reject/update(educator attach)/toggle/delete. `fullVcGet` correctly
+returns null for an orphaned parent ref. Cleanup clean. `tsc` clean.
+
+**Next:** admin book, ebook, course, package, material.
+
+---
+
+## 2026-06-17 — 🎬 Wave 5: admin `video` CRUD on SQL
+
+**What:** Admin video management via new module `src/modules/admin-video/` (repo + service); branches on
+`isMysqlModule("admin-video")`; enabled in `.env`. No DDL (the Video model is clean).
+
+**Wired (all 8 handlers):** listVideos (search/status/type/platform/category filters, paginated, populated
+category, toItem shape), getVideoPreRequisites (active categories + has_children + types + platforms), getVideo,
+createVideo, updateVideo, deleteVideo, toggleVideoStatus, reorderVideos.
+
+**Logic mirrored:** platform = youtube|vimeo|aws with only the matching `*_id` column populated (the other two
+nulled on create / platform-switch); **slug auto-uniquify** (append -2/-3/… until free, never 409); video-category
+existence validated on create + re-link; prereqs `has_children` derived from the VideoCategory `parent` self-FK;
+the `toItem` response shape (id/name/slug/order/topic/type/status/video_category/platform/{youtube,vimeo,aws}+ids)
+matches the Mongo branch exactly. SQL-side numeric category ids.
+
+**Verified (tsx vs live DB, rolled back):** list 156 videos + prereqs (152 cats); create (aws, awsId set); a 2nd
+video with the same slug → uniquified to `zz-vid-2`; update switching aws→youtube (youtubeId set, awsId cleared);
+toggle; reorder (order→99); delete. Cleanup clean. `tsc` clean.
+
+**Next:** admin videoCategory (full), book, ebook, course, package, material.
+
+---
+
+## 2026-06-17 — 🗂 Wave 5: admin master sub-catalog CRUD on SQL
+
+**What:** Second admin catalog CRUD increment — the small "master" lookup CRUDs via new module
+`src/modules/admin-master/` (repo + service); branches on `isMysqlModule("admin-master")`; enabled in `.env`.
+
+**Wired:** `src/admin/pc-material/` (5 handlers) + `src/admin/master/material.controller.ts` +
+`src/admin/master/subjectCategory.controller.ts` + `src/admin/master/videoCategory.controller.ts`.
+- **PackageCourseMaterial** (ws_package_course_material) — pc-material AND master/material share this table;
+  it's TITLE-ONLY in SQL (id/title), so master/material's `image`/`isActive` fields are dropped on the SQL branch.
+- **CourseSubjectCategory** (ws_course_subject_category) — title/slug/image/parent/order/status CRUD.
+- **VideoCategory** (ws_video_category) — list resolves `child_categories` + `hasChildren` from the `parent`
+  self-FK (Mongo populated `childCategoryIds`); CRUD.
+
+**Schema (Prisma only):** added `parent`/`educatorId`(@map educator_id)/`pdf` to the VideoCategory model (were
+absent/commented). All three are **NOT NULL with default 0/'' in the DB** → the service coerces to 0/"" on write
+(never sends null) to avoid constraint violations. Regenerated client. The existing catalog-video reads are
+unaffected (additive nullable fields).
+
+**⚠ Mongo-only (no SQL table):** `master/packageCategory` — `ws_package_category` does not exist; stays Mongo
+(documented, like the other table-less features). VideoCategory delete's `ws_video_category_relation` (D2)
+cleanup is deferred (relations not migrated).
+
+**Verified (tsx vs live DB):** pc-material create/update/delete; subjectCategory create(order)/update/delete;
+videoCategory list (157, 5 parents w/ children) + create (educator_id/parent default 0) /update/delete. Cleanup
+clean. `tsc` clean.
+
+**Next:** admin video, videoCategory (full), book, ebook, course, package, material.
+
+---
+
+## 2026-06-17 — 💲 Wave 5: admin `plan` CRUD on SQL (first admin catalog module)
+
+**What:** First admin catalog CRUD module — plan management (`ws_package_course_ebook_price`) via new module
+`src/modules/admin-plan/` (repo + service); branches on `isMysqlModule("admin-plan")`; enabled in `.env`. No DDL.
+
+**Wired (all 10 handlers):** listPlans (filters: entityType/owner/status/isDefault/withMaterial/search, paginated,
+populated owner refs), getPlanById (+promotedCount/subscriberCount), createPlan, updatePlan (re-link),
+deletePlan, togglePlanStatus, markAsDefault, bulkStatus, bulkDelete, clonePlan.
+
+**Drift handled:** a plan is owned by exactly ONE of course/package/ebook; unused owner ids are stored as
+**EITHER NULL or 0** (legacy mix — verified 330 null + 542 zero on course_id) → treat NULL-or-0 as "not owned",
+and on write set the chosen owner + **0** the other two. The **single-default-per-entity** invariant is enforced
+by `clearSiblingDefaults` (flip all other plans of the same owner to isDefault=false) after any create/update/
+markAsDefault that sets default. delete is blocked when the plan has subscribers + cascades the
+`ws_promoted_package_course_ebook` rows (planId = pcb_price_id).
+
+**Verified (tsx vs live DB):** 1353 plans listed; create two ebook plans both isDefault → the **first flips to
+false** when the second is created (invariant holds); update price/withMaterial; markAsDefault flips the sibling;
+toggle; clone (isDefault forced false); bulkDelete 3 + cleanup clean. `tsc` clean.
+
+**Next:** continue admin catalog CRUD — pc-material, master sub-categories, video, videoCategory, book, ebook,
+course, package, material.
+
+---
+
+## 2026-06-17 — 🧑‍🏫 Wave 5: client educator on SQL (+ material/search found Mongo-only)
+
+**What:** Migrated the client educator-detail endpoint via new module `src/modules/client-educator/`; branches on
+`isMysqlModule("client-educator")`; enabled in `.env`. Composes already-migrated tables — no new tables/DDL.
+
+**Wired:** `getEducatorWithCoursesHandler` (GET /client/educators/:id) — educator profile (ws_course_educator) +
+their active courses (ws_course) + per-course plans split with/withoutMaterial (ws_package_course_ebook_price) +
+per-course daysLeft from active subscriptions (ws_package_course_subscription, lifetime-aware: null endAt beats
+dated, latest wins) + fire-and-forget view-counter bump. Course relation fields: `educator`/`subject`
+(CourseSubjectCategory uses `title`, not name).
+
+**Found BLOCKED (documented Mongo-only, NOT migrated):**
+- client **material** (getCategoryContents/getMaterialDetail/trackDownload/getRecentMaterials) — the entitlement
+  helper joins LiveCourse (no SQL table) + Mongo-only embedded `materialCategories[].category`; `ws_material` has
+  no `isPaid`/`ancestors`. Same blocker catalog-material flagged for item listing.
+- client **search** (globalSearch) — searches across LiveCourse (no SQL table) among others.
+
+So the Wave-5 client-read slice is effectively complete (cart ✅, educator ✅; material/search/wishlist/folder/
+notes blocked). Remaining Wave 5 = the **admin catalog CRUD** (~136 handlers), to be built module-by-module
+starting with `plan`.
+
+**Verified (tsx vs live DB):** educator 20 (Priyanka Soni) → 1 course ("test") with 5 plans, correct share link.
+`tsc` clean.
+
+---
+
+## 2026-06-17 — 📝 Wave 4 COMPLETE: admin exam reads on SQL
+
+**What:** Closed out Wave 4 by migrating the admin exam READ surface via new module `src/modules/admin-exam/`
+(repo + service); branches on `isMysqlModule("admin-exam")`; enabled in `.env`. No DDL (reuses the ws_exam*
+tables + Exam.description→nullable fix from the client-exam slice).
+
+**Wired (admin exam controller):** getExams (filters: search/category/type/status/isPaid, paginated, populated
+category), getExamById (+actualQuestionCount), getQuestions (+options — admin SEES the `answer`, unlike the
+client attempt view), getQuestionById, getExamSubmissions (populated customer, score-ranked), getExamAnalytics
+(raw SQL: overall avg/max/min/accuracy + per-question correct/wrong/skip/accuracy aggregates over the qresult_*
+columns), getResultById (+details), getCustomerAnalytics, and invalidateResult (status=false, score=0).
+
+**Verified (tsx vs live DB):** 1 exam listed w/ category; question with answer + 5 options; submission (Sanjay,
+score 1); analytics overall (1 candidate, accuracy 100%) + per-question; customer analytics null when no row.
+`tsc` clean.
+
+**Deferred (low-value, stay Mongo):** admin exam/question **CRUD writes** + `getSolutionDownloadByExam` (PDF via
+generateExamSolutionPdf). Test Series + ExamCountdown remain Mongo-only (no SQL tables).
+
+**Wave 4 is now fully complete** (client reads + scoring write + admin reads). Back to Wave 5.
+
+---
+
+## 2026-06-17 — 🛒 Wave 5 START: client book-cart on SQL
+
+**What:** First slice of Wave 5 (catalog admin CRUD + remaining client reads). Migrated the client book-cart via
+new module `src/modules/client-cart/` (repo + service); branches on `isMysqlModule("client-cart")`; enabled in
+`.env`. Inventory: **156 migratable handlers** (10 admin CRUD + 5 client read modules) + **21 BLOCKED** on missing
+SQL tables (wishlist/folder/lecture-note/lecture-audio-note/free-progress — Mongo-only, no tables; deferred).
+
+**Wired (all 5 cart handlers, behind isClientCartMysql):** addToCart, updateCartItemQty, removeCartItem,
+attachShippingToCart, getCart (with totals summary).
+
+**Shape translation:** Mongo `BookCart` embeds `items[]`; SQL splits into `ws_book_cart` (one active row per
+customer, `active`=status column) + `ws_book_cart_item` (cartId→cart.id, bookId→`item_id`). `cart_id` is a
+NOT-NULL VARCHAR business key → generated `cart-<base36>` (matches existing rows). attach-shipping find-or-creates
+a `ws_customer_shipping` row (userId, phone BigInt, state Int, pincode Int, address_2/email/city NOT NULL) and
+resolves the city via the offline-city module. Reuses the BookCart/BookCartItem Prisma models the book-order
+module already uses (no schema change).
+
+**Verified (tsx vs live DB, rolled back):** add (new line) → add 2nd book → add same book again (increments, not
+duplicated) → getCart (items, itemCount, totals) → updateCartItemQty → removeCartItem. Test cart cleaned up.
+`tsc` clean.
+
+**Next:** client material/educator/search reads, then the admin catalog CRUD modules.
+
+---
+
+## 2026-06-17 — 📝 Wave 4 (Exam) CLIENT complete: reads + the saveAnswers scoring WRITE
+
+**What:** Finished the client exam surface on SQL (`src/modules/client-exam/`, behind `isClientExamMysql()`).
+Builds on the earlier reads slice; this adds the solution reads, the daily drill-down, and — the important one —
+the **`saveAnswers` quiz-submission scoring write**.
+
+**Wired:** client reads `listExamsByCategory`, `getExamQuestions`, `listMyResults`, `getSolutionByExam`,
+`getSolutionAnalyticsByExam`, `getDailyExams` (year→month→week→tests drill-down, raw SQL grouping); and the
+WRITE `saveAnswers`.
+
+**saveAnswers scoring (the delicate part — verified exact):** for each answer, resolve question+option, compare
+`norm(option.name) === norm(question.answer)` → true/false, `"skip"` → skip; point = +positive_marks / −|negative_marks| / 0.
+Aggregate total/attempt/skip/success/failed/score → insert `ws_exam_result` + `ws_exam_result_detail` rows in one
+`$transaction`, recompute `ws_exam_result_detail_analytics` (upsert), compute rank by best-score-per-customer.
+SQL-side numeric-id payload validation (the Mongo zod schema enforces 24-hex ObjectId, which would reject SQL ids).
+
+**Drift / scope:** result tables use the legacy `qresult_*` columns; Mongo-only `attemptNumber`/`inProgress`/
+`startedAt`/`submittedAt` are dropped (no SQL columns; `qresult_attempt` = attempt COUNT). `getSolutionDownloadByExam`
+(PDF) stays Mongo (composes Mongo docs via generateExamSolutionPdf). The `answer` field is never surfaced to the
+client during an attempt.
+
+**Verified (tsx vs live DB, then rolled back):** correct answer → score +1 (success 1/1, rank 1/2); wrong → −1
+(failed 1/1); 2 result + 2 detail rows; analytics rollup exams=1/success=1/score=0; solution marks the correct
+option. Test rows deleted, customer restored. `tsc` clean.
+
+**Wave 4 remainder:** admin exam reads (`src/admin/exam`) + admin exam/question CRUD — admin-only, deferred.
+Test Series + ExamCountdown remain Mongo-only (no SQL tables).
+
+---
+
+## 2026-06-17 — 📝 Wave 4 (Exam) client READS on SQL
+
+**Drift check first (per protocol):** ✅ exam tables exist (ws_exam, ws_exam_category, ws_exam_question,
+ws_exam_question_option, ws_exam_result, ws_exam_result_detail, ws_exam_result_detail_analytics). ❌ **Test
+Series (all ws_test_series*) and ExamCountdown (ws_exam_countdown*) have NO SQL tables → MONGO-ONLY, excluded
+from this wave** (like LiveCourse). Result tables use the legacy `qresult_*` column prefix.
+
+**What:** Migrated the client exam READ surface via new module `src/modules/client-exam/` (repo + service,
+read-only). Branches on `isMysqlModule("client-exam")`; enabled in `.env`. Wave 4 of
+[`migration/MONGO_ONLY_MIGRATION_PLAN.md`](./migration/MONGO_ONLY_MIGRATION_PLAN.md).
+
+**Schema fix:** `Exam.description` String → String? (1 NULL row in ws_exam would throw on read). No DDL.
+
+**Wired (behind isClientExamMysql):** `listExamsByCategory` (subjects + published exams w/ window filter +
+per-customer isCompleted/lastResult), `getExamQuestions` (questions + options; the `answer` field is NEVER
+surfaced during an attempt), `listMyResults` (paginated, w/ exam title). Built but NOT yet wired: solution
+reads + `getDailyExams` drill-down (raw SQL YEAR/MONTH grouping + JS week bucketing).
+
+**Verified (tsx vs live DB):** 1 exam ("test") / 1 question / 5 options; answer-not-leaked confirmed;
+isCompleted decoration true; listMyResults 2 results w/ score 1/1; daily years drill-down. `tsc` clean.
+
+**Next (Wave 4 cont.):** wire client solution + daily endpoints, admin exam reads, then the `saveAnswers`
+scoring WRITE (qresult_* tables + analytics recompute) + admin exam/question CRUD.
+
+---
+
+## 2026-06-17 — 🔐 Wave 3 (RBAC management) on SQL (spatie tables)
+
+**What:** Migrated admin role + permission management off MongoDB onto the spatie SQL tables (`ws_roles`,
+`ws_permissions`, `ws_role_has_permissions`) that admin-auth already reads. New module `src/modules/admin-rbac/`
+(repo + service); branches on `isMysqlModule("admin-rbac")`. Enabled in `.env`. Wave 3 of
+[`migration/MONGO_ONLY_MIGRATION_PLAN.md`](./migration/MONGO_ONLY_MIGRATION_PLAN.md).
+
+**Schema (Prisma only — no DDL; tables already existed):**
+- `AdminRoleRow` / `AdminPermissionRow`: added `created_at` / `updated_at` (the role API returns them).
+- New `AdminRoleHasPermission` model → `@@map("ws_role_has_permissions")` (composite PK permission_id+role_id).
+- Regenerated client.
+
+**Wired:**
+- `src/admin/role/role.controller.ts` — all 7 handlers (list/get/create/update/delete/getRolePermissions/
+  syncRolePermissions). Role mutations **write the pivot directly** (delete-all + insert in a `$transaction`,
+  validating permission ids belong to the role's guard). `deleteRole` **cascades** the pivot + ws_model_has_roles
+  (no DB FK cascade in the legacy schema). roleInUse checks ws_model_has_roles.
+- `src/admin/permission/permission.service.ts` — list/get/create/update/delete/getRolesForPermission/tree
+  (thin controller → branched in the service). `category` is **derived from the permission name prefix**
+  (`bannerslider.create` → `bannerslider`); the tree groups by it.
+
+**Mongo-only gaps (documented):** `ws_permission_categories` has NO SQL table → the **permissionCategory CRUD
+controller stays Mongo**, and the Mongo permission `category` object shape (`{id,title,slug}`) becomes a plain
+derived string on SQL. Permission create/update ignore `category_id` on SQL (nothing to write).
+
+**Verified (tsx vs live DB):** 29 web roles, role 8 (Super Admin, 16 perms), 108 permissions w/ derived
+categories, tree (30 categories), assigned/unassigned split, and a create→sync→delete role lifecycle incl.
+**pivot cascade on delete**. Orphan test rows cleaned. `tsc` clean.
+
+**Next:** Wave 4 — Exam / Test Series.
+
+---
+
+## 2026-06-17 — 🎁 Wave 2 (Referral) COMPLETE: admin referral on SQL
+
+**What:** Finished Wave 2 by branching the **admin referral service** (`src/admin/referral/referral.service.ts`)
+on `isReferralMysql()`, reusing the `src/modules/referral/` repo (extended with admin ops). No new tables/DDL.
+
+**Branched admin functions:** `listPrograms`/`getProgramById`/`createProgram`/`updateProgram`/`deleteProgram`
+(ws_refferal_program CRUD, name-uniqueness), `listTransactions` (w/ customer join), `updateWithdrawalStatus`
+(debit-only), `rejectWithdrawal` (atomic refund + delete), `getWithdrawalsReport` + `buildWithdrawalsCsv` (raw
+SQL JSON_EXTRACT over `bank_account` + customer search), `adjustCustomerRewards` (atomic inc/dec + successful
+txn), `listReferrers` (raw SQL per-customer GROUP BY rollup: totalEarned/Withdrawn/pending/failed/successful).
+
+**Drift / notes:** The admin **content controller is entirely FAQ/Term CRUD → stays Mongo** (ws_referral_faq/
+ws_referral_term have no SQL tables). `listReferrers` pagination `total` is approximated (exact count over a
+GROUP BY/HAVING is a follow-up if needed). Program write maps Mongo-style body (referralDiscount/referralReward)
+→ SQL cols (refferal_discount/refferal_reward).
+
+**Verified (tsx vs live DB):** program create/update/delete + name-exists; adjustRewards credit → successful txn,
+points 0→50; admin txn list w/ customer populated; referrers rollup (ran clean, empty in staging);
+withdrawals report + CSV header. Test rows cleaned + customer restored. `tsc` clean.
+
+**Wave 2 fully done** (client + webhook + admin). Next: Wave 3 — RBAC management (role/permission CRUD onto the
+spatie tables admin-auth already reads).
+
+---
+
+## 2026-06-17 — 🎁 Wave 2 (Referral) client + webhook on SQL
+
+**What:** Migrated the client referral surface + the RazorpayX payout webhook off MongoDB onto SQL via new
+module `src/modules/referral/` (repo + service). Branches on `isMysqlModule("referral")`; enabled in `.env`.
+Wave 2 of [`migration/MONGO_ONLY_MIGRATION_PLAN.md`](./migration/MONGO_ONLY_MIGRATION_PLAN.md) (admin referral
+service still pending).
+
+**Schema (DDL on `ws_refferal_transaction`, additive, prod-safe):**
+- `+ provider_ref VARCHAR(255) NULL`, `+ failure_reason VARCHAR(500) NULL`
+  ([schema-changes/2026-06-17_extend_ws_refferal_transaction.sql](./migration/schema-changes/2026-06-17_extend_ws_refferal_transaction.sql))
+- widened `status` enum `('pending','successful')` → add `'failed'`
+  ([schema-changes/2026-06-17_add_failed_to_refferal_status.sql](./migration/schema-changes/2026-06-17_add_failed_to_refferal_status.sql))
+- Prisma `RefferalTransaction` (+ `providerRef`/`failureReason`) and `RefferalTransactionStatus` enum (+ `failed`) updated; regenerated.
+
+**Wired (all behind isReferralMysql):**
+- client `referral.controller.ts`: getRewardsOverview (ws_customer + ws_refferal_program), getMyTransactions /
+  getTransactionById (ws_refferal_transaction), generateReferralCode (sets ws_customer.referral_code + zeroes
+  reward_points), requestWithdrawal (atomic `$transaction`: decrement reward_points + create pending DEBIT txn →
+  RazorpayX payout → refund + mark `failed` on payout error).
+- content `getReferralStatus` (ws_refferal_program). **getTerms/getFaqs STAY Mongo** — `ws_referral_faq`/`_term`
+  don't exist in SQL (Mongo-only content, like Goal/social-link).
+- `webhooks/razorpay-payout.controller.ts`: flips a pending withdrawal by `provider_ref` → successful, or refunds
+  points (DEBIT) + marks `failed`; idempotent (skips non-pending).
+
+**Drift:** Mongo-only `utr`/`providerPayload` webhook audit fields are NOT persisted on SQL (not in the response
+contract; only provider_ref + failure_reason added). Mixed-backend risk eliminated — customer + bank account +
+txn are all SQL now, so the debit+create is one Prisma transaction.
+
+**Verified (tsx vs live DB):** referralStatus; rewards overview; withdrawal debit (points 1000→400); webhook
+success → `successful` + idempotent replay (`already`); 2nd withdrawal → fail webhook → refund (points→400) +
+`failed`+reason; transaction list. Test rows cleaned up, customer restored. `tsc` clean.
+
+**Next:** Wave 2 cont. — admin referral service (program CRUD, withdrawals report, listReferrers rollup) +
+admin FAQ/Term CRUD (Mongo-only).
+
+---
+
+## 2026-06-17 — 📣 Wave 1 (Promoter) COMPLETE: `promoter-data` reads on SQL
+
+**What:** Migrated the 4 promoter read controllers off MongoDB (`src/promoter/{dashboard,customer,promocode,subscription}/`)
+onto SQL via a new shared module `src/modules/promoter-data/` (repository + service). Branches on
+`isMysqlModule("promoter-data")` (a separate flag from `promoter-auth`). Enabled `promoter-data` in `.env`.
+Completes Wave 1 of [`migration/MONGO_ONLY_MIGRATION_PLAN.md`](./migration/MONGO_ONLY_MIGRATION_PLAN.md).
+
+**🔑 Attribution model (the crux — differs from Mongo):** SQL subscription tables have **no `promoter_id`,
+`promoter_percentage`, or `paid_amount`** columns (Mongo denormalizes them per-subscription). Instead,
+`ws_package_course_order.promocode` / `ws_ebook_order.promocode` is a **JSON snapshot** of the whole promocode
+at purchase, embedding `promoterId`, `promocode`, and `promotedPackageCourseEbook[0].promoterPercentage`. So:
+- **attribution:** `JSON_EXTRACT(order.promocode,'$.promoterId') = :promoterId`
+- **order→subscription join:** `order.id = subscription.order_id` (NOT `unique_id` — that's a nullable string key)
+- **revenue:** `subscription.amount` (course) / `subscription.price` (ebook)
+- **commission:** `amount * JSON_EXTRACT(...promoterPercentage) / 100`
+- **time series:** `DATE_FORMAT(created_at, fmt)` grouping (today→hour, week/month→day, year/all→month, custom→derived)
+
+All implemented as **raw SQL** (`prisma.$queryRawUnsafe` with bound params) because Prisma can't express the
+JSON-path filter or DATE_FORMAT grouping. No new tables, no schema change.
+
+**Surfaces wired:** promoter customers (list + detail), subscriptions (course/ebook list + byCourse/byMonth
+report w/ commission), dashboard (summary + date-range overview), promocodes (list/detail + derived usage).
+**Limitation (documented):** promocode `appliesTo` is not representable from SQL (same as commerce-promocode) →
+returned empty; dashboard overview's `promocodeId` scope param is ignored on SQL.
+
+**Verified (tsx vs live DB):** promoter 130 → 2 course subs, ₹15,300 revenue, **commission ₹765** (5% of each),
+2 unique customers; report byCourse/byMonth; overview totals + chart buckets; promocode PIYUSH50 usage=2/₹15,300.
+`tsc` clean.
+
+**Next:** Wave 2 — Referral system (`ws_refferal_program` + `ws_refferal_transaction`; client + admin + webhook).
+
+---
+
+## 2026-06-17 — 📣 Wave 1 (Promoter) START: `promoter-auth` on SQL (`ws_promoter`)
+
+**Context:** First wave of the FINAL Mongo-only→SQL push, tracked in
+[`migration/MONGO_ONLY_MIGRATION_PLAN.md`](./migration/MONGO_ONLY_MIGRATION_PLAN.md) (the resumable plan — read
+its RESUME POINTER to continue). ~90 Mongo-only files remain (39 admin / 42 client / 9 other); migrated by
+dependency cluster. Wave 1 = promoter side (self-contained).
+
+**What:** Promoter login flow (`src/promoter/auth/promoter.auth.service.ts`) migrated off MongoDB onto SQL,
+mirroring educator-auth. All 6 functions branch on `isMysqlModule("promoter-auth")` (login, refresh, logout,
+change-password, update-profile, get-profile). Mongo retained as fallback. Enabled `promoter-auth` in `.env`.
+
+**Schema:**
+- DDL ADD: `ws_promoter_access_tokens` (mirrors admin/educator token tables) →
+  [`migration/schema-changes/2026-06-17_create_ws_promoter_access_tokens.sql`](./migration/schema-changes/2026-06-17_create_ws_promoter_access_tokens.sql)
+  (additive, prod-safe, run once).
+- Extended Prisma `Promoter`: added `password` + `lastSeenAt` (`@map("last_seen_at")`) + `accessTokens`
+  relation; new `PromoterAccessToken` model. Regenerated client. (commerce-promoter READ transformer explicitly
+  excludes password — safe.)
+
+**Drift handled:** ws_promoter has **no `last_login_date`/`last_login_ip`** columns (the Mongo model wrote them)
+→ `touchLogin` updates `last_seen_at` instead. Password verify = `verifyPromoterPassword` (bcrypt then 32-hex
+MD5, like educator) — though only **1 of 114** promoters has a password (the rest are admin-created, no login).
+JWT `{id,email,role:"promoter",type:"promoter"}` + Redis `promoter_session:{id}` unchanged; numeric id stringified.
+
+**Verified (tsx against live DB):** dual-hash verify (bcrypt/MD5/empty); login lookup + DTO (promoter 2 GPSC
+ONLINE); token create/refresh-lookup/deactivate; profile update; touchLogin. Data restored. `tsc` clean.
+
+**Next (Wave 1 cont.):** promoter dashboard/customers/promocode/subscription reads (aggregations over
+already-migrated tables — no new SQL).
+
+---
+
+## 2026-06-17 — 🎓 admin educator MASTER CRUD migrated to MySQL (ws_course_educator)
+
+**What:** Migrated the admin educator master endpoints (`src/admin/master/educator.controller.ts`,
+mounted at `/api/v1/admin/master/educators`) off MongoDB onto SQL. This is the listing/CRUD admins see — separate
+from the educator login flow migrated earlier today. Gated by the existing `educator-auth` flag (already ON).
+No schema/DDL change.
+
+**Branched handlers (Mongo retained as fallback):** `getEducators` (list w/ search + status + sortBy
+[createdAt/updatedAt/name/email] + sortOrder, paginated), `createEducator`, `updateEducator`,
+`getEducatorDetails`, `deleteEducator`.
+
+**Schema realities handled:**
+- `ws_course_educator` has **no `deleted` column** → "delete" = `status=false` + revoke tokens (row retained, so
+  course/live-course `courseEducatorId` refs still resolve). List shows all rows; callers filter by status.
+- `password` is **NOT NULL** but the create validation makes it optional → store `""` when absent (no-login
+  educator, matching the existing empty-MD5 rows); hash with bcrypt when provided.
+- `id` is numeric (not ObjectId); DTO returns `_id` as the stringified int + status + timestamps; password omitted.
+- `getEducatorDetails` associations (courses/live-courses/packages/sessions/subscriptions) return empty on SQL —
+  those models aren't migrated yet.
+
+**Reused:** extended `src/modules/educator-auth/educator-auth.{repository,transformer}.ts` with admin
+list/CRUD ops + `toEducatorListDto`.
+
+**Verified (tsx against live DB):** the exact failing query (page=1, limit=10, sortBy=updatedAt, sortOrder=desc)
+→ 56 educators, sorted correctly; search+status filter; create (password→""), email-uniqueness excl. self,
+update, disable (row retained). Throwaway row cleaned up. `tsc --noEmit` clean.
+
+---
+
+## 2026-06-17 — 🎓 educator-auth migrated to MySQL (ws_course_educator) + MD5/bcrypt password support
+
+**What:** Migrated the educator auth flow (`src/educator/auth/educator.auth.service.ts`) off MongoDB onto MySQL,
+following the admin-auth pattern. Added `educator-auth` to `.env` `MIGRATION_MYSQL_MODULES`. Mongo retained as
+fallback.
+
+**Schema (`prisma/schema.prisma`):**
+- Extended `CourseEducator` (`@@map("ws_course_educator")`): made `image` nullable (matches DB), added
+  `last_seen_at`/`email_verified_at` (Date) and the `accessTokens` relation.
+- Added `EducatorAccessToken` → `@@map("ws_educator_access_tokens")` (new table) mirroring the admin/customer
+  token tables.
+
+**DDL (applied to `websankul_staging`):** created `ws_educator_access_tokens`
+`(id INT PK AI, educator_id BIGINT UNSIGNED, token TEXT, refresh_token TEXT NULL, active TINYINT(1),
+deleted TINYINT(1), created_at DATETIME, expires_at DATETIME, updated_at TIMESTAMP, INDEX educator_id,
+INDEX (active,deleted))`.
+
+**⚠️ Password formats (key finding):** `ws_course_educator.password` is MIXED — 40 rows are legacy 32-char
+**MD5** hashes, 16 are **bcrypt** (`$2`). The Mongo branch only did `bcrypt.compare` (would fail the MD5 rows).
+New `verifyEducatorPassword` (in the transformer) tries bcrypt first, then falls back to `md5(input)===stored`
+for 32-char-hex hashes. Empty-string MD5 (`d41d8cd9…`, = "no password") never matches a non-empty input.
+Password **changes** always write bcrypt (legacy MD5 upgrades on next change). No bulk re-hash performed.
+
+**New module:** `src/modules/educator-auth/{educator-auth.repository.ts, educator-auth.transformer.ts}`.
+Service branches added to login, refresh, logout, change-password, update-profile, get-profile. JWT payload
+unchanged (`{id, email, role:"educator", type:"educator"}`); Redis `educator_session:{id}` and the
+middleware 1-device rule unchanged. DTO matches the Mongo `buildProfile` shape (id as stringified int).
+
+**Verified (tsx against live DB, 56 educators):** verifyEducatorPassword for MD5/bcrypt/$2y/empty-md5; login
+lookup + verify (educator 20); DTO shape; token create/refresh-lookup/deactivate; profile update. Original
+data restored, none left modified. `tsc --noEmit` clean.
+
+**NOT migrated yet (still Mongo):** educator dashboard/course/package controllers (read Course/Package/
+PackageCourseSubscription/Customer — depend on subscription models not yet on SQL). Tracked in
+`docs/MIGRATION_MONGO_REMAINING.md`.
+
+---
+
+## 2026-06-17 — 🔀 enabled customer-profile + customer-bank-account on MySQL (config flip)
+
+**What:** Added `customer-profile` and `customer-bank-account` to `.env` `MIGRATION_MYSQL_MODULES`. Both modules'
+SQL branches were already fully built (repository + transformer + service, no TODOs/fallthrough) — this is a
+config flip only, no code/schema change.
+
+**Verified (tsx against live DB):** `customer-profile.getProfile` returns a complete DTO with hydrated goals
+(`ws_customer` + `ws_customer_target_goal`); `customer-bank-account` service loads and lists from
+`ws_customer_bank_account`. `tsc --noEmit` clean.
+
+**Held back:** `customer-address` NOT enabled — its SQL branch is complete but depends on the `offline-city`
+id-space (cityId ↔ OfflineCity), and offline-city is not yet enabled. Enable together once offline-city lands.
+
+**Note on "SQL-only" goal:** the app is still hybrid. See `docs/MIGRATION_MONGO_REMAINING.md` for the full
+inventory of endpoints/files that still read MongoDB with **no SQL branch** (client referral/cart/goals/orders,
+admin dashboard/notifications/livechat, educator + promoter modules, FCM/sockets/webhooks). Those require new
+SQL branches, not just a flag flip.
+
+---
+
+## 2026-06-17 — 🧑‍🤝‍🧑 admin customer CRUD/list migrated to MySQL (ws_customer)
+
+**What:** Migrated the admin-side customer management endpoints
+(`src/admin/customer/customer.controller.ts`) off MongoDB onto MySQL `ws_customer`. Gated by the existing
+`customer-auth` flag (already ON in `.env`) — so admin customer management flips together with customer auth.
+No schema/DDL change (all tables already introspected).
+
+**Branched handlers (Mongo retained as fallback):** `getCustomers` (list w/ search + status + state/district +
+date-range filters, paginated), `getCustomerById`, `getCustomerPreRequisites` (states + educations from
+ws_customer_state/_education), `getDistrictsByState` (ws_customer_distict), `createCustomer`, `updateCustomer`,
+`deleteCustomer` (soft delete), `toggleCustomerStatus`. The subscription/order/address aggregate handlers
+(`getCustomerCourseSubscriptions`, `getCustomerEbookSubscriptions`, `getCustomerAddresses`,
+`getCustomerDetails`) return empty/zeroed payloads on the SQL branch — their underlying models
+(PackageCourseSubscription/EbookSubscription/CustomerAddress/orders) are not yet on SQL.
+
+**New files:** `src/modules/admin-customer/{admin-customer.repository.ts, admin-customer.service.ts,
+admin-customer.transformer.ts}`.
+
+**Schema realities handled:**
+- `ws_customer` stores a **single `full_name`** — the API contract exposes firstName/middleName/lastName.
+  Compose on write (`composeFullName`), best-effort split on read (`splitFullName`: 1 token→first; 2→first+last;
+  3+→first + middle(joined) + last).
+- **`state` and `district` are NOT NULL** in MySQL (no default) → cleared/absent values write **0** (the legacy
+  dump sentinel, matching customer-auth `createStub`), never NULL. `education_id` is nullable. Create uses the
+  Prisma **unchecked** input to set raw FK columns.
+- FK ids are **Int** (not ObjectId) → list filters + create/update accept numeric ids; lookups returned with
+  `_id` as the stringified int. Column maps: `dob`→birthDate, `profile_picture`, `phone_2`→phone2,
+  `goal` (JSON) ← goals[].
+- Changing phone resets `is_phone_verified` (matches Mongo).
+
+**Validation (`customer.validation.ts`):** state/district/education id fields + `goals[]` now accept a numeric
+MySQL id alongside the 24-hex Mongo ObjectId.
+
+**Verified (tsx against live `websankul_staging`, 27 customers):** list, filters, get, prereqs (states/educations),
+districts-by-state (Gujarat→33), full create (full_name composed, state/district/education connected, goals JSON),
+phone/email uniqueness excl. self, update (name recomposed, education→NULL, phone-verify reset), toggle, soft
+delete (row retained, hidden from reads). Throwaway row cleaned up. `tsc --noEmit` clean project-wide.
+
+---
+
+## 2026-06-17 — 👥 administrator CRUD/list migrated to MySQL (ws_users) — completes admin-auth flip
+
+**What:** Migrated all administrator CRUD/list endpoints
+(`src/admin/administrator/administrator.controller.ts`) off MongoDB onto MySQL `ws_users`, gated by the same
+`isMysqlModule("admin-auth")` flag added earlier today. Every handler — list, get-by-id, pre-requisites
+(roles dropdown), create, update, delete, toggle-status — now has a MySQL branch (Mongo path retained as
+fallback).
+
+**New files:**
+- `src/modules/admin-auth/administrator.service.ts` — SQL CRUD service (list w/ search+status+role filter,
+  get, create, update, disable, toggle, assignable-roles, role-exists). `ADMIN_MODEL_TYPE = "App\\Models\\User"`
+  (verified against existing `ws_model_has_roles` rows).
+- Extended `admin-auth.repository.ts` with admin CRUD + spatie role-pivot writes, and `admin-auth.transformer.ts`
+  with `toAdminListDto` (mirrors the Mongo `PUBLIC_FIELDS` projection: `_id`, status, timestamps).
+
+**Schema realities handled (no DDL this entry):**
+- `ws_users` has **no `deleted` column** → "delete" = set `status='0'` (inactive) + revoke tokens; the row is
+  retained. List/detail show all rows; callers filter by `status`.
+- `image` is **NOT NULL** → create defaults to `""`.
+- **No `role` column** → built-in enum roles (super_admin/admin/editor) are not persistable on SQL; a numeric
+  spatie role id (ws_roles.id) is written to the `ws_model_has_roles` pivot and `role` is derived on read from
+  role names (super→super_admin, editor→editor, else admin).
+- Pagination/search via Prisma (`firstName/lastName/email contains`, `orderBy createdAt desc`).
+
+**Validation (`administrator.validation.ts`):** `roleField` now also accepts a numeric string id (MySQL spatie
+role id) alongside the 24-hex Mongo ObjectId form.
+
+**Verified (tsx against live `websankul_staging`):** full lifecycle — list (3 admins, derived role+status),
+role-filter, get, 31-row roles dropdown, create (+spatie pivot write `role=1 type=App\\Models\\User`),
+email-uniqueness (excludes self), update (incl. lastName→null), toggle, disable (row retained). Throwaway row
+cleaned up; no test data left behind. `tsc --noEmit` clean project-wide.
+
+---
+
+## 2026-06-17 — 🔐 admin-auth (ws_users) migrated to MySQL — admin login reads from SQL
+
+**What:** Migrated the administrator login/auth flow off MongoDB onto MySQL `ws_users`, following the
+established `isMysqlModule("admin-auth")` branch pattern. Added module `admin-auth` to `.env`
+`MIGRATION_MYSQL_MODULES`.
+
+**Schema (`prisma/schema.prisma`):** Added models:
+- `AdminUser` → `@@map("ws_users")`. Laravel snake_case columns; `status` and `is_dark` are
+  `enum('0','1')` in MySQL, modeled as Prisma enums `AdminStatusFlag {inactive=0, active=1}` and
+  `AdminDarkFlag {light=0, dark=1}`. **No `role`/`deleted` columns exist** on this table.
+- `AdminAccessToken` → `@@map("ws_admin_access_tokens")` (new table, see DDL below) mirroring
+  `ws_customer_access_token`.
+- `AdminRoleRow`/`AdminPermissionRow` → `ws_roles`/`ws_permissions`; `AdminModelHasRole`/
+  `AdminModelHasPermission` → spatie pivots `ws_model_has_roles`/`ws_model_has_permissions`
+  (read-only role/permission resolution for the login response).
+
+**DDL (applied to `websankul_staging`):** created `ws_admin_access_tokens`
+`(id INT PK AI, admin_user_id BIGINT UNSIGNED, token TEXT, refresh_token TEXT NULL, active TINYINT(1),
+deleted TINYINT(1), created_at DATETIME, expires_at DATETIME, updated_at TIMESTAMP, INDEX on admin_user_id,
+INDEX on (active,deleted))`.
+
+**Service (`src/admin/auth/admin.auth.service.ts`):** Added MySQL branches to `adminLogin`,
+`changeAdminPassword`, `refreshAdminToken`, `logoutAdmin`, `updateAdminProfile`. New repository
+`src/modules/admin-auth/admin-auth.repository.ts` + transformer `admin-auth.transformer.ts` (returns the
+**same admin DTO shape** as the Mongo branch: `id, firstName, lastName, email, role, roles[], permissions[],
+image, isDark`). `role` is derived from spatie role names (super_admin/editor/admin). JWT payload uses the
+numeric `ws_users.id` as a string; Redis `admin_session:{id}` caching unchanged.
+
+**Verified:** repository lookup + pivot role resolution (`it@websankul.com` → role `admin`, guard `web`),
+token write/read/delete round-trip, and bcrypt compare — including that **legacy Laravel `$2y$10$` hashes
+verify with `bcryptjs`**, so all existing admins log in with current passwords. `tsc --noEmit` clean.
+
+---
+
 ## 2026-06-15 — 🚀 FULL FLIP enabled in this env (all 30 module keys ON) + full HTTP suite green
 
 **What:** Turned ON every built module flag in `.env` `MIGRATION_MYSQL_MODULES` (was 12, now all 30:

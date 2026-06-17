@@ -10,7 +10,11 @@ export const createEducatorSchema = z.object({
   status: z.boolean().optional().default(true),
 });
 
-export const updateEducatorSchema = createEducatorSchema.partial();
+export const updateEducatorSchema = createEducatorSchema.partial().extend({
+  // Allow an explicit null to CLEAR the stored image (omit = keep current,
+  // URL string / file upload = set). Additive; create still requires a URL.
+  image: z.string().url("Image must be a valid URL").nullable().optional(),
+});
 
 // Subject Category Validation
 export const createSubjectCategorySchema = z.object({

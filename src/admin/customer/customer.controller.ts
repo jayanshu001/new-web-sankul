@@ -13,6 +13,18 @@ import { BookOrder } from "../../models/book/BookOrder.model";
 import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSchema } from "./customer.validation";
 import { ensureDefaultFolders } from "../../client/folder/folder.controller";
 import { buildSearchFilter } from "../../utils/searchFilter";
+import { isMysqlModule } from "../../config/migration";
+import * as customerSql from "../../modules/admin-customer/admin-customer.service";
+
+// Admin customer CRUD shares the customer-auth migration flag — when ws_customer
+// is the source of truth for auth, it is for admin management too.
+const MODULE = "customer-auth";
+
+const parseStatusFilter = (status?: string): boolean | undefined => {
+  if (status === "true" || status === "active") return true;
+  if (status === "false" || status === "inactive") return false;
+  return undefined;
+};
 
 // ─── List & Get ───────────────────────────────────────────────────────────────
 
@@ -29,6 +41,28 @@ export const getCustomers = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      const { items, total } = await customerSql.listCustomers({
+        search,
+        status: parseStatusFilter(status),
+        stateId,
+        districtId,
+        fromDate,
+        toDate,
+        page: pageNum,
+        limit: limitNum,
+      });
+      return res.status(200).json({
+        success: true,
+        data: items,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     const filters: any = { isAccountDeleted: false };
 
     Object.assign(filters, buildSearchFilter(search, ["firstName", "lastName", "phoneNumber", "emailAddress"]));
@@ -41,8 +75,6 @@ export const getCustomers = async (req: Request, res: Response) => {
       if (toDate) filters.createdAt.$lte = new Date(toDate);
     }
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
@@ -70,6 +102,20 @@ export const getCustomers = async (req: Request, res: Response) => {
 export const getCustomerById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      const numId = customerSql.parseCustomerId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+      const dto = await customerSql.getCustomer(numId);
+      if (!dto) return res.status(404).json({ success: false, message: "Customer not found" });
+      // Subscription/ebook models are not yet on SQL; counts default to 0.
+      return res.status(200).json({
+        success: true,
+        data: { ...dto, courseSubCount: 0, ebookSubCount: 0 },
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Customer ID" });
     }
@@ -100,6 +146,12 @@ export const getCustomerById = async (req: Request, res: Response) => {
 
 export const getCustomerPreRequisites = async (_req: Request, res: Response) => {
   try {
+    // ─── MySQL branch (ws_customer_state / _education) ────────────────────
+    if (isMysqlModule(MODULE)) {
+      const data = await customerSql.getPreRequisites();
+      return res.status(200).json({ success: true, data });
+    }
+
     const [states, educations] = await Promise.all([
       CustomerState.find({ active: true }).select("_id name stateCode").sort({ name: 1 }),
       CustomerEducation.find({ status: true }).select("_id name").sort({ name: 1 }),
@@ -113,6 +165,15 @@ export const getCustomerPreRequisites = async (_req: Request, res: Response) => 
 export const getDistrictsByState = async (req: Request, res: Response) => {
   try {
     const stateId = req.params.stateId as string;
+
+    // ─── MySQL branch (ws_customer_distict) ───────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      const numId = customerSql.parseCustomerId(stateId);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid stateId" });
+      const data = await customerSql.getDistrictsByState(numId);
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(stateId)) {
       return res.status(400).json({ success: false, message: "Invalid stateId" });
     }
@@ -132,6 +193,18 @@ export const createCustomer = async (req: Request, res: Response) => {
     const file = req.file as any;
     if (file?.location) req.body.profilePicture = file.location;
     const validatedData = createCustomerSchema.parse(req.body);
+
+    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      if (await customerSql.phoneInUse(validatedData.phoneNumber)) {
+        return res.status(409).json({ success: false, message: "Phone number already registered" });
+      }
+      if (validatedData.emailAddress && (await customerSql.emailInUse(validatedData.emailAddress))) {
+        return res.status(409).json({ success: false, message: "Email address already registered" });
+      }
+      const created = await customerSql.createCustomer(validatedData);
+      return res.status(201).json({ success: true, data: created });
+    }
 
     const phoneExists = await Customer.exists({ phoneNumber: validatedData.phoneNumber, isAccountDeleted: false });
     if (phoneExists) {
@@ -170,13 +243,33 @@ export const createCustomer = async (req: Request, res: Response) => {
 export const updateCustomer = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-    }
 
     const file = req.file as any;
     if (file?.location) req.body.profilePicture = file.location;
     const validatedData = updateCustomerSchema.parse(req.body);
+
+    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      const numId = customerSql.parseCustomerId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+
+      const existing = await customerSql.getCustomer(numId);
+      if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
+
+      if (validatedData.emailAddress && (await customerSql.emailInUse(validatedData.emailAddress, numId))) {
+        return res.status(409).json({ success: false, message: "Email address already in use" });
+      }
+      if (validatedData.phoneNumber && (await customerSql.phoneInUse(validatedData.phoneNumber, numId))) {
+        return res.status(409).json({ success: false, message: "Phone number already registered" });
+      }
+
+      const updated = await customerSql.updateCustomer(numId, validatedData);
+      return res.status(200).json({ success: true, data: updated });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+    }
 
     if (validatedData.emailAddress) {
       const emailExists = await Customer.exists({
@@ -226,6 +319,17 @@ export const updateCustomer = async (req: Request, res: Response) => {
 export const deleteCustomer = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      const numId = customerSql.parseCustomerId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+      const existing = await customerSql.getCustomer(numId);
+      if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
+      await customerSql.softDeleteCustomer(numId);
+      return res.status(200).json({ success: true, message: "Customer deleted successfully" });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Customer ID" });
     }
@@ -246,6 +350,18 @@ export const deleteCustomer = async (req: Request, res: Response) => {
 export const toggleCustomerStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
+    if (isMysqlModule(MODULE)) {
+      const numId = customerSql.parseCustomerId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+      const existing = await customerSql.getCustomer(numId);
+      if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
+      const newStatus = !existing.status;
+      await customerSql.setCustomerStatus(numId, newStatus);
+      return res.status(200).json({ success: true, data: { status: newStatus } });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Customer ID" });
     }
@@ -274,6 +390,17 @@ export const getCustomerCourseSubscriptions = async (req: Request, res: Response
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    // Subscription models are not yet on SQL — return an empty page on the
+    // ws_customer branch so the admin detail view degrades gracefully.
+    if (isMysqlModule(MODULE)) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
+      });
+    }
+
     const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
@@ -306,6 +433,16 @@ export const getCustomerEbookSubscriptions = async (req: Request, res: Response)
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    // Ebook-subscription model not yet on SQL — empty page on ws_customer branch.
+    if (isMysqlModule(MODULE)) {
+      return res.status(200).json({
+        success: true,
+        data: [],
+        pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
+      });
+    }
+
     const skip = (pageNum - 1) * limitNum;
 
     const now = new Date();
@@ -337,6 +474,12 @@ export const getCustomerEbookSubscriptions = async (req: Request, res: Response)
 export const getCustomerAddresses = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // Address admin view not yet on SQL — empty list on ws_customer branch.
+    if (isMysqlModule(MODULE)) {
+      return res.status(200).json({ success: true, data: [] });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid Customer ID" });
     const addresses = await CustomerAddress.find({ customerId: id })
@@ -353,6 +496,30 @@ export const getCustomerAddresses = async (req: Request, res: Response) => {
 export const getCustomerDetails = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
+    // Profile comes from SQL; purchase aggregates depend on subscription/order
+    // models not yet migrated, so they return empty until those modules land.
+    if (isMysqlModule(MODULE)) {
+      const numId = customerSql.parseCustomerId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+      const profile = await customerSql.getCustomer(numId);
+      if (!profile) return res.status(404).json({ success: false, message: "Customer not found" });
+      return res.status(200).json({
+        success: true,
+        data: {
+          profile,
+          addresses: [],
+          purchases: { courses: [], packages: [], liveCourses: [], testSeries: [], ebooks: [], physicalBooks: [] },
+          summary: {
+            totals: { courses: 0, packages: 0, liveCourses: 0, testSeries: 0, ebooks: 0, physicalBooks: 0, addresses: 0 },
+            active: { courses: 0, packages: 0, liveCourses: 0, testSeries: 0, ebooks: 0 },
+            lifetimeSpend: 0,
+          },
+        },
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Customer ID" });
     }

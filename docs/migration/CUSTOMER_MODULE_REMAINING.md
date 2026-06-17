@@ -1,6 +1,13 @@
 # Customer Module — Remaining Migration Scope
 
 > **Created:** 2026-06-10
+> **⚠ UPDATE 2026-06-17:** the §0 state table below is now PARTLY STALE. Since then: **`customer-profile` +
+> `customer-bank-account` are FLIPPED ON** (live on SQL, verified), and **admin-side customer CRUD**
+> (`/admin/customers` on `ws_customer`) was migrated (module `customer-admin-crud`, gated by the `customer-auth`
+> flag). `customer-address` is STILL flag OFF (offline-city id-space dep). The client-side customer *tail*
+> (referral rewards/transactions/withdrawal, cart, goals, orders referral lookup) is still Mongo — see
+> [`../MIGRATION_MONGO_REMAINING.md`](../MIGRATION_MONGO_REMAINING.md). Treat this doc as the original scoping
+> record; the live status is in [`RESUME_HERE.md`](./RESUME_HERE.md) §1A.
 > **Status (2026-06-10):** Customer Module surface **fully built**. Auth + Lookups **live**; Profile, Address, Bank-account dual-pathed with **flags OFF** (blocked only by non-customer deps); Shipping is part of cart/order checkout (not standalone). See §7.
 > **Strategy reference:** [`legacy_system_migration_strategy.md`](./legacy_system_migration_strategy.md) · [`MIGRATED_MODULES.md`](./MIGRATED_MODULES.md)
 

@@ -5,6 +5,12 @@ import { Customer } from "../../models/customer/Customer.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildSearchFilter } from "../../utils/searchFilter";
+import {
+  isPromoterDataMysql,
+  parsePromoterId,
+  listPromoterCustomers,
+  listPromoterSubscriptions,
+} from "../../modules/promoter-data/promoter-data.service";
 
 // GET /api/v1/promoter/customers — unique customers attributed to this promoter
 export const listMyCustomers = async (req: Request, res: Response) => {
@@ -18,6 +24,20 @@ export const listMyCustomers = async (req: Request, res: Response) => {
     const { search, page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    // ─── MySQL branch (ws_promoter attribution via order promocode JSON) ────
+    if (isPromoterDataMysql()) {
+      const pid = parsePromoterId(promoterId);
+      if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
+      const { items, total } = await listPromoterCustomers(pid, { search, page: pageNum, limit: limitNum });
+      logger.info("listMyCustomers success (sql)", { traceId, promoterId, total });
+      return res.status(200).json({
+        success: true,
+        data: items,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     const skip = (pageNum - 1) * limitNum;
 
     const [courseCustomerIds, ebookCustomerIds] = await Promise.all([
@@ -63,6 +83,26 @@ export const getMyCustomerDetail = async (req: Request, res: Response) => {
 
   try {
     if (!promoterId) { logger.warn("getMyCustomerDetail unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (isPromoterDataMysql()) {
+      const pid = parsePromoterId(promoterId);
+      const cid = Number(customerId);
+      if (!pid || !Number.isInteger(cid)) return res.status(400).json({ success: false, message: "Invalid id." });
+      // Attribution: the customer must appear in this promoter's attributed set.
+      const { items } = await listPromoterCustomers(pid, { page: 1, limit: 100000 });
+      const customer = items.find((c) => c._id === String(cid));
+      if (!customer) { logger.warn("getMyCustomerDetail not attributed (sql)", { traceId, promoterId, customerId }); return res.status(404).json({ success: false, message: "Customer not found." }); }
+      // Pull this promoter's subs, then keep only this customer's.
+      const [courseAll, ebookAll] = await Promise.all([
+        listPromoterSubscriptions(pid, { type: "course", page: 1, limit: 100000 }),
+        listPromoterSubscriptions(pid, { type: "ebook", page: 1, limit: 100000 }),
+      ]);
+      const courseSubscriptions = courseAll.items.filter((s) => s.customerId?._id === String(cid));
+      const ebookSubscriptions = ebookAll.items.filter((s) => s.customerId?._id === String(cid));
+      logger.info("getMyCustomerDetail success (sql)", { traceId, promoterId, customerId, courseSubs: courseSubscriptions.length, ebookSubs: ebookSubscriptions.length });
+      return res.status(200).json({ success: true, data: { customer, courseSubscriptions, ebookSubscriptions } });
+    }
 
     // Ensure this customer is actually attributed to this promoter
     const hasSub = await PackageCourseSubscription.exists({ customerId, promoterId });

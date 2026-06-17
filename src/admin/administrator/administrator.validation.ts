@@ -6,7 +6,9 @@ const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 const roleField = z
   .union([
     z.enum([AdminRole.SUPER_ADMIN, AdminRole.ADMIN, AdminRole.EDITOR]),
+    // Mongo role id (24-hex ObjectId) OR MySQL spatie role id (numeric).
     z.string().regex(objectIdRegex, "Invalid role id"),
+    z.string().regex(/^[1-9]\d*$/, "Invalid role id"),
   ])
   .optional()
   .nullable();

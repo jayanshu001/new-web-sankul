@@ -13,8 +13,12 @@ import {
 } from "../../modules/offline-city/offline-city.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import * as cartSql from "../../modules/client-cart/client-cart.service";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
+// On the SQL branch ids are numeric strings, not ObjectIds.
+const numericId = z.string().regex(/^[1-9]\d*$/, "Invalid id");
+const sqlAddSchema = z.object({ bookId: numericId, qty: z.number().int().min(1).max(99).optional().default(1) });
 
 const addSchema = z.object({
   bookId: objectId,
@@ -36,6 +40,17 @@ export const addToCart = async (req: Request, res: Response) => {
     if (!userId) {
       logger.warn("addToCart unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    // ─── MySQL branch (ws_book_cart + ws_book_cart_item) ──────────────────
+    if (cartSql.isClientCartMysql()) {
+      const cid = cartSql.parseCartId(userId);
+      const { bookId, qty } = sqlAddSchema.parse(req.body);
+      const numBook = cartSql.parseCartId(bookId);
+      if (!cid || !numBook) return res.status(400).json({ success: false, message: "Invalid id." });
+      const r = await cartSql.addToCart(cid, numBook, qty);
+      if (!r.ok) return res.status(404).json({ success: false, message: "Book not found." });
+      return res.status(r.created ? 201 : 200).json({ success: true, data: r.data, message: r.created ? "Added to cart." : "Quantity updated." });
     }
 
     const { bookId, qty } = addSchema.parse(req.body);
@@ -90,6 +105,17 @@ export const updateCartItemQty = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (cartSql.isClientCartMysql()) {
+      const cid = cartSql.parseCartId(userId);
+      const numBook = cartSql.parseCartId(String(req.params.bookId));
+      const { qty } = updateQtySchema.parse(req.body);
+      if (!cid || !numBook) return res.status(400).json({ success: false, message: "Invalid id." });
+      const r = await cartSql.updateCartItemQty(cid, numBook, qty);
+      if (!r.ok) return res.status(404).json({ success: false, message: "Item not in cart." });
+      return res.status(200).json({ success: true, data: r.data, message: "Quantity updated." });
+    }
+
     const bookId = objectId.parse(req.params.bookId);
     const { qty } = updateQtySchema.parse(req.body);
 
@@ -126,6 +152,16 @@ export const removeCartItem = async (req: Request, res: Response) => {
     if (!userId) {
       logger.warn("removeCartItem unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (cartSql.isClientCartMysql()) {
+      const cid = cartSql.parseCartId(userId);
+      const numBook = cartSql.parseCartId(String(req.params.bookId));
+      if (!cid || !numBook) return res.status(400).json({ success: false, message: "Invalid id." });
+      const r = await cartSql.removeCartItem(cid, numBook);
+      if (!r.ok) return res.status(404).json({ success: false, message: "Item not in cart." });
+      return res.status(200).json({ success: true, data: r.data, message: "Removed from cart." });
     }
 
     const bookId = objectId.parse(req.params.bookId);
@@ -170,6 +206,20 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
     if (!userId) {
       logger.warn("attachShippingToCart unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (cartSql.isClientCartMysql()) {
+      const cid = cartSql.parseCartId(userId);
+      const numAddr = cartSql.parseCartId(String((req.body ?? {}).addressId ?? ""));
+      if (!cid || !numAddr) return res.status(400).json({ success: false, message: "Invalid address id." });
+      const r = await cartSql.attachShipping(cid, numAddr);
+      if (!r.ok) {
+        if (r.reason === "address") return res.status(404).json({ success: false, message: "Address not found." });
+        if (r.reason === "phone") return res.status(400).json({ success: false, message: "No phone number on file. Please update your profile before using this address for delivery." });
+        return res.status(400).json({ success: false, message: "Address is missing a city. Please update the address before using it for delivery." });
+      }
+      return res.status(200).json({ success: true, data: { cart: r.cart, shipping: r.shipping }, message: "Shipping address attached." });
     }
 
     const { addressId } = attachShippingSchema.parse(req.body);
@@ -284,6 +334,15 @@ export const getCart = async (req: Request, res: Response) => {
     if (!userId) {
       logger.warn("getCart unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (cartSql.isClientCartMysql()) {
+      const cid = cartSql.parseCartId(userId);
+      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+      const data = await cartSql.getCart(cid);
+      logger.info("getCart success (sql)", { traceId, customerId: userId, itemCount: data.summary.itemCount });
+      return res.status(200).json({ success: true, data });
     }
 
     const cart = await BookCart.findOne({ customerId: userId, status: true }).lean();

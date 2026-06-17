@@ -9,10 +9,22 @@
 
 ## Golden rules
 
+0. **⭐ ALWAYS update these migration docs after ANY migration work — every session, no exceptions** (standing
+   user requirement, 2026-06-17). After finishing a module / flip / schema change: (a) append a **newest-first**
+   entry to [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md); (b) update
+   [`RESUME_HERE.md`](./RESUME_HERE.md) (§1/§1A where-we-are + §3 module list + §7 scope + §8 remaining);
+   (c) update [`MIGRATION_TRACKER.md`](./MIGRATION_TRACKER.md) (status line + changelog); (d) add a registry
+   entry in `scripts/generate-migrated-modules.ts` and **regenerate** the 3 `yarn docs:*` files; (e) update
+   [`README.md`](./README.md) status + [`../MIGRATION_MONGO_REMAINING.md`](../MIGRATION_MONGO_REMAINING.md).
+   Do **NOT** touch [`legacy_system_migration_strategy.md`](./legacy_system_migration_strategy.md) (frozen).
 1. **Do not add the next module to `MIGRATION_MYSQL_MODULES`** until required tests are **Pass** in [MIGRATION_TEST_LOG.md](./MIGRATION_TEST_LOG.md).
 2. **Regenerate** auto-generated docs (`yarn docs:*`) — do not hand-edit those files except for one-off fixes (re-run generator instead).
 3. **Log build progress** in [MIGRATION_TRACKER.md](./MIGRATION_TRACKER.md) changelog; **log test results** in [MIGRATION_TEST_LOG.md](./MIGRATION_TEST_LOG.md).
 4. **Complex field mappings** (e.g. Customer `full_name` vs `firstName`): update generator appendices in `scripts/generate-schema-comparison.ts`, then regen.
+5. **Admin-side modules** (admin/educator/promoter auth + CRUD) follow the SAME pattern but live in
+   `src/modules/<key>/` with branches in `src/admin/**` or `src/educator/**` (not only `src/client/**`). New
+   token tables get an additive DDL captured under `schema-changes/`. See the `admin-auth` / `educator-auth`
+   entries in the registry for the template (spatie roles, MD5+bcrypt verify, `id` sort tiebreaker).
 
 ---
 

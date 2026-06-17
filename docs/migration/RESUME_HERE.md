@@ -2,7 +2,7 @@
 
 > **Purpose:** Cold-start context so any session can resume **exactly** here without losing flow, behaviour,
 > or any established rule. This is THE single source of truth for "where we are."
-> **Last updated:** 2026-06-15 (FULL FLIP enabled in this env — see §2) · **Branch:** `migration` (NEVER merge to `main` until full sign-off)
+> **Last updated:** 2026-06-17 (ADMIN + EDUCATOR wave migrated — auth + CRUD now on SQL; see §1A) · **Branch:** `migration` (NEVER merge to `main` until full sign-off)
 > **Working dir:** `/Users/pratikzankat/new-web-sankul`
 > **On resume:** UPDATE THIS FILE as you go (don't create a new one). Pair it with the newest-first detailed
 > log [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md) — that log is the history; this file
@@ -87,6 +87,102 @@ or pick off the low-value flat tables — ws_tag, ws_dynamic_image, etc.)*
 **Note on the schema add:** package-chat introduced the FIRST additive ALTER (`ws_package_chat`). The flip
 plan must include running [`schema-changes/2026-06-13_extend_ws_package_chat.sql`](./schema-changes/2026-06-13_extend_ws_package_chat.sql)
 on prod before enabling the `package-chat` flag.
+
+---
+
+## 1A. 🆕 ADMIN + EDUCATOR WAVE (2026-06-17) — auth + CRUD now on SQL
+
+> This wave was driven by a direct user requirement: **"every API's data must come from SQL only, not
+> MongoDB."** It **overturns** the old §7 line that listed Laravel admin/RBAC (`ws_users`, `ws_roles`, …) as
+> *out of scope / stays Mongo*. Admin login, admin management, and educator login/management are now SQL.
+> Detailed newest-first entries are in [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md).
+
+**Built + WIRED + flag ON in this env (3 new modules):**
+
+1. **`admin-auth`** — admin login authenticates against **`ws_users`** (not Mongo). New token table
+   `ws_admin_access_tokens` (DDL ADD). role/roles/permissions resolved from the spatie pivots
+   (`ws_model_has_roles` → `ws_roles`, model_type `App\\Models\\User`); `role` string derived from role
+   names. Laravel `$2y$` bcrypt verifies as-is. **Administrator CRUD** (`/admin/administrators`) also on SQL.
+   `status`/`is_dark` are enum('0','1') → Prisma enums. No `deleted` column → delete = status='0' + revoke.
+2. **`customer-admin-crud`** — admin customer management (`/admin/customers`) on **`ws_customer`**, gated by the
+   existing `customer-auth` flag. `full_name` compose/split; state/district NOT NULL → 0 sentinel; numeric FK ids.
+3. **`educator-auth`** — educator login on **`ws_course_educator`** + new `ws_educator_access_tokens` (DDL ADD).
+   ⚠ **MIXED password hashes**: 40 rows MD5, 16 bcrypt → `verifyEducatorPassword` tries bcrypt then MD5.
+   **Admin educator master CRUD** (`/admin/master/educators`) also on SQL — list has an **`id` secondary-sort
+   tiebreaker** (37/56 rows share NULL updated_at → without it pagination drifts). Image-clear: PUT accepts
+   `image:null` to clear (additive). getEducatorDetails associations return empty (subscription/course models
+   unmigrated).
+
+**Flipped ON (were code-complete, flag OFF):** `customer-profile`, `customer-bank-account` — verified via
+live-DB tsx, then added to `.env`. **`customer-address` still OFF** (offline-city id-space dep).
+
+**Three new DDL ADDs to carry to prod** (additive, prod-safe, run once) — alongside the package-chat ALTER:
+- `ws_admin_access_tokens` (admin JWT/refresh store)
+- `ws_educator_access_tokens` (educator JWT/refresh store)
+- `ws_promoter_access_tokens` (promoter JWT/refresh store — Wave 1, see §1B)
+- Schema edits to existing models: `CourseEducator` (image nullable + last_seen_at/email_verified_at +
+  accessTokens relation), `Promoter` (password + last_seen_at + accessTokens relation), new
+  `AdminUser`/`PromoterAccessToken`/token/role/pivot Prisma models. All additive.
+
+---
+
+## 1B. 🆕 MONGO-ONLY PUSH — Wave 1 (Promoter) DONE (2026-06-17)
+
+> Driven by the user goal "every API's data from SQL only." The full remaining Mongo-only inventory (~90 files)
+> and the wave plan live in [`MONGO_ONLY_MIGRATION_PLAN.md`](./MONGO_ONLY_MIGRATION_PLAN.md) — **that doc's
+> RESUME POINTER is authoritative for this push.**
+
+**✅ Wave 1 (Promoter) — entire persona now on SQL, flags ON:**
+- **`promoter-auth`** — login/refresh/logout/profile on `ws_promoter` + new `ws_promoter_access_tokens` (DDL ADD).
+  Extended Prisma `Promoter` (password + last_seen_at). dual-hash verify (only 1/114 has a pw).
+- **`promoter-data`** (separate flag) — the 4 reads (customers, subscriptions+report, dashboard+overview,
+  promocode) via shared `src/modules/promoter-data/`. **⚠ Attribution divergence:** SQL subs have no
+  promoter_id/percentage; derived from the `ws_*_order.promocode` **JSON snapshot** (`$.promoterId` +
+  `$.promotedPackageCourseEbook[0].promoterPercentage`), raw SQL JSON_EXTRACT + DATE_FORMAT. promocode
+  appliesTo not representable → empty (like commerce-promocode). Verified vs live DB (promoter 130: 2 subs,
+  ₹15,300, commission ₹765, 2 customers). `tsc` clean.
+
+**✅ Wave 2 (Referral) COMPLETE:** new `src/modules/referral/`. **Client + webhook:** rewards overview,
+transactions, generate-code, withdrawal (RazorpayX + atomic refund), getReferralStatus, payout webhook. **Admin:**
+program CRUD, txn list, withdrawal status/reject+refund, withdrawals report + CSV, adjustCustomerRewards,
+listReferrers rollup — branched in `src/admin/referral/referral.service.ts`. DDL: `ws_refferal_transaction` +=
+provider_ref/failure_reason + `failed` enum value. **getTerms/getFaqs + admin FAQ/Term CRUD stay Mongo** (no SQL
+tables). Verified the full withdrawal/refund/idempotent-webhook cycle + admin CRUD/reports vs live DB.
+
+**✅ Wave 3 (RBAC management) DONE:** new `src/modules/admin-rbac/`. Role CRUD + pivot writes + permission
+CRUD + tree onto spatie ws_roles/ws_permissions/ws_role_has_permissions (admin-auth already reads ws_roles).
+Prisma: +created_at/updated_at on role/permission rows + new AdminRoleHasPermission pivot model. `category`
+derived from permission name prefix; deleteRole cascades pivot. **permissionCategory CRUD stays Mongo** (no SQL
+table). Verified vs live DB (29 roles, 108 perms, tree, create/sync/delete + pivot cascade).
+
+**✅ Wave 4 (Exam) CLIENT complete — reads + scoring write:** `src/modules/client-exam/`. Wired all client
+exam reads (list/questions[answer-not-leaked]/my-results/solution/solution-analytics/daily-drill-down) + the
+**saveAnswers** scoring WRITE (ws_exam_result + _detail + analytics recompute + rank; verified exact: correct→+pos,
+wrong→−neg). Schema fix: Exam.description→nullable. **Drift:** Test Series + ExamCountdown MONGO-ONLY (no SQL tables);
+getSolutionDownloadByExam PDF stays Mongo. **Pending:** admin exam reads (src/admin/exam, admin-only, ~28 handlers).
+
+**✅ Wave 4 FULLY COMPLETE:** client exam (reads + scoring write) + **admin exam reads** (`src/modules/admin-exam/`:
+getExams/getExamById/questions/submissions/analytics[raw SQL aggregates]/result/customer-analytics + invalidate;
+admin sees the answer). Deferred (Mongo): admin exam/question CRUD writes + getSolutionDownload PDF.
+
+**🔄 Wave 5 IN PROGRESS — client reads done where possible:** `client-cart` ✅ (`src/modules/client-cart/`,
+5 handlers) + `client-educator` ✅ (`src/modules/client-educator/`, getEducatorWithCourses). **BLOCKED (stay
+Mongo):** client material (entitlement→LiveCourse + Mongo embeds; ws_material lacks isPaid/ancestors), client
+search (includes LiveCourse), wishlist/folder/lecture-note/lecture-audio-note/free-progress (no SQL tables).
+**Remaining Wave 5 = admin catalog CRUD (~136 handlers)** — build module-by-module, start with `plan`, then
+video/videoCategory/book/ebook/course/package/material/master/pc-material.
+
+**Admin catalog CRUD progress:** ✅ **`admin-plan`** (10) ✅ **`admin-master`** (pc-material + 3 master sub-cats
++ **full videoCategory**: list/prereqs/get/create/update/toggle/delete/courses-list/videos-list; `duplicate`
+stays Mongo — DAG clone) ✅ **`admin-video`** (8). ⚠ Mongo-only: master/packageCategory, videoCategory `duplicate`.
+Remaining admin modules: book, ebook, course, package, material.
+
+**Next:** admin CRUD cont. — `book` (books+orders+settings) → `ebook` → `course` → `package` → `material`.
+
+**Still Mongo (the rest of the ~90)** — tracked in [`MONGO_ONLY_MIGRATION_PLAN.md`](./MONGO_ONLY_MIGRATION_PLAN.md)
+(waves 2–8) + [`../MIGRATION_MONGO_REMAINING.md`](../MIGRATION_MONGO_REMAINING.md): referral, RBAC mgmt, exam/test-series,
+catalog admin CRUD + remaining client reads, **LiveCourse (needs schema design)**, dashboards/aggregation,
+notifications/sockets/misc. Educator dashboard/course/package still blocked on subscription models.
 
 ---
 
@@ -240,8 +336,10 @@ yarn migration:api:<key>      # one module
 ## 7. 🚫 OUT OF SCOPE / DEFERRED (don't re-investigate — decisions already made)
 
 - **`pendrive-course` (7 tables `ws_pendrive_course*`)** — DECOMMISSIONED by user. Skip entirely.
-- **Laravel admin/RBAC** — `ws_users`, `ws_roles`, `ws_permissions`, `ws_model_has_*`, `ws_role_has_*`,
-  `ws_password_resets`, `ws_personal_access_tokens`. New app uses Mongo for admin auth; legacy Laravel infra.
+- **~~Laravel admin/RBAC~~ — NO LONGER OUT OF SCOPE (migrated 2026-06-17, see §1A).** `ws_users` + spatie
+  pivots (`ws_roles`/`ws_permissions`/`ws_model_has_*`) are now read by `admin-auth`. Admin login + management
+  are on SQL. Still untouched legacy Laravel infra: `ws_password_resets`, `ws_personal_access_tokens` (the new
+  app uses its own JWT + `ws_admin_access_tokens`, not Sanctum).
 - **Laravel internals** — `ws_migrations`, `ws_failed_jobs` (not app data).
 - **`Goal`** — Mongo `ws_goals` has embedded `labels[]`; NO SQL table (only flat `ws_customer_target_goal`).
   `listPackagesByGoal` not reproducible from SQL → deferred (reconciliation design).
@@ -270,6 +368,12 @@ built + wired, flag OFF.
 **Small flat (low value):** `ws_tag` · `ws_dynamic_image` · `ws_image_notification` ·
 `ws_offline_banner_slider` · `ws_user_inquiry` · `ws_website_inquiry`
 **Mongo-only (design needed):** LiveCourse/LiveSession · Goal · PromoCode appliesTo
+**Admin/educator wave done (2026-06-17, §1A):** ✅ admin-auth (ws_users + spatie) · ✅ admin administrator
+CRUD · ✅ admin customer CRUD · ✅ educator-auth (ws_course_educator, MD5+bcrypt) · ✅ admin educator master CRUD.
+**Still Mongo after that wave** (see [`../MIGRATION_MONGO_REMAINING.md`](../MIGRATION_MONGO_REMAINING.md)):
+client referral/cart/goals/orders lookups · admin dashboard/notifications/livechat · educator
+dashboard/course/package (blocked on subscription models) · **promoter** (auth + dashboard + customers +
+subscriptions — mirror admin-auth/educator-auth next) · FCM/sockets/webhooks.
 
 **Reality:** the read side AND the write side (Phase 3b) are now DONE. What's left is **THE FLIP (go-live)**
 + one architectural design (**LiveCourse**) + the Mongo-only tail (Goal, PromoCode appliesTo) + a handful of

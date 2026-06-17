@@ -96,6 +96,7 @@ enum RefferalTransactionType {
 enum RefferalTransactionStatus {
   pending
   successful
+  failed
 }
 
 enum OsType {
@@ -460,6 +461,8 @@ model RefferalTransaction {
   coin        Int                       @map("coin")
   type        RefferalTransactionType   @map("type")
   status      RefferalTransactionStatus @map("status")
+  providerRef String?                   @map("provider_ref") @db.VarChar(255)
+  failureReason String?                 @map("failure_reason") @db.VarChar(500)
   createdAt   DateTime?                 @map("created_at")
   updatedAt   DateTime?                 @map("updated_at")
 
@@ -711,7 +714,7 @@ model ExamCategory {
 model Exam {
   id                Int                @id @default(autoincrement())
   name              String             @map("title")
-  description       String
+  description       String?
   type              ExamType
   ExamCategory      ExamCategory?      @relation(fields: [examCategoryId], references: [id])
   examCategoryId    Int?               @map("exam_category_id")
@@ -1010,8 +1013,10 @@ model VideoCategory {
   id                     Int                      @id @default(autoincrement())
   title                  String
   slug                   String
-  // parent                 Int
+  parent                 Int?
+  educatorId             Int?                     @map("educator_id")
   image                  String
+  pdf                    String?
   order_by               Int
   status                 Boolean
   created_at             DateTime?
@@ -1062,19 +1067,37 @@ model PackageVideoCategoryRelation {
 // ****************************COURSE MODULE******************************
 
 model CourseEducator {
-  id        Int       @id @default(autoincrement())
-  name      String
-  image     String
-  about     String
-  email     String    @map("email_address")
-  password  String
-  view      Int
-  status    Boolean
-  createdAt DateTime? @map("created_at")
-  updatedAt DateTime? @map("updated_at")
-  course    Course[]
+  id              Int                     @id @default(autoincrement())
+  name            String
+  image           String?
+  about           String
+  email           String                  @map("email_address")
+  password        String
+  view            Int
+  status          Boolean
+  lastSeenAt      DateTime?               @map("last_seen_at") @db.Date
+  emailVerifiedAt DateTime?               @map("email_verified_at") @db.Date
+  createdAt       DateTime?               @map("created_at")
+  updatedAt       DateTime?               @map("updated_at")
+  course          Course[]
+  accessTokens    EducatorAccessToken[]
 
   @@map("ws_course_educator")
+}
+
+model EducatorAccessToken {
+  id           Int            @id @default(autoincrement())
+  educator     CourseEducator @relation(references: [id], fields: [educatorId])
+  educatorId   Int            @map("educator_id")
+  token        String         @db.Text
+  refreshToken String?        @map("refresh_token") @db.Text
+  active       Boolean        @default(true)
+  deleted      Boolean        @default(false)
+  created_at   DateTime
+  expires_at   DateTime
+
+  @@index([educatorId], map: "idx_educator_id")
+  @@map("ws_educator_access_tokens")
 }
 
 model CourseSubjectCategory {
@@ -1316,18 +1339,36 @@ model EBookSubscription {
 // ****************************PROMOTION MODULE******************************
 
 model Promoter {
-  id         Int         @id @default(autoincrement())
-  full_name  String?
-  email      String?
-  phone      String?
-  image      String?
-  status     Boolean
-  is_delete  Boolean
-  created_at DateTime?
-  updated_at DateTime?
-  promocode  Promocode[]
+  id           Int                     @id @default(autoincrement())
+  full_name    String?
+  email        String?
+  password     String?
+  phone        String?
+  image        String?
+  status       Boolean
+  is_delete    Boolean
+  lastSeenAt   DateTime?               @map("last_seen_at") @db.Date
+  created_at   DateTime?
+  updated_at   DateTime?
+  promocode    Promocode[]
+  accessTokens PromoterAccessToken[]
 
   @@map("ws_promoter")
+}
+
+model PromoterAccessToken {
+  id           Int       @id @default(autoincrement())
+  promoter     Promoter  @relation(references: [id], fields: [promoterId])
+  promoterId   Int       @map("promoter_id")
+  token        String    @db.Text
+  refreshToken String?   @map("refresh_token") @db.Text
+  active       Boolean   @default(true)
+  deleted      Boolean   @default(false)
+  created_at   DateTime
+  expires_at   DateTime
+
+  @@index([promoterId], map: "idx_promoter_id")
+  @@map("ws_promoter_access_tokens")
 }
 
 model Promocode {
@@ -1461,4 +1502,102 @@ model Inquiry {
   updatedAt DateTime    @updatedAt
 
   @@map("ws_website_inquiry")
+}
+
+// ***************************ADMIN (ws_users)*********************
+// Admin accounts. Laravel schema: snake_case columns, no `role`/`deleted`
+// columns (roles come from the spatie pivots below). `status`/`is_dark` are
+// stored as enum('0','1') in MySQL; mapped to Boolean via @db column type.
+model AdminUser {
+  id              BigInt              @id @default(autoincrement()) @db.UnsignedBigInt
+  firstName       String              @map("first_name") @db.VarChar(255)
+  lastName        String?             @map("last_name") @db.VarChar(100)
+  email           String              @unique @db.VarChar(255)
+  image           String              @db.VarChar(255)
+  emailVerifiedAt DateTime?           @map("email_verified_at")
+  password        String              @db.VarChar(255)
+  lastLoginDate   DateTime?           @map("last_login_date")
+  lastLoginIp     String?             @map("last_login_ip") @db.VarChar(255)
+  lastSeenAt      DateTime?           @map("last_seen_at")
+  status          AdminStatusFlag     @default(active)
+  rememberToken   String?             @map("remember_token") @db.VarChar(100)
+  isDark          AdminDarkFlag       @default(light) @map("is_dark")
+  createdAt       DateTime?           @map("created_at")
+  updatedAt       DateTime?           @map("updated_at")
+  accessTokens    AdminAccessToken[]
+
+  @@map("ws_users")
+}
+
+// enum('0','1') columns from the legacy dump.
+enum AdminStatusFlag {
+  inactive @map("0")
+  active   @map("1")
+}
+
+enum AdminDarkFlag {
+  light @map("0")
+  dark  @map("1")
+}
+
+model AdminAccessToken {
+  id           Int       @id @default(autoincrement())
+  admin        AdminUser @relation(references: [id], fields: [adminUserId])
+  adminUserId  BigInt    @map("admin_user_id") @db.UnsignedBigInt
+  token        String    @db.Text
+  refreshToken String?   @map("refresh_token") @db.Text
+  active       Boolean   @default(true)
+  deleted      Boolean   @default(false)
+  created_at   DateTime
+  expires_at   DateTime
+
+  @@index([adminUserId], map: "idx_admin_user_id")
+  @@map("ws_admin_access_tokens")
+}
+
+// Spatie roles/permissions (read-only resolution for the login response).
+model AdminRoleRow {
+  id        BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String    @db.VarChar(255)
+  guardName String    @map("guard_name") @db.VarChar(255)
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@map("ws_roles")
+}
+
+model AdminPermissionRow {
+  id        BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name      String    @db.VarChar(255)
+  guardName String    @map("guard_name") @db.VarChar(255)
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@map("ws_permissions")
+}
+
+model AdminRoleHasPermission {
+  permissionId BigInt @map("permission_id") @db.UnsignedBigInt
+  roleId       BigInt @map("role_id") @db.UnsignedBigInt
+
+  @@id([permissionId, roleId])
+  @@map("ws_role_has_permissions")
+}
+
+model AdminModelHasRole {
+  roleId    BigInt @map("role_id") @db.UnsignedBigInt
+  modelType String @map("model_type") @db.VarChar(255)
+  modelId   BigInt @map("model_id") @db.UnsignedBigInt
+
+  @@id([roleId, modelId, modelType])
+  @@map("ws_model_has_roles")
+}
+
+model AdminModelHasPermission {
+  permissionId BigInt @map("permission_id") @db.UnsignedBigInt
+  modelType    String @map("model_type") @db.VarChar(255)
+  modelId      BigInt @map("model_id") @db.UnsignedBigInt
+
+  @@id([permissionId, modelId, modelType])
+  @@map("ws_model_has_permissions")
 }

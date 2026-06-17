@@ -14,6 +14,7 @@ import { sortFieldMap } from "./permission.validation";
 import { HttpError } from "../../middlewares/errorHandler";
 import cache from "../../libs/cache";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import * as rbac from "../../modules/admin-rbac/admin-rbac.service";
 
 const assertObjectId = (id: string, label: string): void => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -70,6 +71,12 @@ export interface ListPermissionsInput {
 export const listPermissions = async (input: ListPermissionsInput) => {
   const { guard, category_id, search, page, per_page, sort_by, sort_dir } = input;
 
+  // ─── MySQL branch (ws_permissions; category derived from name prefix) ────
+  if (rbac.isRbacMysql()) {
+    const { items, total } = await rbac.listPermissions({ guard, search, page, per_page });
+    return { items, pagination: { page, per_page, total } };
+  }
+
   const filter: any = {};
   if (guard) filter.guardName = guard;
   if (category_id) filter.categoryId = category_id;
@@ -110,6 +117,15 @@ export const listPermissions = async (input: ListPermissionsInput) => {
 };
 
 export const getPermission = async (id: string, guard?: string) => {
+  if (rbac.isRbacMysql()) {
+    const numId = rbac.parseRbacId(id);
+    if (!numId) throw new HttpError(400, "Invalid permission id");
+    const data = await rbac.getRolesForPermission(numId);
+    if (!data) throw new HttpError(404, "Permission not found");
+    const perm = await rbac.getPermission(numId);
+    if (guard && perm && perm.guard_name !== guard) throw new HttpError(404, "Permission not found");
+    return { ...perm, roles: data.roles };
+  }
   assertObjectId(id, "permission");
   const filter: any = { _id: id };
   if (guard) filter.guardName = guard;
@@ -130,6 +146,9 @@ export const getPermission = async (id: string, guard?: string) => {
 };
 
 export const getPermissionsTree = async () => {
+  if (rbac.isRbacMysql()) {
+    return rbac.getPermissionsTree();
+  }
   return cache.aside({
     key: treeKey(),
     ttlSeconds: 1800,
@@ -187,6 +206,14 @@ export interface CreatePermissionInput {
 export const createPermission = async (input: CreatePermissionInput) => {
   const { name, guard, category_id } = input;
 
+  // ─── MySQL branch (no category table; category derived from name) ────────
+  if (rbac.isRbacMysql()) {
+    if (await rbac.permissionNameExists(name, guard)) {
+      throw new HttpError(409, `Permission '${name}' already exists for guard '${guard}'`);
+    }
+    return rbac.createPermission(name, guard);
+  }
+
   const categoryExists = await PermissionCategory.exists({
     _id: category_id,
     status: true,
@@ -224,6 +251,19 @@ export interface UpdatePermissionInput {
 }
 
 export const updatePermission = async (id: string, input: UpdatePermissionInput) => {
+  if (rbac.isRbacMysql()) {
+    const numId = rbac.parseRbacId(id);
+    if (!numId) throw new HttpError(400, "Invalid permission id");
+    const existing = await rbac.getPermission(numId);
+    if (!existing) throw new HttpError(404, "Permission not found");
+    const nextName = input.name ?? existing.name;
+    const nextGuard = input.guard ?? existing.guard_name;
+    if ((nextName !== existing.name || nextGuard !== existing.guard_name) && (await rbac.permissionNameExists(nextName, nextGuard))) {
+      throw new HttpError(409, `Permission '${nextName}' already exists for guard '${nextGuard}'`);
+    }
+    // category_id ignored on SQL (no category table; derived from name).
+    return rbac.updatePermission(numId, { name: nextName, guard: nextGuard });
+  }
   assertObjectId(id, "permission");
 
   const perm = await Permission.findById(id);
@@ -275,6 +315,18 @@ export const updatePermission = async (id: string, input: UpdatePermissionInput)
 };
 
 export const deletePermission = async (id: string, guard?: string) => {
+  if (rbac.isRbacMysql()) {
+    const numId = rbac.parseRbacId(id);
+    if (!numId) throw new HttpError(400, "Invalid permission id");
+    const perm = await rbac.getPermission(numId);
+    if (!perm || (guard && perm.guard_name !== guard)) throw new HttpError(404, "Permission not found");
+    const inUse = await rbac.getRolesForPermission(numId);
+    if (inUse && inUse.roles.length) {
+      throw new HttpError(409, "Permission is assigned to one or more roles or users and cannot be deleted");
+    }
+    await rbac.deletePermission(numId);
+    return;
+  }
   assertObjectId(id, "permission");
 
   const filter: any = { _id: id };
@@ -303,6 +355,14 @@ export const deletePermission = async (id: string, guard?: string) => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const getRolesForPermission = async (id: string, guard?: string) => {
+  if (rbac.isRbacMysql()) {
+    const numId = rbac.parseRbacId(id);
+    if (!numId) throw new HttpError(400, "Invalid permission id");
+    const data = await rbac.getRolesForPermission(numId);
+    if (!data) throw new HttpError(404, "Permission not found");
+    const roles = guard ? data.roles.filter((r) => r.guard_name === guard) : data.roles;
+    return { roles };
+  }
   assertObjectId(id, "permission");
   const exists = await Permission.exists({ _id: id });
   if (!exists) throw new HttpError(404, "Permission not found");

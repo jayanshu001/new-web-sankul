@@ -14,6 +14,9 @@ import {
   RefferalTransactionStatus,
 } from "../../models/enums";
 import { HttpError } from "../../middlewares/errorHandler";
+import * as refSql from "../../modules/referral/referral.service";
+
+const { isReferralMysql, parseId } = refSql;
 
 const assertObjectId = (id: string, label: string): void => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -25,10 +28,19 @@ const assertObjectId = (id: string, label: string): void => {
 // Programs (small master)
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const listPrograms = async () =>
-  ReferralProgram.find().sort({ createdAt: -1 }).lean();
+export const listPrograms = async () => {
+  if (isReferralMysql()) return refSql.adminListPrograms();
+  return ReferralProgram.find().sort({ createdAt: -1 }).lean();
+};
 
 export const getProgramById = async (id: string) => {
+  if (isReferralMysql()) {
+    const numId = parseId(id);
+    if (!numId) throw new HttpError(400, "Invalid program id.");
+    const program = await refSql.adminGetProgram(numId);
+    if (!program) throw new HttpError(404, "Program not found.");
+    return program;
+  }
   assertObjectId(id, "program");
   const program = await ReferralProgram.findById(id).lean();
   if (!program) throw new HttpError(404, "Program not found.");
@@ -36,6 +48,12 @@ export const getProgramById = async (id: string) => {
 };
 
 export const createProgram = async (validated: any) => {
+  if (isReferralMysql()) {
+    if (validated.name && (await refSql.adminProgramNameExists(validated.name))) {
+      throw new HttpError(409, "Program name already exists.");
+    }
+    return refSql.adminCreateProgram(validated);
+  }
   try {
     const program = await ReferralProgram.create(validated);
     return program.toObject();
@@ -48,6 +66,15 @@ export const createProgram = async (validated: any) => {
 };
 
 export const updateProgram = async (id: string, validated: any) => {
+  if (isReferralMysql()) {
+    const numId = parseId(id);
+    if (!numId) throw new HttpError(400, "Invalid program id.");
+    if (!(await refSql.adminGetProgram(numId))) throw new HttpError(404, "Program not found.");
+    if (validated.name && (await refSql.adminProgramNameExists(validated.name, numId))) {
+      throw new HttpError(409, "Program name already exists.");
+    }
+    return refSql.adminUpdateProgram(numId, validated);
+  }
   assertObjectId(id, "program");
   const program = await ReferralProgram.findByIdAndUpdate(
     id,
@@ -59,6 +86,13 @@ export const updateProgram = async (id: string, validated: any) => {
 };
 
 export const deleteProgram = async (id: string) => {
+  if (isReferralMysql()) {
+    const numId = parseId(id);
+    if (!numId) throw new HttpError(400, "Invalid program id.");
+    if (!(await refSql.adminGetProgram(numId))) throw new HttpError(404, "Program not found.");
+    await refSql.adminDeleteProgram(numId);
+    return;
+  }
   assertObjectId(id, "program");
   const program = await ReferralProgram.findByIdAndDelete(id).lean();
   if (!program) throw new HttpError(404, "Program not found.");
@@ -80,6 +114,13 @@ export interface ListTransactionsQuery {
 
 export const listTransactions = async (query: ListTransactionsQuery) => {
   const { customerId, type, status, fromDate, toDate, page = "1", limit = "20" } = query;
+
+  if (isReferralMysql()) {
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const { data, total } = await refSql.adminListTransactions({ customerId, type, status, fromDate, toDate, page: pageNum, limit: limitNum });
+    return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
+  }
 
   const filter: any = {};
   if (customerId && mongoose.Types.ObjectId.isValid(customerId)) filter.customerId = customerId;
@@ -126,6 +167,17 @@ export const updateWithdrawalStatus = async (
   id: string,
   validated: { status: string; description?: string }
 ) => {
+  if (isReferralMysql()) {
+    const numId = parseId(id);
+    if (!numId) throw new HttpError(400, "Invalid transaction id.");
+    const r = await refSql.adminUpdateWithdrawalStatus(numId, validated.status, validated.description);
+    if (!r.ok) {
+      if (r.reason === "not_found") throw new HttpError(404, "Transaction not found.");
+      if (r.reason === "not_debit") throw new HttpError(400, "Only debit withdrawal transactions can have status updated.");
+      throw new HttpError(400, "Invalid status.");
+    }
+    return r.data;
+  }
   assertObjectId(id, "transaction");
 
   const txn = await ReferralTransaction.findById(id);
@@ -159,6 +211,17 @@ export const updateWithdrawalStatus = async (
 };
 
 export const rejectWithdrawal = async (id: string) => {
+  if (isReferralMysql()) {
+    const numId = parseId(id);
+    if (!numId) throw new HttpError(400, "Invalid transaction id.");
+    const r = await refSql.adminRejectWithdrawal(numId);
+    if (!r.ok) {
+      if (r.reason === "not_found") throw new HttpError(404, "Transaction not found.");
+      if (r.reason === "not_debit") throw new HttpError(400, "Only withdrawal debits can be rejected.");
+      throw new HttpError(400, "Only pending withdrawals can be rejected.");
+    }
+    return;
+  }
   assertObjectId(id, "transaction");
 
   const txn = await ReferralTransaction.findById(id);
@@ -200,6 +263,13 @@ export interface WithdrawalsReportQuery {
 
 export const getWithdrawalsReport = async (query: WithdrawalsReportQuery) => {
   const { fromDate, toDate, status, search, page = "1", limit = "10" } = query;
+
+  if (isReferralMysql()) {
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 200);
+    const { data, total } = await refSql.adminWithdrawalsReport({ status, fromDate, toDate, search, page: pageNum, limit: limitNum });
+    return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
+  }
 
   const filter: any = { type: RefferalTransactionType.DEBIT, bankAccount: { $ne: null } };
   if (
@@ -323,6 +393,7 @@ export interface WithdrawalsCsvQuery {
 
 export const buildWithdrawalsCsv = async (query: WithdrawalsCsvQuery): Promise<string> => {
   const { fromDate, toDate, status } = query;
+  if (isReferralMysql()) return refSql.adminWithdrawalsCsv({ status, fromDate, toDate });
   const filter: any = { type: RefferalTransactionType.DEBIT, bankAccount: { $ne: null } };
   if (
     status === RefferalTransactionStatus.PENDING ||
@@ -376,8 +447,20 @@ export const adjustCustomerRewards = async (
   customerId: string,
   input: { amount: number; type: "credit" | "debit"; description?: string }
 ) => {
-  assertObjectId(customerId, "customer");
   const { amount, type, description } = input;
+
+  if (isReferralMysql()) {
+    const numId = parseId(customerId);
+    if (!numId) throw new HttpError(400, "Invalid customer id.");
+    const r = await refSql.adminAdjustRewards(numId, { amount, type, description });
+    if (!r.ok) {
+      if (r.reason === "not_found") throw new HttpError(404, "Customer not found.");
+      throw new HttpError(400, "Debit amount exceeds customer's reward points.");
+    }
+    return r.data;
+  }
+
+  assertObjectId(customerId, "customer");
   const signedDelta = type === "credit" ? amount : -amount;
 
   const customer = await Customer.findOne({
@@ -448,6 +531,11 @@ export const listReferrers = async (query: ReferrersQuery) => {
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
   const skip = (pageNum - 1) * limitNum;
+
+  if (isReferralMysql()) {
+    const { data } = await refSql.adminListReferrers({ search, sort, hasWithdrawn, minEarned, page: pageNum, limit: limitNum });
+    return { data, pagination: { total: data.length, page: pageNum, limit: limitNum, totalPages: data.length < limitNum ? pageNum : pageNum + 1 } };
+  }
 
   const match: Record<string, unknown> = {
     referralCode: { $exists: true, $ne: null },

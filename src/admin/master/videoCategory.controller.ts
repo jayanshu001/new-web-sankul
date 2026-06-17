@@ -3,9 +3,11 @@ import mongoose from "mongoose";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { createVideoCategorySchema, updateVideoCategorySchema } from "./master.validation";
+import * as master from "../../modules/admin-master/admin-master.service";
 
 export const getVideoCategories = async (req: Request, res: Response) => {
   try {
+    if (master.isAdminMasterMysql()) return res.status(200).json({ success: true, data: await master.vcList() });
     // Populate childCategoryIds so each row can carry a `child_categories`
     // array (mirroring the admin /video-categories list) plus a `hasChildren`
     // boolean. This lets clients (e.g. the Course / Live Course modal, which
@@ -42,6 +44,7 @@ export const createVideoCategory = async (req: Request, res: Response) => {
     if (typeof req.body.order_by === "string") req.body.order_by = Number(req.body.order_by);
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = createVideoCategorySchema.parse(req.body);
+    if (master.isAdminMasterMysql()) return res.status(201).json({ success: true, data: await master.vcCreate(validatedData) });
     const category = new VideoCategory(validatedData);
     await category.save();
     res.status(201).json({ success: true, data: category });
@@ -54,14 +57,21 @@ export const createVideoCategory = async (req: Request, res: Response) => {
 export const updateVideoCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    }
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.order_by === "string") req.body.order_by = Number(req.body.order_by);
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const validatedData = updateVideoCategorySchema.parse(req.body);
+    if (master.isAdminMasterMysql()) {
+      const numId = master.parseMasterId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+      const data = await master.vcUpdate(numId, validatedData);
+      if (!data) return res.status(404).json({ success: false, message: "Video Category not found" });
+      return res.status(200).json({ success: true, data });
+    }
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    }
     const category = await VideoCategory.findByIdAndUpdate(id, validatedData, { new: true });
     if (!category) return res.status(404).json({ success: false, message: "Video Category not found" });
     res.status(200).json({ success: true, data: category });
@@ -74,6 +84,13 @@ export const updateVideoCategory = async (req: Request, res: Response) => {
 export const deleteVideoCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (master.isAdminMasterMysql()) {
+      const numId = master.parseMasterId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+      if (!(await master.vcDelete(numId))) return res.status(404).json({ success: false, message: "Video Category not found" });
+      // D2 relation cleanup (ws_video_category_relation) is deferred; not migrated.
+      return res.status(200).json({ success: true, message: "Video Category deleted successfully", data: { deletedRelations: 0 } });
+    }
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
     }

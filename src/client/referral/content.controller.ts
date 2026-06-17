@@ -4,6 +4,7 @@ import { ReferralFaq } from "../../models/referral/ReferralFaq.model";
 import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { isReferralMysql, getReferralStatus as svcReferralStatus } from "../../modules/referral/referral.service";
 
 // GET /api/v1/client/referral/status
 // Tells the app whether to show the Refer & Earn module at all.
@@ -13,6 +14,13 @@ export const getReferralStatus = async (_req: Request, res: Response) => {
   logger.info("getReferralStatus invoked", { traceId, path: _req.originalUrl });
 
   try {
+    // ─── MySQL branch (ws_refferal_program) ───────────────────────────────
+    if (isReferralMysql()) {
+      const data = await svcReferralStatus();
+      logger.info("getReferralStatus success (sql)", { traceId, enabled: data.enabled });
+      return res.status(200).json({ success: true, data });
+    }
+
     const program = await ReferralProgram.findOne({ name: "student", status: true })
       .select("_id referralDiscount referralReward minimumPrice")
       .lean();

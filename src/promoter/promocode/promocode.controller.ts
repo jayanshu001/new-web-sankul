@@ -8,6 +8,12 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isPromoterDataMysql,
+  parsePromoterId,
+  listPromoterPromocodes,
+  getPromoterPromocode,
+} from "../../modules/promoter-data/promoter-data.service";
 
 const APPLIES_TO_MODEL = {
   package: Package,
@@ -36,6 +42,15 @@ export const listMyPromocodes = async (req: Request, res: Response) => {
 
   try {
     if (!promoterId) { logger.warn("listMyPromocodes unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ─── MySQL branch (SQL-faithful: no appliesTo) ────────────────────────
+    if (isPromoterDataMysql()) {
+      const pid = parsePromoterId(promoterId);
+      if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
+      const data = await listPromoterPromocodes(pid);
+      logger.info("listMyPromocodes success (sql)", { traceId, promoterId, count: data.length });
+      return res.status(200).json({ success: true, data });
+    }
 
     const data = await PromoCode.find({ promoterId }).sort({ createdAt: -1 }).lean();
 
@@ -82,6 +97,18 @@ export const getMyPromocode = async (req: Request, res: Response) => {
 
   try {
     if (!promoterId) { logger.warn("getMyPromocode unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (isPromoterDataMysql()) {
+      const pid = parsePromoterId(promoterId);
+      const cid = Number(id);
+      if (!pid || !Number.isInteger(cid) || cid <= 0) return res.status(400).json({ success: false, message: "Invalid id." });
+      const promocode = await getPromoterPromocode(pid, cid);
+      if (!promocode) { logger.warn("getMyPromocode not found (sql)", { traceId, promoterId, promocodeId: id }); return res.status(404).json({ success: false, message: "Promocode not found." }); }
+      logger.info("getMyPromocode success (sql)", { traceId, promoterId, promocodeId: id });
+      return res.status(200).json({ success: true, data: { promocode } });
+    }
+
     if (!isObjectId(id)) { logger.warn("getMyPromocode invalid id", { traceId, promoterId, promocodeId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
 
     const promocode = await PromoCode.findOne({ _id: id, promoterId }).lean();

@@ -123,7 +123,12 @@
       "Bash(awk '{n=$1} END {print \"Files with no logging: \" n}')",
       "Bash(awk '{p=$1; getline < \"/tmp/results.txt\"; for\\(i=0;i<200;i++\\) {if\\(getline < \"/tmp/results.txt\" > 0\\) {if\\(/NONE/\\) n++}} print \"Total work items: \" p+n}')",
       "Bash(docker compose *)",
-      "Bash(yarn prisma *)"
+      "Bash(yarn prisma *)",
+      "Bash(npx prisma *)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(yarn docs:migrated-modules)",
+      "Bash(yarn docs:schema-comparison)",
+      "Bash(yarn docs:field-comparison)"
     ]
   }
 }

@@ -14,6 +14,7 @@ import {
   createPcMaterialSchema,
   updatePcMaterialSchema,
 } from "./pc-material.validation";
+import * as master from "../../modules/admin-master/admin-master.service";
 
 const assertObjectId = (id: string) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -22,12 +23,20 @@ const assertObjectId = (id: string) => {
 };
 
 export const listPcMaterials = asyncHandler(async (_req: Request, res: Response) => {
+  if (master.isAdminMasterMysql()) return res.status(200).json({ success: true, data: await master.pcmList() });
   const data = await PackageCourseMaterial.find().sort({ createdAt: -1 }).lean();
   return res.status(200).json({ success: true, data });
 });
 
 export const getPcMaterialById = asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
+  if (master.isAdminMasterMysql()) {
+    const numId = master.parseMasterId(id);
+    if (!numId) throw new HttpError(400, "Invalid material id.");
+    const data = await master.pcmGet(numId);
+    if (!data) throw new HttpError(404, "Material not found.");
+    return res.status(200).json({ success: true, data });
+  }
   assertObjectId(id);
   const data = await PackageCourseMaterial.findById(id).lean();
   if (!data) throw new HttpError(404, "Material not found.");
@@ -36,14 +45,22 @@ export const getPcMaterialById = asyncHandler(async (req: Request, res: Response
 
 export const createPcMaterial = asyncHandler(async (req: Request, res: Response) => {
   const validated = createPcMaterialSchema.parse(req.body);
+  if (master.isAdminMasterMysql()) return res.status(201).json({ success: true, data: await master.pcmCreate(validated.title) });
   const material = await PackageCourseMaterial.create(validated);
   return res.status(201).json({ success: true, data: material.toObject() });
 });
 
 export const updatePcMaterial = asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
-  assertObjectId(id);
   const validated = updatePcMaterialSchema.parse(req.body);
+  if (master.isAdminMasterMysql()) {
+    const numId = master.parseMasterId(id);
+    if (!numId) throw new HttpError(400, "Invalid material id.");
+    const data = await master.pcmUpdate(numId, validated.title ?? "");
+    if (!data) throw new HttpError(404, "Material not found.");
+    return res.status(200).json({ success: true, data });
+  }
+  assertObjectId(id);
   const material = await PackageCourseMaterial.findByIdAndUpdate(
     id,
     { $set: validated },
@@ -55,6 +72,12 @@ export const updatePcMaterial = asyncHandler(async (req: Request, res: Response)
 
 export const deletePcMaterial = asyncHandler(async (req: Request, res: Response) => {
   const id = req.params.id as string;
+  if (master.isAdminMasterMysql()) {
+    const numId = master.parseMasterId(id);
+    if (!numId) throw new HttpError(400, "Invalid material id.");
+    if (!(await master.pcmDelete(numId))) throw new HttpError(404, "Material not found.");
+    return res.status(200).json({ success: true, message: "Material deleted." });
+  }
   assertObjectId(id);
   const material = await PackageCourseMaterial.findByIdAndDelete(id).lean();
   if (!material) throw new HttpError(404, "Material not found.");

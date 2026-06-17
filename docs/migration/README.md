@@ -21,6 +21,8 @@ All Web Sankul **MySQL migration** docs for `new-web-sankul` live in this folder
 | [**FIELD_COMPARISON.md**](./FIELD_COMPARISON.md) | Module-by-module column/field + constraints matrix |
 | [**phase-1-mysql.md**](./phase-1-mysql.md) | Phase 1: Docker MySQL, import dump, Prisma setup |
 | [**legacy_system_migration_strategy.md**](./legacy_system_migration_strategy.md) | Full 8-phase migration strategy (architecture & phases) |
+| [**../MIGRATION_QUERY_CHANGES.md**](../MIGRATION_QUERY_CHANGES.md) | Newest-first detailed log of every query/schema/index/migration change (in `docs/`) |
+| [**../MIGRATION_MONGO_REMAINING.md**](../MIGRATION_MONGO_REMAINING.md) | Inventory of everything still on MongoDB with no SQL branch — the path to SQL-only (in `docs/`) |
 
 ---
 
@@ -60,11 +62,26 @@ yarn dev
 
 ## Current status (summary)
 
-> **✅ 2026-06-13 — 0 MODULES LEFT TO MIGRATE.** All 34 read+write modules are built + wired, **all flag OFF**
-> (11 enabled, the rest dual-path dormant). The read side AND the Phase 3b write side are DONE. What remains is
-> **THE FLIP** (go-live: turn flags ON) + the **LiveCourse design** (Mongo-only, no SQL tables) + optional
-> low-value flat/D2 tables. **`RESUME_HERE.md` is the live single source of truth** — read it first. The
-> per-module detail below is the historical wave-by-wave record (newest waves at the bottom of this list).
+> **🆕 2026-06-17 — MONGO-ONLY PUSH started (resumable plan: [`MONGO_ONLY_MIGRATION_PLAN.md`](./MONGO_ONLY_MIGRATION_PLAN.md)).**
+> Goal: convert every remaining MongoDB-only module to SQL (~90 files, by dependency wave). **✅ Wave 1
+> (Promoter) DONE** — `promoter-auth` (login + new `ws_promoter_access_tokens`) and `promoter-data` (customers,
+> subscriptions+report, dashboard+overview, promocode) on SQL, flags ON, verified. Attribution derived from the
+> `ws_*_order.promocode` JSON snapshot (no new subscription columns). **Next = Wave 2 (Referral).** That plan
+> doc's RESUME POINTER is the live next-step for this push.
+>
+> **🆕 2026-06-17 — ADMIN + EDUCATOR wave on SQL.** Driven by the user requirement *"every API's data from SQL
+> only."* Now on MySQL (flags ON, verified tsx + live HTTP): **admin-auth** (`ws_users` + spatie roles + new
+> `ws_admin_access_tokens`), **admin administrator CRUD**, **admin customer CRUD** (`ws_customer`),
+> **educator-auth** (`ws_course_educator` + new `ws_educator_access_tokens`; **MD5+bcrypt** passwords), **admin
+> educator master CRUD**. Also **flipped `customer-profile` + `customer-bank-account` ON**. ⚠ This **overturns
+> the earlier "Laravel admin/RBAC stays Mongo" decision** (see `RESUME_HERE.md` §1A). 2 new DDL ADDs to carry to
+> prod: `ws_admin_access_tokens`, `ws_educator_access_tokens`. **Still Mongo:** client referral/cart/goals/orders
+> lookups, admin dashboard/notifications/livechat, educator dashboard/course/package, **promoter** (next mirror),
+> FCM/sockets/webhooks — full inventory in [`../MIGRATION_MONGO_REMAINING.md`](../MIGRATION_MONGO_REMAINING.md).
+>
+> **✅ 2026-06-13 — client/catalog/commerce read+write modules (34) built + wired.** The read side AND the
+> Phase 3b write side are DONE; full flip enabled in this env. **`RESUME_HERE.md` is the live single source of
+> truth** — read it first. The per-module detail below is the historical wave-by-wave record.
 >
 > **Phase 3b write cluster (COMPLETE, flag OFF):**
 > - `commerce-order` — course purchase (order + subscription + tracking; dual-read fallback). tsx 28/28.

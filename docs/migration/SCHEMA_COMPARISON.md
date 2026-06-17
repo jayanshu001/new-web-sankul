@@ -1,6 +1,6 @@
 # Schema comparison — Legacy MySQL vs MongoDB vs post-migration MySQL
 
-> **Generated:** 2026-06-13 (re-run `yarn docs:schema-comparison` after schema changes)  
+> **Generated:** 2026-06-17 (re-run `yarn docs:schema-comparison` after schema changes)  
 > **Migrated only:** [MIGRATED_MODULES.md](./MIGRATED_MODULES.md) · **Field-level detail:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md)  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Strategy:** [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
@@ -28,7 +28,7 @@
 
 ### Currently migrated modules (`MIGRATION_MYSQL_MODULES`)
 
-`app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city`
+`app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city, catalog-package-type, catalog-course, catalog-video, catalog-ebook, catalog-exam, catalog-material, catalog-book, offline-batch, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, admin-auth, customer-profile, customer-bank-account, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video`
 
 ---
 
@@ -38,19 +38,19 @@
 |---:|---|---|---|---|---|---|
 | 1 | AppUpdate | `ws_app_update` (4 cols) | `ws_app_updates` | `ws_app_update` | ✅ Migrated | Collection name differs from MySQL table |
 | 2 | BannerSlider | `ws_banner_slider` (7 cols) | `ws_banner_sliders` | `ws_banner_slider` | ✅ Migrated | Collection name differs from MySQL table |
-| 3 | Book | `ws_book` (20 cols) | `ws_books` | `ws_book` | 🟡 Code ready (flag off, WIRED — listBooks/getBookDetail compose book-order cart/purchase state) | Collection name differs from MySQL table |
-| 4 | BookCart | `ws_book_cart` (11 cols) | `ws_book_carts` | `ws_book_cart` | 🟡 Code ready (flag off, book WRITE built — book-order Phase 3b) | Collection name differs from MySQL table |
-| 5 | BookCartItem | `ws_book_cart_item` (7 cols) | — | `ws_book_cart_item` | 🟡 Code ready (flag off, book WRITE built — book-order Phase 3b) | MySQL/Prisma only (no Mongoose model found) |
-| 6 | BookOrder | `ws_book_order` (19 cols) | `ws_book_orders` | `ws_book_order` | 🟡 Code ready (flag off, book WRITE built — book-order Phase 3b) | Collection name differs from MySQL table |
-| 7 | BookOrderItem | `ws_book_order_item` (9 cols) | — | `ws_book_order_item` | 🟡 Code ready (flag off, book WRITE built — book-order Phase 3b) | MySQL/Prisma only (no Mongoose model found) |
-| 8 | BookTracking | `ws_book_tracking` (5 cols) | — | `ws_book_tracking` | 🟡 Code ready (flag off, book WRITE built — book-order Phase 3b) | MySQL/Prisma only (no Mongoose model found) |
-| 9 | Course | `ws_course` (19 cols) | — | `ws_course` | 🟡 Code ready (flag off) | MySQL/Prisma only (no Mongoose model found) |
-| 10 | CourseEducator | `ws_course_educator` (12 cols) | — | `ws_course_educator` | 🟡 Code ready (flag off, read-only) | MySQL/Prisma only (no Mongoose model found) |
-| 11 | CourseSubjectCategory | `ws_course_subject_category` (9 cols) | — | `ws_course_subject_category` | 🟡 Code ready (flag off) | MySQL/Prisma only (no Mongoose model found) |
+| 3 | Book | `ws_book` (20 cols) | `ws_books` | `ws_book` | ✅ Migrated (reads wired) | Collection name differs from MySQL table |
+| 4 | BookCart | `ws_book_cart` (11 cols) | `ws_book_carts` | `ws_book_cart` | ✅ Migrated (book write path) | Collection name differs from MySQL table |
+| 5 | BookCartItem | `ws_book_cart_item` (7 cols) | — | `ws_book_cart_item` | ✅ Migrated (book write path) | MySQL/Prisma only (no Mongoose model found) |
+| 6 | BookOrder | `ws_book_order` (19 cols) | `ws_book_orders` | `ws_book_order` | ✅ Migrated (book write path) | Collection name differs from MySQL table |
+| 7 | BookOrderItem | `ws_book_order_item` (9 cols) | — | `ws_book_order_item` | ✅ Migrated (book write path) | MySQL/Prisma only (no Mongoose model found) |
+| 8 | BookTracking | `ws_book_tracking` (5 cols) | — | `ws_book_tracking` | ✅ Migrated (book write path) | MySQL/Prisma only (no Mongoose model found) |
+| 9 | Course | `ws_course` (19 cols) | — | `ws_course` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
+| 10 | CourseEducator | `ws_course_educator` (12 cols) | — | `ws_course_educator` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
+| 11 | CourseSubjectCategory | `ws_course_subject_category` (9 cols) | — | `ws_course_subject_category` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 12 | Customer | `ws_customer` (34 cols) | `ws_customers` | `ws_customer` | ✅ Migrated | Collection name differs from MySQL table |
 | 13 | CustomerAccessToken | `ws_customer_access_token` (9 cols) | `ws_customer_access_tokens` | `ws_customer_access_token` | ✅ Migrated | Collection name differs from MySQL table |
 | 14 | CustomerAddress | `ws_customer_address` (17 cols) | `ws_customer_addresses` | `ws_customer_address` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
-| 15 | CustomerBankAccount | `ws_customer_bank_account` (10 cols) | `ws_customer_bank_accounts` | `ws_customer_bank_account` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
+| 15 | CustomerBankAccount | `ws_customer_bank_account` (10 cols) | `ws_customer_bank_accounts` | `ws_customer_bank_account` | ✅ Migrated | Collection name differs from MySQL table |
 | 16 | CustomerDistict | `ws_customer_distict` (4 cols) | — | `ws_customer_distict` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 17 | CustomerEducation | `ws_customer_education` (3 cols) | `ws_customer_educations` | `ws_customer_education` | ✅ Migrated | Collection name differs from MySQL table |
 | 18 | CustomerOtp | `ws_customer_otp` (4 cols) | `ws_customer_otps` | `ws_customer_otp` | ✅ Migrated | Collection name differs from MySQL table |
@@ -60,11 +60,11 @@
 | 22 | Department | `ws_department` (5 cols) | `ws_departments` | `ws_department` | ✅ Migrated | Collection name differs from MySQL table |
 | 23 | DepartmentContact | `ws_department_contact` (7 cols) | — | `ws_department_contact` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 24 | DynamicImage | `ws_dynamic_image` (2 cols) | `ws_dynamic_images` | `ws_dynamic_image` | ⏳ Not migrated | Collection name differs from MySQL table |
-| 25 | EBook | `ws_ebook` (16 cols) | `ws_ebook_downloads` | `ws_ebook` | 🟡 Code ready (flag off, wired) | Collection name differs from MySQL table |
-| 26 | EBookOrder | `ws_ebook_order` (16 cols) | — | `ws_ebook_order` | 🟡 Code ready (flag off, ebook WRITE built — ebook-order Phase 3b) | MySQL/Prisma only (no Mongoose model found) |
-| 27 | EBookSubscription | `ws_ebook_subscription` (12 cols) | — | `ws_ebook_subscription` | 🟡 Code ready (flag off — reads + ebook WRITE built) | MySQL/Prisma only (no Mongoose model found) |
-| 28 | Exam | `ws_exam` (18 cols) | `ws_exam` | `ws_exam` | 🟡 Partial (nav counts; item/attempt blocked) |  |
-| 29 | ExamCategory | `ws_exam_category` (9 cols) | `ws_exam` | `ws_exam_category` | 🟡 Code ready (flag off, nav-only) | Collection name differs from MySQL table |
+| 25 | EBook | `ws_ebook` (16 cols) | `ws_ebook_downloads` | `ws_ebook` | ✅ Migrated | Collection name differs from MySQL table |
+| 26 | EBookOrder | `ws_ebook_order` (16 cols) | — | `ws_ebook_order` | ✅ Migrated (ebook write path) | MySQL/Prisma only (no Mongoose model found) |
+| 27 | EBookSubscription | `ws_ebook_subscription` (12 cols) | — | `ws_ebook_subscription` | ✅ Migrated (reads + ebook write) | MySQL/Prisma only (no Mongoose model found) |
+| 28 | Exam | `ws_exam` (18 cols) | `ws_exam` | `ws_exam` | ✅ Migrated (nav counts) |  |
+| 29 | ExamCategory | `ws_exam_category` (9 cols) | `ws_exam` | `ws_exam_category` | ✅ Migrated | Collection name differs from MySQL table |
 | 30 | ExamCategoryCourse | `ws_exam_category_course` (6 cols) | `ws_exam` | `ws_exam_category_course` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 31 | ExamCategoryPackage | `ws_exam_category_package` (6 cols) | `ws_exam` | `ws_exam_category_package` | ⏳ Not migrated | Collection name differs from MySQL table |
 | 32 | ExamQuestion | `ws_exam_question` (11 cols) | `ws_exam_question` | `ws_exam_question` | ⏳ Not migrated |  |
@@ -75,27 +75,27 @@
 | 37 | — | `ws_failed_jobs` (7 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 38 | FAQ | `ws_faq` (7 cols) | `ws_faqs` | `ws_faq` | ✅ Migrated | Collection name differs from MySQL table |
 | 39 | ImageNotification | `ws_image_notification` (4 cols) | `ws_image_notifications` | `ws_image_notification` | ⏳ Not migrated | Collection name differs from MySQL table |
-| 40 | Material | `ws_material` (9 cols) | `ws_materials` | `ws_material` | 🟡 Partial (nav counts; item listing blocked) | Collection name differs from MySQL table |
-| 41 | MaterialCategory | `ws_material_category` (9 cols) | — | `ws_material_category` | 🟡 Code ready (flag off, nav-only) | MySQL/Prisma only (no Mongoose model found) |
+| 40 | Material | `ws_material` (9 cols) | `ws_materials` | `ws_material` | ✅ Migrated (nav counts) | Collection name differs from MySQL table |
+| 41 | MaterialCategory | `ws_material_category` (9 cols) | — | `ws_material_category` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 42 | MaterialCategoryCourse | `ws_material_category_course` (6 cols) | — | `ws_material_category_course` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 43 | MaterialCategoryPackage | `ws_material_category_package` (6 cols) | — | `ws_material_category_package` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 44 | — | `ws_migrations` (3 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
-| 45 | — | `ws_model_has_permissions` (3 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
-| 46 | — | `ws_model_has_roles` (3 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
+| 45 | AdminModelHasPermission | `ws_model_has_permissions` (3 cols) | — | `ws_model_has_permissions` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
+| 46 | AdminModelHasRole | `ws_model_has_roles` (3 cols) | — | `ws_model_has_roles` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 47 | OfflineBannerSlider | `ws_offline_banner_slider` (6 cols) | `ws_offline_banner_slider` | `ws_offline_banner_slider` | ⏳ Not migrated |  |
-| 48 | OfflineBatch | `ws_offline_batch` (9 cols) | `ws_offline_batch` | `ws_offline_batch` | 🟡 Code ready (flag off, wired reads) |  |
-| 49 | OfflineCenter | `ws_offline_center` (10 cols) | `ws_offline_center` | `ws_offline_center` | 🟡 Code ready (flag off, wired reads) |  |
+| 48 | OfflineBatch | `ws_offline_batch` (9 cols) | `ws_offline_batch` | `ws_offline_batch` | ✅ Migrated (reads) |  |
+| 49 | OfflineCenter | `ws_offline_center` (10 cols) | `ws_offline_center` | `ws_offline_center` | ✅ Migrated (reads) |  |
 | 50 | OfflineCity | `ws_offline_city` (5 cols) | `ws_offline_city` | `ws_offline_city` | ✅ Migrated |  |
-| 51 | OfflineEnquiry | `ws_offline_enquiry` (8 cols) | `ws_offline_enquiry` | `ws_offline_enquiry` | 🟡 Code ready (flag off, enquiry WRITE built — offline-enquiry Phase 3b) |  |
+| 51 | OfflineEnquiry | `ws_offline_enquiry` (8 cols) | `ws_offline_enquiry` | `ws_offline_enquiry` | ✅ Migrated (write) |  |
 | 52 | Package | `ws_package` (15 cols) | `ws_packages` | `ws_package` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
-| 53 | PackageChat | `ws_package_chat` (5 cols) | `ws_package_chats` | `ws_package_chat` | 🟡 Code ready (flag off, READ+WRITE built; table EXTENDED — package-chat Phase 3b) | Collection name differs from MySQL table |
-| 54 | PackageCourseEbookPrice | `ws_package_course_ebook_price` (13 cols) | — | `ws_package_course_ebook_price` | 🟡 Code ready (flag off) | MySQL/Prisma only (no Mongoose model found) |
+| 53 | PackageChat | `ws_package_chat` (5 cols) | `ws_package_chats` | `ws_package_chat` | ✅ Migrated (read + write; schema EXTENDED) | Collection name differs from MySQL table |
+| 54 | PackageCourseEbookPrice | `ws_package_course_ebook_price` (13 cols) | — | `ws_package_course_ebook_price` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 55 | PackageCourseMaterial | `ws_package_course_material` (4 cols) | — | `ws_package_course_material` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 56 | PackageCourseOrder | `ws_package_course_order` (22 cols) | — | `ws_package_course_order` | 🟡 Code ready (flag off, course WRITE built — commerce-order Phase 3b) | MySQL/Prisma only (no Mongoose model found) |
-| 57 | PackageCourseSubscription | `ws_package_course_subscription` (21 cols) | — | `ws_package_course_subscription` | 🟡 Code ready (flag off — reads + course WRITE built) | MySQL/Prisma only (no Mongoose model found) |
-| 58 | PackageCourseSubscriptionTracking | `ws_package_course_subscription_tracking` (5 cols) | — | `ws_package_course_subscription_tracking` | 🟡 Code ready (flag off, course WRITE built — commerce-order Phase 3b) | MySQL/Prisma only (no Mongoose model found) |
+| 56 | PackageCourseOrder | `ws_package_course_order` (22 cols) | — | `ws_package_course_order` | ✅ Migrated (course write path) | MySQL/Prisma only (no Mongoose model found) |
+| 57 | PackageCourseSubscription | `ws_package_course_subscription` (21 cols) | — | `ws_package_course_subscription` | ✅ Migrated (reads + course write) | MySQL/Prisma only (no Mongoose model found) |
+| 58 | PackageCourseSubscriptionTracking | `ws_package_course_subscription_tracking` (5 cols) | — | `ws_package_course_subscription_tracking` | ✅ Migrated (course write path) | MySQL/Prisma only (no Mongoose model found) |
 | 59 | PackageSpecificSubject | `ws_package_specific_subject` (7 cols) | — | `ws_package_specific_subject` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 60 | PackageType | `ws_package_type` (4 cols) | `ws_package_types` | `ws_package_type` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
+| 60 | PackageType | `ws_package_type` (4 cols) | `ws_package_types` | `ws_package_type` | ✅ Migrated | Collection name differs from MySQL table |
 | 61 | — | `ws_password_resets` (4 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 62 | PendriveCourse | `ws_pendrive_course` (24 cols) | — | `ws_pendrive_course` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 63 | PendriveCourseCart | `ws_pendrive_course_cart` (5 cols) | — | `ws_pendrive_course_cart` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
@@ -104,24 +104,24 @@
 | 66 | PendriveCourseStorageDevice | `ws_pendrive_course_storage_device` (5 cols) | — | `ws_pendrive_course_storage_device` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 67 | PendriveCourseTag | `ws_pendrive_course_tag` (5 cols) | — | `ws_pendrive_course_tag` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 68 | PendriveCourseTracking | `ws_pendrive_course_tracking` (5 cols) | — | `ws_pendrive_course_tracking` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 69 | Permission | `ws_permissions` (5 cols) | `ws_permissions` | — | ⏳ Not migrated | In SQL dump but no Prisma model |
+| 69 | AdminPermissionRow | `ws_permissions` (5 cols) | `ws_permissions` | `ws_permissions` | ⏳ Not migrated |  |
 | 70 | — | `ws_personal_access_tokens` (10 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 71 | PopupNotifications | `ws_popup_notification` (10 cols) | `ws_popup_notifications` | `ws_popup_notification` | ✅ Migrated | Collection name differs from MySQL table |
-| 72 | Promocode | `ws_promocode` (13 cols) | — | `ws_promocode` | 🟡 Code ready (flag off, SQL-faithful) | MySQL/Prisma only (no Mongoose model found) |
-| 73 | PromotedPackageCourseEbook | `ws_promoted_package_course_ebook` (10 cols) | — | `ws_promoted_package_course_ebook` | 🟡 Code ready (flag off, SQL-faithful) | MySQL/Prisma only (no Mongoose model found) |
-| 74 | Promoter | `ws_promoter` (11 cols) | `ws_promoter` | `ws_promoter` | 🟡 Code ready (flag off, read-only) |  |
+| 72 | Promocode | `ws_promocode` (13 cols) | — | `ws_promocode` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
+| 73 | PromotedPackageCourseEbook | `ws_promoted_package_course_ebook` (10 cols) | — | `ws_promoted_package_course_ebook` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
+| 74 | Promoter | `ws_promoter` (11 cols) | `ws_promoter` | `ws_promoter` | ✅ Migrated |  |
 | 75 | RefferalProgram | `ws_refferal_program` (10 cols) | — | `ws_refferal_program` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 76 | RefferalTransaction | `ws_refferal_transaction` (10 cols) | — | `ws_refferal_transaction` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 77 | — | `ws_role_has_permissions` (2 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
-| 78 | Role | `ws_roles` (5 cols) | `ws_roles` | — | ⏳ Not migrated | In SQL dump but no Prisma model |
+| 77 | AdminRoleHasPermission | `ws_role_has_permissions` (2 cols) | — | `ws_role_has_permissions` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
+| 78 | AdminRoleRow | `ws_roles` (5 cols) | `ws_roles` | `ws_roles` | ⏳ Not migrated |  |
 | 79 | — | `ws_tag` (5 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 80 | TermsAndConditions | `ws_termsandcondition` (5 cols) | — | `ws_termsandcondition` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 81 | Testimonial | `ws_testimonial` (5 cols) | `ws_testimonials` | `ws_testimonial` | ✅ Migrated | Collection name differs from MySQL table |
 | 82 | — | `ws_user_inquiry` (10 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
-| 83 | AdminUser | `ws_users` (15 cols) | `ws_users` | — | ⏳ Not migrated | In SQL dump but no Prisma model |
+| 83 | AdminUser | `ws_users` (15 cols) | `ws_users` | `ws_users` | ⏳ Not migrated |  |
 | 84 | Version | `ws_versions` (3 cols) | `ws_versions` | `ws_versions` | ✅ Migrated |  |
-| 85 | Video | `ws_video` (14 cols) | — | `ws_video` | 🟡 Code ready (flag off) | MySQL/Prisma only (no Mongoose model found) |
-| 86 | VideoCategory | `ws_video_category` (11 cols) | — | `ws_video_category` | 🟡 Code ready (flag off) | MySQL/Prisma only (no Mongoose model found) |
+| 85 | Video | `ws_video` (14 cols) | — | `ws_video` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
+| 86 | VideoCategory | `ws_video_category` (11 cols) | — | `ws_video_category` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 87 | PackageVideoCategoryRelation | `ws_video_category_package_relation` (6 cols) | — | `ws_video_category_package_relation` | 🟡 Prisma ready (deferred — D2) | MySQL/Prisma only (no Mongoose model found) |
 | 88 | VideoCategoryRelation | `ws_video_category_relation` (6 cols) | — | `ws_video_category_relation` | 🟡 Prisma ready (deferred — D2) | MySQL/Prisma only (no Mongoose model found) |
 | 89 | Inquiry | `ws_website_inquiry` (9 cols) | `ws_website_inquiry` | `ws_website_inquiry` | ⏳ Not migrated |  |
@@ -180,15 +180,16 @@
 | 142 | FaqType | — | `ws_faq_types` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/FaqType.model.ts |
 | 143 | LiveBannerSlider | — | `ws_live_banner_sliders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/LiveBannerSlider.model.ts |
 | 144 | Notification | — | `ws_notifications` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/Notification.model.ts |
-| 145 | SocialLink | — | `ws_social_links` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/SocialLink.model.ts |
-| 146 | SocialLinkType | — | `ws_social_link_types` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/SocialLinkType.model.ts |
-| 147 | TermsAndConditions | — | `ws_terms_and_conditions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/TermsAndConditions.model.ts |
-| 148 | TestSeries | — | `ws_test_series` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeries.model.ts |
-| 149 | TestSeriesContentCategory | — | `ws_test_series_content_category` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesContentCategory.model.ts |
-| 150 | TestSeriesExam | — | `ws_test_series_exam` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesExam.model.ts |
-| 151 | TestSeriesOrder | — | `ws_test_series_orders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesOrder.model.ts |
-| 152 | TestSeriesPrice | — | `ws_test_series_prices` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesPrice.model.ts |
-| 153 | TestSeriesSubscription | — | `ws_test_series_subscriptions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesSubscription.model.ts |
+| 145 | PdfUploadJob | — | `(default pdfuploadjobs)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/PdfUploadJob.model.ts |
+| 146 | SocialLink | — | `ws_social_links` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/SocialLink.model.ts |
+| 147 | SocialLinkType | — | `ws_social_link_types` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/SocialLinkType.model.ts |
+| 148 | TermsAndConditions | — | `ws_terms_and_conditions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/TermsAndConditions.model.ts |
+| 149 | TestSeries | — | `ws_test_series` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeries.model.ts |
+| 150 | TestSeriesContentCategory | — | `ws_test_series_content_category` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesContentCategory.model.ts |
+| 151 | TestSeriesExam | — | `ws_test_series_exam` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesExam.model.ts |
+| 152 | TestSeriesOrder | — | `ws_test_series_orders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesOrder.model.ts |
+| 153 | TestSeriesPrice | — | `ws_test_series_prices` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesPrice.model.ts |
+| 154 | TestSeriesSubscription | — | `ws_test_series_subscriptions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesSubscription.model.ts |
 
 ---
 

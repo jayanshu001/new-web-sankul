@@ -4,6 +4,7 @@ import mongoose from "mongoose";
 import { Customer } from "../models/customer/Customer.model";
 import { ReferralTransaction } from "../models/referral/ReferralTransaction.model";
 import { RefferalTransactionStatus, RefferalTransactionType } from "../models/enums";
+import { isReferralMysql, applyPayoutWebhook } from "../modules/referral/referral.service";
 
 const WEBHOOK_SECRET = process.env.RAZORPAY_PAYOUT_WEBHOOK_SECRET ?? "";
 
@@ -47,6 +48,18 @@ export const razorpayPayoutWebhook = async (req: Request, res: Response) => {
     const utr: string | undefined = payout.utr ?? payout.reference_id ?? undefined;
     const failureReason: string | undefined =
       payout.failure_reason ?? payout.status_details?.description ?? undefined;
+
+    // ─── MySQL branch (ws_refferal_transaction) ──────────────────────────
+    if (isReferralMysql()) {
+      const result = await applyPayoutWebhook(
+        providerRef,
+        newStatus === RefferalTransactionStatus.SUCCESSFUL ? "successful" : "failed",
+        failureReason
+      );
+      if (result === "unknown") return res.status(200).json({ success: true, ignored: true, reason: "Unknown payout id." });
+      if (result === "already") return res.status(200).json({ success: true, alreadyProcessed: true });
+      return res.status(200).json({ success: true });
+    }
 
     const transaction = await ReferralTransaction.findOne({ providerRef });
     if (!transaction) {

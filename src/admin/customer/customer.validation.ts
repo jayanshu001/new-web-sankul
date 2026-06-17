@@ -1,6 +1,8 @@
 import { z } from "zod";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+// Accept a Mongo ObjectId (24-hex) OR a MySQL numeric id (ws_customer_* tables).
+const refIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 
 export const createCustomerSchema = z.object({
   firstName: z.string().min(1, "First name is required"),
@@ -11,12 +13,12 @@ export const createCustomerSchema = z.object({
   emailAddress: z.string().email().optional().nullable(),
   dob: z.string().optional().nullable(),
   gender: z.string().max(10).optional().nullable(),
-  stateId: z.string().regex(objectIdRegex, "Invalid stateId").optional().nullable(),
-  districtId: z.string().regex(objectIdRegex, "Invalid districtId").optional().nullable(),
+  stateId: z.string().regex(refIdRegex, "Invalid stateId").optional().nullable(),
+  districtId: z.string().regex(refIdRegex, "Invalid districtId").optional().nullable(),
   city: z.string().max(255).optional().nullable(),
-  educationId: z.string().regex(objectIdRegex, "Invalid educationId").optional().nullable(),
+  educationId: z.string().regex(refIdRegex, "Invalid educationId").optional().nullable(),
   language: z.string().max(50).optional().nullable(),
-  goals: z.array(z.string().regex(objectIdRegex)).optional().default([]),
+  goals: z.array(z.string().regex(refIdRegex)).optional().default([]),
   profilePicture: z.string().max(500).optional().nullable(),
   status: z.coerce.boolean().optional().default(true),
 });
