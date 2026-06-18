@@ -15,6 +15,7 @@ import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";
 import {
   createCourseSchema,
+  createCourseSqlSchema,
   createCoursePlanSchema,
   updateCoursePlanSchema,
 } from "./course.validation";
@@ -56,6 +57,32 @@ const coerceCourseBody = (req: Request) => {
       order: r.order,
     }));
   }
+  return { materialCategories, examCategories };
+};
+
+// SQL branch: coerce the multipart body without the ObjectId-validating helpers
+// (refs are numeric ids). Returns the parsed numeric category-ref arrays.
+const coerceCourseBodySql = (req: Request) => {
+  const file = req.file as any;
+  if (file?.location) req.body.image = file.location;
+  if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
+  if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+  if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
+  if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
+  delete req.body.examCountdownCategoryId;
+  const parseRefs = (raw: any): Array<{ category: number; order: number }> | undefined => {
+    if (raw === undefined || raw === null || raw === "") return undefined;
+    let items = raw;
+    if (typeof raw === "string") { try { items = JSON.parse(raw); } catch { return undefined; } }
+    if (!Array.isArray(items)) return undefined;
+    return items
+      .map((i: any) => ({ category: Number(i?.category), order: Number(i?.order) || 0 }))
+      .filter((r) => Number.isInteger(r.category) && r.category > 0);
+  };
+  const materialCategories = parseRefs(req.body.materialCategories);
+  const examCategories = parseRefs(req.body.examCategories);
+  if (materialCategories !== undefined) req.body.materialCategories = materialCategories;
+  if (examCategories !== undefined) req.body.examCategories = examCategories;
   return { materialCategories, examCategories };
 };
 
@@ -148,6 +175,13 @@ export const deleteCourseVideoCategory = asyncHandler(
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const createCourse = asyncHandler(async (req: Request, res: Response) => {
+  if (courseService.isAdminCourseMysql()) {
+    coerceCourseBodySql(req);
+    const v = createCourseSqlSchema.parse(req.body);
+    const data = await courseService.createCourseSql(v);
+    // The Mongo "default folder" automation is N/A on SQL (no course_id col).
+    return res.status(201).json({ success: true, message: "Course created successfully", data });
+  }
   const { materialCategories, examCategories } = coerceCourseBody(req);
   const validated = createCourseSchema.parse(req.body);
   const data = await courseService.createCourse({
@@ -161,6 +195,12 @@ export const createCourse = asyncHandler(async (req: Request, res: Response) => 
 });
 
 export const updateCourse = asyncHandler(async (req: Request, res: Response) => {
+  if (courseService.isAdminCourseMysql()) {
+    coerceCourseBodySql(req);
+    const v = createCourseSqlSchema.partial().parse(req.body);
+    const data = await courseService.updateCourseSql(req.params.id as string, v);
+    return success(res, data as any);
+  }
   const { materialCategories, examCategories } = coerceCourseBody(req);
   const validated = createCourseSchema.partial().parse(req.body);
   const data = await courseService.updateCourse({

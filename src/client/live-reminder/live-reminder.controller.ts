@@ -10,6 +10,7 @@ import {
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { formatScheduledAt } from "../../utils/displayTime";
+import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
 // Shape a reminder (with its session populated, when available) for the client.
 function publicReminder(reminder: any) {
@@ -48,6 +49,44 @@ function publicReminder(reminder: any) {
 
 const SESSION_FIELDS = "title status scheduledAt subject streamId liveCourseIds";
 
+// SQL branch: the admin-live-course service returns a flat reminder DTO (id,
+// liveSessionId, liveCourseId, minutesBefore, remindAt, sessionScheduledAt,
+// status, optional nested `session`). Shape it to the same public contract.
+function sqlReminderToPublic(r: any) {
+  const session = r.session ?? null;
+  return {
+    id: String(r.id),
+    liveSessionId: r.liveSessionId ? String(r.liveSessionId) : null,
+    liveCourseId: r.liveCourseId ? String(r.liveCourseId) : null,
+    minutesBefore: r.minutesBefore,
+    remindAt: r.remindAt,
+    remindAtDisplay: formatScheduledAt(r.remindAt),
+    sessionScheduledAt: r.sessionScheduledAt,
+    sessionScheduledAtDisplay: formatScheduledAt(r.sessionScheduledAt),
+    status: r.status,
+    fired: r.remindAt ? new Date(r.remindAt).getTime() <= Date.now() : false,
+    session: session
+      ? {
+          id: String(session._id),
+          title: session.title,
+          status: session.status,
+          scheduledAt: session.scheduledAt ?? null,
+          scheduledAtDisplay: formatScheduledAt(session.scheduledAt),
+          subject: session.subject ?? "",
+          streamId: session.streamId ?? null,
+          liveCourseIds: r.liveCourseId ? [String(r.liveCourseId)] : [],
+        }
+      : null,
+    createdAt: r.createdAt ?? null,
+    updatedAt: r.updatedAt ?? null,
+  };
+}
+
+// ⚠ STAY Mongo (no SQL branch): setLiveSessionReminder / removeLiveSessionReminder.
+// They provision/cancel a scheduled Notification row + BullMQ job (the
+// notification pipeline is not migrated), so the write path stays on Mongo even
+// under the live-course flag. Only the two read handlers above branch to SQL.
+//
 // POST /api/v1/client/live-reminders
 // Body: { liveSessionId, minutesBefore? }  — set (or replace) a reminder for a
 // SCHEDULED live session. minutesBefore defaults to 30; a notification fires
@@ -110,6 +149,26 @@ export const listMyLiveSessionReminders = async (req: Request, res: Response) =>
 
     const upcomingOnly = req.query.upcoming === "true";
 
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(String(customerId));
+      if (!cid) return success(res, { reminders: [], total: 0, limit: null }, "Reminders fetched.");
+      let lim = upcomingOnly ? 50 : 0;
+      const raw = req.query.limit;
+      if (raw !== undefined && raw !== "") { const n = Number(raw); if (!Number.isFinite(n) || n < 1) return failure(res, "limit must be a positive number.", 422); lim = Math.min(Math.floor(n), 100); }
+      const dtos = await liveSql.listRemindersForCustomer(cid);
+      let reminders = dtos.map((r: any) => sqlReminderToPublic(r));
+      if (upcomingOnly) {
+        const now = Date.now();
+        reminders = reminders.filter((r) => r.status === "scheduled" && r.session?.scheduledAt && new Date(r.session.scheduledAt).getTime() > now)
+          .sort((a, b) => new Date(a.session!.scheduledAt as any).getTime() - new Date(b.session!.scheduledAt as any).getTime());
+      } else {
+        reminders.sort((a, b) => new Date(a.remindAt as any).getTime() - new Date(b.remindAt as any).getTime());
+      }
+      const total = reminders.length;
+      if (lim > 0) reminders = reminders.slice(0, lim);
+      return success(res, { reminders, total, limit: lim || null }, "Reminders fetched.");
+    }
+
     let limit = upcomingOnly ? 50 : 0;
     const rawLimit = req.query.limit;
     if (rawLimit !== undefined && rawLimit !== "") {
@@ -171,6 +230,14 @@ export const getMyReminderForSession = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) { logger.warn("getMyReminderForSession unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
+
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(String(customerId));
+      const sid = liveSql.parseLiveId(liveSessionId);
+      if (!sid) return failure(res, "Invalid liveSessionId.", 422);
+      const dto = cid ? await liveSql.getReminderForSession(cid, sid) : null;
+      return success(res, { reminder: dto ? sqlReminderToPublic(dto) : null }, dto ? "Reminder fetched." : "No reminder set for this session.");
+    }
 
     if (!Types.ObjectId.isValid(liveSessionId)) {
       logger.warn("getMyReminderForSession invalid id", { traceId, customerId, liveSessionId });

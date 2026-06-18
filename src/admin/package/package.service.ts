@@ -30,6 +30,10 @@ import {
   packageExists as packageChatPackageExists,
   parsePackageChatId,
 } from "../../modules/package-chat/package-chat.service";
+import * as adminPackage from "../../modules/admin-package/admin-package.service";
+
+// Re-exported so the thin controllers can branch validation if needed.
+export const isAdminPackageMysql = adminPackage.isAdminPackageMysql;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -39,6 +43,13 @@ const assertObjectId = (id: string, label: string): void => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new HttpError(400, `Invalid ${label} id.`);
   }
+};
+
+// On the SQL branch ids are numeric; the Mongo assertObjectId would 400 them.
+const assertPkgSqlId = (id: string, label: string): number => {
+  const n = adminPackage.parsePackageId(id);
+  if (!n) throw new HttpError(400, `Invalid ${label} id.`);
+  return n;
 };
 
 // Validates the two exam-countdown arrays: each id is a valid ObjectId and
@@ -123,15 +134,23 @@ const invalidatePackageCaches = async (packageId?: string) => {
 // Package types (small master)
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const listPackageTypes = async () =>
-  PackageType.find().sort({ order: 1, name: 1 }).lean();
+export const listPackageTypes = async () => {
+  if (isAdminPackageMysql()) return adminPackage.listPackageTypes();
+  return PackageType.find().sort({ order: 1, name: 1 }).lean();
+};
 
 export const createPackageType = async (validated: any) => {
+  if (isAdminPackageMysql()) return adminPackage.createPackageType(validated);
   const pt = await PackageType.create(validated);
   return pt.toObject();
 };
 
 export const updatePackageType = async (id: string, validated: any) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.updatePackageType(assertPkgSqlId(id, "package type"), validated);
+    if (res === "not_found") throw new HttpError(404, "Package type not found.");
+    return res;
+  }
   assertObjectId(id, "package type");
   const pt = await PackageType.findByIdAndUpdate(id, { $set: validated }, { new: true }).lean();
   if (!pt) throw new HttpError(404, "Package type not found.");
@@ -139,6 +158,12 @@ export const updatePackageType = async (id: string, validated: any) => {
 };
 
 export const deletePackageType = async (id: string) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.deletePackageType(assertPkgSqlId(id, "package type"));
+    if (res === "not_found") throw new HttpError(404, "Package type not found.");
+    if (res === "in_use") throw new HttpError(400, "Package type is in use; reassign packages first.");
+    return;
+  }
   assertObjectId(id, "package type");
   const inUse = await Package.countDocuments({ packageTypeId: id });
   if (inUse > 0) {
@@ -162,6 +187,7 @@ export interface ListPackagesQuery {
 }
 
 export const listPackages = async (query: ListPackagesQuery) => {
+  if (isAdminPackageMysql()) return adminPackage.listPackages(query);
   const {
     search,
     active,
@@ -240,6 +266,11 @@ export const listPackages = async (query: ListPackagesQuery) => {
 };
 
 export const getPackageById = async (id: string) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.getPackageById(assertPkgSqlId(id, "package"));
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    return res;
+  }
   assertObjectId(id, "package");
   return cache.aside({
     key: packageDetailKey(id),
@@ -262,6 +293,12 @@ export const getPackageById = async (id: string) => {
 };
 
 export const createPackage = async (validated: any) => {
+  if (isAdminPackageMysql()) {
+    // Mongo-only fields (goal/packageCategory/examCountdown/isPaid/smart/planner/
+    // subtitle/notificationTopic) are dropped on SQL (no columns). Embedded arrays
+    // → pivot tables. The goalLabel/examCountdown validations are Mongo-only too.
+    return adminPackage.createPackage(validated);
+  }
   await assertGoalLabelPair(validated.goalId, validated.goalLabelId);
   if (
     validated.packageCategoryId &&
@@ -291,6 +328,11 @@ export const createPackage = async (validated: any) => {
 };
 
 export const updatePackage = async (id: string, validated: any) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.updatePackage(assertPkgSqlId(id, "package"), validated);
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    return res;
+  }
   assertObjectId(id, "package");
 
   if (validated.goalId !== undefined || validated.goalLabelId !== undefined) {
@@ -341,6 +383,12 @@ export const updatePackage = async (id: string, validated: any) => {
 };
 
 export const deletePackage = async (id: string) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.deletePackage(assertPkgSqlId(id, "package"));
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    if (res === "has_subscribers") throw new HttpError(400, "Package has active subscribers; archive (set active=false) instead.");
+    return;
+  }
   assertObjectId(id, "package");
 
   const subCount = await PackageCourseSubscription.countDocuments({ packageId: id });
@@ -370,6 +418,11 @@ export const deletePackage = async (id: string) => {
 };
 
 export const togglePackageStatus = async (id: string) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.togglePackageStatus(assertPkgSqlId(id, "package"));
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    return res;
+  }
   assertObjectId(id, "package");
   const pkg = await Package.findById(id).select("active");
   if (!pkg) throw new HttpError(404, "Package not found.");
@@ -382,6 +435,11 @@ export const togglePackageStatus = async (id: string) => {
 export const reorderPackages = async (
   orders: Array<{ id: string; order: number }>
 ) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.reorderPackages(orders);
+    if (res === "dup") throw new HttpError(400, "Duplicate order values.");
+    return;
+  }
   const values = new Set(orders.map((o) => o.order));
   if (values.size !== orders.length) throw new HttpError(400, "Duplicate order values.");
   const ops = orders
@@ -403,6 +461,12 @@ export const reorderEmbedded = async (
   field: "specificSubjects" | "materialCategories" | "examCategories",
   orders: Array<{ category: string; order: number }>
 ) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.reorderEmbedded(assertPkgSqlId(pkgId, "package"), field, orders);
+    if (res === "dup") throw new HttpError(400, "Duplicate order values.");
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    return res;
+  }
   assertObjectId(pkgId, "package");
   const values = new Set(orders.map((o) => o.order));
   if (values.size !== orders.length) throw new HttpError(400, "Duplicate order values.");
@@ -427,6 +491,11 @@ export const reorderEmbedded = async (
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const listPackagePlans = async (packageId: string) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.listPackagePlans(assertPkgSqlId(packageId, "package"));
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    return res;
+  }
   assertObjectId(packageId, "package");
   // Exclude soft-detached plans (status:false set by detachPlan). The row is
   // intentionally kept — PackageCourseSubscription.packageId references the plan
@@ -438,6 +507,12 @@ export const listPackagePlans = async (packageId: string) => {
 };
 
 export const attachPlansToPackage = async (packageId: string, planIds: string[]) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.attachPlansToPackage(assertPkgSqlId(packageId, "package"), planIds);
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    if (res === "no_valid") throw new HttpError(400, "No valid plan ids.");
+    return res;
+  }
   assertObjectId(packageId, "package");
   const validIds = planIds.filter((i) => mongoose.Types.ObjectId.isValid(i));
   if (!validIds.length) throw new HttpError(400, "No valid plan ids.");
@@ -450,6 +525,10 @@ export const attachPlansToPackage = async (packageId: string, planIds: string[])
 };
 
 export const detachPlan = async (packageId: string, planId: string) => {
+  if (isAdminPackageMysql()) {
+    await adminPackage.detachPlan(assertPkgSqlId(packageId, "package"), assertPkgSqlId(planId, "plan"));
+    return;
+  }
   assertObjectId(packageId, "package");
   assertObjectId(planId, "plan");
   // Soft-detach: a plan row is owned 1:1 by its package (scalar packageId), and
@@ -475,6 +554,11 @@ export interface PaginationQuery {
 }
 
 export const listSubscribers = async (packageId: string, query: PaginationQuery) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.listSubscribers(assertPkgSqlId(packageId, "package"), query);
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    return res;
+  }
   assertObjectId(packageId, "package");
   const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(query.limit ?? "20", 10) || 20, 1), 100);
@@ -503,6 +587,9 @@ export const listSubscribers = async (packageId: string, query: PaginationQuery)
   };
 };
 
+// ⚠ STAYS Mongo: PromoCode.appliesTo (type+ids) has no SQL representation —
+// ws_promocode has no appliesTo/package-linkage column (same gap as
+// commerce-promocode's empty appliesTo). No admin-package SQL branch.
 export const listPromotedCodes = async (packageId: string) => {
   assertObjectId(packageId, "package");
   return PromoCode.find({
@@ -513,6 +600,8 @@ export const listPromotedCodes = async (packageId: string) => {
     .lean();
 };
 
+// ⚠ STAYS Mongo: Book.packageIds (the many-to-many link) has no SQL column —
+// ws_book has no packageIds (confirmed by admin-book). No SQL branch.
 // Physical books linked to this package (the "material (Book)" tab). Paginated
 // to mirror listSubscribers. Books carry `packageIds`; a book belongs here when
 // its `packageIds` array contains this package id.
@@ -547,6 +636,11 @@ export const listBooks = async (packageId: string, query: PaginationQuery) => {
 };
 
 export const listVideoRelations = async (packageId: string) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.listVideoRelations(assertPkgSqlId(packageId, "package"));
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    return res;
+  }
   assertObjectId(packageId, "package");
   return PackageVideoCategoryRelation.find({ packageId })
     .populate("videoCategoryRelationId")
@@ -557,6 +651,11 @@ export const setVideoRelations = async (
   packageId: string,
   videoCategoryRelationIds: string[]
 ) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.setVideoRelations(assertPkgSqlId(packageId, "package"), videoCategoryRelationIds);
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    return res;
+  }
   assertObjectId(packageId, "package");
   const validIds = videoCategoryRelationIds.filter((i) =>
     mongoose.Types.ObjectId.isValid(i)
@@ -591,6 +690,11 @@ export const setVideoRelations = async (
  * this package (transactionally).
  */
 export const expandSubjectsToRelations = async (packageId: string) => {
+  if (isAdminPackageMysql()) {
+    const res = await adminPackage.expandSubjectsToRelations(assertPkgSqlId(packageId, "package"));
+    if (res === "not_found") throw new HttpError(404, "Package not found.");
+    return res;
+  }
   assertObjectId(packageId, "package");
 
   const pkg = await Package.findById(packageId).select("specificSubjects").lean();

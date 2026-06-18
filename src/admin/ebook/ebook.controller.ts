@@ -11,6 +11,7 @@ import {
   createEbookPlanSchema,
   updateEbookPlanSchema,
   reorderEbooksSchema,
+  reorderEbooksSqlSchema,
 } from "./ebook.validation";
 import * as ebookService from "./ebook.service";
 
@@ -104,7 +105,12 @@ export const toggleEbookTrending = asyncHandler(async (req: Request, res: Respon
 });
 
 export const reorderEbooks = asyncHandler(async (req: Request, res: Response) => {
-  const { orders } = reorderEbooksSchema.parse(req.body);
+  // On SQL ids are numeric — the Mongo reorderEbooksSchema enforces ObjectId, so
+  // validate with a numeric-id schema in that branch (same pattern as client-exam
+  // saveAnswers). Both shapes are { orders: [{ id, order }] }.
+  const { orders } = ebookService.isAdminEbookMysql()
+    ? reorderEbooksSqlSchema.parse(req.body)
+    : reorderEbooksSchema.parse(req.body);
   await ebookService.reorderEbooks(orders);
   return success(res, {}, "Ebooks reordered successfully");
 });

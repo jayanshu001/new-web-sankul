@@ -19,6 +19,7 @@ import logger from "../../utils/logger";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { formatScheduledAt } from "../../utils/displayTime";
 import { qualitiesFromSessionRecordings } from "../../utils/videoQualities";
+import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -132,6 +133,13 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
     const limit = Math.min(50, parseInt(req.query.limit as string) || 20);
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
 
+    if (liveSql.isLiveCourseMysql()) {
+      const r = await liveSql.listClient(liveSql.parseLiveId(String(req.user?.id ?? "")), { search, page, limit });
+      const base = resolveBase(req);
+      const liveCourses = r.liveCourses.map((c: any) => ({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }));
+      return success(res, { liveCourses, total: r.total, page: r.page, limit: r.limit }, "Live courses fetched.");
+    }
+
     const query: Record<string, any> = { status: true };
     const searchCond = buildRegexCondition(search);
     if (searchCond) query.name = searchCond;
@@ -235,6 +243,14 @@ export const listUpcomingLiveBatches = async (req: Request, res: Response) => {
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const categoryId = typeof req.query.categoryId === "string" ? req.query.categoryId.trim() : "";
 
+    if (liveSql.isLiveCourseMysql()) {
+      const catId = categoryId ? liveSql.parseLiveId(categoryId) ?? undefined : undefined;
+      const r = await liveSql.listUpcomingBatches(liveSql.parseLiveId(String(req.user?.id ?? "")), { search, categoryId: catId, page, limit });
+      const base = resolveBase(req);
+      const liveBatches = r.liveBatches.map((c: any) => ({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }));
+      return success(res, { ...r, liveBatches }, "Upcoming live batches fetched.");
+    }
+
     if (categoryId && !mongoose.Types.ObjectId.isValid(categoryId)) {
       logger.warn("listUpcomingLiveBatches invalid categoryId", { traceId, categoryId });
       return failure(res, "Invalid category id.", 422);
@@ -328,6 +344,17 @@ export const listUpcomingLiveBatches = async (req: Request, res: Response) => {
   }
 };
 
+// ⚠ STAY Mongo (no SQL branch — Wave 6 documented gaps; revisit in Wave 7):
+//   - getLiveCourseForClient: detail needs the subjects/folders count (Mongo-only
+//     VideoCategory folder layer) + packageCategory populate (no SQL table).
+//   - listLiveCourseRecordings / getLiveCourseLecture / listLiveCourseSessionRecordings:
+//     folder/video layer + LectureProgress (no SQL table) + AES lecture encryption.
+//   - getLiveCourseSchedule / listMyScheduleByCategory: blend a session-derived
+//     timetable with an educator populate (ws_course_educators is Mongo) — only
+//     the pure schedule-folder read (getMyScheduleFolder) is on SQL.
+//   - listMyLiveCourses / listMyUpcomingSessions: subscription-shaped "my" lists
+//     with status=active|expired filtering — natural Wave 7 my-subscriptions work.
+//
 // GET /api/v1/client/live-courses/:id
 // Includes plans + whether the current customer already has access.
 export const getLiveCourseForClient = async (req: Request, res: Response) => {
@@ -407,6 +434,13 @@ export const listSessionsForCourseClient = async (req: Request, res: Response) =
   logger.info("listSessionsForCourseClient invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
 
   try {
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(id);
+      if (!cid) return failure(res, "Invalid live course id.", 422);
+      const r = await liveSql.listSessionsForCourseClient(cid, { status: req.query.status as string, upcoming: req.query.upcoming as string, page: req.query.page as string, limit: req.query.limit as string });
+      if (r === "not_found") return failure(res, "Live course not found.", 404);
+      return success(res, r, "Sessions fetched.");
+    }
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listSessionsForCourseClient invalid id", { traceId, id });
       return failure(res, "Invalid live course id.", 422);
@@ -1002,6 +1036,13 @@ export const listAllUpcomingSessions = async (req: Request, res: Response) => {
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
     const now = new Date();
 
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(String(customerId ?? ""));
+      const r = await liveSql.listAllUpcomingSessions({ page, limit });
+      const sessions = await Promise.all(r.sessions.map(async (s: any) => ({ ...s, subscribed: cid ? await liveSql.hasAccessToAnyLiveCourse(cid, (s.liveCourseIds ?? []).map(Number)) : false })));
+      return success(res, { sessions, total: r.total, page: r.page, limit: r.limit }, "Upcoming sessions fetched.");
+    }
+
     // Only sessions whose source courses are still active should surface in the
     // discovery feed — a disabled course shouldn't advertise classes.
     const activeCourseIds = await LiveCourse.find({ status: true })
@@ -1104,6 +1145,13 @@ export const listLiveNowSessions = async (req: Request, res: Response) => {
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
     const now = new Date();
+
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(String(customerId ?? ""));
+      const r = await liveSql.listLiveNowSessions({ page, limit });
+      const sessions = await Promise.all(r.sessions.map(async (s: any) => ({ ...s, subscribed: cid ? await liveSql.hasAccessToAnyLiveCourse(cid, (s.liveCourseIds ?? []).map(Number)) : false })));
+      return success(res, { sessions, total: r.total, page: r.page, limit: r.limit }, "Live-now sessions fetched.");
+    }
 
     const activeCourseIds = await LiveCourse.find({ status: true })
       .select("_id")
@@ -1438,6 +1486,19 @@ export const getMyScheduleFolder = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) return failure(res, "Unauthorized.", 401);
+
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(id);
+      if (!cid) return failure(res, "Invalid live course id.", 422);
+      // folderId is a synthetic/backfilled string id — not validated as ObjectId.
+      const custId = liveSql.parseLiveId(String(customerId));
+      if (!custId || !(await liveSql.hasAccessToAnyLiveCourse(custId, [cid]))) return failure(res, "You don't have access to this live course.", 403);
+      const r = await liveSql.getScheduleFolderForClient(cid, folderId);
+      if (r === "not_found") return failure(res, "Live course not found.", 404);
+      if (r === "folder_not_found") return failure(res, "Folder not found.", 404);
+      return success(res, r, "Folder fetched.");
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid live course id.", 422);
     if (!mongoose.Types.ObjectId.isValid(folderId)) return failure(res, "Invalid folder id.", 422);
 

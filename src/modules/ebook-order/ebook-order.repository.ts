@@ -19,6 +19,10 @@ export const ebookOrderRepository = {
       where: { gatewayOrderId: razorpayOrderId, userId: Number(customerIdStr) },
     }),
 
+  /** Order by Razorpay id ALONE (webhook context — no customer in the payload). */
+  findOrderByRazorpayOnly: (razorpayOrderId: string) =>
+    prisma.eBookOrder.findFirst({ where: { gatewayOrderId: razorpayOrderId } }),
+
   /** A plan row — to read its ebook_id + duration + price. */
   findPlan: (planId: number) =>
     prisma.packageCourseEbookPrice.findUnique({

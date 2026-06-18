@@ -18,6 +18,7 @@ import {
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { PackageCourseEbookOrderStatus } from "../../models/enums";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import * as subSql from "../../modules/admin-subscription/admin-subscription.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -33,6 +34,14 @@ export const listCourseSubscriptions = async (req: Request, res: Response) => {
   try {
     const { customerId, courseId, packageId, status, fromDate, toDate, search, sortBy, sortOrder, type } =
       req.query as Record<string, string>;
+
+    if (subSql.isAdminSubscriptionMysql()) {
+      const { pageNum, limitNum } = paginated(req);
+      const { items, pagination } = await subSql.listCourseSubscriptions({
+        customerId, courseId, packageId, status, fromDate, toDate, search, sortBy, sortOrder, type, page: pageNum, limit: limitNum,
+      });
+      return res.status(200).json({ success: true, items, pagination });
+    }
 
     const filter: any = {};
     if (customerId && isObjectId(customerId)) filter.customerId = customerId;
@@ -116,6 +125,13 @@ export const listCourseSubscriptions = async (req: Request, res: Response) => {
 export const getCourseSubscriptionById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (subSql.isAdminSubscriptionMysql()) {
+      const numId = subSql.parseSubId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid subscription id." });
+      const data = await subSql.getCourseSubscriptionById(numId);
+      if (data === "not_found") return res.status(404).json({ success: false, message: "Subscription not found." });
+      return res.status(200).json({ success: true, data });
+    }
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid subscription id." });
 
@@ -131,6 +147,13 @@ export const getCourseSubscriptionById = async (req: Request, res: Response) => 
   }
 };
 
+// ⚠ STAY Mongo (no SQL branch): createCourseSubscription / updateCourseSubscription /
+// deleteCourseSubscription + listCustomerAddresses / adminCreateCustomerAddress.
+// The subscription writes set Mongo-only fields (paymentStatus/paidAmount/
+// paymentMethod/withMaterial/remark/targetPackageId) with grant-extend logic;
+// ws_package_course_subscription lacks those columns. The address handlers touch
+// CustomerAddress (held OFF — offline-city dep). Only the read/report surface is
+// on SQL (admin-subscription module, Wave 7). Revisit writes with the payment wave.
 export const createCourseSubscription = async (req: Request, res: Response) => {
   try {
     const data = createSubscriptionSchema.parse(req.body);
@@ -255,6 +278,12 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
 export const listPlansForTarget = async (req: Request, res: Response) => {
   try {
     const { courseId, packageId } = req.query as Record<string, string>;
+    if (subSql.isAdminSubscriptionMysql()) {
+      const cId = courseId ? subSql.parseSubId(courseId) ?? undefined : undefined;
+      const pId = packageId ? subSql.parseSubId(packageId) ?? undefined : undefined;
+      if (!cId && !pId) return res.status(400).json({ success: false, message: "Provide courseId or packageId." });
+      return res.status(200).json({ success: true, data: await subSql.listPlansForTarget(cId, pId) });
+    }
     const filter: any = { status: true };
     if (courseId && isObjectId(courseId)) filter.courseId = courseId;
     else if (packageId && isObjectId(packageId)) filter.packageId = packageId;
@@ -342,6 +371,11 @@ export const deleteCourseSubscription = async (req: Request, res: Response) => {
 export const listEbookSubscriptions = async (req: Request, res: Response) => {
   try {
     const { customerId, ebookId, status, fromDate, toDate } = req.query as Record<string, string>;
+    if (subSql.isAdminSubscriptionMysql()) {
+      const { pageNum, limitNum } = paginated(req);
+      const { data, pagination } = await subSql.listEbookSubscriptions({ customerId, ebookId, status, fromDate, toDate, page: pageNum, limit: limitNum });
+      return res.status(200).json({ success: true, data, pagination });
+    }
     const filter: any = {};
     if (customerId && isObjectId(customerId)) filter.customerId = customerId;
     if (ebookId && isObjectId(ebookId)) filter.ebookId = ebookId;
@@ -387,6 +421,9 @@ const buildDateFilter = (fromDate?: string, toDate?: string) => {
 export const reportSummary = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate } = req.query as Record<string, string>;
+    if (subSql.isAdminSubscriptionMysql()) {
+      return res.status(200).json({ success: true, data: await subSql.reportSummary(fromDate, toDate) });
+    }
     const dateFilter = buildDateFilter(fromDate, toDate);
 
     const [
@@ -443,6 +480,9 @@ export const reportSummary = async (req: Request, res: Response) => {
 export const reportByCourse = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate } = req.query as Record<string, string>;
+    if (subSql.isAdminSubscriptionMysql()) {
+      return res.status(200).json({ success: true, data: await subSql.reportByCourse(fromDate, toDate) });
+    }
     const dateFilter = buildDateFilter(fromDate, toDate);
 
     const rows = await PackageCourseSubscription.aggregate([
@@ -476,6 +516,9 @@ export const reportByCourse = async (req: Request, res: Response) => {
 export const reportByEbook = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate } = req.query as Record<string, string>;
+    if (subSql.isAdminSubscriptionMysql()) {
+      return res.status(200).json({ success: true, data: await subSql.reportByEbook(fromDate, toDate) });
+    }
     const dateFilter = buildDateFilter(fromDate, toDate);
 
     const rows = await EbookSubscription.aggregate([
@@ -510,6 +553,9 @@ export const reportByEbook = async (req: Request, res: Response) => {
 export const reportBookOrders = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate, status } = req.query as Record<string, string>;
+    if (subSql.isAdminSubscriptionMysql()) {
+      return res.status(200).json({ success: true, data: await subSql.reportBookOrders(fromDate, toDate, status) });
+    }
     const dateFilter = buildDateFilter(fromDate, toDate);
     const match: any = { ...(Object.keys(dateFilter).length ? dateFilter : {}) };
     if (status) match.status = status;

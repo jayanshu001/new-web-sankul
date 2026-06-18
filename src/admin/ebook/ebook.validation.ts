@@ -105,3 +105,28 @@ export const reorderEbooksSchema = z.object({
     })
   ).min(1, "orders array must not be empty"),
 });
+
+// SQL branch: ids are numeric (the Mongo schema enforces ObjectId). Same shape.
+export const reorderEbooksSqlSchema = z.object({
+  orders: z.array(
+    z.object({
+      id: z.coerce.string().min(1, "Invalid ebook ID"),
+      order: z.coerce.number().int().nonnegative(),
+    })
+  ).min(1, "orders array must not be empty"),
+});
+
+// SQL-side subscription create (numeric ids; the Mongo schema enforces ObjectId).
+export const createEbookSubscriptionSqlSchema = z.object({
+  customerId: z.coerce.number().int().positive(),
+  ebookId: z.coerce.number().int().positive(),
+  planId: z.coerce.number().int().positive().optional().nullable(),
+  durationInDays: z.coerce.number().int().positive().optional(),
+  paymentMethod: z.enum(Object.values(PaymentMethod) as [string, ...string[]]),
+  orderPrice: z.coerce.number().nonnegative(),
+  razorpayOrderId: z.string().optional().nullable(),
+  razorpayPaymentId: z.string().optional().nullable(),
+  transactionId: z.string().optional().nullable(),
+  remarks: z.string().optional().nullable(),
+  status: z.boolean().optional().default(true),
+}).refine((d) => d.planId || d.durationInDays, { message: "Either planId or durationInDays is required", path: ["planId"] });

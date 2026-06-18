@@ -6,6 +6,7 @@ import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
+import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
 const createPlanSchema = z
   .object({
@@ -33,6 +34,15 @@ export const createLiveCoursePlan = async (req: Request, res: Response) => {
   const liveCourseId = String(req.params.id ?? "");
   logger.info("createLiveCoursePlan invoked", { traceId, path: req.originalUrl, liveCourseId, userId: req.user?.id });
 
+  if (liveSql.isLiveCourseMysql()) {
+    const cid = liveSql.parseLiveId(liveCourseId);
+    if (!cid) return failure(res, "Invalid live course id.", 422);
+    let v: z.infer<typeof createPlanSchema>;
+    try { v = createPlanSchema.parse(req.body); } catch (err) { if (err instanceof z.ZodError) return zodIssueResponse(res, err); throw err; }
+    const r = await liveSql.createPlan(cid, v);
+    if (r === "not_found") return failure(res, "Live course not found.", 404);
+    return success(res, { plan: r }, "Plan created.", 201);
+  }
   const txn = await mongoose.startSession();
   try {
     if (!mongoose.Types.ObjectId.isValid(liveCourseId)) {
@@ -91,6 +101,12 @@ export const listLiveCoursePlans = async (req: Request, res: Response) => {
   logger.info("listLiveCoursePlans invoked", { traceId, path: req.originalUrl, liveCourseId, userId: req.user?.id });
 
   try {
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(liveCourseId);
+      if (!cid) return failure(res, "Invalid live course id.", 422);
+      const plans = await liveSql.listPlans(cid);
+      return success(res, { plans, total: plans.length }, "Plans fetched.");
+    }
     if (!mongoose.Types.ObjectId.isValid(liveCourseId)) {
       logger.warn("listLiveCoursePlans invalid id", { traceId, liveCourseId });
       return failure(res, "Invalid live course id.", 422);
@@ -113,6 +129,13 @@ export const getLiveCoursePlan = async (req: Request, res: Response) => {
   logger.info("getLiveCoursePlan invoked", { traceId, path: req.originalUrl, planId, userId: req.user?.id });
 
   try {
+    if (liveSql.isLiveCourseMysql()) {
+      const pid = liveSql.parseLiveId(planId);
+      if (!pid) return failure(res, "Invalid plan id.", 422);
+      const r = await liveSql.getPlan(pid);
+      if (r === "not_found") return failure(res, "Plan not found.", 404);
+      return success(res, { plan: r }, "Plan fetched.");
+    }
     if (!mongoose.Types.ObjectId.isValid(planId)) {
       logger.warn("getLiveCoursePlan invalid id", { traceId, planId });
       return failure(res, "Invalid plan id.", 422);
@@ -136,6 +159,15 @@ export const updateLiveCoursePlan = async (req: Request, res: Response) => {
   const planId = String(req.params.planId ?? "");
   logger.info("updateLiveCoursePlan invoked", { traceId, path: req.originalUrl, planId, userId: req.user?.id });
 
+  if (liveSql.isLiveCourseMysql()) {
+    const pid = liveSql.parseLiveId(planId);
+    if (!pid) return failure(res, "Invalid plan id.", 422);
+    let v: z.infer<typeof updatePlanSchema>;
+    try { v = updatePlanSchema.parse(req.body); } catch (err) { if (err instanceof z.ZodError) return zodIssueResponse(res, err); throw err; }
+    const r = await liveSql.updatePlan(pid, v);
+    if (r === "not_found") return failure(res, "Plan not found.", 404);
+    return success(res, { plan: r }, "Plan updated.");
+  }
   const txn = await mongoose.startSession();
   try {
     if (!mongoose.Types.ObjectId.isValid(planId)) {
@@ -195,6 +227,14 @@ export const deleteLiveCoursePlan = async (req: Request, res: Response) => {
   logger.info("deleteLiveCoursePlan invoked", { traceId, path: req.originalUrl, planId, userId: req.user?.id });
 
   try {
+    if (liveSql.isLiveCourseMysql()) {
+      const pid = liveSql.parseLiveId(planId);
+      if (!pid) return failure(res, "Invalid plan id.", 422);
+      const r = await liveSql.deletePlan(pid);
+      if (r === "not_found") return failure(res, "Plan not found.", 404);
+      if (r === "has_subs") return failure(res, "Cannot delete: verified subscription(s) reference this plan. Toggle status off instead.", 409);
+      return success(res, { id: planId }, "Plan deleted.");
+    }
     if (!mongoose.Types.ObjectId.isValid(planId)) {
       logger.warn("deleteLiveCoursePlan invalid id", { traceId, planId });
       return failure(res, "Invalid plan id.", 422);

@@ -12,6 +12,8 @@ import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscr
 import { TestSeries } from "../../models/testSeries/TestSeries.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import * as mySubSql from "../../modules/client-my-subscriptions/client-my-subscriptions.service";
+import * as tsOrderSql from "../../modules/test-series-order/test-series-order.service";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
@@ -81,12 +83,30 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
     const skip = (pageNum - 1) * limitNum;
 
     const now = new Date();
-    const cid = new mongoose.Types.ObjectId(userId);
+    // Only construct the Mongo ObjectId for paths that hit Mongo (test_series, or
+    // when the SQL flag is off). Under the flag req.user.id is a numeric SQL id,
+    // which would throw if passed to ObjectId.
+    const cid = mongoose.Types.ObjectId.isValid(userId)
+      ? new mongoose.Types.ObjectId(userId)
+      : (null as any);
 
     // Each builder returns the FULL deduped+sorted card list for its type; the
     // shared tail paginates and shapes the response identically.
+    // SQL branches (flag-gated, per type): course/package + ebook via
+    // client-my-subscriptions; test_series via test-series-order (Wave 7 added the
+    // ws_test_series* tables). The SQL customer id is the numeric req.user.id.
+    const numericCid = mySubSql.parseMySubId(String(userId));
+    const useTsSql = tsOrderSql.isTestSeriesOrderMysql() && numericCid != null;
+    const useSql = mySubSql.isMySubscriptionsMysql() && type !== "test_series" && numericCid != null;
+
     let cards: Card[];
-    if (type === "test_series") {
+    if (type === "test_series" && useTsSql) {
+      cards = (await tsOrderSql.buildTestSeriesCards(numericCid!, now)) as unknown as Card[];
+    } else if (useSql && numericCid != null) {
+      cards = type === "ebook"
+        ? (await mySubSql.buildEbookCards(numericCid, now)) as unknown as Card[]
+        : (await mySubSql.buildCourseAndPackageCards(numericCid, now)) as unknown as Card[];
+    } else if (type === "test_series") {
       cards = await buildTestSeriesCards(cid, now);
     } else if (type === "ebook") {
       cards = await buildEbookCards(cid, now);

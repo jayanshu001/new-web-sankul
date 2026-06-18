@@ -25,3 +25,9 @@ docs/migration/api-tests/.auth.json
 
 # Per-module API-doc capture sidecar (regenerated each run)
 docs/migration/api-tests/*/.api-doc-calls.json
+
+# Personal/machine-local Claude config (NOT the shared .claude/settings.json)
+.claude/settings.local.json
+
+# Throwaway end-to-end/diagnostic probes (kept local, never pushed)
+scripts/_tmp_*.ts

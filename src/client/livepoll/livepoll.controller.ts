@@ -4,6 +4,7 @@ import { LivePoll } from "../../models/course/LivePoll.model";
 import { LivePollVote } from "../../models/course/LivePollVote.model";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
+import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
 // GET /api/v1/client/live-polls/:liveClassId/active
 export const getActivePoll = async (req: Request, res: Response) => {
@@ -13,6 +14,11 @@ export const getActivePoll = async (req: Request, res: Response) => {
   logger.info("getActivePoll invoked", { traceId, path: req.originalUrl, userId, liveClassId });
 
   try {
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(String(userId));
+      const r = await liveSql.getActivePoll(String(liveClassId), cid ?? 0);
+      return success(res, r.poll ? { poll: r.poll, myVote: r.myVote } : { poll: null }, r.poll ? "Active poll fetched." : "No active poll.");
+    }
     const poll = await LivePoll.findOne({ liveClassId, isActive: true })
       .select("question options totalVotes createdAt")
       .lean();

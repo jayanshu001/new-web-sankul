@@ -15,6 +15,7 @@ import {
 } from "../../models/enums";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import * as phSql from "../../modules/client-purchase-history/client-purchase-history.service";
 
 const parsePagination = (q: Record<string, string>) => {
   const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
@@ -38,6 +39,14 @@ export const listSubscriptionsHistory = async (req: Request, res: Response) => {
     if (!userId) { logger.warn("listSubscriptionsHistory unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { pageNum, limitNum, skip } = parsePagination(req.query as Record<string, string>);
+
+    if (phSql.isPurchaseHistoryMysql()) {
+      const cid = phSql.parsePhId(String(userId));
+      if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
+      // ⚠ SQL has no payment_status — "verified" maps to status=true (active sub).
+      const { data, pagination } = await phSql.listSubscriptions(cid, skip, limitNum, pageNum, limitNum);
+      return res.status(200).json({ success: true, data, pagination });
+    }
 
     const filter = {
       customerId: new mongoose.Types.ObjectId(userId),
@@ -163,6 +172,13 @@ export const listBooksHistory = async (req: Request, res: Response) => {
 
     const { pageNum, limitNum, skip } = parsePagination(req.query as Record<string, string>);
 
+    if (phSql.isPurchaseHistoryMysql()) {
+      const cid = phSql.parsePhId(String(userId));
+      if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
+      const { data, pagination } = await phSql.listBooks(cid, BOOK_SUCCESS_STATUSES as string[], skip, limitNum, pageNum, limitNum);
+      return res.status(200).json({ success: true, data, pagination });
+    }
+
     const filter = {
       customerId: new mongoose.Types.ObjectId(userId),
       status: { $in: BOOK_SUCCESS_STATUSES },
@@ -256,6 +272,13 @@ export const listEbooksHistory = async (req: Request, res: Response) => {
     if (!userId) { logger.warn("listEbooksHistory unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     const { pageNum, limitNum, skip } = parsePagination(req.query as Record<string, string>);
+
+    if (phSql.isPurchaseHistoryMysql()) {
+      const cid = phSql.parsePhId(String(userId));
+      if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
+      const { data, pagination } = await phSql.listEbooks(cid, PackageCourseEbookOrderStatus.COMPLETE, skip, limitNum, pageNum, limitNum);
+      return res.status(200).json({ success: true, data, pagination });
+    }
 
     const filter = {
       customerId: new mongoose.Types.ObjectId(userId),

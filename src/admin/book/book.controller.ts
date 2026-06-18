@@ -17,6 +17,7 @@ import {
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildSearchFilter } from "../../utils/searchFilter";
+import * as adminBook from "../../modules/admin-book/admin-book.service";
 
 // ─── Books CRUD ───────────────────────────────────────────────────────────────
 
@@ -35,6 +36,27 @@ export const getBooks = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    if (adminBook.isAdminBookMysql()) {
+      const { data, total } = await adminBook.listBooks({
+        search,
+        language,
+        isMagazine: isMagazine === "true" ? true : isMagazine === "false" ? false : undefined,
+        isCombo: isCombo === "true" ? true : isCombo === "false" ? false : undefined,
+        status: status === "true" ? true : status === "false" ? false : undefined,
+        page: pageNum,
+        limit: limitNum,
+      });
+      logger.info("getBooks success (mysql)", { traceId, total });
+      return res.status(200).json({
+        success: true,
+        data,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     const filter: any = {};
     Object.assign(filter, buildSearchFilter(search, ["name", "author"]));
     if (status === "true" || status === "false") filter.status = status === "true";
@@ -42,8 +64,6 @@ export const getBooks = async (req: Request, res: Response) => {
     if (isMagazine === "true" || isMagazine === "false") filter.isMagazine = isMagazine === "true";
     if (isCombo === "true" || isCombo === "false") filter.isCombo = isCombo === "true";
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
@@ -69,6 +89,14 @@ export const getBookById = async (req: Request, res: Response) => {
   logger.info("getBookById invoked", { traceId, path: req.originalUrl, id });
 
   try {
+    if (adminBook.isAdminBookMysql()) {
+      const numId = adminBook.parseBookId(id);
+      if (!numId) { logger.warn("getBookById invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
+      const book = await adminBook.getBook(numId);
+      if (!book) { logger.warn("getBookById not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
+      logger.info("getBookById success (mysql)", { traceId, id });
+      return res.status(200).json({ success: true, data: book });
+    }
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("getBookById invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     const book = await Book.findById(id)
       .populate("examCountdownCategoryId", "_id name colorHex")
@@ -145,6 +173,14 @@ export const createBook = async (req: Request, res: Response) => {
         message: "Discounted price cannot exceed list price.",
       });
     }
+    if (adminBook.isAdminBookMysql()) {
+      // SQL ws_book has no columns for examCountdown*/packageIds/termsAndConditions/
+      // demoFileName/bookFileName/bookUrl/isTrending — those Mongo-only fields are
+      // dropped on write (documented gap).
+      const created = await adminBook.createBook(data as any);
+      logger.info("createBook success (mysql)", { traceId, bookId: created._id });
+      return res.status(201).json({ success: true, data: created });
+    }
     const book = await Book.create(data);
     logger.info("createBook success", { traceId, bookId: book._id });
     return res.status(201).json({ success: true, data: book });
@@ -161,7 +197,10 @@ export const updateBook = async (req: Request, res: Response) => {
   logger.info("updateBook invoked", { traceId, path: req.originalUrl, id });
 
   try {
-    if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("updateBook invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
+    const sqlId = adminBook.isAdminBookMysql() ? adminBook.parseBookId(id) : undefined;
+    if (adminBook.isAdminBookMysql()) {
+      if (!sqlId) { logger.warn("updateBook invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
+    } else if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("updateBook invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     mergeUploadedFiles(req);
     coerceArrayFields(req);
     const data = updateBookSchema.parse(req.body);
@@ -186,6 +225,12 @@ export const updateBook = async (req: Request, res: Response) => {
         message: "Discounted price cannot exceed list price.",
       });
     }
+    if (adminBook.isAdminBookMysql()) {
+      const updated = await adminBook.updateBook(sqlId!, data as any);
+      if (!updated) { logger.warn("updateBook not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
+      logger.info("updateBook success (mysql)", { traceId, id });
+      return res.status(200).json({ success: true, data: updated });
+    }
     const book = await Book.findByIdAndUpdate(id, { $set: data }, { new: true });
     if (!book) { logger.warn("updateBook not found", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
     logger.info("updateBook success", { traceId, id });
@@ -203,6 +248,14 @@ export const deleteBook = async (req: Request, res: Response) => {
   logger.info("deleteBook invoked", { traceId, path: req.originalUrl, id });
 
   try {
+    if (adminBook.isAdminBookMysql()) {
+      const numId = adminBook.parseBookId(id);
+      if (!numId) { logger.warn("deleteBook invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
+      const ok = await adminBook.deleteBook(numId);
+      if (!ok) { logger.warn("deleteBook not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
+      logger.info("deleteBook success (mysql)", { traceId, id });
+      return res.status(200).json({ success: true, message: "Book deleted." });
+    }
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("deleteBook invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     const book = await Book.findByIdAndDelete(id);
     if (!book) { logger.warn("deleteBook not found", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
@@ -220,6 +273,14 @@ export const toggleBookStatus = async (req: Request, res: Response) => {
   logger.info("toggleBookStatus invoked", { traceId, path: req.originalUrl, id });
 
   try {
+    if (adminBook.isAdminBookMysql()) {
+      const numId = adminBook.parseBookId(id);
+      if (!numId) { logger.warn("toggleBookStatus invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
+      const newStatus = await adminBook.toggleBookStatus(numId);
+      if (newStatus === null) { logger.warn("toggleBookStatus not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
+      logger.info("toggleBookStatus success (mysql)", { traceId, id, newStatus });
+      return res.status(200).json({ success: true, data: { status: newStatus } });
+    }
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("toggleBookStatus invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     const book = await Book.findById(id).select("status");
     if (!book) { logger.warn("toggleBookStatus not found", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
@@ -233,6 +294,8 @@ export const toggleBookStatus = async (req: Request, res: Response) => {
   }
 };
 
+// ⚠ STAYS Mongo: ws_book has no `is_trending` column — `isTrending` is a
+// Mongo-only field (the SQL DTO synthesizes it false). No SQL branch.
 export const toggleBookTrending = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -258,6 +321,11 @@ export const reorderBooks = async (req: Request, res: Response) => {
 
   try {
     const { orders } = reorderBooksSchema.parse(req.body);
+    if (adminBook.isAdminBookMysql()) {
+      await adminBook.reorderBooks(orders);
+      logger.info("reorderBooks success (mysql)", { traceId, count: orders.length });
+      return res.status(200).json({ success: true, message: "Book order updated." });
+    }
     const ops = orders
       .filter((o) => mongoose.Types.ObjectId.isValid(o.id))
       .map((o) => ({
@@ -293,6 +361,29 @@ export const getOrders = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    if (adminBook.isAdminBookMysql()) {
+      const { items, total } = await adminBook.listOrders({
+        customerId,
+        status: status && Object.values(BookOrderStatus).includes(status as BookOrderStatus) ? status : undefined,
+        fromDate,
+        toDate,
+        search,
+        sortBy,
+        sortOrder,
+        page: pageNum,
+        limit: limitNum,
+      });
+      logger.info("getOrders success (mysql)", { traceId, total });
+      return res.status(200).json({
+        success: true,
+        items,
+        pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     const filter: any = {};
     if (customerId && mongoose.Types.ObjectId.isValid(customerId)) filter.customerId = customerId;
     if (status && Object.values(BookOrderStatus).includes(status as BookOrderStatus))
@@ -319,8 +410,6 @@ export const getOrders = async (req: Request, res: Response) => {
       ];
     }
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
     const sortField = sortBy || "createdAt";
@@ -373,6 +462,14 @@ export const getOrderById = async (req: Request, res: Response) => {
   logger.info("getOrderById invoked", { traceId, path: req.originalUrl, id });
 
   try {
+    if (adminBook.isAdminBookMysql()) {
+      const numId = adminBook.parseBookId(id);
+      if (!numId) { logger.warn("getOrderById invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid order id." }); }
+      const order = await adminBook.getOrder(numId);
+      if (!order) { logger.warn("getOrderById not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Order not found." }); }
+      logger.info("getOrderById success (mysql)", { traceId, id });
+      return res.status(200).json({ success: true, data: order });
+    }
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("getOrderById invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid order id." }); }
 
     const order = await BookOrder.findById(id)
@@ -388,6 +485,14 @@ export const getOrderById = async (req: Request, res: Response) => {
   }
 };
 
+// ⚠ STAY Mongo (no SQL branch): updateOrderStatus / setOrderTracking /
+// addOrderTrackingEvent all write the embedded `tracking.history[]` array +
+// paidAt/shippedAt/deliveredAt/cancelledAt timestamps. SQL `ws_book_tracking`
+// is a single flat row per AWB (status varchar(10), no history/location/note/
+// courier columns) and ws_book_order has only created/updated/order_date — the
+// full SHIPPED→DELIVERED→CANCELLED lifecycle + event history is not
+// representable. (book-order's verify path already writes the one "verified"
+// tracking row; admin status transitions remain Mongo until the table grows.)
 export const updateOrderStatus = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
@@ -502,6 +607,9 @@ export const addOrderTrackingEvent = async (req: Request, res: Response) => {
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
 
+// ⚠ STAY Mongo (no SQL branch): getSettings / updateSettings — there is NO
+// `ws_book_setting(s)` table in MySQL. BookSetting (freeShippingMinOrderAmount,
+// gstRate, supportPhone, termsAndConditions[], originCity/Hub) is Mongo-only.
 export const getSettings = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
   logger.info("getSettings invoked", { traceId, path: _req.originalUrl });

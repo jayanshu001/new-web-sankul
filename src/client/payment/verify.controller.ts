@@ -27,6 +27,9 @@ import {
   isCommerceOrderMysql,
   findCourseOrderForVerify,
   verifyCourseOrderMysql,
+  isPackageOrderMysql,
+  findPackageOrderForVerify,
+  verifyPackageOrderMysql,
 } from "../../modules/commerce-order/commerce-order.service";
 import {
   isEbookOrderMysql,
@@ -38,6 +41,12 @@ import {
   findBookOrderForVerify,
   verifyBookOrderMysql,
 } from "../../modules/book-order/book-order.service";
+import {
+  isLiveCourseOrderMysql,
+  findLiveCourseOrderForVerify,
+  verifyLiveCourseOrderMysql,
+} from "../../modules/live-course-order/live-course-order.service";
+import * as tsOrderSql from "../../modules/test-series-order/test-series-order.service";
 
 const verifySchema = z.object({
   razorpay_order_id: z.string().min(1),
@@ -128,6 +137,25 @@ export const verifyPayment = async (req: Request, res: Response) => {
       // miss → fall through to the Mongo fan-out (dual-read fallback).
     }
 
+    // ── MySQL package write path (commerce-order tables, `package-order` flag) ──
+    // Twin of the course branch; findPackageOrderForVerify only matches PACKAGE
+    // orders (plan has packageId, no courseId). Dual-read fallback on miss.
+    if (isPackageOrderMysql()) {
+      const customerIdInt = Number(userId);
+      const mysqlPackageOrder = Number.isInteger(customerIdInt)
+        ? await findPackageOrderForVerify(razorpay_order_id, customerIdInt)
+        : null;
+      if (mysqlPackageOrder) {
+        if (mysqlPackageOrder.paymentStatus !== "pending") {
+          logger.info("verifyPayment: package order already verified (idempotent, mysql)", { orderId: mysqlPackageOrder.id, razorpay_order_id });
+        }
+        const subscription = await verifyPackageOrderMysql(mysqlPackageOrder, razorpay_payment_id);
+        logger.info("verifyPayment: package subscription activated (mysql)", { orderId: mysqlPackageOrder.id, subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
+        return res.status(200).json({ success: true, data: { kind: "package", subscription } });
+      }
+      // miss → fall through to the Mongo fan-out (dual-read fallback).
+    }
+
     // ── MySQL ebook write path (ebook-order, flag-gated) ─────────────────────
     // Same dual-read fallback as course: check MySQL first, fall through to Mongo
     // on miss. Returns the Mongo-shaped EbookOrder as data.order (the ebook
@@ -186,6 +214,43 @@ export const verifyPayment = async (req: Request, res: Response) => {
           success: true,
           data: { kind: "book", order },
         });
+      }
+      // miss → fall through to the Mongo fan-out (dual-read fallback).
+    }
+
+    // ── MySQL live-course write path (live-course-order, flag-gated) ─────────
+    // Single-table: the pending ws_live_course_subscription owns the razorpay id.
+    // Same dual-read fallback — check MySQL first, fall through to Mongo on miss.
+    if (isLiveCourseOrderMysql()) {
+      const customerIdInt = Number(userId);
+      const mysqlLiveSub = Number.isInteger(customerIdInt)
+        ? await findLiveCourseOrderForVerify(razorpay_order_id, customerIdInt)
+        : null;
+      if (mysqlLiveSub) {
+        if (mysqlLiveSub.paymentStatus && mysqlLiveSub.paymentStatus !== "pending") {
+          logger.info("verifyPayment: live-course sub already verified (idempotent, mysql)", { subscriptionId: mysqlLiveSub.id, razorpay_order_id });
+        }
+        const subscription = await verifyLiveCourseOrderMysql(mysqlLiveSub, razorpay_payment_id);
+        logger.info("verifyPayment: live-course subscription activated (mysql)", { subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
+        return res.status(200).json({ success: true, data: { kind: "live-course", subscription } });
+      }
+      // miss → fall through to the Mongo fan-out (dual-read fallback).
+    }
+
+    // ── MySQL test-series write path (test-series-order flag) ────────────────
+    // Single order table; verify folds-or-fresh into ws_test_series_subscription.
+    if (tsOrderSql.isTestSeriesOrderMysql()) {
+      const customerIdInt = Number(userId);
+      const mysqlTsOrder = Number.isInteger(customerIdInt)
+        ? await tsOrderSql.findOrderForVerify(razorpay_order_id, customerIdInt)
+        : null;
+      if (mysqlTsOrder) {
+        if (mysqlTsOrder.status !== "pending") {
+          logger.info("verifyPayment: test-series order already verified (idempotent, mysql)", { orderId: mysqlTsOrder.id, razorpay_order_id });
+        }
+        const subscription = await tsOrderSql.verifyOrderMysql(mysqlTsOrder, razorpay_payment_id);
+        logger.info("verifyPayment: test-series subscription activated (mysql)", { orderId: mysqlTsOrder.id, subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
+        return res.status(200).json({ success: true, data: { kind: "test-series", subscription } });
       }
       // miss → fall through to the Mongo fan-out (dual-read fallback).
     }

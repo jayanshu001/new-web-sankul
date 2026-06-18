@@ -29,10 +29,31 @@ export const catalogVideoRepository = {
   findCategoryById: (id: number) =>
     prisma.videoCategory.findFirst({ where: { id, status: true } }),
 
+  /** Single category by id, NO status gate (parent of a children-nav lookup). */
+  findCategoryByIdAny: (id: number) =>
+    prisma.videoCategory.findFirst({ where: { id } }),
+
   /** Active categories, ordered by `order_by` then title. */
   listActiveCategories: () =>
     prisma.videoCategory.findMany({
       where: { status: true },
       orderBy: [{ order_by: "asc" }, { title: "asc" }],
     }),
+
+  /**
+   * Active CHILD categories of a parent (children-nav drill-down). ⚠ Mongo
+   * `childCategoryIds[]` is a DAG; SQL derives children from the single `parent`
+   * FK (same divergence as admin-master). Optional title search.
+   */
+  listActiveChildren: (parentId: number, opts?: { search?: string }) =>
+    prisma.videoCategory.findMany({
+      where: { parent: parentId, status: true, ...(opts?.search ? { title: { contains: opts.search } } : {}) },
+      orderBy: [{ order_by: "asc" }, { title: "asc" }],
+    }),
+
+  /** Of the given category ids, which have ≥1 active child (havingChildDirectory). */
+  parentsWithChildren: (childIds: number[]) =>
+    childIds.length
+      ? prisma.videoCategory.findMany({ where: { parent: { in: childIds }, status: true }, select: { parent: true }, distinct: ["parent"] })
+      : Promise.resolve([]),
 };

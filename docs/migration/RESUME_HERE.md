@@ -2,7 +2,13 @@
 
 > **Purpose:** Cold-start context so any session can resume **exactly** here without losing flow, behaviour,
 > or any established rule. This is THE single source of truth for "where we are."
-> **Last updated:** 2026-06-17 (ADMIN + EDUCATOR wave migrated — auth + CRUD now on SQL; see §1A) · **Branch:** `migration` (NEVER merge to `main` until full sign-off)
+> **Last updated:** 2026-06-18 — ✅ **Waves 1–7 COMPLETE on SQL.** Wave 6 (LiveCourse, 14 tables) DONE; Wave 7
+> (aggregators + full payment + the 8 net-new blocked tables) DONE — test-series/ebook-download/folder flags ON &
+> verified; `client-notification` + `client-lecture-progress` code-complete but flag-OFF (Mongo write subsystem /
+> 14-file content-join hub). **⚠ For the live wave-by-wave status + next step, the canonical source is the
+> `§RESUME POINTER` block in [`MONGO_ONLY_MIGRATION_PLAN.md`](./MONGO_ONLY_MIGRATION_PLAN.md)** — the per-section
+> next-step notes BELOW in this file are from the Wave-5/6 era and are kept only for the established patterns/rules,
+> not for current status. · **Branch:** `migration` (NEVER merge to `main` until full sign-off)
 > **Working dir:** `/Users/pratikzankat/new-web-sankul`
 > **On resume:** UPDATE THIS FILE as you go (don't create a new one). Pair it with the newest-first detailed
 > log [`../MIGRATION_QUERY_CHANGES.md`](../MIGRATION_QUERY_CHANGES.md) — that log is the history; this file
@@ -165,17 +171,19 @@ getSolutionDownloadByExam PDF stays Mongo. **Pending:** admin exam reads (src/ad
 getExams/getExamById/questions/submissions/analytics[raw SQL aggregates]/result/customer-analytics + invalidate;
 admin sees the answer). Deferred (Mongo): admin exam/question CRUD writes + getSolutionDownload PDF.
 
-**🔄 Wave 5 IN PROGRESS — client reads done where possible:** `client-cart` ✅ (`src/modules/client-cart/`,
-5 handlers) + `client-educator` ✅ (`src/modules/client-educator/`, getEducatorWithCourses). **BLOCKED (stay
-Mongo):** client material (entitlement→LiveCourse + Mongo embeds; ws_material lacks isPaid/ancestors), client
-search (includes LiveCourse), wishlist/folder/lecture-note/lecture-audio-note/free-progress (no SQL tables).
-**Remaining Wave 5 = admin catalog CRUD (~136 handlers)** — build module-by-module, start with `plan`, then
-video/videoCategory/book/ebook/course/package/material/master/pc-material.
+**🏁 Wave 5 COMPLETE (2026-06-18):** client reads (`client-cart` ✅ + `client-educator` ✅) + **all 9 admin
+catalog CRUD modules on SQL** — `admin-plan` (10) · `admin-master` (pc-material + 3 sub-cats + full videoCategory) ·
+`admin-video` (8) · `admin-book` (9: books + order reads) · `admin-ebook` (17: ebooks + plans + subscriptions) ·
+`admin-course` (~24: course + plans + masters + relations) · `admin-package` (~22: packages + types + plans +
+relations) · `admin-material` (~19: categories + leaf materials). Each verified vs live DB; `tsc` clean; flags ON.
+**BLOCKED / stay Mongo:** client material + search (LiveCourse-dependent); wishlist/folder/lecture-note/lecture-
+audio-note/free-progress (no SQL tables); per-module documented gaps (see MONGO_ONLY_MIGRATION_PLAN §RESUME POINTER);
+master/packageCategory + videoCategory/material `duplicate` (DAG clones).
 
-**Admin catalog CRUD progress:** ✅ **`admin-plan`** (10) ✅ **`admin-master`** (pc-material + 3 master sub-cats
-+ **full videoCategory**: list/prereqs/get/create/update/toggle/delete/courses-list/videos-list; `duplicate`
-stays Mongo — DAG clone) ✅ **`admin-video`** (8). ⚠ Mongo-only: master/packageCategory, videoCategory `duplicate`.
-Remaining admin modules: book, ebook, course, package, material.
+**▶️ NEXT — Wave 6 (LiveCourse / LiveSession):** unlike Waves 1–5, the SQL tables **don't exist yet** — must be
+CREATED. Design doc written → [`schema-changes/LIVE_COURSE_DESIGN.md`](./schema-changes/LIVE_COURSE_DESIGN.md)
+(~14 tables, mirrors the 12 live Mongo collections). **Awaiting:** sign-off + the backfill-vs-empty-start decision,
+then DDL → Prisma → modules. Wave 7 (aggregation/finalizers) follows.
 
 **Next:** admin CRUD cont. — `book` (books+orders+settings) → `ebook` → `course` → `package` → `material`.
 

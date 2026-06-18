@@ -8,8 +8,21 @@ import { resolveLivePromo } from "../live-course/promo";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { prisma } from "../../config/prisma";
+import {
+  isPackageOrderMysql,
+  findPackagePlanForOrder,
+  createPackageOrderMysql,
+} from "../../modules/commerce-order/commerce-order.service";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
+
+// SQL planId is numeric (migrated id-space).
+const createPackageOrderSqlSchema = z.object({
+  packageId: z.coerce.number().int().positive(),
+  customerShippingId: z.coerce.number().int().positive().optional(),
+  promocode: z.string().trim().min(1).optional(),
+});
 
 const createPackageOrderSchema = z.object({
   // PackageCourseEbookPrice._id — the specific plan/duration row picked.
@@ -44,6 +57,63 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       return res.status(500).json({
         success: false,
         message: "Razorpay credentials not configured on the server.",
+      });
+    }
+
+    // ── MySQL package write path (commerce-order tables, `package-order` flag) ──
+    // 3-table pattern (order → sub+tracking at verify), mirroring the course path.
+    // Writes only the pending ws_package_course_order row here; /payment/verify
+    // creates/extends the subscription. customerShippingId validated against Mongo.
+    if (isPackageOrderMysql()) {
+      const customerIdInt = Number(customerId);
+      if (!Number.isInteger(customerIdInt)) {
+        logger.warn("createPackageOrderPayment[mysql] non-int customer id", { traceId, customerId });
+        return res.status(400).json({ success: false, message: "Invalid customer id." });
+      }
+      const body = createPackageOrderSqlSchema.parse(req.body);
+      if (body.customerShippingId) {
+        const addr = await CustomerAddress.findOne({ _id: String(body.customerShippingId), customerId }).select("_id");
+        if (!addr) return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
+      }
+      const planSql = await findPackagePlanForOrder(body.packageId);
+      if (!planSql) {
+        logger.warn("createPackageOrderPayment[mysql] plan invalid/not-package/zero", { traceId, customerId, packageId: body.packageId });
+        return res.status(404).json({ success: false, message: "Plan not found, not a package plan, or zero price." });
+      }
+      const pkgSql = await prisma.package.findFirst({ where: { id: planSql.packageId }, select: { id: true, name: true } });
+
+      let chargeAmount = planSql.price;
+      let promocodeIdNum: number | null = null;
+      let originalAmount: number | null = null;
+      let discountAmount: number | null = null;
+      if (body.promocode) {
+        const { result, error } = await resolveLivePromo(body.promocode, planSql.price, { type: "package", id: String(planSql.packageId) });
+        if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
+        if (result.finalAmount < 1) return res.status(400).json({ success: false, message: "This promo code reduces the price below the minimum payable amount. Please contact support." });
+        chargeAmount = result.finalAmount;
+        const pid = Number(String(result.promo._id));
+        promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
+        originalAmount = result.originalAmount;
+        discountAmount = result.discountAmount;
+      }
+
+      const receiptId = `package-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const rzpOrder = await createRazorpayOrder(rp, {
+        amount: Math.round(chargeAmount * 100), currency: "INR", receipt: receiptId,
+        notes: { kind: "package", targetPackageId: String(planSql.packageId), packageId: String(body.packageId), customerId: String(customerIdInt), ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}) },
+      });
+      // NOTE: SQL order row carries the CHARGED amount (post-promo) as both price
+      // and discount_price (commerce-order.createPendingOrder sets both = input).
+      const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, razorpayOrderId: rzpOrder.id });
+      logger.info("createPackageOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
+      return res.status(201).json({
+        success: true,
+        data: {
+          subscriptionId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
+          package: pkgSql ? { _id: String(pkgSql.id), name: pkgSql.name } : { _id: String(planSql.packageId), name: null },
+          plan: { _id: String(body.packageId), duration: planSql.duration, price: planSql.price },
+          promo: promocodeIdNum ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount } : null,
+        },
       });
     }
 

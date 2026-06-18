@@ -214,3 +214,18 @@ export const verifyBookOrderMysql = async (
   const items = await repo.findOrderItems(order.orderKey);
   return toBookOrderDto(result.order, items);
 };
+
+/**
+ * Webhook fulfillment (paymentWebhook) — keyed by razorpayOrderId ALONE (no
+ * customer in the razorpay payload). Reuses verifyBookOrderMysql, which allocates
+ * the AWB tracking row IN-TRANSACTION on the SQL side (no Mongo Counter needed).
+ * Idempotent; null on miss → caller falls through to Mongo.
+ */
+export const fulfillBookWebhookMysql = async (
+  razorpayOrderId: string,
+  razorpayPaymentId: string
+): Promise<BookOrderDto | null> => {
+  const order = await repo.findOrderByRazorpayOnly(razorpayOrderId);
+  if (!order) return null;
+  return verifyBookOrderMysql(toBookOrderRow(order), razorpayPaymentId);
+};

@@ -11,6 +11,18 @@ import { HttpError } from "../../middlewares/errorHandler";
 import { deleteFromS3FileUrl, isOwnBucketUrl } from "../../middlewares/upload";
 import cache from "../../libs/cache";
 import { buildRegexCondition, buildSearchFilter } from "../../utils/searchFilter";
+import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
+
+// Re-exported so the thin controllers can branch validation (numeric vs ObjectId).
+export const isAdminEbookMysql = adminEbook.isAdminEbookMysql;
+export const parseEbookId = adminEbook.parseEbookId;
+
+// On the SQL branch ids are numeric; the Mongo assertObjectId would 400 them.
+const assertEbookSqlId = (id: string, label: string): number => {
+  const n = adminEbook.parseEbookId(id);
+  if (!n) throw new HttpError(400, `Invalid ${label} ID`);
+  return n;
+};
 
 const assertObjectId = (id: string, label: string): void => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -51,6 +63,8 @@ export interface ListEbooksQuery {
 }
 
 export const listEbooks = async (query: ListEbooksQuery) => {
+  if (adminEbook.isAdminEbookMysql()) return adminEbook.listEbooks(query);
+
   const { search, author, publisher, language, status, page = "1", limit = "20" } = query;
 
   const filter: any = {};
@@ -96,6 +110,11 @@ export const listEbooks = async (query: ListEbooksQuery) => {
 };
 
 export const getEbookById = async (id: string) => {
+  if (adminEbook.isAdminEbookMysql()) {
+    const data = await adminEbook.getEbookById(assertEbookSqlId(id, "Ebook"));
+    if (!data) throw new HttpError(404, "Ebook not found");
+    return data;
+  }
   assertObjectId(id, "Ebook");
   return cache.aside({
     key: ebookDetailKey(id),
@@ -116,6 +135,11 @@ export const getEbookById = async (id: string) => {
 };
 
 export const createEbook = async (validated: any) => {
+  if (adminEbook.isAdminEbookMysql()) {
+    // SQL ws_ebook has no examCountdown*/isTrending/PDF-status columns — those
+    // Mongo-only fields are dropped on write (documented gap).
+    return adminEbook.createEbook(validated);
+  }
   // Legacy single field is now a derived mirror of examCountdownCategoryIds[0]
   // (admin no longer sends a meaningful single value). Kept in sync for the one
   // remaining reader. See docs/MIGRATION_QUERY_CHANGES.md.
@@ -162,6 +186,14 @@ export const setEbookUploadStatus = async (
 const EBOOK_FILE_FIELDS = ["image", "thumbnail", "demoUrl", "bookUrl"] as const;
 
 export const updateEbook = async (id: string, validated: any) => {
+  if (adminEbook.isAdminEbookMysql()) {
+    // NOTE: the Mongo path best-effort-deletes replaced S3 files; on SQL we skip
+    // that orphan cleanup (not part of the API contract). examCountdown*/PDF-
+    // status fields are dropped (no SQL columns).
+    const data = await adminEbook.updateEbook(assertEbookSqlId(id, "Ebook"), validated);
+    if (!data) throw new HttpError(404, "Ebook not found");
+    return data;
+  }
   assertObjectId(id, "Ebook");
   // Keep the legacy single field in sync with examCountdownCategoryIds[0], but
   // ONLY when the array is present in this payload — otherwise an update that
@@ -202,6 +234,13 @@ export const updateEbook = async (id: string, validated: any) => {
 };
 
 export const deleteEbook = async (id: string) => {
+  if (adminEbook.isAdminEbookMysql()) {
+    // Cascades the ebook's plans (ws_package_course_ebook_price) in one txn.
+    // S3 file cleanup is skipped on SQL (best-effort, not contract).
+    const ok = await adminEbook.deleteEbook(assertEbookSqlId(id, "Ebook"));
+    if (!ok) throw new HttpError(404, "Ebook not found");
+    return;
+  }
   assertObjectId(id, "Ebook");
   const session = await mongoose.startSession();
   // Captured inside the transaction, used AFTER it commits — S3 deletes are not
@@ -232,6 +271,8 @@ export const deleteEbook = async (id: string) => {
   }
 };
 
+// ⚠ STAYS Mongo: ws_ebook has no `is_trending` column (isTrending is Mongo-only,
+// synthesized false in the SQL DTO). No admin-ebook SQL branch.
 export const toggleEbookTrending = async (id: string) => {
   assertObjectId(id, "Ebook");
   const ebook = await Ebook.findById(id).select("isTrending");
@@ -243,6 +284,10 @@ export const toggleEbookTrending = async (id: string) => {
 };
 
 export const reorderEbooks = async (orders: Array<{ id: string; order: number }>) => {
+  if (adminEbook.isAdminEbookMysql()) {
+    await adminEbook.reorderEbooks(orders);
+    return;
+  }
   const ops = orders
     .filter((o) => mongoose.Types.ObjectId.isValid(o.id))
     .map((o) => ({
@@ -258,6 +303,11 @@ export const reorderEbooks = async (orders: Array<{ id: string; order: number }>
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const listEbookPlans = async (ebookId: string) => {
+  if (adminEbook.isAdminEbookMysql()) {
+    const res = await adminEbook.listEbookPlans(assertEbookSqlId(ebookId, "Ebook"));
+    if (res === "not_found") throw new HttpError(404, "Ebook not found");
+    return res;
+  }
   assertObjectId(ebookId, "Ebook");
   const exists = await Ebook.exists({ _id: ebookId });
   if (!exists) throw new HttpError(404, "Ebook not found");
@@ -265,6 +315,11 @@ export const listEbookPlans = async (ebookId: string) => {
 };
 
 export const createEbookPlan = async (ebookId: string, validated: any) => {
+  if (adminEbook.isAdminEbookMysql()) {
+    const res = await adminEbook.createEbookPlan(assertEbookSqlId(ebookId, "Ebook"), validated);
+    if (res === "not_found") throw new HttpError(404, "Ebook not found");
+    return res;
+  }
   assertObjectId(ebookId, "Ebook");
   const exists = await Ebook.exists({ _id: ebookId });
   if (!exists) throw new HttpError(404, "Ebook not found");
@@ -274,6 +329,11 @@ export const createEbookPlan = async (ebookId: string, validated: any) => {
 };
 
 export const getEbookPlanById = async (planId: string) => {
+  if (adminEbook.isAdminEbookMysql()) {
+    const plan = await adminEbook.getEbookPlanById(assertEbookSqlId(planId, "Plan"));
+    if (!plan) throw new HttpError(404, "Plan not found");
+    return plan;
+  }
   assertObjectId(planId, "Plan");
   const plan = await EbookPrice.findById(planId).populate("ebookId", "_id name").lean();
   if (!plan) throw new HttpError(404, "Plan not found");
@@ -281,6 +341,11 @@ export const getEbookPlanById = async (planId: string) => {
 };
 
 export const updateEbookPlan = async (planId: string, validated: any) => {
+  if (adminEbook.isAdminEbookMysql()) {
+    const res = await adminEbook.updateEbookPlan(assertEbookSqlId(planId, "Plan"), validated);
+    if (res === "not_found") throw new HttpError(404, "Plan not found");
+    return res;
+  }
   assertObjectId(planId, "Plan");
   const plan = await EbookPrice.findByIdAndUpdate(planId, validated, { new: true });
   if (!plan) throw new HttpError(404, "Plan not found");
@@ -289,6 +354,11 @@ export const updateEbookPlan = async (planId: string, validated: any) => {
 };
 
 export const deleteEbookPlan = async (planId: string) => {
+  if (adminEbook.isAdminEbookMysql()) {
+    const ok = await adminEbook.deleteEbookPlan(assertEbookSqlId(planId, "Plan"));
+    if (!ok) throw new HttpError(404, "Plan not found");
+    return;
+  }
   assertObjectId(planId, "Plan");
   const plan = await EbookPrice.findByIdAndDelete(planId);
   if (!plan) throw new HttpError(404, "Plan not found");

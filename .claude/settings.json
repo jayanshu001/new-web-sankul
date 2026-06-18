@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if [ -n \"$(git status --porcelain src/ 2>/dev/null)\" ] && [ -z \"$(git status --porcelain docs/MIGRATION_QUERY_CHANGES.md 2>/dev/null)\" ]; then echo '{\"decision\":\"block\",\"reason\":\"Migration doc protocol not done: src/ has changes but docs/MIGRATION_QUERY_CHANGES.md is unmodified. Before finishing, run the protocol: (1) prepend the changelog entry in docs/MIGRATION_QUERY_CHANGES.md (newest first), (2) update the RESUME POINTER + wave checklist + change-log table in docs/migration/MONGO_ONLY_MIGRATION_PLAN.md, (3) add a row to docs/migration/MIGRATION_TRACKER.md + MIGRATION_TEST_LOG.md, (4) regenerate with yarn docs:migrated-modules, (5) update the migration-wave-status memory.\"}'; else echo '{}'; fi",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

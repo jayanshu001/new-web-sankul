@@ -45,6 +45,11 @@ import {
   getCategoryChildren as getExamCategoryChildren,
   parseExamCategoryId,
 } from "../../modules/catalog-exam/catalog-exam.service";
+import {
+  isVideoMysql,
+  getVideoCategoryChildren,
+  parseVideoCategoryId,
+} from "../../modules/catalog-video/catalog-video.service";
 
 // Row passthrough. The list now also embeds the encrypted playback envelope
 // (`request.files`, see listVideosByCategory) so the FE can download/play
@@ -439,6 +444,25 @@ export const listVideoCategoryChildren = async (req: Request, res: Response) => 
   logger.info("listVideoCategoryChildren invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
+    // MySQL branch first — a MySQL category id is an int, so this precedes the
+    // ObjectId guard. Children resolve via the SQL `parent` self-FK (the Mongo
+    // `childCategoryIds[]` embed has no SQL column).
+    if (isVideoMysql()) {
+      const catId = parseVideoCategoryId(id);
+      if (catId == null) {
+        logger.warn("listVideoCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
+        return res.status(400).json({ success: false, message: "Invalid category id." });
+      }
+      const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+      const result = await getVideoCategoryChildren(catId, search || undefined);
+      if (!result) {
+        logger.warn("listVideoCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
+        return res.status(404).json({ success: false, message: "Video category not found." });
+      }
+      logger.info("listVideoCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
+      return res.status(200).json({ success: true, data: result });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listVideoCategoryChildren invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });

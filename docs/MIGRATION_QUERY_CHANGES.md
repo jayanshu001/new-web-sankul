@@ -4,6 +4,656 @@
 
 ---
 
+## 2026-06-18 — 🔌 Wave 7: wired the new-table consumers — ebook-download + folder ON; notification + lecture-progress code-complete (flag OFF)
+
+Follow-up to creating the 8 tables: built the consumer modules so the previously-blocked surfaces run on SQL.
+
+**Key finding that unblocked this:** at runtime every relevant id IS already a SQL int — `customer-auth` makes
+`req.user.id` the SQL customer id, and `catalog-*` makes content ids (ebook/video/material) SQL ints in the request.
+So the "Mongo content ≠ SQL" worry only affected the *backfill* (which stored refId 0), NOT the live path — proven
+by folder addItem hydrating a real ws_video id to its title.
+
+**✅ FLIPPED + verified (flags ON):**
+- **client-ebook-download** — recordDownload (idempotent) / list / countActiveDownloads / removeDownload +
+  the profile-dashboard count. Verified end-to-end (record→list 'Super Six'→count 1→idempotent→remove→0).
+- **client-folder** — all 8 handlers ×2 types (list/create/detail/update/remove/addItem/removeItem/allItems) +
+  ensureDefaultFolders + countSavedItems. Verified incl. content hydration (refId→ws_video title) + dup-reject + dedup.
+
+**⏸️ Code-complete, FLAG OFF (write subsystem / consumer breadth still Mongo):**
+- **client-notification** — client reads (visibility customer OR broadcast; unread same filter) + markRead/markAll,
+  verified in isolation. OFF because the WRITE path is a Mongo subsystem (admin dispatcher + scheduler/BullMQ + FCM
+  fan-out + per-recipient insertMany keyed by Mongo Customer ObjectIds). Flip reads alone = stale feed.
+- **client-lecture-progress** — heartbeat upserts (per (customer,video)/(customer,liveSession), additive pointers,
+  sticky completed) + rollups + completedLectureCount built. OFF because it's a 14-file content-join hub: the
+  heartbeat is gated by Mongo entitlement/reachability reads, and resume/learning reads join content across many
+  files — heartbeat + reads must flip together.
+
+**profile getProfileDashboardCounts:** the folder/ebook/notification counts are now flag-aware (use SQL when their
+module is on). Guarded the `new ObjectId(userId)` construction (it would throw on the numeric SQL id under
+customer-auth — a pre-existing latent bug). The subscription + pastExams counts still read Mongo and need their own
+flip (they don't function under SQL-auth today).
+
+`tsc` clean. Enabled `client-ebook-download` + `client-folder`; `client-notification` + `client-lecture-progress`
+stay OFF.
+
+---
+
+## 2026-06-18 — 🆕 Wave 7: created the 8 previously-blocked SQL tables + test-series vertical + webhook book/ebook
+
+**DDL (live staging, `docs/migration/schema-changes/2026-06-18_create_wave7_blocked_tables.sql`):** created
+`ws_lecture_progress`, `ws_notification`, `ws_folder`, `ws_folder_item`, `ws_ebook_download`, `ws_test_series`,
+`ws_test_series_price`, `ws_test_series_order`, `ws_test_series_subscription` + added `ws_book_order.paid_at`.
+INT PKs throughout (matches existing tables); scalar-only FK columns (no hard constraints, 0/null sentinel-tolerant);
+polymorphic `folder_item.ref_id` single-column; `test_series.exam_category_ids`/`notification.audience`/`.data` JSON.
+9 Prisma models appended + `BookOrder.paidAt`. `prisma generate` OK. All 9 round-trip-verified via tsx.
+
+**Backfill (`scripts/backfill-wave7-blocked-to-sql.ts`):** customer phone-bridge (Mongo ObjectId →
+ws_customers.phoneNumber → ws_customer.id), test-series family self-contained (intra-family id maps). Staging result:
+notification 22/24, test_series 2/2, test_series_price 3/3; customer-keyed rows (lecture-progress 15, folders 8,
+folder-items 7, downloads 2, ts subs/orders) mostly **skipped — staging test users aren't in the SQL customer dump**
+(same documented artifact as Wave 6; production bridges far better). Other content refs (video/ebook/course/refId)
+have no Mongo→SQL bridge → stored 0/null.
+
+**✅ FLIPPED + verified (flag ON):**
+- **test-series** (`test-series-order`) — FIRST net-new-table vertical, fully self-contained: apply-promo preview +
+  create-order + /verify (fold-or-fresh) + my-subscriptions test_series tab + webhook. Verified end-to-end vs live DB
+  (plan 60d/₹399 → verify +60d → 2026-08-17 → idempotent → my-subs card → webhook fold +60d → 952). **Unblocks
+  test-series payment AND the my-subs test_series tab** (was empty for SQL-auth customers).
+- **webhook book + ebook fulfillment** (`book-order`/`ebook-order`, already ON) — `fulfillBookWebhookMysql` (AWB
+  allocated SQL-side in-txn, no Mongo Counter) + `fulfillEbookWebhookMysql`, branched in webhook.controller.ts.
+
+**⏸️ Tables created + backfilled (production-ready) but consumers STAY Mongo — flipping reads alone would
+split-brain against a Mongo write-path/content-graph:**
+- **lecture-progress** — a content-join hub: heartbeat + resume/learning rollups join to Video/Course/Package/
+  LiveSession content whose Mongo→SQL id bridge doesn't exist. Needs the video/lecture content graph bridged first.
+- **notification** — reads are clean, but the write path is a Mongo subsystem (admin dispatcher + scheduler + FCM
+  push fan-out + BullMQ) + reminder job-carrier rows → flipping reads alone = stale feed.
+- **folder/folder-item** — polymorphic refId (material/video/ebook) with no SQL bridge (backfilled 0).
+- **ebook-download** — ebookId unbridged + the download-register write.
+
+`tsc` clean. Enabled `test-series-order`.
+
+---
+
+## 2026-06-18 — 💳 Wave 7: package payment write path + webhook ebook fulfillment on SQL (payment surface closed)
+
+**What:** Two payment-write pieces, closing the migratable payment surface.
+
+**(1) Package payment** — added to the EXISTING `src/modules/commerce-order/` (same tables/repo/transformer as
+course; no new module): `findPackagePlanForOrder` / `createPackageOrderMysql` / `findPackageOrderForVerify` /
+`verifyPackageOrderMysql` (service) + `findActivePackageSub` / `verifyPackageTx` (repo). Toggled by a SEPARATE
+`package-order` flag (independent of course's `commerce-order`). Branched `package-payment.controller.ts`
+createPackageOrderPayment + `verify.controller.ts`. 3-table pattern (pending order → sub+tracking at verify, one tx).
+⚠ plan must be a PACKAGE plan (packageId set, courseId null); fulfilled sub sets package_id with course_id NULL.
+DAYS duration. PackageCourseOrder.customer_id is `userId Int` (the earlier agent spec's "VARCHAR" was wrong).
+
+**(2) Webhook ebook fulfillment** — added `fulfillEbookWebhookMysql` to `ebook-order` (keyed by razorpayOrderId
+ALONE — webhook payload has no customer) + repo `findOrderByRazorpayOnly`; branched `webhook.controller.ts`
+paymentWebhook ebook section (SQL-first, dual-read fallback). Reuses `verifyEbookOrderMysql` (idempotent).
+
+**Verified end-to-end vs live DB (flags ON):**
+- package: plan 102 (pkg 4, ₹6500, 180d) → create pending order → verify (fresh grant, package_id 4, course_id null,
+  +180d → 2026-12-15) → idempotent → 2nd purchase folded (sub.amount accumulated 6500→13000).
+- webhook ebook: pending order → fulfill (order complete, sub +180d → 2026-12-15) → idempotent (1 sub) → unknown
+  id → null.
+
+`commerce-order` + `ebook-order` flags were already ON (verify used them); enabled `package-order`. `tsc` clean.
+
+**⏸️ STILL DEFERRED (documented blocks):** test-series payment (no ws_test_series* table), webhook book branch
+(needs paidAt column + tracking flatten + Counter), recordingWebhook (Json recordings + socket), profile
+getProfileDashboardCounts (5/7 counts have no SQL table), client/dashboard (no clean slice). The orders 3 writes
+(placeCourseOrder/placeEbookOrder via /client/orders) remain Mongo — the canonical create-order/verify path is
+`/payment/*` (now on SQL for course/ebook/book/package/live-course).
+
+---
+
+## 2026-06-18 — 💳 Wave 7: live-course payment write path on SQL (create + verify + webhook) + remaining-surface analysis
+
+**What:** New `src/modules/live-course-order/` branching the live-course payment vertical on the new
+`live-course-order` flag — the FIRST payment-WRITE path fully on SQL end-to-end:
+- `createLiveCourseOrderPayment` (src/client/payment/live-course-payment.controller.ts) — SQL branch writes a
+  pending `ws_live_course_subscription` row + Razorpay order; numeric planId schema.
+- `verifyPayment` (verify.controller.ts) — live-course branch, dual-read fallback (SQL first, Mongo on miss).
+- `paymentWebhook` (webhook.controller.ts) — live-course fulfillment branch, same dual-read.
+
+**Single-table design:** unlike course/package (3-table order/sub/tracking), `ws_live_course_subscription` carries
+BOTH payment (razorpay ids, payment_status) AND entitlement (start/end, status). createPending → pending row;
+verify/webhook → flip to verified (fresh grant) OR fold onto an existing active sub (extend endAt, sum paid) and
+retire the pending row.
+
+**⚠ Duration is DAYS** (`computeEndAt asDays:true`) — matches the shipped admin-live-course grant + Mongo
+controllers. The prisma schema comment saying "MONTHS" is STALE; DAYS is the precedent ([[project_plan_duration_unit]]).
+withMaterial/customerShippingId are Mongo-only (no SQL column); promocodeId coerced to int; LiveCourse title still
+read from Mongo.
+
+**Verified vs live DB end-to-end (flag ON):** plan 1 (₹1999, 3 days) → create pending → verify (fresh grant,
+start 2026-06-18 → end 2026-06-21 = +3 DAYS, payment id set) → idempotent re-verify (no change) → webhook 2nd
+purchase folded onto the active sub (end → 2026-06-24, paid 1999→3998, 2nd row retired). `tsc` clean. Enabled
+`live-course-order`.
+
+**⏸️ DEFERRED this run (analyzed + documented for next session):**
+- **package-payment** create-order — doable next (3-table commerce-order pattern, all SQL tables exist; the spec's
+  customer_id-as-VARCHAR was wrong — it's `userId Int`).
+- **test-series payment** — BLOCKED (no ws_test_series* table).
+- **webhook book branch** — needs schema work (paidAt column, tracking flatten, Counter); **ebook branch** doable,
+  deferred to batch with package.
+- **profile getProfileDashboardCounts** — 5/7 counts BLOCKED (Notification, FolderItem×2, EbookDownload have no SQL
+  table; PackageCourseSub has no payment_status/targetPackageId; ExamResult lacks inProgress/submittedAt). Not worth
+  a mixed half-count. profile READS already on customer-profile.
+- **recordingWebhook** — Json recordings + socket.io, Mongo-only.
+- **client/dashboard** — no clean slice (prior analysis).
+
+---
+
+## 2026-06-18 — 🧾 Wave 7: client orders — listMyOrders on SQL (+ client/dashboard analyzed & deferred)
+
+**What:** New `src/modules/client-orders/` (repo + service) branching `listMyOrders` in
+`src/client/orders/orders.controller.ts` on the new `client-orders` flag. Read-aggregation over already-migrated
+tables (course/package subs + ebook subs + book orders for a customer, newest-first); no new tables. Matches the
+Mongo `{ courseSubscriptions, ebookSubscriptions, bookOrders }` shape.
+
+**⚠ Drift (same family as client-purchase-history, distinct contract):** Mongo populates courseId→{name,thumbnail}
+and packageId→the price/plan doc; SQL maps Course.image→thumbnail, resolves package_id directly, hydrates the plan
+via planId (packageId field = the plan DTO). ws_book_order: items from the order_items JSON, AWB from tracking_id
+(BIGINT), customer keyed by user_id (→customer_id). withMaterial from pc_material_id.
+
+**⚠ STAY Mongo (no SQL branch):** placeCourseOrder / placeEbookOrder / verifyPayment — the payment-write path
+(Razorpay order+verify + subscription grant + PromoCode.appliesTo + ReferralProgram crediting) → payment wave.
+
+**Verified vs live DB (flag ON):** cust 472341 → 1 package sub (plan 88/90d/₹7500) + 4 book orders (items parsed,
+AWB resolved, verified/pending), 472335 → 1 course sub + 1 ebook + 1 book order. `tsc` clean. Enabled `client-orders`
+in `.env`.
+
+**⏸️ client/dashboard analyzed & DEFERRED (no clean slice):** getResumeDashboard = 10× LectureProgress (no SQL
+table); getDashboard = atomic Promise.all bundling ExamCountdown + Notification (no SQL tables) + the Mongo-only
+trending helpers + banners/testimonials in one payload (no per-section flag boundary); getFreeDashboard = clean
+tables BUT its 3 data helpers (fetchTrendingBooksOnly/fetchTrendingEbooksOnly in book.controller,
+resolveFreeCategoryIds in free.controller) are raw Mongo. banner-slider + testimonial SQL modules exist;
+ws_notification/ws_exam_countdown/ws_lecture_progress do NOT. To unblock free-dashboard, migrate those 3 helpers first.
+
+---
+
+## 2026-06-18 — 🗂️ Wave 7: client categories — listVideoCategoryChildren on SQL (children-nav trio complete)
+
+**What:** Wired `listVideoCategoryChildren` in `src/client/categories/categories.controller.ts` onto the
+already-on `catalog-video` flag — completing the children-nav trio (material + exam children were already migrated).
+Added to `src/modules/catalog-video/`:
+- repo: `findCategoryByIdAny` (parent lookup, no status gate — matches Mongo `findById`), `listActiveChildren`
+  (children via the `parent` self-FK + optional title `contains`), `parentsWithChildren` (distinct-parent probe
+  for `havingChildDirectory`).
+- service: `getVideoCategoryChildren(parentId, search?)` → `{ parent, list[].category{ ...dto, count,
+  havingChildDirectory } }`, and `parseVideoCategoryId`.
+
+Mirrors the existing catalog-material/catalog-exam `getCategoryChildren` pattern exactly; no new flag (catalog-video
+already ON), no new tables.
+
+**⚠ Divergence (documented):** Mongo gates children via the `childCategoryIds[]` DAG embed; SQL derives them from
+the single `parent` FK (same as admin-master). Root-level categories use `parent=0` (sentinel) — not a real row, so
+a `parent=0` lookup correctly returns null/404.
+
+**⚠ Rest of categories.controller STAYS Mongo (no SQL tables exist):** the 4 `examCountdown*` handlers
+(ExamCountdown / ExamCountdownCategory — no SQL table), `listPackageCategories` / `listPackagesByCategory`
+(PackageCategory — no SQL table), and `listVideosByCategory` / `getVideoByCategory` (LectureProgress + video
+encryption — Mongo-only progress). `listMaterialsByCategory` stays Mongo (paid-material entitlement gating).
+
+**Verified vs live DB (flag ON):** cat 295 "Old courses" → 18 children (matches raw active count), cat 8 "Clerk" →
+3 children, order-sorted, with video counts + havingChildDirectory; missing parent → null/404; search filters.
+`tsc` clean.
+
+---
+
+## 2026-06-18 — 📚 Wave 7: client my-subscriptions library (course + ebook tabs) on SQL
+
+**What:** New `src/modules/client-my-subscriptions/` (repo + service) branching the `type=course` (course+package)
+and `type=ebook` tabs of `src/client/my-subscriptions/my-subscriptions.controller.ts` on the new
+`client-my-subscriptions` flag. Read-aggregation over already-migrated tables; no new tables.
+
+**Behavior preserved:** active-only cards (`status=true && endAt>now`), deduped to the furthest-out endAt per
+target, soonest-expiring first — same `Card` envelope (title/author/thumbnail/badge/daysLeft/action.kind/meta).
+
+**⚠ `type=test_series` STAYS Mongo** — `ws_test_series*` has no SQL table. NOTE a pre-existing cross-store gap
+(not introduced here): `customer-auth` is on SQL so the client token carries a numeric id, but
+`TestSeriesSubscription` is keyed by the Mongo customer ObjectId — the test_series tab returns empty for SQL-auth
+customers regardless. Documented in the controller.
+
+**⚠ Drift:** `ws_package_course_subscription` has no `payment_status` → the Mongo `paymentStatus:"verified"`
+filter maps to `status=true`. SQL `package_id`=the package (`pcb_id`=plan) — the Mongo handler inverts
+packageId/targetPackageId, resolved directly. `course.author` is Mongo-only → null.
+
+**Verified vs live DB (flag ON):** the real `endAt>now` filter returns 0 for the past-dated staging subs (correct);
+seeded a future-dated package + ebook sub to prove composition — package card "CCE"/badge "Recorded Course"/30d,
+ebook card "Super Six"/30d, dedup + hydration + card shape all correct; seed cleaned up. `tsc` clean. Enabled
+`client-my-subscriptions` in `.env`.
+
+---
+
+## 2026-06-18 — 📊 Wave 7: admin subscription reads + reports (aggregation) on SQL
+
+**What:** New `src/modules/admin-subscription/` (repo + service) branching the read/report handlers of
+`src/admin/subscription/subscription.controller.ts` on the new `admin-subscription` flag. Read + report
+aggregation over already-migrated tables — no new tables, no DDL.
+
+**Wired (8 handlers):** `listCourseSubscriptions` (customer/course/package/status/date filters + cross-table
+search), `getCourseSubscriptionById`, `listPlansForTarget`, `listEbookSubscriptions`, and the 4 reports —
+`reportSummary`, `reportByCourse`, `reportByEbook`, `reportBookOrders` (via Prisma `groupBy`/`aggregate`).
+
+**⚠ Drift handled:** `ws_package_course_subscription` has **no `payment_status` / `paid_amount` / `razorpay` /
+`target_package_id`** columns — SQL `package_id` = the real package (`pcb_id` = the plan), `amount` = paidAmount,
+`remarks` = remark, `payment_type` ≈ paymentMethod, withMaterial inferred from `pc_material_id`. The Mongo
+handler's `packageId`/`targetPackageId` are **inverted** vs SQL → the DTO resolves `package_id` directly.
+
+**STAY Mongo (no SQL branch):** the 3 subscription **writes** (`create`/`update`/`delete` — they set Mongo-only
+fields with grant-extend logic; will revisit with the payment wave) + the 2 **address** handlers
+(`listCustomerAddresses`/`adminCreateCustomerAddress` — CustomerAddress is held OFF, offline-city dep).
+
+**Verified vs live DB (flag ON):** 2 course/pkg subs hydrated (Piyush/CCE, Kishan/DySO + withMaterial), plans for
+package (5), ebook subs (1), reportSummary (book revenue ₹905 / 6 orders / 4 verified), reportByEbook + book-orders
+groupBy. `tsc` clean. Enabled `admin-subscription` in `.env`.
+
+---
+
+## 2026-06-18 — 📜 Wave 7 START: client purchase-history (aggregation) on SQL
+
+**What:** First Wave 7 (aggregation/finalizers) module. New `src/modules/client-purchase-history/` (repo +
+service) branching `src/client/purchase-history/purchase-history.controller.ts` on the new
+`client-purchase-history` flag. **Read-only cross-collection aggregator** — composes only ALREADY-MIGRATED
+tables, no new tables, no DDL.
+
+**Wired — 3 tabs:** `/subscriptions` (package/course subs + type badge via package_id→packageType),
+`/books` (BookOrder + order_items JSON thumbnails + AWB), `/ebooks` (EBookOrder via plan→ebook hop).
+
+**⚠ Drift handled:**
+- `ws_package_course_subscription` has **no `payment_status` column** → the Mongo `paymentStatus:"verified"`
+  filter maps to `status=true` (active subscription). `course.author` + razorpay ids on the subscription are
+  Mongo-only → null.
+- SQL `package_id` = the real package, `pcb_id` = the plan — the Mongo handler's `packageId`/`targetPackageId`
+  are **inverted**; the SQL DTO resolves `package_id` directly (no plan→package hop needed).
+- `ws_ebook_order` has **no `ebook_id`** → ebook title/thumbnail resolved via `plan_id → price.ebook_id → ebook`.
+- `ws_book_order` items live in the `order_items` JSON (no embedded array); tracking surfaces the **AWB only**
+  (`ws_book_tracking` is a flat status row — no courier column).
+
+**STAY Mongo (this module):** the per-order receipt (`receipts.controller.ts`) — receipt-generation path,
+lower-traffic, deferred.
+
+**Verified vs live DB (flag ON):** subscriptions tab (package "DySO I STI I GPSC", badge "Recorded Course",
+amount 7500), books tab (order + AWB 119400693001), ebooks tab ("E-Book: test" resolved via the plan hop).
+`tsc` clean. Enabled `client-purchase-history` in `.env`.
+
+---
+
+## 2026-06-18 — 🎥 Wave 6: client live-course reads (Groups A+B) on SQL
+
+**What:** Ported the live-course **entitlement** helper to SQL inside `src/modules/admin-live-course/` and branched
+the high-traffic client live-course reads on the `live-course` flag. No new tables.
+
+**Entitlement (ported from `src/client/live-course/entitlement.ts`; all on migrated subscription/plan/course
+tables):** `hasAccessToAnyLiveCourse`, `getDaysLeftMap`, `getOwnedCourseIds`, `getPurchaseCounts`. Verified with a
+real seeded subscription: access=true, owned set, daysLeft=30, my-courses, purchase counts all correct.
+
+**Wired client reads:**
+- `listLiveCoursesForClient` — courses + batched plans (originalPrice/discountPercent) + daysLeft + isPurchased +
+  purchaseCount + hero card-variant ranking + shareableLink.
+- `listUpcomingLiveBatches` — upcoming (startTime≥now) + category tab counts. ⚠ the category tab bar emits
+  `{_id,count}` only — `PackageCategory` has no SQL table, so title/slug/image are null.
+- `listSessionsForCourseClient`, `listAllUpcomingSessions`, `listLiveNowSessions` — session feeds via the
+  `ws_live_session_course` join; each session carries `liveCourseIds[]` + a per-row `subscribed` flag.
+  ("live now" = status `CREATED`, mirroring Mongo.)
+- `getMyScheduleFolder` — entitlement-gated read of one schedule folder from the `ws_live_course.scheduleFolders`
+  JSON (folderId is the synthetic/backfilled string id, not ObjectId-validated).
+
+**⚠ STAY Mongo (documented; revisit in Wave 7):**
+- `getLiveCourseForClient` (detail) — needs the subjects/folders count (Mongo-only VideoCategory layer) +
+  packageCategory populate.
+- `listLiveCourseRecordings` / `getLiveCourseLecture` / `listLiveCourseSessionRecordings` — folder/video layer +
+  `LectureProgress` (no SQL table) + AES lecture encryption.
+- `getLiveCourseSchedule` / `listMyScheduleByCategory` — blend a session-derived timetable with an educator
+  populate (`ws_course_educators` is Mongo); only the pure schedule-folder read migrated.
+- `listMyLiveCourses` / `listMyUpcomingSessions` — subscription-shaped "my" lists with status=active|expired
+  filtering — natural Wave 7 my-subscriptions work.
+
+Verified vs live DB (flag ON): listClient (4 courses + plans + hero ranking), upcoming-batches, session feeds,
+schedule folder (backfilled "Maths TimeTable", 2 entries), and full entitlement with a seeded real subscription.
+`tsc` clean.
+
+---
+
+## 2026-06-18 — 🎥 Wave 6: live-reminder / livechat / livepoll on SQL (admin + client)
+
+**What:** Extended `src/modules/admin-live-course/` (repo + service) with reminder/chat/poll operations and
+branched the chat/poll/reminder controllers on the existing `live-course` flag. No new tables (reuses the Wave 6
+`ws_live_*` tables created earlier today).
+
+**Wired:**
+- **live-reminder (client):** `listMyLiveSessionReminders` + `getMyReminderForSession` → SQL (`ws_live_session_reminder`,
+  with the session hydrated). ⚠ **set/remove STAY Mongo** — they provision/cancel a scheduled `Notification` row +
+  BullMQ job (the notification pipeline isn't migrated), so the write path can't move without splitting that.
+- **livechat (client):** `getChatHistory` + `getChatBanStatus` → SQL. **(admin):** `sendAdminMessage`,
+  `getChatHistory`, `deleteChatMessage` (soft-delete), `banCustomerFromChat`, `unbanCustomerFromChat`, `listChatBans`
+  → SQL. The **socket side-effects are preserved** (the controllers still `io.emit(...)` / disconnect sockets after
+  the SQL write). Admin ban is global → stored with a `""` `live_class_id` sentinel. `includeDeleted` history not
+  supported on SQL (documented).
+- **livepoll (client):** `getActivePoll` (+ myVote) → SQL. **(admin):** `createPoll` (closes the existing active
+  poll first, both socket-broadcast), `getPollsByClass`, `getPollResults`, `closePoll`, `deletePoll` → SQL; poll
+  options live in the `ws_live_poll_option` child table. ⚠ **`updatePoll` STAYS Mongo** — the option-replacement-
+  with-0-votes guard rewrites the embedded options[] (intricate, low-value edge path). **Poll vote casting** is in
+  the socket layer → stays Mongo.
+
+**Verified vs live DB (flag ON):** chat history (5 msgs, chrono order) + ban status; polls-by-class with options +
+vote counts (Mars:1) + results; reminder read; full poll create→close→delete + admin chat send→soft-delete
+lifecycles. Customer-scoped reads return empty for the backfilled `customer_id=0` staging rows (expected).
+`tsc` clean.
+
+**Still pending (next pass):** the **client live-course reads** (14 handlers, ~1,500 lines in
+`src/client/live-course/`) — list/my/detail/sessions/schedule/recordings/lecture. These compose entitlement logic
++ the Mongo-only folder/video layer (recordings/lecture) + `LectureProgress` (no SQL table), so each needs its own
+scope pass (like a Wave 5 module). The `src/admin/live/` realtime stack (StreamOS/recording-promote/socket) stays
+Mongo.
+
+---
+
+## 2026-06-18 — 🎥 Wave 6: admin live-course module (CRUD + plans + subs + schedule) on SQL
+
+**What:** New `src/modules/admin-live-course/` (repository + service) on the freshly-created Wave 6 tables.
+Branches `src/admin/live-course/live-course.service.ts` (core, thin-controller delegation) + the fat
+`live-course.plan.controller.ts` + `live-course.subscription.controller.ts` on the new `live-course` flag
+(enabled in `.env`). No DDL beyond the tables already created earlier today.
+
+**Wired (admin surface):** live-courses list/get/create/update/delete/popular-toggle + sessions-list (via the
+`ws_live_session_course` many-to-many join); plans list/get/create/update/delete (single-default-per-course);
+subscriptions list/get/update/delete + grant (with extend-existing-active behavior); schedule folders + entries
+full CRUD + reorder.
+
+**Schedule folders/entries** live in JSON columns on `ws_live_course`. The Mongo API addresses sub-folders/
+entries by their subdocument `_id`, so the service **mints synthetic string ids** (`f-…`/`e-…`) on create;
+backfilled folders keep their original Mongo `_id` (verified addressable). `plan.duration` is treated as **DAYS**
+(`computeEndAt({asDays:true})`) per the live-course controllers — this overrides the design doc's earlier MONTHS
+guess (the code is authoritative).
+
+**⚠ STAY Mongo (no SQL branch — documented gaps):**
+- The **folder + video-in-folder** controllers (`live-course.folder.controller` / `live-course.video.controller`)
+  and `createLiveCourse`'s **Root-folder automation** — `ws_video_category` has no `live_course_id` column (same
+  blocker as the Wave 5 course Root folder). `createLiveCourse` returns `folder=null`; `deleteCourse` reports
+  `deletedFolders/Videos/Relations=0`.
+- The `src/admin/live/` realtime stack (StreamOS / recording-promote / socket) — orchestration, not DB CRUD.
+
+**Validation / refs:** SQL-side numeric-id schemas for create/update course + grant (the Mongo zod enforces
+ObjectId). External refs (educator/subject/package-category, subscription customer) backfilled `0`/null on
+staging where the Mongo ObjectId had no SQL bridge — the DTOs tolerate `0`/null. Verified vs live DB through the
+**branched service with the flag ON**: list 4 courses / detail + the backfilled "Maths TimeTable" schedule folder
+(2 entries) / 15 sessions via the join / plan single-default / grant (+90 days) / full CRUD lifecycle / invalid
+id → 422. `tsc` clean. Enabled `live-course`.
+
+**Pending (next pass):** the client live-course reads + livechat/livepoll + live-reminder. These are entangled
+with the Mongo-only folder/video layer (recordings/lecture) and `LectureProgress` (no SQL table), so they need
+their own scoping pass.
+
+---
+
+## 2026-06-18 — 🎥 Wave 6: CREATE LiveCourse SQL tables + backfill from Mongo
+
+**What:** Wave 6 (LiveCourse/LiveSession) — the first wave that **creates net-new SQL tables** (every prior wave
+migrated into pre-existing tables). Design signed off (`schema-changes/LIVE_COURSE_DESIGN.md`); **14 tables
+created** + Prisma models added + **existing Mongo rows backfilled**.
+
+**DDL** → `schema-changes/2026-06-18_create_ws_live_course_tables.sql` (additive, `CREATE TABLE IF NOT EXISTS`):
+`ws_live_course`, `ws_live_course_plan`, `ws_live_course_subscription`, `ws_live_session`,
+`ws_live_session_course` (many-to-many join — a session's `liveCourseIds[]`), `ws_live_course_category`,
+`ws_live_chat_message`, `ws_live_chat_ban`, `ws_live_poll`, `ws_live_poll_option` (embedded `options[]` → child),
+`ws_live_poll_vote`, `ws_live_session_attendance`, `ws_live_session_reminder`, `ws_live_session_preview`.
+
+**Mapping rules (mirror the live Mongo collections):** ObjectId → INT AUTO_INCREMENT PK; embedded arrays
+(`scheduleEntries`/`scheduleFolders`/`timetableFiles`/`recordings`/`hlsUrls`/`examCountdown*`) → **JSON columns**;
+poll `options[]` → the `ws_live_poll_option` child table; chat/polls keyed by the **string** `live_class_id` (the
+realtime room key — NOT FK'd to a session). ⚠ `ws_live_course_plan.duration` is in **MONTHS** (not DAYS like the
+package/course/ebook price table) — flagged so the subscription endAt uses `setMonth`, not the DAYS helper.
+
+**Prisma:** 14 new standalone models appended (`LiveCourse`, `LiveCoursePlan`, `LiveCourseSubscription`,
+`LiveSession`, `LiveSessionCourse`, `LiveCourseCategory`, `LiveChatMessage`, `LiveChatBan`, `LivePoll`,
+`LivePollOption`, `LivePollVote`, `LiveSessionAttendance`, `LiveSessionReminder`, `LiveSessionPreview`); no
+cross-relations (additive, low-risk); ids surfaced as strings by the future modules. `tsc` clean.
+
+**Backfill** → `scripts/backfill-live-course-to-sql.ts` (inserts in dependency order, building an ObjectId→new-int
+id map so intra-family refs resolve; customer ObjectId → `ws_customers.phoneNumber` → `ws_customer.id` phone
+bridge; unbridgeable external refs (educator/subject/video/package category) stored 0/null). **Verified row
+counts match Mongo:** 4 courses / 4 plans / 10 subs / 51 sessions / 53 session-course links / 9 polls + 33 options
+/ 11 votes / 52 chat / 195 attendance / 9 reminders / 4 previews. JSON embeds round-trip; the many-to-many join
+shows multi-course sessions. ⚠ customer phone-bridge resolved 14/267 on **staging** (seeded test users aren't in
+the SQL customer dump; the 5 dropped poll votes were duplicate `(poll, customer=0)` rows the unique constraint
+correctly rejected) — production data bridges far better.
+
+**Next:** build `src/modules/admin-live-course/` + the client live modules (repo/service/transformer), branch the
+live-course controllers on `isLiveCourseMysql()` — exactly like Wave 5. **No client-facing behavior changes yet**
+(flag OFF until the modules are wired + verified).
+
+---
+
+## 2026-06-18 — 🗂 Wave 5: admin `material` categories + leaf materials on SQL (Wave 5 catalog CRUD COMPLETE)
+
+**What:** New `src/modules/admin-material/` (repository + service) branching `src/admin/material/material.controller.ts`
+(fat controllers → branched in the controller) on the new `admin-material` flag. Reuses `ws_material_category` and
+`ws_material` (+ `ws_material_category_course` for the category→courses sub-resource). **No DDL, no Prisma change.**
+This is the **last admin CRUD module** — it completes the Wave 5 catalog CRUD set.
+
+**Wired — both surfaces (~19 handlers):**
+- **Categories:** list (parent filter + search + pagination), tree (`?tree=true`, built from the single parent FK),
+  getById, create, update, delete (blocked if it has sub-categories or materials), toggle status, reorder, courses
+  (via the `ws_material_category_course` pivot), materials.
+- **Leaf materials:** list (search + category/status filters), getById, create, update, delete, toggle status,
+  reorder, bulk-status, bulk-delete.
+
+**⚠ USER-APPROVED divergence — `ws_material_category` is single-parent only:** SQL has just a `parent` int
+(NOT NULL → `0` = root) — **no `ancestors[]` or `childCategoryIds[]`** (the Mongo multi-parent DAG fields). So on
+SQL: create/update write single-parent only; the `attachChildrenToParent` reparenting + ancestors rewriting are
+Mongo-only; the DTO synthesizes `ancestors=[]` / `childCategoryIds=[]`. **`duplicateCategory` STAYS Mongo** — its
+BFS subtree+materials clone depends on `ancestors[]` (same call as the videoCategory `duplicate` that stayed Mongo).
+
+**⚠ `ws_material` is minimal** — `title` / `direct_link` / `file` / `order_by` / `status` only. NO `description`,
+`thumbnail`, `fileSize`, `fileMime`, `language`, `isPreview`, `isPaid`, `downloadCount` — those Mongo fields are
+dropped on write and synthesized on read (isPreview/isPaid=false, downloadCount=0, the rest null). The list
+`language`/`isPreview` filters become no-ops on SQL.
+
+**Validation:** numeric ids throughout (the Mongo controller's `ObjectId.isValid` guards are replaced by
+`parseMaterialId` in the SQL branch); the zod schemas already accept numeric strings (`z.string().min(1)`). The
+category schema's `childCategoryIds` (ObjectId-strict) is simply ignored on SQL.
+
+**Verified vs live DB (staging):** 5 categories (list + tree = 4 roots with nesting + getById with parent→string/
+root→null), category CRUD lifecycle (create root + child, update, toggle, reorder, delete blocked when has-children
+then succeeds), category→courses + →materials sub-resources, 226 materials (list with category populated, getById
+with Mongo-only fields synthesized), material CRUD + toggle + reorder + bulk-status/bulk-delete. `tsc` clean.
+Enabled `admin-material` in `.env`.
+
+**🏁 Wave 5 catalog CRUD COMPLETE:** plan · master · video · videoCategory · book · ebook · course · package ·
+material — all admin catalog CRUD modules are now on SQL (with their documented Mongo-only gaps). The only Wave 5
+items intentionally left on Mongo: client material/search (LiveCourse-blocked) and the 21 no-SQL-table features
+(wishlist/folder/notes/free-progress).
+
+---
+
+## 2026-06-18 — 📦 Wave 5: admin `package` CRUD + types + plans + relations on SQL
+
+**What:** New `src/modules/admin-package/` (repository + service) branching `src/admin/package/package.service.ts`
+(thin-controller delegation → branched inside the service) on the new `admin-package` flag. Reuses `ws_package`,
+`ws_package_type`, the embedded-array pivots `ws_package_specific_subject` / `ws_material_category_package` /
+`ws_exam_category_package`, `ws_package_course_ebook_price` (package-owned), `ws_package_course_subscription`, and
+`ws_video_category_package_relation`. **Schema:** added a nullable `educator_id` to the `Package` Prisma model
+(the DB column existed but was unmapped) — additive, no DDL.
+
+**Wired — the full admin package surface (~22 handlers):** package types (list/create/update/delete);
+packages list (search + active/packageType filters + pagination + per-row plan buckets), getById (+ all three
+embedded category arrays populated), create, update, delete, toggle status, reorder; embedded reorders
+(specificSubjects / materialCategories / examCategories); plans (list/attach/detach — soft-detach via status=false);
+subscribers; video-category relations (list/set/BFS-expand-from-subjects).
+
+**Embedded arrays → SQL pivot tables:** the Mongo `Package.specificSubjects[]` / `materialCategories[]` /
+`examCategories[]` embeds map to `ws_package_specific_subject` (subject_id → VideoCategory) /
+`ws_material_category_package` (mcategory_id → MaterialCategory) / `ws_exam_category_package` (exam_category_id →
+ExamCategory). create writes them in the same `$transaction`; update **replaces** a set when its array is present.
+getPackageById populates `subject → {_id, title, image}`, `material → {_id, title(=name), image}`,
+`exam → {_id, title(=name), image}` (matching the Mongo `.populate()` shapes).
+
+**⚠ Schema-drift — `ws_package` is MISSING columns** for: `isPaid`, `isSmartCourse`, `isPlannerCourse`,
+`subtitle`, `notificationTopic`, `packageCategoryId`, `goalId`/`goalLabelId`, and the `examCountdown*` arrays. The
+DTO synthesizes these (isPaid=true Mongo default; smart/planner=false; examCountdown*=[]; the rest null/""); writes
+drop them. `with_material`/`without_material` are the descriptive `*Text` fields. `package_type_id` is NOT NULL →
+`1` sentinel; `exam_id` NOT NULL → `0` sentinel. The Mongo goalLabel/examCountdown validations are Mongo-only and
+skipped on SQL.
+
+**⚠ STAY Mongo (no SQL branch — documented gaps):**
+- `listPromotedCodes` — `PromoCode.appliesTo` (type + ids) has no SQL representation; `ws_promocode` has no
+  appliesTo/package-linkage column (same gap as commerce-promocode's empty appliesTo).
+- `listBooks` — `Book.packageIds` (the m2m link) has no SQL column (confirmed by admin-book).
+- Chat (`/:id/chat`) is already on SQL via the existing **package-chat** module — unchanged.
+
+**Subscribers / plans:** `listSubscribers` filters `ws_package_course_subscription.package_id` (the real package
+column — ⚠ note the Mongo `PackageCourseSubscription.packageId` refs the PLAN, but the SQL `package_id` holds the
+package id, so the SQL filter is the natural "this package's subscribers"). `attachPlans` points the shared price
+row at this package (course/ebook owner → 0). `PackageType` has only id/name (+timestamps) — order/active dropped.
+
+**Verified vs live DB (staging):** 6 types, 5 packages (list w/ plan buckets, getById with all 3 embeds populated
+— e.g. CCE: 55 subjects / 2 material / 35 exam), type CRUD, package create-with-embeds → update replace-embeds →
+toggle → reorder → delete cascade, plan attach/list/detach, 1 subscriber, setVideoRelations + BFS expand (94
+relations). `tsc` clean. Enabled `admin-package` in `.env`.
+
+---
+
+## 2026-06-18 — 🎓 Wave 5: admin `course` CRUD + plans + masters on SQL
+
+**What:** New `src/modules/admin-course/` (repository + service) branching `src/admin/course/course.service.ts`
+(thin-controller delegation → branched inside the service) + `course.controller.ts` (createCourse/updateCourse,
+which need numeric-id coercion) on the new `admin-course` flag. Reuses `ws_course`,
+`ws_package_course_ebook_price` (course-owned, shared with admin-plan), the pivot tables
+`ws_material_category_course` / `ws_exam_category_course`, `ws_video_category` (+ `_relation`), and
+`ws_package_course_material`. **No DDL, no Prisma change.**
+
+**Wired — the full admin course surface (~24 handlers):** getPreRequisites, getCourses (search + status/isPaid/
+isPopular filters + pagination, educator/subject/videoCategory refs populated), getCourseById (+ plans + the
+material/exam category pivots), createCourse, updateCourse, deleteCourse, toggleCoursePopular; course plans
+(list/create/get/update/delete, single-default-per-course invariant); course video-categories (list/create/
+update/delete); video-category-relations (list/create/update/delete); course materials (pc-material, title-only).
+
+**Embedded arrays → SQL pivot tables:** the Mongo `Course.materialCategories[]` / `examCategories[]` embeds map
+to `ws_material_category_course` / `ws_exam_category_course`. createCourse writes them in the same `$transaction`;
+updateCourse **replaces** a pivot set when its array is present in the payload. getCourseById populates
+`material → {_id, title, image}` and `exam → {_id, name, image}` (matching the Mongo `.populate()` shapes).
+
+**SQL enums / drift:** `is_featured` enum('0','1') → `isPopular`; `purchase` enum → `isPaid` (Mongo `isPaid`
+defaults TRUE, so only an explicit '0' is unpaid). `with_material`/`without_material`/`level` are **VARCHAR** in
+SQL (not bool — passed through as strings). `course_category_id`/`educator_id` are **NOT NULL** → `0` sentinel on
+create when unset.
+
+**⚠ USER-APPROVED divergence — `ws_video_category` has NO `course_id` column:**
+- `createCourse`'s "Root folder" automation (a `VideoCategory{courseId}` per course) is **skipped** on SQL —
+  the response `folder` field is `null` (documented Mongo-only side-effect).
+- The course **video-category** create/update/delete operate on the **global** `ws_video_category` (same table as
+  admin-master); the `courseId` scope is dropped (surfaced `null`).
+- `deleteCourse` cascades the plans + both category-pivot sets, but NOT courseId-scoped folders/relations
+  (`deletedCourseVideoCategories` / `deletedVideoRelations` are always `0`).
+
+**Validation:** createCourse/updateCourse branch to `createCourseSqlSchema` + a numeric category-ref parser in the
+controller, since the Mongo zod enforces ObjectId on the FK ids (`courseEducatorId`/`courseSubjectCategoryId`/
+`videoCategoryId`) and the category refs. All other handlers take URL-param ids (numeric-validated in the service
+branch). The Mongo cache-aside layer is bypassed on SQL (reads hit Prisma directly).
+
+**Verified vs live DB (staging):** 1 course (list + get with both pivots populated + 5 plans), create-with-pivots,
+update replace-pivots-to-empty, popular toggle, plan single-default invariant (2 isDefault:true → 1 default),
+delete cascade (4 plans), video-categories (152) / relations (2456) / materials lists. `tsc` clean. Enabled
+`admin-course` in `.env`.
+
+---
+
+## 2026-06-18 — 📖 Wave 5: admin `ebook` CRUD + plans + subscriptions on SQL
+
+**What:** New `src/modules/admin-ebook/` (repository + service) branching `src/admin/ebook/ebook.service.ts`
+(thin-controller delegation → branched inside the service) and `ebook-subscription.controller.ts` (fat
+controllers → branched in the controller) on the new `admin-ebook` flag. Reuses `ws_ebook` /
+`ws_package_course_ebook_price` (shared with admin-plan) / `ws_ebook_subscription` / `ws_ebook_order`. **No DDL,
+no Prisma change.**
+
+**Wired — 3 surfaces:**
+- **Ebooks:** `getEbooks` (search on name/author + author/publisher/language/status filters + pagination),
+  `getEbookById` (+ active plans), `createEbook`, `updateEbook`, `deleteEbook` (cascades the ebook's plans in
+  one txn), `reorderEbooks`.
+- **Plans** (ebook-owned `ws_package_course_ebook_price` rows): `listEbookPlans`, `createEbookPlan`,
+  `getEbookPlanById`, `updateEbookPlan`, `deleteEbookPlan`, `getEbookPricesForSubscription` (active-only).
+  Ebook-owned = `ebook_id` set, `course_id`/`package_id` = 0 sentinel (same convention as admin-plan).
+- **Subscriptions:** `getEbookSubscriptions` (customerId/ebookId/status filters + customer-name/phone & ebook-
+  name search), `getEbookSubscriptionById`, `createEbookSubscription` (backend grant), `updateEbookSubscription`
+  (verify-pending-order OR toggle status/remarks), `deleteEbookSubscription`.
+
+**⚠ Schema-drift — `ws_ebook` is MISSING columns** for: `isTrending`, the PDF-upload status fields
+(`book/demoUploadStatus` + `…Progress`), and the Mongo-only `examCountdown*` relations. The DTO synthesizes
+`isTrending=false` + `examCountdown*`=[]/null; PDF-status omitted; `demoFileName`/`bookFileName`=null. NOT-NULL
+no-default columns (`thumbnail`/`image`/`terms_and_conditions`/`demo_url`/`book_url`/`link`) get write-time `""`
+sentinels.
+
+**⚠ STAY Mongo (no SQL branch — documented gaps):**
+- `toggleEbookTrending` — no `is_trending` column.
+- The **BullMQ single-PDF upload pipeline** (`POST /:id/pdf` + `GET /pdf-jobs/:batchId`, see
+  [`pdf_upload_pipeline`]) writes the Mongo `*UploadStatus`/`*UploadProgress` fields — those have no SQL columns,
+  so the pipeline is unaffected and stays Mongo.
+- `updateEbook`'s best-effort S3 orphan-cleanup of replaced files is skipped on SQL (not part of the API
+  contract).
+
+**Subscription backend grant** = one `$transaction`: insert `ws_ebook_order` (status COMPLETE) + the
+`ws_ebook_subscription` row. `endAt` is computed via the planDuration helper `computeEndAt({asDays:true})` —
+**`duration` is in DAYS** (NOT raw ms math). ⚠ `ws_ebook_order.plan_id` is **NOT NULL** → write `0` when the
+`durationInDays` path is used (no plan); `order.planId` / sub `planId` surface `null` for the 0 sentinel.
+`ws_ebook_order.customer_id` is `varchar(255)` in the DB while Prisma maps it `Int` — MySQL casts transparently
+on read/write (verified). `order_price` is `double(10,2)` (Prisma `Int`; integer writes are exact).
+
+**Validation:** the Mongo zod schemas enforce ObjectId on `id`/`customerId`/`ebookId`/`planId`. On SQL these are
+numeric, so the reorder + subscription-create handlers branch to numeric-id schemas (`reorderEbooksSqlSchema` /
+`createEbookSubscriptionSqlSchema`) — same pattern as client-exam `saveAnswers`. Customer name from `full_name`
+via `splitFullName`.
+
+**Verified vs live DB (staging):** 2 ebooks (list/get + create→update→reorder→delete cascade), plans
+(create/list/update/get/delete + active-only prices filter), 1 subscription (list w/ customer+ebook+plan+order,
+get-by-id), backend-grant create (durationInDays=30 → endAt +30d; planId=90 → endAt +90d) + toggle + delete.
+`tsc` clean. Enabled `admin-ebook` in `.env`.
+
+---
+
+## 2026-06-18 — 📚 Wave 5: admin `book` CRUD + order reads on SQL
+
+**What:** New `src/modules/admin-book/` (repository + service) branching `src/admin/book/book.controller.ts` on
+the new `admin-book` flag. Reuses existing `ws_book` / `ws_book_order` / `ws_book_order_item` /
+`ws_customer_shipping` tables — **no DDL**, no Prisma change.
+
+**Wired (9 handlers on SQL):** books `getBooks` (search on name/author + language/isMagazine/isCombo/status
+filters + pagination), `getBookById`, `createBook`, `updateBook`, `deleteBook`, `toggleBookStatus`,
+`reorderBooks`; orders `getOrders` (customerId/status/date filters + cross-table search) and `getOrderById`.
+
+**⚠ Schema-drift — `ws_book` is MISSING columns** for: `isTrending`, `publication`, `deliveryEta`,
+`termsAndConditions`, `demoFileName`/`bookFileName`, `bookUrl` (only `demo_url` exists), and the Mongo-only
+relations `examCountdownCategoryId(s)` / `examCountdownIds` / `packageIds`. The DTO **synthesizes** these
+(isTrending=false, publication="WebSankul Publication", deliveryEta="5-7 days", the rest null/[]; mirrors
+`catalog-book.transformer`). On **write** those fields are silently DROPPED. NOT-NULL no-default columns
+(`name`, `pages`, `dynamic_link`, `thumbnail`) get write-time sentinels.
+
+**⚠ STAY Mongo (no SQL branch — documented gaps):**
+- `toggleBookTrending` — no `is_trending` column.
+- `getBookById` exam-countdown `.populate()`s — ExamCountdown(Category) has no SQL table (same Mongo-only
+  blocker as elsewhere); the SQL branch returns the core book with `examCountdown*`=[].
+- `updateOrderStatus` / `setOrderTracking` / `addOrderTrackingEvent` — these write the embedded
+  `tracking.history[]` array + `paidAt/shippedAt/deliveredAt/cancelledAt`. `ws_book_tracking` is one flat row
+  per AWB (`status` varchar(10); no history/location/note/courier columns) and only `pending`/`verified`
+  statuses exist — the full SHIPPED→DELIVERED→CANCELLED lifecycle + event history is not representable.
+- `getSettings` / `updateSettings` — there is **NO `ws_book_setting(s)` table** in MySQL at all.
+
+**Order line items:** legacy book orders keep their items in the `ws_book_order.order_items` **JSON column**
+(the `ws_book_order_item` child table is near-empty — only orders created by the migrated `book-order` WRITE
+path have child rows). So item hydration **prefers child rows, falls back to the JSON snapshot** (the
+authoritative source for legacy orders), matching the Mongo embedded `items[]`. Book-name search scans BOTH
+the child table (book→bookId→item rows) AND a raw `order_items LIKE` (mirroring Mongo's `{"items.name": rx}`).
+Customer name comes from `full_name` via `splitFullName` (firstName/lastName, like `customer-profile`); shipping
+phones BigInt→string; order amount Decimal→Number.
+
+**Verified vs live DB (staging):** 10 books (list/search/filter/get + create→update→toggle→reorder→delete
+lifecycle), 6 orders (list w/ customer+shipping+items hydrated from JSON, get-by-id, status filter, customer-
+name + book-name search). `tsc` clean. Enabled `admin-book` in `.env`.
+
+---
+
 ## 2026-06-17 — 🎞 Wave 5: admin `videoCategory` (full) CRUD on SQL
 
 **What:** The full admin videoCategory controller (`src/admin/videoCategory/`, distinct from the simpler master

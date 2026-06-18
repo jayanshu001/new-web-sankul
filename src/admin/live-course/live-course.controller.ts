@@ -11,6 +11,8 @@ import { success, failure } from "../../utils/httpResponse";
 import {
   createLiveCourseSchema,
   updateLiveCourseSchema,
+  createLiveCourseSqlSchema,
+  updateLiveCourseSqlSchema,
 } from "./live-course.validation";
 import * as liveCourseService from "./live-course.service";
 
@@ -54,9 +56,10 @@ export const createLiveCourse = asyncHandler(async (req: Request, res: Response)
   const file = req.file as any;
   if (file?.location) req.body.image = file.location;
 
-  let validated: z.infer<typeof createLiveCourseSchema>;
+  let validated: any;
   try {
-    validated = createLiveCourseSchema.parse(coerceBody(req.body));
+    const schema = liveCourseService.isLiveCourseMysql() ? createLiveCourseSqlSchema : createLiveCourseSchema;
+    validated = schema.parse(coerceBody(req.body));
   } catch (err) {
     if (err instanceof z.ZodError) return zodIssueResponse(res, err);
     throw err;
@@ -82,9 +85,10 @@ export const updateLiveCourse = asyncHandler(async (req: Request, res: Response)
   const file = req.file as any;
   if (file?.location) req.body.image = file.location;
 
-  let validated: z.infer<typeof updateLiveCourseSchema>;
+  let validated: any;
   try {
-    validated = updateLiveCourseSchema.parse(coerceBody(req.body));
+    const schema = liveCourseService.isLiveCourseMysql() ? updateLiveCourseSqlSchema : updateLiveCourseSchema;
+    validated = schema.parse(coerceBody(req.body));
   } catch (err) {
     if (err instanceof z.ZodError) return zodIssueResponse(res, err);
     throw err;

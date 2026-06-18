@@ -26,6 +26,7 @@ import {
 import { creditReferrer } from "../referral/credit-referrer";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import * as ordersSql from "../../modules/client-orders/client-orders.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -99,6 +100,11 @@ async function resolveFinalPrice(opts: {
 }
 
 // POST /api/v1/client/orders/course
+// ⚠ STAY Mongo (no SQL branch): placeCourseOrder / placeEbookOrder / verifyPayment.
+// These are the payment-write path — Razorpay order creation + signature
+// verification + subscription grant + promo (PromoCode.appliesTo) + referral
+// crediting. Deferred to the payment wave (writes + Mongo-only PromoCode.appliesTo
+// + ReferralProgram). Only the listMyOrders READ is on SQL (client-orders module).
 export const placeCourseOrder = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = (req as any).user?.id || (req as any).user?._id;
@@ -406,6 +412,16 @@ export const listMyOrders = async (req: Request, res: Response) => {
 
   try {
     if (!userId) { logger.warn("listMyOrders unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // SQL branch — read aggregation over migrated tables (course/package + ebook
+    // subs + book orders). The order WRITES below stay Mongo (payment wave).
+    if (ordersSql.isClientOrdersMysql()) {
+      const cid = ordersSql.parseOrdersCustomerId(userId);
+      if (!cid) { logger.warn("listMyOrders invalid customer id (mysql)", { traceId, customerId: userId }); return res.status(400).json({ success: false, message: "Invalid customer." }); }
+      const data = await ordersSql.listMyOrders(cid);
+      logger.info("listMyOrders success (sql)", { traceId, customerId: userId, courseSubs: data.courseSubscriptions.length, ebookSubs: data.ebookSubscriptions.length, bookOrders: data.bookOrders.length });
+      return res.status(200).json({ success: true, data });
+    }
 
     const [courseSubs, ebookSubs, bookOrders] = await Promise.all([
       PackageCourseSubscription.find({ customerId: userId })

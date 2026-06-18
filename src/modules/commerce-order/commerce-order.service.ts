@@ -30,10 +30,16 @@ import type {
 } from "./commerce-order.types";
 
 export const COMMERCE_ORDER_MODULE = "commerce-order";
+/** Package write-path flag — toggled independently from course (same module/tables). */
+export const PACKAGE_ORDER_MODULE = "package-order";
 
 /** Whether the course write-path is served from MySQL. */
 export const isCommerceOrderMysql = (): boolean =>
   isMysqlModule(COMMERCE_ORDER_MODULE);
+
+/** Whether the package write-path is served from MySQL. */
+export const isPackageOrderMysql = (): boolean =>
+  isMysqlModule(PACKAGE_ORDER_MODULE);
 
 /** Parse a string id to a positive int, else null. */
 export const parseCommerceOrderId = (id: string): number | null => {
@@ -182,6 +188,85 @@ export const verifyCourseOrderMysql = async (
     planId: order.planId,
     amount,
     now,
+    fresh: { startAt, endAt },
+  });
+  return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
+};
+
+// ── PACKAGE write-path (same tables/module; toggled by `package-order` flag) ──
+// Twin of the course path: the only differences are the plan must be a PACKAGE
+// plan (plan.packageId set, no courseId) and the fulfilled sub sets package_id
+// (course_id null). DAYS duration, idempotent, dual-read fallback — all identical.
+
+/** Read an active PACKAGE plan for create-order. Null if missing/not-a-package/free. */
+export const findPackagePlanForOrder = async (
+  planId: number
+): Promise<{ packageId: number; price: number; duration: number } | null> => {
+  const plan = await repo.findPlan(planId);
+  if (!plan?.packageId || plan.courseId || !plan.price || plan.price <= 0) return null;
+  return { packageId: plan.packageId, price: plan.price, duration: plan.duration ?? 0 };
+};
+
+/** Write a pending PACKAGE order (same order table/shape as course). */
+export const createPackageOrderMysql = async (input: {
+  customerId: number;
+  planId: number;
+  price: number;
+  razorpayOrderId: string;
+}): Promise<CreatedCourseOrder> => {
+  const order = await repo.createPendingOrder(input);
+  return { orderId: order.id };
+};
+
+/**
+ * Owner lookup for verify — returns the order row iff it's a PACKAGE order (plan
+ * has packageId, no courseId). Null on miss → caller falls back to Mongo.
+ */
+export const findPackageOrderForVerify = async (
+  razorpayOrderId: string,
+  customerId: number
+): Promise<CourseOrderRow | null> => {
+  const order = await repo.findOrderByRazorpay(razorpayOrderId, String(customerId));
+  if (!order || order.planId == null) return null;
+  const plan = await repo.findPlan(order.planId);
+  if (!plan?.packageId || plan.courseId) return null;
+  return toCourseOrderRow(order);
+};
+
+/** Fulfill a verified PACKAGE payment (fold-or-fresh, idempotent). DAYS duration. */
+export const verifyPackageOrderMysql = async (
+  order: CourseOrderRow,
+  razorpayPaymentId: string,
+  now: Date = new Date()
+): Promise<VerifiedCourseSubscriptionDto> => {
+  if (order.paymentStatus !== "pending") {
+    const existing = await repo.findSubByOrder(order.id);
+    const orderRow = await repo.findOrderByRazorpay(order.razorpayOrderId ?? "", order.customerIdStr ?? "");
+    if (existing && orderRow) return toVerifiedCourseSubscriptionDto(orderRow, existing);
+  }
+  if (order.planId == null) throw new Error("package-order: order has no plan id");
+  const plan = await repo.findPlan(order.planId);
+  const packageId = plan?.packageId ?? null;
+  if (packageId == null) throw new Error("package-order: plan is not a package plan");
+  const durationDays = plan?.duration ?? 0;
+  const customerId = Number(order.customerIdStr);
+  const amount = order.amount ?? 0;
+
+  const existingActive = await repo.findActivePackageSub(customerId, packageId, null, now);
+  if (existingActive) {
+    const newEndAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
+    const prevAmount = existingActive.amount ? Number(existingActive.amount.toString()) : 0;
+    const result = await repo.verifyPackageTx({
+      orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now,
+      extend: { existingSubId: existingActive.id, newEndAt, newAmount: prevAmount + amount },
+    });
+    return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
+  }
+
+  const startAt = now;
+  const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
+  const result = await repo.verifyPackageTx({
+    orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now,
     fresh: { startAt, endAt },
   });
   return toVerifiedCourseSubscriptionDto(result.order, result.subscription);

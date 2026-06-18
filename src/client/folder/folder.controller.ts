@@ -8,6 +8,7 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildRegexCondition } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import * as folderSql from "../../modules/client-folder/client-folder.service";
 
 const KIND_MODELS: Record<FolderItemKind, mongoose.Model<any>> = {
   material: Material,
@@ -34,6 +35,11 @@ function userId(req: Request): string | null {
  * Idempotent — safe to call on every signup and from backfill scripts.
  */
 export async function ensureDefaultFolders(customerId: string | Types.ObjectId) {
+  if (folderSql.isFolderMysql()) {
+    const cid = folderSql.parseFolderId(String(customerId));
+    if (cid != null) return folderSql.ensureDefaultFolders(cid);
+    return;
+  }
   const types: FolderType[] = ["video", "material"];
   await Promise.all(
     types.map((type) =>
@@ -60,9 +66,16 @@ function makeFolderController(type: FolderType) {
         return res.status(401).json({ success: false, message: "Unauthorized." });
       }
 
-      await ensureDefaultFolders(uid);
-
       const { search, page, limit, skip } = parseListQuery(req.query);
+
+      if (folderSql.isFolderMysql()) {
+        const cid = folderSql.parseFolderId(uid);
+        if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
+        const { data, total } = await folderSql.listFolders(cid, type, search || undefined, skip, limit);
+        return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
+      }
+
+      await ensureDefaultFolders(uid);
       const filter: any = { customerId: uid, type };
       { const c = buildRegexCondition(search); if (c) filter.name = c; }
 
@@ -108,6 +121,14 @@ function makeFolderController(type: FolderType) {
       if (!name) { logger.warn(`${type}Folder create missing name`, { traceId, customerId: uid }); return res.status(400).json({ success: false, message: "name is required." }); }
       if (name.length > 120) { logger.warn(`${type}Folder create name too long`, { traceId, customerId: uid }); return res.status(400).json({ success: false, message: "name too long (max 120)." }); }
 
+      if (folderSql.isFolderMysql()) {
+        const cid = folderSql.parseFolderId(uid);
+        if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
+        const r = await folderSql.createFolder(cid, type, name);
+        if (!r.ok) return res.status(409).json({ success: false, message: "A folder with this name already exists." });
+        return res.status(201).json({ success: true, data: r.data });
+      }
+
       try {
         const folder = await Folder.create({ customerId: uid, name, type, isDefaultFolder: false });
         logger.info(`${type}Folder create success`, { traceId, customerId: uid, folderId: folder._id });
@@ -139,15 +160,23 @@ function makeFolderController(type: FolderType) {
         return res.status(401).json({ success: false, message: "Unauthorized." });
       }
 
-      if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn(`${type}Folder detail invalid id`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "Invalid folder id." }); }
-
-      const folder = await Folder.findOne({ _id: id, customerId: uid, type }).lean();
-      if (!folder) { logger.warn(`${type}Folder detail not found`, { traceId, customerId: uid, folderId: id }); return res.status(404).json({ success: false, message: "Folder not found." }); }
-
       const { page = "1", limit = "20" } = req.query as Record<string, string>;
       const pageNum = Math.max(parseInt(page, 10) || 1, 1);
       const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
       const skip = (pageNum - 1) * limitNum;
+
+      if (folderSql.isFolderMysql()) {
+        const cid = folderSql.parseFolderId(uid); const fid = folderSql.parseFolderId(id);
+        if (cid == null || fid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+        const r = await folderSql.folderDetail(cid, type, fid, skip, limitNum);
+        if (!r) return res.status(404).json({ success: false, message: "Folder not found." });
+        return res.status(200).json({ success: true, data: { folder: r.folder, list: r.list }, pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) } });
+      }
+
+      if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn(`${type}Folder detail invalid id`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "Invalid folder id." }); }
+
+      const folder = await Folder.findOne({ _id: id, customerId: uid, type }).lean();
+      if (!folder) { logger.warn(`${type}Folder detail not found`, { traceId, customerId: uid, folderId: id }); return res.status(404).json({ success: false, message: "Folder not found." }); }
 
       const filter = { folderId: id, customerId: uid, kind: allowedKind };
 
@@ -190,11 +219,20 @@ function makeFolderController(type: FolderType) {
     try {
       if (!uid) { logger.warn(`${type}Folder update unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-      if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn(`${type}Folder update invalid id`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "Invalid folder id." }); }
+      if (!folderSql.isFolderMysql() && !mongoose.Types.ObjectId.isValid(id)) { logger.warn(`${type}Folder update invalid id`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "Invalid folder id." }); }
 
       const name = (req.body?.name ?? "").toString().trim();
       if (!name) { logger.warn(`${type}Folder update missing name`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "name is required." }); }
       if (name.length > 120) { logger.warn(`${type}Folder update name too long`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "name too long (max 120)." }); }
+
+      if (folderSql.isFolderMysql()) {
+        const cid = folderSql.parseFolderId(uid); const fid = folderSql.parseFolderId(id);
+        if (cid == null || fid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+        const r = await folderSql.updateFolder(cid, type, fid, name);
+        if (r === "not_found") return res.status(404).json({ success: false, message: "Folder not found." });
+        if (r === "dup") return res.status(409).json({ success: false, message: "A folder with this name already exists." });
+        return res.status(200).json({ success: true, data: r });
+      }
 
       try {
         const folder = await Folder.findOneAndUpdate(
@@ -230,6 +268,14 @@ function makeFolderController(type: FolderType) {
     try {
       if (!uid) { logger.warn(`${type}Folder remove unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
+      if (folderSql.isFolderMysql()) {
+        const cid = folderSql.parseFolderId(uid); const fid = folderSql.parseFolderId(id);
+        if (cid == null || fid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+        const r = await folderSql.removeFolder(cid, type, fid);
+        if (!r.ok) return res.status(404).json({ success: false, message: "Folder not found." });
+        return res.status(200).json({ success: true, message: r.wasDefault ? "Folder emptied." : "Folder deleted." });
+      }
+
       if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn(`${type}Folder remove invalid id`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "Invalid folder id." }); }
 
       const existing = await Folder.findOne({ _id: id, customerId: uid, type }).select("isDefaultFolder").lean();
@@ -264,9 +310,19 @@ function makeFolderController(type: FolderType) {
     try {
       if (!uid) { logger.warn(`${type}Folder addItem unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
+      const refId = req.body?.refId as string;
+
+      if (folderSql.isFolderMysql()) {
+        const cid = folderSql.parseFolderId(uid); const fid = folderSql.parseFolderId(id); const rid = folderSql.parseFolderId(String(refId));
+        if (cid == null || fid == null || rid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+        const r = await folderSql.addItem(cid, type, fid, rid);
+        if (r === "folder_not_found") return res.status(404).json({ success: false, message: "Folder not found." });
+        if (r === "ref_not_found") return res.status(404).json({ success: false, message: `${allowedKind} not found.` });
+        return res.status(r.deduped ? 200 : 201).json({ success: true, data: r.data, ...(r.deduped ? { deduped: true } : {}) });
+      }
+
       if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn(`${type}Folder addItem invalid folderId`, { traceId, folderId: id }); return res.status(400).json({ success: false, message: "Invalid folder id." }); }
 
-      const refId = req.body?.refId as string;
       if (!refId || !mongoose.Types.ObjectId.isValid(refId)) { logger.warn(`${type}Folder addItem invalid refId`, { traceId, refId }); return res.status(400).json({ success: false, message: "Invalid refId." }); }
 
       const folder = await Folder.findOne({ _id: id, customerId: uid, type }).select("_id");
@@ -308,6 +364,14 @@ function makeFolderController(type: FolderType) {
     try {
       if (!uid) { logger.warn(`${type}Folder removeItem unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
+      if (folderSql.isFolderMysql()) {
+        const cid = folderSql.parseFolderId(uid); const fid = folderSql.parseFolderId(id); const iid = folderSql.parseFolderId(itemId);
+        if (cid == null || fid == null || iid == null) return res.status(400).json({ success: false, message: "Invalid id(s)." });
+        const ok = await folderSql.removeItem(cid, type, fid, iid);
+        if (!ok) return res.status(404).json({ success: false, message: "Item not found." });
+        return res.status(200).json({ success: true, message: "Item removed." });
+      }
+
       if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(itemId)) { logger.warn(`${type}Folder removeItem invalid ids`, { traceId, folderId: id, itemId }); return res.status(400).json({ success: false, message: "Invalid id(s)." }); }
 
       const folder = await Folder.findOne({ _id: id, customerId: uid, type }).select("_id");
@@ -339,6 +403,12 @@ function makeFolderController(type: FolderType) {
 
     try {
       if (!uid) { logger.warn(`${type}Folder allItems unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+      if (folderSql.isFolderMysql()) {
+        const cid = folderSql.parseFolderId(uid);
+        if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
+        return res.status(200).json({ success: true, data: await folderSql.allItems(cid, type) });
+      }
 
       await ensureDefaultFolders(uid);
 

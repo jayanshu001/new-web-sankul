@@ -18,6 +18,19 @@ import {
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isLiveCourseOrderMysql,
+  fulfillLiveCourseWebhookMysql,
+} from "../../modules/live-course-order/live-course-order.service";
+import {
+  isEbookOrderMysql,
+  fulfillEbookWebhookMysql,
+} from "../../modules/ebook-order/ebook-order.service";
+import {
+  isBookOrderMysql,
+  fulfillBookWebhookMysql,
+} from "../../modules/book-order/book-order.service";
+import * as tsOrderSql from "../../modules/test-series-order/test-series-order.service";
 
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || "";
 
@@ -62,6 +75,18 @@ export const paymentWebhook = async (req: Request, res: Response) => {
 
     const razorpayOrderId = payment.order_id as string;
     const razorpayPaymentId = payment.id as string;
+
+    // ── MySQL ebook webhook fulfillment (ebook-order, flag-gated) ────────────
+    // Keyed by razorpayOrderId alone (no customer in the webhook payload). Same
+    // idempotent fold-or-fresh as /verify. Dual-read: miss → fall through to Mongo.
+    if (isEbookOrderMysql()) {
+      const fulfilled = await fulfillEbookWebhookMysql(razorpayOrderId, razorpayPaymentId);
+      if (fulfilled) {
+        logger.info("paymentWebhook ebook activated (mysql)", { traceId, razorpayOrderId, orderId: fulfilled._id });
+        return res.status(200).json({ success: true, message: "Ebook subscription activated." });
+      }
+      // miss → fall through to the Mongo path below (dual-read fallback).
+    }
 
     // Try ebook order first
     const ebookOrder = await EbookOrder.findOne({ razorpayOrderId });
@@ -117,6 +142,27 @@ export const paymentWebhook = async (req: Request, res: Response) => {
       return res.status(200).json({ success: true, message: "Ebook order activated." });
     }
 
+    // ── MySQL book webhook fulfillment (book-order, flag-gated) ──────────────
+    // AWB allocated SQL-side in verifyBookOrderMysql's txn (no Mongo Counter).
+    if (isBookOrderMysql()) {
+      const fulfilled = await fulfillBookWebhookMysql(razorpayOrderId, razorpayPaymentId);
+      if (fulfilled) {
+        logger.info("paymentWebhook book verified (mysql)", { traceId, razorpayOrderId, orderId: fulfilled._id });
+        return res.status(200).json({ success: true, message: "Book order verified." });
+      }
+      // miss → fall through to Mongo.
+    }
+
+    // ── MySQL test-series webhook fulfillment (test-series-order, flag-gated) ──
+    if (tsOrderSql.isTestSeriesOrderMysql()) {
+      const fulfilled = await tsOrderSql.fulfillWebhookMysql(razorpayOrderId, razorpayPaymentId);
+      if (fulfilled) {
+        logger.info("paymentWebhook test-series activated (mysql)", { traceId, razorpayOrderId, subscriptionId: fulfilled._id });
+        return res.status(200).json({ success: true, message: "Test series subscription activated." });
+      }
+      // miss → fall through to Mongo.
+    }
+
     // Try book order
     const bookOrder = await BookOrder.findOne({ razorpayOrderId });
     if (bookOrder) {
@@ -134,6 +180,18 @@ export const paymentWebhook = async (req: Request, res: Response) => {
       }
       logger.info("paymentWebhook book verified", { traceId, razorpayOrderId, orderId: bookOrder._id });
       return res.status(200).json({ success: true, message: "Book order verified." });
+    }
+
+    // ── MySQL live-course webhook fulfillment (live-course-order, flag-gated) ──
+    // Single-table SQL sub carries razorpayOrderId; fulfill (fold-or-fresh,
+    // idempotent) keyed by order id. Dual-read: miss → fall through to Mongo.
+    if (isLiveCourseOrderMysql()) {
+      const fulfilled = await fulfillLiveCourseWebhookMysql(razorpayOrderId, razorpayPaymentId);
+      if (fulfilled) {
+        logger.info("paymentWebhook live course activated (mysql)", { traceId, razorpayOrderId, subscriptionId: fulfilled._id });
+        return res.status(200).json({ success: true, message: "Live course subscription activated." });
+      }
+      // miss → fall through to the Mongo path below (dual-read fallback).
     }
 
     // Live course subscription — unlike PackageCourseSubscription, this row

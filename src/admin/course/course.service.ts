@@ -21,6 +21,27 @@ import { HttpError } from "../../middlewares/errorHandler";
 import cache from "../../libs/cache";
 import logger from "../../utils/logger";
 import { buildSearchFilter } from "../../utils/searchFilter";
+import * as adminCourse from "../../modules/admin-course/admin-course.service";
+
+// Re-exported so the thin controllers can branch validation (numeric vs ObjectId).
+export const isAdminCourseMysql = adminCourse.isAdminCourseMysql;
+export const parseCourseSqlId = adminCourse.parseCourseId;
+
+// On the SQL branch ids are numeric; the Mongo assertObjectId would 400 them.
+const assertCourseSqlId = (id: string, label: string): number => {
+  const n = adminCourse.parseCourseId(id);
+  if (!n) throw new HttpError(400, `Invalid ${label} ID`);
+  return n;
+};
+
+// SQL create/update wrappers (validated numeric input from the controller).
+export const createCourseSql = (v: any) => adminCourse.createCourse(v);
+
+export const updateCourseSql = async (id: string, v: any) => {
+  const res = await adminCourse.updateCourse(assertCourseSqlId(id, "Course"), v);
+  if (res === "not_found") throw new HttpError(404, "Course not found");
+  return res;
+};
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
@@ -113,6 +134,7 @@ const invalidateCourseCaches = async (courseId?: string) => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const getPreRequisites = async () => {
+  if (isAdminCourseMysql()) return adminCourse.getPreRequisites();
   const [educators, subjectCategories, videoCategories, materials] = await Promise.all([
     CourseEducator.find({ status: true }).select("_id name").lean(),
     CourseSubjectCategory.find({ status: true }).select("_id title").lean(),
@@ -133,6 +155,7 @@ export const getPreRequisites = async () => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const listCourses = async (query: ListCoursesQuery) => {
+  if (isAdminCourseMysql()) return adminCourse.listCourses(query);
   const {
     search = "",
     status,
@@ -188,6 +211,11 @@ export const listCourses = async (query: ListCoursesQuery) => {
 };
 
 export const getCourseById = async (id: string) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.getCourseById(assertCourseSqlId(id, "Course"));
+    if (res === "not_found") throw new HttpError(404, "Course not found");
+    return res;
+  }
   assertObjectId(id, "Course");
 
   return cache.aside({
@@ -227,6 +255,7 @@ export interface ListVideoCategoriesQuery {
 }
 
 export const listCourseVideoCategories = async (query: ListVideoCategoriesQuery) => {
+  if (isAdminCourseMysql()) return adminCourse.listCourseVideoCategories(query);
   const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(query.limit ?? "50", 10) || 50, 1), 200);
   const skip = (pageNum - 1) * limitNum;
@@ -254,6 +283,7 @@ export const listCourseVideoCategories = async (query: ListVideoCategoriesQuery)
 };
 
 export const listCourseMaterials = async (query: ListVideoCategoriesQuery) => {
+  if (isAdminCourseMysql()) return adminCourse.listCourseMaterials(query);
   const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(query.limit ?? "50", 10) || 50, 1), 200);
   const skip = (pageNum - 1) * limitNum;
@@ -280,11 +310,17 @@ export const listCourseMaterials = async (query: ListVideoCategoriesQuery) => {
 };
 
 export const createCourseMaterial = async (validated: any) => {
+  if (isAdminCourseMysql()) return adminCourse.createCourseMaterial(validated);
   const material = await PackageCourseMaterial.create(validated);
   return material.toObject();
 };
 
 export const updateCourseMaterial = async (materialId: string, validated: any) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.updateCourseMaterial(assertCourseSqlId(materialId, "Material"), validated);
+    if (res === "not_found") throw new HttpError(404, "Material not found");
+    return res;
+  }
   assertObjectId(materialId, "Material");
   const material = await PackageCourseMaterial.findByIdAndUpdate(materialId, validated, {
     new: true,
@@ -294,17 +330,27 @@ export const updateCourseMaterial = async (materialId: string, validated: any) =
 };
 
 export const deleteCourseMaterial = async (materialId: string) => {
+  if (isAdminCourseMysql()) {
+    if (!(await adminCourse.deleteCourseMaterial(assertCourseSqlId(materialId, "Material")))) throw new HttpError(404, "Material not found");
+    return;
+  }
   assertObjectId(materialId, "Material");
   const material = await PackageCourseMaterial.findByIdAndDelete(materialId).lean();
   if (!material) throw new HttpError(404, "Material not found");
 };
 
 export const createCourseVideoCategory = async (validated: any) => {
+  if (isAdminCourseMysql()) return adminCourse.createCourseVideoCategory(validated);
   const category = await VideoCategory.create(validated);
   return category.toObject();
 };
 
 export const updateCourseVideoCategory = async (videoCategoryId: string, validated: any) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.updateCourseVideoCategory(assertCourseSqlId(videoCategoryId, "Video Category"), validated);
+    if (res === "not_found") throw new HttpError(404, "Video Category not found");
+    return res;
+  }
   assertObjectId(videoCategoryId, "Video Category");
   const category = await VideoCategory.findByIdAndUpdate(videoCategoryId, validated, {
     new: true,
@@ -314,6 +360,12 @@ export const updateCourseVideoCategory = async (videoCategoryId: string, validat
 };
 
 export const deleteCourseVideoCategory = async (videoCategoryId: string) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.deleteCourseVideoCategory(assertCourseSqlId(videoCategoryId, "Video Category"));
+    if (res === "in_use") throw new HttpError(409, "Video category is linked with one or more courses. Remove mapping first.");
+    if (res === "not_found") throw new HttpError(404, "Video Category not found");
+    return res;
+  }
   assertObjectId(videoCategoryId, "Video Category");
   const isUsed = await Course.exists({ videoCategoryId });
   if (isUsed) {
@@ -404,6 +456,11 @@ export const updateCourse = async (input: UpdateCourseInput) => {
 };
 
 export const deleteCourse = async (id: string) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.deleteCourse(assertCourseSqlId(id, "Course"));
+    if (res === "not_found") throw new HttpError(404, "Course not found");
+    return res;
+  }
   assertObjectId(id, "Course");
   const session = await mongoose.startSession();
   try {
@@ -452,6 +509,11 @@ export const deleteCourse = async (id: string) => {
 };
 
 export const toggleCoursePopular = async (id: string, requested?: boolean | string) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.toggleCoursePopular(assertCourseSqlId(id, "Course"), requested);
+    if (res === "not_found") throw new HttpError(404, "Course not found");
+    return res;
+  }
   assertObjectId(id, "Course");
   const course = await Course.findById(id).select("_id isPopular");
   if (!course) throw new HttpError(404, "Course not found");
@@ -492,6 +554,11 @@ export const createCoursePlan = async (
   courseId: string,
   validated: any
 ) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.createCoursePlan(assertCourseSqlId(courseId, "Course"), validated);
+    if (res === "not_found") throw new HttpError(404, "Course not found");
+    return res;
+  }
   assertObjectId(courseId, "Course");
 
   const courseExists = await Course.exists({ _id: courseId });
@@ -523,6 +590,11 @@ export const createCoursePlan = async (
 };
 
 export const listCoursePlans = async (courseId: string) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.listCoursePlans(assertCourseSqlId(courseId, "Course"));
+    if (res === "not_found") throw new HttpError(404, "Course not found");
+    return res;
+  }
   assertObjectId(courseId, "Course");
   const exists = await Course.exists({ _id: courseId });
   if (!exists) throw new HttpError(404, "Course not found");
@@ -534,6 +606,11 @@ export const listCoursePlans = async (courseId: string) => {
 };
 
 export const getCoursePlanById = async (planId: string) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.getCoursePlanById(assertCourseSqlId(planId, "Plan"));
+    if (res === "not_found") throw new HttpError(404, "Pricing plan not found");
+    return res;
+  }
   assertObjectId(planId, "Plan");
   const plan = await PackageCourseEbookPrice.findById(planId).lean();
   if (!plan) throw new HttpError(404, "Pricing plan not found");
@@ -541,6 +618,11 @@ export const getCoursePlanById = async (planId: string) => {
 };
 
 export const updateCoursePlan = async (planId: string, validated: any) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.updateCoursePlan(assertCourseSqlId(planId, "Plan"), validated);
+    if (res === "not_found") throw new HttpError(404, "Pricing plan not found");
+    return res;
+  }
   assertObjectId(planId, "Plan");
   const normalized = {
     ...validated,
@@ -577,6 +659,10 @@ export const updateCoursePlan = async (planId: string, validated: any) => {
 };
 
 export const deleteCoursePlan = async (planId: string) => {
+  if (isAdminCourseMysql()) {
+    if (!(await adminCourse.deleteCoursePlan(assertCourseSqlId(planId, "Plan")))) throw new HttpError(404, "Pricing plan not found");
+    return;
+  }
   assertObjectId(planId, "Plan");
   const plan = await PackageCourseEbookPrice.findByIdAndDelete(planId).lean();
   if (!plan) throw new HttpError(404, "Pricing plan not found");
@@ -593,6 +679,7 @@ export interface ListVideoCategoryRelationsQuery {
 }
 
 export const listVideoCategoryRelations = async (query: ListVideoCategoryRelationsQuery) => {
+  if (isAdminCourseMysql()) return adminCourse.listVideoCategoryRelations(query);
   const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(query.limit ?? "50", 10) || 50, 1), 200);
   const skip = (pageNum - 1) * limitNum;
@@ -625,6 +712,14 @@ export const createVideoCategoryRelation = async (input: {
   order?: number;
 }) => {
   const { parent, child, order = 0 } = input;
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.createVideoCategoryRelation({ parent, child, order });
+    if (res === "missing") throw new HttpError(422, "parent and child are required.");
+    if (res === "same") throw new HttpError(400, "parent and child cannot be same.");
+    if (res === "not_found") throw new HttpError(404, "Parent or child category not found.");
+    if (res === "exists") throw new HttpError(409, "Relation already exists.");
+    return res;
+  }
   if (!parent || !child) {
     throw new HttpError(422, "parent and child are required.");
   }
@@ -654,6 +749,11 @@ export const createVideoCategoryRelation = async (input: {
 };
 
 export const updateVideoCategoryRelation = async (relationId: string, order: number) => {
+  if (isAdminCourseMysql()) {
+    const res = await adminCourse.updateVideoCategoryRelation(assertCourseSqlId(relationId, "relation"), order);
+    if (res === "not_found") throw new HttpError(404, "Relation not found.");
+    return res;
+  }
   assertObjectId(relationId, "relation");
   const relation = await VideoCategoryRelation.findByIdAndUpdate(
     relationId,
@@ -665,6 +765,10 @@ export const updateVideoCategoryRelation = async (relationId: string, order: num
 };
 
 export const deleteVideoCategoryRelation = async (relationId: string) => {
+  if (isAdminCourseMysql()) {
+    if (!(await adminCourse.deleteVideoCategoryRelation(assertCourseSqlId(relationId, "relation")))) throw new HttpError(404, "Relation not found.");
+    return;
+  }
   assertObjectId(relationId, "relation");
   const relation = await VideoCategoryRelation.findByIdAndDelete(relationId).lean();
   if (!relation) throw new HttpError(404, "Relation not found.");

@@ -17,6 +17,18 @@ import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation
 import { Video } from "../../models/course/Video.model";
 import { HttpError } from "../../middlewares/errorHandler";
 import cache from "../../libs/cache";
+import * as sql from "../../modules/admin-live-course/admin-live-course.service";
+
+// Re-exported so the thin controllers can branch validation (numeric vs ObjectId).
+export const isLiveCourseMysql = sql.isLiveCourseMysql;
+export const parseLiveSqlId = sql.parseLiveId;
+
+// On the SQL branch ids are numeric; the Mongo assertObjectId would 422 them.
+const assertLiveSqlId = (id: string, label: string): number => {
+  const n = sql.parseLiveId(id);
+  if (!n) throw new HttpError(422, `Invalid ${label} id.`);
+  return n;
+};
 
 const assertObjectId = (id: string, label: string): void => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -85,6 +97,11 @@ export const assertRefsExist = async (input: {
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const createLiveCourse = async (validated: any, createdById?: string) => {
+  if (isLiveCourseMysql()) {
+    // Root-folder automation is Mongo-only (no live_course_id on ws_video_category).
+    // Ref existence checks (educator/category/examCountdown) are Mongo-only too.
+    return sql.createLiveCourse(validated, createdById);
+  }
   await assertRefsExist(validated);
 
   const session = await mongoose.startSession();
@@ -147,6 +164,7 @@ export interface ListLiveCoursesQuery {
 }
 
 export const listLiveCourses = async (query: ListLiveCoursesQuery) => {
+  if (isLiveCourseMysql()) return sql.listLiveCourses(query);
   const page = Math.max(1, parseInt(query.page as any) || 1);
   const limit = Math.min(100, parseInt(query.limit as any) || 20);
   const search = typeof query.search === "string" ? query.search.trim() : "";
@@ -179,6 +197,11 @@ export const listLiveCourses = async (query: ListLiveCoursesQuery) => {
 };
 
 export const getLiveCourseById = async (id: string) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.getLiveCourseById(assertLiveSqlId(id, "live course"));
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    return r;
+  }
   assertObjectId(id, "live course");
   return cache.aside({
     key: detailKey(id),
@@ -195,6 +218,11 @@ export const getLiveCourseById = async (id: string) => {
 };
 
 export const updateLiveCourse = async (id: string, validated: any) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.updateLiveCourse(assertLiveSqlId(id, "live course"), validated);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    return r;
+  }
   assertObjectId(id, "live course");
   await assertRefsExist(validated);
   try {
@@ -214,6 +242,12 @@ export const updateLiveCourse = async (id: string, validated: any) => {
 };
 
 export const deleteLiveCourse = async (id: string) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.deleteLiveCourse(assertLiveSqlId(id, "live course"));
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    if (r === "has_sessions") throw new HttpError(409, "Cannot delete: live session(s) are attached to this course.");
+    return r;
+  }
   assertObjectId(id, "live course");
 
   const sessionCount = await LiveSession.countDocuments({ liveCourseIds: id });
@@ -274,6 +308,11 @@ export const deleteLiveCourse = async (id: string) => {
 };
 
 export const toggleLiveCoursePopular = async (id: string) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.togglePopular(assertLiveSqlId(id, "live course"));
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    return r;
+  }
   assertObjectId(id, "live course");
   const doc = (await LiveCourse.findById(id)) as ILiveCourse | null;
   if (!doc) throw new HttpError(404, "Live course not found.");
@@ -295,6 +334,11 @@ export interface ListSessionsQuery {
 }
 
 export const listSessionsForLiveCourse = async (id: string, query: ListSessionsQuery) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.listSessionsForCourse(assertLiveSqlId(id, "live course"), query);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    return r;
+  }
   assertObjectId(id, "live course");
   const exists = await LiveCourse.exists({ _id: id });
   if (!exists) throw new HttpError(404, "Live course not found.");
@@ -375,12 +419,23 @@ const loadCourse = async (id: string) => {
 };
 
 export const listScheduleFolders = async (id: string) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.listScheduleFolders(assertLiveSqlId(id, "live course"));
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    return r;
+  }
   const doc = await loadCourse(id);
   const folders = sortFolders(doc.scheduleFolders ?? []).map(projectFolder);
   return { scheduleFolders: folders };
 };
 
 export const createScheduleFolder = async (id: string, input: ScheduleFolderInput) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.createScheduleFolder(assertLiveSqlId(id, "live course"), input);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    if (r === "max") throw new HttpError(400, `A course can have at most ${MAX_FOLDERS_PER_COURSE} schedule folders.`);
+    return r;
+  }
   const doc = await loadCourse(id);
   if ((doc.scheduleFolders?.length ?? 0) >= MAX_FOLDERS_PER_COURSE) {
     throw new HttpError(400, `A course can have at most ${MAX_FOLDERS_PER_COURSE} schedule folders.`);
@@ -405,6 +460,12 @@ export const updateScheduleFolder = async (
   folderId: string,
   patch: ScheduleFolderPatch
 ) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.updateScheduleFolder(assertLiveSqlId(id, "live course"), folderId, patch);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    if (r === "folder_not_found") throw new HttpError(404, "Schedule folder not found.");
+    return r;
+  }
   assertObjectId(folderId, "schedule folder");
   const doc = await loadCourse(id);
   const folder = (doc.scheduleFolders as any).id(folderId);
@@ -421,6 +482,12 @@ export const updateScheduleFolder = async (
 };
 
 export const deleteScheduleFolder = async (id: string, folderId: string) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.deleteScheduleFolder(assertLiveSqlId(id, "live course"), folderId);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    if (r === "folder_not_found") throw new HttpError(404, "Schedule folder not found.");
+    return { success: true };
+  }
   assertObjectId(folderId, "schedule folder");
   const doc = await loadCourse(id);
   const folder = (doc.scheduleFolders as any).id(folderId);
@@ -432,6 +499,12 @@ export const deleteScheduleFolder = async (id: string, folderId: string) => {
 };
 
 export const reorderScheduleFolders = async (id: string, folderIds: string[]) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.reorderScheduleFolders(assertLiveSqlId(id, "live course"), folderIds);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    if (r === "mismatch") throw new HttpError(400, "folderIds must contain exactly the existing folder ids.");
+    return r;
+  }
   const doc = await loadCourse(id);
   const existing = (doc.scheduleFolders ?? []) as any[];
 
@@ -465,6 +538,12 @@ const loadFolder = async (id: string, folderId: string) => {
 };
 
 export const listScheduleEntries = async (id: string, folderId: string) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.listScheduleEntries(assertLiveSqlId(id, "live course"), folderId);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    if (r === "folder_not_found") throw new HttpError(404, "Schedule folder not found.");
+    return r;
+  }
   const { folder } = await loadFolder(id, folderId);
   return { entries: sortEntries(folder.entries ?? []) };
 };
@@ -474,6 +553,13 @@ export const createScheduleEntry = async (
   folderId: string,
   input: ScheduleEntryInput
 ) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.createScheduleEntry(assertLiveSqlId(id, "live course"), folderId, input);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    if (r === "folder_not_found") throw new HttpError(404, "Schedule folder not found.");
+    if (r === "max") throw new HttpError(400, `A folder can have at most ${MAX_ENTRIES_PER_FOLDER} entries.`);
+    return r;
+  }
   const { doc, folder } = await loadFolder(id, folderId);
   if ((folder.entries?.length ?? 0) >= MAX_ENTRIES_PER_FOLDER) {
     throw new HttpError(400, `A folder can have at most ${MAX_ENTRIES_PER_FOLDER} entries.`);
@@ -498,6 +584,13 @@ export const updateScheduleEntry = async (
   entryId: string,
   patch: ScheduleEntryPatch
 ) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.updateScheduleEntry(assertLiveSqlId(id, "live course"), folderId, entryId, patch);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    if (r === "folder_not_found") throw new HttpError(404, "Schedule folder not found.");
+    if (r === "entry_not_found") throw new HttpError(404, "Schedule entry not found.");
+    return r;
+  }
   assertObjectId(entryId, "schedule entry");
   const { doc, folder } = await loadFolder(id, folderId);
   const entry = folder.entries.id(entryId);
@@ -518,6 +611,13 @@ export const deleteScheduleEntry = async (
   folderId: string,
   entryId: string
 ) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.deleteScheduleEntry(assertLiveSqlId(id, "live course"), folderId, entryId);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    if (r === "folder_not_found") throw new HttpError(404, "Schedule folder not found.");
+    if (r === "entry_not_found") throw new HttpError(404, "Schedule entry not found.");
+    return { success: true };
+  }
   assertObjectId(entryId, "schedule entry");
   const { doc, folder } = await loadFolder(id, folderId);
   const entry = folder.entries.id(entryId);
@@ -533,6 +633,13 @@ export const reorderScheduleEntries = async (
   folderId: string,
   entryIds: string[]
 ) => {
+  if (isLiveCourseMysql()) {
+    const r = await sql.reorderScheduleEntries(assertLiveSqlId(id, "live course"), folderId, entryIds);
+    if (r === "not_found") throw new HttpError(404, "Live course not found.");
+    if (r === "folder_not_found") throw new HttpError(404, "Schedule folder not found.");
+    if (r === "mismatch") throw new HttpError(400, "entryIds must contain exactly the existing entry ids.");
+    return r;
+  }
   const { doc, folder } = await loadFolder(id, folderId);
   const existing = folder.entries as any[];
 

@@ -9,8 +9,27 @@ import { Notification } from "../../models/system/Notification.model";
 import { ExamResult } from "../../models/exam/ExamResult.model";
 import { ExamType } from "../../models/enums";
 import { countActiveEbookDownloads } from "../ebook/ebook-downloads.controller";
+import * as folderSql from "../../modules/client-folder/client-folder.service";
+import * as notifSql from "../../modules/client-notification/client-notification.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+
+// Flag-aware saved-item counts: use the SQL folder module when on, else the Mongo
+// FolderItem aggregate. countActiveEbookDownloads already dispatches internally.
+const savedCount = (uid: string, cid: mongoose.Types.ObjectId, kind: "material" | "video", lookupFrom: string) =>
+  folderSql.isFolderMysql()
+    ? folderSql.countSavedItems(folderSql.parseFolderId(uid) ?? 0, kind)
+    : FolderItem.aggregate([
+        { $match: { customerId: cid, kind } },
+        { $lookup: { from: lookupFrom, localField: "refId", foreignField: "_id", as: "ref" } },
+        { $unwind: "$ref" },
+        { $count: "n" },
+      ]).then((r: any) => r[0]?.n ?? 0);
+
+const unreadNotifCount = (uid: string) =>
+  notifSql.isNotificationMysql()
+    ? notifSql.unreadCount(notifSql.parseNotifId(uid) ?? 0)
+    : Notification.countDocuments({ $or: [{ customerId: uid }, { broadcast: true }], isRead: false });
 
 // Active-subscription counts that MATCH the My Subscriptions screen exactly
 // (GET /client/my-subscriptions). The badge must equal what the user sees when
@@ -83,7 +102,13 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
   try {
     if (!userId) { logger.warn("getProfileDashboardCounts unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    const cid = new mongoose.Types.ObjectId(userId);
+    // Under customer-auth (SQL), userId is a numeric id — guard the ObjectId
+    // construction so the SQL-branched counts (folder/ebook/notification) don't
+    // crash. The still-Mongo counts (subscriptions/pastExams) receive a null-ish
+    // cid and need their own flip — see the per-count notes.
+    const cid = mongoose.Types.ObjectId.isValid(userId)
+      ? new mongoose.Types.ObjectId(userId)
+      : (null as any);
     const pastDailyExamsAgg = ExamResult.aggregate([
       {
         $match: {
@@ -118,23 +143,10 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
     ] = await Promise.all([
       CustomerAddress.countDocuments({ customerId: userId, status: true }),
       countActiveSubscriptions(cid, now),
-      FolderItem.aggregate([
-        { $match: { customerId: cid, kind: "material" } },
-        { $lookup: { from: "ws_materials", localField: "refId", foreignField: "_id", as: "ref" } },
-        { $unwind: "$ref" },
-        { $count: "n" },
-      ]).then((r) => r[0]?.n ?? 0),
-      FolderItem.aggregate([
-        { $match: { customerId: cid, kind: "video" } },
-        { $lookup: { from: "ws_videos", localField: "refId", foreignField: "_id", as: "ref" } },
-        { $unwind: "$ref" },
-        { $count: "n" },
-      ]).then((r) => r[0]?.n ?? 0),
+      savedCount(String(userId), cid, "material", "ws_materials"),
+      savedCount(String(userId), cid, "video", "ws_videos"),
       countActiveEbookDownloads(userId),
-      Notification.countDocuments({
-        $or: [{ customerId: userId }, { broadcast: true }],
-        isRead: false,
-      }),
+      unreadNotifCount(String(userId)),
       pastDailyExamsAgg,
     ]);
     const pastExams = pastExamsRows[0]?.n ?? 0;

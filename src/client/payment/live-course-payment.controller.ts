@@ -8,6 +8,19 @@ import { resolveLivePromo } from "../live-course/promo";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isLiveCourseOrderMysql,
+  findLiveCoursePlanForOrder,
+  createLiveCourseOrderMysql,
+} from "../../modules/live-course-order/live-course-order.service";
+
+// SQL planId is numeric (migrated id-space), unlike the Mongo ObjectId schema.
+const createOrderSqlSchema = z.object({
+  planId: z.coerce.number().int().positive(),
+  promocode: z.string().trim().min(1).optional(),
+  withMaterial: z.boolean().optional(),
+  customerShippingId: z.coerce.number().int().positive().optional(),
+});
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -103,6 +116,61 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       return res.status(500).json({
         success: false,
         message: "Razorpay credentials not configured on the server.",
+      });
+    }
+
+    // ── MySQL live-course write path (live-course-order, flag-gated) ─────────
+    // Single-table design: createPending writes a pending ws_live_course_subscription
+    // row; /payment/verify (or the webhook) flips it to verified or folds it onto an
+    // existing active sub. Reads the LiveCourse title from Mongo (not yet migrated).
+    if (isLiveCourseOrderMysql()) {
+      const customerIdInt = Number(customerId);
+      if (!Number.isInteger(customerIdInt)) {
+        logger.warn("createLiveCourseOrderPayment[mysql] non-int customer id", { traceId, customerId });
+        return res.status(400).json({ success: false, message: "Invalid customer id." });
+      }
+      const body = createOrderSqlSchema.parse(req.body);
+      const planSql = await findLiveCoursePlanForOrder(body.planId);
+      if (!planSql) {
+        logger.warn("createLiveCourseOrderPayment[mysql] plan not found/zero-price", { traceId, customerId, planId: body.planId });
+        return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
+      }
+      const courseSql = await LiveCourse.findOne({ _id: planSql.liveCourseId }).select("_id name").lean();
+
+      let chargeAmount = planSql.price;
+      let promocodeIdNum: number | null = null;
+      let originalAmount: number | null = null;
+      let discountAmount: number | null = null;
+      if (body.promocode) {
+        const { result, error } = await resolveLivePromo(body.promocode, planSql.price, { type: "liveCourse", id: String(planSql.liveCourseId) });
+        if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
+        if (result.finalAmount < 1) return res.status(400).json({ success: false, message: "This promo code reduces the price below the minimum payable amount. Please contact support." });
+        chargeAmount = result.finalAmount;
+        const pid = Number(String(result.promo._id));
+        promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
+        originalAmount = result.originalAmount;
+        discountAmount = result.discountAmount;
+      }
+
+      const nowSql = new Date();
+      const receiptId = `live-${nowSql.getTime()}-${Math.random().toString(36).slice(2, 8)}`;
+      const rzpOrder = await createRazorpayOrder(rp, {
+        amount: Math.round(chargeAmount * 100), currency: "INR", receipt: receiptId,
+        notes: { kind: "live-course", liveCourseId: String(planSql.liveCourseId), planId: String(body.planId), customerId: String(customerIdInt), ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}) },
+      });
+      const { subscriptionId } = await createLiveCourseOrderMysql({
+        customerId: customerIdInt, liveCourseId: planSql.liveCourseId, planId: body.planId,
+        amount: chargeAmount, razorpayOrderId: rzpOrder.id, promocodeId: promocodeIdNum, originalAmount, discountAmount, now: nowSql,
+      });
+      logger.info("createLiveCourseOrderPayment[mysql] success", { traceId, customerId, subscriptionId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
+      return res.status(201).json({
+        success: true,
+        data: {
+          subscriptionId: String(subscriptionId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
+          liveCourse: courseSql ? { _id: String(planSql.liveCourseId), name: (courseSql as any).name } : { _id: String(planSql.liveCourseId), name: null },
+          plan: { _id: String(body.planId), duration: planSql.duration, price: planSql.price },
+          promo: promocodeIdNum ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount } : null,
+        },
       });
     }
 

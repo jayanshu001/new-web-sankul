@@ -39,3 +39,37 @@ export const updateLiveCourseSchema = createLiveCourseSchema
   .partial()
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "Provide at least one field to update." });
+
+// SQL branch: ref ids are numeric (the Mongo schema enforces ObjectId). Same
+// shape, numeric ids. examCountdown*/materialCategories/examCategories pass
+// through as arrays (stored as JSON; not validated against Mongo collections).
+const numId = z.coerce.number().int().positive();
+export const createLiveCourseSqlSchema = z
+  .object({
+    name:          z.string().trim().min(1, "Name is required").max(300),
+    subtitle:      z.string().trim().optional(),
+    description:   z.string().trim().min(1, "Description is required"),
+    image:           z.string().url("Image must be a valid URL"),
+    ordered:         z.coerce.number().int("Ordered must be an integer"),
+    shareableLink:   z.string().trim().optional(),
+    withMaterial:    z.string().trim().optional(),
+    withoutMaterial: z.string().trim().optional(),
+    level:           z.string().trim().min(1, "Level is required"),
+    classType:       z.enum(["live", "live_offline", "offline"]).optional(),
+    status:        z.boolean(),
+    isPaid:        z.boolean().optional(),
+    isPopular:     z.boolean().optional(),
+    startTime:     z.string().datetime({ offset: true }).nullable().optional(),
+    courseEducatorId:  numId.optional(),
+    courseSubjectCategoryId: numId.optional(),
+    packageCategoryId: numId.optional(),
+    examCountdownCategoryIds: z.array(z.any()).optional(),
+    examCountdownIds:         z.array(z.any()).optional(),
+    timetableFiles:           z.array(z.any()).optional(),
+  })
+  .strict();
+
+export const updateLiveCourseSqlSchema = createLiveCourseSqlSchema
+  .partial()
+  .strict()
+  .refine((v) => Object.keys(v).length > 0, { message: "Provide at least one field to update." });

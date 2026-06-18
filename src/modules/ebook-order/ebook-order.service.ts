@@ -154,3 +154,21 @@ export const verifyEbookOrderMysql = async (
   });
   return toEbookOrderDto(result.order, ebookId);
 };
+
+/**
+ * Webhook fulfillment (paymentWebhook) — keyed by razorpayOrderId ALONE (the
+ * razorpay payload carries no customer). Confirms an ebook order owns this id,
+ * then runs the same idempotent verify fulfillment. Returns null on miss (→ caller
+ * falls through to Mongo). Safe to run before or after the client /verify call.
+ */
+export const fulfillEbookWebhookMysql = async (
+  razorpayOrderId: string,
+  razorpayPaymentId: string,
+  now: Date = new Date()
+): Promise<EbookOrderDto | null> => {
+  const order = await repo.findOrderByRazorpayOnly(razorpayOrderId);
+  if (!order || order.planId == null) return null;
+  const plan = await repo.findPlan(order.planId);
+  if (!plan?.ebookId) return null;
+  return verifyEbookOrderMysql(toEbookOrderRow(order), razorpayPaymentId, now);
+};

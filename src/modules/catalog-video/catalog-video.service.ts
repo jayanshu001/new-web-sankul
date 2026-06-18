@@ -41,6 +41,12 @@ export const parseVideoId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
+/** Numeric video-category id guard (SQL ids are ints). */
+export const parseVideoCategoryId = (id: string): number | null => {
+  const n = Number(id);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
 // ── videos ──────────────────────────────────────────────────────────────────
 
 export const findVideoById = async (id: number): Promise<VideoDto | null> => {
@@ -83,4 +89,34 @@ export const findVideoCategoryById = async (
 export const listActiveVideoCategories = async (): Promise<VideoCategoryDto[]> => {
   const rows = await repo.listActiveCategories();
   return rows.map(toVideoCategoryDto);
+};
+
+/**
+ * Children-nav drill-down for a video category (client `categories` controller).
+ * Returns { parent, list } where each list[].category = { ...categoryDto, count
+ * (active videos), havingChildDirectory (≥1 active grandchild) }. Returns null if
+ * the parent is missing. ⚠ Mongo gates children via the `childCategoryIds[]` DAG;
+ * SQL derives them from the single `parent` FK (same divergence as admin-master).
+ * The parent is fetched WITHOUT a status gate, matching the Mongo `findById`
+ * (an inactive parent still renders its children).
+ */
+export const getVideoCategoryChildren = async (
+  parentId: number,
+  search?: string
+): Promise<{ parent: VideoCategoryDto; list: { category: VideoCategoryDto & { count: number; havingChildDirectory: boolean } }[] } | null> => {
+  const parentRow = await repo.findCategoryByIdAny(parentId);
+  if (!parentRow) return null;
+
+  const children = await repo.listActiveChildren(parentId, { search: search?.trim() || undefined });
+  const childIds = children.map((c) => c.id);
+  const [counts, parentsWithKids] = await Promise.all([
+    Promise.all(childIds.map((cid) => repo.countActiveVideosByCategory(cid))),
+    repo.parentsWithChildren(childIds),
+  ]);
+  const hasKids = new Set(parentsWithKids.map((r) => r.parent));
+
+  const list = children.map((c, i) => ({
+    category: { ...toVideoCategoryDto(c), count: counts[i], havingChildDirectory: hasKids.has(c.id) },
+  }));
+  return { parent: toVideoCategoryDto(parentRow), list };
 };

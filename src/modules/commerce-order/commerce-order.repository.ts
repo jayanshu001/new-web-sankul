@@ -67,6 +67,81 @@ export const commerceOrderRepository = {
   findSubByOrder: (orderId: number) =>
     prisma.packageCourseSubscription.findFirst({ where: { orderId } }),
 
+  /**
+   * PACKAGE upsert-extend twin of findActiveCourseSub. The customer's existing
+   * ACTIVE verified PACKAGE subscription for the same package — gated by
+   * package_id (and course_id NULL, so a course sub for a bundled course can't be
+   * mistaken for the package entitlement). `status=true` is the verified gate.
+   */
+  findActivePackageSub: (
+    customerId: number,
+    packageId: number,
+    excludeSubId: number | null,
+    now: Date
+  ) =>
+    prisma.packageCourseSubscription.findFirst({
+      where: {
+        customerId,
+        packageId,
+        courseId: null,
+        status: true,
+        ...(excludeSubId ? { id: { not: excludeSubId } } : {}),
+        OR: [{ endAt: null }, { endAt: { gte: now } }],
+      },
+      orderBy: { endAt: "desc" },
+    }),
+
+  /**
+   * PACKAGE transactional fulfillment — twin of verifyCourseTx, but the fresh sub
+   * sets `packageId` (the target package) with `courseId: null`, mirroring the
+   * Mongo package sub (targetPackageId set, courseId unset). Plan id → pcb_id.
+   */
+  verifyPackageTx: (input: {
+    orderId: number;
+    razorpayPaymentId: string;
+    customerId: number;
+    packageId: number;
+    planId: number | null;
+    amount: number;
+    now: Date;
+    fresh?: { startAt: Date; endAt: Date };
+    extend?: { existingSubId: number; newEndAt: Date; newAmount: number };
+  }) =>
+    prisma.$transaction(async (tx) => {
+      const order = await tx.packageCourseOrder.update({
+        where: { id: input.orderId },
+        data: { status: "complete", gatewayPaymentId: input.razorpayPaymentId },
+      });
+
+      if (input.extend) {
+        const sub = await tx.packageCourseSubscription.update({
+          where: { id: input.extend.existingSubId },
+          data: { endAt: input.extend.newEndAt, amount: new Prisma.Decimal(input.extend.newAmount) },
+        });
+        return { order, subscription: sub, extended: true as const };
+      }
+
+      const tracking = await tx.packageCourseSubscriptionTracking.create({
+        data: { orderId: input.orderId, status: "complete" },
+      });
+      const sub = await tx.packageCourseSubscription.create({
+        data: {
+          customerId: input.customerId,
+          orderId: input.orderId,
+          packageId: input.packageId,
+          courseId: null,
+          planId: input.planId,
+          trackingId: tracking.id,
+          startAt: input.fresh!.startAt,
+          endAt: input.fresh!.endAt,
+          amount: new Prisma.Decimal(input.amount),
+          status: true,
+          payment_type: "online",
+        },
+      });
+      return { order, subscription: sub, extended: false as const };
+    }),
+
   // ── write: create the pending order row (create-order endpoint) ────────────
 
   /**

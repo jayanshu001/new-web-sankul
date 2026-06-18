@@ -14,6 +14,7 @@ import {
   bulkDeleteSchema,
 } from "./material.validation";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import * as adminMaterial from "../../modules/admin-material/admin-material.service";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -161,6 +162,19 @@ async function nextAvailableCopyTitle(
 export const listCategories = async (req: Request, res: Response) => {
   try {
     const { parent, search, status, tree } = req.query as Record<string, string>;
+    const statusBool = status === "true" ? true : status === "false" ? false : undefined;
+
+    if (adminMaterial.isAdminMaterialMysql()) {
+      if (tree === "true") {
+        const data = await adminMaterial.listCategoriesTree(statusBool);
+        return res.status(200).json({ success: true, data });
+      }
+      const { page = "1", limit = "20", sortBy, sortOrder } = req.query as Record<string, string>;
+      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+      const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+      const { data, total } = await adminMaterial.listCategories({ parent, search, status: statusBool, sortBy, sortOrder, page: pageNum, limit: limitNum });
+      return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
+    }
 
     if (tree === "true") {
       const all = await MaterialCategory.find(
@@ -220,6 +234,13 @@ export const listCategories = async (req: Request, res: Response) => {
 export const getCategoryById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const numId = adminMaterial.parseMaterialId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const data = await adminMaterial.getCategoryById(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Category not found." });
+      return res.status(200).json({ success: true, data });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const cat = await MaterialCategory.findById(id);
@@ -231,6 +252,19 @@ export const getCategoryById = async (req: Request, res: Response) => {
 };
 
 export const createCategory = async (req: Request, res: Response) => {
+  if (adminMaterial.isAdminMaterialMysql()) {
+    try {
+      const file = req.file as any;
+      if (file?.location) req.body.image = file.location;
+      const data = createMaterialCategorySchema.parse(req.body);
+      // ⚠ childCategoryIds[] + ancestors[] are Mongo-only (single-parent SQL) — dropped.
+      const created = await adminMaterial.createCategory(data);
+      return res.status(201).json({ success: true, data: created });
+    } catch (error: any) {
+      if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
   const session = await mongoose.startSession();
   try {
     const file = req.file as any;
@@ -288,6 +322,24 @@ export const createCategory = async (req: Request, res: Response) => {
 };
 
 export const updateCategory = async (req: Request, res: Response) => {
+  if (adminMaterial.isAdminMaterialMysql()) {
+    try {
+      const id = req.params.id as string;
+      const numId = adminMaterial.parseMaterialId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const file = req.file as any;
+      if (file?.location) req.body.image = file.location;
+      const data = updateMaterialCategorySchema.parse(req.body);
+      // ⚠ childCategoryIds[] reparenting + ancestors[] are Mongo-only — dropped.
+      const res2 = await adminMaterial.updateCategory(numId, data);
+      if (res2 === "not_found") return res.status(404).json({ success: false, message: "Category not found." });
+      if (res2 === "self_parent") return res.status(400).json({ success: false, message: "Category cannot be its own parent." });
+      return res.status(200).json({ success: true, data: res2 });
+    } catch (error: any) {
+      if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
   const session = await mongoose.startSession();
   try {
     const id = req.params.id as string;
@@ -377,6 +429,15 @@ export const updateCategory = async (req: Request, res: Response) => {
 export const deleteCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const numId = adminMaterial.parseMaterialId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const res2 = await adminMaterial.deleteCategory(numId);
+      if (res2 === "not_found") return res.status(404).json({ success: false, message: "Category not found." });
+      if (res2 === "has_children") return res.status(400).json({ success: false, message: "Category has sub-categories. Delete or reassign them first." });
+      if (res2 === "has_materials") return res.status(400).json({ success: false, message: "Category has materials. Delete or reassign them first." });
+      return res.status(200).json({ success: true, message: "Category deleted." });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const childCount = await MaterialCategory.countDocuments({ parent: id });
@@ -410,6 +471,13 @@ export const deleteCategory = async (req: Request, res: Response) => {
 export const toggleCategoryStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const numId = adminMaterial.parseMaterialId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const res2 = await adminMaterial.toggleCategoryStatus(numId);
+      if (res2 === "not_found") return res.status(404).json({ success: false, message: "Category not found." });
+      return res.status(200).json({ success: true, data: res2 });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const cat = await MaterialCategory.findById(id).select("status");
@@ -425,6 +493,12 @@ export const toggleCategoryStatus = async (req: Request, res: Response) => {
 export const reorderCategories = async (req: Request, res: Response) => {
   try {
     const { orders } = reorderCategoriesSchema.parse(req.body);
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const res2 = await adminMaterial.reorderCategories(orders);
+      if (res2 === "dup") return res.status(400).json({ success: false, message: "Duplicate order values." });
+      if (res2 === "no_valid") return res.status(400).json({ success: false, message: "No valid ids." });
+      return res.status(200).json({ success: true, message: "Category order updated." });
+    }
     const values = new Set(orders.map((o) => o.order));
     if (values.size !== orders.length)
       return res.status(400).json({ success: false, message: "Duplicate order values." });
@@ -440,6 +514,9 @@ export const reorderCategories = async (req: Request, res: Response) => {
   }
 };
 
+// ⚠ STAYS Mongo: duplicateCategory is a BFS subtree+materials clone that depends
+// on the Mongo-only ancestors[] (and clones Mongo-only material fields). Same call
+// as the videoCategory `duplicate` that stayed Mongo. No admin-material SQL branch.
 export const duplicateCategory = async (req: Request, res: Response) => {
   const session = await mongoose.startSession();
   try {
@@ -561,6 +638,12 @@ export const getCategoryCourses = async (req: Request, res: Response) => {
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
 
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const numId = adminMaterial.parseMaterialId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const data = await adminMaterial.getCategoryCourses(numId);
+      return res.status(200).json({ success: true, data });
+    }
     const courses = await Course.find({ "materialCategories.category": id })
       .select("_id name image level status");
     return res.status(200).json({ success: true, data: courses });
@@ -572,12 +655,19 @@ export const getCategoryCourses = async (req: Request, res: Response) => {
 export const getCategoryMaterials = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid category id." });
-
     const { page = "1", limit = "50" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 50, 1);
+
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const numId = adminMaterial.parseMaterialId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const { data, total } = await adminMaterial.getCategoryMaterials(numId, pageNum, limitNum);
+      return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
+    }
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid category id." });
+
     const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
@@ -612,6 +702,20 @@ export const listMaterials = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    if (adminMaterial.isAdminMaterialMysql()) {
+      // language/isPreview filters are Mongo-only (no SQL columns) → ignored.
+      const { data, total } = await adminMaterial.listMaterials({
+        search,
+        materialCategoryId: materialCategoryId ? adminMaterial.parseMaterialId(materialCategoryId) ?? undefined : undefined,
+        status: status === "true" ? true : status === "false" ? false : undefined,
+        page: pageNum, limit: limitNum,
+      });
+      return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
+    }
+
     const filter: any = {};
     {
       const c = buildRegexCondition(search);
@@ -623,8 +727,6 @@ export const listMaterials = async (req: Request, res: Response) => {
     if (language) filter.language = language;
     if (isPreview === "true" || isPreview === "false") filter.isPreview = isPreview === "true";
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
@@ -649,6 +751,13 @@ export const listMaterials = async (req: Request, res: Response) => {
 export const getMaterialById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const numId = adminMaterial.parseMaterialId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid material id." });
+      const data = await adminMaterial.getMaterialById(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Material not found." });
+      return res.status(200).json({ success: true, data });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid material id." });
     const m = await Material.findById(id).populate("materialCategoryId", "_id title");
@@ -679,6 +788,13 @@ export const createMaterial = async (req: Request, res: Response) => {
   try {
     applyUploadedFile(req);
     const data = createMaterialSchema.parse(req.body);
+    if (adminMaterial.isAdminMaterialMysql()) {
+      // Mongo-only fields (description/thumbnail/fileSize/fileMime/language/
+      // isPreview/isPaid/downloadCount) are dropped — no SQL columns.
+      const res2 = await adminMaterial.createMaterial(data as any);
+      if (res2 === "category") return res.status(404).json({ success: false, message: "Category not found." });
+      return res.status(201).json({ success: true, data: res2 });
+    }
     if (!mongoose.Types.ObjectId.isValid(data.materialCategoryId))
       return res.status(400).json({ success: false, message: "Invalid materialCategoryId." });
 
@@ -696,10 +812,18 @@ export const createMaterial = async (req: Request, res: Response) => {
 export const updateMaterial = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid material id." });
     applyUploadedFile(req);
     const data = updateMaterialSchema.parse(req.body);
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const numId = adminMaterial.parseMaterialId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid material id." });
+      const res2 = await adminMaterial.updateMaterial(numId, data as any);
+      if (res2 === "not_found") return res.status(404).json({ success: false, message: "Material not found." });
+      if (res2 === "category") return res.status(400).json({ success: false, message: "Invalid materialCategoryId." });
+      return res.status(200).json({ success: true, data: res2 });
+    }
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid material id." });
     if (
       data.materialCategoryId &&
       !mongoose.Types.ObjectId.isValid(data.materialCategoryId)
@@ -718,6 +842,12 @@ export const updateMaterial = async (req: Request, res: Response) => {
 export const deleteMaterial = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const numId = adminMaterial.parseMaterialId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid material id." });
+      if (!(await adminMaterial.deleteMaterial(numId))) return res.status(404).json({ success: false, message: "Material not found." });
+      return res.status(200).json({ success: true, message: "Material deleted." });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid material id." });
     const m = await Material.findByIdAndDelete(id);
@@ -731,6 +861,13 @@ export const deleteMaterial = async (req: Request, res: Response) => {
 export const toggleMaterialStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const numId = adminMaterial.parseMaterialId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid material id." });
+      const res2 = await adminMaterial.toggleMaterialStatus(numId);
+      if (res2 === "not_found") return res.status(404).json({ success: false, message: "Material not found." });
+      return res.status(200).json({ success: true, data: res2 });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid material id." });
     const m = await Material.findById(id).select("status");
@@ -746,6 +883,14 @@ export const toggleMaterialStatus = async (req: Request, res: Response) => {
 export const reorderMaterials = async (req: Request, res: Response) => {
   try {
     const { materialCategoryId, orders } = reorderMaterialsSchema.parse(req.body);
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const catId = adminMaterial.parseMaterialId(materialCategoryId);
+      if (!catId) return res.status(400).json({ success: false, message: "Invalid materialCategoryId." });
+      const res2 = await adminMaterial.reorderMaterials(catId, orders);
+      if (res2 === "dup") return res.status(400).json({ success: false, message: "Duplicate order values." });
+      if (res2 === "no_valid") return res.status(400).json({ success: false, message: "No valid ids." });
+      return res.status(200).json({ success: true, message: "Material order updated." });
+    }
     if (!mongoose.Types.ObjectId.isValid(materialCategoryId))
       return res.status(400).json({ success: false, message: "Invalid materialCategoryId." });
 
@@ -773,6 +918,11 @@ export const reorderMaterials = async (req: Request, res: Response) => {
 export const bulkStatus = async (req: Request, res: Response) => {
   try {
     const { ids, status } = bulkStatusSchema.parse(req.body);
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const res2 = await adminMaterial.bulkStatus(ids, status);
+      if (res2 === "no_valid") return res.status(400).json({ success: false, message: "No valid ids." });
+      return res.status(200).json({ success: true, modified: res2.modified });
+    }
     const validIds = ids.filter((i) => mongoose.Types.ObjectId.isValid(i));
     if (!validIds.length)
       return res.status(400).json({ success: false, message: "No valid ids." });
@@ -787,6 +937,11 @@ export const bulkStatus = async (req: Request, res: Response) => {
 export const bulkDelete = async (req: Request, res: Response) => {
   try {
     const { ids } = bulkDeleteSchema.parse(req.body);
+    if (adminMaterial.isAdminMaterialMysql()) {
+      const res2 = await adminMaterial.bulkDelete(ids);
+      if (res2 === "no_valid") return res.status(400).json({ success: false, message: "No valid ids." });
+      return res.status(200).json({ success: true, deleted: res2.deleted });
+    }
     const validIds = ids.filter((i) => mongoose.Types.ObjectId.isValid(i));
     if (!validIds.length)
       return res.status(400).json({ success: false, message: "No valid ids." });

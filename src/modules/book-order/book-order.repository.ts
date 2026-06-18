@@ -32,6 +32,10 @@ export const bookOrderRepository = {
       where: { gatewayOrderId: razorpayOrderId, userId: customerId },
     }),
 
+  /** Order by Razorpay id ALONE (webhook context — no customer in the payload). */
+  findOrderByRazorpayOnly: (razorpayOrderId: string) =>
+    prisma.bookOrder.findFirst({ where: { gatewayOrderId: razorpayOrderId } }),
+
   /** Line items for an order (by VARCHAR business key) — for the DTO. */
   findOrderItems: (orderKey: string) =>
     prisma.bookOrderItem.findMany({ where: { order_id: orderKey } }),

@@ -1,6 +1,6 @@
 # Migrated modules (MySQL / Prisma)
 
-> **Generated:** 2026-06-17 — re-run `yarn docs:migrated-modules` when you add a module  
+> **Generated:** 2026-06-18 — re-run `yarn docs:migrated-modules` when you add a module  
 > **Scope:** Only modules with **repository → service → transformer** on **legacy MySQL** tables  
 > **Enable in runtime:** `MIGRATION_MYSQL_MODULES` in `.env`
 
@@ -10,9 +10,9 @@
 
 | | |
 |---|---|
-| **Total migrated (code complete)** | 48 |
-| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, customer-address, customer-profile, customer-bank-account, offline-city, catalog-package-type, catalog-package, catalog-course, catalog-video, catalog-ebook, catalog-material, catalog-book, offline-batch, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, catalog-exam, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, admin-auth, customer-admin-crud, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video` |
-| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator,admin-auth,customer-admin-crud,educator-auth,promoter-auth,promoter-data,referral,admin-rbac,client-exam,client-cart,admin-exam,client-educator,admin-plan,admin-master,admin-video` |
+| **Total migrated (code complete)** | 67 |
+| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city, catalog-package-type, catalog-course, catalog-video, catalog-ebook, catalog-exam, catalog-material, catalog-book, offline-batch, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, admin-auth, customer-profile, customer-bank-account, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video, admin-book, admin-ebook, admin-course, admin-package, admin-material, live-course, client-purchase-history, admin-subscription, client-my-subscriptions, client-orders, live-course-order, package-order, test-series-order, client-ebook-download, client-folder` |
+| **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator,admin-auth,customer-admin-crud,educator-auth,promoter-auth,promoter-data,referral,admin-rbac,client-exam,client-cart,admin-exam,client-educator,admin-plan,admin-master,admin-video,admin-book,admin-ebook,admin-course,admin-package,admin-material,live-course,client-purchase-history,admin-subscription,client-my-subscriptions,client-orders,live-course-order,package-order,test-series-order,wave7-new-tables (lecture-progress/notification/folder/ebook-download),client-ebook-download,client-folder,client-notification,client-lecture-progress` |
 
 | # | Module key | Label | MySQL table | Mongo collection | Env | Detail |
 |---:|---|---|---|---|---|---|
@@ -26,12 +26,12 @@
 | 8 | `popup` | Popup Notification | `ws_popup_notification` | `ws_popup_notifications` | ✅ enabled | [Detail](#popup) |
 | 9 | `customer-auth` | Customer Auth (OTP/token) | `ws_customer (+ ws_customer_otp, ws_customer_access_token)` | `ws_customers / ws_customer_otps / ws_customer_access_tokens` | ✅ enabled | [Detail](#customer-auth) |
 | 10 | `customer-lookups` | Customer Lookups (state/district/education/goal) | `ws_customer_state / ws_customer_distict / ws_customer_education / ws_customer_target_goal` | `ws_customer_states / ws_customer_districts / ws_customer_educations / ws_customer_target_goals` | ✅ enabled | [Detail](#customer-lookups) |
-| 11 | `customer-address` | Customer Address | `ws_customer_address` | `ws_customer_addresses` | ✅ enabled | [Detail](#customer-address) |
+| 11 | `customer-address` | Customer Address | `ws_customer_address` | `ws_customer_addresses` | ⏸ not in env | [Detail](#customer-address) |
 | 12 | `customer-profile` | Customer Profile | `ws_customer` | `ws_customers` | ✅ enabled | [Detail](#customer-profile) |
 | 13 | `customer-bank-account` | Customer Bank Account | `ws_customer_bank_account` | `ws_customer_bank_accounts` | ✅ enabled | [Detail](#customer-bank-account) |
 | 14 | `offline-city` | Offline City | `ws_offline_city` | `ws_offline_cities` | ✅ enabled | [Detail](#offline-city) |
 | 15 | `catalog-package-type` | Catalog · Package Type | `ws_package_type` | `ws_package_types` | ✅ enabled | [Detail](#catalog-package-type) |
-| 16 | `catalog-package` | Catalog · Package | `ws_package` | `ws_packages` | ✅ enabled | [Detail](#catalog-package) |
+| 16 | `catalog-package` | Catalog · Package | `ws_package` | `ws_packages` | ⏸ not in env | [Detail](#catalog-package) |
 | 17 | `catalog-course` | Catalog · Course | `ws_course / ws_course_subject_category` | `ws_courses / coursesubjectcategories` | ✅ enabled | [Detail](#catalog-course) |
 | 18 | `catalog-video` | Catalog · Video (+ URL-encryption contract) | `ws_video / ws_video_category` | `videos / videocategories` | ✅ enabled | [Detail](#catalog-video) |
 | 19 | `catalog-ebook` | Catalog · eBook (+ listing/detail composition) | `ws_ebook` | `ws_ebooks` | ✅ enabled | [Detail](#catalog-ebook) |
@@ -51,7 +51,7 @@
 | 33 | `commerce-promocode` | Commerce · Promocode (READ — SQL-faithful, NOT the client appliesTo model) | `ws_promocode / ws_promoted_package_course_ebook` | `ws_promo_codes / (embedded)` | ✅ enabled | [Detail](#commerce-promocode) |
 | 34 | `commerce-educator` | Commerce · Educator (READ — full entity master) | `ws_course_educator` | `ws_course_educators` | ✅ enabled | [Detail](#commerce-educator) |
 | 35 | `admin-auth` | Admin Auth + Administrator CRUD (ws_users) | `ws_users (+ ws_admin_access_tokens, ws_roles, ws_permissions, ws_model_has_roles, ws_model_has_permissions)` | `ws_users (+ ws_admin_access_tokens, roles, permissions)` | ✅ enabled | [Detail](#admin-auth) |
-| 36 | `customer-admin-crud` | Admin · Customer CRUD (ws_customer) | `ws_customer` | `ws_customers` | ✅ enabled | [Detail](#customer-admin-crud) |
+| 36 | `customer-admin-crud` | Admin · Customer CRUD (ws_customer) | `ws_customer` | `ws_customers` | ⏸ not in env | [Detail](#customer-admin-crud) |
 | 37 | `educator-auth` | Educator Auth + Admin Educator Master CRUD (ws_course_educator) | `ws_course_educator (+ ws_educator_access_tokens)` | `ws_course_educators (+ ws_educator_access_tokens)` | ✅ enabled | [Detail](#educator-auth) |
 | 38 | `promoter-auth` | Promoter Auth (ws_promoter) | `ws_promoter (+ ws_promoter_access_tokens)` | `ws_promoter (+ ws_promoter_access_tokens)` | ✅ enabled | [Detail](#promoter-auth) |
 | 39 | `promoter-data` | Promoter Analytics (customers/subscriptions/dashboard/promocode) | `ws_package_course_subscription / ws_ebook_subscription (joined via order.promocode JSON)` | `ws_package_course_subscriptions / ws_ebook_subscriptions / ws_promo_codes` | ✅ enabled | [Detail](#promoter-data) |
@@ -64,6 +64,25 @@
 | 46 | `admin-plan` | Admin Plan CRUD (PackageCourseEbookPrice) | `ws_package_course_ebook_price` | `ws_package_course_ebook_prices` | ✅ enabled | [Detail](#admin-plan) |
 | 47 | `admin-master` | Admin Master sub-catalog CRUD + full videoCategory (pc-material / subject / video categories) | `ws_package_course_material / ws_course_subject_category / ws_video_category` | `ws_package_course_materials / coursesubjectcategories / videocategories` | ✅ enabled | [Detail](#admin-master) |
 | 48 | `admin-video` | Admin Video CRUD (ws_video) | `ws_video` | `videos` | ✅ enabled | [Detail](#admin-video) |
+| 49 | `admin-book` | Admin Book CRUD + order reads (ws_book) | `ws_book / ws_book_order / ws_book_order_item` | `ws_books / bookorders` | ✅ enabled | [Detail](#admin-book) |
+| 50 | `admin-ebook` | Admin Ebook CRUD + plans + subscriptions (ws_ebook) | `ws_ebook / ws_package_course_ebook_price / ws_ebook_subscription / ws_ebook_order` | `ws_ebook / ws_ebook_prices / ebooksubscriptions / ebookorders` | ✅ enabled | [Detail](#admin-ebook) |
+| 51 | `admin-course` | Admin Course CRUD + plans + masters (ws_course) | `ws_course / ws_package_course_ebook_price / ws_material_category_course / ws_exam_category_course / ws_video_category(_relation)` | `courses / ws_ebook_prices / videocategories / videocategoryrelations` | ✅ enabled | [Detail](#admin-course) |
+| 52 | `admin-package` | Admin Package CRUD + types + plans + relations (ws_package) | `ws_package / ws_package_type / ws_package_specific_subject / ws_(material|exam)_category_package / ws_video_category_package_relation` | `packages / packagetypes / packagecoursesubscriptions` | ✅ enabled | [Detail](#admin-package) |
+| 53 | `admin-material` | Admin Material categories + leaf materials (ws_material) | `ws_material_category / ws_material` | `materialcategories / materials` | ✅ enabled | [Detail](#admin-material) |
+| 54 | `live-course` | Admin Live-Course CRUD + plans + subscriptions + schedule (Wave 6) | `ws_live_course / ws_live_course_plan / ws_live_course_subscription / ws_live_session(+ _course join)` | `ws_live_courses / ws_live_course_plans / ws_live_course_subscriptions / ws_live_sessions` | ✅ enabled | [Detail](#live-course) |
+| 55 | `client-purchase-history` | Client Purchase-History tabs (Wave 7 — aggregation) | `ws_package_course_subscription / ws_book_order / ws_ebook_order (read-aggregation, no new tables)` | `packagecoursesubscriptions / bookorders / ebookorders` | ✅ enabled | [Detail](#client-purchase-history) |
+| 56 | `admin-subscription` | Admin Subscription reads + reports (Wave 7 — aggregation) | `ws_package_course_subscription / ws_ebook_subscription / ws_book_order / ws_ebook_order (read-aggregation, no new tables)` | `packagecoursesubscriptions / ebooksubscriptions / bookorders / ebookorders` | ✅ enabled | [Detail](#admin-subscription) |
+| 57 | `client-my-subscriptions` | Client My-Subscriptions library (Wave 7 — aggregation) | `ws_package_course_subscription / ws_ebook_subscription (read-aggregation, no new tables)` | `packagecoursesubscriptions / ebooksubscriptions` | ✅ enabled | [Detail](#client-my-subscriptions) |
+| 58 | `catalog-video` | Client Categories — video-category children-nav (Wave 7; extends catalog-video) | `ws_video_category / ws_video (read-nav, no new tables)` | `videocategories / videos` | ✅ enabled | [Detail](#catalog-video) |
+| 59 | `client-orders` | Client Orders — listMyOrders (Wave 7 — aggregation) | `ws_package_course_subscription / ws_ebook_subscription / ws_book_order (read-aggregation, no new tables)` | `packagecoursesubscriptions / ebooksubscriptions / bookorders` | ✅ enabled | [Detail](#client-orders) |
+| 60 | `live-course-order` | Live-Course Payment write path (Wave 7 — create/verify/webhook) | `ws_live_course_subscription (carries BOTH payment + entitlement; no separate order table)` | `livecoursesubscriptions / livecourseplans` | ✅ enabled | [Detail](#live-course-order) |
+| 61 | `package-order` | Package Payment write path + webhook ebook fulfillment (Wave 7) | `ws_package_course_order / ws_package_course_subscription / ws_package_course_subscription_tracking; ws_ebook_order / ws_ebook_subscription` | `packagecoursesubscriptions / ebookorders / ebooksubscriptions` | ✅ enabled | [Detail](#package-order) |
+| 62 | `test-series-order` | Test-Series payment + subscription (Wave 7 — NET-NEW tables) | `ws_test_series / ws_test_series_price / ws_test_series_order / ws_test_series_subscription (CREATED 2026-06-18)` | `ws_test_series / ws_test_series_prices / ws_test_series_orders / ws_test_series_subscriptions` | ✅ enabled | [Detail](#test-series-order) |
+| 63 | `wave7-new-tables (lecture-progress/notification/folder/ebook-download)` | Wave 7 — net-new tables created + backfilled; consumers stay Mongo (documented) | `ws_lecture_progress / ws_notification / ws_folder / ws_folder_item / ws_ebook_download (CREATED 2026-06-18) + ws_book_order.paid_at column added` | `ws_lecture_progress / ws_notifications / ws_folders / ws_folder_items / ws_ebook_downloads` | ⏸ not in env | [Detail](#wave7-new-tables (lecture-progress/notification/folder/ebook-download)) |
+| 64 | `client-ebook-download` | Client Ebook Downloads (Wave 7 — net-new table) | `ws_ebook_download (CREATED 2026-06-18)` | `ws_ebook_downloads` | ✅ enabled | [Detail](#client-ebook-download) |
+| 65 | `client-folder` | Client Saved Folders — video/material (Wave 7 — net-new tables) | `ws_folder / ws_folder_item (CREATED 2026-06-18)` | `ws_folders / ws_folder_items` | ✅ enabled | [Detail](#client-folder) |
+| 66 | `client-notification` | Client Notification reads (Wave 7 — net-new table, FLAG OFF) | `ws_notification (CREATED 2026-06-18)` | `ws_notifications` | ⏸ not in env | [Detail](#client-notification) |
+| 67 | `client-lecture-progress` | Client Lecture Progress (Wave 7 — net-new table, FLAG OFF) | `ws_lecture_progress (CREATED 2026-06-18)` | `ws_lecture_progress` | ⏸ not in env | [Detail](#client-lecture-progress) |
 
 ---
 
@@ -71,7 +90,7 @@
 
 ```env
 DATABASE_URL=mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging
-MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator,admin-auth,customer-admin-crud,educator-auth,promoter-auth,promoter-data,referral,admin-rbac,client-exam,client-cart,admin-exam,client-educator,admin-plan,admin-master,admin-video
+MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator,admin-auth,customer-admin-crud,educator-auth,promoter-auth,promoter-data,referral,admin-rbac,client-exam,client-cart,admin-exam,client-educator,admin-plan,admin-master,admin-video,admin-book,admin-ebook,admin-course,admin-package,admin-material,live-course,client-purchase-history,admin-subscription,client-my-subscriptions,client-orders,live-course-order,package-order,test-series-order,wave7-new-tables (lecture-progress/notification/folder/ebook-download),client-ebook-download,client-folder,client-notification,client-lecture-progress
 ```
 
 - Toggle: `src/config/migration.ts` → `isMysqlModule("<key>")`
@@ -347,7 +366,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `customer-address` |
 | **Phase** | 2 |
 | **Migrated** | 2026-06-10 |
-| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
 | **Prisma model** | `CustomerAddress` |
 | **MySQL table** | `ws_customer_address` |
 | **Mongo collection (legacy app)** | `ws_customer_addresses` |
@@ -481,7 +500,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `catalog-package` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-11 |
-| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
 | **Prisma model** | `Package` |
 | **MySQL table** | `ws_package` |
 | **Mongo collection (legacy app)** | `ws_packages` |
@@ -1017,7 +1036,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `customer-admin-crud` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-17 |
-| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
 | **Prisma model** | `Customer (+ CustomerState/CustomerDistict/CustomerEducation lookups)` |
 | **MySQL table** | `ws_customer` |
 | **Mongo collection (legacy app)** | `ws_customers` |
@@ -1351,6 +1370,483 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 - priceType is the VideoType enum (free|paid). SQL-side numeric category ids. No schema change (Video model was clean).
 
 **Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Video (+ VideoCategory)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 49. Admin Book CRUD + order reads (ws_book) {#admin-book}
+
+| | |
+|---|---|
+| **Module key** | `admin-book` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Book (+ BookOrder / BookOrderItem / CustomerShipping)` |
+| **MySQL table** | `ws_book / ws_book_order / ws_book_order_item` |
+| **Mongo collection (legacy app)** | `ws_books / bookorders` |
+| **Code** | `src/modules/admin-book (branches src/admin/book/book.controller.ts)/` |
+| **Data** | 10 books, 6 orders in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | GET `/admin/books` · `/:id` · POST `/` · `/reorder` · PUT `/:id` · DELETE `/:id` · PATCH `/:id/status` · GET `/admin/books/orders/list` · `/orders/:id` |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 5 admin CRUD. Books: list(search/language/isMagazine/isCombo/status + pagination)/get/create/update/delete/toggleStatus/reorder. Orders: list(filters + cross-table search on customer name/phone + book name on items)/get.
+- ⚠ ws_book has NO column for: isTrending, publication, deliveryEta, termsAndConditions, demoFileName/bookFileName, bookUrl (only demo_url), examCountdown*/packageIds. The DTO synthesizes isTrending=false, publication/deliveryEta defaults, the rest null/[] (mirrors catalog-book). Those Mongo-only fields are DROPPED on write. NOT-NULL no-default cols (name/pages/dynamic_link/thumbnail) get write-time sentinels.
+- ⚠ STAY Mongo (no SQL branch): toggleBookTrending (no is_trending col); getBookById's examCountdown* populates (Mongo-only entities); updateOrderStatus/setOrderTracking/addOrderTrackingEvent (write embedded tracking.history[] — ws_book_tracking is one flat varchar(10)-status row, no history/location/note/courier); getSettings/updateSettings (NO ws_book_setting table at all).
+- Customer name from full_name via splitFullName (firstName/lastName, like customer-profile); shipping phones BigInt→string. Order amount Decimal→Number. Verified vs live DB.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Book (+ BookOrder / BookOrderItem / CustomerShipping)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 50. Admin Ebook CRUD + plans + subscriptions (ws_ebook) {#admin-ebook}
+
+| | |
+|---|---|
+| **Module key** | `admin-ebook` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `EBook (+ PackageCourseEbookPrice / EBookSubscription / EBookOrder)` |
+| **MySQL table** | `ws_ebook / ws_package_course_ebook_price / ws_ebook_subscription / ws_ebook_order` |
+| **Mongo collection (legacy app)** | `ws_ebook / ws_ebook_prices / ebooksubscriptions / ebookorders` |
+| **Code** | `src/modules/admin-ebook (branches src/admin/ebook/ebook.service.ts + ebook-subscription.controller.ts)/` |
+| **Data** | 2 ebooks, 214 ebook plans, 1 subscription in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | GET `/admin/ebooks` · `/:id` · POST `/` · PUT `/:id` · DELETE `/:id` · GET/POST `/:id/plans` · GET/PUT/DELETE `/plans/:planId` · `/subscriptions/list` · POST `/subscriptions` · GET/PUT/DELETE `/subscriptions/:id` · GET `/:ebookId/prices` |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 5 admin CRUD (3 surfaces). Ebooks: list(search/author/publisher/language/status + pagination)/get(+active plans)/create/update/delete(cascades plans)/reorder. Plans: list/create/get/update/delete + prices-for-subscription (ebook-owned ws_package_course_ebook_price rows, same shared table as admin-plan — ebook_id set, course/package 0 sentinel). Subscriptions: list(filters + customer-name/phone + ebook-name search)/get/create(backend grant)/update(verify-order OR toggle)/delete.
+- ⚠ ws_ebook has NO column for isTrending, the PDF-upload status fields (book/demoUploadStatus/Progress), or examCountdown* relations. DTO synthesizes isTrending=false + examCountdown*=[]/null; PDF-status omitted; demoFileName/bookFileName=null. NOT-NULL no-default cols get write-time sentinels (thumbnail/image/terms/urls/link).
+- ⚠ STAYS Mongo: toggleEbookTrending (no is_trending col); the BullMQ single-PDF upload pipeline (POST /:id/pdf + /pdf-jobs/:batchId) writes Mongo upload-status fields — unaffected, stays Mongo. updateEbook S3 orphan-cleanup skipped on SQL (best-effort, not contract).
+- Subscription backend grant = one $transaction (ws_ebook_order COMPLETE + ws_ebook_subscription). endAt via planDuration computeEndAt(asDays:true) — duration is DAYS. ⚠ ws_ebook_order.plan_id is NOT NULL → 0 sentinel on the durationInDays path (no plan); customer_id is varchar(255) in DB (Prisma Int — MySQL casts). SQL-side numeric-id validation (reorder + subscription create) since the Mongo zod enforces ObjectId. Verified full lifecycle vs live DB (planId-path duration=90, durationInDays-path=30).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `EBook (+ PackageCourseEbookPrice / EBookSubscription / EBookOrder)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 51. Admin Course CRUD + plans + masters (ws_course) {#admin-course}
+
+| | |
+|---|---|
+| **Module key** | `admin-course` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Course (+ PackageCourseEbookPrice / MaterialCategoryCourse / ExamCategoryCourse / VideoCategory / VideoCategoryRelation / PackageCourseMaterial)` |
+| **MySQL table** | `ws_course / ws_package_course_ebook_price / ws_material_category_course / ws_exam_category_course / ws_video_category(_relation)` |
+| **Mongo collection (legacy app)** | `courses / ws_ebook_prices / videocategories / videocategoryrelations` |
+| **Code** | `src/modules/admin-course (branches src/admin/course/course.service.ts + course.controller.ts create/update)/` |
+| **Data** | 1 course, 152 video-cats, 2456 vcat relations in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | GET `/admin/courses` · `/pre-requisites` · `/:id` · POST `/` · PUT `/:id` · DELETE `/:id` · PATCH `/:id/popular` · plans `/:id/plans` + `/plans/:planId` · `/video-categories` · `/video-category-relations` · `/materials` |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 5 admin CRUD (largest). Course CRUD + popular toggle + plans (course-owned ws_package_course_ebook_price, single-default invariant) + materials (pc-material, title-only) + video-categories (global ws_video_category) + video-category-relations. The Mongo embedded materialCategories[]/examCategories[] map to the SQL pivot tables ws_material_category_course / ws_exam_category_course (create writes them in the same txn; update replaces the set). getCourseById populates material→{_id,title,image} / exam→{_id,name,image}.
+- SQL enums: is_featured('0','1')→isPopular, purchase→isPaid (Mongo isPaid defaults TRUE → only explicit '0' unpaid). with_material/without_material/level are VARCHAR in SQL (not bool). course_category_id/educator_id are NOT NULL → 0 sentinel on create when unset.
+- ⚠ USER-APPROVED divergence: ws_video_category has NO course_id column. So (a) createCourse's 'Root folder' automation is SKIPPED (response folder=null); (b) course video-category create/update/delete operate on the GLOBAL ws_video_category (courseId scope dropped, surfaced null); (c) deleteCourse cascades plans + both pivot sets but NOT courseId-scoped folders/relations (deletedCourseVideoCategories/deletedVideoRelations always 0).
+- SQL-side numeric-id validation for createCourse/updateCourse (createCourseSqlSchema + a numeric category-ref parser in the controller) since the Mongo zod enforces ObjectId on the FK ids + category refs. Verified full lifecycle vs live DB (1 course list/get w/ pivots populated, create+pivots, update replace-pivots, popular toggle, plan single-default, delete cascade, vcats/relations/materials lists).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Course (+ PackageCourseEbookPrice / MaterialCategoryCourse / ExamCategoryCourse / VideoCategory / VideoCategoryRelation / PackageCourseMaterial)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 52. Admin Package CRUD + types + plans + relations (ws_package) {#admin-package}
+
+| | |
+|---|---|
+| **Module key** | `admin-package` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Package (+ PackageType / PackageSpecificSubject / MaterialCategoryPackage / ExamCategoryPackage / PackageCourseEbookPrice / PackageCourseSubscription / PackageVideoCategoryRelation)` |
+| **MySQL table** | `ws_package / ws_package_type / ws_package_specific_subject / ws_(material|exam)_category_package / ws_video_category_package_relation` |
+| **Mongo collection (legacy app)** | `packages / packagetypes / packagecoursesubscriptions` |
+| **Code** | `src/modules/admin-package (branches src/admin/package/package.service.ts)/` |
+| **Data** | 5 packages, 6 types, 1623 specific-subjects, 6907 pkg relations in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | GET `/admin/packages` · `/:id` · POST `/` · PUT `/:id` · DELETE `/:id` · PATCH `/:id/status` · types `/types(/:id)` · embedded reorders · plans `/:id/plans(/attach|/:planId)` · `/:id/subscribers` · `/:id/video-relations(+/expand)` |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 5 admin CRUD (large). Package types + packages CRUD/status/reorder + embedded reorders + plans (attach/list/detach, soft-detach=status off) + subscribers + video-category relations (set + BFS expand). The Mongo embedded specificSubjects[]/materialCategories[]/examCategories[] map to the SQL pivots ws_package_specific_subject (subject_id→VideoCategory) / ws_material_category_package / ws_exam_category_package (create writes in-txn; update replaces the set). getPackageById populates subject→{_id,title,image} / material→{_id,title(=name),image} / exam→{_id,title(=name),image}.
+- ⚠ ws_package is MISSING columns for isPaid, isSmartCourse, isPlannerCourse, subtitle, notificationTopic, packageCategoryId, goalId/goalLabelId, and the examCountdown* arrays. DTO synthesizes (isPaid=true Mongo default, smart/planner=false, examCountdown*=[], the rest null/''); writes drop them. with_material/without_material are the descriptive *Text fields. package_type_id NOT NULL → 1 sentinel; exam_id NOT NULL → 0 sentinel. Schema: added nullable educator_id to the Package Prisma model (DB column existed, was unmapped).
+- ⚠ STAY Mongo (no SQL branch): listPromotedCodes (PromoCode.appliesTo — ws_promocode has no package-linkage column, same gap as commerce-promocode) and listBooks (Book.packageIds — no SQL column, per admin-book). Chat is already on SQL via the package-chat module.
+- PackageType has only id/name (+timestamps) — order/active dropped. listSubscribers filters ws_package_course_subscription.package_id (the real package column; ⚠ Mongo's PackageCourseSubscription.packageId refs the PLAN, but SQL package_id holds the package id). attachPlans points the shared price row at this package (course/ebook → 0). Verified full lifecycle vs live DB (5 packages, embeds populated, type+package CRUD, attach/detach, subscribers, setVideoRelations + BFS expand=94).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Package (+ PackageType / PackageSpecificSubject / MaterialCategoryPackage / ExamCategoryPackage / PackageCourseEbookPrice / PackageCourseSubscription / PackageVideoCategoryRelation)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 53. Admin Material categories + leaf materials (ws_material) {#admin-material}
+
+| | |
+|---|---|
+| **Module key** | `admin-material` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `MaterialCategory / Material (+ MaterialCategoryCourse)` |
+| **MySQL table** | `ws_material_category / ws_material` |
+| **Mongo collection (legacy app)** | `materialcategories / materials` |
+| **Code** | `src/modules/admin-material (branches src/admin/material/material.controller.ts)/` |
+| **Data** | 5 material categories, 226 materials in staging |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | categories CRUD `/admin/materials/categories(/:id)` (+ reorder, status, courses, materials) · leaf materials CRUD `/admin/materials(/:id)` (+ reorder, bulk-status, bulk-delete, status) |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 5 admin CRUD (LAST module — completes the Wave 5 catalog CRUD set). Categories: list (parent filter + pagination) / tree (built from the single parent FK) / getById / create / update / delete (blocked if children or materials) / toggle / reorder / courses (via ws_material_category_course) / materials. Leaf materials: list / get / create / update / delete / toggle / reorder / bulk-status / bulk-delete.
+- ⚠ USER-APPROVED divergence: ws_material_category has only a single `parent` int (NOT NULL → 0 = root) — NO ancestors[]/childCategoryIds[]. So the DAG is dropped: createCategory/updateCategory write single-parent only (childCategoryIds[] reparenting + ancestors[] rewriting are Mongo-only); the DTO synthesizes ancestors=[]/childCategoryIds=[]. duplicateCategory STAYS Mongo (BFS clone depends on ancestors[], like the videoCategory `duplicate`).
+- ⚠ ws_material is minimal: title/direct_link/file/order_by/status only. NO description/thumbnail/fileSize/fileMime/language/isPreview/isPaid/downloadCount — dropped on write, synthesized on read (isPreview/isPaid=false, downloadCount=0, the rest null). list language/isPreview filters become no-ops on SQL.
+- Numeric ids throughout (the Mongo controller's ObjectId guards are replaced by parseMaterialId in the SQL branch). Verified full lifecycle vs live DB (5 categories list/tree(4 roots)/getById, category CRUD + child-attach + delete-blocked-when-children, 226 materials, material CRUD + toggle + reorder + bulk status/delete).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `MaterialCategory / Material (+ MaterialCategoryCourse)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 54. Admin Live-Course CRUD + plans + subscriptions + schedule (Wave 6) {#live-course}
+
+| | |
+|---|---|
+| **Module key** | `live-course` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `LiveCourse / LiveCoursePlan / LiveCourseSubscription / LiveSession (+ LiveSessionCourse)` |
+| **MySQL table** | `ws_live_course / ws_live_course_plan / ws_live_course_subscription / ws_live_session(+ _course join)` |
+| **Mongo collection (legacy app)** | `ws_live_courses / ws_live_course_plans / ws_live_course_subscriptions / ws_live_sessions` |
+| **Code** | `src/modules/admin-live-course (branches src/admin/live-course/{live-course,plan,subscription}.controller + service)/` |
+| **Data** | 4 live courses, 4 plans, 10 subs, 51 sessions (backfilled from Mongo) |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | GET `/admin/live-courses` · `/:id` · POST `/` · PUT `/:id` · DELETE `/:id` · PATCH `/:id/popular` · `/:id/sessions` · plans `/:id/plans` + `/plans/:planId` · subscriptions `/subscriptions(/:id)` + `/:id/grant` · schedule-folders/entries CRUD |
+| **Client API** | — (client live-course reads + livechat/livepoll/live-reminder pending) |
+
+**Transformer / schema notes:**
+
+- Wave 6 — the FIRST wave on net-new SQL tables (created + backfilled 2026-06-18, see LIVE_COURSE_DESIGN.md). Admin surface: live-course CRUD + popular toggle + sessions-list (via ws_live_session_course many-to-many join) + plans (single-default) + subscriptions (list/get/update/delete + grant with extend-existing) + schedule folders/entries.
+- Schedule folders/entries live in JSON columns on ws_live_course; the service mints SYNTHETIC string ids (f-…/e-…) on create so the Mongo API's folderId/entryId addressing works. Backfilled folders keep their original Mongo _id (addressable). plan.duration is treated as DAYS (computeEndAt asDays) per the controllers — overriding the design doc's MONTHS guess.
+- ⚠ STAY Mongo (no SQL branch): the folder + video-in-folder controllers (live-course.folder/video.controller) + createLiveCourse's Root-folder automation — ws_video_category has no live_course_id column (same blocker as the Wave 5 course Root folder, user-approved). createLiveCourse returns folder=null; deleteCourse reports deletedFolders/Videos/Relations=0.
+- External refs (educator/subject/package category, and subscription customer) backfilled 0/null on staging where the Mongo ObjectId had no SQL bridge — DTOs tolerate 0/null (surface id-or-null; customer falls back to id when not hydratable). SQL-side numeric-id validation (create/update course + grant) since the Mongo zod enforces ObjectId. Verified vs live DB through the branched service (flag ON): list 4 / detail + schedule folder (backfilled Maths TimeTable, 2 entries) / 15 sessions / plan single-default / grant 90d / full CRUD lifecycle.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `LiveCourse / LiveCoursePlan / LiveCourseSubscription / LiveSession (+ LiveSessionCourse)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 55. Client Purchase-History tabs (Wave 7 — aggregation) {#client-purchase-history}
+
+| | |
+|---|---|
+| **Module key** | `client-purchase-history` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageCourseSubscription / BookOrder / EBookOrder (+ Course/Package/PackageType/Book/EBook/price)` |
+| **MySQL table** | `ws_package_course_subscription / ws_book_order / ws_ebook_order (read-aggregation, no new tables)` |
+| **Mongo collection (legacy app)** | `packagecoursesubscriptions / bookorders / ebookorders` |
+| **Code** | `src/modules/client-purchase-history (branches src/client/purchase-history/purchase-history.controller.ts)/` |
+| **Data** | staging: 1 sub / 1 book order / 1 ebook order per customer |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | GET `/client/purchase-history/subscriptions` · `/books` · `/ebooks` |
+
+**Transformer / schema notes:**
+
+- Wave 7 (first finalizer) — a read-only cross-collection aggregator that composes ALREADY-MIGRATED tables; no new tables. 3 tabs: subscriptions (package/course + type badge), books (BookOrder + order_items JSON thumbnails + AWB), ebooks (EBookOrder + plan→ebook hop). The per-order receipt (receipts.controller) stays Mongo for now.
+- ⚠ Drift: ws_package_course_subscription has NO payment_status column → the Mongo `paymentStatus:'verified'` filter maps to status=true (active). SQL package_id = the real package (pcb_id = the plan) — the Mongo handler's packageId/targetPackageId are inverted, so the SQL DTO resolves package_id directly. course author + razorpay ids on the subscription are Mongo-only → null.
+- ⚠ ws_ebook_order has NO ebook_id → ebook title/thumb resolved via plan_id → price.ebook_id → ebook. ws_book_order items live in the order_items JSON (no embedded array); tracking surfaces the AWB only (ws_book_tracking is a flat status row, no courier column). Verified vs live DB (flag ON): subscription badge 'Recorded Course', book AWB resolved, ebook resolved via plan hop.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseSubscription / BookOrder / EBookOrder (+ Course/Package/PackageType/Book/EBook/price)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 56. Admin Subscription reads + reports (Wave 7 — aggregation) {#admin-subscription}
+
+| | |
+|---|---|
+| **Module key** | `admin-subscription` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageCourseSubscription / EBookSubscription / BookOrder / EBookOrder (+ course/package/type/customer/plan/ebook)` |
+| **MySQL table** | `ws_package_course_subscription / ws_ebook_subscription / ws_book_order / ws_ebook_order (read-aggregation, no new tables)` |
+| **Mongo collection (legacy app)** | `packagecoursesubscriptions / ebooksubscriptions / bookorders / ebookorders` |
+| **Code** | `src/modules/admin-subscription (branches src/admin/subscription/subscription.controller.ts read+report handlers)/` |
+| **Data** | staging: 2 course/pkg subs, 1 ebook sub, 6 book orders |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | GET `/admin/subscriptions` · `/:id` · `/plans` · `/ebooks` · reports `/reports/{summary,by-course,by-ebook,book-orders}` |
+| **Client API** | — |
+
+**Transformer / schema notes:**
+
+- Wave 7 finalizer (2nd). Read + report aggregation over already-migrated tables; no new tables. Wired 8 handlers: listCourseSubscriptions (filters + cross-table search on customer/course/package), getCourseSubscriptionById, listPlansForTarget, listEbookSubscriptions, + 4 reports (summary/by-course/by-ebook/book-orders) via Prisma groupBy/aggregate.
+- ⚠ Drift: ws_package_course_subscription has NO payment_status / paid_amount / razorpay / target_package_id columns. SQL package_id = the real package (pcb_id = the plan); amount = paidAmount; remarks = remark; payment_type ~ paymentMethod; withMaterial inferred from pc_material_id. The Mongo packageId/targetPackageId are inverted vs SQL — resolve package_id directly.
+- ⚠ STAY Mongo (no SQL branch): the 3 subscription WRITES (create/update/delete — write Mongo-only fields with grant-extend logic; revisit with the payment wave) + the 2 address handlers (CustomerAddress held OFF, offline-city dep). Verified vs live DB (flag ON): list w/ pkg/customer hydration, reportSummary (₹905 book revenue / 6 orders), by-ebook + book-orders groupBy.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseSubscription / EBookSubscription / BookOrder / EBookOrder (+ course/package/type/customer/plan/ebook)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 57. Client My-Subscriptions library (Wave 7 — aggregation) {#client-my-subscriptions}
+
+| | |
+|---|---|
+| **Module key** | `client-my-subscriptions` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageCourseSubscription / EBookSubscription (+ course/package/type/plan/ebook)` |
+| **MySQL table** | `ws_package_course_subscription / ws_ebook_subscription (read-aggregation, no new tables)` |
+| **Mongo collection (legacy app)** | `packagecoursesubscriptions / ebooksubscriptions` |
+| **Code** | `src/modules/client-my-subscriptions (branches src/client/my-subscriptions/my-subscriptions.controller.ts course+ebook tabs)/` |
+| **Data** | staging: subs are past-dated (0 active); verified via a seeded future-dated sub |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | GET `/client/my-subscriptions?type=course|ebook` (test_series tab stays Mongo) |
+
+**Transformer / schema notes:**
+
+- Wave 7 finalizer (3rd). The 'My Subscriptions' library — active-only cards (status=true && endAt>now), deduped to the furthest-out endAt per target, soonest-expiring first. SQL branch covers the `type=course` (course+package) and `type=ebook` tabs; matches the Mongo card envelope exactly (title/author/thumbnail/badge/daysLeft/action.kind/meta).
+- ⚠ `type=test_series` STAYS Mongo — ws_test_series* has no SQL table. NOTE a pre-existing cross-store gap: customer-auth is on SQL so the token carries a numeric id, but TestSeriesSubscription is keyed by the Mongo customer ObjectId — the test_series tab returns empty for SQL-auth customers regardless (not introduced here; documented). course author = null (ws_course has no author col); package badge via package_id→packageType.
+- ⚠ Drift: ws_package_course_subscription has no payment_status → the Mongo `paymentStatus:'verified'` filter maps to status=true. SQL package_id=package (pcb_id=plan) — Mongo inverts packageId/targetPackageId, resolved directly. Verified vs live DB via a seeded future-dated sub: package card 'CCE'/badge 'Recorded Course'/30d, ebook card 'Super Six'/30d; real endAt>now filter returns 0 for the past-dated staging rows.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseSubscription / EBookSubscription (+ course/package/type/plan/ebook)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 58. Client Categories — video-category children-nav (Wave 7; extends catalog-video) {#catalog-video}
+
+| | |
+|---|---|
+| **Module key** | `catalog-video` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `VideoCategory (+ Video count) — extends catalog-video` |
+| **MySQL table** | `ws_video_category / ws_video (read-nav, no new tables)` |
+| **Mongo collection (legacy app)** | `videocategories / videos` |
+| **Code** | `src/modules/catalog-video (getVideoCategoryChildren) — branches src/client/categories/categories.controller.ts listVideoCategoryChildren/` |
+| **Data** | staging: cat 295 'Old courses' → 18 children, cat 8 'Clerk' → 3 |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | GET `/client/video-categories/:id/children` |
+
+**Transformer / schema notes:**
+
+- Wave 7 finalizer (4th). Completes the children-nav trio — material + exam category children were already on SQL; this adds video. Reuses the existing `catalog-video` flag (already ON), no new flag, no new tables. Shape: { parent, list[].category{ ...VideoCategoryDto, count (active videos), havingChildDirectory (≥1 active grandchild) } }, order_by-sorted, optional title search.
+- ⚠ Divergence: Mongo gates children via the childCategoryIds[] DAG embed; SQL derives them from the single `parent` self-FK (same as admin-master). Root-level categories use parent=0 (sentinel, not a real row) → a parent=0 lookup correctly returns null/404. Parent fetched WITHOUT a status gate (matches Mongo findById — an inactive parent still renders children).
+- ⚠ REST of categories.controller STAYS Mongo (no SQL tables): 4 examCountdown* handlers (ExamCountdown/ExamCountdownCategory — no SQL table), listPackageCategories/listPackagesByCategory (PackageCategory — no SQL table), listVideosByCategory/getVideoByCategory (LectureProgress + video encryption), listMaterialsByCategory (paid-material entitlement gating). Verified vs live DB: cat 295→18, cat 8→3, missing→404, search filters.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `VideoCategory (+ Video count) — extends catalog-video`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 59. Client Orders — listMyOrders (Wave 7 — aggregation) {#client-orders}
+
+| | |
+|---|---|
+| **Module key** | `client-orders` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageCourseSubscription / EBookSubscription / BookOrder (+ course/package/plan/ebook)` |
+| **MySQL table** | `ws_package_course_subscription / ws_ebook_subscription / ws_book_order (read-aggregation, no new tables)` |
+| **Mongo collection (legacy app)** | `packagecoursesubscriptions / ebooksubscriptions / bookorders` |
+| **Code** | `src/modules/client-orders (branches src/client/orders/orders.controller.ts listMyOrders)/` |
+| **Data** | staging: cust 472341 (1 course sub, 4 book orders), 472335 (1+1+1) |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | GET `/client/orders` (listMyOrders). Writes POST /course /ebook /verify-payment stay Mongo. |
+
+**Transformer / schema notes:**
+
+- Wave 7 finalizer (5th). listMyOrders — all of a customer's course/package subs + ebook subs + book orders (unfiltered, newest-first), matching the Mongo `{ courseSubscriptions, ebookSubscriptions, bookOrders }` shape. Same drift family as client-purchase-history but distinct contract (unpaginated, all-statuses, raw-ish docs) → own module.
+- ⚠ Mongo populates courseId→{name,thumbnail} and packageId→the price/plan doc; SQL maps Course.image→thumbnail, resolves package_id directly, hydrates the plan via planId (→ packageId field carries the plan DTO). ws_book_order: items from the order_items JSON column, AWB from tracking_id (BIGINT), customer keyed by user_id (→customer_id). withMaterial inferred from pc_material_id.
+- ⚠ STAY Mongo (no SQL branch): placeCourseOrder / placeEbookOrder / verifyPayment — the payment-write path (Razorpay order+verify + subscription grant + PromoCode.appliesTo + ReferralProgram crediting) → payment wave. Verified vs live DB (flag ON): cust 472341 → 1 package sub (plan 88/90d/₹7500) + 4 book orders (items parsed, AWB resolved, verified/pending), 472335 → 1 course sub + 1 ebook + 1 book order.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseSubscription / EBookSubscription / BookOrder (+ course/package/plan/ebook)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 60. Live-Course Payment write path (Wave 7 — create/verify/webhook) {#live-course-order}
+
+| | |
+|---|---|
+| **Module key** | `live-course-order` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `LiveCourseSubscription (single-table) + LiveCoursePlan (read)` |
+| **MySQL table** | `ws_live_course_subscription (carries BOTH payment + entitlement; no separate order table)` |
+| **Mongo collection (legacy app)** | `livecoursesubscriptions / livecourseplans` |
+| **Code** | `src/modules/live-course-order (branches src/client/payment/live-course-payment.controller.ts createLiveCourseOrderPayment + verify.controller.ts + webhook.controller.ts paymentWebhook)/` |
+| **Data** | staging: plan 1 (liveCourse 1, ₹1999, 3 days) |
+| **Smoke test** | `—  (verified via live-DB tsx: seed→create→verify→idempotent→webhook-fold→cleanup)` |
+| **Admin API** | — |
+| **Client API** | POST `/payment/create-order/live-course` + POST `/payment/verify` (live-course branch) + POST `/webhook/payment` (live-course fulfillment) |
+
+**Transformer / schema notes:**
+
+- Wave 7 finalizer (6th) — the FIRST payment-WRITE vertical fully on SQL end-to-end (create-order + /verify + webhook). Single-table design (unlike course/package's 3-table order/sub/tracking): ws_live_course_subscription carries razorpay ids + payment_status AND start/end + status. createPending writes a pending row; verify/webhook flip it to verified (fresh grant) OR fold onto an existing active sub (extend endAt, sum paid) and retire the pending row.
+- ⚠ plan.duration is DAYS (computeEndAt asDays:true) — matches the shipped admin-live-course grant + Mongo controllers. The prisma schema comment saying MONTHS is STALE; DAYS is the precedent. Verified: 3-day plan → +3 days, fold → +3 more. ⚠ withMaterial / customerShippingId are Mongo-only (no SQL column); the SQL create omits them (address still validated against Mongo). promocodeId coerced to int (null if non-numeric). LiveCourse title still read from Mongo (LiveCourse not yet migrated). Dual-read fallback in verify + webhook (SQL first, Mongo on miss). Verified vs live DB end-to-end (flag ON): create→verify(fresh, +3d, idempotent)→webhook(fold onto active, paid 1999→3998).
+- ⏸️ DEFERRED this run (analyzed, documented): package-payment create-order (3-table commerce-order pattern — doable next, all SQL tables exist); test-series payment (BLOCKED — no ws_test_series* table); webhook book branch (needs schema: paidAt/tracking/Counter) + ebook branch (doable, deferred for batch); profile getProfileDashboardCounts (5/7 counts BLOCKED — Notification/FolderItem×2/EbookDownload no SQL table, PackageCourseSub paymentStatus mismatch); recordingWebhook (Json recordings + socket, Mongo-only). client/dashboard (no clean slice — see earlier). profile reads already on customer-profile.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `LiveCourseSubscription (single-table) + LiveCoursePlan (read)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 61. Package Payment write path + webhook ebook fulfillment (Wave 7) {#package-order}
+
+| | |
+|---|---|
+| **Module key** | `package-order` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `PackageCourseOrder + PackageCourseSubscription + Tracking (package twin in commerce-order); EBookOrder/EBookSubscription (webhook)` |
+| **MySQL table** | `ws_package_course_order / ws_package_course_subscription / ws_package_course_subscription_tracking; ws_ebook_order / ws_ebook_subscription` |
+| **Mongo collection (legacy app)** | `packagecoursesubscriptions / ebookorders / ebooksubscriptions` |
+| **Code** | `src/modules/commerce-order (package fns added) + src/modules/ebook-order (fulfillEbookWebhookMysql); branches package-payment.controller.ts + verify.controller.ts + webhook.controller.ts/` |
+| **Data** | staging: package plan 102 (pkg 4, ₹6500, 180d); ebook plan 2 (ebook 2, ₹130, 180d) |
+| **Smoke test** | `—  (verified via live-DB tsx end-to-end)` |
+| **Admin API** | — |
+| **Client API** | POST `/payment/create-order/package` + `/payment/verify` (package branch) + `/webhook/payment` (ebook fulfillment) |
+
+**Transformer / schema notes:**
+
+- Wave 7 finalizer (7th — closes the payment surface). PACKAGE create-order + verify added to the EXISTING commerce-order module (same tables/repo/transformer as course — no new module): findPackagePlanForOrder / createPackageOrderMysql / findPackageOrderForVerify / verifyPackageOrderMysql + repo findActivePackageSub / verifyPackageTx. Toggled by a SEPARATE `package-order` flag (independent of course's `commerce-order`). 3-table pattern: create writes pending ws_package_course_order; verify creates/extends sub + tracking in one tx.
+- ⚠ Package vs course: the plan must be a PACKAGE plan (plan.packageId set, courseId null); the fulfilled sub sets package_id with course_id NULL (Mongo targetPackageId set, courseId unset). DAYS duration (asDays:true). PackageCourseOrder.customer_id is `userId Int` (NOT varchar — the earlier spec was wrong). Idempotent + dual-read fallback. Verified end-to-end vs live DB: create→verify (fresh, pkg4/plan102, +180d → 2026-12-15, courseId null ✓)→idempotent→2nd-purchase fold (sub.amount accumulated 6500→13000 ✓).
+- WEBHOOK ebook: added fulfillEbookWebhookMysql to ebook-order (keyed by razorpayOrderId ALONE — no customer in webhook payload) + repo findOrderByRazorpayOnly; branched webhook.controller.ts paymentWebhook ebook section (SQL-first, dual-read). Reuses verifyEbookOrderMysql (idempotent fold-or-fresh). Verified: order→complete + sub created (+180d), idempotent (1 sub), unknown id→null. ⏸️ STILL DEFERRED: test-series payment (no SQL table), webhook book branch (needs paidAt/tracking/Counter schema), recordingWebhook (Json+socket), profile getProfileDashboardCounts (5/7 counts no SQL table). orders 3 writes (placeCourseOrder/placeEbookOrder via /orders) stay Mongo.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `PackageCourseOrder + PackageCourseSubscription + Tracking (package twin in commerce-order); EBookOrder/EBookSubscription (webhook)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 62. Test-Series payment + subscription (Wave 7 — NET-NEW tables) {#test-series-order}
+
+| | |
+|---|---|
+| **Module key** | `test-series-order` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `TestSeries / TestSeriesPrice / TestSeriesOrder / TestSeriesSubscription (all net-new)` |
+| **MySQL table** | `ws_test_series / ws_test_series_price / ws_test_series_order / ws_test_series_subscription (CREATED 2026-06-18)` |
+| **Mongo collection (legacy app)** | `ws_test_series / ws_test_series_prices / ws_test_series_orders / ws_test_series_subscriptions` |
+| **Code** | `src/modules/test-series-order (branches test-series-payment.controller.ts + verify.controller.ts + my-subscriptions.controller.ts test_series tab + webhook.controller.ts)/` |
+| **Data** | staging: 2 series + 3 prices backfilled (self-contained intra-family) |
+| **Smoke test** | `—  (verified via live-DB tsx end-to-end)` |
+| **Admin API** | — |
+| **Client API** | POST `/payment/apply-promo/test-series` + `/payment/create-order/test-series` + `/payment/verify` (test-series branch) + `/webhook/payment` + GET `/my-subscriptions?type=test_series` |
+
+**Transformer / schema notes:**
+
+- Wave 7 — FIRST net-new-table migration: created ws_test_series(+_price/_order/_subscription) via 2026-06-18_create_wave7_blocked_tables.sql + Prisma models + backfill (test-series family is self-contained → intra-family id maps resolve fully; 2 series + 3 prices on staging). Self-contained vertical: apply-promo preview, create-order (pending ws_test_series_order), /verify (fold-or-fresh into ws_test_series_subscription), my-subscriptions test_series tab, webhook fulfillment. Flag `test-series-order`.
+- ⚠ price-plan duration is DAYS (durationDays column; computeEndAt asDays:true). Idempotent verify + fold-onto-active (extend endAt, sum price). Dual-read fallback in verify (SQL first, Mongo on miss); webhook keyed by razorpayOrderId alone. promocode re-validated via resolveLivePromo (testSeries appliesTo). Verified end-to-end vs live DB: plan(60d/₹399) → create → verify (fresh +60d → 2026-08-17) → idempotent → my-subs card → webhook fold (+60d → 2026-10-16, price 476→952).
+- This UNBLOCKS the my-subscriptions test_series tab (previously empty for SQL-auth customers) + test-series payment (previously fully blocked — no SQL table).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `TestSeries / TestSeriesPrice / TestSeriesOrder / TestSeriesSubscription (all net-new)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 63. Wave 7 — net-new tables created + backfilled; consumers stay Mongo (documented) {#wave7-new-tables (lecture-progress/notification/folder/ebook-download)}
+
+| | |
+|---|---|
+| **Module key** | `wave7-new-tables (lecture-progress/notification/folder/ebook-download)` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Prisma model** | `LectureProgress / Notification / Folder / FolderItem / EbookDownload (net-new, production-ready)` |
+| **MySQL table** | `ws_lecture_progress / ws_notification / ws_folder / ws_folder_item / ws_ebook_download (CREATED 2026-06-18) + ws_book_order.paid_at column added` |
+| **Mongo collection (legacy app)** | `ws_lecture_progress / ws_notifications / ws_folders / ws_folder_items / ws_ebook_downloads` |
+| **Code** | `Prisma models + backfill only (consumers NOT flipped — see notes)/` |
+| **Data** | staging: notification 22/24 (customer phone-bridge), others mostly skipped (test users not in SQL dump) |
+| **Smoke test** | `scripts/backfill-wave7-blocked-to-sql.ts` |
+| **Admin API** | — |
+| **Client API** | (consumers stay Mongo) |
+
+**Transformer / schema notes:**
+
+- Tables + Prisma models + backfill DONE (all 5 round-trip-verified via tsx). NOT flipped to SQL because each has a write-path or content-graph still on Mongo — flipping reads alone would split-brain / stale-feed:
+- ⏸️ lecture-progress: a CONTENT-JOIN HUB — heartbeat writes + resume/learning rollups join back to Video/Course/Package/LiveSession content whose Mongo→SQL id bridge doesn't exist (refs would be 0/null). Flip requires the video/lecture content graph bridged first. ⏸️ notification: customer-facing reads are clean, but the WRITE path is a Mongo subsystem (admin dispatcher + scheduler + FCM push fan-out + BullMQ insertMany) + the reminder job-carrier rows — flipping reads alone = stale feed. ⏸️ folder/folder-item: refId is polymorphic (material/video/ebook ObjectId) with NO SQL bridge → backfilled 0. ⏸️ ebook-download: ebookId unbridged + the download-register write. All production-ready (tables exist, bridge better in prod); migrate consumers once the paired write/content-graph lands.
+- ws_book_order.paid_at column added (the webhook book branch sets paidAt) — webhook book + ebook fulfillment ARE flipped (see book-order/ebook-order; AWB allocated SQL-side, no Mongo Counter).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `LectureProgress / Notification / Folder / FolderItem / EbookDownload (net-new, production-ready)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 64. Client Ebook Downloads (Wave 7 — net-new table) {#client-ebook-download}
+
+| | |
+|---|---|
+| **Module key** | `client-ebook-download` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `EbookDownload (+ EBookSubscription/EBook reads)` |
+| **MySQL table** | `ws_ebook_download (CREATED 2026-06-18)` |
+| **Mongo collection (legacy app)** | `ws_ebook_downloads` |
+| **Code** | `src/modules/client-ebook-download (branches src/client/ebook/ebook-downloads.controller.ts all 4 fns)/` |
+| **Data** | staging: write+read round-trip verified |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | POST `/client/ebooks/:id/download` + GET `/client/ebooks/downloads` + DELETE `/client/ebooks/downloads/:ebookId` + dashboard count |
+
+**Transformer / schema notes:**
+
+- Wave 7 net-new-table migration, flag ON + verified. recordDownload (idempotent upsert) / listDownloads / countActiveDownloads / removeDownload + countActiveEbookDownloads (profile dashboard). Everything is SQL at runtime: customer (customer-auth int), ebook (catalog-ebook), EBookSubscription (commerce-ebook-sub) — no content-id bridge needed (ebook id arrives as a SQL int in the route).
+- 'Active download' = ebook live (active=true) AND subscription active (status=true, endAt>now). Verified end-to-end vs live DB: hasActiveSub → record → list (ebook 'Super Six' hydrated) → count 1 → idempotent re-record (still 1) → remove → 0.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `EbookDownload (+ EBookSubscription/EBook reads)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 65. Client Saved Folders — video/material (Wave 7 — net-new tables) {#client-folder}
+
+| | |
+|---|---|
+| **Module key** | `client-folder` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
+| **Prisma model** | `Folder / FolderItem (+ Video/Material content hydration)` |
+| **MySQL table** | `ws_folder / ws_folder_item (CREATED 2026-06-18)` |
+| **Mongo collection (legacy app)** | `ws_folders / ws_folder_items` |
+| **Code** | `src/modules/client-folder (branches src/client/folder/folder.controller.ts all 8 handlers ×2 types + ensureDefaultFolders)/` |
+| **Data** | staging: full CRUD + content hydration verified |
+| **Smoke test** | `—  (verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | `/client/{video,material}-folders` list/create/detail/update/delete + items add/remove + all-items + dashboard saved-counts |
+
+**Transformer / schema notes:**
+
+- Wave 7 net-new-table migration, flag ON + verified. Full surface: list (w/ itemCount via groupBy) / create (dup-reject on uniq customer+type+name) / detail (paginated items + content hydration) / update / remove (txn: items + non-default folder) / addItem (dedup) / removeItem / allItems + ensureDefaultFolders (idempotent) + countSavedItems (profile dashboard).
+- ⚠ KEY FINDING: the item refId→ws_video/ws_material join RESOLVES at runtime — verified live: addItem with a real ws_video id hydrated to its title ('Lecture 37 …'). The runtime refId is a genuine SQL int (content arrives from a catalog-* SQL read); the earlier 'Mongo content ≠ SQL' worry only affected the BACKFILL (stored refId 0), not the live path. Material→ws_material (name@title), Video→ws_video.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Folder / FolderItem (+ Video/Material content hydration)`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 66. Client Notification reads (Wave 7 — net-new table, FLAG OFF) {#client-notification}
+
+| | |
+|---|---|
+| **Module key** | `client-notification` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Prisma model** | `Notification` |
+| **MySQL table** | `ws_notification (CREATED 2026-06-18)` |
+| **Mongo collection (legacy app)** | `ws_notifications` |
+| **Code** | `src/modules/client-notification (branches src/client/notification/notification.controller.ts list/markRead/markAll + profile dashboard unread count)/` |
+| **Data** | staging: 22 backfilled rows; visibility + unread filter verified |
+| **Smoke test** | `—  (read mechanics verified via live-DB tsx)` |
+| **Admin API** | — |
+| **Client API** | GET `/client/notifications` + POST `/:id/read` + `/read-all` (flag OFF) |
+
+**Transformer / schema notes:**
+
+- Wave 7 net-new-table — code-complete, FLAG OFF. Client reads (visibility = customer_id=me OR broadcast; unread uses same filter) + read-state writes (markRead/markAll) verified vs live DB (10 visible broadcasts, markRead resolves).
+- ⏸️ FLAG STAYS OFF: the notification WRITE path is a Mongo subsystem — admin dispatcher + scheduler (BullMQ job keyed by Mongo _id) + FCM push fan-out + per-recipient insertMany keyed by Mongo Customer ObjectIds (resolveAudience). Flipping client reads while that writes Mongo = stale feed. Enable once the admin notification write subsystem migrates to SQL Customer ids. ImageNotification stays Mongo (separate collection, no SQL table).
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `Notification`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
+
+## 67. Client Lecture Progress (Wave 7 — net-new table, FLAG OFF) {#client-lecture-progress}
+
+| | |
+|---|---|
+| **Module key** | `client-lecture-progress` |
+| **Phase** | 3 |
+| **Migrated** | 2026-06-18 |
+| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Prisma model** | `LectureProgress` |
+| **MySQL table** | `ws_lecture_progress (CREATED 2026-06-18)` |
+| **Mongo collection (legacy app)** | `ws_lecture_progress` |
+| **Code** | `src/modules/client-lecture-progress (module built: upsertVideoProgress / upsertLiveSessionProgress / rollupByContainer / completedCountInContainer / completedLectureCount)/` |
+| **Data** | staging: 15 rows (mostly unbridged customer on backfill) |
+| **Smoke test** | `—` |
+| **Admin API** | — |
+| **Client API** | (consumers not yet branched — heartbeat + resume/learning reads span 14 files) |
+
+**Transformer / schema notes:**
+
+- Wave 7 net-new-table — module CODE-COMPLETE, FLAG OFF. Per-container model: one row per (customer,video) + one per (customer,liveSession) [uniq indexes], additive container pointers, sticky completed. Heartbeat upserts + rollups + completedLectureCount (profile dashboard) implemented + correct shape.
+- ⏸️ FLAG STAYS OFF: this is a 14-file CONTENT-JOIN HUB. The heartbeat write is preceded by Mongo entitlement/reachability validation (subscription checks, scope resolution reading Video/LiveCourse content), and the resume/learning READS (resumeCard.ts, learning/progress.controller.ts, course + dashboard rollups) join Video/Course/Package/LiveSession content across many files. Heartbeat + reads must flip TOGETHER (else split data). The module is the foundation; wiring the 14 consumers is the remaining work. Runtime ids ARE SQL (so it WILL resolve once wired) — the blocker is consumer-file breadth, not data.
+
+**Field matrix:** [FIELD_COMPARISON.md](./FIELD_COMPARISON.md) (search for `LectureProgress`) · **Inventory row:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md)
 
 ---
 

@@ -5,6 +5,7 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { EbookDownload } from "../../models/ebook/EbookDownload.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import * as dlSql from "../../modules/client-ebook-download/client-ebook-download.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -42,6 +43,20 @@ export const recordEbookDownload = async (req: Request, res: Response) => {
     if (!uid) {
       logger.warn("recordEbookDownload unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    // ── MySQL ebook-download path (client-ebook-download flag) ────────────────
+    if (dlSql.isEbookDownloadMysql()) {
+      const cid = dlSql.parseDlId(String(uid));
+      const eId = dlSql.parseDlId(ebookId);
+      if (cid == null || eId == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const ebook = await dlSql.findActiveEbook(eId);
+      if (!ebook) return res.status(404).json({ success: false, message: "Ebook not found." });
+      if (!(await dlSql.hasActiveSub(cid, eId))) return res.status(403).json({ success: false, message: "Active subscription required to download." });
+      if (!ebook.bookUrl) return res.status(404).json({ success: false, message: "This ebook has no downloadable PDF." });
+      await dlSql.recordDownload(cid, eId);
+      logger.info("recordEbookDownload success (sql)", { traceId, customerId: uid, ebookId });
+      return res.status(200).json({ success: true, message: "Download recorded.", data: { ebookId: String(ebook.id), bookUrl: ebook.bookUrl } });
     }
 
     if (!isObjectId(ebookId)) {
@@ -107,6 +122,14 @@ export const listEbookDownloads = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
+    if (dlSql.isEbookDownloadMysql()) {
+      const cid = dlSql.parseDlId(String(uid));
+      if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
+      const data = await dlSql.listDownloads(cid);
+      logger.info("listEbookDownloads success (sql)", { traceId, customerId: uid, count: data.length });
+      return res.status(200).json({ success: true, data });
+    }
+
     const rows = await EbookDownload.find({ customerId: uid })
       .sort({ downloadedAt: -1 })
       .lean();
@@ -160,6 +183,16 @@ export const removeEbookDownload = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
+    if (dlSql.isEbookDownloadMysql()) {
+      const cid = dlSql.parseDlId(String(uid));
+      const eId = dlSql.parseDlId(ebookId);
+      if (cid == null || eId == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const ok = await dlSql.removeDownload(cid, eId);
+      if (!ok) return res.status(404).json({ success: false, message: "Download not found." });
+      logger.info("removeEbookDownload success (sql)", { traceId, customerId: uid, ebookId });
+      return res.status(200).json({ success: true, message: "Removed from downloads." });
+    }
+
     if (!isObjectId(ebookId)) {
       logger.warn("removeEbookDownload invalid id", { traceId, customerId: uid, ebookId });
       return res.status(400).json({ success: false, message: "Invalid ebook id." });
@@ -181,6 +214,10 @@ export const removeEbookDownload = async (req: Request, res: Response) => {
 // Internal helper for the profile dashboard (Step 2): counts only entries
 // whose subscription is still active, matching what `listEbookDownloads` shows.
 export async function countActiveEbookDownloads(customerId: string): Promise<number> {
+  if (dlSql.isEbookDownloadMysql()) {
+    const cid = dlSql.parseDlId(String(customerId));
+    return cid == null ? 0 : dlSql.countActiveDownloads(cid);
+  }
   const rows = await EbookDownload.find({ customerId }).select("ebookId").lean();
   if (!rows.length) return 0;
   const ebookIds = rows.map((r: any) => r.ebookId);

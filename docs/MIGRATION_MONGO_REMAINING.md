@@ -1,6 +1,6 @@
 # Remaining MongoDB Reads — Path to SQL-Only
 
-> Snapshot: 2026-06-17. Tracks everywhere the app still reads/writes **MongoDB**
+> Snapshot: **2026-06-18** (Waves 1–7 complete). Tracks everywhere the app still reads/writes **MongoDB**
 > so we can drive to "all API data from SQL". Two kinds of work:
 > **(A) flip** — SQL branch exists, just not enabled; **(B) build** — no SQL
 > branch yet (hardwired to Mongoose).
@@ -21,6 +21,21 @@ ebook-sub, promoter, promocode, educator, order), ebook-order, book-order,
 offline-enquiry, package-chat.
 
 Plus (no flag, migrated directly): **admin administrator CRUD**, **admin customer CRUD**.
+
+**+ Waves 1–7 (2026-06-18):** promoter-auth, promoter-data, referral, admin-rbac,
+client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master,
+admin-video, admin-book, admin-ebook, admin-course, admin-package, admin-material,
+**live-course** (Wave 6, 14 tables), client-purchase-history, admin-subscription,
+client-my-subscriptions, catalog-video (categories children), client-orders,
+**live-course-order / package-order / test-series-order** (payment write paths),
+**client-ebook-download, client-folder** (Wave 7 net-new tables).
+
+**🟡 Ready, OFF (Wave 7 — code-complete, await paired write/consumer surface):**
+`client-notification` (client reads done; OFF until the admin notification WRITE
+subsystem — dispatcher/scheduler/FCM/BullMQ keyed by Mongo Customer ids — migrates)
+· `client-lecture-progress` (heartbeat upserts + rollups + count done; OFF until the
+14-file content-join hub — heartbeat entitlement reads + resume/learning reads —
+flips together). Tables exist + backfilled.
 
 ---
 
@@ -47,9 +62,9 @@ Plus (no flag, migrated directly): **admin administrator CRUD**, **admin custome
 | File | Functions | Mongo models | Notes |
 |---|---|---|---|
 | `src/admin/dashboard/dashboard.controller.ts` | customer counts/active stats | Customer | `find` + `countDocuments`. Straightforward `prisma.customer.count`. |
-| `src/admin/notification/notification.controller.ts` | createNotification + dispatch | Notification, ImageNotification | Audience snapshot. |
-| `src/admin/notification/audience.ts` | audience resolution | Customer + subscriptions | Targets by course/platform/explicit ids. |
-| `src/admin/notification/dispatcher.ts` | dispatchAudience, dispatchNotification | Customer, Notification | Feeds FCM. |
+| `src/admin/notification/notification.controller.ts` | createNotification + dispatch | Notification, ImageNotification | ⚠ `ws_notification` table EXISTS (Wave 7); CLIENT reads built on `client-notification` (flag OFF). This admin WRITE path is the remaining blocker — migrate persistence (Notification.create/insertMany) to SQL, then flip client-notification. Audience snapshot. |
+| `src/admin/notification/audience.ts` | audience resolution | Customer + subscriptions | Targets by course/platform/explicit ids. Customer is SQL (ws_customer) — resolve there. |
+| `src/admin/notification/dispatcher.ts` | dispatchAudience, dispatchNotification | Customer, Notification | Feeds FCM (push delivery stays; only the Notification row persistence needs SQL). |
 | `src/admin/livechat/livechat.controller.ts` | history, send, ban | LiveChatMessage, LiveChatBan, Customer | |
 
 ### Educator

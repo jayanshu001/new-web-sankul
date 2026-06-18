@@ -4,6 +4,7 @@ import { Notification } from "../../models/system/Notification.model";
 import { ImageNotification } from "../../models/system/ImageNotification.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import * as notifSql from "../../modules/client-notification/client-notification.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -20,6 +21,13 @@ export const listMyNotifications = async (req: Request, res: Response) => {
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
+
+    if (notifSql.isNotificationMysql()) {
+      const cid = notifSql.parseNotifId(String(userId));
+      if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
+      const { data, total, unreadCount } = await notifSql.listNotifications(cid, skip, limitNum);
+      return res.status(200).json({ success: true, data, unreadCount, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
+    }
 
     const filter = { $or: [{ customerId: userId }, { broadcast: true }] };
     // unreadCount must use the SAME visibility filter as the list — otherwise
@@ -54,6 +62,15 @@ export const markAsRead = async (req: Request, res: Response) => {
 
   try {
     if (!userId) { logger.warn("markAsRead unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    if (notifSql.isNotificationMysql()) {
+      const cid = notifSql.parseNotifId(String(userId)); const nid = notifSql.parseNotifId(id);
+      if (cid == null || nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const doc = await notifSql.markRead(cid, nid);
+      if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data: doc });
+    }
+
     if (!isObjectId(id)) { logger.warn("markAsRead invalid id", { traceId, customerId: userId, notificationId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
 
     const doc = await Notification.findOneAndUpdate(
@@ -78,6 +95,15 @@ export const markAllAsRead = async (req: Request, res: Response) => {
 
   try {
     if (!userId) { logger.warn("markAllAsRead unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    if (notifSql.isNotificationMysql()) {
+      const cid = notifSql.parseNotifId(String(userId));
+      if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
+      const modified = await notifSql.markAllRead(cid);
+      logger.info("markAllAsRead success (sql)", { traceId, customerId: userId, modified });
+      return res.status(200).json({ success: true, message: "All marked as read." });
+    }
+
     const result = await Notification.updateMany(
       { customerId: userId, isRead: false },
       { $set: { isRead: true, readAt: new Date() } }

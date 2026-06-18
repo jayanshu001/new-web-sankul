@@ -62,6 +62,19 @@ yarn dev
 
 ## Current status (summary)
 
+> **✅ 2026-06-18 — WAVES 1–7 COMPLETE on SQL.** Wave 5 (admin catalog CRUD), Wave 6 (LiveCourse — 14 tables),
+> Wave 7 (aggregators + full payment course/ebook/book/live-course/package + test-series + webhooks). Wave 7 also
+> **created the 8 previously-blocked tables** (ws_lecture_progress, ws_notification, ws_folder(+item),
+> ws_ebook_download, ws_test_series(+price/order/subscription)) + ws_book_order.paid_at, with `test-series-order`,
+> `client-ebook-download`, `client-folder` flags **ON & verified**. ⏸️ `client-notification` +
+> `client-lecture-progress` are **code-complete but flag-OFF** (notification's Mongo dispatcher/scheduler/FCM/BullMQ
+> write subsystem; lecture-progress's 14-file content-join hub — flip with their paired surface). No SQL home / no
+> clean slice: ExamCountdown, PackageCategory, ImageNotification, client/dashboard, recordingWebhook. **The live
+> wave-by-wave status + next step is the `§RESUME POINTER` in
+> [`MONGO_ONLY_MIGRATION_PLAN.md`](./MONGO_ONLY_MIGRATION_PLAN.md)** (single source of truth); full Mongo-remaining
+> inventory in [`../MIGRATION_MONGO_REMAINING.md`](../MIGRATION_MONGO_REMAINING.md). *(History below is kept
+> point-in-time.)*
+
 > **🆕 2026-06-17 — MONGO-ONLY PUSH started (resumable plan: [`MONGO_ONLY_MIGRATION_PLAN.md`](./MONGO_ONLY_MIGRATION_PLAN.md)).**
 > Goal: convert every remaining MongoDB-only module to SQL (~90 files, by dependency wave). **✅ Wave 1
 > (Promoter) DONE** — `promoter-auth` (login + new `ws_promoter_access_tokens`) and `promoter-data` (customers,

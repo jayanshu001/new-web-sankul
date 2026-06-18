@@ -13,6 +13,7 @@ import { _shared } from "../testSeries/testSeries.controller";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import * as tsSql from "../../modules/test-series-order/test-series-order.service";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -26,6 +27,10 @@ const applyPromoSchema = z.object({
   promocode: z.string().trim().min(1),
 });
 
+// SQL planId is numeric (migrated id-space).
+const applyPromoSqlSchema = z.object({ planId: z.coerce.number().int().positive(), promocode: z.string().trim().min(1) });
+const createOrderSqlSchema = z.object({ planId: z.coerce.number().int().positive(), promocode: z.string().trim().min(1).optional() });
+
 // POST /api/v1/client/payment/apply-promo/test-series
 // Preview-only. Mirrors apply-promo/live-course.
 export const applyTestSeriesPromo = async (req: Request, res: Response) => {
@@ -35,6 +40,20 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) { logger.warn("applyTestSeriesPromo unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ── MySQL test-series promo preview (test-series-order flag) ──────────────
+    if (tsSql.isTestSeriesOrderMysql()) {
+      const body = applyPromoSqlSchema.parse(req.body);
+      const plan = await tsSql.findPlanForOrder(body.planId);
+      if (!plan) return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
+      const { result, error } = await resolveLivePromo(body.promocode, plan.price, { type: "testSeries", id: String(plan.testSeriesId) });
+      if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
+      const bd = _shared.computeBreakdown(plan.price, result.discountAmount, String(result.promo._id));
+      return res.status(200).json({ success: true, data: {
+        planId: String(plan.id), testSeriesId: String(plan.testSeriesId), promocode: result.promo.promocode,
+        promocodeId: String(result.promo._id), discountType: result.discountType, discountValue: result.discountValue, breakdown: bd,
+      }});
+    }
 
     const { planId, promocode } = applyPromoSchema.parse(req.body);
 
@@ -103,6 +122,40 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
         success: false,
         message: "Razorpay credentials not configured on the server.",
       });
+    }
+
+    // ── MySQL test-series create-order (test-series-order flag) ───────────────
+    if (tsSql.isTestSeriesOrderMysql()) {
+      const customerIdInt = Number(customerId);
+      if (!Number.isInteger(customerIdInt)) return res.status(400).json({ success: false, message: "Invalid customer id." });
+      const body = createOrderSqlSchema.parse(req.body);
+      const plan = await tsSql.findPlanForOrder(body.planId);
+      if (!plan) return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
+      const series = await tsSql.findSeries(plan.testSeriesId);
+      if (!series) return res.status(404).json({ success: false, message: "Test series not found or inactive." });
+
+      let discountAmount = 0; let promocodeIdNum: number | null = null;
+      if (body.promocode) {
+        const { result, error } = await resolveLivePromo(body.promocode, plan.price, { type: "testSeries", id: String(plan.testSeriesId) });
+        if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
+        discountAmount = result.discountAmount;
+        const pid = Number(String(result.promo._id)); promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
+      }
+      const bd = _shared.computeBreakdown(plan.price, discountAmount, promocodeIdNum != null ? String(promocodeIdNum) : null);
+      if (bd.totalAmount < 1) return res.status(400).json({ success: false, message: "Final amount is below the minimum payable. Please contact support." });
+
+      const receiptId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const rzpOrder = await createRazorpayOrder(rp, {
+        amount: Math.round(bd.totalAmount * 100), currency: "INR", receipt: receiptId,
+        notes: { kind: "test-series", testSeriesId: String(plan.testSeriesId), planId: String(body.planId), customerId: String(customerIdInt), ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}) },
+      });
+      const { orderId } = await tsSql.createOrderMysql({ customerId: customerIdInt, testSeriesId: plan.testSeriesId, planId: body.planId, bd, promocodeId: promocodeIdNum, razorpayOrderId: rzpOrder.id });
+      logger.info("createTestSeriesOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: bd.totalAmount });
+      return res.status(201).json({ success: true, data: {
+        testSeriesOrderId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: bd.totalAmount, breakdown: bd,
+        testSeries: { _id: String(series.id), title: series.title },
+        plan: { _id: String(body.planId), durationDays: plan.durationDays, price: plan.price, originalPrice: plan.originalPrice },
+      }});
     }
 
     const { planId, promocode } = createOrderSchema.parse(req.body);

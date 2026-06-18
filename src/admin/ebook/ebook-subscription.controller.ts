@@ -6,7 +6,8 @@ import { EbookOrder } from "../../models/ebook/EbookOrder.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { PackageCourseEbookOrderStatus, PackageCourseEbookPaymentType } from "../../models/enums";
-import { createEbookSubscriptionSchema, updateEbookSubscriptionSchema } from "./ebook.validation";
+import { createEbookSubscriptionSchema, createEbookSubscriptionSqlSchema, updateEbookSubscriptionSchema } from "./ebook.validation";
+import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
 
 export const getEbookSubscriptions = async (req: Request, res: Response) => {
   try {
@@ -20,6 +21,33 @@ export const getEbookSubscriptions = async (req: Request, res: Response) => {
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    if (adminEbook.isAdminEbookMysql()) {
+      if (customerId && !adminEbook.parseEbookId(customerId)) {
+        return res.status(400).json({ success: false, message: "Invalid customerId" });
+      }
+      if (ebookId && !adminEbook.parseEbookId(ebookId)) {
+        return res.status(400).json({ success: false, message: "Invalid ebookId" });
+      }
+      const { items, total } = await adminEbook.listSubscriptions({
+        customerId: customerId ? adminEbook.parseEbookId(customerId)! : undefined,
+        ebookId: ebookId ? adminEbook.parseEbookId(ebookId)! : undefined,
+        status: status === "true" ? true : status === "false" ? false : undefined,
+        search,
+        sortBy,
+        sortOrder,
+        page: pageNum,
+        limit: limitNum,
+      });
+      return res.status(200).json({
+        success: true,
+        items,
+        pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
 
     const filters: any = {};
     if (customerId) {
@@ -50,8 +78,6 @@ export const getEbookSubscriptions = async (req: Request, res: Response) => {
       ];
     }
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
     const sortField = sortBy || "createdAt";
@@ -101,6 +127,13 @@ export const getEbookSubscriptions = async (req: Request, res: Response) => {
 export const getEbookSubscriptionById = async (req: Request, res: Response) => {
   try {
     const subscriptionId = req.params.subscriptionId as string;
+    if (adminEbook.isAdminEbookMysql()) {
+      const numId = adminEbook.parseEbookId(subscriptionId);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid subscription ID" });
+      const data = await adminEbook.getSubscriptionById(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Subscription not found" });
+      return res.status(200).json({ success: true, data });
+    }
     if (!mongoose.Types.ObjectId.isValid(subscriptionId)) {
       return res.status(400).json({ success: false, message: "Invalid subscription ID" });
     }
@@ -122,6 +155,28 @@ export const getEbookSubscriptionById = async (req: Request, res: Response) => {
 
 export const createEbookSubscription = async (req: Request, res: Response) => {
   try {
+    if (adminEbook.isAdminEbookMysql()) {
+      const d = createEbookSubscriptionSqlSchema.parse(req.body);
+      const result = await adminEbook.createSubscription({
+        customerId: d.customerId,
+        ebookId: d.ebookId,
+        planId: d.planId ?? null,
+        durationInDays: d.durationInDays,
+        paymentMethod: d.paymentMethod,
+        orderPrice: d.orderPrice,
+        razorpayOrderId: d.razorpayOrderId ?? null,
+        razorpayPaymentId: d.razorpayPaymentId ?? null,
+        transactionId: d.transactionId ?? null,
+        ipAddress: req.ip ?? null,
+        remarks: d.remarks ?? null,
+        status: d.status,
+      });
+      if (!result.ok) {
+        const msg = result.reason === "ebook" ? "Ebook not found" : "Plan not found";
+        return res.status(404).json({ success: false, message: msg });
+      }
+      return res.status(201).json({ success: true, data: result.data });
+    }
     const validatedData = createEbookSubscriptionSchema.parse(req.body);
     const { customerId, ebookId, planId, durationInDays, paymentMethod, orderPrice, razorpayOrderId, razorpayPaymentId, transactionId, remarks, status } = validatedData;
 
@@ -199,11 +254,27 @@ export const createEbookSubscription = async (req: Request, res: Response) => {
 export const updateEbookSubscription = async (req: Request, res: Response) => {
   try {
     const subscriptionId = req.params.subscriptionId as string;
+
+    const validatedData = updateEbookSubscriptionSchema.parse(req.body);
+
+    if (adminEbook.isAdminEbookMysql()) {
+      const numId = adminEbook.parseEbookId(subscriptionId);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid subscription ID" });
+      const result = await adminEbook.updateSubscription(numId, {
+        razorpayOrderId: validatedData.razorpayOrderId,
+        razorpayPaymentId: validatedData.razorpayPaymentId,
+        remarks: validatedData.remarks,
+        status: validatedData.status,
+      });
+      if (result === "not_found") return res.status(404).json({ success: false, message: "Subscription not found" });
+      if (result === "order_not_found") return res.status(404).json({ success: false, message: "Order not found" });
+      if (result === "already_active") return res.status(400).json({ success: false, message: "Subscription is already active" });
+      return res.status(200).json({ success: true, data: result });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(subscriptionId)) {
       return res.status(400).json({ success: false, message: "Invalid subscription ID" });
     }
-
-    const validatedData = updateEbookSubscriptionSchema.parse(req.body);
 
     const subscription = await EbookSubscription.findById(subscriptionId);
     if (!subscription) return res.status(404).json({ success: false, message: "Subscription not found" });
@@ -248,6 +319,13 @@ export const updateEbookSubscription = async (req: Request, res: Response) => {
 export const deleteEbookSubscription = async (req: Request, res: Response) => {
   try {
     const subscriptionId = req.params.subscriptionId as string;
+    if (adminEbook.isAdminEbookMysql()) {
+      const numId = adminEbook.parseEbookId(subscriptionId);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid subscription ID" });
+      const ok = await adminEbook.deleteSubscription(numId);
+      if (!ok) return res.status(404).json({ success: false, message: "Subscription not found" });
+      return res.status(200).json({ success: true, message: "Subscription deleted successfully" });
+    }
     if (!mongoose.Types.ObjectId.isValid(subscriptionId)) {
       return res.status(400).json({ success: false, message: "Invalid subscription ID" });
     }
@@ -264,6 +342,13 @@ export const deleteEbookSubscription = async (req: Request, res: Response) => {
 export const getEbookPricesForSubscription = async (req: Request, res: Response) => {
   try {
     const ebookId = req.params.ebookId as string;
+    if (adminEbook.isAdminEbookMysql()) {
+      const numId = adminEbook.parseEbookId(ebookId);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid Ebook ID" });
+      const res2 = await adminEbook.getEbookPricesForSubscription(numId);
+      // Mongo returns [] for a missing ebook (no 404) — keep that contract.
+      return res.status(200).json({ success: true, data: res2 === "not_found" ? [] : res2 });
+    }
     if (!mongoose.Types.ObjectId.isValid(ebookId)) {
       return res.status(400).json({ success: false, message: "Invalid Ebook ID" });
     }

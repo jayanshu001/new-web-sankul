@@ -557,6 +557,7 @@ model BookOrder {
   transactionId    String?           @map("transaction_id")
   orderDate        DateTime?         @map("order_date")
   status           String
+  paidAt           DateTime?         @map("paid_at")
   createdAt        DateTime?         @map("created_at")
   updatedAt        DateTime?         @map("updated_at")
 
@@ -995,6 +996,7 @@ model Package {
   active                    Boolean                     @map("status")
   packageTypeId             Int?                        @map("package_type_id")
   packageType               PackageType?                @relation(fields: [packageTypeId], references: [id])
+  educator_id               Int?
   examId                    Int?                        @map("exam_id")
   Exam                      CustomerTargetGoal?         @relation(fields: [examId], references: [id])
   created_at                DateTime?
@@ -1600,4 +1602,394 @@ model AdminModelHasPermission {
 
   @@id([permissionId, modelId, modelType])
   @@map("ws_model_has_permissions")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Wave 6 — LiveCourse / LiveSession (created 2026-06-18; see
+// docs/migration/schema-changes/2026-06-18_create_ws_live_course_tables.sql).
+// Mirrors the live Mongo collections. Standalone models (no cross-relations to
+// keep the additive change low-risk); ids surfaced as strings by the modules.
+// ─────────────────────────────────────────────────────────────────────────────
+
+model LiveCourse {
+  id                       Int       @id @default(autoincrement())
+  name                     String
+  subtitle                 String?
+  description              String?
+  image                    String?
+  ordered                  Int       @default(0)
+  shareableLink            String?   @map("shareable_link")
+  withMaterial             String?   @map("with_material")
+  withoutMaterial          String?   @map("without_material")
+  level                    String?
+  classType                String    @default("live") @map("class_type")
+  status                   Boolean   @default(true)
+  isPaid                   Boolean   @default(true) @map("is_paid")
+  isPopular                Boolean   @default(false) @map("is_popular")
+  educatorId               Int?      @map("educator_id")
+  courseSubjectCategoryId  Int?      @map("course_subject_category_id")
+  videoCategoryId          Int?      @map("video_category_id")
+  packageCategoryId        Int?      @map("package_category_id")
+  createdBy                Int?      @map("created_by")
+  startTime                DateTime? @map("start_time")
+  scheduleEntries          Json?     @map("schedule_entries")
+  scheduleFolders          Json?     @map("schedule_folders")
+  timetableFiles           Json?     @map("timetable_files")
+  examCountdownCategoryIds Json?     @map("exam_countdown_category_ids")
+  examCountdownIds         Json?     @map("exam_countdown_ids")
+  createdAt                DateTime? @map("created_at")
+  updatedAt                DateTime? @map("updated_at")
+
+  @@map("ws_live_course")
+}
+
+model LiveCoursePlan {
+  id            Int       @id @default(autoincrement())
+  liveCourseId  Int       @map("live_course_id")
+  name          String?
+  duration      Int // ⚠ MONTHS (not DAYS) — see LIVE_COURSE_DESIGN §3
+  price         Int
+  originalPrice Int?      @map("original_price")
+  isDefault     Boolean   @default(false) @map("is_default")
+  status        Boolean   @default(true)
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@map("ws_live_course_plan")
+}
+
+model LiveCourseSubscription {
+  id                Int       @id @default(autoincrement())
+  customerId        Int       @map("customer_id")
+  liveCourseId      Int       @map("live_course_id")
+  planId            Int?      @map("plan_id")
+  startAt           DateTime? @map("start_at")
+  endAt             DateTime? @map("end_at")
+  status            Boolean   @default(true)
+  promocodeId       Int?      @map("promocode_id")
+  originalAmount    Int?      @map("original_amount")
+  discountAmount    Int?      @map("discount_amount")
+  paidAmount        Int?      @map("paid_amount")
+  paymentStatus     String?   @map("payment_status")
+  razorpayOrderId   String?   @map("razorpay_order_id")
+  razorpayPaymentId String?   @map("razorpay_payment_id")
+  paidAt            DateTime? @map("paid_at")
+  createdAt         DateTime? @map("created_at")
+  updatedAt         DateTime? @map("updated_at")
+
+  @@map("ws_live_course_subscription")
+}
+
+model LiveSession {
+  id                       Int       @id @default(autoincrement())
+  title                    String?
+  subject                  String?
+  educatorId               Int?      @map("educator_id")
+  scheduledAt              DateTime? @map("scheduled_at")
+  endAt                    DateTime? @map("end_at")
+  status                   String    @default("SCHEDULED")
+  streamId                 String?   @map("stream_id")
+  rtmpUrl                  String?   @map("rtmp_url")
+  hlsUrl                   String?   @map("hls_url")
+  hlsUrls                  Json?     @map("hls_urls")
+  recordings               Json?
+  recordingTargetFolderId  Int?      @map("recording_target_folder_id")
+  createdAt                DateTime? @map("created_at")
+  updatedAt                DateTime? @map("updated_at")
+
+  @@map("ws_live_session")
+}
+
+model LiveSessionCourse {
+  id            Int       @id @default(autoincrement())
+  liveSessionId Int       @map("live_session_id")
+  liveCourseId  Int       @map("live_course_id")
+  createdAt     DateTime? @map("created_at")
+
+  @@unique([liveSessionId, liveCourseId], map: "uq_lsc")
+  @@map("ws_live_session_course")
+}
+
+model LiveCourseCategory {
+  id        Int       @id @default(autoincrement())
+  name      String
+  slug      String?
+  image     String?
+  parent    Int       @default(0)
+  order_by  Int       @default(0)
+  status    Boolean   @default(true)
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@map("ws_live_course_category")
+}
+
+model LiveChatMessage {
+  id          Int       @id @default(autoincrement())
+  liveClassId String    @map("live_class_id")
+  customerId  Int?      @map("customer_id")
+  adminId     Int?      @map("admin_id")
+  isAdmin     Boolean   @default(false) @map("is_admin")
+  userName    String?   @map("user_name")
+  message     String?
+  deletedAt   DateTime? @map("deleted_at")
+  deletedBy   Int?      @map("deleted_by")
+  createdAt   DateTime? @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+
+  @@map("ws_live_chat_message")
+}
+
+model LiveChatBan {
+  id          Int       @id @default(autoincrement())
+  liveClassId String    @map("live_class_id")
+  customerId  Int?      @map("customer_id")
+  bannedBy    Int?      @map("banned_by")
+  reason      String?
+  createdAt   DateTime? @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+
+  @@map("ws_live_chat_ban")
+}
+
+model LivePoll {
+  id            Int       @id @default(autoincrement())
+  liveClassId   String    @map("live_class_id")
+  question      String
+  totalVotes    Int       @default(0) @map("total_votes")
+  isActive      Boolean   @default(true) @map("is_active")
+  createdBy     Int?      @map("created_by")
+  createdByName String?   @map("created_by_name")
+  closedAt      DateTime? @map("closed_at")
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@map("ws_live_poll")
+}
+
+model LivePollOption {
+  id          Int    @id @default(autoincrement())
+  pollId      Int    @map("poll_id")
+  optionIndex Int    @map("option_index")
+  text        String?
+  votes       Int    @default(0)
+
+  @@map("ws_live_poll_option")
+}
+
+model LivePollVote {
+  id          Int       @id @default(autoincrement())
+  pollId      Int       @map("poll_id")
+  customerId  Int       @map("customer_id")
+  optionIndex Int       @map("option_index")
+  createdAt   DateTime? @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+
+  @@unique([pollId, customerId], map: "uq_lpv")
+  @@map("ws_live_poll_vote")
+}
+
+model LiveSessionAttendance {
+  id            Int       @id @default(autoincrement())
+  streamId      String?   @map("stream_id")
+  liveSessionId Int?      @map("live_session_id")
+  customerId    Int?      @map("customer_id")
+  userName      String?   @map("user_name")
+  joinedAt      DateTime? @map("joined_at")
+  leftAt        DateTime? @map("left_at")
+  durationSec   Int?      @map("duration_sec")
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@map("ws_live_session_attendance")
+}
+
+model LiveSessionReminder {
+  id                 Int       @id @default(autoincrement())
+  liveSessionId      Int?      @map("live_session_id")
+  liveCourseId       Int?      @map("live_course_id")
+  customerId         Int?      @map("customer_id")
+  minutesBefore      Int?      @map("minutes_before")
+  notificationId     Int?      @map("notification_id")
+  remindAt           DateTime? @map("remind_at")
+  sessionScheduledAt DateTime? @map("session_scheduled_at")
+  status             String?
+  createdAt          DateTime? @map("created_at")
+  updatedAt          DateTime? @map("updated_at")
+
+  @@map("ws_live_session_reminder")
+}
+
+model LiveSessionPreview {
+  id            Int       @id @default(autoincrement())
+  liveSessionId Int?      @map("live_session_id")
+  customerId    Int?      @map("customer_id")
+  startedAt     DateTime? @map("started_at")
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@map("ws_live_session_preview")
+}
+
+// ── Wave 7: previously Mongo-only-blocked tables (created 2026-06-18) ──────────
+// Scalar-only FK columns (no @relation) to avoid touching existing owner models;
+// matches the loose-FK convention used elsewhere in this migration.
+
+model LectureProgress {
+  id            Int       @id @default(autoincrement())
+  customerId    Int       @map("customer_id")
+  videoId       Int?      @map("video_id")
+  liveSessionId Int?      @map("live_session_id")
+  courseId      Int?      @map("course_id")
+  liveCourseId  Int?      @map("live_course_id")
+  packageId     Int?      @map("package_id")
+  source        String?
+  positionSec   Int       @default(0) @map("position_sec")
+  durationSec   Int       @default(0) @map("duration_sec")
+  completed     Boolean   @default(false)
+  completedAt   DateTime? @map("completed_at")
+  lastWatchedAt DateTime? @map("last_watched_at")
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@unique([customerId, videoId], name: "uniq_customer_video")
+  @@unique([customerId, liveSessionId], name: "uniq_customer_live_session")
+  @@map("ws_lecture_progress")
+}
+
+model Notification {
+  id             Int       @id @default(autoincrement())
+  customerId     Int?      @map("customer_id")
+  title          String
+  body           String    @db.Text
+  image          String?
+  type           String    @default("general")
+  deepLink       String?   @map("deep_link")
+  data           Json?
+  isRead         Boolean   @default(false) @map("is_read")
+  readAt         DateTime? @map("read_at")
+  broadcast      Boolean   @default(false)
+  status         String    @default("sent")
+  scheduledAt    DateTime? @map("scheduled_at")
+  sentAt         DateTime? @map("sent_at")
+  failureReason  String?   @map("failure_reason")
+  recipientCount Int       @default(0) @map("recipient_count")
+  audience       Json?
+  createdAt      DateTime? @map("created_at")
+  updatedAt      DateTime? @map("updated_at")
+
+  @@map("ws_notification")
+}
+
+model Folder {
+  id              Int       @id @default(autoincrement())
+  customerId      Int       @map("customer_id")
+  name            String
+  type            String
+  isDefaultFolder Boolean   @default(false) @map("is_default_folder")
+  createdAt       DateTime? @map("created_at")
+  updatedAt       DateTime? @map("updated_at")
+
+  @@unique([customerId, type, name], name: "uniq_folder_customer_type_name")
+  @@map("ws_folder")
+}
+
+model FolderItem {
+  id         Int       @id @default(autoincrement())
+  folderId   Int       @map("folder_id")
+  customerId Int       @map("customer_id")
+  kind       String
+  refId      Int       @map("ref_id")
+  addedAt    DateTime? @map("added_at")
+
+  @@unique([folderId, kind, refId], name: "uniq_folder_kind_ref")
+  @@map("ws_folder_item")
+}
+
+model EbookDownload {
+  id           Int       @id @default(autoincrement())
+  customerId   Int       @map("customer_id")
+  ebookId      Int       @map("ebook_id")
+  downloadedAt DateTime? @map("downloaded_at")
+
+  @@unique([customerId, ebookId], name: "uniq_dl_customer_ebook")
+  @@map("ws_ebook_download")
+}
+
+model TestSeries {
+  id              Int       @id @default(autoincrement())
+  title           String
+  description     String?   @db.Text
+  thumbnail       String?
+  examCategoryIds Json?     @map("exam_category_ids")
+  examCategoryId  Int?      @map("exam_category_id")
+  language        String    @default("gu")
+  paperCount      Int       @default(0) @map("paper_count")
+  isFree          Boolean   @default(false) @map("is_free")
+  instructions    String?   @db.Text
+  policy          String?   @db.Text
+  orderBy         Int       @default(0) @map("order_by")
+  status          Boolean   @default(true)
+  createdAt       DateTime? @map("created_at")
+  updatedAt       DateTime? @map("updated_at")
+
+  @@map("ws_test_series")
+}
+
+model TestSeriesPrice {
+  id            Int       @id @default(autoincrement())
+  testSeriesId  Int       @map("test_series_id")
+  name          String?
+  durationDays  Int       @map("duration_days")
+  price         Decimal   @db.Decimal(10, 2)
+  originalPrice Decimal?  @map("original_price") @db.Decimal(10, 2)
+  isDefault     Boolean   @default(false) @map("is_default")
+  status        Boolean   @default(true)
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@map("ws_test_series_price")
+}
+
+model TestSeriesOrder {
+  id                Int       @id @default(autoincrement())
+  customerId        Int       @map("customer_id")
+  testSeriesId      Int       @map("test_series_id")
+  planId            Int?      @map("plan_id")
+  paymentMethod     String    @map("payment_method")
+  orderType         String    @default("purchase") @map("order_type")
+  orderPrice        Decimal   @map("order_price") @db.Decimal(10, 2)
+  basePrice         Decimal   @default(0) @map("base_price") @db.Decimal(10, 2)
+  discountAmount    Decimal   @default(0) @map("discount_amount") @db.Decimal(10, 2)
+  gstAmount         Decimal   @default(0) @map("gst_amount") @db.Decimal(10, 2)
+  handlingFee       Decimal   @default(0) @map("handling_fee") @db.Decimal(10, 2)
+  promocodeId       Int?      @map("promocode_id")
+  razorpayOrderId   String?   @map("razorpay_order_id")
+  razorpayPaymentId String?   @map("razorpay_payment_id")
+  ipAddress         String?   @map("ip_address")
+  transactionId     String?   @map("transaction_id")
+  status            String    @default("pending")
+  createdAt         DateTime? @map("created_at")
+  updatedAt         DateTime? @map("updated_at")
+
+  @@map("ws_test_series_order")
+}
+
+model TestSeriesSubscription {
+  id           Int       @id @default(autoincrement())
+  orderId      Int?      @map("order_id")
+  customerId   Int       @map("customer_id")
+  testSeriesId Int       @map("test_series_id")
+  planId       Int?      @map("plan_id")
+  price        Decimal   @db.Decimal(10, 2)
+  startAt      DateTime? @map("start_at")
+  endAt        DateTime? @map("end_at")
+  remarks      String?
+  paymentType  String    @default("online") @map("payment_type")
+  status       Boolean   @default(true)
+  promocodeId  Int?      @map("promocode_id")
+  createdAt    DateTime? @map("created_at")
+  updatedAt    DateTime? @map("updated_at")
+
+  @@map("ws_test_series_subscription")
 }

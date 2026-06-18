@@ -8,8 +8,18 @@ import { Customer } from "../../models/customer/Customer.model";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId");
+// SQL grant: numeric ids (the Mongo schema enforces ObjectId).
+const grantSqlSchema = z.object({
+  customerId:     z.coerce.string().min(1),
+  planId:         z.coerce.string().min(1),
+  durationDays:   z.number().int().positive().optional(),
+  durationMonths: z.number().int().positive().optional(),
+  startAt:        z.string().trim().optional(),
+  endAt:          z.string().trim().optional(),
+}).strict();
 
 function zodIssueResponse(res: Response, err: z.ZodError) {
   const messages = err.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);
@@ -52,6 +62,20 @@ export const listLiveCourseSubscriptions = async (req: Request, res: Response) =
   logger.info("listLiveCourseSubscriptions invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
+    if (liveSql.isLiveCourseMysql()) {
+      const r = await liveSql.listSubscriptions({
+        liveCourseId: req.params.id ? String(req.params.id) : (req.query.liveCourseId ? String(req.query.liveCourseId) : undefined),
+        customerId: req.query.customerId ? String(req.query.customerId) : undefined,
+        planId: req.query.planId ? String(req.query.planId) : undefined,
+        paymentStatus: req.query.paymentStatus as string | undefined,
+        status: req.query.status as string | undefined,
+        page: req.query.page as string | undefined,
+        limit: req.query.limit as string | undefined,
+      });
+      if (r === "bad_course") return failure(res, "Invalid live course id.", 422);
+      if (r === "bad_customer") return failure(res, "Invalid customer id.", 422);
+      return success(res, r, "Subscriptions fetched.");
+    }
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, parseInt(req.query.limit as string) || 20);
 
@@ -110,6 +134,13 @@ export const getLiveCourseSubscription = async (req: Request, res: Response) => 
   logger.info("getLiveCourseSubscription invoked", { traceId, path: req.originalUrl, subscriptionId: id, userId: req.user?.id });
 
   try {
+    if (liveSql.isLiveCourseMysql()) {
+      const sid = liveSql.parseLiveId(id);
+      if (!sid) return failure(res, "Invalid subscription id.", 422);
+      const r = await liveSql.getSubscription(sid);
+      if (r === "not_found") return failure(res, "Subscription not found.", 404);
+      return success(res, { subscription: r }, "Subscription fetched.");
+    }
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("getLiveCourseSubscription invalid id", { traceId, subscriptionId: id });
       return failure(res, "Invalid subscription id.", 422);
@@ -142,6 +173,18 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
   logger.info("grantLiveCourseSubscription invoked", { traceId, path: req.originalUrl, liveCourseId, userId: req.user?.id });
 
   try {
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(liveCourseId);
+      if (!cid) return failure(res, "Invalid live course id.", 422);
+      let v: z.infer<typeof grantSqlSchema>;
+      try { v = grantSqlSchema.parse(req.body); } catch (err) { if (err instanceof z.ZodError) return zodIssueResponse(res, err); throw err; }
+      const r = await liveSql.grantSubscription(cid, v);
+      if (!r.ok) {
+        const code = r.code === "course" || r.code === "customer" || r.code === "plan" ? 404 : 422;
+        return failure(res, r.msg, code);
+      }
+      return success(res, { subscription: r.data }, r.created ? "Subscription granted." : "Subscription extended.", r.created ? 201 : 200);
+    }
     if (!mongoose.Types.ObjectId.isValid(liveCourseId)) {
       logger.warn("grantLiveCourseSubscription invalid id", { traceId, liveCourseId });
       return failure(res, "Invalid live course id.", 422);
@@ -281,6 +324,17 @@ export const updateLiveCourseSubscription = async (req: Request, res: Response) 
   logger.info("updateLiveCourseSubscription invoked", { traceId, path: req.originalUrl, subscriptionId: id, userId: req.user?.id });
 
   try {
+    if (liveSql.isLiveCourseMysql()) {
+      const sid = liveSql.parseLiveId(id);
+      if (!sid) return failure(res, "Invalid subscription id.", 422);
+      let v: z.infer<typeof updateSubscriptionSchema>;
+      try { v = updateSubscriptionSchema.parse(req.body); } catch (err) { if (err instanceof z.ZodError) return zodIssueResponse(res, err); throw err; }
+      const r = await liveSql.updateSubscription(sid, v);
+      if (r === "not_found") return failure(res, "Subscription not found.", 404);
+      if (r === "bad_start") return failure(res, "startAt must be a valid date.", 422);
+      if (r === "bad_end") return failure(res, "endAt must be a valid date.", 422);
+      return success(res, { subscription: r }, "Subscription updated.");
+    }
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("updateLiveCourseSubscription invalid id", { traceId, subscriptionId: id });
       return failure(res, "Invalid subscription id.", 422);
@@ -344,6 +398,12 @@ export const deleteLiveCourseSubscription = async (req: Request, res: Response) 
   logger.info("deleteLiveCourseSubscription invoked", { traceId, path: req.originalUrl, subscriptionId: id, userId: req.user?.id });
 
   try {
+    if (liveSql.isLiveCourseMysql()) {
+      const sid = liveSql.parseLiveId(id);
+      if (!sid) return failure(res, "Invalid subscription id.", 422);
+      if (!(await liveSql.deleteSubscription(sid))) return failure(res, "Subscription not found.", 404);
+      return success(res, { id }, "Subscription deleted.");
+    }
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("deleteLiveCourseSubscription invalid id", { traceId, subscriptionId: id });
       return failure(res, "Invalid subscription id.", 422);
