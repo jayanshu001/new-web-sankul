@@ -96,8 +96,30 @@ import {
 } from "./cms.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { z } from "zod";
+import * as cmsx from "../../modules/cms/cms-extra.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
+
+// cms-extra (SocialLink/Type, CurrentAffair, LiveBanner) SQL flag + helpers.
+const cmsxOn = () => cmsx.isCmsExtraMysql();
+const cmsxIdInvalid = (id: string) => (cmsxOn() ? cmsx.parseCmsId(id) == null : !isObjectId(id));
+// SQL body schemas: FK ids are numeric ints (not 24-hex) on the SQL path.
+const socialLinkCreateSqlSchema = z.object({
+  typeId: z.coerce.number().int().positive(),
+  title: z.string().min(1).max(255),
+  icon: z.string().max(500).optional(),
+  link: z.string().min(1).max(500).url("Invalid link URL"),
+  order: z.number().int().default(0),
+  status: z.boolean().optional(),
+});
+const socialLinkUpdateSqlSchema = socialLinkCreateSqlSchema.partial();
+const liveBannerCreateSqlSchema = z.object({
+  image: z.string().min(1).max(500),
+  liveCourseId: z.coerce.number().int().positive(),
+  orderBy: z.number().int().default(0),
+});
+const liveBannerUpdateSqlSchema = liveBannerCreateSqlSchema.partial();
 
 // Generic CRUD helpers — keeps each resource below to a thin wrapper.
 // `model.modelName` tags log entries so each derived endpoint is identifiable.
@@ -514,6 +536,7 @@ export const listLiveBanners = async (_req: Request, res: Response) => {
   logger.info("listLiveBanners invoked", { traceId, path: _req.originalUrl });
 
   try {
+    if (cmsxOn()) return res.status(200).json({ success: true, data: await cmsx.listLiveBanners() });
     const data = await LiveBannerSlider.find()
       .sort({ orderBy: 1 })
       .populate("liveCourseId")
@@ -531,6 +554,13 @@ export const getLiveBanner = async (req: Request, res: Response) => {
   logger.info("getLiveBanner invoked", { traceId, path: req.originalUrl, id });
 
   try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const d = await cmsx.getLiveBanner(nid);
+      if (!d) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data: d });
+    }
     if (!isObjectId(id)) { logger.warn("getLiveBanner invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
     const doc = await LiveBannerSlider.findById(id).populate("liveCourseId").lean();
     if (!doc) { logger.warn("getLiveBanner not found", { traceId, id }); return res.status(404).json({ success: false, message: "Not found." }); }
@@ -541,9 +571,42 @@ export const getLiveBanner = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: e.message });
   }
 };
-export const createLiveBanner = genericCreate(LiveBannerSlider, liveBannerCreateSchema);
-export const updateLiveBanner = genericUpdate(LiveBannerSlider, liveBannerUpdateSchema);
-export const deleteLiveBanner = genericDelete(LiveBannerSlider);
+export const createLiveBanner = async (req: Request, res: Response) => {
+  try {
+    if (cmsxOn()) {
+      const data = liveBannerCreateSqlSchema.parse(req.body);
+      return res.status(201).json({ success: true, data: await cmsx.createLiveBanner(data) });
+    }
+    return genericCreate(LiveBannerSlider, liveBannerCreateSchema)(req, res);
+  } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
+};
+export const updateLiveBanner = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = liveBannerUpdateSqlSchema.parse(req.body);
+      const d = await cmsx.updateLiveBanner(nid, data);
+      if (!d) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data: d });
+    }
+    return genericUpdate(LiveBannerSlider, liveBannerUpdateSchema)(req, res);
+  } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
+};
+export const deleteLiveBanner = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const ok = await cmsx.deleteLiveBanner(nid);
+      if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, message: "Deleted." });
+    }
+    return genericDelete(LiveBannerSlider)(req, res);
+  } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+};
 
 export const reorderLiveBanners = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -551,6 +614,11 @@ export const reorderLiveBanners = async (req: Request, res: Response) => {
 
   try {
     const { orders } = reorderSchema.parse(req.body);
+    if (cmsxOn()) {
+      const count = await cmsx.reorderLiveBanners(orders);
+      if (!count) return res.status(400).json({ success: false, message: "No valid ids." });
+      return res.status(200).json({ success: true, message: "Live banner order updated." });
+    }
     const ops = orders
       .filter((o) => isObjectId(o.id))
       .map((o) => ({
@@ -637,30 +705,65 @@ export const deleteTestimonial = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Social Link Type ──
-export const listSocialLinkTypes = genericList(SocialLinkType, { title: 1 });
-export const getSocialLinkType = genericGet(SocialLinkType);
-export const createSocialLinkType = genericCreate(SocialLinkType, socialLinkTypeCreateSchema);
-export const updateSocialLinkType = genericUpdate(SocialLinkType, socialLinkTypeUpdateSchema);
-
+// ─── Social Link Type ── (dual-path: cms-extra SQL flag)
+export const listSocialLinkTypes = async (req: Request, res: Response) => {
+  try {
+    if (cmsxOn()) return res.status(200).json({ success: true, data: await cmsx.listSocialLinkTypes() });
+    return genericList(SocialLinkType, { title: 1 })(req, res);
+  } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+};
+export const getSocialLinkType = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const d = await cmsx.getSocialLinkType(nid);
+      if (!d) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data: d });
+    }
+    return genericGet(SocialLinkType)(req, res);
+  } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+};
+export const createSocialLinkType = async (req: Request, res: Response) => {
+  try {
+    if (cmsxOn()) {
+      const data = socialLinkTypeCreateSchema.parse(req.body);
+      return res.status(201).json({ success: true, data: await cmsx.createSocialLinkType(data) });
+    }
+    return genericCreate(SocialLinkType, socialLinkTypeCreateSchema)(req, res);
+  } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
+};
+export const updateSocialLinkType = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = socialLinkTypeUpdateSchema.parse(req.body);
+      const d = await cmsx.updateSocialLinkType(nid, data);
+      if (!d) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data: d });
+    }
+    return genericUpdate(SocialLinkType, socialLinkTypeUpdateSchema)(req, res);
+  } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
+};
 export const deleteSocialLinkType = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
-  logger.info("deleteSocialLinkType invoked", { traceId, path: req.originalUrl, id });
-
   try {
-    if (!isObjectId(id)) { logger.warn("deleteSocialLinkType invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
-    const inUse = await SocialLink.exists({ typeId: id });
-    if (inUse) {
-      logger.warn("deleteSocialLinkType in use", { traceId, id });
-      return res.status(409).json({
-        success: false,
-        message: "Social Link Type is in use by one or more links and cannot be deleted.",
-      });
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const r = await cmsx.deleteSocialLinkType(nid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, message: "Deleted." });
     }
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+    const inUse = await SocialLink.exists({ typeId: id });
+    if (inUse) return res.status(409).json({ success: false, message: "Social Link Type is in use by one or more links and cannot be deleted." });
     const doc = await SocialLinkType.findByIdAndDelete(id);
-    if (!doc) { logger.warn("deleteSocialLinkType not found", { traceId, id }); return res.status(404).json({ success: false, message: "Not found." }); }
-    logger.info("deleteSocialLinkType success", { traceId, id });
+    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
     return res.status(200).json({ success: true, message: "Deleted." });
   } catch (e: any) {
     logger.error("deleteSocialLinkType failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
@@ -668,34 +771,124 @@ export const deleteSocialLinkType = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Social Link ──
-export const listSocialLinks = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listSocialLinks invoked", { traceId, path: _req.originalUrl });
-
+// ─── Social Link ── (dual-path)
+export const listSocialLinks = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
   try {
-    const data = await SocialLink.find()
-      .populate("typeId", "_id title")
-      .sort({ order: 1 })
-      .lean();
-    logger.info("listSocialLinks success", { traceId, count: data.length });
+    if (cmsxOn()) return res.status(200).json({ success: true, data: await cmsx.listSocialLinks() });
+    const data = await SocialLink.find().populate("typeId", "_id title").sort({ order: 1 }).lean();
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("listSocialLinks failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
-export const getSocialLink = genericGet(SocialLink);
-export const createSocialLink = genericCreate(SocialLink, socialLinkCreateSchema);
-export const updateSocialLink = genericUpdate(SocialLink, socialLinkUpdateSchema);
-export const deleteSocialLink = genericDelete(SocialLink);
+export const getSocialLink = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const d = await cmsx.getSocialLink(nid);
+      if (!d) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data: d });
+    }
+    return genericGet(SocialLink)(req, res);
+  } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+};
+export const createSocialLink = async (req: Request, res: Response) => {
+  try {
+    if (cmsxOn()) {
+      const data = socialLinkCreateSqlSchema.parse(req.body);
+      return res.status(201).json({ success: true, data: await cmsx.createSocialLink(data) });
+    }
+    return genericCreate(SocialLink, socialLinkCreateSchema)(req, res);
+  } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
+};
+export const updateSocialLink = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = socialLinkUpdateSqlSchema.parse(req.body);
+      const d = await cmsx.updateSocialLink(nid, data);
+      if (!d) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data: d });
+    }
+    return genericUpdate(SocialLink, socialLinkUpdateSchema)(req, res);
+  } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
+};
+export const deleteSocialLink = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const ok = await cmsx.deleteSocialLink(nid);
+      if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, message: "Deleted." });
+    }
+    return genericDelete(SocialLink)(req, res);
+  } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+};
 
-// ─── Current Affairs ──
-export const listCurrentAffairs = genericList(CurrentAffair, { createdAt: -1 });
-export const getCurrentAffair = genericGet(CurrentAffair);
-export const createCurrentAffair = genericCreate(CurrentAffair, currentAffairCreateSchema);
-export const updateCurrentAffair = genericUpdate(CurrentAffair, currentAffairUpdateSchema);
-export const deleteCurrentAffair = genericDelete(CurrentAffair);
+// ─── Current Affairs ── (dual-path)
+export const listCurrentAffairs = async (req: Request, res: Response) => {
+  try {
+    if (cmsxOn()) return res.status(200).json({ success: true, data: await cmsx.listCurrentAffairs() });
+    return genericList(CurrentAffair, { createdAt: -1 })(req, res);
+  } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+};
+export const getCurrentAffair = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const d = await cmsx.getCurrentAffair(nid);
+      if (!d) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data: d });
+    }
+    return genericGet(CurrentAffair)(req, res);
+  } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+};
+export const createCurrentAffair = async (req: Request, res: Response) => {
+  try {
+    if (cmsxOn()) {
+      const data = currentAffairCreateSchema.parse(req.body);
+      return res.status(201).json({ success: true, data: await cmsx.createCurrentAffair(data) });
+    }
+    return genericCreate(CurrentAffair, currentAffairCreateSchema)(req, res);
+  } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
+};
+export const updateCurrentAffair = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = currentAffairUpdateSchema.parse(req.body);
+      const d = await cmsx.updateCurrentAffair(nid, data);
+      if (!d) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data: d });
+    }
+    return genericUpdate(CurrentAffair, currentAffairUpdateSchema)(req, res);
+  } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
+};
+export const deleteCurrentAffair = async (req: Request, res: Response) => {
+  const id = req.params.id as string;
+  try {
+    if (cmsxOn()) {
+      const nid = cmsx.parseCmsId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const ok = await cmsx.deleteCurrentAffair(nid);
+      if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, message: "Deleted." });
+    }
+    return genericDelete(CurrentAffair)(req, res);
+  } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
+};
 
 // ─── Terms ──
 // Delegated to terms service (MySQL/Prisma when listed in

@@ -18,4 +18,24 @@ export const offlineCityRepository = {
   /** Name-only fetch for the cart shipping resolution. */
   findNameById: (id: number) =>
     prisma.offlineCity.findUnique({ where: { id }, select: { id: true, name: true } }),
+
+  // ── admin (Wave 8) ──────────────────────────────────────────────────────────
+  /** Admin list: optional status filter (includes inactive), manual order. */
+  listAll: (opts?: { status?: boolean }) =>
+    prisma.offlineCity.findMany({
+      where: opts?.status === undefined ? {} : { status: opts.status },
+      orderBy: [{ order: "asc" }, { name: "asc" }],
+    }),
+
+  create: (data: { name: string; image: string; order: number; status: boolean }) => {
+    const now = new Date();
+    return prisma.offlineCity.create({ data: { ...data, createdAt: now, updatedAt: now } });
+  },
+
+  update: (id: number, data: Record<string, unknown>) =>
+    prisma.offlineCity.update({ where: { id }, data: { ...data, updatedAt: new Date() } }),
+
+  remove: (id: number) => prisma.offlineCity.delete({ where: { id } }),
+
+  countCenters: (cityId: number) => prisma.offlineCenter.count({ where: { cityId } }),
 };

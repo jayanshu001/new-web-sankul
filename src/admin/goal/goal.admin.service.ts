@@ -3,6 +3,15 @@ import { buildSearchFilter } from "../../utils/searchFilter";
 import { Goal } from "../../models/Goal.model";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { redisClient } from "../../config/redis";
+import {
+  isGoalMysql, parseGoalId,
+  createGoalSql, getGoalsSql, updateGoalSql, deleteGoalSql,
+} from "../../modules/goal/goal.service";
+
+const invalidateGoalCaches = async (traceId?: string) => {
+  try { await redisClient.del(ADMIN_GOALS_CACHE_KEY, ACTIVE_GOALS_CACHE_KEY); }
+  catch (err) { logger.warn("goal cache invalidation failed", { traceId, error: (err as Error).message }); }
+};
 
 const ADMIN_GOALS_CACHE_KEY = "cache:admin:goals:list";
 const ACTIVE_GOALS_CACHE_KEY = "cache:client:goals:active";
@@ -35,6 +44,17 @@ const parseLabels = (rawLabels: any): { _id?: string, name: string }[] => {
 export const createGoal = async (data: { title: string; labels: any; image?: string; isActive?: boolean | string }, traceId?: string) => {
   logger.info("createGoal service invoked", { traceId, data });
 
+  if (isGoalMysql()) {
+    const saved = await createGoalSql({
+      title: data.title,
+      labels: parseLabels(data.labels).map((l) => ({ name: l.name })),
+      image: data.image || null,
+      isActive: !(data.isActive === "false" || data.isActive === false),
+    });
+    await invalidateGoalCaches(traceId);
+    return saved;
+  }
+
   const goal = new Goal({
     title: data.title,
     labels: parseLabels(data.labels),
@@ -65,7 +85,20 @@ export const getGoals = async (query: {
 } = {}, traceId?: string) => {
   logger.info("getGoals service invoked", { traceId, query });
   const { search, isActive, page = 1, limit = 10, sortBy = 'createdAt', sortOrder = 'desc' } = query;
-  
+
+  if (isGoalMysql()) {
+    // Note: SQL search matches title only (labels are a JSON array — no
+    // label-name text index); active filter + pagination + sort preserved.
+    const result = await getGoalsSql({
+      search: search as string | undefined,
+      isActive: isActive === undefined || isActive === "" ? undefined : (isActive === "true" || isActive === true),
+      page: Number(page), limit: Number(limit),
+      sortBy: sortBy as string, sortOrder: (sortOrder as "asc" | "desc") ?? "desc",
+    });
+    logger.info("getGoals service (SQL) completed", { traceId, total: result.meta.total });
+    return result;
+  }
+
   // Search by Goal Title OR specific Label Name
   const filter: any = { ...buildSearchFilter(search, ["title", "labels.name"]) };
 
@@ -123,6 +156,24 @@ export const updateGoal = async (
 ) => {
   logger.info("updateGoal service invoked", { traceId, id, data });
 
+  if (isGoalMysql()) {
+    const nid = parseGoalId(id);
+    if (nid == null) return { ok: false, message: "Goal not found!" };
+    const r = await updateGoalSql(nid, {
+      title: data.title,
+      labels: data.labels !== undefined ? parseLabels(data.labels).map((l) => ({ name: l.name })) : undefined,
+      image: data.image,
+      isActive: data.isActive !== undefined ? (data.isActive === "true" || data.isActive === true) : undefined,
+    });
+    if (!r) return { ok: false, message: "Goal not found!" };
+    if (r.previousImage) {
+      deleteFromS3FileUrl(r.previousImage).catch((err) =>
+        logger.error("updateGoal(SQL) failed deleting old image", { traceId, id, error: (err as Error).message }));
+    }
+    await invalidateGoalCaches(traceId);
+    return { ok: true, goal: r.goal };
+  }
+
   const goal = await Goal.findById(id);
   if (!goal) {
     logger.warn("updateGoal service missing goal", { traceId, id });
@@ -164,6 +215,19 @@ export const updateGoal = async (
 
 export const deleteGoal = async (id: string, traceId?: string) => {
   logger.info("deleteGoal service invoked", { traceId, id });
+
+  if (isGoalMysql()) {
+    const nid = parseGoalId(id);
+    if (nid == null) return { ok: false, message: "Goal not found!" };
+    const r = await deleteGoalSql(nid);
+    if (!r) return { ok: false, message: "Goal not found!" };
+    if (r.image) {
+      deleteFromS3FileUrl(r.image).catch((err) =>
+        logger.error("deleteGoal(SQL) failed deleting image", { traceId, goalId: id, error: (err as Error).message }));
+    }
+    await invalidateGoalCaches(traceId);
+    return { ok: true, message: "Goal permanently deleted." };
+  }
 
   const goal = await Goal.findById(id);
   if (!goal) {

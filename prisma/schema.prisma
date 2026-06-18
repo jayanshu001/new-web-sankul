@@ -1413,6 +1413,7 @@ model OfflineBannerSlider {
   image     String   @map("image")
   key       String?  @map("key")
   keyId     Int?     @map("key_id")
+  orderBy   Int      @default(0) @map("order_by")
   createdAt DateTime @map("created_at")
   updatedAt DateTime @map("updated_at")
 
@@ -1493,15 +1494,19 @@ model Testimonial {
 
 // ****************************Website Inquiry******************************
 model Inquiry {
-  id        Int         @id @default(autoincrement())
-  name      String
-  mobile    String
-  email     String
-  city      String
-  course    Courses
-  mode      inquiryMode
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  id          Int          @id @default(autoincrement())
+  customerId  Int?         @map("customer_id")
+  description String?      @db.VarChar(2000)
+  name        String?
+  mobile      String?
+  email       String?
+  city        String?
+  course      Courses?
+  mode        inquiryMode?
+  message     String?      @db.VarChar(2000)
+  source      String?      @default("app")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 
   @@map("ws_website_inquiry")
 }
@@ -1904,6 +1909,106 @@ model FolderItem {
 
   @@unique([folderId, kind, refId], name: "uniq_folder_kind_ref")
   @@map("ws_folder_item")
+}
+
+// Multi-device FCM tokens — SQL home for Mongo Customer.firebaseTokens[].
+// One row per (customer, token); `token` globally unique so a handset
+// re-registering moves the row (matches Mongo's token-keyed $pull/$push upsert).
+model CustomerDeviceToken {
+  id         Int       @id @default(autoincrement())
+  customerId Int       @map("customer_id")
+  token      String    @db.VarChar(512)
+  platform   String?   @db.VarChar(16)
+  createdAt  DateTime? @map("created_at")
+  updatedAt  DateTime? @map("updated_at")
+
+  @@unique([token], name: "uniq_device_token")
+  @@index([customerId, updatedAt], name: "idx_dt_customer")
+  @@map("ws_customer_device_token")
+}
+
+// ── Wave 8 misc/low-value modules (net-new tables) ───────────────────────────
+model ActivityLog {
+  id         Int       @id @default(autoincrement())
+  customerId Int?      @map("customer_id")
+  event      String    @db.VarChar(100)
+  entityType String?   @map("entity_type") @db.VarChar(50)
+  entityId   Int?      @map("entity_id")
+  duration   Int?
+  metadata   Json?
+  ip         String?   @db.VarChar(100)
+  userAgent  String?   @map("user_agent") @db.VarChar(500)
+  createdAt  DateTime? @map("created_at")
+  updatedAt  DateTime? @map("updated_at")
+
+  @@index([event, createdAt], name: "idx_al_event_created")
+  @@index([customerId, createdAt], name: "idx_al_customer_created")
+  @@map("ws_activity_log")
+}
+
+model Goal {
+  id        Int       @id @default(autoincrement())
+  title     String    @db.VarChar(255)
+  labels    Json?
+  image     String?   @db.VarChar(512)
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@index([isActive, createdAt], name: "idx_goal_active")
+  @@map("ws_goal")
+}
+
+model SocialLinkType {
+  id        Int       @id @default(autoincrement())
+  title     String    @db.VarChar(255)
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@unique([title], name: "uniq_slt_title")
+  @@map("ws_social_link_type")
+}
+
+model SocialLink {
+  id        Int       @id @default(autoincrement())
+  typeId    Int       @map("type_id")
+  title     String    @db.VarChar(255)
+  icon      String?   @db.VarChar(500)
+  link      String    @db.VarChar(500)
+  orderBy   Int       @default(0) @map("order_by")
+  status    Boolean   @default(true)
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@index([status, orderBy], name: "idx_sl_status_order")
+  @@index([typeId], name: "idx_sl_type")
+  @@map("ws_social_link")
+}
+
+model CurrentAffair {
+  id          Int       @id @default(autoincrement())
+  title       String    @db.VarChar(255)
+  image       String    @db.VarChar(512)
+  youtubeLink String    @map("youtube_link") @db.VarChar(512)
+  status      Boolean   @default(true)
+  createdAt   DateTime? @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+
+  @@index([status, createdAt], name: "idx_ca_status_created")
+  @@map("ws_current_affair")
+}
+
+model LiveBannerSlider {
+  id           Int       @id @default(autoincrement())
+  image        String    @db.VarChar(512)
+  liveCourseId Int       @map("live_course_id")
+  orderBy      Int       @default(0) @map("order_by")
+  createdAt    DateTime? @map("created_at")
+  updatedAt    DateTime? @map("updated_at")
+
+  @@index([orderBy], name: "idx_lbs_order")
+  @@index([liveCourseId], name: "idx_lbs_livecourse")
+  @@map("ws_live_banner_slider")
 }
 
 model EbookDownload {

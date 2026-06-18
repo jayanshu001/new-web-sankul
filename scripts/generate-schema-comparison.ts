@@ -282,6 +282,42 @@ function main() {
         ? "✅ Migrated (read + write; schema EXTENDED)"
         : "🟡 Code ready (flag off, READ+WRITE built; table EXTENDED — package-chat Phase 3b)";
 
+    // ── Wave 8 — misc / low-value modules (2026-06-18) ────────────────────────
+    // customer-master: State/District/Education/TargetGoal admin CRUD (also
+    // covered by customer-lookups for reads; customer-master adds admin writes).
+    if (
+      (table === "ws_customer_state" ||
+        table === "ws_customer_distict" ||
+        table === "ws_customer_education" ||
+        table === "ws_customer_target_goal") &&
+      MIGRATED.includes("customer-master")
+    )
+      status = "✅ Migrated (admin CRUD)";
+    // offline admin CRUD: Center/Batch (offline-batch), Enquiry (offline-enquiry),
+    // City (offline-city), Banner (offline-batch). Upgrades the reads-only status.
+    if ((table === "ws_offline_center" || table === "ws_offline_batch") && MIGRATED.includes("offline-batch"))
+      status = "✅ Migrated (admin CRUD)";
+    if (table === "ws_offline_banner_slider")
+      status = MIGRATED.includes("offline-batch") ? "✅ Migrated (admin CRUD; +order_by ALTER)" : "⏳ Not migrated";
+    // ImageNotification — on the client-notification flag (same cluster).
+    if (table === "ws_image_notification")
+      status = MIGRATED.includes("client-notification") ? "✅ Migrated (admin CRUD)" : "⏳ Not migrated";
+    // tracking / ActivityLog — net-new ws_activity_log.
+    if (table === "ws_activity_log")
+      status = MIGRATED.includes("tracking") ? "✅ Migrated (admin reads)" : "⏳ Not migrated";
+    // goal — net-new ws_goal.
+    if (table === "ws_goal")
+      status = MIGRATED.includes("goal") ? "✅ Migrated (admin CRUD)" : "⏳ Not migrated";
+    // cms-extra — net-new ws_social_link(_type), ws_current_affair, ws_live_banner_slider.
+    if (
+      table === "ws_social_link" || table === "ws_social_link_type" ||
+      table === "ws_current_affair" || table === "ws_live_banner_slider"
+    )
+      status = MIGRATED.includes("cms-extra") ? "✅ Migrated (admin CRUD)" : "⏳ Not migrated";
+    // inquiry — ws_website_inquiry ALTERed (+customer_id/description/message/source).
+    if (table === "ws_website_inquiry")
+      status = MIGRATED.includes("inquiry") ? "✅ Migrated (admin reads + client submit; +4 cols ALTER)" : "⏳ Not migrated";
+
     let notes = "";
     if (mColl !== "—" && mColl !== table && best < 100) notes = "Collection name differs from MySQL table";
     if (!prismaModel) notes = "In SQL dump but no Prisma model";
@@ -297,9 +333,59 @@ function main() {
     });
   }
 
+  // Net-new SQL tables created during the migration (NOT in the legacy dump, so
+  // they don't appear in the legacy-table loop above). Map model→(flag, table)
+  // so they show as ✅ migrated instead of "🆕 Mongo-only" once the flag is on.
+  const NET_NEW: Record<string, { flag: string; table: string; label: string }> = {
+    // Wave 7 net-new tables
+    Notification: { flag: "client-notification", table: "ws_notification", label: "✅ Migrated (write subsystem + client reads)" },
+    LectureProgress: { flag: "client-lecture-progress", table: "ws_lecture_progress", label: "✅ Migrated (free-video slice; container/DAG paths still Mongo)" },
+    Folder: { flag: "client-folder", table: "ws_folder", label: "✅ Migrated" },
+    FolderItem: { flag: "client-folder", table: "ws_folder_item", label: "✅ Migrated" },
+    // Wave 8 net-new tables
+    ActivityLog: { flag: "tracking", table: "ws_activity_log", label: "✅ Migrated (admin reads)" },
+    Goal: { flag: "goal", table: "ws_goal", label: "✅ Migrated (admin CRUD)" },
+    SocialLink: { flag: "cms-extra", table: "ws_social_link", label: "✅ Migrated (admin CRUD)" },
+    SocialLinkType: { flag: "cms-extra", table: "ws_social_link_type", label: "✅ Migrated (admin CRUD)" },
+    CurrentAffair: { flag: "cms-extra", table: "ws_current_affair", label: "✅ Migrated (admin CRUD)" },
+    LiveBannerSlider: { flag: "cms-extra", table: "ws_live_banner_slider", label: "✅ Migrated (admin CRUD)" },
+    EbookDownload: { flag: "client-ebook-download", table: "ws_ebook_download", label: "✅ Migrated" },
+    // Wave 6 net-new tables (14 ws_live_* tables created + backfilled). The Mongo
+    // models still exist for not-yet-flipped realtime consumers, but the data
+    // layer + admin/client surfaces are on SQL under the `live-course` flag.
+    LiveCourse: { flag: "live-course", table: "ws_live_course", label: "✅ Migrated (Wave 6)" },
+    LiveCoursePlan: { flag: "live-course", table: "ws_live_course_plan", label: "✅ Migrated (Wave 6)" },
+    LiveCourseSubscription: { flag: "live-course", table: "ws_live_course_subscription", label: "✅ Migrated (Wave 6)" },
+    LiveSession: { flag: "live-course", table: "ws_live_session", label: "✅ Migrated (Wave 6)" },
+    LiveSessionAttendance: { flag: "live-course", table: "ws_live_session_attendance", label: "✅ Migrated (Wave 6)" },
+    LiveSessionPreview: { flag: "live-course", table: "ws_live_session_preview", label: "✅ Migrated (Wave 6)" },
+    LiveSessionReminder: { flag: "live-course", table: "ws_live_session_reminder", label: "⏸️ Partial (reads on SQL; reminder set/remove stays Mongo+BullMQ)" },
+    LiveChatMessage: { flag: "live-course", table: "ws_live_chat_message", label: "✅ Migrated (Wave 6 — admin+client chat)" },
+    LiveChatBan: { flag: "live-course", table: "ws_live_chat_ban", label: "✅ Migrated (Wave 6)" },
+    LivePoll: { flag: "live-course", table: "ws_live_poll", label: "⏸️ Partial (create/list/results/close on SQL; vote-casting stays Mongo socket)" },
+    LivePollVote: { flag: "live-course", table: "ws_live_poll_vote", label: "⏸️ Partial (myVote read on SQL; vote-casting stays Mongo socket)" },
+    // Wave 7 test-series family (fully migrated under test-series-order).
+    TestSeries: { flag: "test-series-order", table: "ws_test_series", label: "✅ Migrated (Wave 7)" },
+    TestSeriesPrice: { flag: "test-series-order", table: "ws_test_series_price", label: "✅ Migrated (Wave 7)" },
+    TestSeriesOrder: { flag: "test-series-order", table: "ws_test_series_order", label: "✅ Migrated (Wave 7)" },
+    TestSeriesSubscription: { flag: "test-series-order", table: "ws_test_series_subscription", label: "✅ Migrated (Wave 7)" },
+  };
+
   // Mongo-only
   for (const [mName, mVal] of mongo) {
     if (usedMongo.has(mName)) continue;
+    const nn = NET_NEW[mName];
+    if (nn && MIGRATED.includes(nn.flag)) {
+      rows.push({
+        domain: mName,
+        legacyMysql: "— (net-new SQL table)",
+        mongoCollection: `\`${mVal.collection}\``,
+        migrationMysql: `\`${nn.table}\``,
+        status: nn.label,
+        notes: `Net-new table (Wave 7/8); see ${mVal.file}`,
+      });
+      continue;
+    }
     rows.push({
       domain: mName,
       legacyMysql: "—",

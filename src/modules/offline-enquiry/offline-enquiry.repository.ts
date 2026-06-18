@@ -29,4 +29,37 @@ export const offlineEnquiryRepository = {
         batchId: input.batchId,
       },
     }),
+
+  // ── admin list / delete (Wave 8) ───────────────────────────────────────────
+  /**
+   * Paginated admin list with optional batch / name-email search / date range.
+   * `search` matches name OR email (mobile is BigInt — not text-searchable here,
+   * mirrors the practical effect of the Mongo regex on string fields).
+   */
+  list: (opts: {
+    batchId?: number; search?: string; from?: Date; to?: Date; skip: number; take: number;
+  }) => {
+    const where: any = {};
+    if (opts.batchId != null) where.batchId = opts.batchId;
+    if (opts.search) where.OR = [{ name: { contains: opts.search } }, { email: { contains: opts.search } }];
+    if (opts.from || opts.to) {
+      where.createdAt = {};
+      if (opts.from) where.createdAt.gte = opts.from;
+      if (opts.to) where.createdAt.lte = opts.to;
+    }
+    return Promise.all([
+      prisma.offlineEnquiry.findMany({
+        where,
+        include: { batch: { select: { id: true, name: true, startAt: true } } },
+        orderBy: { createdAt: "desc" },
+        skip: opts.skip,
+        take: opts.take,
+      }),
+      prisma.offlineEnquiry.count({ where }),
+    ]);
+  },
+
+  findById: (id: number) => prisma.offlineEnquiry.findUnique({ where: { id }, select: { id: true } }),
+
+  deleteById: (id: number) => prisma.offlineEnquiry.delete({ where: { id } }),
 };

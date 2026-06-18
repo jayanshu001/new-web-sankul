@@ -11,7 +11,7 @@
 | | |
 |---|---|
 | **Total migrated (code complete)** | 67 |
-| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city, catalog-package-type, catalog-course, catalog-video, catalog-ebook, catalog-exam, catalog-material, catalog-book, offline-batch, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, admin-auth, customer-profile, customer-bank-account, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video, admin-book, admin-ebook, admin-course, admin-package, admin-material, live-course, client-purchase-history, admin-subscription, client-my-subscriptions, client-orders, live-course-order, package-order, test-series-order, client-ebook-download, client-folder` |
+| **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, customer-address, customer-profile, customer-bank-account, offline-city, catalog-package-type, catalog-package, catalog-course, catalog-video, catalog-ebook, catalog-material, catalog-book, offline-batch, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, catalog-exam, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, admin-auth, customer-admin-crud, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video, admin-book, admin-ebook, admin-course, admin-package, admin-material, live-course, client-purchase-history, admin-subscription, client-my-subscriptions, catalog-video, client-orders, live-course-order, package-order, test-series-order, wave7-new-tables (lecture-progress/notification/folder/ebook-download), client-ebook-download, client-folder, client-notification, client-lecture-progress` |
 | **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator,admin-auth,customer-admin-crud,educator-auth,promoter-auth,promoter-data,referral,admin-rbac,client-exam,client-cart,admin-exam,client-educator,admin-plan,admin-master,admin-video,admin-book,admin-ebook,admin-course,admin-package,admin-material,live-course,client-purchase-history,admin-subscription,client-my-subscriptions,client-orders,live-course-order,package-order,test-series-order,wave7-new-tables (lecture-progress/notification/folder/ebook-download),client-ebook-download,client-folder,client-notification,client-lecture-progress` |
 
 | # | Module key | Label | MySQL table | Mongo collection | Env | Detail |
@@ -26,12 +26,12 @@
 | 8 | `popup` | Popup Notification | `ws_popup_notification` | `ws_popup_notifications` | ✅ enabled | [Detail](#popup) |
 | 9 | `customer-auth` | Customer Auth (OTP/token) | `ws_customer (+ ws_customer_otp, ws_customer_access_token)` | `ws_customers / ws_customer_otps / ws_customer_access_tokens` | ✅ enabled | [Detail](#customer-auth) |
 | 10 | `customer-lookups` | Customer Lookups (state/district/education/goal) | `ws_customer_state / ws_customer_distict / ws_customer_education / ws_customer_target_goal` | `ws_customer_states / ws_customer_districts / ws_customer_educations / ws_customer_target_goals` | ✅ enabled | [Detail](#customer-lookups) |
-| 11 | `customer-address` | Customer Address | `ws_customer_address` | `ws_customer_addresses` | ⏸ not in env | [Detail](#customer-address) |
+| 11 | `customer-address` | Customer Address | `ws_customer_address` | `ws_customer_addresses` | ✅ enabled | [Detail](#customer-address) |
 | 12 | `customer-profile` | Customer Profile | `ws_customer` | `ws_customers` | ✅ enabled | [Detail](#customer-profile) |
 | 13 | `customer-bank-account` | Customer Bank Account | `ws_customer_bank_account` | `ws_customer_bank_accounts` | ✅ enabled | [Detail](#customer-bank-account) |
 | 14 | `offline-city` | Offline City | `ws_offline_city` | `ws_offline_cities` | ✅ enabled | [Detail](#offline-city) |
 | 15 | `catalog-package-type` | Catalog · Package Type | `ws_package_type` | `ws_package_types` | ✅ enabled | [Detail](#catalog-package-type) |
-| 16 | `catalog-package` | Catalog · Package | `ws_package` | `ws_packages` | ⏸ not in env | [Detail](#catalog-package) |
+| 16 | `catalog-package` | Catalog · Package | `ws_package` | `ws_packages` | ✅ enabled | [Detail](#catalog-package) |
 | 17 | `catalog-course` | Catalog · Course | `ws_course / ws_course_subject_category` | `ws_courses / coursesubjectcategories` | ✅ enabled | [Detail](#catalog-course) |
 | 18 | `catalog-video` | Catalog · Video (+ URL-encryption contract) | `ws_video / ws_video_category` | `videos / videocategories` | ✅ enabled | [Detail](#catalog-video) |
 | 19 | `catalog-ebook` | Catalog · eBook (+ listing/detail composition) | `ws_ebook` | `ws_ebooks` | ✅ enabled | [Detail](#catalog-ebook) |
@@ -51,7 +51,7 @@
 | 33 | `commerce-promocode` | Commerce · Promocode (READ — SQL-faithful, NOT the client appliesTo model) | `ws_promocode / ws_promoted_package_course_ebook` | `ws_promo_codes / (embedded)` | ✅ enabled | [Detail](#commerce-promocode) |
 | 34 | `commerce-educator` | Commerce · Educator (READ — full entity master) | `ws_course_educator` | `ws_course_educators` | ✅ enabled | [Detail](#commerce-educator) |
 | 35 | `admin-auth` | Admin Auth + Administrator CRUD (ws_users) | `ws_users (+ ws_admin_access_tokens, ws_roles, ws_permissions, ws_model_has_roles, ws_model_has_permissions)` | `ws_users (+ ws_admin_access_tokens, roles, permissions)` | ✅ enabled | [Detail](#admin-auth) |
-| 36 | `customer-admin-crud` | Admin · Customer CRUD (ws_customer) | `ws_customer` | `ws_customers` | ⏸ not in env | [Detail](#customer-admin-crud) |
+| 36 | `customer-admin-crud` | Admin · Customer CRUD (ws_customer) | `ws_customer` | `ws_customers` | ✅ enabled | [Detail](#customer-admin-crud) |
 | 37 | `educator-auth` | Educator Auth + Admin Educator Master CRUD (ws_course_educator) | `ws_course_educator (+ ws_educator_access_tokens)` | `ws_course_educators (+ ws_educator_access_tokens)` | ✅ enabled | [Detail](#educator-auth) |
 | 38 | `promoter-auth` | Promoter Auth (ws_promoter) | `ws_promoter (+ ws_promoter_access_tokens)` | `ws_promoter (+ ws_promoter_access_tokens)` | ✅ enabled | [Detail](#promoter-auth) |
 | 39 | `promoter-data` | Promoter Analytics (customers/subscriptions/dashboard/promocode) | `ws_package_course_subscription / ws_ebook_subscription (joined via order.promocode JSON)` | `ws_package_course_subscriptions / ws_ebook_subscriptions / ws_promo_codes` | ✅ enabled | [Detail](#promoter-data) |
@@ -78,11 +78,11 @@
 | 60 | `live-course-order` | Live-Course Payment write path (Wave 7 — create/verify/webhook) | `ws_live_course_subscription (carries BOTH payment + entitlement; no separate order table)` | `livecoursesubscriptions / livecourseplans` | ✅ enabled | [Detail](#live-course-order) |
 | 61 | `package-order` | Package Payment write path + webhook ebook fulfillment (Wave 7) | `ws_package_course_order / ws_package_course_subscription / ws_package_course_subscription_tracking; ws_ebook_order / ws_ebook_subscription` | `packagecoursesubscriptions / ebookorders / ebooksubscriptions` | ✅ enabled | [Detail](#package-order) |
 | 62 | `test-series-order` | Test-Series payment + subscription (Wave 7 — NET-NEW tables) | `ws_test_series / ws_test_series_price / ws_test_series_order / ws_test_series_subscription (CREATED 2026-06-18)` | `ws_test_series / ws_test_series_prices / ws_test_series_orders / ws_test_series_subscriptions` | ✅ enabled | [Detail](#test-series-order) |
-| 63 | `wave7-new-tables (lecture-progress/notification/folder/ebook-download)` | Wave 7 — net-new tables created + backfilled; consumers stay Mongo (documented) | `ws_lecture_progress / ws_notification / ws_folder / ws_folder_item / ws_ebook_download (CREATED 2026-06-18) + ws_book_order.paid_at column added` | `ws_lecture_progress / ws_notifications / ws_folders / ws_folder_items / ws_ebook_downloads` | ⏸ not in env | [Detail](#wave7-new-tables (lecture-progress/notification/folder/ebook-download)) |
+| 63 | `wave7-new-tables (lecture-progress/notification/folder/ebook-download)` | Wave 7 — net-new tables created + backfilled; consumers stay Mongo (documented) | `ws_lecture_progress / ws_notification / ws_folder / ws_folder_item / ws_ebook_download (CREATED 2026-06-18) + ws_book_order.paid_at column added` | `ws_lecture_progress / ws_notifications / ws_folders / ws_folder_items / ws_ebook_downloads` | ✅ enabled | [Detail](#wave7-new-tables (lecture-progress/notification/folder/ebook-download)) |
 | 64 | `client-ebook-download` | Client Ebook Downloads (Wave 7 — net-new table) | `ws_ebook_download (CREATED 2026-06-18)` | `ws_ebook_downloads` | ✅ enabled | [Detail](#client-ebook-download) |
 | 65 | `client-folder` | Client Saved Folders — video/material (Wave 7 — net-new tables) | `ws_folder / ws_folder_item (CREATED 2026-06-18)` | `ws_folders / ws_folder_items` | ✅ enabled | [Detail](#client-folder) |
-| 66 | `client-notification` | Client Notification reads (Wave 7 — net-new table, FLAG OFF) | `ws_notification (CREATED 2026-06-18)` | `ws_notifications` | ⏸ not in env | [Detail](#client-notification) |
-| 67 | `client-lecture-progress` | Client Lecture Progress (Wave 7 — net-new table, FLAG OFF) | `ws_lecture_progress (CREATED 2026-06-18)` | `ws_lecture_progress` | ⏸ not in env | [Detail](#client-lecture-progress) |
+| 66 | `client-notification` | Client Notification reads (Wave 7 — net-new table, FLAG OFF) | `ws_notification (CREATED 2026-06-18)` | `ws_notifications` | ✅ enabled | [Detail](#client-notification) |
+| 67 | `client-lecture-progress` | Client Lecture Progress (Wave 7 — net-new table, FLAG OFF) | `ws_lecture_progress (CREATED 2026-06-18)` | `ws_lecture_progress` | ✅ enabled | [Detail](#client-lecture-progress) |
 
 ---
 
@@ -366,7 +366,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `customer-address` |
 | **Phase** | 2 |
 | **Migrated** | 2026-06-10 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `CustomerAddress` |
 | **MySQL table** | `ws_customer_address` |
 | **Mongo collection (legacy app)** | `ws_customer_addresses` |
@@ -500,7 +500,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `catalog-package` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-11 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `Package` |
 | **MySQL table** | `ws_package` |
 | **Mongo collection (legacy app)** | `ws_packages` |
@@ -1036,7 +1036,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `customer-admin-crud` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-17 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `Customer (+ CustomerState/CustomerDistict/CustomerEducation lookups)` |
 | **MySQL table** | `ws_customer` |
 | **Mongo collection (legacy app)** | `ws_customers` |
@@ -1734,7 +1734,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `wave7-new-tables (lecture-progress/notification/folder/ebook-download)` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-18 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `LectureProgress / Notification / Folder / FolderItem / EbookDownload (net-new, production-ready)` |
 | **MySQL table** | `ws_lecture_progress / ws_notification / ws_folder / ws_folder_item / ws_ebook_download (CREATED 2026-06-18) + ws_book_order.paid_at column added` |
 | **Mongo collection (legacy app)** | `ws_lecture_progress / ws_notifications / ws_folders / ws_folder_items / ws_ebook_downloads` |
@@ -1807,7 +1807,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `client-notification` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-18 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `Notification` |
 | **MySQL table** | `ws_notification (CREATED 2026-06-18)` |
 | **Mongo collection (legacy app)** | `ws_notifications` |
@@ -1831,7 +1831,7 @@ MIGRATION_MYSQL_MODULES=app-update,version,faq,banner-slider,testimonial,departm
 | **Module key** | `client-lecture-progress` |
 | **Phase** | 3 |
 | **Migrated** | 2026-06-18 |
-| **Status** | ⏸ Implemented; add `${m.key}` to env to enable |
+| **Status** | ✅ Active when listed in `MIGRATION_MYSQL_MODULES` |
 | **Prisma model** | `LectureProgress` |
 | **MySQL table** | `ws_lecture_progress (CREATED 2026-06-18)` |
 | **Mongo collection (legacy app)** | `ws_lecture_progress` |

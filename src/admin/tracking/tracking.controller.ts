@@ -1,6 +1,10 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { ActivityLog } from "../../models/system/ActivityLog.model";
+import {
+  isTrackingMysql, parseTrackingId,
+  listActivity as sqlListActivity, activitySummary as sqlActivitySummary,
+} from "../../modules/tracking/tracking.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -18,6 +22,25 @@ export const listActivity = async (req: Request, res: Response) => {
       limit = "50",
     } = req.query as Record<string, string>;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
+
+    if (isTrackingMysql()) {
+      const { data, total } = await sqlListActivity({
+        customerId: customerId ? parseTrackingId(customerId) ?? undefined : undefined,
+        event: event || undefined,
+        entityType: entityType || undefined,
+        entityId: entityId ? parseTrackingId(entityId) ?? undefined : undefined,
+        from: fromDate ? new Date(fromDate) : undefined,
+        to: toDate ? new Date(toDate) : undefined,
+        page: pageNum, limit: limitNum,
+      });
+      return res.status(200).json({
+        success: true, data,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     const filter: any = {};
     if (customerId && isObjectId(customerId)) filter.customerId = customerId;
     if (event) filter.event = event;
@@ -29,8 +52,6 @@ export const listActivity = async (req: Request, res: Response) => {
       if (toDate) filter.createdAt.$lte = new Date(toDate);
     }
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 200);
     const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
@@ -52,6 +73,13 @@ export const listActivity = async (req: Request, res: Response) => {
 export const activitySummary = async (req: Request, res: Response) => {
   try {
     const { fromDate, toDate } = req.query as Record<string, string>;
+    if (isTrackingMysql()) {
+      const data = await sqlActivitySummary({
+        from: fromDate ? new Date(fromDate) : undefined,
+        to: toDate ? new Date(toDate) : undefined,
+      });
+      return res.status(200).json({ success: true, data });
+    }
     const match: any = {};
     if (fromDate || toDate) {
       match.createdAt = {};

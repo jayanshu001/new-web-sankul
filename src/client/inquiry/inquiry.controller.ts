@@ -4,6 +4,7 @@ import { Inquiry } from "../../models/system/Inquiry.model";
 import { listActiveContactDepartments } from "../../modules/department/department.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { isInquiryMysql, submitInquiry as sqlSubmitInquiry } from "../../modules/inquiry/inquiry.service";
 
 const submitSchema = z.object({
   description: z.string().min(1).max(2000),
@@ -22,8 +23,10 @@ export const submitInquiry = async (req: Request, res: Response) => {
     }
 
     const { description } = submitSchema.parse(req.body);
-    const inquiry = await Inquiry.create({ customerId, description });
-    logger.info("submitInquiry success", { traceId, customerId, inquiryId: inquiry._id });
+    const inquiry = isInquiryMysql()
+      ? await sqlSubmitInquiry(Number(customerId), description)
+      : await Inquiry.create({ customerId, description });
+    logger.info("submitInquiry success", { traceId, customerId, inquiryId: (inquiry as any)._id });
     return res.status(201).json({
       success: true,
       message: "Your inquiry has been submitted. Our team will reach out to you shortly.",

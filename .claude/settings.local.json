@@ -131,7 +131,8 @@
       "Bash(yarn docs:field-comparison)",
       "Bash(awk '/^model Course /,/^\\\\}/' prisma/schema.prisma)",
       "Bash(awk '/^model EBook /,/^\\\\}/' prisma/schema.prisma)",
-      "Bash(awk '/^model BookOrder /,/^\\\\}/' prisma/schema.prisma)"
+      "Bash(awk '/^model BookOrder /,/^\\\\}/' prisma/schema.prisma)",
+      "Bash(npx tsx *)"
     ]
   }
 }

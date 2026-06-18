@@ -45,3 +45,27 @@ export const submitEnquiryMysql = async (
   });
   return toEnquiryDto(row);
 };
+
+// ── admin list / delete (Wave 8) ─────────────────────────────────────────────
+/** Admin enquiry listing: paginated, batch-populated, name/email search + date range. */
+export const listEnquiriesAdmin = async (opts: {
+  batchId?: number; search?: string; from?: Date; to?: Date; page: number; limit: number;
+}): Promise<{ data: any[]; total: number }> => {
+  const skip = (opts.page - 1) * opts.limit;
+  const [rows, total] = await repo.list({
+    batchId: opts.batchId, search: opts.search, from: opts.from, to: opts.to, skip, take: opts.limit,
+  });
+  const data = rows.map((r: any) => ({
+    ...toEnquiryDto(r),
+    // populated batch ref (mirrors Mongo .populate("batchId","name startAt"))
+    batchId: r.batch ? { _id: String(r.batch.id), name: r.batch.name, startAt: r.batch.startAt } : String(r.batchId),
+  }));
+  return { data, total };
+};
+
+/** Delete an enquiry; false if not found (→404). */
+export const deleteEnquiryAdmin = async (id: number): Promise<boolean> => {
+  if (!(await repo.findById(id))) return false;
+  await repo.deleteById(id);
+  return true;
+};

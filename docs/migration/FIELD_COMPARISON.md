@@ -1,6 +1,6 @@
 # Field comparison — module by module
 
-> **Generated:** 2026-06-17 — re-run `yarn docs:field-comparison` after schema changes  
+> **Generated:** 2026-06-18 — re-run `yarn docs:field-comparison` after schema changes  
 > **Sources:** `websankul_staging.sql`, `prisma/schema.prisma`, `src/models/**/*.model.ts`  
 > **Related:** [SCHEMA_COMPARISON.md](./SCHEMA_COMPARISON.md) (table inventory) · [legacy_system_migration_strategy.md](./legacy_system_migration_strategy.md)
 
@@ -16,7 +16,7 @@
 | **Prisma field** | Prisma model property; DB column via `@map` when different |
 | **Match** | ✅ aligned · ⚠️ rename · 🆕 Mongo-only · 🆕 MySQL-only · 🆕 Prisma-only |
 
-**Migrated modules (`MIGRATION_MYSQL_MODULES`):** `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city, catalog-package-type, catalog-course, catalog-video, catalog-ebook, catalog-exam, catalog-material, catalog-book, offline-batch, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, admin-auth, customer-profile, customer-bank-account, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video`
+**Migrated modules (`MIGRATION_MYSQL_MODULES`):** `MIGRATION_MYSQL_MODULES=MIGRATION_MYSQL_MODULES=app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city, catalog-package-type, catalog-course, catalog-video, catalog-ebook, catalog-exam, catalog-material, catalog-book, offline-batch, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, admin-auth, customer-profile, customer-bank-account, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video, admin-book, admin-ebook, admin-course, admin-package, admin-material, live-course, client-purchase-history, admin-subscription, client-my-subscriptions, client-orders, live-course-order, package-order, test-series-order, client-ebook-download, client-folder, client-notification, client-lecture-progress, customer-master, tracking, goal, cms-extra, inquiry`
 
 ---
 
@@ -243,7 +243,7 @@
 | 3 | — | — | — | `freeShippingMinimumOrderAmount` | Number | required | — | — | — | 🆕 Mongo-only |
 | 4 | — | — | — | `status` | Boolean | required; true | — | — | — | 🆕 Mongo-only |
 
-### 1.10 AppUpdate — ✅ Migrated
+### 1.10 AppUpdate — ⏳ Not migrated
 
 | | |
 |---|---|
@@ -463,18 +463,22 @@
 | # | Legacy MySQL column | MySQL type | MySQL constraints | MongoDB field | Mongo type | Mongo constraints | Prisma field | Prisma type | Prisma constraints | Match |
 |---:|---|---|---|---|---|---|---|---|---|---|
 | 1 | `id` | `int` | PK AI; NOT NULL | — | — | — | `id` | Int | @id @default(autoincrement()) | ✅ SQL+Prisma |
-| 2 | `name` | `varchar(255)` | NOT NULL | `name` | String | maxlength:255 | `name` | String | — | ✅ |
-| 3 | `mobile` | `varchar(12)` | NOT NULL | `mobile` | String | maxlength:20 | `mobile` | String | — | ✅ |
-| 4 | `email` | `varchar(255)` | NULL; DEFAULT NULL | `email` | String | maxlength:255 | `email` | String | — | ✅ |
-| 5 | `city` | `varchar(100)` | NOT NULL | `city` | String | maxlength:100 | `city` | String | — | ✅ |
-| 6 | `course` | `enum('UPSC','GPSC','STI','DYSO','RFO','PI','PSI','Constable','CCE','Talati','Forest','TET_TAT','FHW_MPHW')` | NOT NULL; enum('UPSC','GPSC','STI','DYSO','RFO','PI','PSI','Constable','CCE','Talati','Forest','TET_TAT','FHW_MPHW') | `course` | String | — | `course` | Courses | — | ✅ |
-| 7 | `mode` | `enum('online','offline')` | NULL; DEFAULT NULL; enum('online','offline') | `mode` | String | — | `mode` | inquiryMode | — | ✅ |
+| 2 | `name` | `varchar(255)` | NOT NULL | `name` | String | maxlength:255 | `name` | String? | — | ✅ |
+| 3 | `mobile` | `varchar(12)` | NOT NULL | `mobile` | String | maxlength:20 | `mobile` | String? | — | ✅ |
+| 4 | `email` | `varchar(255)` | NULL; DEFAULT NULL | `email` | String | maxlength:255 | `email` | String? | — | ✅ |
+| 5 | `city` | `varchar(100)` | NOT NULL | `city` | String | maxlength:100 | `city` | String? | — | ✅ |
+| 6 | `course` | `enum('UPSC','GPSC','STI','DYSO','RFO','PI','PSI','Constable','CCE','Talati','Forest','TET_TAT','FHW_MPHW')` | NOT NULL; enum('UPSC','GPSC','STI','DYSO','RFO','PI','PSI','Constable','CCE','Talati','Forest','TET_TAT','FHW_MPHW') | `course` | String | — | `course` | Courses? | — | ✅ |
+| 7 | `mode` | `enum('online','offline')` | NULL; DEFAULT NULL; enum('online','offline') | `mode` | String | — | `mode` | inquiryMode? | — | ✅ |
 | 8 | `createdAt` | `datetime` | NULL; DEFAULT CURRENT_TIMESTAMP | `createdAt` | Date | — | `createdAt` | DateTime | @default(now()) | ✅ |
 | 9 | `updatedAt` | `datetime` | NULL; DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP | `updatedAt` | Date | — | `updatedAt` | DateTime | — | ✅ |
-| 10 | — | — | — | `customerId` | ObjectId | ref:Customer | — | — | — | 🆕 Mongo-only |
-| 11 | — | — | — | `description` | String | required; maxlength:2000 | — | — | — | 🆕 Mongo-only |
-| 12 | — | — | — | `message` | String | null | — | — | — | 🆕 Mongo-only |
-| 13 | — | — | — | `source` | String | "app"; maxlength:50 | — | — | — | 🆕 Mongo-only |
+| 10 | — | — | — | — | — | — | `customerId` | Int? | — | 🆕 Prisma-only |
+| 11 | — | — | — | — | — | — | `description` | String? | @db.VarChar(2000) | 🆕 Prisma-only |
+| 12 | — | — | — | — | — | — | `message` | String? | @db.VarChar(2000) | 🆕 Prisma-only |
+| 13 | — | — | — | — | — | — | `source` | String? | — | 🆕 Prisma-only |
+| 14 | — | — | — | `customerId` | ObjectId | ref:Customer | — | — | — | 🆕 Mongo-only |
+| 15 | — | — | — | `description` | String | required; maxlength:2000 | — | — | — | 🆕 Mongo-only |
+| 16 | — | — | — | `message` | String | null | — | — | — | 🆕 Mongo-only |
+| 17 | — | — | — | `source` | String | "app"; maxlength:50 | — | — | — | 🆕 Mongo-only |
 
 
 <a id="module-admin"></a>
@@ -1325,30 +1329,31 @@
 | 17 | `status` | `varchar(20)` | NOT NULL | `status` | BookOrderStatus | — | `status` | String | — | ✅ |
 | 18 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | `createdAt` | DateTime? | — | ✅ |
 | 19 | `updated_at` | `timestamp NULL` | NULL; DEFAULT NULL | `updatedAt` | Date | — | `updatedAt` | DateTime? | — | ✅ |
-| 20 | — | — | — | `bookId` | ObjectId | required; ref:Book | — | — | — | 🆕 Mongo-only |
-| 21 | — | — | — | `name` | String | required | — | — | — | 🆕 Mongo-only |
-| 22 | — | — | — | `qty` | Number | required; min:1  | — | — | — | 🆕 Mongo-only |
-| 23 | — | — | — | `listPrice` | Number | required; min:0  | — | — | — | 🆕 Mongo-only |
-| 24 | — | — | — | `price` | Number | required; min:0  | — | — | — | 🆕 Mongo-only |
-| 25 | — | — | — | `shippingPrice` | Number | required; 0; min:0 | — | — | — | 🆕 Mongo-only |
-| 26 | — | — | — | `weight` | Number | 0 | — | — | — | 🆕 Mongo-only |
-| 27 | — | — | — | `isMagazine` | Boolean | false | — | — | — | 🆕 Mongo-only |
-| 28 | — | — | — | `courier` | BookCourier | — | — | — | — | 🆕 Mongo-only |
-| 29 | — | — | — | `receiptId` | string | — | — | — | — | 🆕 Mongo-only |
-| 30 | — | — | — | `items` | IBookOrderItem[] | — | — | — | — | 🆕 Mongo-only |
-| 31 | — | — | — | `totalListPrice` | number | — | — | — | — | 🆕 Mongo-only |
-| 32 | — | — | — | `totalDiscountedPrice` | number | — | — | — | — | 🆕 Mongo-only |
-| 33 | — | — | — | `totalShippingPrice` | number | — | — | — | — | 🆕 Mongo-only |
-| 34 | — | — | — | `amount` | number | — | — | — | — | 🆕 Mongo-only |
-| 35 | — | — | — | `razorpayOrderId` | string | — | — | — | — | 🆕 Mongo-only |
-| 36 | — | — | — | `razorpayPaymentId` | string | — | — | — | — | 🆕 Mongo-only |
-| 37 | — | — | — | `razorpayOrderPayload` | Record<string, any> | — | — | — | — | 🆕 Mongo-only |
-| 38 | — | — | — | `tracking` | IBookOrderTracking | — | — | — | — | 🆕 Mongo-only |
-| 39 | — | — | — | `paidAt` | Date | — | — | — | — | 🆕 Mongo-only |
-| 40 | — | — | — | `shippedAt` | Date | — | — | — | — | 🆕 Mongo-only |
-| 41 | — | — | — | `deliveredAt` | Date | — | — | — | — | 🆕 Mongo-only |
-| 42 | — | — | — | `cancelledAt` | Date | — | — | — | — | 🆕 Mongo-only |
-| 43 | — | — | — | `remarks` | string | — | — | — | — | 🆕 Mongo-only |
+| 20 | — | — | — | — | — | — | `paidAt` | DateTime? | — | 🆕 Prisma-only |
+| 21 | — | — | — | `bookId` | ObjectId | required; ref:Book | — | — | — | 🆕 Mongo-only |
+| 22 | — | — | — | `name` | String | required | — | — | — | 🆕 Mongo-only |
+| 23 | — | — | — | `qty` | Number | required; min:1  | — | — | — | 🆕 Mongo-only |
+| 24 | — | — | — | `listPrice` | Number | required; min:0  | — | — | — | 🆕 Mongo-only |
+| 25 | — | — | — | `price` | Number | required; min:0  | — | — | — | 🆕 Mongo-only |
+| 26 | — | — | — | `shippingPrice` | Number | required; 0; min:0 | — | — | — | 🆕 Mongo-only |
+| 27 | — | — | — | `weight` | Number | 0 | — | — | — | 🆕 Mongo-only |
+| 28 | — | — | — | `isMagazine` | Boolean | false | — | — | — | 🆕 Mongo-only |
+| 29 | — | — | — | `courier` | BookCourier | — | — | — | — | 🆕 Mongo-only |
+| 30 | — | — | — | `receiptId` | string | — | — | — | — | 🆕 Mongo-only |
+| 31 | — | — | — | `items` | IBookOrderItem[] | — | — | — | — | 🆕 Mongo-only |
+| 32 | — | — | — | `totalListPrice` | number | — | — | — | — | 🆕 Mongo-only |
+| 33 | — | — | — | `totalDiscountedPrice` | number | — | — | — | — | 🆕 Mongo-only |
+| 34 | — | — | — | `totalShippingPrice` | number | — | — | — | — | 🆕 Mongo-only |
+| 35 | — | — | — | `amount` | number | — | — | — | — | 🆕 Mongo-only |
+| 36 | — | — | — | `razorpayOrderId` | string | — | — | — | — | 🆕 Mongo-only |
+| 37 | — | — | — | `razorpayPaymentId` | string | — | — | — | — | 🆕 Mongo-only |
+| 38 | — | — | — | `razorpayOrderPayload` | Record<string, any> | — | — | — | — | 🆕 Mongo-only |
+| 39 | — | — | — | `tracking` | IBookOrderTracking | — | — | — | — | 🆕 Mongo-only |
+| 40 | — | — | — | `paidAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 41 | — | — | — | `shippedAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 42 | — | — | — | `deliveredAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 43 | — | — | — | `cancelledAt` | Date | — | — | — | — | 🆕 Mongo-only |
+| 44 | — | — | — | `remarks` | string | — | — | — | — | 🆕 Mongo-only |
 
 ### 4.7 BookOrderItem — ⏳ Not migrated
 
@@ -2061,7 +2066,7 @@
 | 8 | `pc_material_id` | `int` | NULL; DEFAULT NULL | — | — | — | `pcMaterialId` | Int? | — | ✅ SQL+Prisma |
 | 9 | `status` | `tinyint(1)` | NOT NULL; DEFAULT '1' | `status` | Boolean | true | `active` | Boolean | — | ✅ |
 | 10 | `package_type_id` | `int` | NOT NULL; DEFAULT '1' | `packageTypeId` | Types.ObjectId | null | — | `packageTypeId` | Int? | — | ✅ |
-| 11 | `educator_id` | `int` | NULL; DEFAULT NULL | `educatorId` | Types.ObjectId | null | — | — | — | — | ✅ |
+| 11 | `educator_id` | `int` | NULL; DEFAULT NULL | `educatorId` | Types.ObjectId | null | — | `educator_id` | Int? | — | ✅ |
 | 12 | `exam_id` | `int` | NOT NULL; DEFAULT '1' | — | — | — | `examId` | Int? | — | ✅ SQL+Prisma |
 | 13 | `order_by` | `tinyint` | NOT NULL; DEFAULT '0' | — | — | — | `order_by` | Int | — | ✅ SQL+Prisma |
 | 14 | `created_at` | `timestamp NULL` | NULL; DEFAULT NULL | `createdAt` | Date | — | `created_at` | DateTime? | — | ✅ |
@@ -3072,7 +3077,8 @@
 | 4 | `key_id` | `int` | NULL; DEFAULT NULL | `keyId` | Number | — | `keyId` | Int? | — | ✅ |
 | 5 | `created_at` | `timestamp` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `createdAt` | Date | — | `createdAt` | DateTime | — | ✅ |
 | 6 | `updated_at` | `timestamp` | NOT NULL; DEFAULT CURRENT_TIMESTAMP | `updatedAt` | Date | — | `updatedAt` | DateTime | — | ✅ |
-| 7 | — | — | — | `orderBy` | Number | 0 | — | — | — | 🆕 Mongo-only |
+| 7 | — | — | — | — | — | — | `orderBy` | Int | @default(0) | 🆕 Prisma-only |
+| 8 | — | — | — | `orderBy` | Number | 0 | — | — | — | 🆕 Mongo-only |
 
 ### 9.2 OfflineBatch — ⏳ Not migrated
 

@@ -18,13 +18,65 @@ import {
   reorderSchema,
 } from "./offline.validation";
 import { buildSearchFilter } from "../../utils/searchFilter";
+import { z } from "zod";
+import {
+  isOfflineBatchMysql, parseOfflineId,
+  listCenters as sqlListCenters, getCenterDetail as sqlGetCenter,
+  createCenter as sqlCreateCenter, updateCenter as sqlUpdateCenter, deleteCenter as sqlDeleteCenter,
+  listBatches as sqlListBatches, getBatchDetail as sqlGetBatch,
+  createBatch as sqlCreateBatch, updateBatch as sqlUpdateBatch, deleteBatch as sqlDeleteBatch,
+  listBanners as sqlListBanners, createBanner as sqlCreateBanner, updateBanner as sqlUpdateBanner,
+  deleteBanner as sqlDeleteBanner, reorderBanners as sqlReorderBanners,
+} from "../../modules/offline-batch/offline-batch.service";
+import {
+  isOfflineEnquiryMysql, parseOfflineEnquiryId,
+  listEnquiriesAdmin as sqlListEnquiries, deleteEnquiryAdmin as sqlDeleteEnquiry,
+} from "../../modules/offline-enquiry/offline-enquiry.service";
+import {
+  isOfflineCityMysql, parseCityId,
+  listCitiesAdmin as sqlListCities, getCityAdmin as sqlGetCity,
+  createCityAdmin as sqlCreateCity, updateCityAdmin as sqlUpdateCity, deleteCityAdmin as sqlDeleteCity,
+} from "../../modules/offline-city/offline-city.service";
+
+// City SQL body schema: stateId dropped (no SQL column), order/status numeric.
+const cityCreateSqlSchema = z.object({
+  name: z.string().min(1).max(100),
+  image: z.string().min(1).max(500),
+  order: z.coerce.number().int().default(0),
+  status: z.boolean().optional(),
+});
+const cityUpdateSqlSchema = cityCreateSqlSchema.partial();
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
+
+// SQL-path body schemas: cityId/centerId are numeric ints (not 24-hex ObjectIds).
+const centerCreateSqlSchema = z.object({
+  name: z.string().min(1).max(255),
+  images: z.array(z.string()).default([]),
+  address: z.string().min(1),
+  latitude: z.coerce.number(),
+  longitude: z.coerce.number(),
+  phone: z.string().min(1).max(20),
+  cityId: z.coerce.number().int().positive(),
+  status: z.boolean().optional(),
+});
+const centerUpdateSqlSchema = centerCreateSqlSchema.partial();
+const batchCreateSqlSchema = z.object({
+  name: z.string().min(1).max(255),
+  image: z.string().min(1).max(500),
+  description: z.string().min(1),
+  startAt: z.string().min(1),
+  duration: z.string().min(1).max(100),
+  centerId: z.coerce.number().int().positive(),
+  status: z.boolean().optional(),
+});
+const batchUpdateSqlSchema = batchCreateSqlSchema.partial();
 
 // ─── Banners ──────────────────────────────────────────────────────────────
 
 export const listBanners = async (_req: Request, res: Response) => {
   try {
+    if (isOfflineBatchMysql()) return res.status(200).json({ success: true, data: await sqlListBanners() });
     const data = await OfflineBannerSlider.find().sort({ orderBy: 1 }).lean();
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -39,6 +91,7 @@ export const createBanner = async (req: Request, res: Response) => {
     if (typeof req.body.keyId === "string") req.body.keyId = Number(req.body.keyId);
     if (typeof req.body.orderBy === "string") req.body.orderBy = Number(req.body.orderBy);
     const data = bannerCreateSchema.parse(req.body);
+    if (isOfflineBatchMysql()) return res.status(201).json({ success: true, data: await sqlCreateBanner(data) });
     const doc = await OfflineBannerSlider.create(data);
     return res.status(201).json({ success: true, data: doc });
   } catch (e: any) {
@@ -50,12 +103,19 @@ export const createBanner = async (req: Request, res: Response) => {
 export const updateBanner = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.keyId === "string") req.body.keyId = Number(req.body.keyId);
     if (typeof req.body.orderBy === "string") req.body.orderBy = Number(req.body.orderBy);
     const data = bannerUpdateSchema.parse(req.body);
+    if (isOfflineBatchMysql()) {
+      const nid = parseOfflineId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const r = await sqlUpdateBanner(nid, data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, data: r.data });
+    }
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const doc = await OfflineBannerSlider.findByIdAndUpdate(id, { $set: data }, { new: true });
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });
     return res.status(200).json({ success: true, data: doc });
@@ -68,6 +128,13 @@ export const updateBanner = async (req: Request, res: Response) => {
 export const deleteBanner = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isOfflineBatchMysql()) {
+      const nid = parseOfflineId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const ok = await sqlDeleteBanner(nid);
+      if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, message: "Deleted." });
+    }
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const doc = await OfflineBannerSlider.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });
@@ -80,6 +147,11 @@ export const deleteBanner = async (req: Request, res: Response) => {
 export const reorderBanners = async (req: Request, res: Response) => {
   try {
     const { orders } = reorderSchema.parse(req.body);
+    if (isOfflineBatchMysql()) {
+      const count = await sqlReorderBanners(orders);
+      if (!count) return res.status(400).json({ success: false, message: "No valid ids." });
+      return res.status(200).json({ success: true, message: "Order updated." });
+    }
     const ops = orders
       .filter((o) => isObjectId(o.id))
       .map((o) => ({
@@ -99,6 +171,11 @@ export const reorderBanners = async (req: Request, res: Response) => {
 export const listCities = async (req: Request, res: Response) => {
   try {
     const { status, stateId } = req.query as Record<string, string>;
+    if (isOfflineCityMysql()) {
+      // stateId filter is a no-op on SQL (no state column).
+      const st = status === "true" ? true : status === "false" ? false : undefined;
+      return res.status(200).json({ success: true, data: await sqlListCities(st) });
+    }
     const filter: any = {};
     if (status === "true" || status === "false") filter.status = status === "true";
     if (stateId && isObjectId(stateId)) filter.stateId = stateId;
@@ -115,6 +192,13 @@ export const listCities = async (req: Request, res: Response) => {
 export const getCity = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isOfflineCityMysql()) {
+      const nid = parseCityId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = await sqlGetCity(nid);
+      if (!data) return res.status(404).json({ success: false, message: "City not found." });
+      return res.status(200).json({ success: true, data });
+    }
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const doc = await OfflineCity.findById(id).lean();
     if (!doc) return res.status(404).json({ success: false, message: "City not found." });
@@ -130,6 +214,10 @@ export const createCity = async (req: Request, res: Response) => {
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+    if (isOfflineCityMysql()) {
+      const data = cityCreateSqlSchema.parse(req.body);
+      return res.status(201).json({ success: true, data: await sqlCreateCity(data) });
+    }
     const data = cityCreateSchema.parse(req.body);
     const doc = await OfflineCity.create(data);
     return res.status(201).json({ success: true, data: doc });
@@ -142,11 +230,19 @@ export const createCity = async (req: Request, res: Response) => {
 export const updateCity = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+    if (isOfflineCityMysql()) {
+      const nid = parseCityId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = cityUpdateSqlSchema.parse(req.body);
+      const r = await sqlUpdateCity(nid, data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, data: r.data });
+    }
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const data = cityUpdateSchema.parse(req.body);
     const doc = await OfflineCity.findByIdAndUpdate(id, { $set: data }, { new: true });
     if (!doc) return res.status(404).json({ success: false, message: "City not found." });
@@ -160,6 +256,13 @@ export const updateCity = async (req: Request, res: Response) => {
 export const deleteCity = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isOfflineCityMysql()) {
+      const nid = parseCityId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const r = await sqlDeleteCity(nid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, message: "City deleted." });
+    }
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const centerCount = await OfflineCenter.countDocuments({ cityId: id });
     if (centerCount > 0)
@@ -180,6 +283,11 @@ export const deleteCity = async (req: Request, res: Response) => {
 export const listCenters = async (req: Request, res: Response) => {
   try {
     const { cityId, status } = req.query as Record<string, string>;
+    if (isOfflineBatchMysql()) {
+      const cid = cityId ? parseOfflineId(cityId) ?? undefined : undefined;
+      // status filter is a no-op on SQL (no status column — all rows active)
+      return res.status(200).json({ success: true, data: await sqlListCenters({ cityId: cid }) });
+    }
     const filter: any = {};
     if (cityId && isObjectId(cityId)) filter.cityId = cityId;
     if (status === "true" || status === "false") filter.status = status === "true";
@@ -196,6 +304,13 @@ export const listCenters = async (req: Request, res: Response) => {
 export const getCenter = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isOfflineBatchMysql()) {
+      const nid = parseOfflineId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = await sqlGetCenter(nid);
+      if (!data) return res.status(404).json({ success: false, message: "Center not found." });
+      return res.status(200).json({ success: true, data });
+    }
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const doc = await OfflineCenter.findById(id)
       .populate({ path: "cityId", model: OfflineCity })
@@ -229,6 +344,12 @@ const buildCenterPayload = (req: Request) => {
 export const createCenter = async (req: Request, res: Response) => {
   try {
     const payload = buildCenterPayload(req);
+    if (isOfflineBatchMysql()) {
+      const data = centerCreateSqlSchema.parse(payload);
+      const r = await sqlCreateCenter(data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(201).json({ success: true, data: r.data });
+    }
     const data = centerCreateSchema.parse(payload);
     const cityExists = await OfflineCity.exists({ _id: data.cityId });
     if (!cityExists) return res.status(404).json({ success: false, message: "City not found." });
@@ -243,9 +364,17 @@ export const createCenter = async (req: Request, res: Response) => {
 export const updateCenter = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const payload = buildCenterPayload(req);
     if (payload.images && payload.images.length === 0) delete payload.images;
+    if (isOfflineBatchMysql()) {
+      const nid = parseOfflineId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = centerUpdateSqlSchema.parse(payload);
+      const r = await sqlUpdateCenter(nid, data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, data: r.data });
+    }
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const data = centerUpdateSchema.parse(payload);
     const doc = await OfflineCenter.findByIdAndUpdate(id, { $set: data }, { new: true });
     if (!doc) return res.status(404).json({ success: false, message: "Center not found." });
@@ -259,6 +388,13 @@ export const updateCenter = async (req: Request, res: Response) => {
 export const deleteCenter = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isOfflineBatchMysql()) {
+      const nid = parseOfflineId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const r = await sqlDeleteCenter(nid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, message: "Center deleted." });
+    }
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const batchCount = await OfflineBatch.countDocuments({ centerId: id });
     if (batchCount > 0)
@@ -279,6 +415,13 @@ export const deleteCenter = async (req: Request, res: Response) => {
 export const listBatches = async (req: Request, res: Response) => {
   try {
     const { centerId, status, upcoming } = req.query as Record<string, string>;
+    if (isOfflineBatchMysql()) {
+      const cid = centerId ? parseOfflineId(centerId) ?? undefined : undefined;
+      return res.status(200).json({
+        success: true,
+        data: await sqlListBatches({ centerId: cid, upcoming: upcoming === "true" }),
+      });
+    }
     const filter: any = {};
     if (centerId && isObjectId(centerId)) filter.centerId = centerId;
     if (status === "true" || status === "false") filter.status = status === "true";
@@ -301,6 +444,13 @@ export const listBatches = async (req: Request, res: Response) => {
 export const getBatch = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isOfflineBatchMysql()) {
+      const nid = parseOfflineId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = await sqlGetBatch(nid);
+      if (!data) return res.status(404).json({ success: false, message: "Batch not found." });
+      return res.status(200).json({ success: true, data });
+    }
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const doc = await OfflineBatch.findById(id)
       .populate({
@@ -321,6 +471,12 @@ export const createBatch = async (req: Request, res: Response) => {
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+    if (isOfflineBatchMysql()) {
+      const data = batchCreateSqlSchema.parse(req.body);
+      const r = await sqlCreateBatch(data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(201).json({ success: true, data: r.data });
+    }
     const data = batchCreateSchema.parse(req.body);
     const centerExists = await OfflineCenter.exists({ _id: data.centerId });
     if (!centerExists) return res.status(404).json({ success: false, message: "Center not found." });
@@ -335,10 +491,18 @@ export const createBatch = async (req: Request, res: Response) => {
 export const updateBatch = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
+    if (isOfflineBatchMysql()) {
+      const nid = parseOfflineId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = batchUpdateSqlSchema.parse(req.body);
+      const r = await sqlUpdateBatch(nid, data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, data: r.data });
+    }
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const data = batchUpdateSchema.parse(req.body);
     const update: any = { ...data };
     if (data.startAt) update.startAt = new Date(data.startAt);
@@ -354,6 +518,13 @@ export const updateBatch = async (req: Request, res: Response) => {
 export const deleteBatch = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isOfflineBatchMysql()) {
+      const nid = parseOfflineId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const r = await sqlDeleteBatch(nid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, message: "Batch deleted." });
+    }
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const doc = await OfflineBatch.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ success: false, message: "Batch not found." });
@@ -370,6 +541,25 @@ export const listEnquiries = async (req: Request, res: Response) => {
   try {
     const { batchId, search, fromDate, toDate, page = "1", limit = "20" } =
       req.query as Record<string, string>;
+
+    if (isOfflineEnquiryMysql()) {
+      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+      const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+      const { data, total } = await sqlListEnquiries({
+        batchId: batchId ? parseOfflineEnquiryId(batchId) ?? undefined : undefined,
+        search: search?.trim() || undefined,
+        from: fromDate ? new Date(fromDate) : undefined,
+        to: toDate ? new Date(toDate) : undefined,
+        page: pageNum,
+        limit: limitNum,
+      });
+      return res.status(200).json({
+        success: true,
+        data,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     const filter: any = {};
     if (batchId && isObjectId(batchId)) filter.batchId = batchId;
     Object.assign(filter, buildSearchFilter(search, ["name", "mobile", "email"]));
@@ -406,6 +596,13 @@ export const listEnquiries = async (req: Request, res: Response) => {
 export const deleteEnquiry = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isOfflineEnquiryMysql()) {
+      const nid = parseOfflineEnquiryId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const ok = await sqlDeleteEnquiry(nid);
+      if (!ok) return res.status(404).json({ success: false, message: "Enquiry not found." });
+      return res.status(200).json({ success: true, message: "Enquiry deleted." });
+    }
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const doc = await OfflineEnquiry.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ success: false, message: "Enquiry not found." });

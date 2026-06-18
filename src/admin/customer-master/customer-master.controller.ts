@@ -4,18 +4,39 @@ import { CustomerState } from "../../models/customer/CustomerState.model";
 import { CustomerDistrict } from "../../models/customer/CustomerDistrict.model";
 import { CustomerEducation } from "../../models/customer/CustomerEducation.model";
 import { CustomerTargetGoal } from "../../models/customer/CustomerTargetGoal.model";
+import { z } from "zod";
 import {
   createStateSchema, updateStateSchema,
   createDistrictSchema, updateDistrictSchema,
   createEducationSchema, updateEducationSchema,
   createTargetGoalSchema, updateTargetGoalSchema,
 } from "./customer-master.validation";
+import {
+  isCustomerMasterMysql, parseId,
+  listStates as sqlListStates, createState as sqlCreateState, updateState as sqlUpdateState, deleteState as sqlDeleteState,
+  listDistricts as sqlListDistricts, createDistrict as sqlCreateDistrict, updateDistrict as sqlUpdateDistrict, deleteDistrict as sqlDeleteDistrict,
+  listEducations as sqlListEducations, createEducation as sqlCreateEducation, updateEducation as sqlUpdateEducation, deleteEducation as sqlDeleteEducation,
+  listTargetGoals as sqlListTargetGoals, createTargetGoal as sqlCreateTargetGoal, updateTargetGoal as sqlUpdateTargetGoal, deleteTargetGoal as sqlDeleteTargetGoal,
+} from "../../modules/customer-master/customer-master.service";
+
+// District bodies carry stateId as a 24-hex ObjectId on Mongo but a numeric
+// int on the SQL path. Numeric-tolerant variants used only by the SQL branch.
+const createDistrictSqlSchema = z.object({
+  name: z.string().min(1).max(255),
+  stateId: z.coerce.number().int().positive(),
+  active: z.boolean().optional().default(true),
+});
+const updateDistrictSqlSchema = createDistrictSqlSchema.partial();
+const toBool = (v?: string) => (v === "true" ? true : v === "false" ? false : undefined);
 
 // ─── States ───────────────────────────────────────────────────────────────────
 
 export const getStates = async (req: Request, res: Response) => {
   try {
     const { active } = req.query as Record<string, string>;
+    if (isCustomerMasterMysql()) {
+      return res.status(200).json({ success: true, data: await sqlListStates(toBool(active)) });
+    }
     const filters: any = {};
     if (active === "true" || active === "false") filters.active = active === "true";
     const states = await CustomerState.find(filters).sort({ name: 1 });
@@ -28,6 +49,9 @@ export const getStates = async (req: Request, res: Response) => {
 export const createState = async (req: Request, res: Response) => {
   try {
     const data = createStateSchema.parse(req.body);
+    if (isCustomerMasterMysql()) {
+      return res.status(201).json({ success: true, data: await sqlCreateState(data) });
+    }
     const state = new CustomerState(data);
     await state.save();
     return res.status(201).json({ success: true, data: state });
@@ -40,6 +64,14 @@ export const createState = async (req: Request, res: Response) => {
 export const updateState = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isCustomerMasterMysql()) {
+      const nid = parseId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid State ID" });
+      const data = updateStateSchema.parse(req.body);
+      const r = await sqlUpdateState(nid, data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, data: r.data });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid State ID" });
     const data = updateStateSchema.parse(req.body);
@@ -55,6 +87,13 @@ export const updateState = async (req: Request, res: Response) => {
 export const deleteState = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isCustomerMasterMysql()) {
+      const nid = parseId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid State ID" });
+      const r = await sqlDeleteState(nid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, message: "State deleted successfully" });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid State ID" });
     const state = await CustomerState.findByIdAndDelete(id);
@@ -70,6 +109,15 @@ export const deleteState = async (req: Request, res: Response) => {
 export const getDistricts = async (req: Request, res: Response) => {
   try {
     const { stateId, active } = req.query as Record<string, string>;
+    if (isCustomerMasterMysql()) {
+      const filter: { stateId?: number; active?: boolean } = { active: toBool(active) };
+      if (stateId) {
+        const sid = parseId(stateId);
+        if (sid == null) return res.status(400).json({ success: false, message: "Invalid stateId" });
+        filter.stateId = sid;
+      }
+      return res.status(200).json({ success: true, data: await sqlListDistricts(filter) });
+    }
     const filters: any = {};
     if (stateId) {
       if (!mongoose.Types.ObjectId.isValid(stateId))
@@ -88,6 +136,12 @@ export const getDistricts = async (req: Request, res: Response) => {
 
 export const createDistrict = async (req: Request, res: Response) => {
   try {
+    if (isCustomerMasterMysql()) {
+      const data = createDistrictSqlSchema.parse(req.body);
+      const r = await sqlCreateDistrict(data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(201).json({ success: true, data: r.data });
+    }
     const data = createDistrictSchema.parse(req.body);
     const stateExists = await CustomerState.exists({ _id: data.stateId });
     if (!stateExists)
@@ -104,6 +158,14 @@ export const createDistrict = async (req: Request, res: Response) => {
 export const updateDistrict = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isCustomerMasterMysql()) {
+      const nid = parseId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid District ID" });
+      const data = updateDistrictSqlSchema.parse(req.body);
+      const r = await sqlUpdateDistrict(nid, data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, data: r.data });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid District ID" });
     const data = updateDistrictSchema.parse(req.body);
@@ -124,6 +186,13 @@ export const updateDistrict = async (req: Request, res: Response) => {
 export const deleteDistrict = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isCustomerMasterMysql()) {
+      const nid = parseId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid District ID" });
+      const r = await sqlDeleteDistrict(nid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, message: "District deleted successfully" });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid District ID" });
     const district = await CustomerDistrict.findByIdAndDelete(id);
@@ -139,6 +208,9 @@ export const deleteDistrict = async (req: Request, res: Response) => {
 export const getEducations = async (req: Request, res: Response) => {
   try {
     const { status } = req.query as Record<string, string>;
+    if (isCustomerMasterMysql()) {
+      return res.status(200).json({ success: true, data: await sqlListEducations(toBool(status)) });
+    }
     const filters: any = {};
     if (status === "true" || status === "false") filters.status = status === "true";
     const educations = await CustomerEducation.find(filters).sort({ name: 1 });
@@ -151,6 +223,9 @@ export const getEducations = async (req: Request, res: Response) => {
 export const createEducation = async (req: Request, res: Response) => {
   try {
     const data = createEducationSchema.parse(req.body);
+    if (isCustomerMasterMysql()) {
+      return res.status(201).json({ success: true, data: await sqlCreateEducation(data) });
+    }
     const education = new CustomerEducation(data);
     await education.save();
     return res.status(201).json({ success: true, data: education });
@@ -163,6 +238,14 @@ export const createEducation = async (req: Request, res: Response) => {
 export const updateEducation = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isCustomerMasterMysql()) {
+      const nid = parseId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid Education ID" });
+      const data = updateEducationSchema.parse(req.body);
+      const r = await sqlUpdateEducation(nid, data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, data: r.data });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid Education ID" });
     const data = updateEducationSchema.parse(req.body);
@@ -178,6 +261,13 @@ export const updateEducation = async (req: Request, res: Response) => {
 export const deleteEducation = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isCustomerMasterMysql()) {
+      const nid = parseId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid Education ID" });
+      const r = await sqlDeleteEducation(nid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, message: "Education deleted successfully" });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid Education ID" });
     const education = await CustomerEducation.findByIdAndDelete(id);
@@ -193,6 +283,9 @@ export const deleteEducation = async (req: Request, res: Response) => {
 export const getTargetGoals = async (req: Request, res: Response) => {
   try {
     const { active } = req.query as Record<string, string>;
+    if (isCustomerMasterMysql()) {
+      return res.status(200).json({ success: true, data: await sqlListTargetGoals(toBool(active)) });
+    }
     const filters: any = {};
     if (active === "true" || active === "false") filters.active = active === "true";
     const goals = await CustomerTargetGoal.find(filters).sort({ name: 1 });
@@ -205,6 +298,9 @@ export const getTargetGoals = async (req: Request, res: Response) => {
 export const createTargetGoal = async (req: Request, res: Response) => {
   try {
     const data = createTargetGoalSchema.parse(req.body);
+    if (isCustomerMasterMysql()) {
+      return res.status(201).json({ success: true, data: await sqlCreateTargetGoal(data) });
+    }
     const goal = new CustomerTargetGoal(data);
     await goal.save();
     return res.status(201).json({ success: true, data: goal });
@@ -217,6 +313,14 @@ export const createTargetGoal = async (req: Request, res: Response) => {
 export const updateTargetGoal = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isCustomerMasterMysql()) {
+      const nid = parseId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid Target Goal ID" });
+      const data = updateTargetGoalSchema.parse(req.body);
+      const r = await sqlUpdateTargetGoal(nid, data);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, data: r.data });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid Target Goal ID" });
     const data = updateTargetGoalSchema.parse(req.body);
@@ -232,6 +336,13 @@ export const updateTargetGoal = async (req: Request, res: Response) => {
 export const deleteTargetGoal = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isCustomerMasterMysql()) {
+      const nid = parseId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid Target Goal ID" });
+      const r = await sqlDeleteTargetGoal(nid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      return res.status(200).json({ success: true, message: "Target Goal deleted successfully" });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid Target Goal ID" });
     const goal = await CustomerTargetGoal.findByIdAndDelete(id);

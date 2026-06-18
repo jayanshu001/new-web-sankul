@@ -4,6 +4,308 @@
 
 ---
 
+## 2026-06-18 — ✅ Wave 8 COMPLETE: DDL batch — 5 new tables + 2 ALTERs + 7 modules migrated to SQL
+
+Closed out Wave 8 with the table-creating modules. **DDL** `docs/migration/schema-changes/2026-06-18_create_wave8_misc_tables.sql`
+(applied to staging, idempotent):
+- **5 new tables:** `ws_activity_log`, `ws_goal`, `ws_social_link_type`, `ws_social_link`, `ws_current_affair`,
+  `ws_live_banner_slider` (6 incl. the type table).
+- **2 ALTERs:** `ws_website_inquiry` +customer_id/description/message/source (+ existing name/mobile/email/city →
+  nullable; note its timestamp cols are camelCase `createdAt`/`updatedAt`); `ws_offline_banner_slider` +order_by.
+- 8 Prisma models added/extended (ActivityLog, Goal, SocialLinkType, SocialLink, CurrentAffair, LiveBannerSlider +
+  Inquiry/OfflineBannerSlider edits); `prisma generate` run.
+
+**Modules + branches (flags ON: `tracking`, `goal`, `cms-extra`, `inquiry`; Banner on existing `offline-batch`):**
+- **tracking** — `src/modules/tracking/tracking.service.ts`; 2 admin handlers (list + summary). Summary uses Prisma
+  groupBy (byEvent) + raw SQL for dailyCount (Y/M/D) + distinct customerId count.
+- **goal** — `src/modules/goal/goal.service.ts`; branched INSIDE `goal.admin.service.ts` (keeps shared Redis cache +
+  S3 cleanup). labels stored as JSON [{name}] (Mongo label _ids dropped). SQL search = title only (labels are JSON).
+- **cms-extra** — `src/modules/cms/cms-extra.service.ts`; SocialLinkType/SocialLink/CurrentAffair/LiveBannerSlider.
+  16 cms.controller handlers converted from genericX factories to dual-path. SocialLink hydrates typeId manually
+  (scalar FK, no Prisma relation); SocialLinkType delete keeps the in-use→409 guard; LiveBanner reorder works
+  (order_by). liveCourseId exposed as a string id (full live-course populate NOT reproduced — admin list only needs id).
+- **inquiry** — `src/modules/inquiry/inquiry.service.ts`; admin list/get/delete + client submit. customer-populate
+  hydrates from ws_customer (full_name split → first/last + phoneNumber + emailAddress).
+- **offline Banner** — added to `offline-batch` module (list/create/update/delete/reorder); order_by now sortable.
+
+**Verified** `scripts/verify-wave8-ddl-sql.ts` → **34/34 PASS** (all CRUDs, tracking summary aggregation, goal labels
+JSON, SocialLinkType in-use 409, LiveBanner+offline-Banner orderBy sort & reorder, inquiry customer-populate, FK 404s,
+no residue). `tsc` clean. **🏁 WAVE 8 DONE — all misc/low-value modules on SQL.**
+
+---
+
+## 2026-06-18 — ✅ VideoCategory DAG resolver built on SQL (recursive CTE) — the prerequisite that unblocks the 6 DAG consumers
+
+Built the SQL equivalent of the Mongo category-tree walk — the long-flagged prerequisite for the container
+lecture-progress heartbeats + resume/learning reads + catalog/free/material/dashboard category rollups.
+
+**KEY FINDING (corrected a prior assumption):** the SQL DAG data is ALREADY PRESENT — `ws_video_category` (157
+rows, all with `parent`) + `ws_video_category_relation` (2456 parent/child edge rows). **No backfill needed** (the
+edges came with the catalog migration / staging dump). Earlier notes that said "ws_video_category empty, needs
+backfill" were wrong.
+
+**New module** `src/modules/catalog-category-tree/category-tree.service.ts` (flag `catalog-category-tree`):
+- `descendantsOf(rootIds)` — DOWN-walk via `WITH RECURSIVE` over ws_video_category_relation (parent→child), depth
+  cap 20 (cycle-safe), deduped. SQL mirror of Mongo `collectCategoryTreeIds` BFS.
+- `ancestorsOf(leafIds)` — UP-walk (child→parent). Mirrors the bounded ancestorChain in resolveVideoCourse/Scope.
+- `reachableCategoryIds(kind, scopeId)` — course/liveCourse/package → linked roots → full subtree. SQL mirror of
+  `resolveScopedReachableVideoCategoryIds`. Package roots = PackageSpecificSubject.subjectId + both endpoints of
+  each linked VideoCategoryRelation (via ws_video_category_package_relation).
+- `resolveVideoScope(catId)` / `resolveVideoCourseId(catId)` — owning container/course by leaf+ancestors.
+- ⚠ **CTE seed fix:** seed the recursion from the root ids as literal `SELECT n` UNIONs, NOT
+  `WHERE id IN (...) FROM ws_video_category` — staging has relation edges whose endpoints aren't in the 157-row
+  category table, and gating the seed on table membership made the recursion never start.
+- ⚠ **drift:** ws_video_category has no `live_course_id` tag column (Mongo-only), so liveCourse reachability uses
+  only the LiveCourse.videoCategoryId downward pointer (no tagged-category roots).
+
+**Verified against real SQL data** `scripts/verify-category-tree-sql.ts` → **13/13 PASS**: descendantsOf (root +
+all children + dedup + multi-level), ancestorsOf (leaf + parent), reachableCategoryIds(course) [⊇ descendantsOf(root)]
++ (package) [specific-subject root], resolveVideoScope→course, resolveVideoCourseId→course id, null/empty guards.
+`tsc` clean. **Flag `catalog-category-tree` NOT yet in `.env`** — turn on only when the first consumer flips (the
+resolver is inert until a consumer calls it).
+
+**⏭️ NEXT — consumers flip ONE SLICE AT A TIME (not all at once):** the 6 DAG consumers (catalog, course.service,
+progress heartbeat ×2, dashboard, free) are each a FULL Mongo→SQL consumer migration — they operate in Mongo
+ObjectId space today, so the tree-walk can't be swapped in isolation; the whole handler must flip so the resolver
+receives SQL int ids. The resolver is the unblocker; flipping is now per-consumer work. Cleanest first flip =
+the container progress heartbeat (pairs with the already-ON `client-lecture-progress` free-video slice).
+
+---
+
+## 2026-06-18 — ✅ Wave 8 cont.: offline CITY admin CRUD migrated to SQL, no DDL (+ inquiry & Banner reclassified to DDL-needed)
+
+Continued the offline pass with the **City** admin CRUD (5 handlers) — the last clean no-DDL offline slice.
+
+**`offline-city` module** (flag `offline-city` already ON for cart/address) — added admin CRUD to the existing
+read module: repo `listAll`/`create`/`update`/`remove`/`countCenters`; service `listCitiesAdmin` (incl. inactive,
+status filter), `getCityAdmin`, `createCityAdmin`, `updateCityAdmin`, `deleteCityAdmin` (Envelope: 404 missing,
+409 city-with-centers). **Drift:** `ws_offline_city` has NO `stateId` column (Mongo field optional/default null),
+so the admin state filter + `.populate("stateId")` are dropped — consistent with this module's read precedent.
+
+**Controller** — 5 City handlers in `offline.controller.ts` branched on `isOfflineCityMysql()`. SQL body schema
+omits stateId; numeric id/order. Verified `scripts/verify-offline-city-admin-sql.ts` → **14/14 PASS** (CRUD, status
+filter active/inactive, center-FK 409 guard, 404s, no residue). `tsc` clean.
+
+**Two siblings RECLASSIFIED to DDL-needed (investigated, NOT migrated):**
+- **inquiry** — SQL `ws_website_inquiry` is a LEGACY schema: Prisma `Inquiry` has only name/mobile/email/city/
+  course/mode. MISSING `customer_id`, `description`, `message`, `source` that the Mongo model + admin reads use
+  (`.populate("customerId")` + search on `description`). Flipping as-is drops the customer link + description →
+  breaks the admin view. Needs ALTER TABLE first.
+- **offline Banner** — `ws_offline_banner_slider` has image/key/key_id but NO `order_by`; the Mongo banner sorts by
+  `orderBy` + has a `reorderBanners` endpoint (both no SQL home → reorder would silently no-op). Needs ALTER TABLE
+  (add `order_by`) first.
+
+**Net:** all genuinely no-DDL Wave 8 slices are now done. Everything remaining needs a table create or ALTER —
+deferred to a sign-off batch.
+
+---
+
+## 2026-06-18 — ✅ Wave 8 cont.: offline admin CRUD (Center / Batch / Enquiry) migrated to SQL, no DDL
+
+Completed the offline admin pass — the Prisma models already existed (no DDL); the existing `offline-batch` +
+`offline-enquiry` modules had only client READS, so I added the admin WRITE surface and branched the 12 admin
+handlers in `src/admin/offline/offline.controller.ts`.
+
+**`offline-batch` module** (flag `offline-batch` ON) — consolidated Center + Batch admin CRUD here (transformers
+`toOfflineCenterDto`/`toOfflineBatchDto` already lived in this module):
+- Repo: `createCenter`/`updateCenter`/`deleteCenter`/`countBatchesInCenter`/`cityExists`,
+  `createBatch`/`updateBatch`/`deleteBatch`/`deleteEnquiriesInBatch`.
+- Service: `createCenter`/`updateCenter`/`deleteCenter` + `createBatch`/`updateBatch`/`deleteBatch` (Envelope
+  pattern: FK-missing→404, center-with-batches→409). Drifts handled: `images[]`↔JSON `image` col, `phone`↔BigInt,
+  `description`↔`discription` col [sic], NO `status` col → dropped on write + synthesized true on read.
+  deleteBatch cascades `ws_offline_enquiry` (mirrors Mongo).
+
+**`offline-enquiry` module** (flag `offline-enquiry` ON) — added admin `listEnquiriesAdmin` (paginated, batch-
+populated, name/email search + date range) + `deleteEnquiryAdmin`. `mobile` BigInt→string in DTO.
+
+**Controller** — 12 handlers branched on `isOfflineBatchMysql()` / `isOfflineEnquiryMysql()` (Center 5, Batch 5,
+Enquiry 2). SQL-path body schemas accept numeric cityId/centerId (Mongo path keeps 24-hex). Banner/City admin
+handlers untouched (City already had its own module; Banner = OfflineBannerSlider, separate).
+
+**Verified** `scripts/verify-offline-admin-sql.ts` (full City→Center→Batch→Enquiry chain, self-cleans) →
+**23/23 PASS**: images[] JSON round-trip, BigInt phone/mobile as string, status-synth, city/center populate,
+FK-missing 404s, center-with-batches 409 block, batch-delete→enquiry cascade, enquiry search. No residue.
+`tsc` clean. **Flags `offline-batch` + `offline-enquiry` ON.**
+
+---
+
+## 2026-06-18 — ✅ Wave 8 STARTED: `customer-master` (4 lookup tables) + `ImageNotification` CRUD migrated to SQL, no DDL
+
+Audited all 7 Wave 8 ("misc / low-value") clusters; migrated the two ZERO-DDL slices (Prisma models already exist).
+No blocker exists to starting Wave 8 — it's independent of the VideoCategory-DAG prerequisite (that gates only the
+container lecture-progress paths, NOT Wave 8).
+
+**`customer-master`** (new flag) — `src/admin/customer-master/customer-master.controller.ts` (all 16 handlers)
+branches on `isCustomerMasterMysql()` → new `src/modules/customer-master/customer-master.service.ts`. Four flat
+lookup tables, no new DDL:
+- State (`ws_customer_state`, field `state_code`←`stateCode`), District (`ws_customer_distict` [sic],
+  FK `stateId`@map("state"), populated state DTO mirrors Mongo `.populate("stateId","_id name stateCode")`),
+  Education (`ws_customer_education`, `status` not `active`), TargetGoal (`ws_customer_target_goal`, required
+  `image` defaulted to ""). DTOs emit `_id` string + Mongo-shaped keys. District `stateId` body is numeric on SQL
+  (numeric-tolerant zod variant in the controller; Mongo path keeps the 24-hex schema). FK existence → 404.
+
+**`ImageNotification`** (same `client-notification` flag — same cluster) — the 4 ImageNotification handlers in
+`notification.controller.ts` now branch to new SQL fns in `admin-notification.service.ts`
+(`listImageNotifications`/`create`/`update`/`delete`; `ws_image_notification`, `redirect_url`←`redirectUrl`,
+no timestamps so list sorts `id desc`). Completes the notification cluster (the 3 ImageNotification handlers were
+the last Mongo holdouts there).
+
+**Verified** `scripts/verify-wave8-sql.ts` (creates/mutates/deletes own rows, self-cleans) → **24/24 PASS**:
+all 4 lookup CRUDs incl. District→State FK validation + populated DTO, ImageNotification CRUD, 404/null on missing,
+no residue. `tsc` clean. **Flags `customer-master` + `client-notification` (for images) ON.**
+
+⏸️ **Wave 8 remaining = the 6 DDL-needing modules (reported for decision, NOT yet built):** ActivityLog (tracking),
+Goal, SocialLink(+Type), CurrentAffair, LiveBannerSlider — each needs a net-new table. Offline center/batch/enquiry
+admin CRUD: models EXIST but need their own module pass. Inquiry: model exists but drifts (no customerId/description).
+
+---
+
+## 2026-06-18 — ✅ `client-lecture-progress` FREE-VIDEO slice migrated to SQL + flag ON (cleanest slice; container/DAG paths stay Mongo)
+
+Took the **cleanest independently-shippable slice** of the 14-file lecture-progress hub: the standalone free-video
+vertical. It needs NO content-graph — `reportFreeVideoProgress` validates only `Video.status`+`priceType=free`
+(free identity = entitlement, no scope/DAG); `listFreeVideoResume` joins only `ws_video` + `ws_video_category`
+(title/image), both already SQL. The container-scoped heartbeat + resume/learning reads STAY Mongo (they need the
+`VideoCategory.childCategoryIds` DAG migrated first — separate effort, untouched).
+
+**No schema change** — reused existing `ws_lecture_progress` (Prisma `LectureProgress`).
+
+**SQL module** `src/modules/client-lecture-progress/client-lecture-progress.service.ts` — added:
+- `listFreeResume(customerId, limit)` — free cards (source=free rows → join live+free `ws_video` + category
+  title/image), mirrors the Mongo card shape exactly. Drops videos flipped to paid/disabled.
+- `findLiveVideo(videoId)` — returns `{id, priceType}` for the controller's 404-vs-403 split.
+- (`upsertVideoProgress` with `source:"free"` already existed — reused for the heartbeat write.)
+
+**Controller branched** `src/client/free/freeProgress.controller.ts` on `isLectureProgressMysql()`:
+- `reportFreeVideoProgress` — SQL path parses int id, `findLiveVideo` (missing→404, paid→403), `upsertVideoProgress`.
+- `listFreeVideoResume` — SQL path delegates to `listFreeResume`. Envelope unchanged.
+
+**Verified end-to-end** `scripts/verify-free-progress-sql.ts` (real live customer + free video, self-cleans) →
+**20/20 PASS**: heartbeat create/update/completion-at-95%/sticky-after-rewind/single-row-upsert, guards
+(live→ok, unknown→404, paid→403), resume card shape + daysLeft=null + resumeNext, paid-video excluded from feed,
+AND join correctness proven both ways (graceful null on the staging dangling vcategory_id FK; real category
+hydrates when present). No DB residue. `tsc` clean. **Flag `client-lecture-progress` ENABLED in `.env`.**
+
+⚠ **What's still Mongo under this flag** (documented, NOT yet migrated — needs the VideoCategory DAG SQL layer):
+the 2 container heartbeats (`course/progress.controller.ts` reportLectureProgress via `scopeReachableCategories`,
+`learning/progress.controller.ts` reportLiveSessionProgress), and all resume/learning READS
+(`learning/progress.controller.ts` listMyLearningProgress, `course/progress.controller.ts` listMyCoursesForResume,
+`learning/resumeCard.ts`, `dashboard.controller.ts` getResumeDashboard). The free-video heartbeat shares the SAME
+`ws_lecture_progress` table, so when those flip later they read consistently — no data split (free rows carry
+`source=free`, container rows carry pointers; disjoint).
+
+---
+
+## 2026-06-18 — ✅ `client-notification` prerequisite (b): admin notification WRITE subsystem migrated to SQL (dual-read cutover)
+
+Resolved the SECOND `client-notification` blocker — the admin write subsystem (audience + dispatcher + scheduler +
+controller), which was the real work behind the "BullMQ job identity" note. The BullMQ jobId is just `String(id)`
+(works for int or hex); the actual coupling was Mongo reads/writes throughout the write path.
+
+**New SQL module** `src/modules/admin-notification/admin-notification.service.ts`:
+- `resolveAudience` — platforms/courses/users → SQL customer ids. Course-targeting via
+  `ws_package_course_subscription` with **`status: true` + endAt null/future** (NO payment_status column — documented
+  drift). Token-owning gate uses `ws_customer_device_token` (the part-(a) table), not `Customer.firebaseTokens`.
+- `dispatchAudience` — collect tokens (broadcast = all live accounts' tokens), `sendPush`, then for targeted sends
+  fan out per-recipient rows via `prisma.notification.createMany`.
+- `dispatchScheduledById` — atomic claim "scheduled"→"sent" via conditional `updateMany` count (no double-send),
+  dispatch, persist; rollback to "scheduled" on throw (BullMQ retries).
+- `existsSql` / `markFailed` / `listScheduledForRehydrate` — worker dual-read routing + boot rehydrate.
+- Controller persistence: `createScheduled` (returns int id = jobId), `createImmediateLog`, `cancelScheduled`,
+  `listAdminLog`, `bulkDelete`, `deleteOne`.
+
+**Legacy files branched on `isAdminNotificationMysql()`:**
+- `src/admin/notification/dispatcher.ts` — `dispatchAudience` + `dispatchScheduledById` delegate to SQL when on.
+  `DispatchResult.targetCustomerIds` widened to `(ObjectId | number)[]` (callers only read `.length`).
+- `src/admin/notification/scheduler.ts` — `rehydrate` reads SQL scheduled rows PLUS leftover Mongo scheduled rows
+  (drain window); worker failed-listener dual-reads (`existsSql` → SQL `markFailed`, else Mongo `$set failed`).
+- `src/admin/notification/notification.controller.ts` — all 6 handlers branched (broadcast scheduled+immediate,
+  cancel, list, bulk-delete, delete). Id-validation switches hex→numeric on the SQL path (`isValidId`). The 3
+  ImageNotification handlers STAY Mongo (no `ws_image_notification` consumer + no SQL table).
+
+**CUTOVER STRATEGY — dual-read worker fallback (user-recommended):** the BullMQ worker routes each job by id —
+a numeric id resolving to a SQL row dispatches via SQL; a non-numeric id (legacy Mongo `_id` hex) or one with no SQL
+row falls through to the Mongo path. So scheduled jobs queued BEFORE the flip still fire correctly; the fallback
+self-retires once Redis drains pre-cutover jobs. No ops timing window, zero lost notifications.
+
+`tsc` clean. **Flag `client-notification` ENABLED in `.env`. VERIFIED END-TO-END:**
+`scripts/verify-notification-sql.ts` (reuses a live customer + throwaway device token, self-cleans, FCM disabled
+for the run) → **23/23 PASS**: audience (broadcast/targeted/token-gated), immediate send + per-recipient fanout,
+schedule→claim→fire (claim-lock proven — double-fire is a no-op), dual-read routing (existsSql: SQL int vs Mongo
+hex vs unknown), cancel, list (parent-rows-only), delete, bulk-delete. No residue left in DB. **`client-notification`
+is DONE** — only `client-lecture-progress` (Mongo content-graph blocked) remains of the two OFF consumers.
+
+---
+
+## 2026-06-18 — ✅ `client-notification` prerequisite (a): multi-device FCM token table `ws_customer_device_token` CREATED + backfilled + rewired
+
+Resolved the FIRST of the two `client-notification` blockers (the FCM multi-device token store). The second
+blocker (BullMQ scheduled-job identity) is untouched — flag stays OFF until that lands too.
+
+**New table** (`docs/migration/schema-changes/2026-06-18_create_customer_device_token.sql`):
+- `ws_customer_device_token` (INT PK) — one row per `(customer_id, token)`. `token` is **globally UNIQUE**
+  (`uniq_device_token`) so a handset re-registering MOVES the row to the new owner — mirrors Mongo's token-keyed
+  two-step `$pull`-then-`$push` upsert into `Customer.firebaseTokens[]`. `platform` VARCHAR(16), nullable
+  timestamps. Index `idx_dt_customer (customer_id, updated_at)`. No hard FK (0/null-sentinel tolerance).
+- Prisma model `CustomerDeviceToken` added to `schema.prisma` (after `FolderItem`); `prisma generate` run.
+
+**Backfill** (`scripts/backfill-customer-device-tokens.ts`): idempotent (CREATE IF NOT EXISTS + DELETE-then-insert).
+Bridge = Mongo customer `_id` → `ws_customers.phoneNumber` → `ws_customer.id` (same as Wave 7). De-dups by token,
+newest `updatedAt` wins. Staging run: 4 docs with `firebaseTokens`, all 4 missed the phone bridge / had 0 tokens
+(`{docsIn:4, tokensIn:0, custMiss:4, out:0}`) — same staging-vs-prod bridge gap noted across this migration; table
+created + queryable (row count 0).
+
+**Rewire** (`src/modules/customer-profile/customer-profile.repository.ts`): `setDeviceToken` /
+`setDeviceTokenByPhone` now upsert into the child table (token-keyed, via `upsertDeviceToken` helper) instead of
+overwriting the single `device` column; `clearDeviceToken` deletes the matching row. The legacy single `device`
+column is kept in sync (newest wins) so the Mongo-mirrored read still works. Added `listDeviceTokens` (FCM fan-out)
+and `pruneDeviceTokens` (dead-token cleanup). `setDeviceToken` returns `{count:0}` for a missing customer (404
+preserved). Service envelope unchanged.
+
+**FCM prune** (`src/utils/fcm.ts`): invalid-token cleanup now branches — when `isMysqlModule("customer-profile")`,
+prune `ws_customer_device_token`; else keep the Mongo `$pull`. `tsc` clean. **`client-notification` flag still OFF**
+(BullMQ job-identity cutover remains).
+
+---
+
+## 2026-06-18 — 🔎 Wave 7 follow-up: investigated flipping the 2 OFF consumers — both confirmed BLOCKED (code-backed), flags stay OFF
+
+Attempted to finish `client-notification` + `client-lecture-progress` (the RESUME POINTER next-step) under a strict
+**"nothing breaks"** mandate. Deep investigation found both have **structural** blockers (not effort) — flipping
+either would break live behavior or split data. No code changed; flags remain OFF. Documented so the next session
+doesn't re-investigate.
+
+**`client-notification` — BLOCKED on FCM token store + BullMQ job identity:**
+- The write path's FCM delivery reads Mongo Customer `firebaseTokens[]` (a multi-device ARRAY, with invalid-token
+  `$pull` pruning in `utils/fcm.ts`). SQL `ws_customer` has only a SINGLE legacy token: `firebaseToken @map("device")`
+  — **no multi-device array, no token table**. Migrating delivery to SQL = lossy (push to one device only) → breaks
+  multi-device users. A faithful flip needs a NEW `ws_customer_device_token` child table + backfill + rewiring
+  `registerDeviceToken`/fcm pruning first.
+- The SCHEDULED path (controller → BullMQ `scheduleNotificationJob` → `dispatchScheduledById`) keys jobs by the Mongo
+  `_id`. Moving scheduled rows to SQL int ids would orphan in-flight BullMQ jobs unless drained/migrated.
+- Audience course-targeting (`PackageCourseSubscription.distinct`) IS SQL-ready; the claim-lock (`findOneAndUpdate`
+  status scheduled→sent) maps to a conditional `updateMany`+count. Those aren't the blocker — tokens + job identity are.
+
+**`client-lecture-progress` — BLOCKED on the Mongo content graph (no SQL equivalent):**
+- All 3 heartbeat writers (`course/progress.controller.ts`, `learning/progress.controller.ts`,
+  `free/freeProgress.controller.ts`) validate the route id with `objectId.parse()` (24-hex) — rejects numeric SQL ids.
+- The recorded-video heartbeat is GATED by `scopeReachableCategories.ts::resolveScopedReachableVideoCategoryIds`,
+  which walks the Mongo `VideoCategory.childCategoryIds` DAG tree. **No SQL equivalent** (`ws_video_category` has no
+  recursive hierarchy nav). Skipping it = breaks the reachability entitlement check.
+- The resume/learning READS (resumeCard.ts, learning/progress.controller.ts, course.service.ts, catalog +
+  categories controllers) join LectureProgress to Mongo-only content: Course, Package, LiveCourse, LiveSession,
+  VideoCategory, CourseEducator (none have SQL tables/usable hierarchy). Progress-in-SQL + content-in-Mongo → joins
+  can't resolve → empty/broken resume feed.
+- Entitlement subs (ws_package_course_subscription, ws_live_course_subscription) + ws_video DO exist; the blocker is
+  the VideoCategory tree + the Course/LiveCourse/LiveSession content layer, which must migrate first.
+
+**Conclusion:** both remaining OFF consumers depend on prerequisite migrations (FCM device-token table + BullMQ
+job-id cutover; the VideoCategory-tree + content-graph SQL layer) that are their own efforts and carry live-system
+break risk that can't be verified on staging. Left flag-OFF per the nothing-breaks mandate. Their SQL modules remain
+code-complete + ready for when those prerequisites land.
+
+---
+
 ## 2026-06-18 — 🔌 Wave 7: wired the new-table consumers — ebook-download + folder ON; notification + lecture-progress code-complete (flag OFF)
 
 Follow-up to creating the 8 tables: built the consumer modules so the previously-blocked surfaces run on SQL.

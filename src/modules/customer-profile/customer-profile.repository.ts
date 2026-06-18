@@ -46,32 +46,76 @@ export const customerProfileRepository = {
   setProfilePicture: (id: number, url: string) =>
     prisma.customer.update({ where: { id }, data: { profile_picture: url, updatedAt: new Date() } }),
 
-  /** Single device token (newest wins) — legacy `device` column semantics. */
-  setDeviceToken: (id: number, token: string, platform?: string) =>
-    prisma.customer.updateMany({
-      where: { id, isAccountDeleted: false },
-      data: {
-        firebaseToken: token,
-        ...(platform === "ios" || platform === "android" ? { os_type: platform } : {}),
-        updatedAt: new Date(),
-      },
-    }),
+  // ── Device tokens — multi-device child table ws_customer_device_token ──────────
+  // Mirrors Mongo Customer.firebaseTokens[] (token-keyed upsert: the token moves
+  // to whichever customer last registered it). Also keeps the legacy single
+  // `device` column in sync (newest wins) so the Mongo-mirrored read still works.
 
-  /** Clear the device token if it matches (logout on this device). */
-  clearDeviceToken: (id: number, token: string) =>
-    prisma.customer.updateMany({
+  /** Register/move a device token to this customer. Returns {count} for 404. */
+  setDeviceToken: async (id: number, token: string, platform?: string) => {
+    const customer = await prisma.customer.findFirst({
+      where: { id, isAccountDeleted: false },
+      select: { id: true },
+    });
+    if (!customer) return { count: 0 };
+    await upsertDeviceToken(id, token, platform);
+    return { count: 1 };
+  },
+
+  /** Remove a single device token (logout on this device). */
+  clearDeviceToken: async (id: number, token: string) => {
+    await prisma.customerDeviceToken.deleteMany({ where: { customerId: id, token } });
+    // Clear the legacy column too if it held this token.
+    await prisma.customer.updateMany({
       where: { id, isAccountDeleted: false, firebaseToken: token },
       data: { firebaseToken: null, updatedAt: new Date() },
+    });
+    return { count: 1 };
+  },
+
+  /** Register a device token by phone (post-login sync; no auth context). */
+  setDeviceTokenByPhone: async (phone: string, token: string, platform?: string) => {
+    const customer = await prisma.customer.findFirst({
+      where: { phoneNumber: phone, isAccountDeleted: false },
+      select: { id: true },
+    });
+    if (!customer) return { count: 0 };
+    await upsertDeviceToken(customer.id, token, platform);
+    return { count: 1 };
+  },
+
+  /** All active device tokens for a customer (for FCM fan-out). */
+  listDeviceTokens: (id: number) =>
+    prisma.customerDeviceToken.findMany({
+      where: { customerId: id },
+      select: { token: true },
     }),
 
-  /** Set device token by phone (post-login device sync; no auth context). */
-  setDeviceTokenByPhone: (phone: string, token: string, platform?: string) =>
-    prisma.customer.updateMany({
-      where: { phoneNumber: phone, isAccountDeleted: false },
-      data: {
-        firebaseToken: token,
-        ...(platform === "ios" || platform === "android" ? { os_type: platform } : {}),
-        updatedAt: new Date(),
-      },
-    }),
+  /** Prune invalid tokens reported by FCM (mirrors Mongo $pull on dead tokens). */
+  pruneDeviceTokens: (tokens: string[]) =>
+    prisma.customerDeviceToken.deleteMany({ where: { token: { in: tokens } } }),
 };
+
+/**
+ * Token-keyed upsert into ws_customer_device_token. The `token` column is
+ * UNIQUE, so re-registering an existing token moves it to the new owner +
+ * refreshes platform/updatedAt — matching Mongo's two-step $pull/$push. Also
+ * mirrors the token into the legacy single `device` column (newest wins).
+ */
+async function upsertDeviceToken(customerId: number, token: string, platform?: string) {
+  const now = new Date();
+  const plat = platform === "ios" || platform === "android" ? platform : null;
+  await prisma.customerDeviceToken.upsert({
+    where: { token },
+    update: { customerId, platform: plat ?? undefined, updatedAt: now },
+    create: { customerId, token, platform: plat, createdAt: now, updatedAt: now },
+  });
+  await prisma.customer.updateMany({
+    where: { id: customerId, isAccountDeleted: false },
+    data: {
+      firebaseToken: token,
+      ...(plat ? { os_type: plat } : {}),
+      updatedAt: now,
+    },
+  });
+}

@@ -69,4 +69,66 @@ export const offlineBatchRepository = {
       orderBy: { startAt: "asc" },
       take,
     }),
+
+  // ── admin writes (Wave 8) ──────────────────────────────────────────────────
+  cityExists: (id: number) =>
+    prisma.offlineCity.findUnique({ where: { id }, select: { id: true } }),
+
+  createCenter: (data: {
+    name: string; image: any; address: string; latitude: number; longitude: number;
+    phone: bigint; cityId: number;
+  }) => {
+    const now = new Date();
+    return prisma.offlineCenter.create({
+      data: { ...data, createdAt: now, updatedAt: now },
+      include: { city: true },
+    });
+  },
+
+  updateCenter: (id: number, data: Record<string, unknown>) =>
+    prisma.offlineCenter.update({
+      where: { id },
+      data: { ...data, updatedAt: new Date() },
+      include: { city: true },
+    }),
+
+  deleteCenter: (id: number) => prisma.offlineCenter.delete({ where: { id } }),
+
+  countBatchesInCenter: (centerId: number) =>
+    prisma.offlineBatch.count({ where: { centerId } }),
+
+  createBatch: (data: {
+    name: string; image: string; discription: string; startAt: Date; duration: string; centerId: number;
+  }) => {
+    const now = new Date();
+    return prisma.offlineBatch.create({
+      data: { ...data, createdAt: now, updatedAt: now },
+      include: { center: { include: { city: true } } },
+    });
+  },
+
+  updateBatch: (id: number, data: Record<string, unknown>) =>
+    prisma.offlineBatch.update({
+      where: { id },
+      data: { ...data, updatedAt: new Date() },
+      include: { center: { include: { city: true } } },
+    }),
+
+  deleteBatch: (id: number) => prisma.offlineBatch.delete({ where: { id } }),
+
+  deleteEnquiriesInBatch: (batchId: number) =>
+    prisma.offlineEnquiry.deleteMany({ where: { batchId } }),
+
+  // ── offline banner (OfflineBannerSlider) ────────────────────────────────────
+  listBanners: () => prisma.offlineBannerSlider.findMany({ orderBy: { orderBy: "asc" } }),
+  findBannerById: (id: number) => prisma.offlineBannerSlider.findUnique({ where: { id }, select: { id: true } }),
+  createBanner: (data: { image: string; key: string | null; keyId: number | null; orderBy: number }) => {
+    const now = new Date();
+    return prisma.offlineBannerSlider.create({ data: { ...data, createdAt: now, updatedAt: now } });
+  },
+  updateBanner: (id: number, data: Record<string, unknown>) =>
+    prisma.offlineBannerSlider.update({ where: { id }, data: { ...data, updatedAt: new Date() } }),
+  deleteBanner: (id: number) => prisma.offlineBannerSlider.delete({ where: { id } }),
+  reorderBanner: (id: number, orderBy: number) =>
+    prisma.offlineBannerSlider.updateMany({ where: { id }, data: { orderBy, updatedAt: new Date() } }),
 };

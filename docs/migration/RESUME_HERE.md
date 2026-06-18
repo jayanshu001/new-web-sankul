@@ -2,10 +2,16 @@
 
 > **Purpose:** Cold-start context so any session can resume **exactly** here without losing flow, behaviour,
 > or any established rule. This is THE single source of truth for "where we are."
-> **Last updated:** 2026-06-18 — ✅ **Waves 1–7 COMPLETE on SQL.** Wave 6 (LiveCourse, 14 tables) DONE; Wave 7
-> (aggregators + full payment + the 8 net-new blocked tables) DONE — test-series/ebook-download/folder flags ON &
-> verified; `client-notification` + `client-lecture-progress` code-complete but flag-OFF (Mongo write subsystem /
-> 14-file content-join hub). **⚠ For the live wave-by-wave status + next step, the canonical source is the
+> **Last updated:** 2026-06-18 — ✅ **Waves 1–8 COMPLETE on SQL.** Wave 6 (LiveCourse, 14 tables) + Wave 7
+> (aggregators + full payment + 8 net-new tables) DONE. `client-notification` FULLY migrated + flag ON (device-token
+> table + admin write subsystem + dual-read BullMQ cutover). `client-lecture-progress` free-video slice migrated +
+> flag ON (container/DAG paths still Mongo — need VideoCategory childCategoryIds DAG → SQL). **Wave 8 DONE** (misc +
+> DDL batch: customer-master, ImageNotification, offline Center/Batch/Enquiry/City/Banner, tracking, goal, cms-extra
+> [SocialLink+Type/CurrentAffair/LiveBannerSlider], inquiry — 5 new tables + 2 ALTERs; verified 24/24+23/23+14/14+34/34).
+> **⏭️ ONLY REMAINING migration work:** VideoCategory DAG → SQL (unblocks container lecture-progress + resume/learning
+> reads), then profile-dashboard subscriptions/pastExams counts. Genuinely Mongo-only (no clean slice): client/dashboard,
+> recordingWebhook, ExamCountdown/PackageCategory (no table), admin exam/question CRUD writes, realtime/streaming stack.
+> **⚠ For the live wave-by-wave status + next step, the canonical source is the
 > `§RESUME POINTER` block in [`MONGO_ONLY_MIGRATION_PLAN.md`](./MONGO_ONLY_MIGRATION_PLAN.md)** — the per-section
 > next-step notes BELOW in this file are from the Wave-5/6 era and are kept only for the established patterns/rules,
 > not for current status. · **Branch:** `migration` (NEVER merge to `main` until full sign-off)

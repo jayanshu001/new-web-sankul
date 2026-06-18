@@ -87,3 +87,76 @@ export const completedCountInContainer = (customerId: number, field: "courseId" 
 /** Profile-dashboard: total distinct lectures the customer has completed. */
 export const completedLectureCount = (customerId: number): Promise<number> =>
   prisma.lectureProgress.count({ where: { customerId, completed: true } });
+
+const percentOf = (pos: number, dur: number) =>
+  dur > 0 ? Math.min(100, Math.round((pos / dur) * 100)) : 0;
+
+/**
+ * Free-video "Resume Learning" feed (SQL). Self-contained slice: only joins
+ * ws_video (must still be live + priceType=free) and ws_video_category
+ * (title/image) — NO container/DAG/subscription joins. Mirrors the Mongo
+ * listFreeVideoResume card shape exactly so the controller envelope is unchanged.
+ */
+export const listFreeResume = async (
+  customerId: number,
+  limit = 20
+): Promise<{ cards: any[]; resumeNext: any | null }> => {
+  const rows = await prisma.lectureProgress.findMany({
+    where: { customerId, source: "free", videoId: { not: null } },
+    orderBy: { lastWatchedAt: "desc" },
+    take: limit,
+  });
+  if (rows.length === 0) return { cards: [], resumeNext: null };
+
+  const videoIds = rows.map((r) => r.videoId!).filter((v) => v != null);
+  // Only videos still live AND still free (a flip to paid/disabled drops them,
+  // matching the Mongo feed — tapping would 403 at /courses/lecture).
+  const videos = await prisma.video.findMany({
+    where: { id: { in: videoIds }, status: true, priceType: "free" },
+    select: {
+      id: true, title: true, topic: true, videoCategoryId: true,
+      VideoCategory: { select: { id: true, title: true, image: true } },
+    },
+  });
+  const byId = new Map(videos.map((v) => [v.id, v]));
+
+  const cards = rows
+    .map((r) => {
+      const v = byId.get(r.videoId!);
+      if (!v) return null; // deleted / disabled / no longer free — skip
+      const cat = v.VideoCategory;
+      return {
+        type: "free" as const,
+        videoId: String(v.id),
+        categoryId: cat ? String(cat.id) : null,
+        title: v.title ?? null,
+        topic: v.topic ?? null,
+        chapterTitle: cat?.title ?? null,
+        thumbnail: cat?.image ?? null,
+        daysLeft: null, // free videos never expire
+        completed: !!r.completed,
+        percentCompleted: percentOf(r.positionSec, r.durationSec),
+        lastWatchedAt: r.lastWatchedAt,
+        resume: {
+          videoId: String(v.id),
+          positionSec: r.positionSec,
+          durationSec: r.durationSec,
+          remainingSec: Math.max(0, r.durationSec - r.positionSec),
+        },
+      };
+    })
+    .filter(Boolean);
+
+  return { cards, resumeNext: cards[0] ?? null };
+};
+
+/** Validate a free video for the heartbeat: exists + live + priceType=free. */
+export const findFreeVideo = (videoId: number) =>
+  prisma.video.findFirst({
+    where: { id: videoId, status: true, priceType: "free" },
+    select: { id: true },
+  });
+
+/** Does the video exist at all (live), regardless of price? (404 vs 403 split) */
+export const findLiveVideo = (videoId: number) =>
+  prisma.video.findFirst({ where: { id: videoId, status: true }, select: { id: true, priceType: true } });

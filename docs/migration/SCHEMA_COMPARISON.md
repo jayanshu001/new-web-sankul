@@ -28,7 +28,7 @@
 
 ### Currently migrated modules (`MIGRATION_MYSQL_MODULES`)
 
-`app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city, catalog-package-type, catalog-course, catalog-video, catalog-ebook, catalog-exam, catalog-material, catalog-book, offline-batch, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, admin-auth, customer-profile, customer-bank-account, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video, admin-book, admin-ebook, admin-course, admin-package`
+`app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, offline-city, catalog-package-type, catalog-course, catalog-video, catalog-ebook, catalog-exam, catalog-material, catalog-book, offline-batch, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, admin-auth, customer-profile, customer-bank-account, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video, admin-book, admin-ebook, admin-course, admin-package, admin-material, live-course, client-purchase-history, admin-subscription, client-my-subscriptions, client-orders, live-course-order, package-order, test-series-order, client-ebook-download, client-folder, client-notification, client-lecture-progress, customer-master, tracking, goal, cms-extra, inquiry`
 
 ---
 
@@ -51,12 +51,12 @@
 | 13 | CustomerAccessToken | `ws_customer_access_token` (9 cols) | `ws_customer_access_tokens` | `ws_customer_access_token` | ✅ Migrated | Collection name differs from MySQL table |
 | 14 | CustomerAddress | `ws_customer_address` (17 cols) | `ws_customer_addresses` | `ws_customer_address` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
 | 15 | CustomerBankAccount | `ws_customer_bank_account` (10 cols) | `ws_customer_bank_accounts` | `ws_customer_bank_account` | ✅ Migrated | Collection name differs from MySQL table |
-| 16 | CustomerDistict | `ws_customer_distict` (4 cols) | — | `ws_customer_distict` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
-| 17 | CustomerEducation | `ws_customer_education` (3 cols) | `ws_customer_educations` | `ws_customer_education` | ✅ Migrated | Collection name differs from MySQL table |
+| 16 | CustomerDistict | `ws_customer_distict` (4 cols) | — | `ws_customer_distict` | ✅ Migrated (admin CRUD) | MySQL/Prisma only (no Mongoose model found) |
+| 17 | CustomerEducation | `ws_customer_education` (3 cols) | `ws_customer_educations` | `ws_customer_education` | ✅ Migrated (admin CRUD) | Collection name differs from MySQL table |
 | 18 | CustomerOtp | `ws_customer_otp` (4 cols) | `ws_customer_otps` | `ws_customer_otp` | ✅ Migrated | Collection name differs from MySQL table |
 | 19 | CustomerShipping | `ws_customer_shipping` (14 cols) | `ws_customer_shippings` | `ws_customer_shipping` | 🟡 Prisma ready (part of cart/order) | Collection name differs from MySQL table |
-| 20 | CustomerState | `ws_customer_state` (4 cols) | `ws_customer_states` | `ws_customer_state` | ✅ Migrated | Collection name differs from MySQL table |
-| 21 | CustomerTargetGoal | `ws_customer_target_goal` (4 cols) | `ws_customer_target_goals` | `ws_customer_target_goal` | ✅ Migrated | Collection name differs from MySQL table |
+| 20 | CustomerState | `ws_customer_state` (4 cols) | `ws_customer_states` | `ws_customer_state` | ✅ Migrated (admin CRUD) | Collection name differs from MySQL table |
+| 21 | CustomerTargetGoal | `ws_customer_target_goal` (4 cols) | `ws_customer_target_goals` | `ws_customer_target_goal` | ✅ Migrated (admin CRUD) | Collection name differs from MySQL table |
 | 22 | Department | `ws_department` (5 cols) | `ws_departments` | `ws_department` | ✅ Migrated | Collection name differs from MySQL table |
 | 23 | DepartmentContact | `ws_department_contact` (7 cols) | — | `ws_department_contact` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 24 | DynamicImage | `ws_dynamic_image` (2 cols) | `ws_dynamic_images` | `ws_dynamic_image` | ⏳ Not migrated | Collection name differs from MySQL table |
@@ -74,7 +74,7 @@
 | 36 | ExamResultDetailAnalytics | `ws_exam_result_detail_analytics` (9 cols) | `ws_exam_result_detail_analytics` | `ws_exam_result_detail_analytics` | ⏳ Not migrated |  |
 | 37 | — | `ws_failed_jobs` (7 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 38 | FAQ | `ws_faq` (7 cols) | `ws_faqs` | `ws_faq` | ✅ Migrated | Collection name differs from MySQL table |
-| 39 | ImageNotification | `ws_image_notification` (4 cols) | `ws_image_notifications` | `ws_image_notification` | ⏳ Not migrated | Collection name differs from MySQL table |
+| 39 | ImageNotification | `ws_image_notification` (4 cols) | `ws_image_notifications` | `ws_image_notification` | ✅ Migrated (admin CRUD) | Collection name differs from MySQL table |
 | 40 | Material | `ws_material` (9 cols) | `ws_materials` | `ws_material` | ✅ Migrated (nav counts) | Collection name differs from MySQL table |
 | 41 | MaterialCategory | `ws_material_category` (9 cols) | — | `ws_material_category` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 42 | MaterialCategoryCourse | `ws_material_category_course` (6 cols) | — | `ws_material_category_course` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
@@ -82,9 +82,9 @@
 | 44 | — | `ws_migrations` (3 cols) | — | — | ⏳ Not migrated | In SQL dump but no Prisma model |
 | 45 | AdminModelHasPermission | `ws_model_has_permissions` (3 cols) | — | `ws_model_has_permissions` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
 | 46 | AdminModelHasRole | `ws_model_has_roles` (3 cols) | — | `ws_model_has_roles` | ⏳ Not migrated | MySQL/Prisma only (no Mongoose model found) |
-| 47 | OfflineBannerSlider | `ws_offline_banner_slider` (6 cols) | `ws_offline_banner_slider` | `ws_offline_banner_slider` | ⏳ Not migrated |  |
-| 48 | OfflineBatch | `ws_offline_batch` (9 cols) | `ws_offline_batch` | `ws_offline_batch` | ✅ Migrated (reads) |  |
-| 49 | OfflineCenter | `ws_offline_center` (10 cols) | `ws_offline_center` | `ws_offline_center` | ✅ Migrated (reads) |  |
+| 47 | OfflineBannerSlider | `ws_offline_banner_slider` (6 cols) | `ws_offline_banner_slider` | `ws_offline_banner_slider` | ✅ Migrated (admin CRUD; +order_by ALTER) |  |
+| 48 | OfflineBatch | `ws_offline_batch` (9 cols) | `ws_offline_batch` | `ws_offline_batch` | ✅ Migrated (admin CRUD) |  |
+| 49 | OfflineCenter | `ws_offline_center` (10 cols) | `ws_offline_center` | `ws_offline_center` | ✅ Migrated (admin CRUD) |  |
 | 50 | OfflineCity | `ws_offline_city` (5 cols) | `ws_offline_city` | `ws_offline_city` | ✅ Migrated |  |
 | 51 | OfflineEnquiry | `ws_offline_enquiry` (8 cols) | `ws_offline_enquiry` | `ws_offline_enquiry` | ✅ Migrated (write) |  |
 | 52 | Package | `ws_package` (15 cols) | `ws_packages` | `ws_package` | 🟡 Code ready (flag off) | Collection name differs from MySQL table |
@@ -124,8 +124,8 @@
 | 86 | VideoCategory | `ws_video_category` (11 cols) | — | `ws_video_category` | ✅ Migrated | MySQL/Prisma only (no Mongoose model found) |
 | 87 | PackageVideoCategoryRelation | `ws_video_category_package_relation` (6 cols) | — | `ws_video_category_package_relation` | 🟡 Prisma ready (deferred — D2) | MySQL/Prisma only (no Mongoose model found) |
 | 88 | VideoCategoryRelation | `ws_video_category_relation` (6 cols) | — | `ws_video_category_relation` | 🟡 Prisma ready (deferred — D2) | MySQL/Prisma only (no Mongoose model found) |
-| 89 | Inquiry | `ws_website_inquiry` (9 cols) | `ws_website_inquiry` | `ws_website_inquiry` | ⏳ Not migrated |  |
-| 90 | Goal | — | `(default goals)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/Goal.model.ts |
+| 89 | Inquiry | `ws_website_inquiry` (9 cols) | `ws_website_inquiry` | `ws_website_inquiry` | ✅ Migrated (admin reads + client submit; +4 cols ALTER) |  |
+| 90 | Goal | — (net-new SQL table) | `(default goals)` | `ws_goal` | ✅ Migrated (admin CRUD) | Net-new table (Wave 7/8); see src/models/Goal.model.ts |
 | 91 | AdminAccessToken | — | `ws_admin_access_tokens` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/admin/AdminAccessToken.model.ts |
 | 92 | PermissionCategory | — | `ws_permission_categories` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/admin/PermissionCategory.model.ts |
 | 93 | BookSetting | — | `ws_book_settings` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/book/BookSetting.model.ts |
@@ -133,13 +133,13 @@
 | 95 | Course | — | `(default courses)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/Course.model.ts |
 | 96 | CourseEducator | — | `(default courseeducators)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/CourseEducator.model.ts |
 | 97 | CourseSubjectCategory | — | `(default coursesubjectcategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/CourseSubjectCategory.model.ts |
-| 98 | LiveChatBan | — | `ws_live_chat_bans` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveChatBan.model.ts |
-| 99 | LiveChatMessage | — | `ws_live_chat_messages` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveChatMessage.model.ts |
-| 100 | LiveCourse | — | `ws_live_courses` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveCourse.model.ts |
-| 101 | LiveCoursePlan | — | `ws_live_course_plans` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveCoursePlan.model.ts |
-| 102 | LivePoll | — | `ws_live_polls` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LivePoll.model.ts |
-| 103 | LivePollVote | — | `ws_live_poll_votes` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LivePollVote.model.ts |
-| 104 | LiveSession | — | `ws_live_sessions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/LiveSession.model.ts |
+| 98 | LiveChatBan | — (net-new SQL table) | `ws_live_chat_bans` | `ws_live_chat_ban` | ✅ Migrated (Wave 6) | Net-new table (Wave 7/8); see src/models/course/LiveChatBan.model.ts |
+| 99 | LiveChatMessage | — (net-new SQL table) | `ws_live_chat_messages` | `ws_live_chat_message` | ✅ Migrated (Wave 6 — admin+client chat) | Net-new table (Wave 7/8); see src/models/course/LiveChatMessage.model.ts |
+| 100 | LiveCourse | — (net-new SQL table) | `ws_live_courses` | `ws_live_course` | ✅ Migrated (Wave 6) | Net-new table (Wave 7/8); see src/models/course/LiveCourse.model.ts |
+| 101 | LiveCoursePlan | — (net-new SQL table) | `ws_live_course_plans` | `ws_live_course_plan` | ✅ Migrated (Wave 6) | Net-new table (Wave 7/8); see src/models/course/LiveCoursePlan.model.ts |
+| 102 | LivePoll | — (net-new SQL table) | `ws_live_polls` | `ws_live_poll` | ⏸️ Partial (create/list/results/close on SQL; vote-casting stays Mongo socket) | Net-new table (Wave 7/8); see src/models/course/LivePoll.model.ts |
+| 103 | LivePollVote | — (net-new SQL table) | `ws_live_poll_votes` | `ws_live_poll_vote` | ⏸️ Partial (myVote read on SQL; vote-casting stays Mongo socket) | Net-new table (Wave 7/8); see src/models/course/LivePollVote.model.ts |
+| 104 | LiveSession | — (net-new SQL table) | `ws_live_sessions` | `ws_live_session` | ✅ Migrated (Wave 6) | Net-new table (Wave 7/8); see src/models/course/LiveSession.model.ts |
 | 105 | MaterialCategory | — | `(default materialcategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/MaterialCategory.model.ts |
 | 106 | PackageCategory | — | `(default packagecategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PackageCategory.model.ts |
 | 107 | PackageCourseEbookPrice | — | `(default packagecourseebookprices)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/PackageCourseEbookPrice.model.ts |
@@ -151,15 +151,15 @@
 | 113 | VideoCategory | — | `(default videocategorys)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/VideoCategory.model.ts |
 | 114 | VideoCategoryRelation | — | `(default videocategoryrelations)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/course/VideoCategoryRelation.model.ts |
 | 115 | CustomerDistrict | — | `ws_customer_districts` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/CustomerDistrict.model.ts |
-| 116 | Folder | — | `ws_folders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/Folder.model.ts |
-| 117 | FolderItem | — | `ws_folder_items` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/FolderItem.model.ts |
+| 116 | Folder | — (net-new SQL table) | `ws_folders` | `ws_folder` | ✅ Migrated | Net-new table (Wave 7/8); see src/models/customer/Folder.model.ts |
+| 117 | FolderItem | — (net-new SQL table) | `ws_folder_items` | `ws_folder_item` | ✅ Migrated | Net-new table (Wave 7/8); see src/models/customer/FolderItem.model.ts |
 | 118 | LectureAudioNote | — | `ws_lecture_audio_notes` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LectureAudioNote.model.ts |
 | 119 | LectureNote | — | `ws_lecture_notes` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LectureNote.model.ts |
-| 120 | LectureProgress | — | `ws_lecture_progress` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LectureProgress.model.ts |
-| 121 | LiveCourseSubscription | — | `ws_live_course_subscriptions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveCourseSubscription.model.ts |
-| 122 | LiveSessionAttendance | — | `ws_live_session_attendance` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveSessionAttendance.model.ts |
-| 123 | LiveSessionPreview | — | `ws_live_session_previews` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveSessionPreview.model.ts |
-| 124 | LiveSessionReminder | — | `(default livesessionreminders)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/LiveSessionReminder.model.ts |
+| 120 | LectureProgress | — (net-new SQL table) | `ws_lecture_progress` | `ws_lecture_progress` | ✅ Migrated (free-video slice; container/DAG paths still Mongo) | Net-new table (Wave 7/8); see src/models/customer/LectureProgress.model.ts |
+| 121 | LiveCourseSubscription | — (net-new SQL table) | `ws_live_course_subscriptions` | `ws_live_course_subscription` | ✅ Migrated (Wave 6) | Net-new table (Wave 7/8); see src/models/customer/LiveCourseSubscription.model.ts |
+| 122 | LiveSessionAttendance | — (net-new SQL table) | `ws_live_session_attendance` | `ws_live_session_attendance` | ✅ Migrated (Wave 6) | Net-new table (Wave 7/8); see src/models/customer/LiveSessionAttendance.model.ts |
+| 123 | LiveSessionPreview | — (net-new SQL table) | `ws_live_session_previews` | `ws_live_session_preview` | ✅ Migrated (Wave 6) | Net-new table (Wave 7/8); see src/models/customer/LiveSessionPreview.model.ts |
+| 124 | LiveSessionReminder | — (net-new SQL table) | `(default livesessionreminders)` | `ws_live_session_reminder` | ⏸️ Partial (reads on SQL; reminder set/remove stays Mongo+BullMQ) | Net-new table (Wave 7/8); see src/models/customer/LiveSessionReminder.model.ts |
 | 125 | PackageCourseSubscription | — | `(default packagecoursesubscriptions)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/PackageCourseSubscription.model.ts |
 | 126 | Wishlist | — | `ws_wishlists` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/customer/Wishlist.model.ts |
 | 127 | Ebook | — | `(default ebooks)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/ebook/Ebook.model.ts |
@@ -175,21 +175,21 @@
 | 137 | ReferralProgram | — | `ws_referral_programs` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/referral/ReferralProgram.model.ts |
 | 138 | ReferralTerm | — | `ws_referral_terms` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/referral/ReferralTerm.model.ts |
 | 139 | ReferralTransaction | — | `ws_referral_transactions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/referral/ReferralTransaction.model.ts |
-| 140 | ActivityLog | — | `ws_activity_log` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/ActivityLog.model.ts |
-| 141 | CurrentAffair | — | `ws_current_affairs` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/CurrentAffair.model.ts |
+| 140 | ActivityLog | — (net-new SQL table) | `ws_activity_log` | `ws_activity_log` | ✅ Migrated (admin reads) | Net-new table (Wave 7/8); see src/models/system/ActivityLog.model.ts |
+| 141 | CurrentAffair | — (net-new SQL table) | `ws_current_affairs` | `ws_current_affair` | ✅ Migrated (admin CRUD) | Net-new table (Wave 7/8); see src/models/system/CurrentAffair.model.ts |
 | 142 | FaqType | — | `ws_faq_types` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/FaqType.model.ts |
-| 143 | LiveBannerSlider | — | `ws_live_banner_sliders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/LiveBannerSlider.model.ts |
-| 144 | Notification | — | `ws_notifications` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/Notification.model.ts |
+| 143 | LiveBannerSlider | — (net-new SQL table) | `ws_live_banner_sliders` | `ws_live_banner_slider` | ✅ Migrated (admin CRUD) | Net-new table (Wave 7/8); see src/models/system/LiveBannerSlider.model.ts |
+| 144 | Notification | — (net-new SQL table) | `ws_notifications` | `ws_notification` | ✅ Migrated (write subsystem + client reads) | Net-new table (Wave 7/8); see src/models/system/Notification.model.ts |
 | 145 | PdfUploadJob | — | `(default pdfuploadjobs)` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/PdfUploadJob.model.ts |
-| 146 | SocialLink | — | `ws_social_links` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/SocialLink.model.ts |
-| 147 | SocialLinkType | — | `ws_social_link_types` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/SocialLinkType.model.ts |
+| 146 | SocialLink | — (net-new SQL table) | `ws_social_links` | `ws_social_link` | ✅ Migrated (admin CRUD) | Net-new table (Wave 7/8); see src/models/system/SocialLink.model.ts |
+| 147 | SocialLinkType | — (net-new SQL table) | `ws_social_link_types` | `ws_social_link_type` | ✅ Migrated (admin CRUD) | Net-new table (Wave 7/8); see src/models/system/SocialLinkType.model.ts |
 | 148 | TermsAndConditions | — | `ws_terms_and_conditions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/system/TermsAndConditions.model.ts |
-| 149 | TestSeries | — | `ws_test_series` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeries.model.ts |
+| 149 | TestSeries | — (net-new SQL table) | `ws_test_series` | `ws_test_series` | ✅ Migrated (Wave 7) | Net-new table (Wave 7/8); see src/models/testSeries/TestSeries.model.ts |
 | 150 | TestSeriesContentCategory | — | `ws_test_series_content_category` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesContentCategory.model.ts |
 | 151 | TestSeriesExam | — | `ws_test_series_exam` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesExam.model.ts |
-| 152 | TestSeriesOrder | — | `ws_test_series_orders` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesOrder.model.ts |
-| 153 | TestSeriesPrice | — | `ws_test_series_prices` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesPrice.model.ts |
-| 154 | TestSeriesSubscription | — | `ws_test_series_subscriptions` | — (new feature / Mongo-only) | 🆕 Mongo-only | See src/models/testSeries/TestSeriesSubscription.model.ts |
+| 152 | TestSeriesOrder | — (net-new SQL table) | `ws_test_series_orders` | `ws_test_series_order` | ✅ Migrated (Wave 7) | Net-new table (Wave 7/8); see src/models/testSeries/TestSeriesOrder.model.ts |
+| 153 | TestSeriesPrice | — (net-new SQL table) | `ws_test_series_prices` | `ws_test_series_price` | ✅ Migrated (Wave 7) | Net-new table (Wave 7/8); see src/models/testSeries/TestSeriesPrice.model.ts |
+| 154 | TestSeriesSubscription | — (net-new SQL table) | `ws_test_series_subscriptions` | `ws_test_series_subscription` | ✅ Migrated (Wave 7) | Net-new table (Wave 7/8); see src/models/testSeries/TestSeriesSubscription.model.ts |
 
 ---
 

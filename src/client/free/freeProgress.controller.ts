@@ -6,6 +6,13 @@ import { Video } from "../../models/course/Video.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isLectureProgressMysql,
+  parseLpId,
+  upsertVideoProgress as sqlUpsertVideoProgress,
+  listFreeResume as sqlListFreeResume,
+  findLiveVideo as sqlFindLiveVideo,
+} from "../../modules/client-lecture-progress/client-lecture-progress.service";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -39,8 +46,37 @@ export const reportFreeVideoProgress = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    const videoId = objectId.parse(req.params.videoId);
     const { positionSec, durationSec } = progressSchema.parse(req.body);
+
+    // ── SQL branch (client-lecture-progress) ──────────────────────────────────
+    // Ids are SQL ints at runtime. Self-contained free slice: validate the video
+    // is live + free (404 vs 403 split, matching Mongo), then upsert source:"free".
+    if (isLectureProgressMysql()) {
+      const vid = parseLpId(String(req.params.videoId));
+      if (vid == null) {
+        return res.status(404).json({ success: false, message: "Lecture not found." });
+      }
+      const live = await sqlFindLiveVideo(vid);
+      if (!live) {
+        logger.warn("reportFreeVideoProgress(SQL) video not found", { traceId, userId, videoId: vid });
+        return res.status(404).json({ success: false, message: "Lecture not found." });
+      }
+      if (live.priceType !== "free") {
+        logger.warn("reportFreeVideoProgress(SQL) not a free video", { traceId, userId, videoId: vid });
+        return res.status(403).json({ success: false, message: "This lecture is not a free video." });
+      }
+      const row = await sqlUpsertVideoProgress({
+        customerId: Number(userId),
+        videoId: vid,
+        source: "free",
+        positionSec,
+        durationSec,
+      });
+      logger.info("reportFreeVideoProgress(SQL) success", { traceId, userId, videoId: vid, positionSec, durationSec });
+      return res.status(200).json({ success: true, data: row });
+    }
+
+    const videoId = objectId.parse(req.params.videoId);
 
     const video = await Video.findById(videoId).select("status priceType").lean();
     if (!video || !video.status) {
@@ -123,6 +159,13 @@ export const listFreeVideoResume = async (req: Request, res: Response) => {
     if (!userId) {
       logger.warn("listFreeVideoResume unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    // ── SQL branch (client-lecture-progress) ──────────────────────────────────
+    if (isLectureProgressMysql()) {
+      const data = await sqlListFreeResume(Number(userId), 20);
+      logger.info("listFreeVideoResume(SQL) success", { traceId, userId, cardCount: data.cards.length, hasResume: !!data.resumeNext });
+      return res.status(200).json({ success: true, data });
     }
 
     const cid = new mongoose.Types.ObjectId(userId);

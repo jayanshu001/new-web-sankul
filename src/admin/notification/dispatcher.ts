@@ -4,6 +4,11 @@ import { Customer } from "../../models/customer/Customer.model";
 import { sendPush } from "../../utils/fcm";
 import { resolveAudience, AudienceFilter } from "./audience";
 import logger from "../../utils/logger";
+import {
+  isAdminNotificationMysql,
+  dispatchAudience as sqlDispatchAudience,
+  dispatchScheduledById as sqlDispatchScheduledById,
+} from "../../modules/admin-notification/admin-notification.service";
 
 export interface DispatchResult {
   status: "sent" | "failed";
@@ -12,7 +17,9 @@ export interface DispatchResult {
   invalidTokensPruned: number;
   failureReason: string | null;
   isBroadcast: boolean;
-  targetCustomerIds: mongoose.Types.ObjectId[];
+  // ObjectId[] on the Mongo path, number[] on the SQL path. Callers only read
+  // `.length`, so the union keeps both branches type-compatible.
+  targetCustomerIds: (mongoose.Types.ObjectId | number)[];
 }
 
 /**
@@ -32,6 +39,9 @@ export async function dispatchAudience(
   audienceFilter: AudienceFilter,
   parentId?: mongoose.Types.ObjectId
 ): Promise<DispatchResult> {
+  if (isAdminNotificationMysql()) {
+    return sqlDispatchAudience(payload, audienceFilter);
+  }
   const resolved = await resolveAudience(audienceFilter);
   const isBroadcast = resolved.isAll;
 
@@ -116,6 +126,17 @@ export async function dispatchScheduledById(
   notificationId: string,
   now: Date = new Date()
 ): Promise<DispatchResult | null> {
+  // Dual-read cutover: when the flag is on, an int id that resolves to a SQL row
+  // dispatches via SQL. Non-numeric ids (legacy Mongo _id hex) and ids with no
+  // SQL row fall through to the Mongo path below — so in-flight Mongo-keyed
+  // BullMQ jobs queued before the flip still fire correctly. The fallback
+  // self-retires once Redis drains those pre-cutover jobs.
+  if (isAdminNotificationMysql()) {
+    const id = Number(notificationId);
+    if (Number.isInteger(id) && id > 0) {
+      return sqlDispatchScheduledById(notificationId, now);
+    }
+  }
   const claimed = (await Notification.findOneAndUpdate(
     { _id: notificationId, status: "scheduled" },
     { $set: { status: "sent", sentAt: now } },

@@ -1,0 +1,203 @@
+/**
+ * CMS extras — SocialLinkType / SocialLink / CurrentAffair / LiveBannerSlider
+ * admin CRUD on MySQL (Prisma). Wave 8. Net-new tables ws_social_link(_type),
+ * ws_current_affair, ws_live_banner_slider.
+ *
+ * Gated behind `isMysqlModule("cms-extra")`. DTOs mirror the Mongo doc shape
+ * (`_id` string; SocialLink populates typeId→{_id,title}; LiveBanner exposes
+ * liveCourseId as a string — full populate of the live course is NOT reproduced
+ * here, the FE only needs the id for these admin lists).
+ */
+import { isMysqlModule } from "../../config/migration";
+import { prisma } from "../../config/prisma";
+
+export const CMS_EXTRA_MODULE = "cms-extra";
+export const isCmsExtraMysql = (): boolean => isMysqlModule(CMS_EXTRA_MODULE);
+
+export const parseCmsId = (id: string): number | null => {
+  const n = Number(id);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+type Envelope<T> = { ok: true; data: T } | { ok: false; status: number; message: string };
+
+// ─── SocialLinkType ──────────────────────────────────────────────────────────
+const sltDto = (r: any) => ({ _id: String(r.id), title: r.title, createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null });
+
+export const listSocialLinkTypes = async () =>
+  (await prisma.socialLinkType.findMany({ orderBy: { title: "asc" } })).map(sltDto);
+
+export const getSocialLinkType = async (id: number) => {
+  const r = await prisma.socialLinkType.findUnique({ where: { id } });
+  return r ? sltDto(r) : null;
+};
+
+export const createSocialLinkType = async (input: { title: string }) => {
+  const now = new Date();
+  return sltDto(await prisma.socialLinkType.create({ data: { title: input.title, createdAt: now, updatedAt: now } }));
+};
+
+export const updateSocialLinkType = async (id: number, input: { title?: string }) => {
+  const exists = await prisma.socialLinkType.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) return null;
+  return sltDto(await prisma.socialLinkType.update({ where: { id }, data: { ...input, updatedAt: new Date() } }));
+};
+
+export const deleteSocialLinkType = async (id: number): Promise<Envelope<null>> => {
+  const exists = await prisma.socialLinkType.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) return { ok: false, status: 404, message: "Not found." };
+  const inUse = await prisma.socialLink.findFirst({ where: { typeId: id }, select: { id: true } });
+  if (inUse) return { ok: false, status: 409, message: "Social Link Type is in use by one or more links and cannot be deleted." };
+  await prisma.socialLinkType.delete({ where: { id } });
+  return { ok: true, data: null };
+};
+
+// ─── SocialLink ──────────────────────────────────────────────────────────────
+const slDto = (r: any) => ({
+  _id: String(r.id),
+  typeId: r.type ? { _id: String(r.type.id), title: r.type.title } : String(r.typeId),
+  title: r.title, icon: r.icon ?? null, link: r.link, order: r.orderBy, status: r.status,
+  createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
+});
+
+// SocialLink has no Prisma relation to SocialLinkType (scalar typeId), so we
+// hydrate the type manually to mirror the Mongo .populate("typeId","_id title").
+const hydrateTypes = async (rows: any[]) => {
+  const typeIds = [...new Set(rows.map((r) => r.typeId))];
+  const types = typeIds.length
+    ? await prisma.socialLinkType.findMany({ where: { id: { in: typeIds } }, select: { id: true, title: true } })
+    : [];
+  const byId = new Map(types.map((t) => [t.id, t]));
+  return rows.map((r) => ({ ...r, type: byId.get(r.typeId) ?? null }));
+};
+
+export const listSocialLinks = async () => {
+  const rows = await prisma.socialLink.findMany({ orderBy: { orderBy: "asc" } });
+  return (await hydrateTypes(rows)).map(slDto);
+};
+
+export const getSocialLink = async (id: number) => {
+  const r = await prisma.socialLink.findUnique({ where: { id } });
+  if (!r) return null;
+  const [h] = await hydrateTypes([r]);
+  return slDto(h);
+};
+
+export const createSocialLink = async (input: {
+  typeId: number; title: string; icon?: string; link: string; order?: number; status?: boolean;
+}) => {
+  const now = new Date();
+  const r = await prisma.socialLink.create({
+    data: {
+      typeId: input.typeId, title: input.title, icon: input.icon ?? null, link: input.link,
+      orderBy: input.order ?? 0, status: input.status ?? true, createdAt: now, updatedAt: now,
+    },
+  });
+  const [h] = await hydrateTypes([r]);
+  return slDto(h);
+};
+
+export const updateSocialLink = async (id: number, input: {
+  typeId?: number; title?: string; icon?: string; link?: string; order?: number; status?: boolean;
+}) => {
+  const exists = await prisma.socialLink.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) return null;
+  const data: any = {};
+  if (input.typeId !== undefined) data.typeId = input.typeId;
+  if (input.title !== undefined) data.title = input.title;
+  if (input.icon !== undefined) data.icon = input.icon;
+  if (input.link !== undefined) data.link = input.link;
+  if (input.order !== undefined) data.orderBy = input.order;
+  if (input.status !== undefined) data.status = input.status;
+  data.updatedAt = new Date();
+  const r = await prisma.socialLink.update({ where: { id }, data });
+  const [h] = await hydrateTypes([r]);
+  return slDto(h);
+};
+
+export const deleteSocialLink = async (id: number): Promise<boolean> => {
+  const exists = await prisma.socialLink.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) return false;
+  await prisma.socialLink.delete({ where: { id } });
+  return true;
+};
+
+// ─── CurrentAffair ───────────────────────────────────────────────────────────
+const caDto = (r: any) => ({
+  _id: String(r.id), title: r.title, image: r.image, youtubeLink: r.youtubeLink, status: r.status,
+  createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
+});
+
+export const listCurrentAffairs = async () =>
+  (await prisma.currentAffair.findMany({ orderBy: { createdAt: "desc" } })).map(caDto);
+
+export const getCurrentAffair = async (id: number) => {
+  const r = await prisma.currentAffair.findUnique({ where: { id } });
+  return r ? caDto(r) : null;
+};
+
+export const createCurrentAffair = async (input: { title: string; image: string; youtubeLink: string; status?: boolean }) => {
+  const now = new Date();
+  return caDto(await prisma.currentAffair.create({
+    data: { title: input.title, image: input.image, youtubeLink: input.youtubeLink, status: input.status ?? true, createdAt: now, updatedAt: now },
+  }));
+};
+
+export const updateCurrentAffair = async (id: number, input: { title?: string; image?: string; youtubeLink?: string; status?: boolean }) => {
+  const exists = await prisma.currentAffair.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) return null;
+  return caDto(await prisma.currentAffair.update({ where: { id }, data: { ...input, updatedAt: new Date() } }));
+};
+
+export const deleteCurrentAffair = async (id: number): Promise<boolean> => {
+  const exists = await prisma.currentAffair.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) return false;
+  await prisma.currentAffair.delete({ where: { id } });
+  return true;
+};
+
+// ─── LiveBannerSlider ────────────────────────────────────────────────────────
+const lbDto = (r: any) => ({
+  _id: String(r.id), image: r.image, liveCourseId: String(r.liveCourseId), orderBy: r.orderBy,
+  createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
+});
+
+export const listLiveBanners = async () =>
+  (await prisma.liveBannerSlider.findMany({ orderBy: { orderBy: "asc" } })).map(lbDto);
+
+export const getLiveBanner = async (id: number) => {
+  const r = await prisma.liveBannerSlider.findUnique({ where: { id } });
+  return r ? lbDto(r) : null;
+};
+
+export const createLiveBanner = async (input: { image: string; liveCourseId: number; orderBy?: number }) => {
+  const now = new Date();
+  return lbDto(await prisma.liveBannerSlider.create({
+    data: { image: input.image, liveCourseId: input.liveCourseId, orderBy: input.orderBy ?? 0, createdAt: now, updatedAt: now },
+  }));
+};
+
+export const updateLiveBanner = async (id: number, input: { image?: string; liveCourseId?: number; orderBy?: number }) => {
+  const exists = await prisma.liveBannerSlider.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) return null;
+  return lbDto(await prisma.liveBannerSlider.update({ where: { id }, data: { ...input, updatedAt: new Date() } }));
+};
+
+export const deleteLiveBanner = async (id: number): Promise<boolean> => {
+  const exists = await prisma.liveBannerSlider.findUnique({ where: { id }, select: { id: true } });
+  if (!exists) return false;
+  await prisma.liveBannerSlider.delete({ where: { id } });
+  return true;
+};
+
+/** Reorder: apply [{id, orderBy}] updates. Returns count applied. */
+export const reorderLiveBanners = async (orders: { id: string; orderBy: number }[]): Promise<number> => {
+  let count = 0;
+  for (const o of orders) {
+    const nid = parseCmsId(o.id);
+    if (nid == null) continue;
+    const r = await prisma.liveBannerSlider.updateMany({ where: { id: nid }, data: { orderBy: o.orderBy, updatedAt: new Date() } });
+    count += r.count;
+  }
+  return count;
+};

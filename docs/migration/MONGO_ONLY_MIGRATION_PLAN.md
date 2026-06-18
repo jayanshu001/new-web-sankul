@@ -14,6 +14,24 @@
 
 ## ▶️ RESUME POINTER (update this every time)
 
+> **🏁 WAVE 8 COMPLETE (2026-06-18).** All misc/low-value modules on SQL. No-DDL: ✅ `customer-master` (16h) ✅
+> `ImageNotification` (4h, on `client-notification`) ✅ offline Center/Batch/Enquiry (12h, `offline-batch`+
+> `offline-enquiry`) ✅ offline City (5h, `offline-city`). DDL batch (`2026-06-18_create_wave8_misc_tables.sql` — 5
+> new tables + 2 ALTERs): ✅ `tracking`(ActivityLog) ✅ `goal` ✅ `cms-extra`(SocialLink+Type/CurrentAffair/
+> LiveBannerSlider) ✅ `inquiry`(ALTER +customer_id/description/message/source) ✅ offline Banner(ALTER +order_by, on
+> `offline-batch`). Verified 24/24 + 23/23 + 14/14 + 34/34; `tsc` clean; all flags ON.
+> **🔧 VideoCategory DAG → SQL — RESOLVER BUILT + VERIFIED 13/13 (2026-06-18).** `src/modules/catalog-category-tree/`
+> (recursive-CTE descendantsOf/ancestorsOf/reachableCategoryIds/resolveVideoScope/resolveVideoCourseId) is the SQL
+> mirror of the Mongo category-tree walk. **DAG data already in SQL** — ws_video_category (157) + ws_video_category_relation
+> (2456 edges); NO backfill needed (prior "empty table" notes were WRONG). Uses the multi-parent RELATION table, not the
+> single `parent` col. **This UNBLOCKS the 6 DAG consumers** (catalog, course.service, progress heartbeat ×2, dashboard,
+> free) — but each is a FULL Mongo→SQL consumer flip (they run in ObjectId space today, so the tree-walk can't be swapped
+> in isolation; the whole handler flips so the resolver gets SQL int ids). Consumers flip ONE SLICE AT A TIME; flag
+> `catalog-category-tree` goes ON with the first. **⏭️ REMAINING:** flip the 6 DAG consumers (cleanest first = container
+> progress heartbeat, pairs with the ON `client-lecture-progress`); then profile-dashboard subscriptions/pastExams counts
+> + the guarded `new ObjectId(userId)`. Genuinely Mongo-only (no clean slice): client/dashboard, recordingWebhook,
+> ExamCountdown/PackageCategory (no table), admin exam/question CRUD writes.
+>
 > **🏁 WAVE 5 COMPLETE (2026-06-18).** All 9 admin catalog CRUD modules on SQL — `plan`, `master`, `video`,
 > `videoCategory`(full), `book`, `ebook`, `course`, `package`, `material` — plus client `cart` + `educator`.
 > **✅ WAVE 6 EFFECTIVELY DONE (2026-06-18).** All migratable live surfaces on the `live-course` flag (ON),
@@ -26,8 +44,9 @@
 > CREATED + backfilled; test-series + ebook-download + folder fully migrated & ON; notification + lecture-progress
 > code-complete (flag OFF — write subsystem / 14-file consumer breadth still Mongo).** Wave 7 = fat
 > cross-collection aggregators + finalizers, done cleanest-slices-first per-handler.
-> **Net-new-table consumer status (after creating the tables):** ✅ `client-ebook-download` (ON, verified) ✅
-> `client-folder` (ON, verified incl. content hydration — runtime refIds ARE SQL ints, only backfill stored 0) ⏸️
+> **Net-new-table consumer status (after creating the tables) — ⚠ HISTORICAL, see top banner for current:** ✅ `client-ebook-download` (ON, verified) ✅
+> `client-folder` (ON, verified incl. content hydration — runtime refIds ARE SQL ints, only backfill stored 0)
+> [SUPERSEDED→] ⏸️
 > `client-notification` (reads code-complete + verified, flag OFF: admin dispatcher/scheduler/FCM/BullMQ write
 > subsystem keyed by Mongo Customer ids must migrate first) ⏸️ `client-lecture-progress` (heartbeat upserts +
 > rollups + count built, flag OFF: 14-file content-join hub — heartbeat's Mongo entitlement-reads + resume/learning
@@ -50,22 +69,45 @@
 > verified) ✅ **folder** (`client-folder`, ON, verified — incl. content hydration; the runtime refId IS a SQL int,
 > so the join resolves; only the backfill stored 0).
 >
-> **⏭️ EXACT NEXT STEP (cold-start, do this first tomorrow):** finish the **two flag-OFF consumers** by migrating
-> their paired surface, then flip + verify + enable the flag:
->   1. **`client-notification`** (module built at `src/modules/client-notification/`, client reads branched in
->      `src/client/notification/notification.controller.ts`, flag OFF). Blocker = the admin WRITE subsystem:
->      migrate `src/admin/notification/{notification.controller,dispatcher,scheduler,audience}.ts` Notification
->      persistence (`.create`/`.insertMany`) to `prisma.notification` (keep FCM push send as-is; resolve audience
->      against `ws_customer`). Then enable `client-notification` + flip the profile-dashboard unread count (already
->      flag-aware).
->   2. **`client-lecture-progress`** (module built at `src/modules/client-lecture-progress/` — upserts + rollups +
->      completedLectureCount, flag OFF). Blocker = 14-file content-join hub: branch the heartbeat writers
->      (`src/client/course/progress.controller.ts`, `src/client/learning/progress.controller.ts`,
->      `src/client/free/freeProgress.controller.ts`) AND the resume/learning readers (`resumeCard.ts`,
->      `learning/progress.controller.ts`, `course`/`dashboard` rollups) together. Runtime ids ARE SQL so joins
->      resolve (folder proved it) — the blocker is consumer breadth, not data. Then enable `client-lecture-progress`.
-> After both: flip the remaining profile-dashboard counts (subscriptions/pastExams) + remove the guarded
-> `new ObjectId(userId)` once fully SQL.
+> **⏭️ NEXT STEP — the 2 OFF consumers are BLOCKED on PREREQUISITE migrations (investigated 2026-06-18, code-backed;
+> NOT just a wiring job — flipping either as-is BREAKS the live system). Do the prerequisite first, then flip.**
+>   1. **`client-notification`** — ✅✅ **BOTH PREREQUISITES DONE + WRITE SUBSYSTEM MIGRATED (2026-06-18).**
+>      ✅ (a) FCM multi-device tokens → `ws_customer_device_token` (table + backfill + repo rewire + flag-branched
+>      `utils/fcm.ts` prune; legacy `device` column kept in sync). ✅ (b) Admin notification WRITE subsystem now has
+>      a full SQL branch in `src/modules/admin-notification/admin-notification.service.ts` (audience resolver, FCM
+>      dispatch, claim-lock via conditional updateMany, per-recipient fanout via createMany, scheduled/immediate
+>      persistence, cancel/list/bulk-delete/delete). The 3 legacy files branch on `isAdminNotificationMysql()`:
+>      `dispatcher.ts` (dispatchAudience + dispatchScheduledById), `scheduler.ts` (rehydrate reads SQL+Mongo;
+>      worker failed-listener dual-reads), `notification.controller.ts` (all 6 handlers; ImageNotification 3 stay
+>      Mongo — no SQL table). **CUTOVER = dual-read worker fallback:** the worker routes by id — numeric id with a
+>      SQL row → SQL dispatch; non-numeric (legacy Mongo hex) or no SQL row → Mongo path. So in-flight Mongo-keyed
+>      BullMQ jobs queued before the flip still fire; fallback self-retires once Redis drains. `tsc` clean.
+>      ✅ **FLAG ON + VERIFIED END-TO-END (2026-06-18).** `client-notification` enabled in `.env`. Verification
+>      harness `scripts/verify-notification-sql.ts` (reuses a live customer + throwaway device token, self-cleans):
+>      **23/23 PASS** — audience (broadcast/targeted/token-gated), immediate send + per-recipient fanout, schedule→
+>      claim→fire with claim-lock proven (double-fire no-op), dual-read routing (existsSql: SQL int vs Mongo hex vs
+>      unknown), cancel, list (parent-rows-only), delete, bulk-delete. FCM disabled for the run (skipped sends).
+>      Course-targeting uses ws_package_course_subscription.status=true (no payment_status col — documented drift).
+>      **`client-notification` is DONE.**
+>   2. **`client-lecture-progress`** — ✅ **FREE-VIDEO SLICE MIGRATED + flag ON (2026-06-18); container/DAG paths
+>      stay Mongo.** The standalone free-video vertical needs NO content-graph, so it flipped cleanly:
+>      `src/client/free/freeProgress.controller.ts` (both handlers) branches on `isLectureProgressMysql()` →
+>      `client-lecture-progress.service.ts` (`upsertVideoProgress source:"free"`, new `listFreeResume` +
+>      `findLiveVideo` for the 404/403 split; joins only ws_video + ws_video_category). Verified
+>      `scripts/verify-free-progress-sql.ts` → **20/20 PASS** (heartbeat create/update/95%-complete/sticky/single-row,
+>      guards, resume card shape, paid-exclusion, join correctness both ways incl. graceful null on staging's dangling
+>      vcategory_id FK). `tsc` clean, flag `client-lecture-progress` ENABLED.
+>      ⏸️ **STILL Mongo under this flag (needs the VideoCategory DAG SQL layer first — NOT yet built):** the 2
+>      container heartbeats (`course/progress.controller.ts` reportLectureProgress gated by `scopeReachableCategories.ts`
+>      walking `VideoCategory.childCategoryIds`; `learning/progress.controller.ts` reportLiveSessionProgress) and ALL
+>      resume/learning READS (listMyLearningProgress, listMyCoursesForResume, `resumeCard.ts`, dashboard
+>      getResumeDashboard — join Course/Package/LiveCourse/LiveSession/VideoCategory-tree/CourseEducator). They share
+>      the SAME `ws_lecture_progress` table (free rows carry source=free; container rows carry pointers — disjoint), so
+>      no data split: when they flip later they read consistently. **NEXT prerequisite = VideoCategory childCategoryIds
+>      DAG → SQL (ws_video_category has only a single `parent` col, no descendant walk).**
+>      (Entitlement subs ws_package_course_subscription/ws_live_course_subscription + ws_video ARE SQL — not the blocker.)
+> The remaining prerequisite (VideoCategory content-graph) is a real multi-file effort, NOT a same-day wiring task.
+> After it: flip the remaining profile-dashboard counts (subscriptions/pastExams) + remove the guarded `new ObjectId(userId)`.
 >
 > **⏸️ STAYS Mongo — genuinely no SQL home / no clean slice (NOT next-step work):**
 > ⏸️ **profile getProfileDashboardCounts** — folder/ebook/notification counts already flag-aware; subscriptions +
@@ -107,15 +149,15 @@
 > - **client material/search:** LiveCourse-blocked (Wave 6). **master/packageCategory; videoCategory `duplicate`.**
 > - **No-SQL-table features (defer, need DDL):** wishlist, folder, lecture-note, lecture-audio-note, free-progress (LectureProgress).
 > - **Wave-4 remainder:** admin exam/question CRUD writes + getSolutionDownload PDF.
-> **Last completed:** ✅ **Wave 7 net-new-table CONSUMERS** — built the consumer modules for the 8 created tables.
-> ✅ `client-ebook-download` (ON, verified) + ✅ `client-folder` (ON, verified incl. content hydration). ⏸️
+> **Last completed (⚠ HISTORICAL — Wave 7 snapshot; current state is the top banner):** ✅ **Wave 7 net-new-table CONSUMERS** — built the consumer modules for the 8 created tables.
+> ✅ `client-ebook-download` (ON, verified) + ✅ `client-folder` (ON, verified incl. content hydration). [SUPERSEDED→ both now flag ON] ⏸️
 > `client-notification` (reads code-complete + verified, flag OFF — admin dispatcher/FCM/BullMQ write subsystem
 > stays Mongo) + ⏸️ `client-lecture-progress` (heartbeat+rollups+count built, flag OFF — 14-file content-join hub).
 > profile dashboard counts now flag-aware (folder/ebook/notification); `new ObjectId(userId)` guarded. `tsc` clean.
 > *(earlier this wave: created the 8 tables + test-series fully + webhook book/ebook + all aggregators + full payment;
 > Wave 6 before Wave 7.)*
 > **Working branch:** `migration` (never merge to `main` until full sign-off)
-> **Env flag list:** `.env` → `MIGRATION_MYSQL_MODULES` (now +`promoter-auth`, `promoter-data`, `referral`, `admin-rbac`, `client-exam`, `client-cart`, `admin-exam`, `client-educator`, `admin-plan`, `admin-master`, `admin-video`, `admin-book`, `admin-ebook`, `admin-course`, `admin-package`, `admin-material`, `live-course`, `client-purchase-history`, `admin-subscription`, `client-my-subscriptions`, `client-orders`, `live-course-order`, `package-order`, `test-series-order`, `client-ebook-download`, `client-folder`) [+ built-but-OFF: `client-notification`, `client-lecture-progress`]
+> **Env flag list:** `.env` → `MIGRATION_MYSQL_MODULES` (now +`promoter-auth`, `promoter-data`, `referral`, `admin-rbac`, `client-exam`, `client-cart`, `admin-exam`, `client-educator`, `admin-plan`, `admin-master`, `admin-video`, `admin-book`, `admin-ebook`, `admin-course`, `admin-package`, `admin-material`, `live-course`, `client-purchase-history`, `admin-subscription`, `client-my-subscriptions`, `client-orders`, `live-course-order`, `package-order`, `test-series-order`, `client-ebook-download`, `client-folder`, `customer-profile`, `client-notification`, `client-lecture-progress`, `customer-master`, `offline-batch`, `offline-enquiry`, `tracking`, `goal`, `cms-extra`, `inquiry`) [`client-lecture-progress` = FREE-VIDEO slice only; container/DAG paths still Mongo under the same flag. `client-notification` also serves ImageNotification CRUD. `offline-batch` serves Center + Batch + Banner admin CRUD. `cms-extra` = SocialLink+Type/CurrentAffair/LiveBannerSlider.]
 
 ---
 
@@ -161,8 +203,8 @@ Then the doc protocol (registry + regen 3 docs + this plan + changelog + tracker
 | **4** | **Exam** (client reads + scoring write + admin reads). ⚠ Test Series + ExamCountdown MONGO-ONLY | ~8 | none (ws_exam* exist; Exam.description→nullable) | ✅ **DONE 2026-06-17** (admin exam CRUD-writes deferred; getSolutionDownload PDF Mongo) |
 | **5** | **Catalog admin CRUD + remaining client reads** (~156 migratable; 21 blocked on missing tables) | ~30 | mostly exist (reuse catalog-*/commerce-*) | ✅ **DONE 2026-06-18** — all 9 admin CRUD modules (plan/master/video/videoCategory/book/ebook/course/package/material) + client cart/educator on SQL; client material/search + 21 no-table features stay Mongo |
 | **6** | **LiveCourse / LiveSession** (admin live-course ×6 + live/livepoll/livechat; client live-course/live/livechat/livepoll/live-reminder) | ~16 | ✅ **14 tables CREATED + backfilled** (ws_live_course/_plan/_subscription/_session(+course join)/_category/chat/poll(+option)/vote/attendance/reminder/preview) | ✅ **DONE 2026-06-18** — schema+backfill + admin live-course + chat/poll/reminder + client reads (Groups A+B). Cross-store reads (detail/recordings/lecture/my-lists/timetable) deferred to Wave 7 |
-| **7** | **Aggregation/finalizers** (admin+client dashboard, categories, my-subscriptions, purchase-history, orders, payment ×8, verify, webhook, profile-dashboard, learning) | ~20 | **8 net-new tables CREATED + backfilled** (ws_lecture_progress, ws_notification, ws_folder(+_item), ws_ebook_download, ws_test_series(+_price/_order/_subscription)) + ws_book_order.paid_at | ✅ **DONE 2026-06-18** — all aggregators + full payment (course/ebook/book/live-course/package + test-series) + webhooks + categories + my-subs + orders migrated & verified; 8 blocked tables created; ebook-download + folder + test-series flags ON. ⏸️ `client-notification` + `client-lecture-progress` CODE-COMPLETE but flag-OFF (Mongo write subsystem / 14-file content-join hub — flip with their paired surface). No clean slice: client/dashboard, recordingWebhook, ExamCountdown/PackageCategory (no table) |
-| **8** | **Misc / low-value** (notification, tracking/ActivityLog, inquiry, goal, wishlist, cms social-link/current-affair, offline admin CRUD) | ~12 | some new flat tables | ⬜ NOT STARTED |
+| **7** | **Aggregation/finalizers** (admin+client dashboard, categories, my-subscriptions, purchase-history, orders, payment ×8, verify, webhook, profile-dashboard, learning) | ~20 | **8 net-new tables CREATED + backfilled** (ws_lecture_progress, ws_notification, ws_folder(+_item), ws_ebook_download, ws_test_series(+_price/_order/_subscription)) + ws_book_order.paid_at | ✅ **DONE 2026-06-18** — all aggregators + full payment (course/ebook/book/live-course/package + test-series) + webhooks + categories + my-subs + orders migrated & verified; 8 blocked tables created; ebook-download + folder + test-series flags ON. ✅ `client-notification` now FULLY MIGRATED + flag ON (device-token table + admin write subsystem + dual-read BullMQ cutover; 2026-06-18). ✅ `client-lecture-progress` FREE-VIDEO slice migrated + flag ON; container/DAG paths still Mongo (need VideoCategory childCategoryIds DAG → SQL). No clean slice: client/dashboard, recordingWebhook, ExamCountdown/PackageCategory (no table) |
+| **8** | **Misc / low-value** (notification, tracking/ActivityLog, inquiry, goal, cms social-link/current-affair/live-banner, offline admin CRUD) | ~12 | 5 new tables (ws_activity_log/ws_goal/ws_social_link(_type)/ws_current_affair/ws_live_banner_slider) + 2 ALTERs (inquiry +4 cols, offline banner +order_by) | ✅ **DONE 2026-06-18** — no-DDL: customer-master(16h)/ImageNotification(4h)/offline Center+Batch+Enquiry(12h)/offline City(5h); DDL batch: tracking/goal/cms-extra(SocialLink+Type/CurrentAffair/LiveBanner)/inquiry/offline-Banner. Flags ON: customer-master, offline-batch, offline-enquiry, offline-city, tracking, goal, cms-extra, inquiry. Verified 24/24 + 23/23 + 14/14 + 34/34. `tsc` clean |
 
 > Counts are approximate and overlap (a controller can belong to two clusters); the per-wave checklists below
 > are authoritative. Total target: every file in [`../MIGRATION_MONGO_REMAINING.md`](../MIGRATION_MONGO_REMAINING.md)
@@ -290,8 +332,10 @@ folder (ws_folder/_item), lecture-note (ws_lecture_note), lecture-audio-note (ws
 
 ### Wave 7 — Aggregation / finalizers  ✅ DONE 2026-06-18 (2 consumers code-complete behind OFF flags — see note)
 > **✅ Wave 7 complete.** All aggregator/finalizer slices migrated + verified; the 8 previously-blocked tables
-> CREATED + backfilled; test-series + ebook-download + folder fully migrated & flags ON. **Two consumers
-> (`client-notification`, `client-lecture-progress`) are CODE-COMPLETE but intentionally flag-OFF** — notification's
+> CREATED + backfilled; test-series + ebook-download + folder fully migrated & flags ON. **⚠ SUPERSEDED (see top
+> banner): both `client-notification` (FULLY migrated + flag ON, 2026-06-18) and `client-lecture-progress`
+> (free-video slice migrated + flag ON; container/DAG paths still Mongo) have since advanced past the flag-OFF state
+> described below.** *(historical:)* the two consumers were CODE-COMPLETE but flag-OFF — notification's
 > write path is a Mongo subsystem (admin dispatcher/scheduler/FCM/BullMQ) and lecture-progress is a 14-file
 > content-join hub; both flip once their paired write/consumer surface migrates. Everything that could be flipped
 > without split-brain IS flipped. Genuinely never had a SQL table / no clean slice: ExamCountdown, PackageCategory,
@@ -316,9 +360,27 @@ Notification** — those slices stay Mongo.
 - [ ] Fold in the deferred Wave-6 live reads (detail/recordings/lecture/timetable/my-lists) where their Mongo-only deps allow.
 - [ ] Doc protocol + update §RESUME POINTER.
 
-### Wave 8 — Misc / low-value  ⬜
-- [ ] notification (+ImageNotification), tracking (ActivityLog), inquiry, goal (Goal — Mongo-only, design), cms (SocialLink/CurrentAffair/LiveBannerSlider), offline admin CRUD, customer-master.
-- [ ] Doc protocol + update §RESUME POINTER.
+### Wave 8 — Misc / low-value  ✅ DONE 2026-06-18
+- [x] **customer-master** ✅ — State/District/Education/TargetGoal CRUD (16 handlers) on SQL, no DDL; flag
+  `customer-master` ON. Verified 24/24 (`scripts/verify-wave8-sql.ts`).
+- [x] **ImageNotification** ✅ — 4 handlers on SQL (same `client-notification` flag); completes the notification cluster.
+- [x] **offline admin CRUD (Center/Batch/Enquiry)** ✅ — 12 handlers on SQL, no DDL; flags `offline-batch` +
+  `offline-enquiry` ON. Center+Batch admin writes added to `offline-batch` module; Enquiry admin list+delete to
+  `offline-enquiry`. Verified 23/23 (`scripts/verify-offline-admin-sql.ts`) incl. cascade/409 guards + JSON/BigInt
+  drifts. (Banner = OfflineBannerSlider + City admin still Mongo — City has own module; Banner separate.)
+- [x] **offline City admin writes — ✅ DONE (2026-06-18), NO DDL:** added admin CRUD (5 handlers) to `offline-city`
+  module (flag already ON). `stateId` filter/populate dropped (no SQL col — Mongo optional). Verified 14/14
+  (`scripts/verify-offline-city-admin-sql.ts`) incl. center-FK 409 guard.
+- [x] **DDL batch — ✅ DONE 2026-06-18** (DDL `2026-06-18_create_wave8_misc_tables.sql`; verified 34/34
+  `scripts/verify-wave8-ddl-sql.ts`):
+  - **tracking** (ActivityLog) — new `ws_activity_log`; flag `tracking` ON; list + summary (groupBy + raw-SQL dailyCount).
+  - **goal** — new `ws_goal` (labels JSON); flag `goal` ON; branched in `goal.admin.service.ts` (keeps shared cache+S3).
+  - **cms-extra** — new `ws_social_link(_type)`/`ws_current_affair`/`ws_live_banner_slider`; flag `cms-extra` ON; 16
+    cms.controller handlers dual-pathed; SocialLinkType in-use→409; LiveBanner order_by reorder.
+  - **inquiry** — `ws_website_inquiry` ALTERed (+customer_id/description/message/source; name/mobile/email/city →
+    nullable); flag `inquiry` ON; admin list/get/delete + client submit; customer-populate from ws_customer.
+  - **offline Banner** — `ws_offline_banner_slider` ALTERed (+order_by); added to `offline-batch` module; CRUD+reorder.
+- [x] Doc protocol + update §RESUME POINTER (kept current per-slice; RESUME POINTER has the Wave 8 banner).
 
 ---
 
@@ -335,6 +397,7 @@ Notification** — those slices stay Mongo.
 
 | Date | Wave | What |
 |------|------|------|
+| 2026-06-18 | 7 | **🔎 Wave 7 follow-up — investigated flipping the 2 OFF consumers; both confirmed BLOCKED on prerequisite migrations (code-backed), flags stay OFF, no code changed.** `client-notification`: FCM delivery needs multi-device tokens but ws_customer has only a single `firebaseToken @map("device")` (Mongo has `firebaseTokens[]` + `$pull` pruning) → needs a `ws_customer_device_token` table + backfill first; AND scheduled-send BullMQ jobs are keyed by Mongo `_id` → needs a drain/cutover. `client-lecture-progress`: recorded-video heartbeat gated by `scopeReachableCategories` walking the Mongo `VideoCategory.childCategoryIds` DAG (no SQL hierarchy nav) + resume reads join Mongo-only content (Course/Package/LiveCourse/LiveSession/VideoCategory/CourseEducator) → needs the content-graph SQL layer first. Both verified via code (objectId.parse guards, fcm.ts array pruning, audience.ts). Honored "nothing breaks" → left OFF. SQL modules stay code-complete + ready. |
 | 2026-06-18 | 7 | **🔌 Wave 7 — wired the new-table consumers.** ✅ `client-ebook-download` (ON, verified: record/list/count/remove) + ✅ `client-folder` (ON, verified: 8 handlers ×2 types + ensureDefault + counts + content hydration). ⏸️ `client-notification` (client reads + markRead/markAll code-complete + verified, FLAG OFF — admin dispatcher/scheduler/FCM/BullMQ write subsystem keyed by Mongo Customer ids stays Mongo) + ⏸️ `client-lecture-progress` (heartbeat upserts + rollups + completedLectureCount built, FLAG OFF — 14-file content-join hub: heartbeat's Mongo entitlement reads + resume/learning reads must flip together). KEY FINDING: runtime ids ARE SQL (customer-auth + catalog-*), so content joins resolve live (folder proved it) — the "Mongo content≠SQL" issue only affected backfill. profile dashboard counts flag-aware (folder/ebook/notification); `new ObjectId(userId)` guarded (latent crash under SQL-auth). `tsc` clean. |
 | 2026-06-18 | 7 | **🆕 Wave 7 — created the 8 blocked SQL tables + test-series vertical + webhook book/ebook.** DDL (`2026-06-18_create_wave7_blocked_tables.sql`): ws_lecture_progress, ws_notification, ws_folder(+_item), ws_ebook_download, ws_test_series(+_price/_order/_subscription) + ws_book_order.paid_at. 9 Prisma models + backfill (`backfill-wave7-blocked-to-sql.ts`; customer phone-bridge + test-series intra-family: notification 22/24, test_series 2+3 prices; customer-keyed rows mostly skipped on staging — test users not in SQL dump). ✅ test-series FULLY migrated (`test-series-order`: apply-promo/create/verify/my-subs-tab/webhook, verified end-to-end +60d/fold). ✅ webhook book+ebook fulfillment flipped (AWB SQL-side). ⏸️ lecture-progress (content-join hub, refs unbridged), notification (Mongo dispatcher/FCM/BullMQ write path), folder/folder-item (polymorphic refId unbridged), ebook-download (ebookId unbridged) — tables+backfill DONE + production-ready, consumers stay Mongo pending paired write/content-graph. `tsc` clean. |
 | 2026-06-18 | 7 | **💳 Wave 7 — package payment + webhook-ebook on SQL (payment surface closed).** PACKAGE create-order + verify added to existing `commerce-order` (flag `package-order`; same tables as course): findPackagePlanForOrder/createPackageOrderMysql/findPackageOrderForVerify/verifyPackageOrderMysql + repo findActivePackageSub/verifyPackageTx; branched package-payment.controller.ts + verify.controller.ts. 3-table, DAYS, fold-or-fresh; plan must be package (packageId set, courseId null), sub sets package_id/course_id null. PackageCourseOrder.customer_id is `userId Int` (NOT varchar). WEBHOOK ebook: fulfillEbookWebhookMysql added to ebook-order (keyed by razorpayOrderId alone) + repo findOrderByRazorpayOnly; branched webhook.controller.ts. Verified end-to-end vs live DB (pkg: +180d, fold sub.amount 6500→13000; ebook webhook: order complete + sub +180d, idempotent). `tsc` clean. ⏸️ Remaining = documented blocks: test-series (no SQL table), webhook-book (paidAt/tracking/Counter schema), recordingWebhook (Json+socket), profile-dashboard (5/7 counts no SQL table), client/dashboard. |

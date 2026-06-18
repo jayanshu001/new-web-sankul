@@ -5,6 +5,10 @@ import { Inquiry } from "../../models/system/Inquiry.model";
 import { isMysqlModule } from "../../config/migration";
 import { buildSearchFilter } from "../../utils/searchFilter";
 import {
+  isInquiryMysql, parseInquiryId,
+  listInquiries as sqlListInquiries, getInquiry as sqlGetInquiry, deleteInquiry as sqlDeleteInquiry,
+} from "../../modules/inquiry/inquiry.service";
+import {
   listDepartments as listDepartmentsService,
   createDepartment as createDepartmentService,
   updateDepartment as updateDepartmentService,
@@ -19,6 +23,20 @@ export const listInquiries = async (req: Request, res: Response) => {
   try {
     const { search, course, mode, fromDate, toDate, page = "1", limit = "20" } =
       req.query as Record<string, string>;
+
+    if (isInquiryMysql()) {
+      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+      const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+      const { data, total } = await sqlListInquiries({
+        search: search || undefined, course: course || undefined, mode: mode || undefined,
+        from: fromDate ? new Date(fromDate) : undefined, to: toDate ? new Date(toDate) : undefined,
+        page: pageNum, limit: limitNum,
+      });
+      return res.status(200).json({
+        success: true, data,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
 
     const filter: any = {};
     if (course) filter.course = course;
@@ -57,6 +75,13 @@ export const listInquiries = async (req: Request, res: Response) => {
 export const getInquiry = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isInquiryMysql()) {
+      const nid = parseInquiryId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = await sqlGetInquiry(nid);
+      if (!data) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, data });
+    }
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const doc = await Inquiry.findById(id)
       .populate("customerId", "_id firstName lastName phoneNumber email")
@@ -72,6 +97,13 @@ export const getInquiry = async (req: Request, res: Response) => {
 export const deleteInquiry = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (isInquiryMysql()) {
+      const nid = parseInquiryId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+      const ok = await sqlDeleteInquiry(nid);
+      if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+      return res.status(200).json({ success: true, message: "Inquiry deleted." });
+    }
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const doc = await Inquiry.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });

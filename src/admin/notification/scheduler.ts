@@ -4,6 +4,12 @@ import { Notification } from "../../models/system/Notification.model";
 import { dispatchScheduledById } from "./dispatcher";
 import logger from "../../utils/logger";
 import { queueDepth, queueDlqTotal } from "../../utils/metrics";
+import {
+  isAdminNotificationMysql,
+  listScheduledForRehydrate as sqlListScheduledForRehydrate,
+  existsSql as sqlNotificationExists,
+  markFailed as sqlMarkFailed,
+} from "../../modules/admin-notification/admin-notification.service";
 
 const QUEUE_NAME = "notification-scheduler";
 const DLQ_NAME = "notification-scheduler-dlq";
@@ -159,25 +165,54 @@ export async function cancelNotificationJob(notificationId: string): Promise<voi
  * the queue already has the job, the second add() is a no-op.
  */
 async function rehydrateScheduledNotifications(): Promise<number> {
-  const rows = await Notification.find({ status: "scheduled" })
-    .select("_id scheduledAt")
-    .lean();
+  // Recovery rows: { id, scheduledAt }. Source depends on the flag.
+  //  - flag OFF: Mongo scheduled rows only (unchanged behaviour).
+  //  - flag ON: SQL scheduled rows (the canonical write store) PLUS any leftover
+  //    Mongo scheduled rows queued before the cutover — both rehydrated during
+  //    the drain window. BullMQ's deterministic jobId makes a duplicate add() a
+  //    no-op, and the worker's dual-read routing dispatches each to the right store.
+  const recovery: { id: string; scheduledAt: Date }[] = [];
+
+  if (isAdminNotificationMysql()) {
+    try {
+      recovery.push(...(await sqlListScheduledForRehydrate()));
+    } catch (err) {
+      logger.error("Rehydrate: failed to read SQL scheduled notifications", {
+        error: (err as Error).message,
+      });
+    }
+  }
+
+  // Mongo scheduled rows: always read when flag is off; when on, these are
+  // pre-cutover stragglers still needing their original Mongo-keyed jobs.
+  try {
+    const rows = await Notification.find({ status: "scheduled" })
+      .select("_id scheduledAt")
+      .lean();
+    for (const row of rows) {
+      if (!row.scheduledAt) continue;
+      recovery.push({ id: String(row._id), scheduledAt: row.scheduledAt });
+    }
+  } catch (err) {
+    logger.error("Rehydrate: failed to read Mongo scheduled notifications", {
+      error: (err as Error).message,
+    });
+  }
 
   let count = 0;
-  for (const row of rows) {
-    if (!row.scheduledAt) continue;
+  for (const row of recovery) {
     try {
       // bypassBackpressure: this is recovery of work that already existed
       // before the restart, not new client-driven load. Refusing the row
       // would lose it permanently (status flips to "failed" via the worker
       // never picking it up).
-      await scheduleNotificationJob(String(row._id), row.scheduledAt, {
+      await scheduleNotificationJob(row.id, row.scheduledAt, {
         bypassBackpressure: true,
       });
       count++;
     } catch (err) {
       logger.error("Rehydrate: failed to enqueue scheduled notification", {
-        id: String(row._id),
+        id: row.id,
         error: (err as Error).message,
       });
     }
@@ -239,10 +274,19 @@ export async function initNotificationScheduler(): Promise<void> {
     // AND push a copy onto the DLQ for forensics.
     if (job.attemptsMade >= (job.opts.attempts ?? 1)) {
       try {
-        await Notification.updateOne(
-          { _id: job.data.notificationId, status: "scheduled" },
-          { $set: { status: "failed", failureReason: err.message } }
-        );
+        // Dual-read: when the flag is on and the id is a SQL row, fail it in SQL;
+        // otherwise (legacy Mongo _id, or flag off) fail it in Mongo.
+        const inSql =
+          isAdminNotificationMysql() &&
+          (await sqlNotificationExists(job.data.notificationId));
+        if (inSql) {
+          await sqlMarkFailed(job.data.notificationId, err.message);
+        } else {
+          await Notification.updateOne(
+            { _id: job.data.notificationId, status: "scheduled" },
+            { $set: { status: "failed", failureReason: err.message } }
+          );
+        }
       } catch (updateErr) {
         logger.error("Failed to mark notification as failed after retries exhausted", {
           jobId: job.id,
