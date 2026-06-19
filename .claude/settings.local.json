@@ -153,7 +153,25 @@
       "Bash(yarn prisma:generate)",
       "Bash(grep -nA8 \"enum ExamType\" /Users/pratikzankat/new-web-sankul/prisma/schema.prisma)",
       "Bash(grep -nA6 \"enum VideoType\" /Users/pratikzankat/new-web-sankul/prisma/schema.prisma)",
-      "Bash(grep -nA5 \"enum CourseFlag01\" /Users/pratikzankat/new-web-sankul/prisma/schema.prisma)"
+      "Bash(grep -nA5 \"enum CourseFlag01\" /Users/pratikzankat/new-web-sankul/prisma/schema.prisma)",
+      "Bash(MIGRATION_API_BASE_URL=http://localhost:4001 yarn migration:api:faq)",
+      "Bash(curl -s http://localhost:4001/api/v1/client/faqs?type=general -H 'Authorization: Bearer __TRACKED_VAR__')",
+      "Bash(curl -s -o /dev/null -w \"server: %{http_code}\\\\n\" http://localhost:4001/api)",
+      "Bash(MIGRATION_API_BASE_URL=http://localhost:4001 yarn migration:api:catalog)",
+      "Bash(MIGRATION_API_BASE_URL=http://localhost:4001 yarn migration:api:commerce-order)",
+      "Bash(MIGRATION_API_BASE_URL=http://localhost:4001 yarn migration:api:catalog-ebook)",
+      "Bash(MIGRATION_API_BASE_URL=http://localhost:4001 yarn migration:api:catalog-material)",
+      "Bash(MIGRATION_API_BASE_URL=http://localhost:4001 yarn migration:api:catalog-book)",
+      "Bash(MIGRATION_API_BASE_URL=http://localhost:4001 yarn migration:api:catalog-exam)",
+      "Bash(MIGRATION_API_BASE_URL=http://localhost:4001 yarn migration:api:commerce-price)",
+      "Bash(MIGRATION_API_BASE_URL=http://localhost:4001 yarn migration:api:book-order)",
+      "Bash(MIGRATION_API_BASE_URL=http://localhost:4001 yarn migration:api:commerce-promocode)",
+      "Bash(yarn migration:api:auth)",
+      "Bash(cd *)",
+      "Bash(docker exec *)",
+      "Bash(grep -nA12 \"toggleBookStatus\" src/modules/admin-book/admin-book.service.ts)",
+      "Bash(grep -nA10 \"toggleBookStatus\\\\|updateStatus\\\\|status:\" src/modules/admin-book/admin-book.repository.ts)",
+      "Bash(graphify update *)"
     ]
   }
 }

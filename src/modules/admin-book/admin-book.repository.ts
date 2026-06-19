@@ -32,6 +32,8 @@ export const adminBookRepository = {
   delete: (id: number) => prisma.book.delete({ where: { id } }),
   setStatus: (id: number, status: boolean) =>
     prisma.book.update({ where: { id }, data: { active: status, updated_at: new Date() } }),
+  setTrending: (id: number, isTrending: boolean) =>
+    prisma.book.update({ where: { id }, data: { isTrending, updated_at: new Date() } }),
   setOrder: (id: number, orderBy: number) =>
     prisma.book.update({ where: { id }, data: { order_by: orderBy, updated_at: new Date() } }),
 

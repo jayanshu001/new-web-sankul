@@ -295,14 +295,22 @@ export const toggleBookStatus = async (req: Request, res: Response) => {
   }
 };
 
-// ⚠ STAYS Mongo: ws_book has no `is_trending` column — `isTrending` is a
-// Mongo-only field (the SQL DTO synthesizes it false). No SQL branch.
+// ws_book.is_trending exists (Prisma `Book.isTrending`), so the MySQL branch
+// mirrors toggleBookStatus; Mongo fallback stays for the pre-migration path.
 export const toggleBookTrending = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
   logger.info("toggleBookTrending invoked", { traceId, path: req.originalUrl, id });
 
   try {
+    if (adminBook.isAdminBookMysql()) {
+      const numId = adminBook.parseBookId(id);
+      if (!numId) { logger.warn("toggleBookTrending invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
+      const newValue = await adminBook.toggleBookTrending(numId);
+      if (newValue === null) { logger.warn("toggleBookTrending not found (mysql)", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }
+      logger.info("toggleBookTrending success (mysql)", { traceId, id, newValue });
+      return res.status(200).json({ success: true, data: { isTrending: newValue } });
+    }
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("toggleBookTrending invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid book id." }); }
     const book = await Book.findById(id).select("isTrending");
     if (!book) { logger.warn("toggleBookTrending not found", { traceId, id }); return res.status(404).json({ success: false, message: "Book not found." }); }

@@ -213,6 +213,13 @@ export const toggleBookStatus = async (id: number): Promise<boolean | null> => {
   return updated.active;
 };
 
+export const toggleBookTrending = async (id: number): Promise<boolean | null> => {
+  const row = await repo.findById(id);
+  if (!row) return null;
+  const updated = await repo.setTrending(id, !row.isTrending);
+  return updated.isTrending;
+};
+
 export const reorderBooks = async (orders: Array<{ id: string; orderBy: number }>) => {
   await Promise.all(
     orders.map(({ id, orderBy }) => {

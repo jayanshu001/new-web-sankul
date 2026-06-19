@@ -92,8 +92,8 @@ _(5 calls captured for this endpoint; first shown.)_
       "isNewUser": false,
       "isProfileCompleted": true
     },
-    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MTUxMTE4MCwiZXhwIjoxNzgyMTE1OTgwfQ.HaEA_VzFNGw7vp--q-42-2P4d4MGMaD9WDxrE7YRiD8",
-    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MTUxMTE4MCwiZXhwIjoxNzg2Njk1MTgwfQ.mj-yUgtKZwhd4EOTfOcTRX8oiu4gDNlZC_zAjY1_xq0",
+    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MTg3NzEzMywiZXhwIjoxNzgyNDgxOTMzfQ.4Pn-nOJrcWxpX_4Yy5CoDBnOEN3GpZyeSg2nGxv8lyE",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MTg3NzEzMywiZXhwIjoxNzg3MDYxMTMzfQ.lOp5yDlxxD-42QvvRILYFIQGDXzzBgLLm--gTtLnb8g",
     "isNewUser": false
   },
   "message": "Login successful.",
@@ -278,7 +278,7 @@ _(2 calls captured for this endpoint; first shown.)_
 ### Request body
 ```json
 {
-  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MTUxMTE4MCwiZXhwIjoxNzg2Njk1MTgwfQ.mj-yUgtKZwhd4EOTfOcTRX8oiu4gDNlZC_zAjY1_xq0"
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MTg3NzEzMywiZXhwIjoxNzg3MDYxMTMzfQ.lOp5yDlxxD-42QvvRILYFIQGDXzzBgLLm--gTtLnb8g"
 }
 ```
 
@@ -314,8 +314,8 @@ _(2 calls captured for this endpoint; first shown.)_
       "isNewUser": false,
       "isProfileCompleted": true
     },
-    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MTUxMTE4MCwiZXhwIjoxNzgyMTE1OTgwfQ.HaEA_VzFNGw7vp--q-42-2P4d4MGMaD9WDxrE7YRiD8",
-    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MTUxMTE4MCwiZXhwIjoxNzg2Njk1MTgwfQ.mj-yUgtKZwhd4EOTfOcTRX8oiu4gDNlZC_zAjY1_xq0",
+    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MTg3NzEzMywiZXhwIjoxNzgyNDgxOTMzfQ.4Pn-nOJrcWxpX_4Yy5CoDBnOEN3GpZyeSg2nGxv8lyE",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MTg3NzEzMywiZXhwIjoxNzg3MDYxMTMzfQ.lOp5yDlxxD-42QvvRILYFIQGDXzzBgLLm--gTtLnb8g",
     "isNewUser": false
   },
   "message": "Token refreshed successfully.",

@@ -147,7 +147,7 @@ _(2 calls captured for this endpoint; first shown.)_
       },
       "courseEducatorId": {
         "_id": "20",
-        "name": "Priyanka Soni"
+        "name": "Priyanka Sonis"
       },
       "videoCategoryId": {
         "_id": "15",

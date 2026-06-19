@@ -155,7 +155,7 @@ _(2 calls captured for this endpoint; first shown.)_
 ```json
 {
   "type": "general",
-  "question": "migration-api-test-1781511180478",
+  "question": "migration-api-test-1781876109464",
   "answer": "test answer",
   "isExpand": false
 }
@@ -166,17 +166,17 @@ _(2 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "83",
+    "_id": "87",
     "type": "general",
     "typeId": {
       "_id": "general",
       "title": "General"
     },
-    "question": "migration-api-test-1781511180478",
+    "question": "migration-api-test-1781876109464",
     "answer": "test answer",
     "isExpand": false,
-    "createdAt": "2026-06-15T08:13:00.000Z",
-    "updatedAt": "2026-06-15T08:13:00.000Z"
+    "createdAt": "2026-06-19T13:35:09.000Z",
+    "updatedAt": "2026-06-19T13:35:09.000Z"
   }
 }
 ```
@@ -231,17 +231,17 @@ _(2 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "84",
+    "_id": "88",
     "type": "referral",
     "typeId": {
       "_id": "referral",
       "title": "Referral"
     },
-    "question": "migration-put-1781511180490",
+    "question": "migration-put-1781876109499",
     "answer": "after",
     "isExpand": false,
-    "createdAt": "2026-06-15T08:13:00.000Z",
-    "updatedAt": "2026-06-15T08:13:00.000Z"
+    "createdAt": "2026-06-19T13:35:10.000Z",
+    "updatedAt": "2026-06-19T13:35:10.000Z"
   }
 }
 ```

@@ -4,6 +4,24 @@
 
 ---
 
+## 2026-06-19 — `toggleBookTrending` gains a MySQL branch (was Mongo-only despite admin-book ON)
+
+Found during live admin write-path verification: `PATCH admin/books/:id/trending` 400'd for MySQL integer ids because
+the handler was Mongo-only (`mongoose.Types.ObjectId.isValid` → `Book.findById`) with **no `isMysqlModule` branch** — a
+stale "ws_book has no is_trending column" decision. The column now exists (`ws_book.is_trending tinyint(1)`) and the
+Prisma `Book.isTrending` field maps it (`@map("is_trending")`), so the deferral was obsolete.
+
+- **`modules/admin-book/admin-book.repository.ts`** — new `setTrending(id, isTrending)` → `prisma.book.update({ data: { isTrending, updated_at } })`.
+- **`modules/admin-book/admin-book.service.ts`** — new `toggleBookTrending(id)` (read row → flip `!row.isTrending` → persist).
+- **`admin/book/book.controller.ts`** — `toggleBookTrending` now branches on `isAdminBookMysql()` (mirrors `toggleBookStatus`); Mongo fallback retained.
+
+Verified live: `is_trending` 0→1→revert 0 against `websankul_staging`. `yarn typecheck` ✅. No schema/DDL change (column +
+Prisma field already present). **Note (not changed):** the read DTO still synthesizes `isTrending=false`
+(`admin-book.service.ts` comment) — admin book listings won't surface the real column value until that DTO is updated; left
+as-is to preserve the response contract.
+
+---
+
 ## 2026-06-19 — 🏁 Handler-level Mongo→SQL migration COMPLETE (every API handler now has a SQL branch)
 
 The last two schema-decision items are done; no handler reads/writes Mongo only anymore.
