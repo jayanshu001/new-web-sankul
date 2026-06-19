@@ -7,6 +7,7 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { createPromoterSchema, updatePromoterSchema } from "./promoter.validation";
 import { buildPromoterOverview, buildAllPromotersOverview } from "../../promoter/dashboard/overview.service";
 import { buildSearchFilter } from "../../utils/searchFilter";
+import * as adminPromoterSql from "../../modules/admin-promoter/admin-promoter.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 const SALT_ROUNDS = 10;
@@ -15,11 +16,27 @@ const SALT_ROUNDS = 10;
 export const listPromoters = async (req: Request, res: Response) => {
   try {
     const { search, status, page = "1", limit = "20" } = req.query as Record<string, string>;
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+
+    if (adminPromoterSql.isAdminPromoterMysql()) {
+      const statusFilter = status === "true" ? true : status === "false" ? false : undefined;
+      const { data, total } = await adminPromoterSql.listPromoters({
+        search,
+        status: statusFilter,
+        page: pageNum,
+        limit: limitNum,
+      });
+      return res.status(200).json({
+        success: true,
+        data,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     const filter: any = { isDelete: false, ...buildSearchFilter(search, ["fullName", "email", "phone"]) };
     if (status === "true" || status === "false") filter.status = status === "true";
 
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
@@ -41,6 +58,15 @@ export const listPromoters = async (req: Request, res: Response) => {
 export const getPromoter = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    if (adminPromoterSql.isAdminPromoterMysql()) {
+      const pid = adminPromoterSql.parsePromoterId(id);
+      if (!pid) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = await adminPromoterSql.getPromoter(pid);
+      if (!data) return res.status(404).json({ success: false, message: "Promoter not found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
 
     const promoter = await Promoter.findOne({ _id: id, isDelete: false }).lean();
@@ -66,6 +92,14 @@ export const createPromoter = async (req: Request, res: Response) => {
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const data = createPromoterSchema.parse(req.body);
+
+    if (adminPromoterSql.isAdminPromoterMysql()) {
+      const result = await adminPromoterSql.createPromoter(data);
+      if (result.conflict)
+        return res.status(409).json({ success: false, message: "Email already in use." });
+      return res.status(201).json({ success: true, data: result.data });
+    }
+
     const existing = await Promoter.findOne({ email: data.email.toLowerCase() });
     if (existing)
       return res.status(409).json({ success: false, message: "Email already in use." });
@@ -89,12 +123,22 @@ export const createPromoter = async (req: Request, res: Response) => {
 export const updatePromoter = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
 
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
     const data = updatePromoterSchema.parse(req.body);
+
+    if (adminPromoterSql.isAdminPromoterMysql()) {
+      const pid = adminPromoterSql.parsePromoterId(id);
+      if (!pid) return res.status(400).json({ success: false, message: "Invalid id." });
+      const updated = await adminPromoterSql.updatePromoter(pid, data);
+      if (!updated) return res.status(404).json({ success: false, message: "Promoter not found." });
+      return res.status(200).json({ success: true, data: updated });
+    }
+
+    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
+
     const update: any = { ...data };
     if (data.email) update.email = data.email.toLowerCase();
     if (data.password) update.password = await bcrypt.hash(data.password, SALT_ROUNDS);
@@ -119,6 +163,15 @@ export const updatePromoter = async (req: Request, res: Response) => {
 export const deletePromoter = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    if (adminPromoterSql.isAdminPromoterMysql()) {
+      const pid = adminPromoterSql.parsePromoterId(id);
+      if (!pid) return res.status(400).json({ success: false, message: "Invalid id." });
+      const ok = await adminPromoterSql.deletePromoter(pid);
+      if (!ok) return res.status(404).json({ success: false, message: "Promoter not found." });
+      return res.status(200).json({ success: true, message: "Promoter deleted." });
+    }
+
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const promoter = await Promoter.findByIdAndUpdate(
       id,
@@ -136,6 +189,15 @@ export const deletePromoter = async (req: Request, res: Response) => {
 export const togglePromoterStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    if (adminPromoterSql.isAdminPromoterMysql()) {
+      const pid = adminPromoterSql.parsePromoterId(id);
+      if (!pid) return res.status(400).json({ success: false, message: "Invalid id." });
+      const next = await adminPromoterSql.togglePromoterStatus(pid);
+      if (next === null) return res.status(404).json({ success: false, message: "Promoter not found." });
+      return res.status(200).json({ success: true, data: { status: next } });
+    }
+
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const promoter = await Promoter.findOne({ _id: id, isDelete: false }).select("status");
     if (!promoter) return res.status(404).json({ success: false, message: "Promoter not found." });
@@ -151,6 +213,14 @@ export const togglePromoterStatus = async (req: Request, res: Response) => {
 export const getPromoterPromocodes = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    if (adminPromoterSql.isAdminPromoterMysql()) {
+      const pid = adminPromoterSql.parsePromoterId(id);
+      if (!pid) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = await adminPromoterSql.getPromoterPromocodes(pid);
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const data = await PromoCode.find({ promoterId: id }).sort({ createdAt: -1 }).lean();
     return res.status(200).json({ success: true, data });
@@ -163,6 +233,14 @@ export const getPromoterPromocodes = async (req: Request, res: Response) => {
 export const getPromoterSubscriptions = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    if (adminPromoterSql.isAdminPromoterMysql()) {
+      const pid = adminPromoterSql.parsePromoterId(id);
+      if (!pid) return res.status(400).json({ success: false, message: "Invalid id." });
+      const data = await adminPromoterSql.getPromoterSubscriptions(pid);
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
     const data = await PackageCourseSubscription.find({ promoterId: id })
       .populate({ path: "customerId", select: "firstName lastName phoneNumber" })
@@ -181,6 +259,21 @@ export const getPromoterSubscriptions = async (req: Request, res: Response) => {
 export const getPromoterDashboard = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    if (adminPromoterSql.isAdminPromoterMysql()) {
+      const pid = adminPromoterSql.parsePromoterId(id);
+      if (!pid) return res.status(400).json({ success: false, message: "Invalid promoter id." });
+      const { range, startDate, endDate, promocodeId } = req.query as Record<string, string>;
+      const data = await adminPromoterSql.getPromoterDashboard(pid, {
+        rangeRaw: range,
+        startDate,
+        endDate,
+        promocodeId,
+      });
+      if (!data) return res.status(404).json({ success: false, message: "Promoter not found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid promoter id." });
 
@@ -202,6 +295,17 @@ export const getPromoterDashboard = async (req: Request, res: Response) => {
 export const getAllPromotersDashboard = async (req: Request, res: Response) => {
   try {
     const { range, startDate, endDate, promocodeId } = req.query as Record<string, string>;
+
+    if (adminPromoterSql.isAdminPromoterMysql()) {
+      const data = await adminPromoterSql.getAllPromotersDashboard({
+        rangeRaw: range,
+        startDate,
+        endDate,
+        promocodeId,
+      });
+      return res.status(200).json({ success: true, data });
+    }
+
     const data = await buildAllPromotersOverview({ rangeRaw: range, startDate, endDate, promocodeId });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {

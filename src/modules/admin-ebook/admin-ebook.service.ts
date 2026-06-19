@@ -2,6 +2,7 @@ import { isMysqlModule } from "../../config/migration";
 import { computeEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminEbookRepository as repo } from "./admin-ebook.repository";
+import { populateExamCountdowns, parseIdArray } from "../exam-countdown/exam-countdown.service";
 import type { EBook, PackageCourseEbookPrice } from "@prisma/client";
 
 export const ADMIN_EBOOK_MODULE = "admin-ebook";
@@ -17,15 +18,25 @@ export const parseEbookId = (id: string): number | null => {
  * `ws_ebook` row → admin Ebook DTO (Mongo `Ebook` shape). Field renames:
  * terms_and_conditions→termsAndConditions, order_by→order, demo_url→demoUrl,
  * book_url→bookUrl, link→link. SQL-absent fields synthesized: isTrending=false,
- * examCountdown*=[]/null, demoFileName/bookFileName=null, and the PDF-upload
- * status fields (book/demoUploadStatus/Progress) are omitted (Mongo-only).
+ * demoFileName/bookFileName=null, and the PDF-upload status fields
+ * (book/demoUploadStatus/Progress) are omitted (Mongo-only).
+ *
+ * examCountdown* are stored as JSON int-arrays on ws_ebook (C6) and populated on
+ * DETAIL reads via `populateExamCountdowns` — pass the resolved DTOs as `ec`.
+ * List/write paths leave them empty (no per-row populate fan-out).
  */
-export const toEbookDto = (row: EBook) => ({
+export const toEbookDto = (
+  row: EBook,
+  ec?: {
+    examCountdownIds: { _id: string; title: string; examDate: Date }[];
+    examCountdownCategoryIds: { _id: string; name: string; colorHex: string }[];
+  }
+) => ({
   _id: String(row.id),
   name: row.name,
-  examCountdownCategoryId: null,
-  examCountdownCategoryIds: [],
-  examCountdownIds: [],
+  examCountdownCategoryId: ec ? ec.examCountdownCategoryIds[0] ?? null : null,
+  examCountdownCategoryIds: ec ? ec.examCountdownCategoryIds : [],
+  examCountdownIds: ec ? ec.examCountdownIds : [],
   thumbnail: row.thumbnail,
   image: row.image,
   description: row.description ?? null,
@@ -84,14 +95,20 @@ export const listEbooks = async (query: ListEbooksQuery) => {
     repo.list({ ...opts, skip: (pageNum - 1) * limitNum, take: limitNum }),
     repo.count(opts),
   ]);
-  return { data: rows.map(toEbookDto), pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
+  // NB: wrap (not bare `rows.map(toEbookDto)`) so Array.map's index arg can't be
+  // mistaken for the optional `ec` populate param. List rows leave examCountdown* empty.
+  return { data: rows.map((r) => toEbookDto(r)), pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
 
 export const getEbookById = async (id: number) => {
   const row = await repo.findById(id);
   if (!row) return null;
-  const plans = await repo.listPlans(id, { activeOnly: true });
-  return { ...toEbookDto(row), plans: plans.map(toPlanDto) };
+  const [plans, ec] = await Promise.all([
+    repo.listPlans(id, { activeOnly: true }),
+    // C6: resolve the stored JSON int-arrays to the Mongo .populate() shape.
+    populateExamCountdowns(row),
+  ]);
+  return { ...toEbookDto(row, ec), plans: plans.map(toPlanDto) };
 };
 
 // ── ebooks: write ────────────────────────────────────────────────────────────
@@ -112,6 +129,9 @@ export const createEbook = async (d: any) => {
     bookUrl: d.bookUrl ?? "",
     shareableLink: d.link ?? "",
     active: d.status ?? true,
+    // C6: persist attached countdown/category ids (SQL ints) as JSON arrays.
+    examCountdownIds: parseIdArray(d.examCountdownIds),
+    examCountdownCategoryIds: parseIdArray(d.examCountdownCategoryIds),
     createdAt: now,
     updatedAt: now,
   });
@@ -134,6 +154,10 @@ export const updateEbook = async (id: number, d: any): Promise<ReturnType<typeof
   if (d.bookUrl !== undefined) data.bookUrl = d.bookUrl ?? "";
   if (d.link !== undefined) data.shareableLink = d.link ?? "";
   if (d.status !== undefined) data.active = d.status;
+  // C6: only touch the JSON arrays when the payload carries them (an update that
+  // omits countdowns must not wipe the stored ids).
+  if (d.examCountdownIds !== undefined) data.examCountdownIds = parseIdArray(d.examCountdownIds);
+  if (d.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = parseIdArray(d.examCountdownCategoryIds);
   const updated = await repo.update(id, data);
   return toEbookDto(updated);
 };

@@ -17,6 +17,7 @@ import {
 } from "./lecture-note.validation";
 import { buildResumeNextCard } from "../learning/resumeCard";
 import { buildLectureRef } from "../learning/lectureRef";
+import * as lnSql from "../../modules/client-lecture-note/client-lecture-note.service";
 
 /**
  * Resolve the recorded lecture and confirm the customer holds an active,
@@ -113,6 +114,26 @@ export const createNote = async (req: Request, res: Response) => {
     if (!parsed.success) { logger.warn("createNote validation failed", { traceId, userId, issues: parsed.error.issues }); return failure(res, parsed.error.issues[0]?.message ?? "Invalid request", 400); }
     const { lectureType, videoId, liveSessionId, timestampSec, content } = parsed.data;
 
+    // ─── SQL branch (int id-space) ───
+    if (lnSql.isLectureNoteMysql()) {
+      const cid = lnSql.parseLnId(String(userId));
+      if (cid == null) return failure(res, "Unauthorized.", 401);
+      if (lectureType === "recorded") {
+        const vid = lnSql.parseLnId(String(videoId));
+        if (vid == null) return failure(res, "Lecture not found.", 404);
+        const guard = await lnSql.authorizeRecorded(cid, vid);
+        if ("error" in guard) return failure(res, guard.error, guard.status);
+        const note = await lnSql.createNote({ customerId: cid, lectureType, timestampSec, content, videoId: vid, courseId: guard.courseId });
+        return success(res, { note }, "Note created.", 201);
+      }
+      const lsid = lnSql.parseLnId(String(liveSessionId));
+      if (lsid == null) return failure(res, "Live session not found.", 404);
+      const guard = await lnSql.authorizeLive(cid, lsid);
+      if ("error" in guard) return failure(res, guard.error, guard.status);
+      const note = await lnSql.createNote({ customerId: cid, lectureType, timestampSec, content, liveSessionId: lsid, liveCourseIds: guard.liveCourseIds });
+      return success(res, { note }, "Note created.", 201);
+    }
+
     const doc: any = {
       customerId: new Types.ObjectId(userId),
       lectureType,
@@ -154,6 +175,31 @@ export const listNotes = async (req: Request, res: Response) => {
     const parsed = listNotesQuerySchema.safeParse(req.query);
     if (!parsed.success) { logger.warn("listNotes validation failed", { traceId, userId, issues: parsed.error.issues }); return failure(res, parsed.error.issues[0]?.message ?? "Invalid request", 400); }
     const { lectureType, videoId, liveSessionId } = parsed.data;
+
+    // ─── SQL branch (int id-space) ───
+    if (lnSql.isLectureNoteMysql()) {
+      const cid = lnSql.parseLnId(String(userId));
+      if (cid == null) return failure(res, "Unauthorized.", 401);
+      let notes;
+      let refInput: any;
+      if (lectureType === "recorded") {
+        const vid = lnSql.parseLnId(String(videoId));
+        if (vid == null) return failure(res, "Lecture not found.", 404);
+        const guard = await lnSql.authorizeRecorded(cid, vid);
+        if ("error" in guard) return failure(res, guard.error, guard.status);
+        notes = await lnSql.listNotes(cid, lectureType, { videoId: vid });
+        refInput = { lectureType: "recorded", userId, videoId: videoId! } as const;
+      } else {
+        const lsid = lnSql.parseLnId(String(liveSessionId));
+        if (lsid == null) return failure(res, "Live session not found.", 404);
+        const guard = await lnSql.authorizeLive(cid, lsid);
+        if ("error" in guard) return failure(res, guard.error, guard.status);
+        notes = await lnSql.listNotes(cid, lectureType, { liveSessionId: lsid });
+        refInput = { lectureType: "live", userId, liveSessionId: liveSessionId! } as const;
+      }
+      const [lecture, resumeNext] = await Promise.all([buildLectureRef(refInput), buildResumeNextCard(refInput)]);
+      return success(res, { notes, lecture, resumeNext }, "Notes fetched.", 200);
+    }
 
     const filter: any = {
       customerId: new Types.ObjectId(userId),
@@ -210,6 +256,13 @@ export const listSavedMaterialNotes = async (req: Request, res: Response) => {
 
   try {
     if (!userId) { logger.warn("listSavedMaterialNotes unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
+
+    if (lnSql.isLectureNoteMysql()) {
+      const cid = lnSql.parseLnId(String(userId));
+      if (cid == null) return failure(res, "Unauthorized.", 401);
+      const items = await lnSql.savedMaterials(cid);
+      return success(res, { items }, "Saved materials fetched.", 200);
+    }
 
     const customerId = new Types.ObjectId(userId);
 
@@ -321,6 +374,25 @@ export const updateNote = async (req: Request, res: Response) => {
     const body = updateNoteSchema.safeParse(req.body);
     if (!body.success) { logger.warn("updateNote validation failed", { traceId, userId, issues: body.error.issues }); return failure(res, body.error.issues[0]?.message ?? "Invalid request", 400); }
 
+    // ─── SQL branch ───
+    if (lnSql.isLectureNoteMysql()) {
+      const cid = lnSql.parseLnId(String(userId));
+      const nid = lnSql.parseLnId(String(params.data.id));
+      if (cid == null || nid == null) return failure(res, "Note not found.", 404);
+      const existing = await lnSql.findOwnedNote(nid, cid);
+      if (!existing) return failure(res, "Note not found.", 404);
+      // Re-check entitlement on write (lapsed sub locks editing).
+      if (existing.lectureType === "recorded" && existing.videoId != null) {
+        const g = await lnSql.authorizeRecorded(cid, existing.videoId);
+        if ("error" in g) return failure(res, g.error, g.status);
+      } else if (existing.lectureType === "live" && existing.liveSessionId != null) {
+        const g = await lnSql.authorizeLive(cid, existing.liveSessionId);
+        if ("error" in g) return failure(res, g.error, g.status);
+      }
+      const note = await lnSql.updateNote(nid, { content: body.data.content, timestampSec: body.data.timestampSec });
+      return success(res, { note }, "Note updated.", 200);
+    }
+
     const note = await LectureNote.findOne({
       _id: params.data.id,
       customerId: new Types.ObjectId(userId),
@@ -360,6 +432,16 @@ export const deleteNote = async (req: Request, res: Response) => {
 
     const params = noteIdParamSchema.safeParse(req.params);
     if (!params.success) { logger.warn("deleteNote invalid id", { traceId, userId, issues: params.error.issues }); return failure(res, params.error.issues[0]?.message ?? "Invalid id", 400); }
+
+    if (lnSql.isLectureNoteMysql()) {
+      const cid = lnSql.parseLnId(String(userId));
+      const nid = lnSql.parseLnId(String(params.data.id));
+      if (cid == null || nid == null) return failure(res, "Note not found.", 404);
+      const existing = await lnSql.findOwnedNote(nid, cid);
+      if (!existing) return failure(res, "Note not found.", 404);
+      await lnSql.deleteNote(nid);
+      return success(res, {}, "Note deleted.", 200);
+    }
 
     const result = await LectureNote.findOneAndDelete({
       _id: params.data.id,

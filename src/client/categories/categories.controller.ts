@@ -28,6 +28,7 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { collapseProgressByVideo } from "../learning/collapseProgress";
 import { resolveVideoScope } from "../course/resolveVideoScope";
+import * as cvSql from "../../modules/client-category-video/client-category-video.service";
 import { getPurchasedMaterialIds, shapeMaterialForClient, listDirectMaterialsForCategory } from "../material/entitlement";
 import { LiveSession } from "../../models/course/LiveSession.model";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
@@ -131,6 +132,52 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
   logger.info("listVideosByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
+    // ─── SQL branch (int id-space) ───
+    if (cvSql.isCategoryVideoMysql()) {
+      const catId = cvSql.parseCvId(id);
+      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const category = await cvSql.findCategory(catId);
+      if (!category) return res.status(404).json({ success: false, message: "Video category not found." });
+
+      const { pageNum, limitNum, skip, search } = parsePaging(req);
+      const typeQ = String(req.query.type ?? "").toLowerCase();
+      const priceType = typeQ === "free" || typeQ === "paid" ? (typeQ as "free" | "paid") : null;
+
+      const [{ rows, total }, scope] = await Promise.all([
+        cvSql.listVideos({ categoryId: catId, search: search || null, priceType, skip, limitNum }),
+        cvSql.scopeForCategory(catId),
+      ]);
+
+      const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
+      const progMap = uid != null ? await cvSql.progressByVideo(uid, rows.map((v) => v.id)) : new Map<number, any>();
+
+      const envByVideo = new Map<number, any>();
+      await Promise.all(rows.map(async (v) => {
+        try { const env = await encryptVideoEnvelope(v as any); envByVideo.set(v.id, env.request); }
+        catch (err: any) { logger.warn("listVideosByCategory (sql) envelope failed", { traceId, videoId: v.id, error: err?.message }); envByVideo.set(v.id, null); }
+      }));
+
+      const list = rows.map((v) => {
+        const isPaid = v.priceType === "paid";
+        const p = progMap.get(v.id);
+        return {
+          _id: String(v.id), title: v.title, topic: v.topic, platform: v.platform,
+          isPaid,
+          progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
+          recordings: [], // SQL videos carry no live-session back-link
+          qualities: defaultListingQualities(),
+          request: envByVideo.get(v.id) ?? null,
+        };
+      });
+
+      logger.info("listVideosByCategory success (sql)", { traceId, categoryId: id, total, returned: list.length, scopeKind: scope?.kind ?? null });
+      return res.status(200).json({
+        success: true,
+        data: { category: cvSql.categoryDto(category), scope, list },
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listVideosByCategory invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
@@ -289,6 +336,27 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
   logger.info("getVideoByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, videoId, userId: req.user?.id });
 
   try {
+    // ─── SQL branch (int id-space) ───
+    if (cvSql.isCategoryVideoMysql()) {
+      const catId = cvSql.parseCvId(id);
+      const vidId = cvSql.parseCvId(videoId);
+      if (catId == null || vidId == null) return res.status(422).json({ success: false, message: "Invalid category or video id." });
+      const v = await cvSql.findVideoInCategory(catId, vidId);
+      if (!v) return res.status(404).json({ success: false, message: "Video not found in this category." });
+      let env, sc;
+      try {
+        [env, sc] = await Promise.all([encryptVideoEnvelope(v as any), cvSql.scopeForCategory(v.videoCategoryId ?? catId)]);
+      } catch (err: any) {
+        logger.error("getVideoByCategory (sql) resolve/encrypt failed", { traceId, videoId, error: err?.message });
+        return res.status(502).json({ success: false, message: "Failed to resolve playable URLs for this video." });
+      }
+      return res.status(200).json({
+        success: true,
+        data: { _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, scope: sc, ...env },
+        message: "Video fetched.",
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(videoId)) {
       logger.warn("getVideoByCategory invalid ids", { traceId, categoryId: id, videoId });
       return res.status(422).json({ success: false, message: "Invalid category or video id." });
@@ -1068,6 +1136,7 @@ export const listBooksAndEbooksByExamCountdown = async (req: Request, res: Respo
 // ─── Package Categories ──────────────────────────────────────────────────────
 import { PackageCategory } from "../../models/course/PackageCategory.model";
 import { LiveCourse } from "../../models/course/LiveCourse.model";
+import * as pkgCatSql from "../../modules/package-category/package-category.service";
 
 export const listPackageCategories = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -1076,6 +1145,14 @@ export const listPackageCategories = async (req: Request, res: Response) => {
   logger.info("listPackageCategories invoked", { traceId, path: req.originalUrl, liveOnly });
 
   try {
+    if (pkgCatSql.isPackageCategoryMysql()) {
+      const result = await pkgCatSql.listClientPackageCategories({
+        liveOnly, search: search || null, skip, limitNum, pageNum,
+      });
+      logger.info("listPackageCategories success (sql)", { traceId, total: result.pagination.total, returned: result.data.length, liveOnly });
+      return res.status(200).json({ success: true, ...result });
+    }
+
     const filter: any = { status: true };
     { const c = buildRegexCondition(search); if (c) filter.title = c; }
 

@@ -175,6 +175,20 @@ export const adminLiveCourseRepository = {
   findPoll: (id: number) => prisma.livePoll.findUnique({ where: { id } }),
   pollOptions: (pollId: number) => prisma.livePollOption.findMany({ where: { pollId }, orderBy: { optionIndex: "asc" } }),
   pollVoteFor: (pollId: number, customerId: number) => prisma.livePollVote.findFirst({ where: { pollId, customerId } }),
+  pollOptionAt: (pollId: number, optionIndex: number) => prisma.livePollOption.findFirst({ where: { pollId, optionIndex } }),
+  /**
+   * Record one vote atomically: insert the (pollId,customerId) vote row (the
+   * @@unique uq_lpv guards double-voting), bump that option's votes and the
+   * poll's totalVotes. The vote insert is FIRST so a duplicate throws (P2002)
+   * before any counter moves — mirrors the Mongo unique-index 11000 behaviour.
+   */
+  recordPollVote: (pollId: number, customerId: number, optionIndex: number) =>
+    prisma.$transaction(async (tx) => {
+      const now = new Date();
+      await tx.livePollVote.create({ data: { pollId, customerId, optionIndex, createdAt: now, updatedAt: now } });
+      await tx.livePollOption.updateMany({ where: { pollId, optionIndex }, data: { votes: { increment: 1 } } });
+      await tx.livePoll.update({ where: { id: pollId }, data: { totalVotes: { increment: 1 }, updatedAt: now } });
+    }),
   createPollWithOptions: (poll: Prisma.LivePollUncheckedCreateInput, options: Array<{ text: string; votes: number }>) =>
     prisma.$transaction(async (tx) => {
       const created = await tx.livePoll.create({ data: poll });

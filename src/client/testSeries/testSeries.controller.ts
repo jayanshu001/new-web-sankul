@@ -19,6 +19,14 @@ import logger from "../../utils/logger";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import {
+  isClientTestSeriesMysql,
+  parseCtsId,
+  listTestSeriesMysql,
+  listMySubscriptionsMysql,
+  getTestSeriesDetailMysql,
+  listSeriesPapersMysql,
+} from "../../modules/client-testseries/client-testseries.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -68,6 +76,25 @@ export const listTestSeries = async (req: Request, res: Response) => {
 
   try {
     const { search, page = "1", limit = "20" } = req.query as Record<string, string>;
+
+    // ─── SQL branch (int id-space) — gated on `client-testseries` ───
+    if (isClientTestSeriesMysql()) {
+      const p = Math.max(1, parseInt(page, 10) || 1);
+      const l = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
+      const cidNum = customerId ? parseCtsId(String(customerId)) : null;
+      const { data, total } = await listTestSeriesMysql({
+        search: search?.trim() || null,
+        page: p,
+        limit: l,
+        customerId: cidNum,
+        now: new Date(),
+        base: resolveBase(req),
+        buildShareUrl,
+      });
+      logger.info("listTestSeries success (sql)", { traceId, customerId, total });
+      return success(res, { data, total, page: p, limit: l }, "Fetched.");
+    }
+
     const filter: any = { status: true };
     { const c = buildRegexCondition(search); if (c) filter.title = c; }
 
@@ -160,6 +187,17 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
   logger.info("getTestSeriesDetail invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
+    // ─── SQL branch (int id-space) — runs BEFORE the ObjectId guard ───
+    if (isClientTestSeriesMysql()) {
+      const tsId = parseCtsId(id);
+      if (tsId == null) { logger.warn("getTestSeriesDetail invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
+      const cidNum = customerId ? parseCtsId(String(customerId)) : null;
+      const out = await getTestSeriesDetailMysql({ id: tsId, customerId: cidNum, now: new Date(), base: resolveBase(req), buildShareUrl });
+      if (!out) { logger.warn("getTestSeriesDetail not found (sql)", { traceId, id }); return failure(res, "Test series not found.", 404); }
+      logger.info("getTestSeriesDetail success (sql)", { traceId, customerId, id, isPurchased: out.isPurchased });
+      return success(res, out, "Fetched.");
+    }
+
     if (!isObjectId(id)) { logger.warn("getTestSeriesDetail invalid id", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
 
     const series = await TestSeries.findOne({ _id: id, status: true })
@@ -221,6 +259,17 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
   logger.info("listSeriesPapers invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
+    // ─── SQL branch (int id-space) — runs BEFORE the ObjectId guard ───
+    if (isClientTestSeriesMysql()) {
+      const tsId = parseCtsId(id);
+      if (tsId == null) { logger.warn("listSeriesPapers invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
+      const cidNum = req.user?.id ? parseCtsId(String(req.user.id)) : null;
+      const out = await listSeriesPapersMysql({ id: tsId, customerId: cidNum, now: new Date() });
+      if (!out) { logger.warn("listSeriesPapers not found (sql)", { traceId, id }); return failure(res, "Test series not found.", 404); }
+      logger.info("listSeriesPapers success (sql)", { traceId, customerId, id, isPaid: out.isPaid, hasAccess: out.hasAccess, categoryCount: out.categories.length });
+      return success(res, { isPaid: out.isPaid, hasAccess: out.hasAccess, categories: out.categories }, "Fetched.");
+    }
+
     if (!isObjectId(id)) { logger.warn("listSeriesPapers invalid id", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
 
     if (!(await TestSeries.exists({ _id: id, status: true }))) { logger.warn("listSeriesPapers not found", { traceId, id }); return failure(res, "Test series not found.", 404); }
@@ -397,6 +446,21 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) { logger.warn("listMySubscriptions unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
+
+    // ─── SQL branch (int id-space) — gated on `client-testseries` ───
+    if (isClientTestSeriesMysql()) {
+      const cidNum = parseCtsId(String(customerId));
+      if (cidNum == null) return success(res, { data: [], total: 0 }, "Fetched.");
+      const { data, total } = await listMySubscriptionsMysql({
+        customerId: cidNum,
+        now: new Date(),
+        base: resolveBase(req),
+        buildShareUrl,
+      });
+      logger.info("listMySubscriptions success (sql)", { traceId, customerId, count: total });
+      return success(res, { data, total }, "Fetched.");
+    }
+
     const subs = await TestSeriesSubscription.find({ customerId, status: true })
       .sort({ endAt: -1 })
       .populate("testSeriesId", "title thumbnail paperCount")

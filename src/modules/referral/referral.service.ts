@@ -48,6 +48,34 @@ const toTransactionDto = (t: RefferalTransaction) => ({
   updatedAt: t.updatedAt ?? null,
 });
 
+// ─── Referral credit on purchase (SQL mirror of credit-referrer.ts) ──────────
+// Idempotent on (orderId, referrerId). Mirrors the Mongo creditReferrer: reward
+// = program.refferalReward % of paidAmount, skipped when self-referral / no
+// program / zero reward. SQL ids are ints.
+export const creditReferrerMysql = async (opts: {
+  referrerId: number; buyerId: number; orderId: number; paidAmount: number;
+  source: "course" | "package" | "ebook";
+}): Promise<void> => {
+  if (!opts.referrerId || !opts.orderId || opts.paidAmount <= 0) return;
+  if (opts.referrerId === opts.buyerId) return;
+
+  const program = await repo.findActiveProgramByName("student");
+  const pct = program ? Number(program.refferalReward) || 0 : 0;
+  if (pct <= 0) return;
+
+  const coin = Math.round((opts.paidAmount * pct) / 100);
+  if (coin <= 0) return;
+
+  // Fast-path idempotency (the atomic write re-checks under the tx).
+  if (await repo.findCreditByOrder(opts.orderId, opts.referrerId)) return;
+  await repo.creditReferralReward({
+    referrerId: opts.referrerId,
+    orderId: opts.orderId,
+    coin,
+    description: `Referral reward (${pct}%) — ${opts.source} purchase`,
+  });
+};
+
 // ─── Rewards overview ────────────────────────────────────────────────────────
 export const getRewardsOverview = async (customerId: number) => {
   const customer = await repo.findRewardCustomer(customerId);

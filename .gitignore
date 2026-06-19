@@ -31,3 +31,6 @@ docs/migration/api-tests/*/.api-doc-calls.json
 
 # Throwaway end-to-end/diagnostic probes (kept local, never pushed)
 scripts/_tmp_*.ts
+
+graphify-out/
+.graphify/cache/

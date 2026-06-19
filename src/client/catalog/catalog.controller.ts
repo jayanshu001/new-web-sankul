@@ -18,6 +18,7 @@ import { collectCategoryTreeIds } from "../../utils/categoryTree";
 import { ExamStatus, ExamType } from "../../models/enums";
 import { listDirectMaterialsForCategory } from "../material/entitlement";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import * as catSql from "../../modules/client-catalog/client-catalog.service";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Unified catalog tabs for the three product types (course / package /
@@ -108,6 +109,21 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
   try {
     if (!type) return failure(res, "Invalid type. Use course | package | live-course.", 422);
     if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid id.", 422);
+
+    // ─── SQL branch (course/package only; live-course stays Mongo) ───
+    if (catSql.isClientCatalogMysql() && type !== "live-course") {
+      const idNum = catSql.parseCatId(id);
+      if (idNum == null) return failure(res, "Invalid id.", 422);
+      const sp = await catSql.loadParent(type, idNum);
+      if (!sp) return failure(res, `${type} not found.`, 404);
+      const search = getSearch(req);
+      const catIds = typeof req.query.categoryIds === "string" && req.query.categoryIds.trim()
+        ? req.query.categoryIds.split(",").map((s) => catSql.parseCatId(s.trim())).filter((n): n is number => n != null)
+        : null;
+      const userNum = catSql.parseCatId(String(req.user?.id ?? ""));
+      const r = await catSql.catalogVideos({ type, id: idNum, customerId: userNum, search: search || null, categoryIds: catIds });
+      return success(res, { parent: { _id: id, type, name: sp.name }, ...r }, "Video categories fetched.");
+    }
 
     const parent = await loadParent(type, id);
     if (!parent) return failure(res, `${type} not found.`, 404);
@@ -286,6 +302,16 @@ export const getCatalogMaterials = async (req: Request, res: Response) => {
     if (!type) return failure(res, "Invalid type. Use course | package | live-course.", 422);
     if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid id.", 422);
 
+    // ─── SQL branch (course/package only; live-course stays Mongo) ───
+    if (catSql.isClientCatalogMysql() && type !== "live-course") {
+      const idNum = catSql.parseCatId(id);
+      if (idNum == null) return failure(res, "Invalid id.", 422);
+      const sp = await catSql.loadParent(type, idNum);
+      if (!sp) return failure(res, `${type} not found.`, 404);
+      const r = await catSql.catalogMaterials({ type, id: idNum, search: getSearch(req) || null });
+      return success(res, { parent: { _id: id, type, name: sp.name }, ...r }, "Material categories fetched.");
+    }
+
     const parent = await loadParent(type, id);
     if (!parent) return failure(res, `${type} not found.`, 404);
 
@@ -353,6 +379,16 @@ export const getCatalogTests = async (req: Request, res: Response) => {
   try {
     if (!type) return failure(res, "Invalid type. Use course | package | live-course.", 422);
     if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid id.", 422);
+
+    // ─── SQL branch (course/package only; live-course stays Mongo) ───
+    if (catSql.isClientCatalogMysql() && type !== "live-course") {
+      const idNum = catSql.parseCatId(id);
+      if (idNum == null) return failure(res, "Invalid id.", 422);
+      const sp = await catSql.loadParent(type, idNum);
+      if (!sp) return failure(res, `${type} not found.`, 404);
+      const r = await catSql.catalogTests({ type, id: idNum, search: getSearch(req) || null });
+      return success(res, { parent: { _id: id, type, name: sp.name }, ...r }, "Test categories fetched.");
+    }
 
     const parent = await loadParent(type, id);
     if (!parent) return failure(res, `${type} not found.`, 404);

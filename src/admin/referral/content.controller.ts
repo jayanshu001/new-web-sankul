@@ -8,6 +8,7 @@ import {
   createFaqSchema,
   updateFaqSchema,
 } from "./content.validation";
+import * as rcService from "../../modules/referral-content/referral-content.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -15,6 +16,10 @@ const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
 export const listTerms = async (_req: Request, res: Response) => {
   try {
+    if (rcService.isReferralContentMysql()) {
+      const data = await rcService.listTerms();
+      return res.status(200).json({ success: true, data });
+    }
     const data = await ReferralTerm.find().sort({ order: 1, createdAt: 1 });
     return res.status(200).json({ success: true, data });
   } catch (error: any) {
@@ -25,6 +30,14 @@ export const listTerms = async (_req: Request, res: Response) => {
 export const getTerm = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
+    if (rcService.isReferralContentMysql()) {
+      const numId = rcService.parseRcId(id);
+      if (!numId)
+        return res.status(400).json({ success: false, message: "Invalid term id." });
+      const term = await rcService.getTerm(numId);
+      if (!term) return res.status(404).json({ success: false, message: "Term not found." });
+      return res.status(200).json({ success: true, data: term });
+    }
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid term id." });
     const term = await ReferralTerm.findById(id);
@@ -38,6 +51,10 @@ export const getTerm = async (req: Request, res: Response) => {
 export const createTerm = async (req: Request, res: Response) => {
   try {
     const data = createTermSchema.parse(req.body);
+    if (rcService.isReferralContentMysql()) {
+      const term = await rcService.createTerm(data);
+      return res.status(201).json({ success: true, data: term });
+    }
     const term = await ReferralTerm.create(data);
     return res.status(201).json({ success: true, data: term });
   } catch (error: any) {
@@ -49,6 +66,15 @@ export const createTerm = async (req: Request, res: Response) => {
 export const updateTerm = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
+    if (rcService.isReferralContentMysql()) {
+      const numId = rcService.parseRcId(id);
+      if (!numId)
+        return res.status(400).json({ success: false, message: "Invalid term id." });
+      const data = updateTermSchema.parse(req.body);
+      const term = await rcService.updateTerm(numId, data);
+      if (!term) return res.status(404).json({ success: false, message: "Term not found." });
+      return res.status(200).json({ success: true, data: term });
+    }
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid term id." });
     const data = updateTermSchema.parse(req.body);
@@ -68,6 +94,14 @@ export const updateTerm = async (req: Request, res: Response) => {
 export const deleteTerm = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
+    if (rcService.isReferralContentMysql()) {
+      const numId = rcService.parseRcId(id);
+      if (!numId)
+        return res.status(400).json({ success: false, message: "Invalid term id." });
+      const ok = await rcService.deleteTerm(numId);
+      if (!ok) return res.status(404).json({ success: false, message: "Term not found." });
+      return res.status(200).json({ success: true, message: "Term deleted." });
+    }
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid term id." });
     const term = await ReferralTerm.findByIdAndDelete(id);
@@ -82,6 +116,10 @@ export const deleteTerm = async (req: Request, res: Response) => {
 
 export const listFaqs = async (_req: Request, res: Response) => {
   try {
+    if (rcService.isReferralContentMysql()) {
+      const data = await rcService.listFaqs();
+      return res.status(200).json({ success: true, data });
+    }
     const data = await ReferralFaq.find().sort({ order: 1, createdAt: 1 });
     return res.status(200).json({ success: true, data });
   } catch (error: any) {
@@ -92,6 +130,14 @@ export const listFaqs = async (_req: Request, res: Response) => {
 export const getFaq = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
+    if (rcService.isReferralContentMysql()) {
+      const numId = rcService.parseRcId(id);
+      if (!numId)
+        return res.status(400).json({ success: false, message: "Invalid faq id." });
+      const faq = await rcService.getFaq(numId);
+      if (!faq) return res.status(404).json({ success: false, message: "FAQ not found." });
+      return res.status(200).json({ success: true, data: faq });
+    }
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid faq id." });
     const faq = await ReferralFaq.findById(id);
@@ -105,6 +151,10 @@ export const getFaq = async (req: Request, res: Response) => {
 export const createFaq = async (req: Request, res: Response) => {
   try {
     const data = createFaqSchema.parse(req.body);
+    if (rcService.isReferralContentMysql()) {
+      const faq = await rcService.createFaq(data);
+      return res.status(201).json({ success: true, data: faq });
+    }
     const faq = await ReferralFaq.create(data);
     return res.status(201).json({ success: true, data: faq });
   } catch (error: any) {
@@ -116,6 +166,15 @@ export const createFaq = async (req: Request, res: Response) => {
 export const updateFaq = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
+    if (rcService.isReferralContentMysql()) {
+      const numId = rcService.parseRcId(id);
+      if (!numId)
+        return res.status(400).json({ success: false, message: "Invalid faq id." });
+      const data = updateFaqSchema.parse(req.body);
+      const faq = await rcService.updateFaq(numId, data);
+      if (!faq) return res.status(404).json({ success: false, message: "FAQ not found." });
+      return res.status(200).json({ success: true, data: faq });
+    }
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid faq id." });
     const data = updateFaqSchema.parse(req.body);
@@ -131,6 +190,14 @@ export const updateFaq = async (req: Request, res: Response) => {
 export const deleteFaq = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
+    if (rcService.isReferralContentMysql()) {
+      const numId = rcService.parseRcId(id);
+      if (!numId)
+        return res.status(400).json({ success: false, message: "Invalid faq id." });
+      const ok = await rcService.deleteFaq(numId);
+      if (!ok) return res.status(404).json({ success: false, message: "FAQ not found." });
+      return res.status(200).json({ success: true, message: "FAQ deleted." });
+    }
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid faq id." });
     const faq = await ReferralFaq.findByIdAndDelete(id);

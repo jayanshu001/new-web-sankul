@@ -132,7 +132,28 @@
       "Bash(awk '/^model Course /,/^\\\\}/' prisma/schema.prisma)",
       "Bash(awk '/^model EBook /,/^\\\\}/' prisma/schema.prisma)",
       "Bash(awk '/^model BookOrder /,/^\\\\}/' prisma/schema.prisma)",
-      "Bash(npx tsx *)"
+      "Bash(npx tsx *)",
+      "Bash(DATABASE_URL='mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging' npx tsx scripts/_tmp/verify-container-progress.ts)",
+      "Bash(DATABASE_URL='mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging' npx tsx scripts/backfill-mongo-only-tail.ts)",
+      "Bash(DATABASE_URL='mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging' npx tsx scripts/_tmp/verify-progress-readhub.ts)",
+      "Bash(awk '/model ExamCategoryCourse /,/^}/' prisma/schema.prisma)",
+      "Bash(DATABASE_URL='mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging' npx tsx scripts/_tmp/verify-material.ts)",
+      "Bash(awk '/model Ebook /,/^}/' prisma/schema.prisma)",
+      "Bash(awk '/model Book /,/^}/' prisma/schema.prisma)",
+      "Bash(awk '/^model Ebook /,/^}/' prisma/schema.prisma)",
+      "Bash(awk '/model EBook |model Ebook /{f=1} f{print} /^}/{if\\(f\\)exit}' prisma/schema.prisma)",
+      "Bash(DATABASE_URL='mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging' npx tsx scripts/_tmp/verify-profile-dash.ts)",
+      "Bash(awk '/^model Book /{f=1} f&&/discounted_price/{print NR\": \"$0} /^}/{if\\(f\\){f=0}}' prisma/schema.prisma)",
+      "Bash(awk '/^model EBook /{f=1} f&&/orderby/{print NR\": \"$0} /^}/{if\\(f\\){f=0}}' prisma/schema.prisma)",
+      "Bash(DATABASE_URL='mysql://root:websankul_dev@127.0.0.1:3307/websankul_staging' npx --yes prisma@5.22.0 generate)",
+      "Bash(graphify query *)",
+      "Bash(graphify explain *)",
+      "Bash(awk '/enum CourseFlag01/,/^}/' prisma/schema.prisma)",
+      "Bash(yarn typecheck *)",
+      "Bash(yarn prisma:generate)",
+      "Bash(grep -nA8 \"enum ExamType\" /Users/pratikzankat/new-web-sankul/prisma/schema.prisma)",
+      "Bash(grep -nA6 \"enum VideoType\" /Users/pratikzankat/new-web-sankul/prisma/schema.prisma)",
+      "Bash(grep -nA5 \"enum CourseFlag01\" /Users/pratikzankat/new-web-sankul/prisma/schema.prisma)"
     ]
   }
 }

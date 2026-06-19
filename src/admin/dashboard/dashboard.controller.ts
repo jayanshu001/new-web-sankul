@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import * as adminDashSql from "../../modules/admin-dashboard/admin-dashboard.service";
 import { Customer } from "../../models/customer/Customer.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
@@ -198,6 +199,39 @@ export const getDashboard = async (req: Request, res: Response) => {
     const bookVerified = "verified";
 
     const bucket = bucketStage(totalWindow.start, totalWindow.end);
+
+    // ─── SQL branch ───
+    if (adminDashSql.isAdminDashboardMysql()) {
+      const d = await adminDashSql.fetchDashboardData({ orderWindow, totalWindow, unit: bucket.unit, limit });
+      // Time-series: merge per-bucket across product types, then lay out on slots.
+      const seriesMap = new Map<number, { orders: number; earnings: number }>();
+      for (const row of d.series) {
+        const prev = seriesMap.get(row.slot) || { orders: 0, earnings: 0 };
+        seriesMap.set(row.slot, { orders: prev.orders + row.orders, earnings: prev.earnings + row.earnings });
+      }
+      const slots = bucket.slots ?? Array.from(seriesMap.keys()).sort((a, b) => a - b);
+      const series = slots.map((slot) => ({ bucket: String(slot).padStart(2, "0"), orders: seriesMap.get(slot)?.orders || 0, earnings: seriesMap.get(slot)?.earnings || 0 }));
+      return res.status(200).json({
+        success: true,
+        data: {
+          orderReports: {
+            range: orderRange || (orderFromDate || orderToDate || fromDate || toDate ? "custom" : "today"),
+            windowStart: orderWindow.start, windowEnd: orderWindow.end,
+            package: { amount: d.revenue.pkg.revenue, deltaPct: deltaPct(d.revenue.pkg.revenue, d.revenue.pkgPrev) },
+            course: { amount: d.revenue.course.revenue, deltaPct: deltaPct(d.revenue.course.revenue, d.revenue.coursePrev) },
+            ebook: { amount: d.revenue.ebook.revenue, deltaPct: deltaPct(d.revenue.ebook.revenue, d.revenue.ebookPrev) },
+            book: { amount: d.revenue.book.revenue, deltaPct: deltaPct(d.revenue.book.revenue, d.revenue.bookPrev) },
+          },
+          totalOrderReports: { range: totalRange || "today", windowStart: totalWindow.start, windowEnd: totalWindow.end, unit: bucket.unit, totalOrders: d.totals.orders, totalEarnings: d.totals.earnings, series },
+          newCustomers: d.newCustomers,
+          recentPackageSubscriptions: d.recentPackageSubs,
+          recentCourseSubscriptions: d.recentCourseSubs,
+          recentBookOrders: d.recentBookOrders,
+          recentEbookSubscriptions: d.recentEbookSubs,
+          summary: d.summary,
+        },
+      });
+    }
 
     const [
       // Order Reports cards (current window)

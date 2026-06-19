@@ -83,6 +83,18 @@ const coerceCourseBodySql = (req: Request) => {
   const examCategories = parseRefs(req.body.examCategories);
   if (materialCategories !== undefined) req.body.materialCategories = materialCategories;
   if (examCategories !== undefined) req.body.examCategories = examCategories;
+  // C6: examCountdown attachments arrive as int[] or JSON-string int[]; coerce.
+  const parseIdList = (raw: any): number[] | undefined => {
+    if (raw === undefined || raw === null || raw === "") return undefined;
+    let items = raw;
+    if (typeof raw === "string") { try { items = JSON.parse(raw); } catch { return undefined; } }
+    if (!Array.isArray(items)) return undefined;
+    return items.map((i: any) => Number(i)).filter((n) => Number.isInteger(n) && n > 0);
+  };
+  const examCountdownIds = parseIdList(req.body.examCountdownIds);
+  const examCountdownCategoryIds = parseIdList(req.body.examCountdownCategoryIds);
+  if (examCountdownIds !== undefined) req.body.examCountdownIds = examCountdownIds;
+  if (examCountdownCategoryIds !== undefined) req.body.examCountdownCategoryIds = examCountdownCategoryIds;
   return { materialCategories, examCategories };
 };
 

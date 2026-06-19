@@ -1,9 +1,30 @@
 # Remaining MongoDB Reads — Path to SQL-Only
 
-> Snapshot: **2026-06-18** (Waves 1–7 complete). Tracks everywhere the app still reads/writes **MongoDB**
-> so we can drive to "all API data from SQL". Two kinds of work:
+> Snapshot: **2026-06-19** (Waves 1–8 complete + Mongo-only tail done). Tracks everywhere the app still
+> reads/writes **MongoDB** so we can drive to "all API data from SQL". Two kinds of work:
 > **(A) flip** — SQL branch exists, just not enabled; **(B) build** — no SQL
 > branch yet (hardwired to Mongoose).
+
+> **⚠ 2026-06-19 — much of the old "Mongo-only" list below is now SUPERSEDED.** The authoritative
+> live status is [`migration/MONGO_ONLY_MIGRATION_PLAN.md`](./migration/MONGO_ONLY_MIGRATION_PLAN.md)
+> §RESUME POINTER. As of 2026-06-19 the following are now **on SQL** (flags ON), contrary to the tables
+> further down: promoter (auth+data), referral, admin-rbac, exam (client+admin), all catalog admin CRUD,
+> live-course, all payment write paths, test-series, folders, ebook-downloads, notifications (admin write +
+> client read), device tokens, customer-master, tracking/goal/cms-extra/inquiry, **customer-address**,
+> and the former "no SQL table" trio **ImageNotification / PackageCategory / ExamCountdown(+Category)** —
+> these 3 now have net-new tables (`ws_image_notification`, `ws_package_category` + `ws_package.package_category_id`,
+> `ws_exam_countdown(_category)`), backfilled, with admin CRUD + client feeds flipped. See the
+> "✅ Already on SQL" section for the current truth.
+>
+> **What genuinely remains (2026-06-19):**
+> 1. **lecture-progress container/resume hub** — the container heartbeat write is built on SQL but gated
+>    behind the `lecture-progress-container` flag (OFF); it flips together with the resume/learning READ
+>    surface (~7 files: listMyCoursesForResume, listMyLearningProgress, resumeCard.ts, course.service,
+>    catalog.controller, live-course.controller, dashboard). Until then the base `client-lecture-progress`
+>    flag stays the free-video slice only.
+> 2. **profile-dashboard** subscriptions/pastExams counts + remove the guarded `new ObjectId(userId)`.
+> 3. **Realtime/streaming (stays Mongo by decision)** — recordingWebhook, the `src/admin/live/` socket/
+>    StreamOS stack, livepoll vote-casting, reminder set/remove. These are infra, not data; not migrating.
 
 ## Status legend
 - ✅ **On SQL** — key in `MIGRATION_MYSQL_MODULES`, served from MySQL.

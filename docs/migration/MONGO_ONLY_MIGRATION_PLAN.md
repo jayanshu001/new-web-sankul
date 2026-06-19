@@ -14,6 +14,26 @@
 
 ## ▶️ RESUME POINTER (update this every time)
 
+> **🎯 ZERO-MONGO PUSH (2026-06-19) — user wants EVERYTHING on MySQL. Canonical roadmap:
+> [`MODULE_STATUS_ROADMAP.md`](./MODULE_STATUS_ROADMAP.md) + work plan [`ZERO_MONGO_PLAN.md`](./ZERO_MONGO_PLAN.md).**
+> Beyond Waves 1–8: full audit found **53 runtime files still on Mongo**, grouped into 8 clusters (C1 catalog
+> content-graph+detail, C2 lecture-progress activation, C3 dashboards, C4 testSeries/wishlist/misc, C5 promocode
+> appliesTo, C6 embedded examCountdown populates, C7 realtime [DATA only — socket transport stays Mongo by user
+> decision], C8 infra+final Mongo removal).
+> **Done 2026-06-19 (73 flags ON, all verified, tsc clean):**
+> ✅ `customer-address` (9/9). ✅ Mongo-only DATA tables created+backfilled+flipped: `ImageNotification`
+> (`ws_image_notification`), `package-category` (`ws_package_category` + `ws_package.package_category_id` col, 11/11),
+> `exam-countdown`(+category) (`ws_exam_countdown`(_category), 13/13). ✅ lecture-progress container heartbeats
+> (video+live-session) + Resume/Learning read hub BUILT+verified (8/8+8/8) but GATED behind `lecture-progress-container`
+> (OFF — coupled flip, waits on C1 detail badges). ✅ **C1 slices:** `client-lecture` (`/lecture` video-URL, 5/5),
+> `client-category-video` (video-by-category list+detail, 8/8), `catalog-category-tree` (DAG resolver flag ON).
+> ✅ lecture-note tables created (`ws_lecture_note`, `ws_lecture_audio_note`) + Prisma models — wiring PENDING.
+> **▶ NEXT (C1, in progress):** lecture-note cluster — backfill (Mongo 4+2) + build `client-lecture-note` service +
+> flip lecture-note/lecture-audio-note controllers + `resumeCard.ts`/`lectureRef.ts` (route resolveVideoCourseId→SQL).
+> Then `buildCourseDetails` → catalog → material → search → live detail → enable `lecture-progress-container` (C2).
+> DDL files: `schema-changes/2026-06-19_create_mongo_only_tail_tables.sql`, `..._create_lecture_note_tables.sql`.
+> Backfills: `scripts/backfill-mongo-only-tail.ts`, `..._package-category-link.ts`.
+>
 > **🏁 WAVE 8 COMPLETE (2026-06-18).** All misc/low-value modules on SQL. No-DDL: ✅ `customer-master` (16h) ✅
 > `ImageNotification` (4h, on `client-notification`) ✅ offline Center/Batch/Enquiry (12h, `offline-batch`+
 > `offline-enquiry`) ✅ offline City (5h, `offline-city`). DDL batch (`2026-06-18_create_wave8_misc_tables.sql` — 5

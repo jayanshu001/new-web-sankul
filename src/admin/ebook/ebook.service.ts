@@ -136,8 +136,9 @@ export const getEbookById = async (id: string) => {
 
 export const createEbook = async (validated: any) => {
   if (adminEbook.isAdminEbookMysql()) {
-    // SQL ws_ebook has no examCountdown*/isTrending/PDF-status columns — those
-    // Mongo-only fields are dropped on write (documented gap).
+    // SQL ws_ebook now stores examCountdownIds/examCountdownCategoryIds as JSON
+    // int-arrays (C6, persisted in adminEbook.createEbook). isTrending/PDF-status
+    // remain Mongo-only (no SQL columns).
     return adminEbook.createEbook(validated);
   }
   // Legacy single field is now a derived mirror of examCountdownCategoryIds[0]
@@ -188,8 +189,9 @@ const EBOOK_FILE_FIELDS = ["image", "thumbnail", "demoUrl", "bookUrl"] as const;
 export const updateEbook = async (id: string, validated: any) => {
   if (adminEbook.isAdminEbookMysql()) {
     // NOTE: the Mongo path best-effort-deletes replaced S3 files; on SQL we skip
-    // that orphan cleanup (not part of the API contract). examCountdown*/PDF-
-    // status fields are dropped (no SQL columns).
+    // that orphan cleanup (not part of the API contract). examCountdownIds/
+    // examCountdownCategoryIds ARE persisted as JSON on SQL (C6); PDF-status
+    // fields are still dropped (no SQL columns).
     const data = await adminEbook.updateEbook(assertEbookSqlId(id, "Ebook"), validated);
     if (!data) throw new HttpError(404, "Ebook not found");
     return data;

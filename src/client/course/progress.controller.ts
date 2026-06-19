@@ -13,8 +13,27 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { resolveScopedReachableVideoCategoryIds } from "./scopeReachableCategories";
+import {
+  isLectureProgressMysql,
+  isLectureProgressContainerMysql,
+  parseLpId,
+  reportContainerProgress,
+  listMyCoursesForResume as sqlListMyCoursesForResume,
+  toProgressDto,
+} from "../../modules/client-lecture-progress/client-lecture-progress.service";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
+
+// SQL id-space variant of the heartbeat body — ids are positive ints, not 24-hex.
+const intIdStr = z.string().regex(/^\d+$/, "Invalid id");
+const progressSchemaMysql = z.object({
+  positionSec: z.number().int().min(0).max(60 * 60 * 24),
+  durationSec: z.number().int().min(0).max(60 * 60 * 24),
+  scope: z.object({
+    kind: z.enum(["course", "liveCourse", "package"]),
+    id: intIdStr,
+  }),
+});
 
 const progressSchema = z.object({
   positionSec: z.number().int().min(0).max(60 * 60 * 24), // sanity cap: 24h
@@ -48,6 +67,36 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
     if (!userId) {
       logger.warn("reportLectureProgress unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    // ─── SQL branch (int id-space) — runs BEFORE the Mongo ObjectId parse ───
+    // Gated on the dedicated container sub-flag (NOT the base free-slice flag) so
+    // the heartbeat only writes SQL once the resume/learning READ hub also reads
+    // SQL — enabling one without the other would split progress data. The base
+    // `client-lecture-progress` flag stays the free-video slice; flip
+    // `lecture-progress-container` to activate this with the read hub.
+    if (isLectureProgressContainerMysql()) {
+      const cid = parseLpId(String(userId));
+      const vid = parseLpId(String(req.params.videoId));
+      if (cid == null || vid == null) {
+        return res.status(404).json({ success: false, message: "Lecture not found." });
+      }
+      const { positionSec, durationSec, scope } = progressSchemaMysql.parse(req.body);
+      const scopeId = parseLpId(scope.id);
+      if (scopeId == null) {
+        return res.status(400).json({ success: false, errors: [{ path: ["scope", "id"], message: "Invalid id" }] });
+      }
+      const result = await reportContainerProgress({
+        customerId: cid, videoId: vid,
+        scope: { kind: scope.kind, id: scopeId },
+        positionSec, durationSec,
+      });
+      if (!result.ok) {
+        logger.warn("reportLectureProgress (sql) rejected", { traceId, userId, videoId: vid, scope, status: result.status });
+        return res.status(result.status).json({ success: false, message: result.message });
+      }
+      logger.info("reportLectureProgress (sql) success", { traceId, userId, videoId: vid, scope, positionSec, durationSec });
+      return res.status(200).json({ success: true, data: toProgressDto(result.row) });
     }
 
     const videoId = objectId.parse(req.params.videoId);
@@ -268,6 +317,14 @@ export const listMyCoursesForResume = async (req: Request, res: Response) => {
     if (!userId) {
       logger.warn("listMyCoursesForResume unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (isLectureProgressContainerMysql()) {
+      const sid = parseLpId(String(userId));
+      if (sid == null) return res.status(200).json({ success: true, data: { courses: [], resumeNext: null } });
+      const data = await sqlListMyCoursesForResume(sid);
+      logger.info("listMyCoursesForResume (sql) success", { traceId, userId, count: data.courses.length });
+      return res.status(200).json({ success: true, data });
     }
 
     const cid = new mongoose.Types.ObjectId(userId);

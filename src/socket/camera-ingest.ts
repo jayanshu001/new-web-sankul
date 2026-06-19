@@ -22,6 +22,10 @@ import { redisClient } from "../config/redis";
 import { verifyAccessToken } from "../utils/jwtSigner";
 import { LiveSession } from "../models/course/LiveSession.model";
 import logger from "../utils/logger";
+// SQL (Prisma) session lookup branch — gated by the existing admin-live flag,
+// since this is the same ws_live_session data the live-class service owns. Only
+// the DB read branches; ffmpeg/RTMP/WebSocket transport stays identical.
+import * as adminLiveSql from "../modules/admin-live/admin-live.service";
 
 const INGEST_PATH = "/ws/camera-ingest";
 const ADMIN_ROLES = new Set(["admin", "super_admin", "editor"]);
@@ -186,9 +190,9 @@ async function startBroadcast(ws: IngestSocket, msg: any) {
   }
   logger.info("Camera ingest: start requested", { adminId: ws.adminId, streamId });
 
-  const session = await LiveSession.findOne({ streamId })
-    .select("streamId rtmpUrl status")
-    .lean();
+  const session = adminLiveSql.isAdminLiveMysql()
+    ? await adminLiveSql.findSessionByStreamId(streamId)
+    : await LiveSession.findOne({ streamId }).select("streamId rtmpUrl status").lean();
   if (!session) {
     logger.warn("Camera ingest: start rejected — session not found", { streamId });
     send(ws, { type: "error", message: `No live session found for streamId ${streamId}.` });

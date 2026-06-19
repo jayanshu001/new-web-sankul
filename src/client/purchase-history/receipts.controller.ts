@@ -11,6 +11,13 @@ import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isPurchaseHistoryMysql,
+  parsePhId,
+  getEbookReceiptMysql,
+  getBookReceiptMysql,
+  getCourseReceiptMysql,
+} from "../../modules/client-purchase-history/client-purchase-history.service";
 
 const isObjectId = (s?: string): boolean => !!s && /^[0-9a-fA-F]{24}$/.test(s);
 
@@ -54,6 +61,20 @@ export const getBookReceipt = async (req: Request, res: Response) => {
 
   try {
     if (!userId) { logger.warn("getBookReceipt unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ─── SQL branch (int id-space) — gated on `client-purchase-history` (flag ON) ───
+    // Must run BEFORE the ObjectId check: SQL order ids are ints, not 24-hex.
+    if (isPurchaseHistoryMysql()) {
+      const oid = parsePhId(id);
+      const cidNum = parsePhId(String(userId));
+      if (oid == null) { logger.warn("getBookReceipt invalid id (sql)", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
+      if (cidNum == null) { return res.status(401).json({ success: false, message: "Unauthorized." }); }
+      const data = await getBookReceiptMysql(oid, cidNum);
+      if (!data) { logger.warn("getBookReceipt not found (sql)", { traceId, customerId: userId, orderId: id }); return res.status(404).json({ success: false, message: "Order not found." }); }
+      logger.info("getBookReceipt success (sql)", { traceId, customerId: userId, orderId: id });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) { logger.warn("getBookReceipt invalid id", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
 
     const order: any = await BookOrder.findOne({ _id: id, customerId: userId }).lean();
@@ -108,6 +129,20 @@ export const getCourseReceipt = async (req: Request, res: Response) => {
 
   try {
     if (!userId) { logger.warn("getCourseReceipt unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ─── SQL branch (int id-space) — gated on `client-purchase-history` (flag ON) ───
+    // Must run BEFORE the ObjectId check: SQL subscription ids are ints, not 24-hex.
+    if (isPurchaseHistoryMysql()) {
+      const sid = parsePhId(id);
+      const cidNum = parsePhId(String(userId));
+      if (sid == null) { logger.warn("getCourseReceipt invalid id (sql)", { traceId, customerId: userId, subscriptionId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
+      if (cidNum == null) { return res.status(401).json({ success: false, message: "Unauthorized." }); }
+      const data = await getCourseReceiptMysql(sid, cidNum);
+      if (!data) { logger.warn("getCourseReceipt not found (sql)", { traceId, customerId: userId, subscriptionId: id }); return res.status(404).json({ success: false, message: "Subscription not found." }); }
+      logger.info("getCourseReceipt success (sql)", { traceId, customerId: userId, subscriptionId: id });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) { logger.warn("getCourseReceipt invalid id", { traceId, customerId: userId, subscriptionId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
 
     const sub: any = await PackageCourseSubscription.findOne({
@@ -189,6 +224,20 @@ export const getEbookReceipt = async (req: Request, res: Response) => {
 
   try {
     if (!userId) { logger.warn("getEbookReceipt unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ─── SQL branch (int id-space) — gated on `client-purchase-history` (flag ON) ───
+    // Must run BEFORE the ObjectId check: SQL order ids are ints, not 24-hex.
+    if (isPurchaseHistoryMysql()) {
+      const oid = parsePhId(id);
+      const cidNum = parsePhId(String(userId));
+      if (oid == null) { logger.warn("getEbookReceipt invalid id (sql)", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
+      if (cidNum == null) { return res.status(401).json({ success: false, message: "Unauthorized." }); }
+      const data = await getEbookReceiptMysql(oid, cidNum);
+      if (!data) { logger.warn("getEbookReceipt not found (sql)", { traceId, customerId: userId, orderId: id }); return res.status(404).json({ success: false, message: "Order not found." }); }
+      logger.info("getEbookReceipt success (sql)", { traceId, customerId: userId, orderId: id });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) { logger.warn("getEbookReceipt invalid id", { traceId, customerId: userId, orderId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
 
     const order: any = await EbookOrder.findOne({ _id: id, customerId: userId }).lean();

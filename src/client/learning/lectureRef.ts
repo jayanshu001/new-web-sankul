@@ -46,6 +46,22 @@ export interface LectureRef {
 }
 
 export async function buildLectureRef(input: Input): Promise<LectureRef | null> {
+  // SQL branch (int id-space) — gated with the lecture-note / container hub.
+  const lpSql = await import("../../modules/client-lecture-progress/client-lecture-progress.service");
+  const lnSql = await import("../../modules/client-lecture-note/client-lecture-note.service");
+  if (lpSql.isLectureProgressContainerMysql() || lnSql.isLectureNoteMysql()) {
+    const cidNum = lpSql.parseLpId(String(input.userId));
+    if (cidNum == null) return null;
+    if (input.lectureType === "recorded") {
+      const vid = lpSql.parseLpId(String(input.videoId));
+      if (vid == null) return null;
+      return lpSql.buildLectureRefSql({ lectureType: "recorded", customerId: cidNum, videoId: vid }) as Promise<LectureRef | null>;
+    }
+    const lsid = lpSql.parseLpId(String(input.liveSessionId));
+    if (lsid == null) return null;
+    return lpSql.buildLectureRefSql({ lectureType: "live", customerId: cidNum, liveSessionId: lsid }) as Promise<LectureRef | null>;
+  }
+
   const cid = new mongoose.Types.ObjectId(input.userId);
 
   if (input.lectureType === "recorded") {

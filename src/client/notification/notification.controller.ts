@@ -5,6 +5,7 @@ import { ImageNotification } from "../../models/system/ImageNotification.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import * as notifSql from "../../modules/client-notification/client-notification.service";
+import * as adminNotifSql from "../../modules/admin-notification/admin-notification.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -122,7 +123,9 @@ export const listActiveImageNotifications = async (_req: Request, res: Response)
   logger.info("listActiveImageNotifications invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const data = await ImageNotification.find({ active: true }).sort({ createdAt: -1 }).lean();
+    const data = adminNotifSql.isAdminNotificationMysql()
+      ? await adminNotifSql.listActiveImageNotifications()
+      : await ImageNotification.find({ active: true }).sort({ createdAt: -1 }).lean();
     logger.info("listActiveImageNotifications success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {

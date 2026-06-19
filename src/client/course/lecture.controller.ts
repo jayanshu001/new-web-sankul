@@ -7,6 +7,7 @@ import { generateToken, generateKey, generateVector, encrypt } from "../../utils
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { lectureQuerySchema } from "./course.validation";
+import * as lecSql from "../../modules/client-lecture/client-lecture.service";
 
 async function hasActiveCourseSubscription(userId: string, courseId: string): Promise<boolean> {
   const now = new Date();
@@ -80,6 +81,41 @@ export const getLectureHandler = async (req: Request, res: Response) => {
     if (type === "package" && !packageId) {
       logger.warn("getLectureHandler missing packageId", { traceId, userId, videoId });
       return failure(res, "package param is required when type is package", 400);
+    }
+
+    // ─── SQL branch (int id-space) ───
+    if (lecSql.isClientLectureMysql()) {
+      const cid = lecSql.parseLecId(String(userId));
+      const vid = lecSql.parseLecId(String(videoId));
+      if (cid == null || vid == null) return failure(res, "Lecture not found", 404);
+      const v = await lecSql.findVideo(vid);
+      if (!v) return failure(res, "Lecture not found", 404);
+      if (!v.status) return failure(res, "Lecture is not available", 403);
+
+      if (type === "course" && courseId) {
+        const courseIdNum = lecSql.parseLecId(courseId);
+        if (courseIdNum == null || !(await lecSql.videoBelongsToCourse(v.videoCategoryId, courseIdNum))) {
+          return failure(res, "Lecture does not belong to this course", 403);
+        }
+      }
+
+      if (v.priceType === "free") {
+        const { token, videoURL } = encryptVideoSource(v as any);
+        return success(res, { _id: String(v.id), title: v.title, platform: v.platform, token, videoURL }, "Lecture fetched successfully.", 200);
+      }
+
+      let subscribed = false;
+      if (type === "course" && courseId) {
+        const n = lecSql.parseLecId(courseId);
+        subscribed = n != null && (await lecSql.hasActiveCourseSub(cid, n));
+      } else if (type === "package" && packageId) {
+        const n = lecSql.parseLecId(packageId);
+        subscribed = n != null && (await lecSql.hasActivePackageSub(cid, n));
+      }
+      if (!subscribed) return failure(res, "Active subscription required to access this lecture", 403);
+
+      const { token, videoURL } = encryptVideoSource(v as any);
+      return success(res, { _id: String(v.id), title: v.title, platform: v.platform, token, videoURL }, "Lecture fetched successfully.", 200);
     }
 
     const video = await Video.findById(videoId).lean();

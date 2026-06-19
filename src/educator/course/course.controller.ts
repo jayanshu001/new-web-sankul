@@ -6,6 +6,7 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { Customer } from "../../models/customer/Customer.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import * as epSql from "../../modules/educator-portal/educator-portal.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -17,6 +18,13 @@ export const listMyCourses = async (req: Request, res: Response) => {
 
   try {
     if (!educatorId) { logger.warn("listMyCourses unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    if (epSql.isEducatorPortalMysql()) {
+      const eid = epSql.parseEpId(String(educatorId));
+      if (eid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
+      const courses = await epSql.listMyCourses(eid);
+      return res.status(200).json({ success: true, data: { courses } });
+    }
 
     const courses = await Course.find({ courseEducatorId: educatorId })
       .populate("courseSubjectCategoryId")
@@ -79,6 +87,16 @@ export const getMyCourseDetail = async (req: Request, res: Response) => {
 
   try {
     if (!educatorId) { logger.warn("getMyCourseDetail unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    if (epSql.isEducatorPortalMysql()) {
+      const eid = epSql.parseEpId(String(educatorId)); const cid = epSql.parseEpId(id);
+      if (eid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
+      if (cid == null) return res.status(400).json({ success: false, message: "Invalid course id." });
+      const data = await epSql.getMyCourseDetail(eid, cid);
+      if (!data) return res.status(404).json({ success: false, message: "Course not found or not yours." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) { logger.warn("getMyCourseDetail invalid id", { traceId, educatorId, courseId: id }); return res.status(400).json({ success: false, message: "Invalid course id." }); }
 
     const course = await Course.findOne({ _id: id, courseEducatorId: educatorId })
@@ -109,6 +127,16 @@ export const getCourseDashboard = async (req: Request, res: Response) => {
 
   try {
     if (!educatorId) { logger.warn("getCourseDashboard unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    if (epSql.isEducatorPortalMysql()) {
+      const eid = epSql.parseEpId(String(educatorId)); const cid = epSql.parseEpId(id);
+      if (eid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
+      if (cid == null) return res.status(400).json({ success: false, message: "Invalid course id." });
+      const data = await epSql.getCourseDashboard(eid, cid);
+      if (!data) return res.status(404).json({ success: false, message: "Course not found or not yours." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) { logger.warn("getCourseDashboard invalid id", { traceId, educatorId, courseId: id }); return res.status(400).json({ success: false, message: "Invalid course id." }); }
 
     const course = await Course.findOne({ _id: id, courseEducatorId: educatorId });
@@ -160,14 +188,24 @@ export const getCourseSubscribers = async (req: Request, res: Response) => {
 
   try {
     if (!educatorId) { logger.warn("getCourseSubscribers unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
-    if (!isObjectId(id)) { logger.warn("getCourseSubscribers invalid id", { traceId, educatorId, courseId: id }); return res.status(400).json({ success: false, message: "Invalid course id." }); }
-
-    const course = await Course.findOne({ _id: id, courseEducatorId: educatorId }).select("_id");
-    if (!course) { logger.warn("getCourseSubscribers not found", { traceId, educatorId, courseId: id }); return res.status(404).json({ success: false, message: "Course not found or not yours." }); }
 
     const pageNum = Math.max(parseInt((req.query.page as string) || "1", 10) || 1, 1);
     const limitNum = Math.max(parseInt((req.query.limit as string) || "20", 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
+
+    if (epSql.isEducatorPortalMysql()) {
+      const eid = epSql.parseEpId(String(educatorId)); const cid = epSql.parseEpId(id);
+      if (eid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
+      if (cid == null) return res.status(400).json({ success: false, message: "Invalid course id." });
+      const r = await epSql.getCourseSubscribers(eid, cid, skip, limitNum);
+      if (!r) return res.status(404).json({ success: false, message: "Course not found or not yours." });
+      return res.status(200).json({ success: true, data: r.data, pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) } });
+    }
+
+    if (!isObjectId(id)) { logger.warn("getCourseSubscribers invalid id", { traceId, educatorId, courseId: id }); return res.status(400).json({ success: false, message: "Invalid course id." }); }
+
+    const course = await Course.findOne({ _id: id, courseEducatorId: educatorId }).select("_id");
+    if (!course) { logger.warn("getCourseSubscribers not found", { traceId, educatorId, courseId: id }); return res.status(404).json({ success: false, message: "Course not found or not yours." }); }
 
     const [data, total] = await Promise.all([
       PackageCourseSubscription.find({ courseId: id })

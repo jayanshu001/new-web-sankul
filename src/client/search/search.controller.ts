@@ -14,6 +14,7 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
 import { BookOrderStatus } from "../../models/enums";
 import { isNewItem } from "../../utils/isNew";
+import * as searchSql from "../../modules/client-search/client-search.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
@@ -288,6 +289,25 @@ export const globalSearch = async (req: Request, res: Response) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 10, 1), 50);
 
     const skip = (page - 1) * limit;
+
+    // ─── SQL branch (int id-space) ───
+    if (searchSql.isClientSearchMysql()) {
+      const userNum = req.user?.id ? Number(req.user.id) : null;
+      const cid = Number.isInteger(userNum) ? userNum : null;
+      if (!type || !searchSql.SEARCH_TYPES.includes(type as any)) {
+        const results = await Promise.all(
+          searchSql.SEARCH_TYPES.map(async (key) => {
+            const { items, total } = await searchSql.searchType(key, q, cid, skip, limit);
+            return [key, { items, total, hasMore: skip + items.length < total }] as const;
+          })
+        );
+        const data = Object.fromEntries(results);
+        const grandTotal = results.reduce((sum, [, v]) => sum + v.total, 0);
+        return res.status(200).json({ success: true, data: { type: "all", page, limit, total: grandTotal, results: data } });
+      }
+      const { items, total } = await searchSql.searchType(type as any, q, cid, skip, limit);
+      return res.status(200).json({ success: true, data: { type, items, total, page, limit, hasMore: skip + items.length < total } });
+    }
 
     if (!type || !TYPE_TO_MODEL[type]) {
       const entries = Object.entries(TYPE_TO_MODEL);

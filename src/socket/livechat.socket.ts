@@ -13,6 +13,14 @@ import { LiveSessionAttendance } from "../models/customer/LiveSessionAttendance.
 import { resolveLiveClassId } from "../admin/live/live.guards";
 import { redisClient } from "../config/redis";
 import logger from "../utils/logger";
+// SQL (Prisma) persistence branches. The socket persists TWO independent data
+// sets, each gated by its own existing module flag (matching the HTTP path):
+//  - chat/ban/poll  → admin-live-course.service (isLiveCourseMysql)
+//  - attendance/session → admin-live.service (isAdminLiveMysql)
+// All Socket.io/Redis transport below stays Mongo-agnostic and runs in both
+// branches; only the DB reads/writes branch.
+import * as liveCourseSql from "../modules/admin-live-course/admin-live-course.service";
+import * as adminLiveSql from "../modules/admin-live/admin-live.service";
 
 // Exported so admin HTTP controllers can broadcast poll events into rooms
 export let io: SocketServer;
@@ -108,6 +116,15 @@ async function viewerCount(liveClassId: string): Promise<number> {
 // Open an attendance row for this socket's stint in a live class. Best-effort.
 async function openAttendance(socket: AuthenticatedSocket, liveClassId: string) {
   try {
+    if (adminLiveSql.isAdminLiveMysql()) {
+      socket.attendanceId = await adminLiveSql.openAttendanceSql({
+        streamId: liveClassId,
+        customerId: adminLiveSql.parseAlId(String(socket.customerId)),
+        userName: socket.userName ?? "",
+      });
+      socket.liveRoom = liveClassId;
+      return;
+    }
     const session = await LiveSession.findOne({ streamId: liveClassId }).select("_id").lean();
     const rec = await LiveSessionAttendance.create({
       streamId: liveClassId,
@@ -129,6 +146,11 @@ async function closeAttendance(socket: AuthenticatedSocket) {
   socket.attendanceId = undefined;
   if (!id) return;
   try {
+    if (adminLiveSql.isAdminLiveMysql()) {
+      const nid = adminLiveSql.parseAlId(id);
+      if (nid != null) await adminLiveSql.closeAttendanceSql(nid, new Date());
+      return;
+    }
     const rec = await LiveSessionAttendance.findById(id);
     if (rec && !rec.leftAt) {
       rec.leftAt = new Date();
@@ -248,12 +270,19 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
       await openAttendance(socket, liveClassId);
 
       try {
-        const history = await LiveChatMessage.find({ liveClassId, deletedAt: null })
-          .sort({ createdAt: 1 })
-          .limit(50)
-          .select("customerId adminId isAdmin userName message createdAt")
-          .lean();
-        socket.emit("chat_history", { liveClassId, messages: history });
+        if (liveCourseSql.isLiveCourseMysql()) {
+          // getChatHistory returns chrono order (oldest→newest), same as the
+          // Mongo sort({createdAt:1}); limit 50 matches the Mongo .limit(50).
+          const history = await liveCourseSql.getChatHistory(liveClassId, 50);
+          socket.emit("chat_history", { liveClassId, messages: history });
+        } else {
+          const history = await LiveChatMessage.find({ liveClassId, deletedAt: null })
+            .sort({ createdAt: 1 })
+            .limit(50)
+            .select("customerId adminId isAdmin userName message createdAt")
+            .lean();
+          socket.emit("chat_history", { liveClassId, messages: history });
+        }
         logger.info("Live chat: user joined", { room: roomKey(liveClassId), customerId: socket.customerId });
       } catch (err) {
         logger.error("Live chat: history load failed", { liveClassId, error: (err as Error).message });
@@ -261,20 +290,28 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
 
       // Send active poll to the joining user (if one exists)
       try {
-        const activePoll = await LivePoll.findOne({ liveClassId, isActive: true })
-          .select("question options totalVotes createdByName createdAt")
-          .lean();
+        if (liveCourseSql.isLiveCourseMysql()) {
+          const cid = liveCourseSql.parseLiveId(String(socket.customerId));
+          const r = await liveCourseSql.getActivePoll(liveClassId, cid ?? 0);
+          if (r.poll) {
+            socket.emit("active_poll", { poll: r.poll, myVote: r.myVote });
+          }
+        } else {
+          const activePoll = await LivePoll.findOne({ liveClassId, isActive: true })
+            .select("question options totalVotes createdByName createdAt")
+            .lean();
 
-        if (activePoll) {
-          const existingVote = await LivePollVote.findOne({
-            pollId: activePoll._id,
-            customerId: new Types.ObjectId(socket.customerId!),
-          }).lean();
+          if (activePoll) {
+            const existingVote = await LivePollVote.findOne({
+              pollId: activePoll._id,
+              customerId: new Types.ObjectId(socket.customerId!),
+            }).lean();
 
-          socket.emit("active_poll", {
-            poll: activePoll,
-            myVote: existingVote ? existingVote.optionIndex : null,
-          });
+            socket.emit("active_poll", {
+              poll: activePoll,
+              myVote: existingVote ? existingVote.optionIndex : null,
+            });
+          }
         }
       } catch (err) {
         logger.error("Live chat: active poll load failed", { liveClassId, error: (err as Error).message });
@@ -301,6 +338,27 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
       }
 
       try {
+        if (liveCourseSql.isLiveCourseMysql()) {
+          const pid = liveCourseSql.parseLiveId(String(pollId));
+          const cid = liveCourseSql.parseLiveId(String(socket.customerId));
+          if (pid == null) { socket.emit("error", { message: "Poll not found" }); return; }
+          if (cid == null) { socket.emit("error", { message: "Failed to submit vote" }); return; }
+          const r = await liveCourseSql.submitPollVote(pid, cid, optionIndex);
+          if (r === "not_found") { socket.emit("error", { message: "Poll not found" }); return; }
+          if (r === "closed") { socket.emit("error", { message: "Poll is closed" }); return; }
+          if (r === "invalid_option") { socket.emit("error", { message: "Invalid option" }); return; }
+          if (r === "already") { socket.emit("error", { message: "You have already voted on this poll" }); return; }
+
+          // Broadcast live counts to everyone in the room (same shape as Mongo)
+          io.to(roomKey(r.liveClassId)).emit("poll_update", {
+            pollId,
+            options: r.options,
+            totalVotes: r.totalVotes,
+          });
+          logger.info("Live poll: vote recorded", { pollId, optionIndex, customerId: socket.customerId });
+          return;
+        }
+
         const poll = await LivePoll.findById(pollId);
         if (!poll) { socket.emit("error", { message: "Poll not found" }); return; }
         if (!poll.isActive) { socket.emit("error", { message: "Poll is closed" }); return; }
@@ -353,13 +411,36 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
 
       // Global chat ban — same enforcement as the http path. Reject early and
       // let the client render the "you're banned" state.
-      const banned = await LiveChatBan.exists({ customerId: socket.customerId });
+      const useSql = liveCourseSql.isLiveCourseMysql();
+      const banCustId = useSql ? liveCourseSql.parseLiveId(String(socket.customerId)) : null;
+      const banned = useSql
+        ? banCustId != null && (await liveCourseSql.isCustomerChatBanned(banCustId))
+        : await LiveChatBan.exists({ customerId: socket.customerId });
       if (banned) {
         socket.emit("chat_banned", { message: "You are blocked from sending messages." });
         return;
       }
 
       try {
+        if (useSql) {
+          const saved = await liveCourseSql.sendCustomerChatMessage({
+            liveClassId,
+            customerId: banCustId,
+            userName: socket.userName!,
+            message: text,
+          });
+          io.to(roomKey(liveClassId)).emit("new_message", {
+            _id: saved._id,
+            liveClassId,
+            customerId: socket.customerId,
+            userName: socket.userName,
+            message: text,
+            createdAt: saved.createdAt,
+          });
+          logger.info("Live chat: message sent", { liveClassId, customerId: socket.customerId });
+          return;
+        }
+
         const saved = await LiveChatMessage.create({
           liveClassId,
           customerId: new Types.ObjectId(socket.customerId!),

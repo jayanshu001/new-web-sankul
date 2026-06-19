@@ -435,6 +435,55 @@ model CustomerBankAccount {
 
 // ****************************REFFERAL PROGRAM MODULE******************************
 
+model PdfUploadJob {
+  id            Int       @id @default(autoincrement())
+  batchId       String    @map("batch_id") @db.VarChar(100)
+  idx           Int       @default(0)
+  uploadedBy    Int?      @map("uploaded_by")
+  ebookId       Int?      @map("ebook_id")
+  targetField   String    @default("bookUrl") @map("target_field") @db.VarChar(20)
+  fileName      String    @map("file_name") @db.VarChar(500)
+  tempPath      String    @map("temp_path") @db.VarChar(1000)
+  fileSize      BigInt    @default(0) @map("file_size")
+  status        String    @default("queued") @db.VarChar(20)
+  progress      Int       @default(0)
+  fileUrl       String?   @map("file_url") @db.VarChar(1000)
+  failureReason String?   @map("failure_reason") @db.VarChar(1000)
+  startedAt     DateTime? @map("started_at")
+  finishedAt    DateTime? @map("finished_at")
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@index([batchId, idx], name: "idx_pdf_job_batch")
+  @@index([status], name: "idx_pdf_job_status")
+  @@map("ws_pdf_upload_job")
+}
+
+model RefferalTerm {
+  id        Int       @id @default(autoincrement())
+  text      String    @db.VarChar(1000)
+  orderBy   Int       @default(0) @map("order_by")
+  status    Boolean   @default(true)
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@index([status, orderBy], name: "idx_refferal_term_status_order")
+  @@map("ws_refferal_term")
+}
+
+model RefferalFaq {
+  id        Int       @id @default(autoincrement())
+  question  String    @db.VarChar(500)
+  answer    String    @db.Text
+  orderBy   Int       @default(0) @map("order_by")
+  status    Boolean   @default(true)
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@index([status, orderBy], name: "idx_refferal_faq_status_order")
+  @@map("ws_refferal_faq")
+}
+
 model RefferalProgram {
   id                  Int      @id @default(autoincrement()) @map("id")
   name                String   @map("name") @db.VarChar(50)
@@ -484,6 +533,7 @@ model Book {
   dynamic_link     String?
   list_price       Int
   discounted_price Int
+  isTrending       Boolean         @default(false) @map("is_trending")
   shipping_price   Int
   order_by         Int?
   language         String          @default("Gujarati")
@@ -494,6 +544,8 @@ model Book {
   updated_at       DateTime?
   bookCartItem     BookCartItem[]
   bookOrderItem    BookOrderItem[]
+  examCountdownIds         Json? @map("exam_countdown_ids")
+  examCountdownCategoryIds Json? @map("exam_countdown_category_ids")
 
   @@map("ws_book")
 }
@@ -879,6 +931,14 @@ model Material {
   file               String
   order_by           Int
   status             Boolean
+  description        String?           @db.Text
+  thumbnail          String?
+  fileSize           BigInt?           @map("file_size")
+  fileMime           String?           @map("file_mime")
+  language           String?
+  isPreview          Boolean           @default(false) @map("is_preview")
+  isPaid             Boolean           @default(false) @map("is_paid")
+  downloadCount      Int               @default(0) @map("download_count")
   created_at         DateTime?
   updated_at         DateTime?
 
@@ -923,15 +983,24 @@ model EBook {
   author             String?
   publisher          String?
   orderby            Int                       @map("order_by")
+  isTrending         Boolean                   @default(false) @map("is_trending")
   language           EBookLanguage
   bookDemoUrl        String                    @map("demo_url")
   bookUrl            String                    @map("book_url")
+  bookFileName       String?                   @map("book_file_name") @db.VarChar(500)
+  demoFileName       String?                   @map("demo_file_name") @db.VarChar(500)
+  bookUploadStatus   String?                   @map("book_upload_status") @db.VarChar(20)
+  demoUploadStatus   String?                   @map("demo_upload_status") @db.VarChar(20)
+  bookUploadProgress Int                       @default(0) @map("book_upload_progress")
+  demoUploadProgress Int                       @default(0) @map("demo_upload_progress")
   shareableLink      String                    @map("link")
   active             Boolean                   @map("status")
   createdAt          DateTime?                 @map("created_at")
   updatedAt          DateTime?                 @map("updated_at")
   plans              PackageCourseEbookPrice[]
   eBookSubscription  EBookSubscription[]
+  examCountdownIds         Json? @map("exam_countdown_ids")
+  examCountdownCategoryIds Json? @map("exam_countdown_category_ids")
 
   @@map("ws_ebook")
 }
@@ -996,6 +1065,7 @@ model Package {
   active                    Boolean                     @map("status")
   packageTypeId             Int?                        @map("package_type_id")
   packageType               PackageType?                @relation(fields: [packageTypeId], references: [id])
+  packageCategoryId         Int?                        @map("package_category_id")
   educator_id               Int?
   examId                    Int?                        @map("exam_id")
   Exam                      CustomerTargetGoal?         @relation(fields: [examId], references: [id])
@@ -1027,7 +1097,9 @@ model VideoCategory {
   course                 Course[]
   video                  Video[]
   videoCategoryRelation  VideoCategoryRelation[]
+  subjectKey             String?                  @map("subject_key") @db.VarChar(255)
 
+  @@index([subjectKey], name: "idx_vcat_subject_key")
   @@map("ws_video_category")
 }
 
@@ -1145,6 +1217,8 @@ model Course {
   materialCategoryCourse    MaterialCategoryCourse[]
   plans                     PackageCourseEbookPrice[]
   packageCourseSubscription PackageCourseSubscription[]
+  examCountdownIds          Json? @map("exam_countdown_ids")
+  examCountdownCategoryIds  Json? @map("exam_countdown_category_ids")
 
   @@map("ws_course")
 }
@@ -1165,9 +1239,11 @@ model Video {
   order           Int            @map("order_by")
   priceType       VideoType      @map("type")
   status          Boolean
+  liveSessionId   Int?           @map("live_session_id")
   created_at      DateTime?
   updated_at      DateTime?
 
+  @@index([liveSessionId], name: "idx_video_live_session")
   @@map("ws_video")
 }
 
@@ -1272,11 +1348,15 @@ model PackageCourseSubscription {
   status                            Boolean
   payment_type                      PackageCourseEbookPaymentType
   remarks                           String?
+  promoterId                        Int?                               @map("promoter_id")
+  promoterPercentage                Decimal?                           @map("promoter_percentage")
+  paidAmount                        Decimal?                           @map("paid_amount")
   created_by                        Int?
   updated_by                        Int?
   createdAt                         DateTime?                          @map("created_at")
   updatedAt                         DateTime?                          @map("updated_at")
 
+  @@index([promoterId, createdAt], name: "idx_pcs_promoter")
   @@map("ws_package_course_subscription")
 }
 
@@ -1391,12 +1471,35 @@ model Promocode {
   @@map("ws_promocode")
 }
 
+model PromoCodeRule {
+  id            Int       @id @default(autoincrement())
+  type          String
+  promocode     String
+  title         String?
+  description   String?   @db.Text
+  promoStartAt  DateTime? @map("promo_start_at")
+  promoExpireAt DateTime? @map("promo_expire_at")
+  status        Boolean   @default(true)
+  discountType  String    @default("percentage") @map("discount_type")
+  discountValue Decimal   @default(0) @map("discount_value") @db.Decimal(10, 2)
+  promoterId    Int?      @map("promoter_id")
+  appliesToType String?   @map("applies_to_type")
+  appliesToIds  Json?     @map("applies_to_ids")
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@index([promocode], name: "idx_promo_code_code")
+  @@index([type, status], name: "idx_promo_code_type_status")
+  @@map("ws_promo_code")
+}
+
 model PromotedPackageCourseEbook {
   id                      Int                      @id @default(autoincrement())
   promocode               Promocode?               @relation(fields: [promocodeId], references: [id])
   promocodeId             Int?                     @map("promocode_id")
   packageCourseEbookPrice PackageCourseEbookPrice? @relation(fields: [planId], references: [id])
   planId                  Int?                     @map("pcb_price_id")
+  planKind                String                   @default("price") @map("plan_kind")
   type                    String?
   promoterPercentage      Decimal                  @map("promoter_percentage")
   customerPercentage      Decimal                  @map("customer_percentage")
@@ -1574,13 +1677,27 @@ model AdminRoleRow {
 }
 
 model AdminPermissionRow {
-  id        BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
-  name      String    @db.VarChar(255)
-  guardName String    @map("guard_name") @db.VarChar(255)
+  id         BigInt    @id @default(autoincrement()) @db.UnsignedBigInt
+  name       String    @db.VarChar(255)
+  guardName  String    @map("guard_name") @db.VarChar(255)
+  categoryId Int?      @map("category_id")
+  createdAt  DateTime? @map("created_at")
+  updatedAt  DateTime? @map("updated_at")
+
+  @@map("ws_permissions")
+}
+
+model PermissionCategoryRow {
+  id        Int       @id @default(autoincrement())
+  title     String    @db.VarChar(255)
+  slug      String    @unique @db.VarChar(255)
+  orderBy   Int       @default(0) @map("order_by")
+  status    Boolean   @default(true)
   createdAt DateTime? @map("created_at")
   updatedAt DateTime? @map("updated_at")
 
-  @@map("ws_permissions")
+  @@index([status, orderBy], name: "idx_permission_category_status_order")
+  @@map("ws_permission_category")
 }
 
 model AdminRoleHasPermission {
@@ -2041,6 +2158,49 @@ model TestSeries {
   @@map("ws_test_series")
 }
 
+model TestSeriesContentCategory {
+  id           Int       @id @default(autoincrement())
+  testSeriesId Int       @map("test_series_id")
+  name         String    @db.VarChar(255)
+  icon         String?   @db.VarChar(500)
+  orderBy      Int       @default(0) @map("order_by")
+  status       Boolean   @default(true)
+  createdAt    DateTime? @map("created_at")
+  updatedAt    DateTime? @map("updated_at")
+
+  @@index([testSeriesId, status, orderBy], name: "idx_tscc_series_status_order")
+  @@map("ws_test_series_content_category")
+}
+
+model TestSeriesExam {
+  id                Int       @id @default(autoincrement())
+  testSeriesId      Int       @map("test_series_id")
+  contentCategoryId Int       @map("content_category_id")
+  examId            Int       @map("exam_id")
+  orderBy           Int       @default(0) @map("order_by")
+  status            Boolean   @default(true)
+  createdAt         DateTime? @map("created_at")
+  updatedAt         DateTime? @map("updated_at")
+
+  @@unique([testSeriesId, examId], name: "uq_tse_series_exam")
+  @@index([testSeriesId, contentCategoryId, orderBy], name: "idx_tse_series_cat_order")
+  @@index([examId], name: "idx_tse_exam")
+  @@map("ws_test_series_exam")
+}
+
+model Wishlist {
+  id         Int       @id @default(autoincrement())
+  customerId Int       @map("customer_id")
+  itemType   String    @map("item_type")
+  itemId     Int       @map("item_id")
+  createdAt  DateTime? @map("created_at")
+  updatedAt  DateTime? @map("updated_at")
+
+  @@unique([customerId, itemType, itemId], name: "uq_wishlist_cust_item")
+  @@index([customerId, itemType], name: "idx_wishlist_cust_type")
+  @@map("ws_wishlist")
+}
+
 model TestSeriesPrice {
   id            Int       @id @default(autoincrement())
   testSeriesId  Int       @map("test_series_id")
@@ -2097,4 +2257,83 @@ model TestSeriesSubscription {
   updatedAt    DateTime? @map("updated_at")
 
   @@map("ws_test_series_subscription")
+}
+
+// ── Mongo-only tail (2026-06-19) — net-new flat tables for the remaining
+//    Mongo-only DATA models. Singular ws_<name> mapping.
+
+model ExamCountdownCategory {
+  id        Int       @id @default(autoincrement())
+  name      String
+  colorHex  String    @map("color_hex")
+  order     Int       @default(0) @map("order_by")
+  status    Boolean   @default(true)
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@map("ws_exam_countdown_category")
+}
+
+model ExamCountdown {
+  id          Int       @id @default(autoincrement())
+  title       String
+  categoryId  Int?      @map("category_id")
+  examDate    DateTime  @map("exam_date")
+  description String?   @db.Text
+  status      Boolean   @default(true)
+  createdAt   DateTime? @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+
+  @@map("ws_exam_countdown")
+}
+
+model PackageCategory {
+  id        Int       @id @default(autoincrement())
+  title     String
+  slug      String    @unique
+  image     String?
+  order     Int       @default(0) @map("order_by")
+  status    Boolean   @default(true)
+  createdAt DateTime? @map("created_at")
+  updatedAt DateTime? @map("updated_at")
+
+  @@map("ws_package_category")
+}
+
+// ── Lecture notes (2026-06-19, C1 zero-Mongo) ──
+model LectureNote {
+  id            Int       @id @default(autoincrement())
+  customerId    Int       @map("customer_id")
+  lectureType   String    @map("lecture_type")
+  videoId       Int?      @map("video_id")
+  liveSessionId Int?      @map("live_session_id")
+  courseId      Int?      @map("course_id")
+  liveCourseIds Json?     @map("live_course_ids")
+  timestampSec  Int       @default(0) @map("timestamp_sec")
+  content       String    @db.Text
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@map("ws_lecture_note")
+}
+
+model LectureAudioNote {
+  id            Int       @id @default(autoincrement())
+  customerId    Int       @map("customer_id")
+  lectureType   String    @map("lecture_type")
+  videoId       Int?      @map("video_id")
+  liveSessionId Int?      @map("live_session_id")
+  courseId      Int?      @map("course_id")
+  liveCourseIds Json?     @map("live_course_ids")
+  timestampSec  Int       @default(0) @map("timestamp_sec")
+  title         String?
+  audioUrl      String    @map("audio_url")
+  audioKey      String    @map("audio_key")
+  mimeType      String?   @map("mime_type")
+  sizeBytes     Int?      @map("size_bytes")
+  durationSec   Int?      @map("duration_sec")
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@map("ws_lecture_audio_note")
 }

@@ -27,6 +27,8 @@ import {
   syncRemindersForSession,
   cancelRemindersForSession,
 } from "../../client/live-reminder/live-reminder.service";
+import * as adminLiveSql from "../../modules/admin-live/admin-live.service";
+import { isAdminLiveMysql } from "../../modules/admin-live/admin-live.service";
 
 // Admin must wait until 2 minutes before scheduledAt to actually start the
 // Streamos stream. Late starts after scheduledAt remain allowed indefinitely.
@@ -113,6 +115,36 @@ function publicView(session: ILiveSession | any) {
 // handlers can distinguish "unchanged" from "set to empty".
 const MAX_LIVE_COURSES_PER_SESSION = 20;
 
+// SQL-branch equivalent of resolveLiveCourseIds' body parsing: gather the raw
+// id strings from `liveCourseIds` (array) and/or `liveCourseId` (single).
+// Returns null if `liveCourseIds` is present but not an array/clear sentinel.
+// `provided=false` (caller distinguishes) is signalled by an empty array when
+// neither field is present.
+function collectLiveCourseIdStrings(body: any): string[] | null {
+  const hasMulti = body?.liveCourseIds !== undefined;
+  const hasSingle = body?.liveCourseId !== undefined;
+  const raw: string[] = [];
+  if (hasMulti) {
+    if (body.liveCourseIds === null || body.liveCourseIds === "") {
+      // explicit clear
+    } else if (Array.isArray(body.liveCourseIds)) {
+      raw.push(...body.liveCourseIds.map((v: unknown) => String(v)));
+    } else {
+      return null;
+    }
+  }
+  if (hasSingle && body.liveCourseId !== null && body.liveCourseId !== "") {
+    raw.push(String(body.liveCourseId));
+  }
+  return raw;
+}
+
+// Whether the body provided a liveCourse linkage field at all (update handlers
+// need "unchanged" vs "set to empty").
+function liveCourseFieldProvided(body: any): boolean {
+  return body?.liveCourseIds !== undefined || body?.liveCourseId !== undefined;
+}
+
 async function resolveLiveCourseIds(
   body: any
 ): Promise<{ provided: boolean; ids: Types.ObjectId[]; error?: string }> {
@@ -185,6 +217,86 @@ export const createLiveSession = async (req: Request, res: Response) => {
     const scheduledAt = parseScheduledAt(req.body?.scheduledAt);
     if (req.body?.scheduledAt !== undefined && req.body?.scheduledAt !== null && req.body?.scheduledAt !== "" && scheduledAt === undefined) {
       return failure(res, "scheduledAt must be a valid date.", 422);
+    }
+
+    // ── MySQL branch ─────────────────────────────────────────────────────────
+    if (isAdminLiveMysql()) {
+      const rawCourseIds = collectLiveCourseIdStrings(req.body);
+      if (rawCourseIds === null) {
+        return failure(res, "liveCourseIds must be an array of ids.", 422);
+      }
+      const courseSql = await adminLiveSql.validateLiveCourseIds(rawCourseIds);
+      if (courseSql.error) return failure(res, courseSql.error, 422);
+      if (courseSql.ids.length === 0) {
+        return failure(res, "liveCourseIds is required (provide at least one live course).", 400);
+      }
+
+      const subjectSql = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
+      if (!subjectSql) {
+        return failure(
+          res,
+          "subject is required — recordings are auto-grouped into a folder named after it.",
+          422
+        );
+      }
+      if (subjectSql.length > 300) return failure(res, "subject is too long (max 300).", 422);
+
+      const endAtParsedSql = parseScheduledAt(req.body?.endAt);
+      if (
+        req.body?.endAt !== undefined && req.body?.endAt !== null && req.body?.endAt !== "" &&
+        endAtParsedSql === undefined
+      ) {
+        return failure(res, "endAt must be a valid date.", 422);
+      }
+      const endAtSql = endAtParsedSql ?? null;
+
+      let educatorIdSql: number | null = null;
+      if (req.body?.educatorId) {
+        const e = adminLiveSql.parseAlId(String(req.body.educatorId));
+        if (e == null) return failure(res, "educatorId must be a valid id.", 422);
+        educatorIdSql = e;
+      }
+
+      if (scheduledAt && scheduledAt.getTime() > Date.now()) {
+        const { row, liveCourseIds } = await adminLiveSql.createSession({
+          title,
+          liveCourseIds: courseSql.ids,
+          subject: subjectSql,
+          educatorId: educatorIdSql,
+          endAt: endAtSql,
+          scheduledAt,
+          status: "SCHEDULED",
+        });
+        logger.info("createLiveSession scheduled (sql)", { traceId, sessionId: row.id });
+        return success(
+          res,
+          { session: adminLiveSql.toPublicView(row, liveCourseIds) },
+          "Live session scheduled.",
+          201
+        );
+      }
+
+      // Immediate create — StreamOS first (unchanged), then SQL persist.
+      const createdSql = await streamosCreateStream(title);
+      const { row, liveCourseIds } = await adminLiveSql.createSession({
+        title,
+        liveCourseIds: courseSql.ids,
+        subject: subjectSql,
+        educatorId: educatorIdSql,
+        endAt: endAtSql,
+        status: "CREATED",
+        streamId: createdSql.streamId,
+        rtmpUrl: createdSql.rtmpUrl,
+        hlsUrl: createdSql.hlsUrl,
+        hlsUrls: createdSql.hlsUrls ?? null,
+      });
+      logger.info("createLiveSession success (sql)", { traceId, streamId: row.streamId, sessionId: row.id });
+      return success(
+        res,
+        { session: adminLiveSql.toPublicView(row, liveCourseIds) },
+        "Live stream created.",
+        201
+      );
     }
 
     const courseRef = await resolveLiveCourseIds(req.body);
@@ -290,6 +402,49 @@ export const listLiveSessions = async (req: Request, res: Response) => {
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
 
+    // ── MySQL branch ─────────────────────────────────────────────────────────
+    if (isAdminLiveMysql()) {
+      const courseIdFiltersSql: string[] = [];
+      if (typeof req.query.liveCourseId === "string" && req.query.liveCourseId.trim()) {
+        courseIdFiltersSql.push(req.query.liveCourseId.trim());
+      }
+      if (typeof req.query.liveCourseIds === "string" && req.query.liveCourseIds.trim()) {
+        for (const part of req.query.liveCourseIds.split(",")) {
+          const t = part.trim();
+          if (t) courseIdFiltersSql.push(t);
+        }
+      }
+      let courseIdsSql: number[] | undefined;
+      if (courseIdFiltersSql.length > 0) {
+        const valid = courseIdFiltersSql
+          .map((id) => adminLiveSql.parseAlId(id))
+          .filter((n): n is number => n != null);
+        if (valid.length === 0) {
+          return failure(res, "liveCourseId/liveCourseIds must be valid ids.", 422);
+        }
+        courseIdsSql = valid;
+      }
+
+      const { rows, total } = await adminLiveSql.listSessions({
+        status,
+        upcoming,
+        courseIds: courseIdsSql,
+        skip: (page - 1) * limit,
+        take: limit,
+      });
+      const sessions = await Promise.all(
+        rows.map(async (row) => {
+          const courses = await adminLiveSql.getLinkedCourses(row.id);
+          return adminLiveSql.toPublicView(
+            row,
+            courses.map((c) => Number(c._id)),
+            courses
+          );
+        })
+      );
+      return success(res, { sessions, total, page, limit }, "Live sessions fetched.");
+    }
+
     const query: Record<string, any> = {};
     if (status) query.status = status;
     if (upcoming) {
@@ -349,6 +504,77 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
 
   try {
     const id = String(req.params.id ?? req.params.streamId ?? "");
+
+    // ── MySQL branch ─────────────────────────────────────────────────────────
+    if (isAdminLiveMysql()) {
+      let row = await adminLiveSql.findSessionByAnyId(id);
+      if (!row) return failure(res, "Live session not found.", 404);
+
+      let isLive = false;
+      if (row.streamId && (row.status === "CREATED" || row.status === "ENDED")) {
+        try {
+          const details = await streamosGetStreamDetails(row.streamId);
+          isLive = details.isLive;
+
+          const patch: { hlsUrl?: string | null; hlsUrls?: any; recordings?: any; status?: string } = {};
+          if (details.hlsUrl && details.hlsUrl !== row.hlsUrl) patch.hlsUrl = details.hlsUrl;
+          if (details.hlsUrls && Object.keys(details.hlsUrls).length > 0) patch.hlsUrls = details.hlsUrls;
+
+          const hadRecordings = (adminLiveSql.toPublicView(row, []).recordings.length) > 0;
+          if (row.status === "ENDED" && details.recordings.length > 0 && !hadRecordings) {
+            patch.recordings = details.recordings;
+            patch.status = "READY";
+            logger.info("getLiveSessionStatus recordings recovered (sql)", {
+              traceId, sessionId: row.id, streamId: row.streamId, count: details.recordings.length,
+            });
+            const liveClassId = String(row.streamId);
+            io?.to(roomKey(liveClassId)).emit("recordings_ready", {
+              streamId: row.streamId,
+              liveClassId,
+              status: "READY",
+              recordings: details.recordings,
+            });
+            // C7: mirror the webhook's auto-promote so a missed webhook still
+            // files the recording into the subject folder (best-effort).
+            const courseIdsForPromote = await adminLiveSql.getLinkedCourseIds(row.id);
+            await adminLiveSql.maybeAutoPromoteRecordingSql({
+              sessionId: row.id,
+              sessionTitle: row.title ?? null,
+              subject: row.subject ?? null,
+              recordings: details.recordings,
+              liveCourseIds: courseIdsForPromote,
+            });
+          }
+          if (Object.keys(patch).length > 0) {
+            row = await adminLiveSql.updateSession(row.id, patch);
+          }
+        } catch (err) {
+          if (err instanceof StreamosError) {
+            logger.warn("getLiveSessionStatus streamos error (sql)", {
+              traceId, sessionId: row.id, message: err.message, upstreamStatus: err.upstreamStatus,
+            });
+          } else {
+            logger.warn("getLiveSessionStatus streamos error (sql)", {
+              traceId, sessionId: row.id, error: getErrorMessage(err),
+            });
+          }
+        }
+      }
+
+      const courses = await adminLiveSql.getLinkedCourses(row.id);
+      // C7: promotedVideos resolved via ws_video.live_session_id.
+      const promotedVideosSql = await adminLiveSql.resolvePromotedVideosSql(row.id);
+      return success(
+        res,
+        {
+          session: adminLiveSql.toPublicView(row, courses.map((c) => Number(c._id)), courses),
+          isLive,
+          promotedVideos: promotedVideosSql,
+        },
+        "Stream status fetched."
+      );
+    }
+
     const session = await findSessionByAnyId(id);
     if (!session) return failure(res, "Live session not found.", 404);
     await session.populate("liveCourseIds", "_id name image thumbnail");
@@ -453,6 +679,103 @@ export const promoteSessionRecording = async (req: Request, res: Response) => {
   logger.info("promoteSessionRecording invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
 
   try {
+    // ── MySQL branch ─────────────────────────────────────────────────────────
+    // C7: full SQL promotion (ws_video.live_session_id + ws_video_category.
+    // subject_key now exist). Validate the request the same way as Mongo, then
+    // delegate the DB work to the service.
+    if (isAdminLiveMysql()) {
+      const rowSql = await adminLiveSql.findSessionByAnyId(String(req.params.id));
+      if (!rowSql) return failure(res, "Live session not found.", 404);
+      const recsSql = adminLiveSql.toPublicView(rowSql, []).recordings;
+      if (recsSql.length === 0) {
+        return failure(res, "This session has no recordings yet.", 409);
+      }
+
+      const folderIdRawSql =
+        typeof req.body?.folderId === "string" || typeof req.body?.folderId === "number"
+          ? String(req.body.folderId).trim()
+          : "";
+      const folderIdSql = adminLiveSql.parseAlId(folderIdRawSql);
+      if (folderIdSql == null) {
+        return failure(res, "A valid folderId is required.", 422);
+      }
+
+      const rawIndexSql = req.body?.recordingIndex;
+      const recordingIndexSql =
+        rawIndexSql === undefined || rawIndexSql === null || rawIndexSql === ""
+          ? undefined
+          : Number(rawIndexSql);
+      if (
+        recordingIndexSql !== undefined &&
+        (!Number.isInteger(recordingIndexSql) || recordingIndexSql < 0)
+      ) {
+        return failure(res, "recordingIndex must be a non-negative integer.", 422);
+      }
+
+      const qualitySql =
+        typeof req.body?.quality === "string" && req.body.quality.trim()
+          ? req.body.quality.trim()
+          : undefined;
+
+      const priceTypeRawSql = req.body?.priceType;
+      const priceTypeSql =
+        priceTypeRawSql === "free" || priceTypeRawSql === "paid" ? priceTypeRawSql : undefined;
+
+      const titleSql =
+        typeof req.body?.title === "string" && req.body.title.trim()
+          ? req.body.title.trim()
+          : undefined;
+
+      const rawOrderSql = req.body?.order;
+      const orderSql =
+        rawOrderSql === undefined || rawOrderSql === null || rawOrderSql === ""
+          ? undefined
+          : Number(rawOrderSql);
+      if (orderSql !== undefined && !Number.isInteger(orderSql)) {
+        return failure(res, "order must be an integer.", 422);
+      }
+
+      const resultSql = await adminLiveSql.promoteSessionRecordingSql({
+        sessionId: rowSql.id,
+        folderId: folderIdSql,
+        recordingIndex: recordingIndexSql,
+        quality: qualitySql,
+        title: titleSql,
+        priceType: priceTypeSql,
+        order: orderSql,
+      });
+
+      if (resultSql === "session_not_found") return failure(res, "Live session not found.", 404);
+      if (resultSql === "no_recordings")
+        return failure(res, "This session has no recordings yet.", 409);
+      if (resultSql === "folder_not_found")
+        return failure(res, "Target folder not found.", 404);
+      if (resultSql === "recording_not_found")
+        return failure(
+          res,
+          qualitySql ? `No recording with quality "${qualitySql}".` : "No recording found at that index.",
+          404
+        );
+      if (resultSql === "no_path")
+        return failure(res, "Recording has no playable path.", 422);
+
+      logger.info("promoteSessionRecording success (sql)", {
+        traceId,
+        sessionId: rowSql.id,
+        folderId: folderIdSql,
+        videoId: resultSql.video._id,
+        alreadyExisted: resultSql.alreadyExisted,
+      });
+      return success(
+        res,
+        { video: resultSql.video, alreadyExisted: resultSql.alreadyExisted },
+        resultSql.alreadyExisted
+          ? "Recording already present in that folder."
+          : "Recording promoted to folder.",
+        resultSql.alreadyExisted ? 200 : 201
+      );
+    }
+
     const session = await findSessionByAnyId(String(req.params.id));
     if (!session) return failure(res, "Live session not found.", 404);
     if (!session.recordings || session.recordings.length === 0) {
@@ -552,6 +875,21 @@ export const getLiveSessionAttendance = async (req: Request, res: Response) => {
   logger.info("getLiveSessionAttendance invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
 
   try {
+    // ── MySQL branch ─────────────────────────────────────────────────────────
+    if (isAdminLiveMysql()) {
+      const rowSql = await adminLiveSql.findSessionByAnyId(String(req.params.id));
+      if (!rowSql) return failure(res, "Live session not found.", 404);
+      if (!rowSql.streamId) {
+        return success(
+          res,
+          { attendance: [], summary: { totalJoins: 0, uniqueViewers: 0, currentlyActive: 0 } },
+          "Session has not started — no attendance yet."
+        );
+      }
+      const { records: recsSql, summary } = await adminLiveSql.getAttendance(rowSql.streamId);
+      return success(res, { attendance: recsSql, summary }, "Attendance fetched.");
+    }
+
     const session = await findSessionByAnyId(String(req.params.id));
     if (!session) return failure(res, "Live session not found.", 404);
 
@@ -595,6 +933,42 @@ export const startScheduledLiveSession = async (req: Request, res: Response) => 
   logger.info("startScheduledLiveSession invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
 
   try {
+    // ── MySQL branch ─────────────────────────────────────────────────────────
+    if (isAdminLiveMysql()) {
+      const rowSql = await adminLiveSql.findSessionByAnyId(String(req.params.id));
+      if (!rowSql) return failure(res, "Live session not found.", 404);
+      if (rowSql.status !== "SCHEDULED") {
+        return failure(res, `Only SCHEDULED sessions can be started (current: ${rowSql.status}).`, 409);
+      }
+      if (!rowSql.scheduledAt) {
+        return failure(res, "Session has no scheduledAt; cannot determine start window.", 422);
+      }
+      const earliestSql = rowSql.scheduledAt.getTime() - START_WINDOW_MS;
+      if (Date.now() < earliestSql) {
+        const secondsRemaining = Math.ceil((earliestSql - Date.now()) / 1000);
+        return failure(
+          res,
+          `Too early to start. You can start within 2 minutes of the scheduled time (in ${secondsRemaining}s).`,
+          409
+        );
+      }
+      const createdSql = await streamosCreateStream(rowSql.title ?? "");
+      const updatedSql = await adminLiveSql.updateSession(rowSql.id, {
+        streamId: createdSql.streamId,
+        rtmpUrl: createdSql.rtmpUrl,
+        hlsUrl: createdSql.hlsUrl,
+        hlsUrls: createdSql.hlsUrls ?? null,
+        status: "CREATED",
+      });
+      const coursesSql = await adminLiveSql.getLinkedCourses(updatedSql.id);
+      logger.info("startScheduledLiveSession success (sql)", { traceId, sessionId: updatedSql.id, streamId: updatedSql.streamId });
+      return success(
+        res,
+        { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql) },
+        "Live stream started."
+      );
+    }
+
     const session = await findSessionByAnyId(String(req.params.id));
     if (!session) return failure(res, "Live session not found.", 404);
 
@@ -646,6 +1020,104 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
   logger.info("updateScheduledLiveSession invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
 
   try {
+    // ── MySQL branch ─────────────────────────────────────────────────────────
+    if (isAdminLiveMysql()) {
+      const rowSql = await adminLiveSql.findSessionByAnyId(String(req.params.id));
+      if (!rowSql) return failure(res, "Live session not found.", 404);
+      if (rowSql.status !== "SCHEDULED") {
+        return failure(res, `Only SCHEDULED sessions can be edited (current: ${rowSql.status}).`, 409);
+      }
+
+      const patch: {
+        title?: string;
+        subject?: string;
+        educatorId?: number | null;
+        endAt?: Date | null;
+        scheduledAt?: Date | null;
+      } = {};
+      let changedSql = false;
+      let scheduleChangedSql = false;
+      let courseIdsToSet: number[] | null = null;
+
+      if (req.body?.title !== undefined) {
+        const t = typeof req.body.title === "string" ? req.body.title.trim() : "";
+        if (!t) return failure(res, "title must be a non-empty string.", 422);
+        if (t.length > 500) return failure(res, "title is too long (max 500).", 422);
+        patch.title = t;
+        changedSql = true;
+      }
+      if (req.body?.scheduledAt !== undefined) {
+        const parsed = parseScheduledAt(req.body.scheduledAt);
+        if (parsed === undefined) return failure(res, "scheduledAt must be a valid date.", 422);
+        if (parsed === null) return failure(res, "scheduledAt cannot be cleared on a SCHEDULED session.", 422);
+        patch.scheduledAt = parsed;
+        changedSql = true;
+        scheduleChangedSql = true;
+      }
+      if (liveCourseFieldProvided(req.body)) {
+        const rawIds = collectLiveCourseIdStrings(req.body);
+        if (rawIds === null) return failure(res, "liveCourseIds must be an array of ids.", 422);
+        const courseSql = await adminLiveSql.validateLiveCourseIds(rawIds);
+        if (courseSql.error) return failure(res, courseSql.error, 422);
+        if (courseSql.ids.length === 0) {
+          return failure(res, "liveCourseIds cannot be empty — a session must remain linked to at least one live course.", 400);
+        }
+        courseIdsToSet = courseSql.ids;
+        changedSql = true;
+      }
+      if (req.body?.subject !== undefined) {
+        const next = typeof req.body.subject === "string" ? req.body.subject.trim() : "";
+        if (!next) return failure(res, "subject cannot be empty.", 422);
+        if (next.length > 300) return failure(res, "subject is too long (max 300).", 422);
+        patch.subject = next;
+        changedSql = true;
+      }
+      if (req.body?.endAt !== undefined) {
+        const parsed = parseScheduledAt(req.body.endAt);
+        if (parsed === undefined) return failure(res, "endAt must be a valid date.", 422);
+        patch.endAt = parsed;
+        changedSql = true;
+      }
+      if (req.body?.educatorId !== undefined) {
+        if (req.body.educatorId === null || req.body.educatorId === "") {
+          patch.educatorId = null;
+        } else {
+          const e = adminLiveSql.parseAlId(String(req.body.educatorId));
+          if (e == null) return failure(res, "educatorId must be a valid id.", 422);
+          patch.educatorId = e;
+        }
+        changedSql = true;
+      }
+
+      if (!changedSql) {
+        return failure(
+          res,
+          "Provide title, scheduledAt, liveCourseIds, subject, endAt, or educatorId to update.",
+          422
+        );
+      }
+
+      let updatedSql = rowSql;
+      if (Object.keys(patch).length > 0) {
+        updatedSql = await adminLiveSql.updateSession(rowSql.id, patch);
+      }
+      if (courseIdsToSet) {
+        await adminLiveSql.setLinkedCourseIds(rowSql.id, courseIdsToSet);
+      }
+      if (scheduleChangedSql) {
+        await syncRemindersForSession(String(rowSql.id)).catch((e) =>
+          logger.error("updateScheduledLiveSession reminder sync failed (sql)", { traceId, error: getErrorMessage(e) })
+        );
+      }
+      const coursesSql = await adminLiveSql.getLinkedCourses(rowSql.id);
+      logger.info("updateScheduledLiveSession success (sql)", { traceId, sessionId: rowSql.id });
+      return success(
+        res,
+        { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql) },
+        "Live session updated."
+      );
+    }
+
     const session = await findSessionByAnyId(String(req.params.id));
     if (!session) return failure(res, "Live session not found.", 404);
 
@@ -746,6 +1218,21 @@ export const deleteLiveSession = async (req: Request, res: Response) => {
   logger.info("deleteLiveSession invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
 
   try {
+    // ── MySQL branch ─────────────────────────────────────────────────────────
+    if (isAdminLiveMysql()) {
+      const rowSql = await adminLiveSql.findSessionByAnyId(String(req.params.id));
+      if (!rowSql) return failure(res, "Live session not found.", 404);
+      if (rowSql.status === "CREATED") {
+        return failure(res, "End the live stream before deleting.", 409);
+      }
+      await adminLiveSql.deleteSession(rowSql.id);
+      await cancelRemindersForSession(String(rowSql.id)).catch((e) =>
+        logger.error("deleteLiveSession reminder cleanup failed (sql)", { traceId, error: getErrorMessage(e) })
+      );
+      logger.info("deleteLiveSession success (sql)", { traceId, sessionId: rowSql.id, status: rowSql.status });
+      return success(res, { id: String(rowSql.id) }, "Live session deleted.");
+    }
+
     const session = await findSessionByAnyId(String(req.params.id));
     if (!session) return failure(res, "Live session not found.", 404);
 
@@ -776,6 +1263,26 @@ export const endLiveSession = async (req: Request, res: Response) => {
     if (!streamId) return failure(res, "Valid streamId is required.", 422);
 
     await streamosEndStream(streamId);
+
+    // ── MySQL branch ─────────────────────────────────────────────────────────
+    if (isAdminLiveMysql()) {
+      const updatedSql = await adminLiveSql.updateByStreamId(streamId, { status: "ENDED" });
+
+      const endedAtSql = new Date();
+      const liveClassIdSql = String(streamId);
+      io?.to(roomKey(liveClassIdSql)).emit("live_session_ended", {
+        streamId,
+        liveClassId: liveClassIdSql,
+        status: "ENDED",
+        endedAt: endedAtSql.toISOString(),
+      });
+
+      const closedSql = await adminLiveSql.closeOpenAttendance(streamId, endedAtSql);
+      logger.info("endLiveSession success (sql)", {
+        traceId, streamId, found: Boolean(updatedSql), attendanceClosed: closedSql,
+      });
+      return success(res, { streamId, status: "ENDED" }, "Live stream ended.");
+    }
 
     const updated = await LiveSession.findOneAndUpdate(
       { streamId },
@@ -966,6 +1473,37 @@ export const recordingWebhook = async (req: Request, res: Response) => {
         file_size: typeof r.file_size === "number" ? r.file_size : Number(r.file_size) || undefined,
         path: stripTrailingQuote(r.path),
       }));
+
+    // ── MySQL branch ─────────────────────────────────────────────────────────
+    if (isAdminLiveMysql()) {
+      const updatedSql = await adminLiveSql.updateByStreamId(streamId, {
+        recordings,
+        status: "READY",
+      });
+      if (!updatedSql) {
+        logger.warn("recordingWebhook stream not found (sql)", { traceId, streamId });
+        return res.status(200).json({ success: true, message: "Acknowledged (no matching stream)." });
+      }
+      // C7: auto-promote the best recording into each linked course's subject
+      // folder (best-effort — never throws).
+      const courseIdsForPromoteSql = await adminLiveSql.getLinkedCourseIds(updatedSql.id);
+      await adminLiveSql.maybeAutoPromoteRecordingSql({
+        sessionId: updatedSql.id,
+        sessionTitle: updatedSql.title ?? null,
+        subject: updatedSql.subject ?? null,
+        recordings,
+        liveCourseIds: courseIdsForPromoteSql,
+      });
+      const liveClassIdSql = String(streamId);
+      io?.to(roomKey(liveClassIdSql)).emit("recordings_ready", {
+        streamId,
+        liveClassId: liveClassIdSql,
+        status: "READY",
+        recordings,
+      });
+      logger.info("recordingWebhook success (sql)", { traceId, streamId, recordingCount: recordings.length });
+      return res.status(200).json({ success: true, message: "Recording saved." });
+    }
 
     const updated = await LiveSession.findOneAndUpdate(
       { streamId },

@@ -474,6 +474,12 @@ export async function listImageNotifications() {
   return rows.map(imageDto);
 }
 
+/** Client feed: active in-app banner images, newest first. Same DTO/flag. */
+export async function listActiveImageNotifications() {
+  const rows = await prisma.imageNotification.findMany({ where: { active: true }, orderBy: { id: "desc" } });
+  return rows.map(imageDto);
+}
+
 export async function createImageNotification(input: {
   image: string; redirectUrl?: string; active?: boolean;
 }) {

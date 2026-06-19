@@ -1,6 +1,7 @@
 import { isMysqlModule } from "../../config/migration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminBookRepository as repo } from "./admin-book.repository";
+import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
 import type { Book } from "@prisma/client";
 
 export const ADMIN_BOOK_MODULE = "admin-book";
@@ -20,8 +21,13 @@ const DEFAULT_DELIVERY_ETA = "5-7 days";
  * `ws_book` row → admin Book DTO, shape-compatible with the Mongo `Book`
  * document. SQL-absent fields are synthesized: isTrending=false,
  * publication/deliveryEta defaults, termsAndConditions=null, demoFileName/
- * bookFileName=null, bookUrl=null (only demo_url exists), and the Mongo-only
- * relations examCountdown* / packageIds = [] (no SQL columns/tables).
+ * bookFileName=null, bookUrl=null (only demo_url exists), and packageIds = []
+ * (no SQL column/table).
+ *
+ * examCountdownIds / examCountdownCategoryIds are stored as JSON int-arrays on
+ * ws_book (C6). This base DTO returns them UNPOPULATED ([]) for list/order
+ * surfaces; the single-book detail (`getBook`) resolves them to the Mongo
+ * `.populate()` shape via `populateExamCountdowns`.
  */
 export const toBookDto = (row: Book) => ({
   _id: String(row.id),
@@ -100,7 +106,15 @@ export const listBooks = async (q: {
 
 export const getBook = async (id: number) => {
   const row = await repo.findById(id);
-  return row ? toBookDto(row) : null;
+  if (!row) return null;
+  // C6: resolve the stored JSON int-arrays to the Mongo `.populate()` shapes.
+  const ec = await populateExamCountdowns(row);
+  return {
+    ...toBookDto(row),
+    examCountdownIds: ec.examCountdownIds,
+    examCountdownCategoryIds: ec.examCountdownCategoryIds,
+    examCountdownCategoryId: ec.examCountdownCategoryIds[0] ?? null,
+  };
 };
 
 // ── books: write ────────────────────────────────────────────────────────────────
@@ -122,6 +136,8 @@ export interface BookWriteInput {
   isMagazine?: boolean;
   isCombo?: boolean;
   status?: boolean;
+  examCountdownIds?: any;
+  examCountdownCategoryIds?: any;
 }
 
 // ws_book NOT-NULL columns with no DB default → write-time sentinels.
@@ -147,6 +163,9 @@ export const createBook = async (d: BookWriteInput) => {
     is_magazine: d.isMagazine ?? false,
     isCombo: d.isCombo ?? false,
     active: d.status ?? true,
+    // C6: store the attached countdown/category SQL ids as JSON int-arrays.
+    examCountdownIds: parseIdArray(d.examCountdownIds),
+    examCountdownCategoryIds: parseIdArray(d.examCountdownCategoryIds),
     created_at: now,
     updated_at: now,
   });
@@ -173,6 +192,10 @@ export const updateBook = async (id: number, d: BookWriteInput): Promise<ReturnT
   if (d.isMagazine !== undefined) data.is_magazine = d.isMagazine;
   if (d.isCombo !== undefined) data.isCombo = d.isCombo;
   if (d.status !== undefined) data.active = d.status;
+  // C6: only persist the JSON int-arrays when the payload includes them, so an
+  // unrelated update doesn't wipe the stored countdown attachments.
+  if (d.examCountdownIds !== undefined) data.examCountdownIds = parseIdArray(d.examCountdownIds);
+  if (d.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = parseIdArray(d.examCountdownCategoryIds);
   const updated = await repo.update(id, data);
   return toBookDto(updated);
 };

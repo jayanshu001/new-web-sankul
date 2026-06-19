@@ -6,6 +6,7 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildRegexCondition } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import * as ecSql from "../../modules/exam-countdown/exam-countdown.service";
 
 const MS_PER_DAY = 86_400_000;
 
@@ -43,17 +44,23 @@ export const listCategories = async (req: Request, res: Response) => {
 
   try {
     const { search, page, limit, skip } = parseListQuery(req.query);
-    const filter: any = { status: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-    const [data, total] = await Promise.all([
-      ExamCountdownCategory.find(filter)
-        .sort({ order: 1, name: 1 })
-        .select("_id name colorHex order")
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      ExamCountdownCategory.countDocuments(filter),
-    ]);
+    let data: any[]; let total: number;
+    if (ecSql.isExamCountdownMysql()) {
+      const r = await ecSql.listCategoriesClient({ search: search || null, skip, limit, page });
+      data = r.data; total = r.total;
+    } else {
+      const filter: any = { status: true };
+      { const c = buildRegexCondition(search); if (c) filter.name = c; }
+      [data, total] = await Promise.all([
+        ExamCountdownCategory.find(filter)
+          .sort({ order: 1, name: 1 })
+          .select("_id name colorHex order")
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+        ExamCountdownCategory.countDocuments(filter),
+      ]);
+    }
     logger.info("listCategories success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
@@ -76,6 +83,30 @@ export const listCountdowns = async (req: Request, res: Response) => {
       includePast = "false",
     } = req.query as Record<string, string>;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    if (ecSql.isExamCountdownMysql()) {
+      let catId: number | null = null;
+      if (categoryId) {
+        catId = ecSql.parseEcId(categoryId);
+        if (catId == null) {
+          logger.warn("listCountdowns invalid categoryId", { traceId, categoryId });
+          return res.status(400).json({ success: false, message: "Invalid categoryId." });
+        }
+      }
+      const r = await ecSql.listCountdownsClient({
+        categoryId: catId, search: search || null, includePast: includePast === "true",
+        skip, limitNum, pageNum, todayUTC: todayUTC(),
+      });
+      logger.info("listCountdowns success (sql)", { traceId, total: r.total });
+      return res.status(200).json({
+        success: true, data: r.data,
+        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
+      });
+    }
+
     const filter: any = { status: true };
     if (categoryId) {
       if (!mongoose.Types.ObjectId.isValid(categoryId)) {
@@ -86,10 +117,6 @@ export const listCountdowns = async (req: Request, res: Response) => {
     }
     { const c = buildRegexCondition(search); if (c) filter.title = c; }
     if (includePast !== "true") filter.examDate = { $gte: todayUTC() };
-
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
-    const skip = (pageNum - 1) * limitNum;
 
     const [docs, total] = await Promise.all([
       ExamCountdown.find(filter)
@@ -121,6 +148,12 @@ export const upcomingCountdowns = async (req: Request, res: Response) => {
   try {
     const requested = parseInt((req.query.limit as string) ?? "5", 10) || 5;
     const limitNum = Math.min(Math.max(requested, 1), 20);
+
+    if (ecSql.isExamCountdownMysql()) {
+      const data = await ecSql.upcomingCountdownsClient(limitNum, todayUTC());
+      logger.info("upcomingCountdowns success (sql)", { traceId, count: data.length });
+      return res.status(200).json({ success: true, data });
+    }
 
     const docs = await ExamCountdown.find({ status: true, examDate: { $gte: todayUTC() } })
       .populate("categoryId", "_id name colorHex")

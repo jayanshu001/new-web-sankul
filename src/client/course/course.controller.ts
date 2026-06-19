@@ -16,6 +16,7 @@ import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { buildCourseDetailsSql } from "../../modules/catalog-course/course-detail.sql";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildSearchFilter, buildRegexCondition } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
@@ -311,6 +312,25 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
 
   try {
     if (!userId) return failure(res, "Unauthorized request.", 401);
+
+    // ─── SQL branch (int id-space) — before the Mongo ObjectId guard ───
+    if (isCourseMysql()) {
+      const cidNum = parseCourseId(courseId);
+      const userNum = parseCourseId(String(userId));
+      if (cidNum == null) return failure(res, "Please select valid package", 400);
+      const sqlResponse = await buildCourseDetailsSql(cidNum, userNum ?? undefined);
+      if (!sqlResponse) return failure(res, "Please select valid package", 400);
+      const requestBase = process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
+      (sqlResponse as any).shareableLink = buildShareUrl("courses", courseId, requestBase);
+      setImmediate(() => {
+        void GenerateCRMLead({ params: { userId, courseId }, leadType: CRM_LEAD_TYPE.VIEW_COURSE }).catch((err) => {
+          logger.warn("GenerateCRMLead (fire-and-forget) failed", { traceId, userId, courseId, error: getErrorMessage(err) });
+        });
+      });
+      logger.info("getCourseByIdHandler success (sql)", { traceId, userId, courseId });
+      return success(res, sqlResponse, "Course details fetched successfully.", 200);
+    }
+
     if (!Types.ObjectId.isValid(courseId)) {
       return failure(res, "Please select valid package", 400);
     }

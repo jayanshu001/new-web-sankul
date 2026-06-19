@@ -9,6 +9,15 @@ import {
   sortFieldMap,
 } from "./permissionCategory.validation";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import {
+  isPermissionCategoryMysql,
+  parsePcatId,
+  listCategories as sqlListCategories,
+  getCategory as sqlGetCategory,
+  createCategory as sqlCreateCategory,
+  updateCategory as sqlUpdateCategory,
+  deleteCategory as sqlDeleteCategory,
+} from "../../modules/permission-category/permission-category.service";
 
 const formatZodErrors = (issues: any[]) =>
   issues.reduce<Record<string, string>>((acc, i) => {
@@ -39,6 +48,18 @@ export const listPermissionCategories = async (req: Request, res: Response) => {
       });
     }
     const { search, status, page, per_page, sort_by, sort_dir } = parsed.data;
+
+    if (isPermissionCategoryMysql()) {
+      const result = await sqlListCategories({
+        search,
+        status,
+        page,
+        per_page,
+        sortBy: sort_by,
+        sortDir: sort_dir,
+      });
+      return res.status(200).json({ success: true, data: result });
+    }
 
     const filter: any = {};
     if (typeof status === "boolean") filter.status = status;
@@ -75,6 +96,19 @@ export const listPermissionCategories = async (req: Request, res: Response) => {
 export const getPermissionCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    if (isPermissionCategoryMysql()) {
+      const numId = parsePcatId(id);
+      if (!numId) {
+        return res.status(400).json({ success: false, message: "Invalid permission category id" });
+      }
+      const data = await sqlGetCategory(numId);
+      if (!data) {
+        return res.status(404).json({ success: false, message: "Permission category not found" });
+      }
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid permission category id" });
     }
@@ -102,6 +136,18 @@ export const createPermissionCategory = async (req: Request, res: Response) => {
     }
     const { title, slug, order, status } = parsed.data;
 
+    if (isPermissionCategoryMysql()) {
+      const result = await sqlCreateCategory({ title, slug, order, status });
+      if (!result.ok) {
+        return res.status(409).json({ success: false, message: `Slug '${slug}' already exists` });
+      }
+      return res.status(201).json({
+        success: true,
+        message: "Permission category created successfully",
+        data: result.data,
+      });
+    }
+
     const exists = await PermissionCategory.exists({ slug });
     if (exists) {
       return res.status(409).json({ success: false, message: `Slug '${slug}' already exists` });
@@ -125,7 +171,14 @@ export const createPermissionCategory = async (req: Request, res: Response) => {
 export const updatePermissionCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    const sqlMode = isPermissionCategoryMysql();
+    const sqlId = sqlMode ? parsePcatId(id) : null;
+
+    if (sqlMode) {
+      if (!sqlId) {
+        return res.status(400).json({ success: false, message: "Invalid permission category id" });
+      }
+    } else if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid permission category id" });
     }
     const parsed = updatePermissionCategorySchema.safeParse(req.body);
@@ -134,6 +187,30 @@ export const updatePermissionCategory = async (req: Request, res: Response) => {
         success: false,
         message: "Validation failed",
         errors: formatZodErrors(parsed.error.issues),
+      });
+    }
+
+    if (sqlMode && sqlId) {
+      const result = await sqlUpdateCategory(sqlId, {
+        title: parsed.data.title,
+        slug: parsed.data.slug,
+        order: parsed.data.order,
+        status: parsed.data.status,
+      });
+      if (!result.ok) {
+        if (result.code === "not_found") {
+          return res
+            .status(404)
+            .json({ success: false, message: "Permission category not found" });
+        }
+        return res
+          .status(409)
+          .json({ success: false, message: `Slug '${parsed.data.slug}' already exists` });
+      }
+      return res.status(200).json({
+        success: true,
+        message: "Permission category updated successfully",
+        data: result.data,
       });
     }
 
@@ -174,6 +251,29 @@ export const updatePermissionCategory = async (req: Request, res: Response) => {
 export const deletePermissionCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    if (isPermissionCategoryMysql()) {
+      const numId = parsePcatId(id);
+      if (!numId) {
+        return res.status(400).json({ success: false, message: "Invalid permission category id" });
+      }
+      const result = await sqlDeleteCategory(numId);
+      if (!result.ok) {
+        if (result.code === "not_found") {
+          return res
+            .status(404)
+            .json({ success: false, message: "Permission category not found" });
+        }
+        return res.status(409).json({
+          success: false,
+          message: "Category has permissions assigned and cannot be deleted",
+        });
+      }
+      return res
+        .status(200)
+        .json({ success: true, message: "Permission category deleted successfully", data: {} });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid permission category id" });
     }

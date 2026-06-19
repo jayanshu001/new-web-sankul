@@ -174,9 +174,10 @@ export const createBook = async (req: Request, res: Response) => {
       });
     }
     if (adminBook.isAdminBookMysql()) {
-      // SQL ws_book has no columns for examCountdown*/packageIds/termsAndConditions/
-      // demoFileName/bookFileName/bookUrl/isTrending — those Mongo-only fields are
-      // dropped on write (documented gap).
+      // C6: examCountdownIds/examCountdownCategoryIds NOW persist to ws_book JSON
+      // columns (parseIdArray-normalised in the service). Still dropped on SQL:
+      // packageIds/termsAndConditions/demoFileName/bookFileName/bookUrl/isTrending
+      // — those Mongo-only fields have no SQL columns (documented gap).
       const created = await adminBook.createBook(data as any);
       logger.info("createBook success (mysql)", { traceId, bookId: created._id });
       return res.status(201).json({ success: true, data: created });

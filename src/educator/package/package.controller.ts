@@ -6,6 +6,7 @@ import { PackageCourseSubscription } from "../../models/customer/PackageCourseSu
 import { Customer } from "../../models/customer/Customer.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import * as epSql from "../../modules/educator-portal/educator-portal.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -17,6 +18,13 @@ export const listMyPackages = async (req: Request, res: Response) => {
 
   try {
     if (!educatorId) { logger.warn("listMyPackages unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    if (epSql.isEducatorPortalMysql()) {
+      const eid = epSql.parseEpId(String(educatorId));
+      if (eid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
+      const packages = await epSql.listMyPackages(eid);
+      return res.status(200).json({ success: true, data: { packages } });
+    }
 
     const packages = await Package.find({ educatorId })
       .sort({ order: 1 })
@@ -87,6 +95,16 @@ export const getMyPackageDetail = async (req: Request, res: Response) => {
 
   try {
     if (!educatorId) { logger.warn("getMyPackageDetail unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    if (epSql.isEducatorPortalMysql()) {
+      const eid = epSql.parseEpId(String(educatorId)); const pid = epSql.parseEpId(id);
+      if (eid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
+      if (pid == null) return res.status(400).json({ success: false, message: "Invalid package id." });
+      const data = await epSql.getMyPackageDetail(eid, pid);
+      if (!data) return res.status(404).json({ success: false, message: "Package not found or not yours." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) { logger.warn("getMyPackageDetail invalid id", { traceId, educatorId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 
     const pkg = await Package.findOne({ _id: id, educatorId }).lean();
@@ -113,6 +131,16 @@ export const getPackageDashboard = async (req: Request, res: Response) => {
 
   try {
     if (!educatorId) { logger.warn("getPackageDashboard unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    if (epSql.isEducatorPortalMysql()) {
+      const eid = epSql.parseEpId(String(educatorId)); const pid = epSql.parseEpId(id);
+      if (eid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
+      if (pid == null) return res.status(400).json({ success: false, message: "Invalid package id." });
+      const data = await epSql.getPackageDashboard(eid, pid);
+      if (!data) return res.status(404).json({ success: false, message: "Package not found or not yours." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) { logger.warn("getPackageDashboard invalid id", { traceId, educatorId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 
     const pkg = await Package.findOne({ _id: id, educatorId });
@@ -166,6 +194,20 @@ export const getPackageSubscribers = async (req: Request, res: Response) => {
 
   try {
     if (!educatorId) { logger.warn("getPackageSubscribers unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    const pageNum = Math.max(parseInt((req.query.page as string) || "1", 10) || 1, 1);
+    const limitNum = Math.max(parseInt((req.query.limit as string) || "20", 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    if (epSql.isEducatorPortalMysql()) {
+      const eid = epSql.parseEpId(String(educatorId)); const pid = epSql.parseEpId(id);
+      if (eid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
+      if (pid == null) return res.status(400).json({ success: false, message: "Invalid package id." });
+      const r = await epSql.getPackageSubscribers(eid, pid, skip, limitNum);
+      if (!r) return res.status(404).json({ success: false, message: "Package not found or not yours." });
+      return res.status(200).json({ success: true, data: r.data, pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) } });
+    }
+
     if (!isObjectId(id)) { logger.warn("getPackageSubscribers invalid id", { traceId, educatorId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 
     const pkg = await Package.findOne({ _id: id, educatorId }).select("_id");
@@ -173,10 +215,6 @@ export const getPackageSubscribers = async (req: Request, res: Response) => {
 
     const plans = await PackageCourseEbookPrice.find({ packageId: id }).select("_id").lean();
     const planIds = plans.map((p) => p._id);
-
-    const pageNum = Math.max(parseInt((req.query.page as string) || "1", 10) || 1, 1);
-    const limitNum = Math.max(parseInt((req.query.limit as string) || "20", 10) || 20, 1);
-    const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
       PackageCourseSubscription.find({ packageId: { $in: planIds } })

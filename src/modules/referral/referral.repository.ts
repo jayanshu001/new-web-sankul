@@ -193,6 +193,37 @@ export const referralRepository = {
   findAdjustCustomer: (id: number) =>
     prisma.customer.findFirst({ where: { id, isAccountDeleted: false }, select: { id: true, rewardPoints: true } }),
 
+  // ─── Referral credit on purchase (order-idempotent) ───────────────────────
+  /** Existing CREDIT txn for this (order, referrer) — the idempotency key. */
+  findCreditByOrder: (orderId: number, customerId: number) =>
+    prisma.refferalTransaction.findFirst({ where: { orderId, customerId, type: "credit" }, select: { id: true } }),
+
+  /** Credit the referrer's points + write a successful CREDIT ledger row, atomic.
+   *  Re-checks the idempotency key INSIDE the tx so a retried verify/webhook is a
+   *  no-op. Returns true when it credited, false when it was already credited. */
+  creditReferralReward: (input: { referrerId: number; orderId: number; coin: number; description: string }) =>
+    prisma.$transaction(async (tx) => {
+      const dup = await tx.refferalTransaction.findFirst({
+        where: { orderId: input.orderId, customerId: input.referrerId, type: "credit" },
+        select: { id: true },
+      });
+      if (dup) return false;
+      await tx.customer.update({ where: { id: input.referrerId }, data: { rewardPoints: { increment: input.coin } } });
+      await tx.refferalTransaction.create({
+        data: {
+          orderId: input.orderId,
+          customerId: input.referrerId,
+          description: input.description.slice(0, 150),
+          coin: input.coin,
+          type: "credit",
+          status: "successful",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+      return true;
+    }),
+
   // ─── Admin: withdrawals report (DEBIT + bank_account present) ─────────────
   /** Raw rows for the withdrawals report / CSV — search across bank JSON + customer. */
   withdrawalRows: (opts: { status?: string; from?: Date; to?: Date; search?: string; skip?: number; take?: number }) => {

@@ -76,6 +76,16 @@ export const listSocialLinks = async () => {
   return (await hydrateTypes(rows)).map(slDto);
 };
 
+// Client read: active links only, ordered by orderBy. Mirrors the Mongo
+// SocialLink.find({status:true}).populate("typeId","_id title").sort({order:1}).
+export const listClientSocialLinks = async () => {
+  const rows = await prisma.socialLink.findMany({
+    where: { status: true },
+    orderBy: { orderBy: "asc" },
+  });
+  return (await hydrateTypes(rows)).map(slDto);
+};
+
 export const getSocialLink = async (id: number) => {
   const r = await prisma.socialLink.findUnique({ where: { id } });
   if (!r) return null;
@@ -130,6 +140,19 @@ const caDto = (r: any) => ({
 
 export const listCurrentAffairs = async () =>
   (await prisma.currentAffair.findMany({ orderBy: { createdAt: "desc" } })).map(caDto);
+
+// Client read: active affairs, newest first, only the fields the client
+// renders (image, title, youtubeLink). `limit` (>0) caps the list. Mirrors the
+// Mongo CurrentAffair.find({status:true}).sort({createdAt:-1}).select(...).
+export const listClientCurrentAffairs = async (limit = 0) => {
+  const rows = await prisma.currentAffair.findMany({
+    where: { status: true },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, title: true, image: true, youtubeLink: true },
+    ...(limit > 0 ? { take: limit } : {}),
+  });
+  return rows.map((r) => ({ _id: String(r.id), title: r.title, image: r.image, youtubeLink: r.youtubeLink }));
+};
 
 export const getCurrentAffair = async (id: number) => {
   const r = await prisma.currentAffair.findUnique({ where: { id } });

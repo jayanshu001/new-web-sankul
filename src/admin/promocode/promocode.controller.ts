@@ -25,6 +25,7 @@ import {
   PlanLinkInput,
 } from "./promocode.validation";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import * as pcSql from "../../modules/promo-code/promo-code.service";
 
 const APPLIES_TO_MODEL = {
   package: Package,
@@ -217,6 +218,24 @@ export const getPromocodes = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    if (pcSql.isPromoCodeMysql()) {
+      const r = await pcSql.listPromocodes({
+        search: search?.trim() || null,
+        status: status === "true" ? true : status === "false" ? false : null,
+        type: type === "public" || type === "private" ? type : null,
+        fromDate: fromDate ? new Date(fromDate) : null,
+        toDate: toDate ? new Date(toDate) : null,
+        skip,
+        limitNum,
+        pageNum,
+      });
+      return res.status(200).json({ success: true, ...r });
+    }
+
     const filter: any = {};
     {
       const c = buildRegexCondition(search?.toUpperCase());
@@ -229,10 +248,6 @@ export const getPromocodes = async (req: Request, res: Response) => {
       if (fromDate) filter.promo_start_at.$gte = new Date(fromDate);
       if (toDate) filter.promo_start_at.$lte = new Date(toDate);
     }
-
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
-    const skip = (pageNum - 1) * limitNum;
 
     const [rows, total] = await Promise.all([
       PromoCode.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum).lean(),
@@ -259,6 +274,21 @@ export const getPromocodes = async (req: Request, res: Response) => {
 export const getPromocodeById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    if (pcSql.isPromoCodeMysql()) {
+      const nid = pcSql.parsePcId(id);
+      if (nid == null)
+        return res.status(400).json({ success: false, message: "Invalid promocode id." });
+      const r = await pcSql.getPromocodeById(nid);
+      if ((r as any).notFound)
+        return res.status(404).json({ success: false, message: "Promocode not found." });
+      // C5: real plan-link `plans[]` for the edit screen.
+      const plans = await pcSql.loadPlanLinksSql(nid);
+      return res
+        .status(200)
+        .json({ success: true, data: { ...(r as any).data, plans } });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid promocode id." });
 
@@ -362,6 +392,43 @@ export const createPromocode = async (req: Request, res: Response) => {
     const data = createPromocodeSchema.parse(req.body);
     const code = data.promocode.toUpperCase();
 
+    if (pcSql.isPromoCodeMysql()) {
+      const ids = data.appliesTo.ids.map((x) => Number(x));
+      if (ids.some((n) => !Number.isInteger(n) || n <= 0))
+        return res.status(400).json({ success: false, message: "Invalid appliesTo ids." });
+      const promoterId = data.promoterId != null ? pcSql.parsePcId(data.promoterId) : null;
+      try {
+        const r = await pcSql.createPromocode({
+          promocode: code,
+          title: data.title,
+          description: data.description,
+          promo_start_at: new Date(data.promo_start_at),
+          promo_expire_at: new Date(data.promo_expire_at),
+          type: data.type,
+          status: data.status ?? true,
+          discountType: data.discountType,
+          discountValue: data.discountValue,
+          promoterId,
+          appliesTo: { type: data.appliesTo.type, ids },
+        });
+        if ((r as any).conflict)
+          return res.status(409).json({ success: false, message: "Promocode already exists." });
+        // C5: real plan-link % sync (replaces the prior stub).
+        if (data.plans.length) {
+          const nid = pcSql.parsePcId(String((r as any).data._id));
+          if (nid != null) {
+            const validPlans = await pcSql.resolveValidPlansSql(data.appliesTo.type, ids);
+            await pcSql.syncPlanLinksSql(nid, data.plans, validPlans);
+          }
+        }
+        return res.status(201).json({ success: true, data: (r as any).data });
+      } catch (e: any) {
+        if (e.__badRequest)
+          return res.status(400).json({ success: false, message: e.message });
+        throw e;
+      }
+    }
+
     const exists = await PromoCode.findOne({ promocode: code });
     if (exists)
       return res.status(409).json({ success: false, message: "Promocode already exists." });
@@ -400,10 +467,78 @@ export const createPromocode = async (req: Request, res: Response) => {
 export const updatePromocode = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    const data = updatePromocodeSchema.parse(req.body);
+
+    if (pcSql.isPromoCodeMysql()) {
+      const nid = pcSql.parsePcId(id);
+      if (nid == null)
+        return res.status(400).json({ success: false, message: "Invalid promocode id." });
+
+      let appliesTo: { type: pcSql.AppliesToType; ids: number[] } | undefined;
+      if (data.appliesTo) {
+        const ids = data.appliesTo.ids.map((x) => Number(x));
+        if (ids.some((n) => !Number.isInteger(n) || n <= 0))
+          return res.status(400).json({ success: false, message: "Invalid appliesTo ids." });
+        appliesTo = { type: data.appliesTo.type, ids };
+      }
+      const promoterId =
+        data.promoterId === undefined
+          ? undefined
+          : data.promoterId == null
+          ? null
+          : pcSql.parsePcId(data.promoterId);
+
+      try {
+        const r = await pcSql.updatePromocode(nid, {
+          promocode: data.promocode,
+          title: data.title,
+          description: data.description,
+          promo_start_at: data.promo_start_at ? new Date(data.promo_start_at) : undefined,
+          promo_expire_at: data.promo_expire_at ? new Date(data.promo_expire_at) : undefined,
+          type: data.type,
+          status: data.status,
+          discountType: data.discountType,
+          discountValue: data.discountValue,
+          promoterId,
+          appliesTo,
+        });
+        if ((r as any).notFound)
+          return res.status(404).json({ success: false, message: "Promocode not found." });
+        if ((r as any).conflict)
+          return res.status(409).json({ success: false, message: "Promocode already exists." });
+        // C5: real plan-link % replace-semantics, mirroring the Mongo branch.
+        // Resolve the *effective* appliesTo (the just-saved value if appliesTo
+        // was part of this update, else the existing row's).
+        const effective = await pcSql.getPromocodeById(nid);
+        const effType = (effective as any).data?.appliesTo?.type as
+          | pcSql.AppliesToType
+          | undefined;
+        const effIds = ((effective as any).data?.appliesTo?.ids ?? [])
+          .map((x: any) => Number(x?._id ?? x))
+          .filter((n: number) => Number.isInteger(n) && n > 0);
+        if (data.plans !== undefined) {
+          const validPlans = effType
+            ? await pcSql.resolveValidPlansSql(effType, effIds)
+            : new Map();
+          await pcSql.syncPlanLinksSql(nid, data.plans, validPlans);
+        } else if (appliesTo) {
+          // appliesTo changed but plans omitted: drop now-orphaned links.
+          const resolved = await pcSql.loadPlansForEntitiesSql(appliesTo.type, appliesTo.ids);
+          await pcSql.prunePlanLinksSql(
+            nid,
+            resolved.map((p) => p.id)
+          );
+        }
+        return res.status(200).json({ success: true, data: (r as any).data });
+      } catch (e: any) {
+        if (e.__badRequest)
+          return res.status(400).json({ success: false, message: e.message });
+        throw e;
+      }
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid promocode id." });
-
-    const data = updatePromocodeSchema.parse(req.body);
 
     const existing = await PromoCode.findById(id);
     if (!existing)
@@ -461,6 +596,19 @@ export const updatePromocode = async (req: Request, res: Response) => {
 export const deletePromocode = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    if (pcSql.isPromoCodeMysql()) {
+      const nid = pcSql.parsePcId(id);
+      if (nid == null)
+        return res.status(400).json({ success: false, message: "Invalid promocode id." });
+      // Drop plan links first (FK-safe), then the rule. Mirrors Mongo cleanup.
+      await pcSql.deletePlanLinksSql([nid]);
+      const r = await pcSql.deletePromocode(nid);
+      if ((r as any).notFound)
+        return res.status(404).json({ success: false, message: "Promocode not found." });
+      return res.status(200).json({ success: true, message: "Promocode deleted." });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid promocode id." });
 
@@ -478,10 +626,21 @@ export const deletePromocode = async (req: Request, res: Response) => {
 export const togglePromocodeStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    const parsed = togglePromocodeStatusSchema.safeParse(req.body);
+
+    if (pcSql.isPromoCodeMysql()) {
+      const nid = pcSql.parsePcId(id);
+      if (nid == null)
+        return res.status(400).json({ success: false, message: "Invalid promocode id." });
+      const r = await pcSql.toggleStatus(nid, parsed.success ? parsed.data.status : null);
+      if ((r as any).notFound)
+        return res.status(404).json({ success: false, message: "Promocode not found." });
+      return res.status(200).json({ success: true, data: (r as any).data });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid promocode id." });
 
-    const parsed = togglePromocodeStatusSchema.safeParse(req.body);
     let nextStatus: boolean;
     if (parsed.success) {
       nextStatus = parsed.data.status;
@@ -506,6 +665,15 @@ export const togglePromocodeStatus = async (req: Request, res: Response) => {
 export const bulkStatus = async (req: Request, res: Response) => {
   try {
     const { ids, status } = bulkPromocodeStatusSchema.parse(req.body);
+
+    if (pcSql.isPromoCodeMysql()) {
+      const nids = ids.map((x) => pcSql.parsePcId(x)).filter((n): n is number => n != null);
+      if (!nids.length)
+        return res.status(400).json({ success: false, message: "No valid ids." });
+      const r = await pcSql.bulkStatus(nids, status);
+      return res.status(200).json({ success: true, matched: r.matched, modified: r.modified });
+    }
+
     const valid = ids.filter(isObjectId);
     if (!valid.length)
       return res.status(400).json({ success: false, message: "No valid ids." });
@@ -525,6 +693,16 @@ export const bulkStatus = async (req: Request, res: Response) => {
 export const bulkDelete = async (req: Request, res: Response) => {
   try {
     const { ids } = bulkPromocodeIdsSchema.parse(req.body);
+
+    if (pcSql.isPromoCodeMysql()) {
+      const nids = ids.map((x) => pcSql.parsePcId(x)).filter((n): n is number => n != null);
+      if (!nids.length)
+        return res.status(400).json({ success: false, message: "No valid ids." });
+      await pcSql.deletePlanLinksSql(nids);
+      await pcSql.bulkDelete(nids);
+      return res.status(200).json({ success: true, message: "Promocodes deleted." });
+    }
+
     const valid = ids.filter(isObjectId);
     if (!valid.length)
       return res.status(400).json({ success: false, message: "No valid ids." });
@@ -544,6 +722,11 @@ export const bulkDelete = async (req: Request, res: Response) => {
 export const getPromocodePlans = async (req: Request, res: Response) => {
   try {
     const { type, examTypeId, search } = req.query as Record<string, string>;
+
+    if (pcSql.isPromoCodeMysql()) {
+      const data = await pcSql.getPromocodePlansSql({ type, examTypeId, search });
+      return res.status(200).json({ success: true, data });
+    }
 
     const ALL_TYPES: AppliesToType[] = ["package", "course", "liveCourse", "ebook", "testSeries"];
     const requested: AppliesToType[] = ALL_TYPES.includes(type as AppliesToType)

@@ -21,6 +21,14 @@ import {
   cancelNotificationJob,
 } from "../../admin/notification/scheduler";
 import logger from "../../utils/logger";
+import {
+  isClientLiveReminderMysql,
+  parseReminderId,
+  upsertReminderSql,
+  removeReminderSql,
+  syncRemindersForSessionSql,
+  cancelRemindersForSessionSql,
+} from "../../modules/client-live-reminder/client-live-reminder.service";
 
 export const DEFAULT_MINUTES_BEFORE = 30;
 export const MAX_MINUTES_BEFORE = 7 * 24 * 60; // up to a week before
@@ -103,6 +111,12 @@ export async function upsertReminder(
 ): Promise<UpsertReminderResult> {
   logger.info("upsertReminder service invoked", { traceId, customerId, liveSessionId, minutesBefore });
 
+  // SQL branch (flag client-live-reminder) — before the 24-hex guard, since SQL
+  // ids are ints. Returns the same discriminated contract.
+  if (isClientLiveReminderMysql()) {
+    return upsertReminderSql(customerId, liveSessionId, minutesBefore, traceId) as Promise<UpsertReminderResult>;
+  }
+
   if (!Types.ObjectId.isValid(liveSessionId)) {
     logger.warn("upsertReminder service invalid id", { traceId, customerId, liveSessionId });
     return { ok: false, status: 422, message: "Invalid liveSessionId." };
@@ -164,6 +178,10 @@ export async function removeReminder(
   traceId?: string
 ): Promise<ILiveSessionReminder | null> {
   logger.info("removeReminder service invoked", { traceId, customerId, liveSessionId });
+  // SQL branch (flag client-live-reminder) — before the 24-hex guard.
+  if (isClientLiveReminderMysql()) {
+    return removeReminderSql(customerId, liveSessionId, traceId) as Promise<ILiveSessionReminder | null>;
+  }
   if (!Types.ObjectId.isValid(liveSessionId)) {
     logger.warn("removeReminder service invalid id", { traceId, customerId, liveSessionId });
     return null;
@@ -186,6 +204,12 @@ export async function removeReminder(
 export async function syncRemindersForSession(
   liveSessionId: Types.ObjectId | string
 ): Promise<void> {
+  // SQL branch (flag client-live-reminder) — admin sync hook.
+  if (isClientLiveReminderMysql()) {
+    const sid = parseReminderId(liveSessionId as any);
+    if (sid) await syncRemindersForSessionSql(sid);
+    return;
+  }
   const reminders = await LiveSessionReminder.find({ liveSessionId, status: "scheduled" });
   if (reminders.length === 0) return;
 
@@ -229,6 +253,12 @@ export async function syncRemindersForSession(
 export async function cancelRemindersForSession(
   liveSessionId: Types.ObjectId | string
 ): Promise<void> {
+  // SQL branch (flag client-live-reminder) — admin delete hook.
+  if (isClientLiveReminderMysql()) {
+    const sid = parseReminderId(liveSessionId as any);
+    if (sid) await cancelRemindersForSessionSql(sid);
+    return;
+  }
   const reminders = await LiveSessionReminder.find({ liveSessionId });
   if (reminders.length === 0) return;
   for (const reminder of reminders) {

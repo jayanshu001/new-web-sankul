@@ -98,6 +98,159 @@ export const listBooks = async (customerId: number, statuses: string[], skip: nu
   return { data, pagination: { total, page, limit, totalPages: Math.ceil(total / limit) } };
 };
 
+// ── ebook receipt (SQL mirror of getEbookReceipt) ────────────────────────────
+// The only receipt endpoint with full column parity on SQL: book + course
+// receipts read breakdown/paidAt/razorpay fields that ws_book_order /
+// ws_package_course_subscription don't carry — those stay Mongo for now.
+export const getEbookReceiptMysql = async (orderId: number, customerId: number) => {
+  const order = await repo.ebookOrderForReceipt(orderId, customerId);
+  if (!order) return null;
+
+  // ws_ebook_order has no ebook_id → hop plan_id → price.ebook_id → ebook.
+  const plan = order.planId ? await repo.planForReceipt(order.planId) : null;
+  const ebook = plan?.ebookId ? await repo.ebookById(plan.ebookId) : null;
+
+  return {
+    kind: "ebook" as const,
+    receiptId: String(order.id),
+    purchasedAt: order.createdAt ?? null,
+    paidAt: order.updatedAt ?? null,
+    status: order.status,
+    customer: { id: order.userId != null ? String(order.userId) : "" },
+    payment: {
+      method: order.paymentMethod,
+      razorpayOrderId: order.gatewayOrderId ?? null,
+      razorpayPaymentId: order.gatewayPaymentId ?? null,
+    },
+    items: [
+      {
+        name: ebook?.name ? `E-Book: ${ebook.name}` : "E-Book purchase",
+        qty: 1,
+        unitPrice: order.orderPrice,
+        lineTotal: order.orderPrice,
+      },
+    ],
+    totals: {
+      subTotal: order.orderPrice,
+      grandTotal: order.orderPrice,
+      currency: "INR" as const,
+    },
+    extra: {
+      ebookId: ebook ? String(ebook.id) : null,
+      planId: order.planId != null ? String(order.planId) : null,
+      duration: plan?.duration ?? null,
+      transactionId: order.bankTransactionId ?? null,
+    },
+  };
+};
+
+// ── book receipt (SQL mirror of getBookReceipt) ──────────────────────────────
+// DRIFT: ws_book_order carries only `amount` (order_price) — there is NO
+// total_discounted_price / total_shipping_price / total_list_price column, so
+// the discount/shipping split is not stored on SQL and collapses to amount.
+export const getBookReceiptMysql = async (orderId: number, customerId: number) => {
+  const o = await repo.bookOrderForReceipt(orderId, customerId);
+  if (!o) return null;
+
+  const rawItems = parseOrderItems(o.orderItems);
+  // backfill missing names via a Book lookup (item field = bookId).
+  const missingIds = [...new Set(rawItems.filter((it) => !it.name).map((it) => Number(it.item)).filter((x) => Number.isInteger(x) && x > 0))];
+  const nameById = new Map((await repo.booksByIds(missingIds)).map((b) => [b.id, b.name]));
+  const items = rawItems.map((it) => {
+    const name = it.name ?? nameById.get(Number(it.item)) ?? null;
+    return { name, qty: it.qty, unitPrice: it.price, lineTotal: it.price * it.qty };
+  });
+
+  const amount = Number(o.amount);
+  return {
+    kind: "book" as const,
+    receiptId: o.receiptId,
+    purchasedAt: o.createdAt,
+    paidAt: o.paidAt ?? null,
+    status: o.status,
+    customer: { id: String(o.userId) },
+    payment: {
+      method: o.paymentMethod,
+      razorpayOrderId: o.gatewayOrderId ?? null,
+      razorpayPaymentId: o.gatewayPaymentId ?? null,
+    },
+    items,
+    totals: {
+      // DRIFT: discount/shipping breakdown is not stored on ws_book_order.
+      subTotal: amount,
+      shipping: 0,
+      discount: 0,
+      grandTotal: amount,
+      currency: "INR" as const,
+    },
+    extra: {
+      shippingId: o.shippingId ?? null,
+      tracking: {
+        trackingId: o.BookTracking?.tracking_id != null ? String(o.BookTracking.tracking_id) : null,
+        status: o.BookTracking?.status ?? null,
+      },
+    },
+  };
+};
+
+// ── course/package receipt (SQL mirror of getCourseReceipt) ──────────────────
+// DRIFT: ws_package_course_subscription has NO paid_at and NO razorpay columns.
+// Mongo's paymentStatus:"verified" → status=true here; razorpay ids are read
+// via the order hop; paidAt stays null (no column anywhere).
+export const getCourseReceiptMysql = async (subId: number, customerId: number) => {
+  const sub = await repo.subscriptionForReceipt(subId, customerId);
+  if (!sub) return null;
+
+  const [plan, course, pkg, order] = await Promise.all([
+    sub.planId ? repo.planDurationForReceipt(sub.planId) : Promise.resolve(null),
+    sub.courseId ? repo.courseForReceipt(sub.courseId) : Promise.resolve(null),
+    sub.packageId ? repo.packageForReceipt(sub.packageId) : Promise.resolve(null),
+    sub.orderId ? repo.courseOrderForReceipt(sub.orderId) : Promise.resolve(null),
+  ]);
+
+  const isPackageKind = !sub.courseId && !!pkg;
+  const lineName =
+    course?.name && pkg?.name
+      ? `${course.name} — ${pkg.name}`
+      : course?.name || pkg?.name || "Subscription";
+  const amount = Number(sub.amount ?? 0);
+
+  return {
+    kind: isPackageKind ? ("package" as const) : ("course" as const),
+    receiptId: String(sub.id),
+    purchasedAt: sub.createdAt ?? null,
+    paidAt: null,
+    status: "verified",
+    customer: { id: String(sub.customerId) },
+    payment: {
+      method: "razorpay",
+      razorpayOrderId: order?.gatewayOrderId ?? null,
+      razorpayPaymentId: order?.gatewayPaymentId ?? null,
+    },
+    items: [
+      {
+        name: lineName,
+        qty: 1,
+        unitPrice: amount,
+        lineTotal: amount,
+      },
+    ],
+    totals: {
+      subTotal: amount,
+      grandTotal: amount,
+      currency: "INR" as const,
+    },
+    extra: {
+      courseId: sub.courseId != null ? String(sub.courseId) : null,
+      targetPackageId: sub.packageId != null ? String(sub.packageId) : null,
+      planId: sub.planId != null ? String(sub.planId) : null,
+      duration: plan?.duration ?? null,
+      startAt: sub.startAt ?? null,
+      endAt: sub.endAt ?? null,
+    },
+  };
+};
+
 // ── ebooks tab ─────────────────────────────────────────────────────────────────
 export const listEbooks = async (customerId: number, status: string, skip: number, take: number, page: number, limit: number) => {
   const [orders, total] = await Promise.all([

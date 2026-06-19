@@ -17,6 +17,7 @@ import {
 } from "./lecture-audio-note.validation";
 import { buildResumeNextCard } from "../learning/resumeCard";
 import { buildLectureRef } from "../learning/lectureRef";
+import * as lnSql from "../../modules/client-lecture-note/client-lecture-note.service";
 
 // Same subscription gate as the text-note controller. Kept inline rather than
 // shared because the two modules will likely diverge (audio may grow per-row
@@ -121,6 +122,27 @@ export const createAudioNote = async (req: Request, res: Response) => {
     }
     const { lectureType, videoId, liveSessionId, timestampSec, title, durationSec } = parsed.data;
 
+    // ─── SQL branch (int id-space) ───
+    if (lnSql.isLectureNoteMysql()) {
+      const cid = lnSql.parseLnId(String(userId));
+      if (cid == null) { await deleteFromS3FileUrl(file.location ?? ""); return failure(res, "Unauthorized.", 401); }
+      const common = { customerId: cid, lectureType, timestampSec, title: title ?? "", audioUrl: file.location!, audioKey: file.key!, mimeType: file.mimetype ?? null, sizeBytes: file.size ?? null, durationSec: durationSec ?? null };
+      if (lectureType === "recorded") {
+        const vid = lnSql.parseLnId(String(videoId));
+        if (vid == null) { await deleteFromS3FileUrl(file.location ?? ""); return failure(res, "Lecture not found.", 404); }
+        const guard = await lnSql.authorizeRecorded(cid, vid);
+        if ("error" in guard) { await deleteFromS3FileUrl(file.location ?? ""); return failure(res, guard.error, guard.status); }
+        const note = await lnSql.createAudioNote({ ...common, videoId: vid, courseId: guard.courseId });
+        return success(res, { note }, "Audio note created.", 201);
+      }
+      const lsid = lnSql.parseLnId(String(liveSessionId));
+      if (lsid == null) { await deleteFromS3FileUrl(file.location ?? ""); return failure(res, "Live session not found.", 404); }
+      const guard = await lnSql.authorizeLive(cid, lsid);
+      if ("error" in guard) { await deleteFromS3FileUrl(file.location ?? ""); return failure(res, guard.error, guard.status); }
+      const note = await lnSql.createAudioNote({ ...common, liveSessionId: lsid, liveCourseIds: guard.liveCourseIds });
+      return success(res, { note }, "Audio note created.", 201);
+    }
+
     const doc: any = {
       customerId: new Types.ObjectId(userId),
       lectureType,
@@ -181,6 +203,31 @@ export const listAudioNotes = async (req: Request, res: Response) => {
     }
     const { lectureType, videoId, liveSessionId } = parsed.data;
 
+    // ─── SQL branch (int id-space) ───
+    if (lnSql.isLectureNoteMysql()) {
+      const cid = lnSql.parseLnId(String(userId));
+      if (cid == null) return failure(res, "Unauthorized.", 401);
+      let notes;
+      let refInput: any;
+      if (lectureType === "recorded") {
+        const vid = lnSql.parseLnId(String(videoId));
+        if (vid == null) return failure(res, "Lecture not found.", 404);
+        const guard = await lnSql.authorizeRecorded(cid, vid);
+        if ("error" in guard) return failure(res, guard.error, guard.status);
+        notes = await lnSql.listAudioNotes(cid, lectureType, { videoId: vid });
+        refInput = { lectureType: "recorded", userId, videoId: videoId! } as const;
+      } else {
+        const lsid = lnSql.parseLnId(String(liveSessionId));
+        if (lsid == null) return failure(res, "Live session not found.", 404);
+        const guard = await lnSql.authorizeLive(cid, lsid);
+        if ("error" in guard) return failure(res, guard.error, guard.status);
+        notes = await lnSql.listAudioNotes(cid, lectureType, { liveSessionId: lsid });
+        refInput = { lectureType: "live", userId, liveSessionId: liveSessionId! } as const;
+      }
+      const [lecture, resumeNext] = await Promise.all([buildLectureRef(refInput), buildResumeNextCard(refInput)]);
+      return success(res, { notes, lecture, resumeNext }, "Audio notes fetched.", 200);
+    }
+
     const filter: any = {
       customerId: new Types.ObjectId(userId),
       lectureType,
@@ -237,6 +284,24 @@ export const updateAudioNote = async (req: Request, res: Response) => {
     const body = updateAudioNoteBodySchema.safeParse(req.body);
     if (!body.success) { logger.warn("updateAudioNote validation failed", { traceId, userId, issues: body.error.issues }); return failure(res, body.error.issues[0]?.message ?? "Invalid request", 400); }
 
+    // ─── SQL branch ───
+    if (lnSql.isLectureNoteMysql()) {
+      const cid = lnSql.parseLnId(String(userId));
+      const nid = lnSql.parseLnId(String(params.data.id));
+      if (cid == null || nid == null) return failure(res, "Audio note not found.", 404);
+      const existing = await lnSql.findOwnedAudioNote(nid, cid);
+      if (!existing) return failure(res, "Audio note not found.", 404);
+      if (existing.lectureType === "recorded" && existing.videoId != null) {
+        const g = await lnSql.authorizeRecorded(cid, existing.videoId);
+        if ("error" in g) return failure(res, g.error, g.status);
+      } else if (existing.lectureType === "live" && existing.liveSessionId != null) {
+        const g = await lnSql.authorizeLive(cid, existing.liveSessionId);
+        if ("error" in g) return failure(res, g.error, g.status);
+      }
+      const note = await lnSql.updateAudioNote(nid, { title: body.data.title, timestampSec: body.data.timestampSec });
+      return success(res, { note }, "Audio note updated.", 200);
+    }
+
     const note = await LectureAudioNote.findOne({
       _id: params.data.id,
       customerId: new Types.ObjectId(userId),
@@ -274,6 +339,21 @@ export const deleteAudioNote = async (req: Request, res: Response) => {
 
     const params = audioNoteIdParamSchema.safeParse(req.params);
     if (!params.success) { logger.warn("deleteAudioNote invalid id", { traceId, userId, issues: params.error.issues }); return failure(res, params.error.issues[0]?.message ?? "Invalid id", 400); }
+
+    // ─── SQL branch ───
+    if (lnSql.isLectureNoteMysql()) {
+      const cid = lnSql.parseLnId(String(userId));
+      const nid = lnSql.parseLnId(String(params.data.id));
+      if (cid == null || nid == null) return failure(res, "Audio note not found.", 404);
+      const existing = await lnSql.findOwnedAudioNote(nid, cid);
+      if (!existing) return failure(res, "Audio note not found.", 404);
+      await lnSql.deleteAudioNote(nid);
+      if (existing.audioUrl) {
+        try { await deleteFromS3FileUrl(existing.audioUrl); }
+        catch (s3err) { logger.warn("deleteAudioNote (sql) S3 delete failed", { traceId, userId, audioKey: existing.audioKey, error: getErrorMessage(s3err) }); }
+      }
+      return success(res, {}, "Audio note deleted.", 200);
+    }
 
     const note = await LectureAudioNote.findOneAndDelete({
       _id: params.data.id,

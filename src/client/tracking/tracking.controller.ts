@@ -4,6 +4,11 @@ import { z } from "zod";
 import { ActivityLog } from "../../models/system/ActivityLog.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isTrackingMysql,
+  parseTrackingId,
+  createActivity,
+} from "../../modules/tracking/tracking.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -23,6 +28,24 @@ export const trackEvent = async (req: Request, res: Response) => {
 
   try {
     const data = trackSchema.parse(req.body);
+
+    // ─── SQL branch (int id-space) — gated on `tracking` (flag already ON) ───
+    if (isTrackingMysql()) {
+      const cidNum = customerId ? parseTrackingId(String(customerId)) : null;
+      const entId = data.entityId ? parseTrackingId(String(data.entityId)) : null;
+      await createActivity({
+        customerId: cidNum,
+        event: data.event,
+        entityType: data.entityType ?? null,
+        entityId: entId,
+        duration: data.duration ?? null,
+        metadata: data.metadata ?? {},
+        ip: (req.headers["x-forwarded-for"] as string) || req.ip || null,
+        userAgent: (req.headers["user-agent"] as string) || null,
+      });
+      logger.info("trackEvent success (sql)", { traceId, customerId, event: data.event });
+      return res.status(201).json({ success: true });
+    }
 
     await ActivityLog.create({
       customerId,

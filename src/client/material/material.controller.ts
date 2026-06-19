@@ -5,6 +5,7 @@ import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { getPurchasedMaterialIds, shapeMaterialForClient } from "./entitlement";
+import * as matSql from "../../modules/client-material/client-material.service";
 
 const NEWLY_ADDED_DAYS = 10;
 
@@ -54,6 +55,16 @@ export const getCategoryContents = async (req: Request, res: Response) => {
   logger.info("getCategoryContents invoked", { traceId, path: req.originalUrl, userId: req.user?.id, categoryId: id });
 
   try {
+    // ─── SQL branch (int id-space) ───
+    if (matSql.isClientMaterialMysql()) {
+      const catId = matSql.parseMatId(id);
+      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const userNum = matSql.parseMatId(String(req.user?.id ?? ""));
+      const data = await matSql.getCategoryContents(catId, userNum);
+      if (!data) return res.status(404).json({ success: false, message: "Category not found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("getCategoryContents invalid id", { traceId, categoryId: id }); return res.status(400).json({ success: false, message: "Invalid category id." }); }
 
     const current = await MaterialCategory.findOne({ _id: id, status: true }).lean();
@@ -120,6 +131,16 @@ export const getMaterialDetail = async (req: Request, res: Response) => {
   logger.info("getMaterialDetail invoked", { traceId, path: req.originalUrl, userId: req.user?.id, materialId: id });
 
   try {
+    // ─── SQL branch ───
+    if (matSql.isClientMaterialMysql()) {
+      const mid = matSql.parseMatId(id);
+      if (mid == null) return res.status(400).json({ success: false, message: "Invalid material id." });
+      const userNum = matSql.parseMatId(String(req.user?.id ?? ""));
+      const data = await matSql.getMaterialDetail(mid, userNum);
+      if (!data) return res.status(404).json({ success: false, message: "Material not found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("getMaterialDetail invalid id", { traceId, materialId: id }); return res.status(400).json({ success: false, message: "Invalid material id." }); }
 
     const material = await Material.findOne({ _id: id, status: true })
@@ -153,6 +174,15 @@ export const trackDownload = async (req: Request, res: Response) => {
   logger.info("trackDownload invoked", { traceId, path: req.originalUrl, userId: req.user?.id, materialId: id });
 
   try {
+    // ─── SQL branch ───
+    if (matSql.isClientMaterialMysql()) {
+      const mid = matSql.parseMatId(id);
+      if (mid == null) return res.status(400).json({ success: false, message: "Invalid material id." });
+      const data = await matSql.trackDownload(mid);
+      if (!data) return res.status(404).json({ success: false, message: "Material not found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("trackDownload invalid id", { traceId, materialId: id }); return res.status(400).json({ success: false, message: "Invalid material id." }); }
 
     const material = await Material.findByIdAndUpdate(
@@ -182,6 +212,13 @@ export const getRecentMaterials = async (req: Request, res: Response) => {
     const days = Math.max(parseInt((req.query.days as string) || "10", 10), 1);
     const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const limit = Math.min(Math.max(parseInt((req.query.limit as string) || "20", 10), 1), 100);
+
+    // ─── SQL branch ───
+    if (matSql.isClientMaterialMysql()) {
+      const userNum = matSql.parseMatId(String(req.user?.id ?? ""));
+      const data = await matSql.getRecentMaterials(userNum, days, limit);
+      return res.status(200).json({ success: true, data });
+    }
 
     const materialsRaw = await Material.find({ status: true, createdAt: { $gt: cutoff } })
       .populate("materialCategoryId", "_id title")

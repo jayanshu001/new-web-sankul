@@ -27,6 +27,23 @@ const dto = (g: any) => ({
   updatedAt: g.updatedAt ?? null,
 });
 
+/**
+ * Assign stable numeric ids to a goal's labels (stored in the `labels` JSON).
+ * The client goal-selection feature stores selected LABEL ids on `ws_customer.goal`,
+ * so labels need stable ids. On update, an existing label keeps its id (matched by
+ * name); new labels get the next free id. Mirrors the Mongo per-label `_id`.
+ */
+const withLabelIds = (
+  labels: { name: string }[],
+  existing?: any[]
+): { id: number; name: string }[] => {
+  const prior = Array.isArray(existing) ? existing : [];
+  const idByName = new Map<string, number>();
+  for (const l of prior) if (l && l.id != null) idByName.set(l.name, Number(l.id));
+  let next = Math.max(0, ...prior.map((l) => Number(l?.id) || 0)) + 1;
+  return labels.map((l) => ({ id: idByName.get(l.name) ?? next++, name: l.name }));
+};
+
 export const createGoalSql = async (input: {
   title: string; labels: { name: string }[]; image?: string | null; isActive: boolean;
 }) => {
@@ -34,7 +51,7 @@ export const createGoalSql = async (input: {
   const row = await prisma.goal.create({
     data: {
       title: input.title,
-      labels: input.labels as any,
+      labels: withLabelIds(input.labels) as any,
       image: input.image ?? null,
       isActive: input.isActive,
       createdAt: now,
@@ -73,7 +90,7 @@ export const updateGoalSql = async (
   if (!existing) return null;
   const data: any = {};
   if (input.title !== undefined) data.title = input.title;
-  if (input.labels !== undefined) data.labels = input.labels as any;
+  if (input.labels !== undefined) data.labels = withLabelIds(input.labels, existing.labels as any[]) as any;
   let previousImage: string | null = null;
   if (input.image !== undefined) {
     const next = input.image === "" ? null : input.image;

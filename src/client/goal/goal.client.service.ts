@@ -3,6 +3,19 @@ import { Types } from "mongoose";
 import { Goal } from "../../models/Goal.model";
 import { Customer } from "../../models/customer/Customer.model";
 import { redisClient } from "../../config/redis";
+import { prisma } from "../../config/prisma";
+import { isGoalMysql } from "../../modules/goal/goal.service";
+
+// SQL goal labels live in the `ws_goal.labels` JSON as [{ id, name }] (ids
+// assigned by modules/goal). The client selection stores selected LABEL ids on
+// `ws_customer.goal` (Json). Cache is bypassed on the SQL branch so a flag flip
+// can't serve Mongo-shaped cached payloads.
+const sqlLabelArr = (j: any): { id: number; name: string }[] => (Array.isArray(j) ? j : []);
+const parseGoalCustomerId = (id: string): number | null => {
+  const n = Number(id);
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+const selectedGoalIds = (j: any): string[] => (Array.isArray(j) ? j.map((x) => String(x)) : []);
 
 const ACTIVE_GOALS_CACHE_KEY = "cache:client:goals:active";
 const MY_SELECTED_GOALS_CACHE_PREFIX = "cache:client:goals:selected:";
@@ -10,6 +23,21 @@ const PROFILE_CACHE_PREFIX = "cache:client:profile:";
 
 export const getActiveGoals = async (traceId?: string) => {
   logger.info("getActiveGoals service invoked", { traceId });
+
+  // ─── SQL branch — gated on `goal` ───
+  if (isGoalMysql()) {
+    const rows = await prisma.goal.findMany({
+      where: { isActive: true },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, title: true, image: true, labels: true },
+    });
+    return rows.map((g) => ({
+      _id: String(g.id),
+      title: g.title,
+      image: g.image ?? null,
+      labels: sqlLabelArr(g.labels).map((l) => ({ _id: String(l.id), name: l.name })),
+    }));
+  }
 
   try {
     const cached = await redisClient.get(ACTIVE_GOALS_CACHE_KEY);
@@ -48,6 +76,21 @@ export const updateMyGoals = async (customerId: string, goals: string[], traceId
       logger.warn("updateMyGoals service invalid input", { traceId, customerId });
       return { ok: false, message: "Goals must be an array of IDs." };
     }
+
+    // ─── SQL branch — store selected LABEL ids on ws_customer.goal ───
+    if (isGoalMysql()) {
+      const cid = parseGoalCustomerId(customerId);
+      if (cid == null) return { ok: false, message: "Customer not found." };
+      const validGoals = goals.filter((id) => id != null && String(id).trim() !== "").map(String);
+      const exists = await prisma.customer.findFirst({ where: { id: cid }, select: { id: true } });
+      if (!exists) return { ok: false, message: "Customer not found." };
+      await prisma.customer.update({ where: { id: cid }, data: { goal: validGoals as any, updatedAt: new Date() } });
+      try {
+        await redisClient.del(`${MY_SELECTED_GOALS_CACHE_PREFIX}${customerId}`, `${PROFILE_CACHE_PREFIX}${customerId}`);
+      } catch { /* cache best-effort */ }
+      logger.info("updateMyGoals service completed (sql)", { traceId, customerId, count: validGoals.length });
+      return { ok: true, data: { goals: validGoals }, message: "Goals updated successfully." };
+    }
     const validGoals = goals.filter((id) => Types.ObjectId.isValid(id));
 
     const customer = await Customer.findByIdAndUpdate(
@@ -84,6 +127,27 @@ export const updateMyGoals = async (customerId: string, goals: string[], traceId
 export const getGoalsWithSelection = async (customerId: string, traceId?: string) => {
   logger.info("getGoalsWithSelection service invoked", { traceId, customerId });
   try {
+    // ─── SQL branch ───
+    if (isGoalMysql()) {
+      const cid = parseGoalCustomerId(customerId);
+      if (cid == null) return { ok: false, message: "Customer not found." };
+      const customer = await prisma.customer.findFirst({ where: { id: cid }, select: { goal: true } });
+      if (!customer) return { ok: false, message: "Customer not found." };
+      const selected = new Set(selectedGoalIds(customer.goal));
+      const goals = await prisma.goal.findMany({
+        where: { isActive: true },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, title: true, image: true, labels: true },
+      });
+      const shaped = goals.map((g) => ({
+        _id: String(g.id),
+        title: g.title,
+        image: g.image ?? null,
+        labels: sqlLabelArr(g.labels).map((l) => ({ _id: String(l.id), name: l.name, isSelected: selected.has(String(l.id)) })),
+      }));
+      return { ok: true, data: shaped };
+    }
+
     const customer = await Customer.findById(customerId).select("goals");
     if (!customer) {
       logger.warn("getGoalsWithSelection service customer not found", { traceId, customerId });
@@ -124,6 +188,29 @@ export const getMySelectedGoals = async (customerId: string, traceId?: string) =
   logger.info("getMySelectedGoals service invoked", { traceId, customerId });
 
   try {
+    // ─── SQL branch ───
+    if (isGoalMysql()) {
+      const cid = parseGoalCustomerId(customerId);
+      if (cid == null) return { ok: false, message: "Customer not found." };
+      const customer = await prisma.customer.findFirst({ where: { id: cid }, select: { goal: true } });
+      if (!customer) return { ok: false, message: "Customer not found." };
+      const selectedIds = selectedGoalIds(customer.goal);
+      if (!selectedIds.length) return { ok: true, data: [] };
+      const selSet = new Set(selectedIds);
+      const goals = await prisma.goal.findMany({
+        where: { isActive: true },
+        orderBy: { createdAt: "asc" },
+        select: { id: true, title: true, image: true, labels: true },
+      });
+      const filtered = goals
+        .map((g) => {
+          const labels = sqlLabelArr(g.labels).filter((l) => selSet.has(String(l.id))).map((l) => ({ _id: String(l.id), name: l.name }));
+          return labels.length ? { _id: String(g.id), title: g.title, image: g.image ?? null, labels } : null;
+        })
+        .filter(Boolean);
+      return { ok: true, data: filtered };
+    }
+
     const customer = await Customer.findById(customerId).select("goals");
     if (!customer) {
       logger.warn("getMySelectedGoals service missing customer", { traceId, customerId });

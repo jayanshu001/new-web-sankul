@@ -470,6 +470,21 @@ export const getChatBanStatus = async (customerId: number) => {
   return ban ? { isBanned: true, reason: ban.reason ?? null, bannedAt: ban.createdAt ?? null } : { isBanned: false, reason: null, bannedAt: null };
 };
 
+/**
+ * Persist a CUSTOMER live-chat message (the socket `send_message` path).
+ * Mirrors sendAdminChatMessage but writes customerId (not adminId) and
+ * isAdmin:false. Returns the Mongo-ish shape the socket emits as `new_message`.
+ */
+export const sendCustomerChatMessage = async (input: { liveClassId: string; customerId: number | null; userName?: string | null; message: string }) => {
+  const now = new Date();
+  const created = await repo.createChatMessage({ liveClassId: input.liveClassId, customerId: input.customerId, adminId: null, isAdmin: false, userName: input.userName ?? "", message: input.message, createdAt: now, updatedAt: now });
+  return { _id: String(created.id), liveClassId: created.liveClassId, customerId: idStrOrNull(created.customerId), userName: created.userName, message: created.message, createdAt: created.createdAt };
+};
+
+/** True iff this customer currently has a chat ban (socket send_message guard). */
+export const isCustomerChatBanned = async (customerId: number): Promise<boolean> =>
+  !!(await repo.chatBanForCustomer(customerId));
+
 export const sendAdminChatMessage = async (input: { liveClassId: string; adminId: number | null; userName?: string | null; message: string }) => {
   const now = new Date();
   const created = await repo.createChatMessage({ liveClassId: input.liveClassId, customerId: null, adminId: input.adminId, isAdmin: true, userName: input.userName ?? "Admin", message: input.message, createdAt: now, updatedAt: now });
@@ -520,6 +535,45 @@ export const getActivePoll = async (liveClassId: string, customerId: number) => 
   const dto = await loadPollWithOptions(poll);
   const vote = await repo.pollVoteFor(poll.id, customerId);
   return { poll: dto, myVote: vote ? vote.optionIndex : null };
+};
+
+/**
+ * Record a student's vote (the socket `submit_vote` path). Validates the poll
+ * exists, is active and the option index is in range, then records the vote and
+ * bumps counters. Returns the poll's liveClassId + fresh option/total counts so
+ * the socket can broadcast `poll_update` to the right room — exactly the data
+ * the Mongo path emitted. Discriminated string results map to the socket's
+ * existing error emits; "already" mirrors the Mongo duplicate-key (11000) case.
+ */
+export const submitPollVote = async (
+  pollId: number,
+  customerId: number,
+  optionIndex: number
+): Promise<
+  | { liveClassId: string; options: Array<{ text: string | null; votes: number }>; totalVotes: number }
+  | "not_found"
+  | "closed"
+  | "invalid_option"
+  | "already"
+> => {
+  const poll = await repo.findPoll(pollId);
+  if (!poll) return "not_found";
+  if (!poll.isActive) return "closed";
+  const options = await repo.pollOptions(pollId);
+  if (optionIndex < 0 || optionIndex >= options.length) return "invalid_option";
+  try {
+    await repo.recordPollVote(pollId, customerId, optionIndex);
+  } catch (err: any) {
+    if (err?.code === "P2002") return "already"; // unique (pollId,customerId)
+    throw err;
+  }
+  const fresh = await repo.findPoll(pollId);
+  const freshOptions = await repo.pollOptions(pollId);
+  return {
+    liveClassId: poll.liveClassId,
+    options: freshOptions.map((o) => ({ text: o.text ?? null, votes: o.votes })),
+    totalVotes: fresh?.totalVotes ?? poll.totalVotes,
+  };
 };
 
 export const getPollsByClass = async (liveClassId: string) => {
@@ -714,4 +768,316 @@ export const getScheduleFolderForClient = async (id: number, folderId: string): 
   const folder = jArr(row.scheduleFolders).find((f: any) => String(f._id) === folderId);
   if (!folder) return "folder_not_found";
   return { scheduleFolder: { _id: folder._id, title: folder.title, image: folder.image ?? null, order: folder.order ?? 0, status: folder.status !== false, entries: [...(folder.entries ?? [])].sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0)) } };
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// Live-course FOLDER + VIDEO persistence (ws_video_category + ws_video)
+//   SQL mirror of src/admin/live-course/live-course.folder.controller.ts and
+//   src/admin/live-course/live-course.video.controller.ts.
+//
+// Gated behind the SEPARATE `admin-live-course` flag (the rest of this file is
+// `live-course`) so folders/videos can be flipped independently. The legacy
+// controllers branch on `isAdminLiveCourseMysql()` BEFORE the ObjectId guard.
+//
+// SCOPING DRIFT: ws_video_category has NO `live_course_id` column (Mongo-only
+// field). So a folder "belongs to" a live course iff it is reachable from the
+// course's root folder (ws_live_course.video_category_id) via the relation DAG.
+// We reuse the catalog-category-tree resolver (descendantsOf) for that walk; the
+// course root itself counts. listFolders therefore returns root + descendants.
+// Videos have no live-session backlink column, so from-recording stores the mp4
+// path as aws_id + platform="aws" and dedupes per folder by (vcategory_id,aws_id).
+// ════════════════════════════════════════════════════════════════════════════
+import { prisma } from "../../config/prisma";
+import { descendantsOf } from "../catalog-category-tree/category-tree.service";
+
+export const ADMIN_LIVE_COURSE_MODULE = "admin-live-course";
+export const isAdminLiveCourseMysql = (): boolean => isMysqlModule(ADMIN_LIVE_COURSE_MODULE);
+
+function lcSlugify(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+}
+
+// ── DTOs (Mongo-shaped: `_id` is the stringified int) ─────────────────────────
+export const folderDto = (f: any) => ({
+  _id: String(f.id),
+  title: f.title,
+  slug: f.slug ?? null,
+  image: f.image ?? null,
+  parent: idStrOrNull(f.parent),
+  educatorId: idStrOrNull(f.educatorId),
+  order_by: f.order_by ?? 0,
+  status: f.status,
+  createdAt: f.created_at ?? null,
+  updatedAt: f.updated_at ?? null,
+});
+
+export const relationDto = (r: any) => ({
+  _id: String(r.id),
+  parent: String(r.parent),
+  child: String(r.child),
+  order: r.order ?? 0,
+});
+
+export const videoDto = (v: any) => ({
+  _id: String(v.id),
+  title: v.title,
+  topic: v.topic ?? "",
+  platform: v.platform,
+  priceType: v.priceType,
+  youtube_id: v.youtube_id ?? null,
+  aws_id: v.aws_id ?? null,
+  vimeo_id: v.vimeo_id ?? null,
+  videoCategoryId: idStrOrNull(v.videoCategoryId),
+  order: v.order ?? 0,
+  status: v.status,
+  createdAt: v.created_at ?? null,
+  updatedAt: v.updated_at ?? null,
+});
+
+const lcVideoSelect = {
+  id: true, title: true, topic: true, platform: true, priceType: true,
+  youtube_id: true, aws_id: true, vimeo_id: true, videoCategoryId: true,
+  order: true, status: true, created_at: true, updated_at: true,
+} as const;
+
+// ── scope helpers (course ↔ folder reachability via the relation DAG) ─────────
+/** The live course's root folder id (ws_live_course.video_category_id), or null. */
+const lcRootFolderId = async (liveCourseId: number): Promise<number | null> => {
+  const lc = await prisma.liveCourse.findFirst({ where: { id: liveCourseId }, select: { videoCategoryId: true } });
+  return lc ? lc.videoCategoryId ?? null : null;
+};
+
+/** Does a live course row exist? */
+export const lcCourseExists = async (liveCourseId: number): Promise<boolean> =>
+  !!(await prisma.liveCourse.findFirst({ where: { id: liveCourseId }, select: { id: true } }));
+
+/** Folder ids reachable from the course root (INCLUSIVE). Empty if no root set. */
+const lcReachableFolderIds = async (liveCourseId: number): Promise<number[]> => {
+  const root = await lcRootFolderId(liveCourseId);
+  if (!root) return [];
+  return descendantsOf([root]);
+};
+
+/** Folder belongs to course iff it is the root or a descendant of the root. */
+export const lcFolderBelongsToCourse = async (folderId: number, liveCourseId: number): Promise<boolean> =>
+  (await lcReachableFolderIds(liveCourseId)).includes(folderId);
+
+// ── folder handlers ───────────────────────────────────────────────────────────
+/** listFolders: flat folder list (root + descendants) + their relation rows. */
+export const lcListFolders = async (liveCourseId: number): Promise<{ folders: any[]; relations: any[] }> => {
+  const ids = await lcReachableFolderIds(liveCourseId);
+  if (!ids.length) return { folders: [], relations: [] };
+  const [folders, relations] = await Promise.all([
+    prisma.videoCategory.findMany({ where: { id: { in: ids } }, orderBy: [{ order_by: "asc" }, { created_at: "asc" }] }),
+    prisma.videoCategoryRelation.findMany({ where: { OR: [{ parent: { in: ids } }, { child: { in: ids } }] } }),
+  ]);
+  return { folders: folders.map(folderDto), relations: relations.map(relationDto) };
+};
+
+/** createFolder. Inserts a relation row when parentFolderId is given. */
+export const lcCreateFolder = async (
+  liveCourseId: number,
+  input: { title: string; image?: string; parentFolderId?: number; order_by?: number; educatorId?: number; status?: boolean }
+): Promise<{ folder: any } | "bad_parent"> => {
+  if (input.parentFolderId != null && !(await lcFolderBelongsToCourse(input.parentFolderId, liveCourseId))) return "bad_parent";
+  const lc = await prisma.liveCourse.findFirst({ where: { id: liveCourseId }, select: { image: true } });
+  const fallbackImage = lc?.image ?? "";
+  const now = new Date();
+  const created = await prisma.videoCategory.create({
+    data: {
+      title: input.title,
+      slug: `${lcSlugify(input.title)}-${Date.now().toString(36)}`,
+      image: input.image ?? fallbackImage,
+      parent: input.parentFolderId ?? null,
+      educatorId: input.educatorId ?? null,
+      order_by: input.order_by ?? 0,
+      status: input.status ?? true,
+      created_at: now,
+      updated_at: now,
+    },
+  });
+  if (input.parentFolderId != null) {
+    await prisma.videoCategoryRelation.create({ data: { parent: input.parentFolderId, child: created.id, order: input.order_by ?? 0 } });
+  }
+  return { folder: folderDto(created) };
+};
+
+/** updateFolder. Returns the DTO, or null if the folder is not in this course. */
+export const lcUpdateFolder = async (
+  liveCourseId: number,
+  folderId: number,
+  input: { title?: string; image?: string; order_by?: number; educatorId?: number; status?: boolean }
+): Promise<any | null> => {
+  if (!(await lcFolderBelongsToCourse(folderId, liveCourseId))) return null;
+  const data: any = { updated_at: new Date() };
+  if (input.title !== undefined) data.title = input.title;
+  if (input.image !== undefined) data.image = input.image;
+  if (input.order_by !== undefined) data.order_by = input.order_by;
+  if (input.educatorId !== undefined) data.educatorId = input.educatorId;
+  if (input.status !== undefined) data.status = input.status;
+  const updated = await prisma.videoCategory.update({ where: { id: folderId }, data });
+  return folderDto(updated);
+};
+
+/**
+ * deleteFolder. Refuses the course root folder. Cascades: deletes all videos in
+ * the folder + relations referencing it, then the folder itself.
+ */
+export const lcDeleteFolder = async (
+  liveCourseId: number,
+  folderId: number
+): Promise<{ ok: true; deletedVideos: number; deletedRelations: number } | "not_found" | "is_root"> => {
+  if (!(await lcFolderBelongsToCourse(folderId, liveCourseId))) return "not_found";
+  const root = await lcRootFolderId(liveCourseId);
+  if (root != null && root === folderId) return "is_root";
+  const [videos, relations] = await Promise.all([
+    prisma.video.deleteMany({ where: { videoCategoryId: folderId } }),
+    prisma.videoCategoryRelation.deleteMany({ where: { OR: [{ parent: folderId }, { child: folderId }] } }),
+  ]);
+  await prisma.videoCategory.delete({ where: { id: folderId } });
+  return { ok: true, deletedVideos: videos.count, deletedRelations: relations.count };
+};
+
+// ── video handlers ────────────────────────────────────────────────────────────
+/** listVideosInFolder: all videos in a folder, ordered. */
+export const lcListVideosInFolder = async (folderId: number): Promise<any[]> => {
+  const rows = await prisma.video.findMany({
+    where: { videoCategoryId: folderId },
+    orderBy: [{ order: "asc" }, { created_at: "asc" }],
+    select: lcVideoSelect,
+  });
+  return rows.map(videoDto);
+};
+
+/** createVideoInFolder: add a manual video (youtube/aws/vimeo). */
+export const lcCreateVideoInFolder = async (
+  folderId: number,
+  input: { title: string; topic?: string; platform: "youtube" | "aws" | "vimeo"; priceType?: "free" | "paid"; youtube_id?: string; aws_id?: string; vimeo_id?: string; order?: number; status?: boolean }
+): Promise<any> => {
+  const now = new Date();
+  const created = await prisma.video.create({
+    data: {
+      videoCategoryId: folderId,
+      title: input.title,
+      topic: input.topic ?? "",
+      platform: input.platform,
+      priceType: input.priceType ?? "paid",
+      youtube_id: input.youtube_id ?? null,
+      aws_id: input.aws_id ?? null,
+      vimeo_id: input.vimeo_id ?? null,
+      slug: `${lcSlugify(input.title)}-${Date.now().toString(36)}`,
+      order: input.order ?? 0,
+      status: input.status ?? true,
+      created_at: now,
+      updated_at: now,
+    },
+    select: lcVideoSelect,
+  });
+  return videoDto(created);
+};
+
+/** Resolve a recording from the JSON array by quality → index → best quality. */
+const lcResolveRecording = (recordings: any[], opts: { recordingIndex?: number; quality?: string }): any | null => {
+  if (!recordings.length) return null;
+  if (opts.quality) {
+    const q = opts.quality.toLowerCase();
+    return recordings.find((r) => String(r?.quality ?? "").toLowerCase() === q) ?? null;
+  }
+  if (typeof opts.recordingIndex === "number") return recordings[opts.recordingIndex] ?? null;
+  for (const q of ["1080p", "720p", "480p", "360p", "240p", "144p"]) {
+    const hit = recordings.find((r) => String(r?.quality ?? "").toLowerCase() === q);
+    if (hit) return hit;
+  }
+  return recordings[0] ?? null;
+};
+
+/**
+ * createVideoFromRecording. Reads the live session's recordings JSON, picks one
+ * by index/quality, files its mp4 path into the folder as an aws video. Dedupes
+ * per folder by (vcategory_id, aws_id) — same key as the Mongo promote helper.
+ */
+export const lcCreateVideoFromRecording = async (
+  folderId: number,
+  input: { liveSessionId: number; recordingIndex?: number; quality?: string; title?: string; priceType?: "free" | "paid"; order?: number }
+): Promise<{ video: any; alreadyExisted: boolean } | "session_not_found" | "no_recordings" | "recording_not_found" | "no_path"> => {
+  const session = await prisma.liveSession.findFirst({ where: { id: input.liveSessionId }, select: { id: true, title: true, recordings: true } });
+  if (!session) return "session_not_found";
+  const recordings = Array.isArray(session.recordings) ? (session.recordings as any[]) : [];
+  if (recordings.length === 0) return "no_recordings";
+  const recording = lcResolveRecording(recordings, { recordingIndex: input.recordingIndex, quality: input.quality });
+  if (!recording) return "recording_not_found";
+  const rawPath: string | undefined = recording.path;
+  if (!rawPath) return "no_path";
+  const path = rawPath.replace(/(?:"|%22|%2522)+$/i, "");
+  const existing = await prisma.video.findFirst({ where: { videoCategoryId: folderId, aws_id: path }, select: lcVideoSelect });
+  if (existing) return { video: videoDto(existing), alreadyExisted: true };
+  const title = input.title ?? session.title ?? "Recording";
+  const now = new Date();
+  const created = await prisma.video.create({
+    data: {
+      videoCategoryId: folderId,
+      title,
+      topic: "",
+      platform: "aws",
+      aws_id: path,
+      priceType: input.priceType ?? "paid",
+      slug: `${lcSlugify(title)}-${Date.now().toString(36)}`,
+      order: input.order ?? 0,
+      status: true,
+      created_at: now,
+      updated_at: now,
+    },
+    select: lcVideoSelect,
+  });
+  return { video: videoDto(created), alreadyExisted: false };
+};
+
+/** deleteVideoInFolder. Scoped to the folder. Returns whether a row was deleted. */
+export const lcDeleteVideoInFolder = async (folderId: number, videoId: number): Promise<boolean> => {
+  const res = await prisma.video.deleteMany({ where: { id: videoId, videoCategoryId: folderId } });
+  return res.count > 0;
+};
+
+/** getVideoInFolder. Returns the DTO, or null if not in this folder. */
+export const lcGetVideoInFolder = async (folderId: number, videoId: number): Promise<any | null> => {
+  const row = await prisma.video.findFirst({ where: { id: videoId, videoCategoryId: folderId }, select: lcVideoSelect });
+  return row ? videoDto(row) : null;
+};
+
+/** updateVideoInFolder. Scoped to the folder. Returns DTO or null (not found). */
+export const lcUpdateVideoInFolder = async (
+  folderId: number,
+  videoId: number,
+  input: { title?: string; topic?: string; platform?: "youtube" | "aws" | "vimeo"; priceType?: "free" | "paid"; youtube_id?: string; aws_id?: string; vimeo_id?: string; order?: number; status?: boolean }
+): Promise<any | null> => {
+  const existing = await prisma.video.findFirst({ where: { id: videoId, videoCategoryId: folderId }, select: { id: true } });
+  if (!existing) return null;
+  const data: any = { updated_at: new Date() };
+  if (input.title !== undefined) data.title = input.title;
+  if (input.topic !== undefined) data.topic = input.topic;
+  if (input.platform !== undefined) data.platform = input.platform;
+  if (input.priceType !== undefined) data.priceType = input.priceType;
+  if (input.youtube_id !== undefined) data.youtube_id = input.youtube_id;
+  if (input.aws_id !== undefined) data.aws_id = input.aws_id;
+  if (input.vimeo_id !== undefined) data.vimeo_id = input.vimeo_id;
+  if (input.order !== undefined) data.order = input.order;
+  if (input.status !== undefined) data.status = input.status;
+  const updated = await prisma.video.update({ where: { id: videoId }, data, select: lcVideoSelect });
+  return videoDto(updated);
+};
+
+/**
+ * reorderVideosInFolder. Only videos that actually live in this folder are
+ * touched (ids from elsewhere are silently ignored). Returns matched/modified.
+ */
+export const lcReorderVideosInFolder = async (
+  folderId: number,
+  orders: { id: number; order: number }[]
+): Promise<{ matched: number; modified: number }> => {
+  let matched = 0;
+  for (const { id, order } of orders) {
+    const res = await prisma.video.updateMany({ where: { id, videoCategoryId: folderId }, data: { order, updated_at: new Date() } });
+    matched += res.count;
+  }
+  return { matched, modified: matched };
 };

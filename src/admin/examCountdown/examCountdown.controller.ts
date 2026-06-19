@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
 import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
 import { buildRegexCondition } from "../../utils/searchFilter";
+import * as ecSql from "../../modules/exam-countdown/exam-countdown.service";
 
 const HEX = /^#[0-9A-Fa-f]{6}$/;
 const TEN_YEARS_MS = 10 * 365 * 86_400_000;
@@ -29,7 +30,9 @@ function parseExamDate(raw: any): { date: Date | null; error?: string } {
 // GET /admin/exam-countdowns/categories
 export const adminListCategories = async (_req: Request, res: Response) => {
   try {
-    const data = await ExamCountdownCategory.find({}).sort({ order: 1, name: 1 }).lean();
+    const data = ecSql.isExamCountdownMysql()
+      ? await ecSql.listCategoriesAdmin()
+      : await ExamCountdownCategory.find({}).sort({ order: 1, name: 1 }).lean();
     return res.status(200).json({ success: true, data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
@@ -52,6 +55,11 @@ export const adminCreateCategory = async (req: Request, res: Response) => {
         .status(400)
         .json({ success: false, message: "colorHex must be a 7-char hex like #7C3AED." });
 
+    if (ecSql.isExamCountdownMysql()) {
+      const r = await ecSql.createCategory({ name, colorHex, order, status });
+      if (r.conflict) return res.status(409).json({ success: false, message: "A category with this name already exists." });
+      return res.status(201).json({ success: true, data: r.data });
+    }
     try {
       const cat = await ExamCountdownCategory.create({ name, colorHex, order, status });
       return res.status(201).json({ success: true, data: cat });
@@ -71,7 +79,8 @@ export const adminCreateCategory = async (req: Request, res: Response) => {
 export const adminUpdateCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    const useSql = ecSql.isExamCountdownMysql();
+    if (!useSql && !mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
 
     const update: any = {};
@@ -94,6 +103,14 @@ export const adminUpdateCategory = async (req: Request, res: Response) => {
     if (req.body?.order !== undefined) update.order = Number(req.body.order) || 0;
     if (req.body?.status !== undefined) update.status = Boolean(req.body.status);
 
+    if (useSql) {
+      const nid = ecSql.parseEcId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const r = await ecSql.updateCategory(nid, update);
+      if ((r as any).notFound) return res.status(404).json({ success: false, message: "Category not found." });
+      if ((r as any).conflict) return res.status(409).json({ success: false, message: "A category with this name already exists." });
+      return res.status(200).json({ success: true, data: (r as any).data });
+    }
     try {
       const cat = await ExamCountdownCategory.findByIdAndUpdate(id, { $set: update }, { new: true });
       if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
@@ -114,6 +131,15 @@ export const adminUpdateCategory = async (req: Request, res: Response) => {
 export const adminDeleteCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (ecSql.isExamCountdownMysql()) {
+      const nid = ecSql.parseEcId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const r = await ecSql.deleteCategory(nid);
+      if ((r as any).notFound) return res.status(404).json({ success: false, message: "Category not found." });
+      if ((r as any).inUse)
+        return res.status(400).json({ success: false, message: "Category is referenced by one or more countdowns. Reassign or soft-disable instead." });
+      return res.status(200).json({ success: true, message: "Category deleted." });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
 
@@ -146,6 +172,25 @@ export const adminListCountdowns = async (req: Request, res: Response) => {
       includePast = "true",
     } = req.query as Record<string, string>;
 
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    if (ecSql.isExamCountdownMysql()) {
+      let catId: number | null = null;
+      if (categoryId) {
+        catId = ecSql.parseEcId(categoryId);
+        if (catId == null) return res.status(400).json({ success: false, message: "Invalid categoryId." });
+      }
+      const now = new Date();
+      const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+      const r = await ecSql.listCountdownsAdmin({
+        categoryId: catId, search: search || null, includePast: includePast !== "false",
+        skip, limitNum, pageNum, todayUTC,
+      });
+      return res.status(200).json({ success: true, ...r });
+    }
+
     const filter: any = {};
     if (categoryId) {
       if (!mongoose.Types.ObjectId.isValid(categoryId))
@@ -162,10 +207,6 @@ export const adminListCountdowns = async (req: Request, res: Response) => {
         $gte: new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())),
       };
     }
-
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
-    const skip = (pageNum - 1) * limitNum;
 
     const [data, total] = await Promise.all([
       ExamCountdown.find(filter)
@@ -198,11 +239,22 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
     if (!title) return res.status(400).json({ success: false, message: "title is required." });
     if (title.length > 200)
       return res.status(400).json({ success: false, message: "title too long (max 200)." });
-    if (!mongoose.Types.ObjectId.isValid(categoryId))
+
+    const useSql = ecSql.isExamCountdownMysql();
+    if (!useSql && !mongoose.Types.ObjectId.isValid(categoryId))
       return res.status(400).json({ success: false, message: "Invalid categoryId." });
 
     const { date, error } = parseExamDate(req.body?.examDate);
     if (error || !date) return res.status(400).json({ success: false, message: error });
+
+    if (useSql) {
+      const nid = ecSql.parseEcId(categoryId);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid categoryId." });
+      const r = await ecSql.createCountdown({ title, categoryId: nid, examDate: date, description, status });
+      if ((r as any).catNotFound) return res.status(404).json({ success: false, message: "Category not found." });
+      if ((r as any).catDisabled) return res.status(400).json({ success: false, message: "Category is disabled; enable it before assigning." });
+      return res.status(201).json({ success: true, data: (r as any).data });
+    }
 
     const cat = await ExamCountdownCategory.findById(categoryId).select("_id status");
     if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
@@ -228,7 +280,8 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
 export const adminUpdateCountdown = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
+    const useSql = ecSql.isExamCountdownMysql();
+    if (!useSql && !mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid countdown id." });
 
     const update: any = {};
@@ -241,15 +294,21 @@ export const adminUpdateCountdown = async (req: Request, res: Response) => {
     }
     if (req.body?.categoryId !== undefined) {
       const cid = req.body.categoryId.toString().trim();
-      if (!mongoose.Types.ObjectId.isValid(cid))
-        return res.status(400).json({ success: false, message: "Invalid categoryId." });
-      const cat = await ExamCountdownCategory.findById(cid).select("_id status");
-      if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
-      if (!cat.status)
-        return res
-          .status(400)
-          .json({ success: false, message: "Category is disabled; enable it before assigning." });
-      update.categoryId = cid;
+      if (useSql) {
+        const nid = ecSql.parseEcId(cid);
+        if (nid == null) return res.status(400).json({ success: false, message: "Invalid categoryId." });
+        update.categoryId = nid;
+      } else {
+        if (!mongoose.Types.ObjectId.isValid(cid))
+          return res.status(400).json({ success: false, message: "Invalid categoryId." });
+        const cat = await ExamCountdownCategory.findById(cid).select("_id status");
+        if (!cat) return res.status(404).json({ success: false, message: "Category not found." });
+        if (!cat.status)
+          return res
+            .status(400)
+            .json({ success: false, message: "Category is disabled; enable it before assigning." });
+        update.categoryId = cid;
+      }
     }
     if (req.body?.examDate !== undefined) {
       const { date, error } = parseExamDate(req.body.examDate);
@@ -258,6 +317,16 @@ export const adminUpdateCountdown = async (req: Request, res: Response) => {
     }
     if (req.body?.description !== undefined) update.description = req.body.description.toString();
     if (req.body?.status !== undefined) update.status = Boolean(req.body.status);
+
+    if (useSql) {
+      const nid = ecSql.parseEcId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid countdown id." });
+      const r = await ecSql.updateCountdown(nid, update);
+      if ((r as any).notFound) return res.status(404).json({ success: false, message: "Countdown not found." });
+      if ((r as any).catNotFound) return res.status(404).json({ success: false, message: "Category not found." });
+      if ((r as any).catDisabled) return res.status(400).json({ success: false, message: "Category is disabled; enable it before assigning." });
+      return res.status(200).json({ success: true, data: (r as any).data });
+    }
 
     const doc = await ExamCountdown.findByIdAndUpdate(id, { $set: update }, { new: true });
     if (!doc) return res.status(404).json({ success: false, message: "Countdown not found." });
@@ -271,6 +340,13 @@ export const adminUpdateCountdown = async (req: Request, res: Response) => {
 export const adminDeleteCountdown = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+    if (ecSql.isExamCountdownMysql()) {
+      const nid = ecSql.parseEcId(id);
+      if (nid == null) return res.status(400).json({ success: false, message: "Invalid countdown id." });
+      const r = await ecSql.deleteCountdown(nid);
+      if ((r as any).notFound) return res.status(404).json({ success: false, message: "Countdown not found." });
+      return res.status(200).json({ success: true, message: "Countdown deleted." });
+    }
     if (!mongoose.Types.ObjectId.isValid(id))
       return res.status(400).json({ success: false, message: "Invalid countdown id." });
     const removed = await ExamCountdown.findByIdAndDelete(id);

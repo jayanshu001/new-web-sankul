@@ -61,4 +61,35 @@ export const clientPurchaseHistoryRepository = {
     ids.length ? prisma.packageCourseEbookPrice.findMany({ where: { id: { in: ids } }, select: { id: true, ebookId: true } }) : Promise.resolve([]),
   ebooksByIds: (ids: number[]) =>
     ids.length ? prisma.eBook.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, thumbnail: true, author: true } }) : Promise.resolve([]),
+
+  // ── ebook receipt (single order, ownership-scoped) ───────────────────────────
+  ebookOrderForReceipt: (orderId: number, customerId: number) =>
+    prisma.eBookOrder.findFirst({ where: { id: orderId, userId: customerId } }),
+  /** plan row carrying duration + the ebook hop (ws_ebook_order has no ebook_id). */
+  planForReceipt: (planId: number) =>
+    prisma.packageCourseEbookPrice.findFirst({ where: { id: planId }, select: { id: true, ebookId: true, duration: true } }),
+  ebookById: (id: number) =>
+    prisma.eBook.findFirst({ where: { id }, select: { id: true, name: true, author: true } }),
+
+  // ── book receipt (single order, ownership-scoped) ────────────────────────────
+  bookOrderForReceipt: (orderId: number, customerId: number) =>
+    prisma.bookOrder.findFirst({
+      where: { id: orderId, userId: customerId },
+      include: { BookTracking: { select: { tracking_id: true, status: true } } },
+    }),
+
+  // ── course/package receipt (single subscription, ownership-scoped) ───────────
+  /** active subscription (status=true mirrors Mongo's paymentStatus:"verified"). */
+  subscriptionForReceipt: (subId: number, customerId: number) =>
+    prisma.packageCourseSubscription.findFirst({ where: { id: subId, customerId, status: true } }),
+  /** plan row carrying duration (pcb_id on the subscription). */
+  planDurationForReceipt: (planId: number) =>
+    prisma.packageCourseEbookPrice.findFirst({ where: { id: planId }, select: { id: true, duration: true } }),
+  courseForReceipt: (id: number) =>
+    prisma.course.findFirst({ where: { id }, select: { id: true, name: true } }),
+  packageForReceipt: (id: number) =>
+    prisma.package.findFirst({ where: { id }, select: { id: true, name: true } }),
+  /** razorpay ids via the order hop (no razorpay cols on the subscription). */
+  courseOrderForReceipt: (id: number) =>
+    prisma.packageCourseOrder.findFirst({ where: { id }, select: { gatewayOrderId: true, gatewayPaymentId: true } }),
 };

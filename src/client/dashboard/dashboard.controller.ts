@@ -7,6 +7,9 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { Testimonial } from "../../models/system/Testimonial.model";
 import { fetchTrendingBooksOnly, fetchTrendingEbooksOnly } from "../book/book.controller";
+import * as clientDashSql from "../../modules/client-dashboard/client-dashboard.service";
+import * as clientTrendingSql from "../../modules/client-trending/client-trending.service";
+import * as lpHubSql from "../../modules/client-lecture-progress/client-lecture-progress.service";
 import { Video } from "../../models/course/Video.model";
 import { resolveFreeCategoryIds } from "../free/free.controller";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
@@ -143,6 +146,15 @@ export const getDashboard = async (req: Request, res: Response) => {
   logger.info("getDashboard invoked", { traceId, path: req.originalUrl, customerId: userId });
 
   try {
+    // ─── SQL branch ───
+    if (clientDashSql.isClientDashboardMysql()) {
+      const uid = Number(userId);
+      const cid = Number.isInteger(uid) ? uid : null;
+      const { unreadNotifications, dashboard, testimonial } = await clientDashSql.buildHomeDashboard(cid);
+      logger.info("getDashboard success (sql)", { traceId, customerId: userId, sections: dashboard.length });
+      return res.status(200).json({ todayDate: new Date().toISOString().slice(0, 10), logo: process.env.APP_LOGO_URL ?? "", unreadNotifications, dashboard, testimonial });
+    }
+
     const now = new Date();
     const [banners, recentPackages, courses, trendingBooks, trendingEbooks, testimonial, courseCategories, examCountdownsRaw, dailyTestRaw, unreadNotifications] = await Promise.all([
       BannerSlider.find().sort({ orderBy: 1 }).populate("keyId").lean(),
@@ -397,6 +409,15 @@ export const getResumeDashboard = async (req: Request, res: Response) => {
   }
 
   try {
+    // ─── SQL branch — reuses the LIVE lecture-progress resume hub ───
+    if (clientDashSql.isClientDashboardMysql()) {
+      const sid = clientDashSql.parseCdId(String(userId));
+      if (sid == null) return res.status(200).json({ resumeLecture: null, recentPackage: null, recentCourse: null });
+      const { resumeLecture, recentCourse, recentPackage } = await lpHubSql.buildResumeDashboard(sid);
+      logger.info("getResumeDashboard success (sql)", { traceId, customerId: userId });
+      return res.status(200).json({ resumeLecture, recentPackage, recentCourse });
+    }
+
     const cid = new mongoose.Types.ObjectId(userId);
     const now = new Date();
 
@@ -881,6 +902,15 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
   logger.info("getFreeDashboard invoked", { traceId, path: _req.originalUrl });
 
   try {
+    // ─── SQL branch ───
+    if (clientDashSql.isClientDashboardMysql()) {
+      const uid = Number(_req.user?.id);
+      const cid = Number.isInteger(uid) ? uid : null;
+      const dashboard = await clientTrendingSql.buildFreeDashboard(cid);
+      logger.info("getFreeDashboard success (sql)", { traceId, sections: dashboard.length });
+      return res.status(200).json({ todayDate: new Date().toISOString().slice(0, 10), logo: process.env.APP_LOGO_URL ?? "", dashboard });
+    }
+
     const [trendingFreeBooks, trendingFreeEbooks, freeCats, freeEbooks] = await Promise.all([
       fetchTrendingBooksOnly({ type: "free", limit: FREE_DASHBOARD_LIMIT }),
       fetchTrendingEbooksOnly({ type: "free", limit: FREE_DASHBOARD_LIMIT }),

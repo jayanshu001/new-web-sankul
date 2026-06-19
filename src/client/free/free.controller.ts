@@ -26,6 +26,14 @@ import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { isNewItem } from "../../utils/isNew";
 import { buildRegexCondition, buildSearchFilter, buildSearchRegExp } from "../../utils/searchFilter";
+import {
+  isClientFreeMysql,
+  freeTests as freeTestsSql,
+  freeMaterials as freeMaterialsSql,
+  freeVideos as freeVideosSql,
+  freeEbooks as freeEbooksSql,
+  freeCourses as freeCoursesSql,
+} from "../../modules/client-free/client-free.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -224,6 +232,23 @@ export const listFreeTests = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "`week` requires `year` and `month`." });
     }
 
+    // ── SQL (MySQL) branch ──
+    if (isClientFreeMysql()) {
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const { pageNum, limitNum, skip } = paginate(req);
+      const result = await freeTestsSql({
+        customerId: Number.isInteger(cid) ? cid : null,
+        search: search || null,
+        year: yearQ, month: monthQ, week: weekQ,
+        page: pageNum, limit: limitNum, skip,
+      });
+      const { pagination, ...data } = result as any;
+      logger.info("listFreeTests success (sql)", { traceId, level: (result as any).level });
+      const payload: any = { success: true, data };
+      if (pagination) payload.pagination = pagination;
+      return res.status(200).json(payload);
+    }
+
     const { examCategoryIds } = await resolveAssignedCategoryIds();
 
     const now = new Date();
@@ -414,6 +439,20 @@ export const listFreeMaterials = async (req: Request, res: Response) => {
     const { search } = req.query as Record<string, string>;
     const { pageNum, limitNum, skip } = paginate(req);
 
+    // ── SQL (MySQL) branch ──
+    if (isClientFreeMysql()) {
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const { data, total } = await freeMaterialsSql({
+        customerId: Number.isInteger(cid) ? cid : null,
+        search: search || null, page: pageNum, limit: limitNum, skip,
+      });
+      logger.info("listFreeMaterials success (sql)", { traceId, total, returned: data.length });
+      return res.status(200).json({
+        success: true, data,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     // 1) Each product → the material-category roots it assigns. BOTH free and
     //    PAID products qualify — free materials sitting inside a paid product
     //    must still surface here. The product being paid never hides its free
@@ -583,6 +622,16 @@ export const listFreeVideos = async (req: Request, res: Response) => {
     const { search } = req.query as Record<string, string>;
     const { pageNum, limitNum, skip } = paginate(req);
 
+    // ── SQL (MySQL) branch ──
+    if (isClientFreeMysql()) {
+      const { data, total } = await freeVideosSql({ search: search || null, page: pageNum, limit: limitNum, skip });
+      logger.info("listFreeVideos success (sql)", { traceId, total, returned: data.length });
+      return res.status(200).json({
+        success: true, data,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     // 1) Each product → the video-category roots it owns. BOTH free and PAID
     //    products qualify — free videos inside a paid product must still surface.
     //    The per-video `priceType:"free"` gate in step 3 decides inclusion; only
@@ -740,6 +789,21 @@ export const listFreeEbooks = async (req: Request, res: Response) => {
   try {
     const { search, language } = req.query as Record<string, string>;
     const { pageNum, limitNum, skip } = paginate(req);
+
+    // ── SQL (MySQL) branch ──
+    if (isClientFreeMysql()) {
+      const cid = customerId ? Number(customerId) : null;
+      const { data, total } = await freeEbooksSql({
+        customerId: Number.isInteger(cid) ? cid : null,
+        search: search || null, language: language || null,
+        page: pageNum, limit: limitNum, skip, shareBase: resolveBase(req),
+      });
+      logger.info("listFreeEbooks success (sql)", { traceId, userId: customerId, total, returned: data.length });
+      return res.status(200).json({
+        success: true, data,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
 
     const filter: any = { status: true, isPaid: false };
     Object.assign(filter, buildSearchFilter(search, ["name", "author"]));
@@ -967,6 +1031,22 @@ export const listFreeCourses = async (req: Request, res: Response) => {
 
     const { pageNum, limitNum, skip } = paginate(req);
     const baseUrl = resolveBase(req);
+
+    // ── SQL (MySQL) branch ──
+    if (isClientFreeMysql()) {
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const { data, total } = await freeCoursesSql({
+        customerId: Number.isInteger(cid) ? cid : null,
+        search: search || null, wantPaid,
+        page: pageNum, limit: limitNum, skip, shareBase: baseUrl,
+      });
+      logger.info("listFreeCourses success (sql)", { traceId, type: wantPaid ? "paid" : "free", total, returned: data.length });
+      return res.status(200).json({
+        success: true, data,
+        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      });
+    }
+
     const nameRegex = buildRegexCondition(search) ?? undefined;
 
     const courseFilter: any = { status: true, isPaid: isPaidValue };

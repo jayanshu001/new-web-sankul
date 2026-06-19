@@ -10,6 +10,7 @@ import { Customer } from "../../models/customer/Customer.model";
 import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
 import { applyPromocodeSchema } from "./promocode.validation";
 import { promoCovers, computePromoDiscount } from "./applies-to";
+import * as pcSql from "../../modules/promo-code/promo-code.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -122,6 +123,79 @@ export const applyPromocode = async (req: Request, res: Response) => {
       return res.status(400).json({
         success: false,
         message: `Use ${endpoint} to apply a promo code to a ${parsed.targetType}.`,
+      });
+    }
+
+    // ── SQL branch (C5: promo-code appliesTo) ────────────────────────────────
+    // When the promo-code module is on MySQL, the cart entity id is a SQL int.
+    // Resolve the entity, load SQL pricing plans, and apply SQL coverage +
+    // discount. NOTE: the referral-code path (Customer.referralCode) is NOT part
+    // of C5 and stays Mongo-only; in SQL mode an unknown code is "Invalid
+    // promocode" rather than falling through to a Mongo referral lookup.
+    if (pcSql.isPromoCodeMysql()) {
+      const nid = pcSql.parsePcId(rawId!);
+      if (nid == null) {
+        return res.status(400).json({ success: false, message: "Invalid course selection!" });
+      }
+      const sqlEntity = await pcSql.detectEntitySql(nid);
+      if (!sqlEntity) {
+        logger.warn("applyPromocode id matches no entity (sql)", { traceId, customerId: userId, promocode, rawId });
+        return res.status(404).json({
+          success: false,
+          message: "No package, course, or ebook found for the selected item.",
+        });
+      }
+
+      const pricingPlans: PlanDoc[] = (await pcSql.loadPricingPlansSql(sqlEntity)).map((p) => ({ ...p }));
+      if (!pricingPlans.length) {
+        logger.warn("applyPromocode no pricing plans (sql)", { traceId, customerId: userId, sqlEntity });
+        return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
+      }
+
+      const code = promocode.toUpperCase();
+      const promo = await pcSql.findActiveByCode(code);
+      if (!promo) {
+        logger.warn("applyPromocode invalid code (sql)", { traceId, customerId: userId, promocode: code });
+        return res.status(400).json({ success: false, message: "Invalid promocode!" });
+      }
+
+      if (!pcSql.promoCovers(promo, { type: sqlEntity.type, id: sqlEntity.id })) {
+        logger.warn("applyPromocode not covered (sql)", { traceId, customerId: userId, promocode: code, sqlEntity });
+        return res.status(404).json({ success: false, message: "This promocode is not valid for this course!" });
+      }
+
+      const promoDiscountType = promo.discountType as "flat" | "percentage";
+      const promoDiscountValue = Number(promo.discountValue ?? 0);
+      if (!(promoDiscountValue > 0)) {
+        logger.warn("applyPromocode zero discount (sql)", { traceId, customerId: userId, promocode: code });
+        return res.status(400).json({ success: false, message: "This promocode has no discount configured." });
+      }
+
+      pricingPlans.forEach((plan) => {
+        plan.orginalPrice = plan.price;
+        plan.offerAvailable = true;
+        plan.discountType = promoDiscountType;
+        plan.discountValue = promoDiscountValue;
+        const discount = computePromoDiscount(
+          { discountType: promoDiscountType, discountValue: promoDiscountValue },
+          plan.price
+        );
+        if (promoDiscountType === "percentage") plan.offerPercentage = promoDiscountValue;
+        plan.price = Math.max(0, plan.price - discount);
+      });
+
+      logger.info("applyPromocode success (sql)", { traceId, customerId: userId, promocode: code, sqlEntity });
+      return res.status(200).json({
+        success: true,
+        data: {
+          _id: String(promo.id),
+          promocode: promo.promocode,
+          discountType: promoDiscountType,
+          discountValue: promoDiscountValue,
+          id: sqlEntity.id,
+          key: sqlEntity.type,
+          plans: splitByMaterial(pricingPlans),
+        },
       });
     }
 

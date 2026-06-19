@@ -2,6 +2,12 @@ import { z } from "zod";
 import { EBookLanguage, PackageCourseEbookOrderStatus, PackageCourseEbookPaymentType, PaymentMethod } from "../../models/enums";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+// On the SQL (MySQL) branch the attached countdown/category ids are numeric
+// strings, not 24-hex ObjectIds. Accept either form for the id-ARRAY fields so
+// the SQL write isn't rejected at validation; the service coerces via
+// parseIdArray (ints) on SQL and stores ObjectId strings on Mongo. Keeps the
+// strict single legacy `examCountdownCategoryId` (Mongo-only writer) untouched.
+const objectIdOrIntRegex = /^(?:[0-9a-fA-F]{24}|[1-9][0-9]*)$/;
 
 const zBool = z.preprocess(
   (v) => (typeof v === "string" ? v === "true" : v),
@@ -29,7 +35,7 @@ const zObjectIdArray = z.preprocess((v) => {
     return [s];
   }
   return v;
-}, z.array(z.string().regex(objectIdRegex, "Invalid id")));
+}, z.array(z.string().regex(objectIdOrIntRegex, "Invalid id")));
 
 export const createEbookSchema = z.object({
   name: z.string().min(1, "Name is required"),

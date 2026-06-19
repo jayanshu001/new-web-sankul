@@ -51,6 +51,9 @@ export const createCourseSqlSchema = z.object({
   videoCategoryId: z.coerce.number().int().positive().optional(),
   materialCategories: z.array(sqlCategoryRefSchema).optional(),
   examCategories: z.array(sqlCategoryRefSchema).optional(),
+  // C6: embedded examCountdown attachments — stored as JSON int[] on ws_course.
+  examCountdownIds: z.array(z.coerce.number().int().positive()).optional(),
+  examCountdownCategoryIds: z.array(z.coerce.number().int().positive()).optional(),
 });
 
 const coursePlanBaseSchema = z.object({

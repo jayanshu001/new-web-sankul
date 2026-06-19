@@ -14,6 +14,13 @@ import { CourseEducator } from "../../models/course/CourseEducator.model";
 import { PackageVideoCategoryRelation } from "../../models/course/PackageVideoCategoryRelation.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import {
+  isLectureProgressContainerMysql,
+  parseLpId,
+  reportLiveSessionProgress as sqlReportLiveSession,
+  listMyLearningProgress as sqlListMyLearningProgress,
+  toProgressDto,
+} from "../../modules/client-lecture-progress/client-lecture-progress.service";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -25,7 +32,9 @@ const progressBodySchema = z.object({
   scope: z
     .object({
       kind: z.enum(["liveCourse", "package"]),
-      id: objectId,
+      // Accept either an ObjectId (Mongo build) or an int-string (SQL build).
+      // Back-compat hint only — no longer affects storage.
+      id: z.string().min(1),
     })
     .optional(),
 });
@@ -46,6 +55,18 @@ export const reportLiveSessionProgress = async (req: Request, res: Response) => 
 
   try {
     if (!userId) { logger.warn("reportLiveSessionProgress unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ─── SQL branch (int id-space) — before the Mongo ObjectId parse ───
+    if (isLectureProgressContainerMysql()) {
+      const cid = parseLpId(String(userId));
+      const lsid = parseLpId(String(req.params.liveSessionId));
+      if (cid == null || lsid == null) return res.status(404).json({ success: false, message: "Live session not found." });
+      const { positionSec, durationSec } = progressBodySchema.parse(req.body);
+      const r = await sqlReportLiveSession({ customerId: cid, liveSessionId: lsid, positionSec, durationSec });
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      logger.info("reportLiveSessionProgress (sql) success", { traceId, customerId: userId, liveSessionId: lsid });
+      return res.status(200).json({ success: true, data: toProgressDto(r.row) });
+    }
 
     const liveSessionId = objectId.parse(req.params.liveSessionId);
     const { positionSec, durationSec } = progressBodySchema.parse(req.body);
@@ -132,6 +153,14 @@ export const listMyLearningProgress = async (req: Request, res: Response) => {
 
   try {
     if (!userId) { logger.warn("listMyLearningProgress unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    if (isLectureProgressContainerMysql()) {
+      const sid = parseLpId(String(userId));
+      if (sid == null) return res.status(200).json({ success: true, data: { cards: [], resumeNext: null } });
+      const data = await sqlListMyLearningProgress(sid);
+      logger.info("listMyLearningProgress (sql) success", { traceId, customerId: userId, cardCount: data.cards.length });
+      return res.status(200).json({ success: true, data });
+    }
 
     const cid = new mongoose.Types.ObjectId(userId);
     const now = new Date();

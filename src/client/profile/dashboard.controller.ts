@@ -11,6 +11,7 @@ import { ExamType } from "../../models/enums";
 import { countActiveEbookDownloads } from "../ebook/ebook-downloads.controller";
 import * as folderSql from "../../modules/client-folder/client-folder.service";
 import * as notifSql from "../../modules/client-notification/client-notification.service";
+import * as profileSql from "../../modules/customer-profile/profile-dashboard.sql";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
@@ -109,29 +110,34 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
     const cid = mongoose.Types.ObjectId.isValid(userId)
       ? new mongoose.Types.ObjectId(userId)
       : (null as any);
-    const pastDailyExamsAgg = ExamResult.aggregate([
-      {
-        $match: {
-          customerId: cid,
-          status: true,
-          inProgress: false,
-          submittedAt: { $ne: null },
-        },
-      },
-      {
-        $lookup: {
-          from: "ws_exam",
-          localField: "examId",
-          foreignField: "_id",
-          as: "exam",
-        },
-      },
-      { $unwind: "$exam" },
-      { $match: { "exam.type": ExamType.DAILY } },
-      { $count: "n" },
-    ]);
 
     const now = new Date();
+    const useSql = profileSql.isProfileMysql();
+    const uidNum = Number(userId);
+    const sqlUid = Number.isInteger(uidNum) ? uidNum : null;
+
+    // The 3 previously-Mongo counts (saved addresses, subscriptions, pastExams)
+    // flip with the customer-profile flag; folder/ebook/notification were already
+    // flag-branched via the helpers.
+    const savedAddressesP =
+      useSql && sqlUid != null
+        ? profileSql.savedAddressCount(sqlUid)
+        : CustomerAddress.countDocuments({ customerId: userId, status: true });
+    const subscriptionsP =
+      useSql && sqlUid != null
+        ? profileSql.countActiveSubscriptions(sqlUid, now)
+        : countActiveSubscriptions(cid, now);
+    const pastExamsP =
+      useSql && sqlUid != null
+        ? profileSql.pastDailyExamsCount(sqlUid)
+        : ExamResult.aggregate([
+            { $match: { customerId: cid, status: true, inProgress: false, submittedAt: { $ne: null } } },
+            { $lookup: { from: "ws_exam", localField: "examId", foreignField: "_id", as: "exam" } },
+            { $unwind: "$exam" },
+            { $match: { "exam.type": ExamType.DAILY } },
+            { $count: "n" },
+          ]).then((rows: any) => rows[0]?.n ?? 0);
+
     const [
       savedAddresses,
       subscriptions,
@@ -139,17 +145,16 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
       savedVideos,
       activeEbookDownloads,
       unreadNotifications,
-      pastExamsRows,
+      pastExams,
     ] = await Promise.all([
-      CustomerAddress.countDocuments({ customerId: userId, status: true }),
-      countActiveSubscriptions(cid, now),
+      savedAddressesP,
+      subscriptionsP,
       savedCount(String(userId), cid, "material", "ws_materials"),
       savedCount(String(userId), cid, "video", "ws_videos"),
       countActiveEbookDownloads(userId),
       unreadNotifCount(String(userId)),
-      pastDailyExamsAgg,
+      pastExamsP,
     ]);
-    const pastExams = pastExamsRows[0]?.n ?? 0;
     const downloads = savedMaterials + savedVideos + activeEbookDownloads;
     // `activePlans` stays as the single headline number (now the correct
     // deduped active total across all three types), with a per-type breakdown

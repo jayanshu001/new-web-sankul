@@ -1,7 +1,15 @@
 import { z } from "zod";
 import { ExamLanguage } from "../../models/enums";
 
-const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
+// During the Mongo→SQL migration window an id may be either a 24-hex Mongo
+// ObjectId OR a positive integer (SQL autoincrement id, sent as a string by
+// multipart/JSON clients). Accept both so neither backend rejects valid ids.
+const objectId = z
+  .union([
+    z.string().regex(/^[0-9a-fA-F]{24}$/),
+    z.string().regex(/^[1-9][0-9]*$/),
+  ])
+  .or(z.number().int().positive().transform(String));
 
 // Coerce: multipart/form-data delivers everything as strings, so we accept
 // strings and convert. JSON callers can still send native types.

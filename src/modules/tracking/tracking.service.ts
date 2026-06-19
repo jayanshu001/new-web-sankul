@@ -44,6 +44,40 @@ const buildWhere = (f: { customerId?: number; event?: string; entityType?: strin
   return where;
 };
 
+/**
+ * Client write path (POST /client/tracking → ws_activity_log). Mirrors the Mongo
+ * `ActivityLog.create`. `customerId`/`entityId` are SQL ints (null when absent or
+ * non-numeric — a Mongo-ObjectId entityId won't parse, matching how the SQL admin
+ * reads treat entityId as numeric). Fire-and-forget telemetry; never throws to the
+ * caller's hot path beyond the create.
+ */
+export const createActivity = async (input: {
+  customerId: number | null;
+  event: string;
+  entityType?: string | null;
+  entityId?: number | null;
+  duration?: number | null;
+  metadata?: any;
+  ip?: string | null;
+  userAgent?: string | null;
+}): Promise<void> => {
+  const now = new Date();
+  await prisma.activityLog.create({
+    data: {
+      customerId: input.customerId,
+      event: input.event,
+      entityType: input.entityType ?? null,
+      entityId: input.entityId ?? null,
+      duration: input.duration ?? null,
+      metadata: (input.metadata ?? {}) as any,
+      ip: input.ip ?? null,
+      userAgent: input.userAgent ?? null,
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+};
+
 export const listActivity = async (opts: {
   customerId?: number; event?: string; entityType?: string; entityId?: number;
   from?: Date; to?: Date; page: number; limit: number;

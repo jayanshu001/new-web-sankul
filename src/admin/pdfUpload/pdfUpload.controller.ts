@@ -18,6 +18,14 @@ import { Ebook } from "../../models/ebook/Ebook.model";
 import { enqueuePdfUploadJob } from "./pdfUpload.scheduler";
 import { setEbookUploadStatus } from "../ebook/ebook.service";
 import { pdfBatchRoom } from "../../socket/pdf-progress.socket";
+import {
+  isPdfUploadMysql,
+  createJobSql,
+  getBatchJobsSql,
+  ebookExistsSql,
+  setEbookUploadStatusSql,
+  parsePdfId,
+} from "../../modules/pdf-upload/pdf-upload.service";
 import logger from "../../utils/logger";
 
 const isObjectId = (s?: string): boolean =>
@@ -42,7 +50,16 @@ export const uploadEbookPdf = asyncHandler(
       await cleanup();
       return failure(res, "Unauthorized.", 401);
     }
-    if (!isObjectId(ebookId)) {
+
+    const sql = isPdfUploadMysql();
+    // On SQL the ebookId path param is a SQL int (the job row + ebook columns are
+    // keyed by it); on Mongo it's a 24-hex ObjectId. Validate per backend.
+    if (sql) {
+      if (parsePdfId(ebookId) == null) {
+        await cleanup();
+        return failure(res, "Invalid ebookId.", 400);
+      }
+    } else if (!isObjectId(ebookId)) {
       await cleanup();
       return failure(res, "Invalid ebookId.", 400);
     }
@@ -56,31 +73,53 @@ export const uploadEbookPdf = asyncHandler(
       return failure(res, "target must be 'bookUrl' or 'demoUrl'.", 422);
     }
 
-    const ebook = await Ebook.findById(ebookId).select("_id").lean();
-    if (!ebook) {
+    const ebookFound = sql
+      ? await ebookExistsSql(ebookId)
+      : !!(await Ebook.findById(ebookId).select("_id").lean());
+    if (!ebookFound) {
       await cleanup();
       return failure(res, "Ebook not found.", 404);
     }
 
     const batchId = randomUUID();
-    const job = await PdfUploadJob.create({
-      batchId,
-      index: 0,
-      uploadedBy: adminId,
-      ebookId: new mongoose.Types.ObjectId(ebookId),
-      targetField: target,
-      fileName: file.originalname,
-      tempPath: file.path,
-      fileSize: file.size,
-      status: "queued",
-      progress: 0,
-    });
+    // SQL branch (flag pdf-upload): the ws_pdf_upload_job ROW + the ebook-side
+    // upload-status write both run on SQL now (C7 — ws_ebook gained the
+    // upload-status / file-name columns). BullMQ enqueue + Socket.io are
+    // untouched. The job `_id` becomes the stringified SQL int id, still the
+    // BullMQ jobId so enqueue stays idempotent.
+    const job: any = sql
+      ? await createJobSql({
+          batchId,
+          index: 0,
+          uploadedBy: adminId,
+          ebookId,
+          targetField: target,
+          fileName: file.originalname,
+          tempPath: file.path,
+          fileSize: file.size,
+        })
+      : await PdfUploadJob.create({
+          batchId,
+          index: 0,
+          uploadedBy: adminId,
+          ebookId: new mongoose.Types.ObjectId(ebookId),
+          targetField: target,
+          fileName: file.originalname,
+          tempPath: file.path,
+          fileSize: file.size,
+          status: "queued",
+          progress: 0,
+        });
 
     await enqueuePdfUploadJob(String(job._id));
 
     // Persist the "queued" state onto the ebook so the admin list reflects it
     // immediately (and after a refresh), not just over the per-session socket.
-    await setEbookUploadStatus(ebookId, target, { status: "queued", progress: 0 });
+    if (sql) {
+      await setEbookUploadStatusSql(ebookId, target, { status: "queued", progress: 0 });
+    } else {
+      await setEbookUploadStatus(ebookId, target, { status: "queued", progress: 0 });
+    }
 
     logger.info("Ebook PDF upload queued", {
       traceId,
@@ -124,12 +163,14 @@ export const getPdfUploadBatch = asyncHandler(
     const batchId = String(req.params.batchId || "");
     if (!batchId) return failure(res, "batchId required.", 400);
 
-    const jobs = await PdfUploadJob.find({ batchId })
-      .sort({ index: 1 })
-      .select(
-        "_id index fileName ebookId status progress fileUrl failureReason startedAt finishedAt"
-      )
-      .lean();
+    const jobs = isPdfUploadMysql()
+      ? await getBatchJobsSql(batchId)
+      : await PdfUploadJob.find({ batchId })
+          .sort({ index: 1 })
+          .select(
+            "_id index fileName ebookId status progress fileUrl failureReason startedAt finishedAt"
+          )
+          .lean();
 
     if (!jobs.length) return failure(res, "Batch not found.", 404);
 

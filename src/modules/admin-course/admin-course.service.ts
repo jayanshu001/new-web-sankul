@@ -1,5 +1,6 @@
 import { isMysqlModule } from "../../config/migration";
 import { adminCourseRepository as repo } from "./admin-course.repository";
+import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
 import type { Course } from "@prisma/client";
 
 export const ADMIN_COURSE_MODULE = "admin-course";
@@ -26,7 +27,12 @@ const nameRef = (r: { id: number; name: string | null } | null | undefined) => (
 const titleRef = (r: { id: number; title: string } | null | undefined) => (r ? { _id: String(r.id), title: r.title } : null);
 
 /** `ws_course` row (+ refs) → Mongo-shaped Course doc (populated refs replace scalar ids). */
-const toCourseDto = (row: CourseRow, materialCats: any[], examCats: any[]) => ({
+const toCourseDto = (
+  row: CourseRow,
+  materialCats: any[],
+  examCats: any[],
+  ec?: { examCountdownIds: any[]; examCountdownCategoryIds: any[] }
+) => ({
   _id: String(row.id),
   name: row.name ?? null,
   description: row.description,
@@ -53,6 +59,11 @@ const toCourseDto = (row: CourseRow, materialCats: any[], examCats: any[]) => ({
     category: e.ExamCategory ? { _id: String(e.ExamCategory.id), name: e.ExamCategory.name ?? null, image: e.ExamCategory.image ?? null } : idStrOrNull(e.examCategoryId),
     order: e.order,
   })),
+  // C6: embedded examCountdown attachments, populated to the Mongo shape.
+  examCountdownIds: ec?.examCountdownIds ?? [],
+  examCountdownCategoryIds: ec?.examCountdownCategoryIds ?? [],
+  // Legacy single-category field (first populated category or null).
+  examCountdownCategoryId: ec?.examCountdownCategoryIds?.[0] ?? null,
   createdAt: row.createdAt ?? null,
   updatedAt: row.updatedAt ?? null,
 });
@@ -115,7 +126,9 @@ export const getCourseById = async (id: number): Promise<"not_found" | { course:
     repo.findById(id), repo.materialCategoriesFor(id), repo.examCategoriesFor(id), repo.listPlans(id),
   ]);
   if (!row) return "not_found";
-  return { course: toCourseDto(row, mc, ec), plans: plans.map(toPlanDto) };
+  // C6: populate the row's stored examCountdown JSON columns to Mongo shape.
+  const countdowns = await populateExamCountdowns(row as any);
+  return { course: toCourseDto(row, mc, ec, countdowns), plans: plans.map(toPlanDto) };
 };
 
 // ── course write ────────────────────────────────────────────────────────────
@@ -126,6 +139,9 @@ export interface CourseWriteInput {
   courseEducatorId?: number; courseSubjectCategoryId?: number; videoCategoryId?: number;
   materialCategories?: Array<{ category: number; order: number }>;
   examCategories?: Array<{ category: number; order: number }>;
+  // C6: embedded examCountdown attachments — stored as JSON int[] on ws_course.
+  examCountdownIds?: any;
+  examCountdownCategoryIds?: any;
 }
 
 const pivotRows = (refs?: Array<{ category: number; order: number }>) =>
@@ -150,6 +166,9 @@ export const createCourse = async (d: CourseWriteInput) => {
       purchase: d.isPaid === false ? "no" : "yes",
       is_featured: d.isPopular ? "yes" : "no",
       status: d.status ?? true,
+      // C6: embedded examCountdown attachments → JSON int[] columns.
+      examCountdownIds: parseIdArray(d.examCountdownIds),
+      examCountdownCategoryIds: parseIdArray(d.examCountdownCategoryIds),
       createdAt: now, updatedAt: now,
     },
     materialCategories: pivotRows(d.materialCategories),
@@ -178,6 +197,9 @@ export const updateCourse = async (id: number, d: CourseWriteInput): Promise<"no
   if (d.isPaid !== undefined) data.purchase = d.isPaid === false ? "no" : "yes";
   if (d.isPopular !== undefined) data.is_featured = d.isPopular ? "yes" : "no";
   if (d.status !== undefined) data.status = d.status;
+  // C6: embedded examCountdown attachments → JSON int[] columns.
+  if (d.examCountdownIds !== undefined) data.examCountdownIds = parseIdArray(d.examCountdownIds);
+  if (d.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = parseIdArray(d.examCountdownCategoryIds);
 
   await repo.updateCourse(id, data, {
     materialCategories: d.materialCategories !== undefined ? pivotRows(d.materialCategories) : undefined,

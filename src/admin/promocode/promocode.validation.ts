@@ -1,6 +1,10 @@
 import { z } from "zod";
 import { PromocodeType } from "../../models/enums";
 
+// Accept a 24-hex Mongo ObjectId OR a positive integer id (the SQL/MySQL branch
+// sends int ids). Mirrors how ebook.validation was widened for examCountdown.
+const objectIdOrIntRegex = /^(?:[0-9a-fA-F]{24}|[1-9][0-9]*)$/;
+
 const promocodeBase = z.object({
   promocode: z.string().min(1).max(50),
   title: z.string().max(255).optional().default(""),
@@ -11,7 +15,7 @@ const promocodeBase = z.object({
   status: z.boolean().optional(),
   discountType: z.enum(["flat", "percentage"]).default("percentage"),
   discountValue: z.number().nonnegative("discountValue must be >= 0"),
-  promoterId: z.string().regex(/^[0-9a-fA-F]{24}$/).nullable().optional(),
+  promoterId: z.string().regex(objectIdOrIntRegex).nullable().optional(),
 });
 
 const validateDiscount = <T extends { discountType?: "flat" | "percentage"; discountValue?: number }>(d: T) =>
@@ -27,7 +31,7 @@ export type AppliesToType = (typeof APPLIES_TO_TYPES)[number];
 export const appliesToSchema = z.object({
   type: z.enum(APPLIES_TO_TYPES),
   ids: z
-    .array(z.string().regex(/^[a-f0-9]{24}$/i, "Invalid id"))
+    .array(z.string().regex(objectIdOrIntRegex, "Invalid id"))
     .min(1, "Select at least one item"),
 });
 
