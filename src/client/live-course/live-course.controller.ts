@@ -364,6 +364,17 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
   logger.info("getLiveCourseForClient invoked", { traceId, path: req.originalUrl, userId, id });
 
   try {
+    // ── MySQL branch (data only — playback URLs never here) ───────────────────
+    if (liveSql.isLiveCourseMysql()) {
+      const lid = liveSql.parseLiveId(id);
+      if (!lid) { logger.warn("getLiveCourseForClient invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const r = await liveSql.getLiveCourseDetailForClient(lid, Number.isInteger(cid) ? cid : null, resolveBase(req));
+      if (r === "not_found") { logger.warn("getLiveCourseForClient not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
+      logger.info("getLiveCourseForClient success (mysql)", { traceId, userId, id });
+      return success(res, r, "Live course fetched.");
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("getLiveCourseForClient invalid id", { traceId, id });
       return failure(res, "Invalid live course id.", 422);
@@ -552,6 +563,17 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
   logger.info("listLiveCourseRecordings invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
 
   try {
+    // ── MySQL branch (folders + lectures + per-quality recordings; video-URL via encryptLecture on tap) ──
+    if (liveSql.isLiveCourseMysql()) {
+      const lid = liveSql.parseLiveId(id);
+      if (!lid) { logger.warn("listLiveCourseRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const r = await liveSql.getRecordingsForClient(lid, Number.isInteger(cid) ? cid : null);
+      if (r === "not_found") { logger.warn("listLiveCourseRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
+      logger.info("listLiveCourseRecordings success (mysql)", { traceId, id, totalLectures: r.totalLectures, folderCount: r.folders.length });
+      return success(res, r, "Recorded lectures fetched.");
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listLiveCourseRecordings invalid id", { traceId, id });
       return failure(res, "Invalid live course id.", 422);
@@ -711,6 +733,31 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
   logger.info("getLiveCourseLecture invoked", { traceId, path: req.originalUrl, userId, id, videoId });
 
   try {
+    // ── MySQL branch (ownership check in SQL; video-URL via the SAME encryptLecture) ──
+    if (liveSql.isLiveCourseMysql()) {
+      const lid = liveSql.parseLiveId(id);
+      const vid = liveSql.parseLiveId(videoId);
+      if (!lid || !vid) { logger.warn("getLiveCourseLecture invalid ids (mysql)", { traceId, id, videoId }); return failure(res, "Invalid live course or video id.", 422); }
+      const r = await liveSql.clientLectureVideoInCourse(lid, vid);
+      if (r === "video_not_found") { logger.warn("getLiveCourseLecture video not found (mysql)", { traceId, userId, videoId }); return failure(res, "Lecture not found.", 404); }
+      if (r === "mismatch") { logger.warn("getLiveCourseLecture course mismatch (mysql)", { traceId, userId, id, videoId }); return failure(res, "Lecture does not belong to this live course.", 404); }
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const entitled = await liveSql.isLectureEntitled(lid, Number.isInteger(cid) ? cid : null, r.priceType);
+      if (!entitled) {
+        logger.warn("getLiveCourseLecture not subscribed (mysql)", { traceId, userId, id, videoId });
+        return failure(res, "Subscribe to this live course to watch this lecture.", 403, {}, { purchaseOptions: await liveSql.buildPurchaseOptionsSql([lid]) });
+      }
+      let envelopeSql;
+      try {
+        envelopeSql = await encryptLecture(r);
+      } catch (err) {
+        logger.error("getLiveCourseLecture resolve/encrypt failed (mysql)", { traceId, videoId: String(r._id), platform: r.platform, error: getErrorMessage(err) });
+        return failure(res, "Failed to resolve playable URLs for this lecture.", 502);
+      }
+      logger.info("getLiveCourseLecture success (mysql)", { traceId, userId, id, videoId, platform: r.platform });
+      return success(res, { _id: String(r._id), title: r.title, topic: r.topic, platform: r.platform, priceType: r.priceType, ...envelopeSql }, "Lecture fetched.");
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(videoId)) {
       logger.warn("getLiveCourseLecture invalid ids", { traceId, id, videoId });
       return failure(res, "Invalid live course or video id.", 422);
@@ -792,6 +839,19 @@ export const listLiveCourseSessionRecordings = async (req: Request, res: Respons
   logger.info("listLiveCourseSessionRecordings invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
 
   try {
+    // ── MySQL branch (metadata only; playback via gated /live-sessions/:id) ────
+    if (liveSql.isLiveCourseMysql()) {
+      const lid = liveSql.parseLiveId(id);
+      if (!lid) { logger.warn("listLiveCourseSessionRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
+      const pageN = Math.max(1, parseInt(req.query.page as string) || 1);
+      const limitN = Math.min(100, parseInt(req.query.limit as string) || 50);
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const r = await liveSql.listSessionRecordingsForClient(lid, Number.isInteger(cid) ? cid : null, pageN, limitN);
+      if (r === "not_found") { logger.warn("listLiveCourseSessionRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
+      logger.info("listLiveCourseSessionRecordings success (mysql)", { traceId, id, total: r.total, returned: r.lectures.length });
+      return success(res, r, "Live classes fetched.");
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listLiveCourseSessionRecordings invalid id", { traceId, id });
       return failure(res, "Invalid live course id.", 422);
@@ -881,6 +941,15 @@ export const listMyLiveCourses = async (req: Request, res: Response) => {
     const filterStatus =
       typeof req.query.status === "string" ? req.query.status : "all";
     const now = new Date();
+
+    // ── MySQL branch ──────────────────────────────────────────────────────────
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = Number(customerId);
+      if (!Number.isInteger(cid)) { logger.warn("listMyLiveCourses invalid customer (mysql)", { traceId, customerId }); return failure(res, "Unauthorized.", 401); }
+      const r = await liveSql.listMyLiveCoursesForClient(cid, filterStatus, resolveBase(req));
+      logger.info("listMyLiveCourses success (mysql)", { traceId, customerId, count: r.total });
+      return success(res, r, "Your live courses fetched.");
+    }
 
     const query: Record<string, any> = { customerId, paymentStatus: "verified" };
     if (filterStatus === "active") {

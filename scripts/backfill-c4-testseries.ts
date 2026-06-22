@@ -55,13 +55,24 @@ dotenv.config();
   // ── exam links ──
   const links: any[] = await TestSeriesExam.find({}).lean();
   let lIns = 0, lSkip = 0;
+  const unmappedExams = new Set<string>();
+  const unmappedSeries = new Set<string>();
+  let ccMisses = 0;
   for (const l of links) {
     const ts: any = await TestSeries.findById(l.testSeriesId).select("title").lean();
     const sqlTsId = ts?.title ? tsByTitle.get(ts.title.trim()) : undefined;
     const sqlCcId = ccMap.get(String(l.contentCategoryId));
     const exam: any = await Exam.findById(l.examId).select("title").lean();
     const sqlExamId = exam?.title ? examByTitle.get(exam.title.trim()) : undefined;
-    if (!sqlTsId || !sqlCcId || !sqlExamId) { lSkip++; continue; }
+    if (!sqlTsId || !sqlCcId || !sqlExamId) {
+      // Surface WHICH natural key failed so a prod run shows what's missing in SQL
+      // (vs. a bare skip count that hides disjoint-data vs. real-bug).
+      if (!sqlTsId) unmappedSeries.add(String(ts?.title ?? l.testSeriesId));
+      if (!sqlCcId) ccMisses++;
+      if (sqlTsId && sqlCcId && !sqlExamId) unmappedExams.add(String(exam?.title ?? l.examId));
+      lSkip++;
+      continue;
+    }
     try {
       await prisma.testSeriesExam.create({
         data: { testSeriesId: sqlTsId, contentCategoryId: sqlCcId, examId: sqlExamId, orderBy: l.orderBy ?? 0, status: l.status ?? true, createdAt: l.createdAt ?? null, updatedAt: l.updatedAt ?? null },
@@ -73,6 +84,13 @@ dotenv.config();
     }
   }
   console.log(`test_series_exam: inserted=${lIns} skipped=${lSkip} (mongo total ${links.length})`);
+  if (lSkip) {
+    if (unmappedExams.size)
+      console.log(`  ↳ exams not found in ws_exam (by name): ${[...unmappedExams].join(", ")}`);
+    if (unmappedSeries.size)
+      console.log(`  ↳ series not found in ws_test_series (by title): ${[...unmappedSeries].join(", ")}`);
+    if (ccMisses) console.log(`  ↳ content-category unmapped: ${ccMisses}`);
+  }
 
   await mongoose.disconnect();
   await prisma.$disconnect();

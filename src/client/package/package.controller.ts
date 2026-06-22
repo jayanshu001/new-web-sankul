@@ -22,8 +22,19 @@ import { buildRegexCondition } from "../../utils/searchFilter";
 import { ExamStatus, ExamType } from "../../models/enums";
 import {
   isPackageTypeMysql,
+  isPackageMysql,
+  parsePackageId,
   listPackageTypes as listPackageTypesMysql,
 } from "../../modules/catalog-package/catalog-package.service";
+import {
+  buildPackageDetailSql,
+  enrichPackagesSql,
+  listPackagesPaginatedSql,
+  listPackagesByTypeSql,
+  listPackagesByGoalLabelSql,
+} from "../../modules/catalog-package/catalog-package.detail.sql";
+import { listActiveSubscriptionsByCustomer } from "../../modules/commerce-subscription/commerce-subscription.service";
+import { prisma as prismaPkg } from "../../config/prisma";
 import {
   isPackageChatMysql,
   listChatMessagesMysql,
@@ -212,6 +223,17 @@ export const getPackageDetail = async (req: Request, res: Response) => {
   logger.info("getPackageDetail invoked", { traceId, path: req.originalUrl, userId: req.user?.id, packageId: id });
 
   try {
+    // ── MySQL branch (ws_package + category links + plans/promo/sub) ──────────
+    if (isPackageMysql()) {
+      const pid = parsePackageId(id);
+      if (!pid) { logger.warn("getPackageDetail invalid id (mysql)", { traceId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const detailSql = await buildPackageDetailSql(pid, Number.isInteger(cid) ? cid : null, resolveBase(req));
+      if (!detailSql) { logger.warn("getPackageDetail not found (mysql)", { traceId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found." }); }
+      logger.info("getPackageDetail success (mysql)", { traceId, packageId: id });
+      return res.status(200).json({ success: true, data: detailSql });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("getPackageDetail invalid id", { traceId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
 
     const detail = await buildPackageDetail(id, req.user?.id, resolveBase(req));
@@ -260,6 +282,28 @@ export const listPackages = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
+    // ── MySQL branch ──────────────────────────────────────────────────────────
+    if (isPackageMysql()) {
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const { rows, total: totalSql } = await listPackagesPaginatedSql({
+        search: search?.trim() || undefined,
+        isPaid: type === "paid" ? true : type === "free" ? false : undefined,
+        packageTypeId: packageTypeId && /^\d+$/.test(packageTypeId) ? Number(packageTypeId) : undefined,
+        goalId: goalId && /^\d+$/.test(goalId) ? Number(goalId) : undefined,
+        isSmartCourse: isSmartCourse === "true" ? true : isSmartCourse === "false" ? false : undefined,
+        isPlannerCourse: isPlannerCourse === "true" ? true : isPlannerCourse === "false" ? false : undefined,
+        skip,
+        take: limitNum,
+      });
+      const dataSql = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
+      logger.info("listPackages success (mysql)", { traceId, total: totalSql, returned: dataSql.length });
+      return res.status(200).json({
+        success: true,
+        data: dataSql,
+        pagination: { total: totalSql, page: pageNum, limit: limitNum, totalPages: Math.ceil(totalSql / limitNum) },
+      });
+    }
+
     const [packages, total] = await Promise.all([
       Package.find(filter)
         .populate("packageTypeId", "_id name")
@@ -295,6 +339,17 @@ export const listPackagesByType = async (req: Request, res: Response) => {
   logger.info("listPackagesByType invoked", { traceId, path: req.originalUrl, userId: req.user?.id, typeId });
 
   try {
+    // ── MySQL branch ──────────────────────────────────────────────────────────
+    if (isPackageMysql()) {
+      const tid = parsePackageId(typeId);
+      if (!tid) { logger.warn("listPackagesByType invalid id (mysql)", { traceId, typeId }); return res.status(400).json({ success: false, message: "Invalid type id." }); }
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const rows = await listPackagesByTypeSql(tid);
+      const enrichedSql = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
+      logger.info("listPackagesByType success (mysql)", { traceId, typeId, count: enrichedSql.length });
+      return res.status(200).json({ success: true, data: enrichedSql });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(typeId)) { logger.warn("listPackagesByType invalid id", { traceId, typeId }); return res.status(400).json({ success: false, message: "Invalid type id." }); }
 
     const packages = await Package.find({ packageTypeId: typeId, active: true })
@@ -405,6 +460,32 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
       });
     }
 
+    // ── MySQL branch (label ids are the goal module's synthetic ints) ─────────
+    if (isPackageMysql()) {
+      const intIds = ids.filter((s) => /^\d+$/.test(s)).map(Number);
+      if (!intIds.length) { logger.warn("listPackagesByGoal no valid labelIds (mysql)", { traceId, ids }); return res.status(400).json({ success: false, message: "No valid label ids supplied." }); }
+      const cid = req.user?.id ? Number(req.user.id) : null;
+      const goals = await prismaPkg.goal.findMany({ select: { id: true, title: true, labels: true } });
+      const metaById = new Map<number, { name: string; goalId: string; goalTitle: string }>();
+      for (const g of goals) {
+        const labels = Array.isArray(g.labels) ? (g.labels as any[]) : [];
+        for (const l of labels) {
+          const lid = Number(l?.id);
+          if (Number.isInteger(lid) && intIds.includes(lid)) metaById.set(lid, { name: String(l?.name ?? ""), goalId: String(g.id), goalTitle: g.title });
+        }
+      }
+      const resultSql = await Promise.all(
+        intIds.map(async (lid) => {
+          const rows = await listPackagesByGoalLabelSql(lid);
+          const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
+          const meta = metaById.get(lid);
+          return { label: { _id: String(lid), name: meta?.name ?? null, goalId: meta?.goalId ?? null, goalTitle: meta?.goalTitle ?? null, packages: enriched } };
+        })
+      );
+      logger.info("listPackagesByGoal success (mysql)", { traceId, labelCount: resultSql.length });
+      return res.status(200).json({ success: true, data: resultSql });
+    }
+
     const validIds = ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
     if (!validIds.length) {
       logger.warn("listPackagesByGoal no valid labelIds", { traceId, ids });
@@ -487,6 +568,24 @@ export const listMyPackages = async (req: Request, res: Response) => {
   try {
     if (!customerId) { logger.warn("listMyPackages unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
     const now = new Date();
+
+    // ── MySQL branch ──────────────────────────────────────────────────────────
+    if (isPackageMysql()) {
+      const cid = Number(customerId);
+      if (!Number.isInteger(cid)) { logger.warn("listMyPackages invalid customer (mysql)", { traceId, customerId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+      const activeSubs = (await listActiveSubscriptionsByCustomer(cid)).filter((s) => s.targetPackageId);
+      const pkgIds = [...new Set(activeSubs.map((s) => Number(s.targetPackageId)).filter(Number.isInteger))];
+      const pkgs = pkgIds.length ? await prismaPkg.package.findMany({ where: { id: { in: pkgIds } } }) : [];
+      const enriched = await enrichPackagesSql(pkgs, cid, resolveBase(req));
+      const byId = new Map(enriched.map((p) => [p._id, p]));
+      const dataSql = activeSubs.map((s) => ({
+        ...s,
+        packageId: byId.get(String(s.targetPackageId)) ?? null,
+        daysLeft: computeDaysLeft(s.endAt ?? null, now),
+      }));
+      logger.info("listMyPackages success (mysql)", { traceId, customerId, count: dataSql.length });
+      return res.status(200).json({ success: true, data: dataSql });
+    }
 
     const subs = await PackageCourseSubscription.find({
       customerId,

@@ -2,8 +2,53 @@ import logger from "../../utils/logger";
 import { Permission } from "../../models/admin/Permission.model";
 import { PermissionCategory } from "../../models/admin/PermissionCategory.model";
 import { PERMISSION_CATALOG, ALL_CATALOG_KEYS } from "./permissions.catalog";
+import { isMysqlModule } from "../../config/migration";
+import { prisma } from "../../config/prisma";
 
 const DEFAULT_GUARD = "api";
+
+/**
+ * SQL catalog sync (ws_permission_category + ws_permissions) — mirrors the Mongo
+ * sync. Runs at boot when `admin-rbac` is on (the SQL RBAC tables are then the
+ * source of truth, read by admin-rbac/role.controller). Removes the last
+ * unconditional boot-time Mongo write.
+ */
+async function syncPermissionCatalogSql(): Promise<void> {
+  const groups = Array.from(new Set(PERMISSION_CATALOG.map((m) => m.group)));
+  const categoryIdByGroup = new Map<string, number>();
+  for (let i = 0; i < groups.length; i++) {
+    const title = groups[i];
+    const slug = slugify(title);
+    const cat = await prisma.permissionCategoryRow.upsert({
+      where: { slug },
+      create: { title, slug, orderBy: i, status: true },
+      update: {}, // keep existing (mirror $setOnInsert)
+    });
+    categoryIdByGroup.set(title, cat.id);
+  }
+
+  let inserted = 0;
+  for (const m of PERMISSION_CATALOG) {
+    const categoryId = categoryIdByGroup.get(m.group) ?? null;
+    for (const p of m.permissions) {
+      const existing = await prisma.adminPermissionRow.findFirst({
+        where: { name: p.key, guardName: DEFAULT_GUARD },
+        select: { id: true },
+      });
+      if (!existing) {
+        await prisma.adminPermissionRow.create({ data: { name: p.key, guardName: DEFAULT_GUARD, categoryId } });
+        inserted++;
+      }
+    }
+  }
+
+  const dbKeys = await prisma.adminPermissionRow.findMany({ where: { guardName: DEFAULT_GUARD }, select: { name: true } });
+  const deprecated = dbKeys.map((r) => r.name).filter((k) => !ALL_CATALOG_KEYS.has(k));
+  logger.info(
+    `[permissions] catalog sync complete (sql) — inserted: ${inserted}, total catalog keys: ${ALL_CATALOG_KEYS.size}, deprecated rows: ${deprecated.length}`
+  );
+  if (deprecated.length > 0) logger.warn(`[permissions] deprecated keys still in DB (sql): ${deprecated.join(", ")}`);
+}
 
 const slugify = (s: string) =>
   s
@@ -20,6 +65,12 @@ const slugify = (s: string) =>
  *   admins can clean up role assignments before hard-deletion.
  */
 export async function syncPermissionCatalog(): Promise<void> {
+  // SQL RBAC is the source of truth when admin-rbac is on — sync ws_* instead of Mongo.
+  if (isMysqlModule("admin-rbac")) {
+    await syncPermissionCatalogSql();
+    return;
+  }
+
   // 1) Ensure a PermissionCategory exists for every group used in the catalog.
   const groups = Array.from(new Set(PERMISSION_CATALOG.map((m) => m.group)));
   const categoryIdByGroup = new Map<string, any>();

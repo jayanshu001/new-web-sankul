@@ -11,7 +11,7 @@ import { createServer } from "http";
 import app from "./app";
 import connectDB from "./config/db";
 import { connectPrisma } from "./config/prisma";
-import { hasMysqlMigrationModules } from "./config/migration";
+import { hasMysqlMigrationModules, isMongoFallbackEnabled } from "./config/migration";
 import logger from "./utils/logger";
 import { sendEmail } from "./utils/emailService";
 import getLocalIpAddress from "./utils/getLocalIp";
@@ -52,7 +52,14 @@ const startServer = async () => {
         `[migration] MySQL modules active: ${process.env.MIGRATION_MYSQL_MODULES}`
       );
     }
-    await connectDB();
+    // Mongo is now an opt-in fallback (migration complete → MySQL-only). Only
+    // connect when explicitly re-enabled via MONGO_FALLBACK_ENABLED=true.
+    if (isMongoFallbackEnabled()) {
+      await connectDB();
+      logger.info("[migration] MongoDB fallback connection ENABLED.");
+    } else {
+      logger.info("[migration] MongoDB fallback DISABLED — running MySQL-only (no Mongo connection).");
+    }
     try {
       await syncPermissionCatalog();
     } catch (err) {

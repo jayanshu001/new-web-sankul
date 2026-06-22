@@ -26,3 +26,12 @@ export const isMysqlModule = (module: string): boolean =>
 
 export const hasMysqlMigrationModules = (): boolean =>
   getMysqlMigrationModules().length > 0;
+
+/**
+ * Whether to connect to MongoDB at boot. The migration is complete — every API
+ * path serves from MySQL — so Mongo is now an OPT-IN fallback, OFF by default.
+ * Set MONGO_FALLBACK_ENABLED=true in .env to re-enable the legacy connection
+ * (e.g. to temporarily fall back a not-yet-flipped module). Reversible by design.
+ */
+export const isMongoFallbackEnabled = (): boolean =>
+  process.env.MONGO_FALLBACK_ENABLED === "true";

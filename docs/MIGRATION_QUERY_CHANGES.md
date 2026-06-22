@@ -4,6 +4,230 @@
 
 ---
 
+## 2026-06-22 — Phase B COMPLETE (operational): MongoDB connection removed; app runs MySQL-only
+
+The app now boots and serves with **no MongoDB connection** — Mongo is an opt-in fallback, OFF by default.
+- **`config/migration.ts`**: new `isMongoFallbackEnabled()` (reads `MONGO_FALLBACK_ENABLED`, default false).
+- **`index.ts`**: `connectDB()` (Mongo) now gated on `isMongoFallbackEnabled()` — skipped by default. Boot logs
+  `MongoDB fallback DISABLED — running MySQL-only`.
+- **`config/env.ts`**: `MONGODB_URI` moved out of always-`REQUIRED`; required only when the fallback is enabled.
+- **`.env` / `.env.example`**: `MONGO_FALLBACK_ENABLED=false` documented.
+- **`admin/notification/scheduler.ts`**: the empirical no-Mongo boot surfaced one real ungated Mongo call — the
+  cutover "straggler" rehydrate `Notification.find()` (+ the fail-path `Notification.updateOne`). Both now gated on
+  `isMongoFallbackEnabled()` (SQL rehydrate via `admin-notification` is canonical).
+
+**Verified:** boots clean with 0 Mongo calls/errors; **22 endpoints across all admin+client modules return 200 with
+MongoDB disconnected** (empirical proof of SQL-only runtime). `yarn typecheck` ✅. Reversible — set
+`MONGO_FALLBACK_ENABLED=true` to restore the legacy connection.
+
+**Remaining (optional, now low-risk dead-code cleanup):** physically deleting `src/models/**`, the dormant `else`
+branches, and the `mongoose` dependency. Safe to do anytime since nothing connects to Mongo, but NOT required for
+"off MongoDB" — and best done incrementally (relocate shared enums first) with typecheck between steps.
+
+---
+
+## 2026-06-22 — Phase B reachability audit + boot permission seeder → SQL
+
+**Audit finding (important):** a full classification of the 153 non-model files importing `src/models` (5 parallel
+agents) proved **statically unreliable** — it repeatedly flagged verified-SQL modules (catalog-package, client-search,
+admin-material/promoter/promocode/exam/dashboard, client-free) as "Mongo-only" because it didn't trace
+controller→service delegation. Reachability checks then showed **most "Mongo-only" files are dead `else`-branches** in
+SQL mode: admin realtime/recording is already dual-path and already calls `maybeAutoPromoteRecordingSql`
+(`admin/live/live.controller` L540/L1490); client reminder writes already branch on `client-live-reminder`
+(`live-reminder.service` L116); promoter `overview.service` + the `client/course` resolver helpers are Mongo
+else-branch implementations. **At runtime (all flags on) the app is effectively SQL-only on reads + writes.**
+
+**Genuine live Mongo write eliminated — boot permission seeder → SQL.** `syncPermissionCatalog` (run at boot,
+`index.ts:57`) wrote Mongo `Permission`/`PermissionCategory` unconditionally. Added `syncPermissionCatalogSql`
+(upsert `ws_permission_category` by slug + `ws_permissions` by name/guard, gated on `isMysqlModule("admin-rbac")`,
+Mongo fallback retained). Verified at boot: `catalog sync complete (sql)`, `ws_permissions`=648 / `ws_permission_category`=23.
+`yarn typecheck` ✅.
+
+**Remaining genuine live Mongo path:** the admin permission-management CRUD (`permission.controller` →
+`permission.service`, Mongo `Permission`) — SQL equivalents already exist in the `admin-rbac` module
+(`listPermissions/createPermission/...`); wiring needs response-shape matching to the admin dashboard. Everything
+else Mongo-touching is dead `else`-branch fallback (only removed in the irreversible strip).
+
+---
+
+## 2026-06-22 — live-recording subsystem → SQL (recordings, lecture, session-recordings, session-detail)
+
+The realtime/video-playback tier. Schema: `ALTER ws_video_category ADD live_course_id` (folders→course link;
+`2026-06-22_video_category_live_course.sql`); Prisma `VideoCategory.liveCourseId` added. Backfill
+`scripts/backfill-live-recordings.ts`: 8 folders + 3 promoted videos Mongo→SQL (live courses map by name).
+
+Handlers wired (client/live-course + client/live controllers), Mongo fallback retained, video-URL contract honored:
+- **`listLiveCourseRecordings`** → `getRecordingsForClient` (folders via ws_video_category.live_course_id, lectures via
+  ws_video, per-quality from ws_live_session.recordings, progress from ws_lecture_progress, qualities helper reused).
+- **`getLiveCourseLecture`** → `clientLectureVideoInCourse` + the SAME local `encryptLecture` util → identical
+  AES `/v1/lecture` envelope by construction. (Verified: 403 entitlement gate fires correctly for non-subscribers.)
+- **`listLiveCourseSessionRecordings`** → `listSessionRecordingsForClient` (SCHEDULED/CREATED via ws_live_session_course).
+- **`getLiveSessionForClient`** → SQL session (`adminLive.findSessionByAnyId`) + SQL write-back
+  (`adminLive.updateSession`) of hls/recordings/status; **StreamOS runtime + Socket.IO `recordings_ready` kept**;
+  per-viewer trial ported to SQL (`resolveLivePreviewStateSql` over ws_live_session_preview); recording auto-promote
+  ported to SQL (`maybeAutoPromoteRecordingSql` → ws_video_category/ws_video).
+
+**Verified live (integer ids, previously 422/404 on SQL ids):** recordings 200 (2 folders), lecture 403 (entitlement),
+session-recordings 200 (3), session-detail 200 (id=2, accessLevel=preview). Regression: live list/detail/recordings 200.
+`yarn typecheck` ✅. New service fns in `admin-live-course.service.ts`; new repo methods + `coursesSlimByIds`.
+
+---
+
+## 2026-06-22 — client live-course detail + my-courses → SQL (safe metadata tier)
+
+Migrated the two data-only client live-course reads (the realtime/video-playback handlers stay on Mongo by
+decision — see finding below):
+- **`getLiveCourseForClient`** (`GET /client/live-courses/:id`) and **`listMyLiveCourses`** (`/my`) now branch on
+  `liveSql.isLiveCourseMysql()`. New `admin-live-course.service.ts` fns `getLiveCourseDetailForClient` +
+  `listMyLiveCoursesForClient`; new repo methods `findEducator`, `findPackageCategory`, `coursesSlimByIds`,
+  `myLiveCourseSubs` (reuses existing `plansByIds`, `listPlans`, `hasAccessToAnyLiveCourse`, `getDaysLeftMap`).
+  Educator/packageCategory are now populated (those tables exist — the old "no SQL table" comment was stale).
+  `subjectsCount` = schedule-folders length; `materialsCount` = 0 (no SQL home — documented drift). Mongo fallback retained.
+- **Verified:** `/live-courses/3` → SQL (int `_id`, no `__v`, stats/plans), `/live-courses/my` → 200. typecheck ✅.
+
+### ⚠️ FINDING — pre-existing id-space breakage in the live realtime handlers
+`listLiveCourseRecordings`, `getLiveCourseLecture`, session-recordings, and `getLiveSessionForClient` are Mongo-only
+and guard with `mongoose.Types.ObjectId.isValid(id)`. Because the live-course **list/sessions were already SQL**
+(flag long-standing), the client already receives **integer** ids, so these handlers already return **422/404** on
+them — they are effectively non-functional in SQL mode, INDEPENDENT of this change. "Keeping them on Mongo" does not
+gracefully degrade; to make live recordings/lecture/session playback actually work in SQL mode they must accept the
+integer id-space (i.e. be migrated to SQL incl. the `/v1/lecture` video-URL contract).
+
+---
+
+## 2026-06-22 — access-token layer: closed the last Mongo gap (educator/promoter logout-all)
+
+Investigated the auth token layer end-to-end. Finding: it was **already ~95% on SQL** —
+`customer/educator/promoter-auth` repos all persist/validate/rotate tokens in SQL
+(`ws_customer_access_token` / `ws_educator_access_tokens` / `ws_promoter_access_tokens`; methods
+`createToken` / `findActiveTokenByRefresh` / `deactivateToken` / `deactivateAllTokens`), the services branch on
+`isMysqlModule`, and the authoritative **revocation is Redis** (`libs/tokenRevocation.ts` cutoff; `authenticate`
+calls `isRevoked()`, never a Mongo lookup). The earlier "tokens are Mongo" reading was the `else` fallback branches.
+
+**Only gap:** the educator + promoter `logout-all-devices` `extraTeardown` callbacks wrote Mongo
+(`EducatorAccessToken/PromoterAccessToken.updateMany`) with no SQL branch (customer already had one). Fixed to
+mirror customer — branch on `isMysqlModule("educator-auth"|"promoter-auth")` → `deactivateAllTokens(id)`, Mongo
+fallback retained. Files: `src/educator/auth/educator.auth.routes.ts`, `src/promoter/auth/promoter.auth.routes.ts`.
+(This is bookkeeping cleanup; real logout-all revocation is the Redis cutoff, unchanged.)
+
+**Verified:** `ws_customer_access_token`=349 rows + `ws_promoter_access_tokens`=2 (logins write SQL);
+`yarn migration:api:customer-auth` 9/9 (OTP→validate→token→refresh-rotation→logout all on SQL). `yarn typecheck` ✅.
+
+---
+
+## 2026-06-22 — catalog-package MIGRATED to SQL (package detail/list/by-type/by-goal/my)
+
+The last content module. `ws_package` was a structural subset; closed the gap and wired all 5 handlers.
+
+**Schema** (`docs/migration/schema-changes/2026-06-22_catalog_package_links.sql`): the package→category
+link tables already existed with data (`ws_package_specific_subject`=1620, `ws_material_category_package`=13,
+`ws_exam_category_package`=66). Added only the missing columns: `goal_label_id`, `goal_id`, `is_paid`,
+`is_smart_course`, `is_planner_course` on `ws_package`. Prisma `Package` model extended (`@default`s on the
+booleans so `create` is unaffected); regenerated.
+
+**Composition** — new `src/modules/catalog-package/catalog-package.detail.sql.ts`:
+`buildPackageDetailSql` + `enrichPackagesSql` + list queries. Reuses category-tree (`descendantsOf` + recursive
+CTEs), `commerce-price` (plans split by withMaterial), `commerce-subscription` (active → isPurchased/daysLeft),
+`promo-code` (public+active appliesTo=package), and populates packageType/goal. Field map: `withMaterialText`←
+`with_material`, `subtitle`→"" and examCountdown arrays→[] (absent in real docs).
+
+**Wiring** — `client/package/package.controller.ts`: `isPackageMysql()` branch added to `getPackageDetail`,
+`listPackages`, `listPackagesByType`, `listPackagesByGoal` (label ids = the goal module's synthetic ints),
+`listMyPackages`. Mongo fallback retained.
+
+**Backfill** — `scripts/backfill-catalog-package-fields.ts` (goal_id/goal_label_id/is_paid/smart/planner). Resolves
+0 in staging (Mongo packages are disjoint from the real SQL packages — same subset situation as ws_exam/customer).
+The SQL packages carry their own links + defaults, so the composition reads fully from SQL.
+
+**Verified live** (flag `catalog-package` ON): `GET /client/packages/3` → detail, pkg._id=3, 20 video/2 material/10
+test groups, plans 2/3, integer ids, no `__v`; `/packages` + `/packages/type/1` → SQL lists (int ids, no `__v`);
+`/packages/my` → 200. Regression: types/courses/wishlist/books still 200. `yarn typecheck` ✅.
+**Documented drift:** incidental Mongo-only fields not stored in SQL (e.g. `__v`, `isMagazine`, `notificationTopic`,
+per-category slug/parent spread) are not reproduced — functional parity on all consumer fields.
+
+---
+
+## 2026-06-22 — flipped the 5 receipt/PDF-generator flags ON (now SQL); catalog-package found unwired
+
+Final flip pass after the rows 29–42 work. Added to `MIGRATION_MYSQL_MODULES`:
+`book-receipt, course-receipt, ebook-receipt, exam-solution, pdf-course-receipt`. Each is wired
+(`isMysqlModule(MODULE)` gates the DB-load step in `src/libs/core/generate.ts` + `src/utils/pdfCourseReceipt.ts`),
+so the flip switches the data read to SQL. `yarn typecheck` ✅; server reboots clean with the flags active.
+
+**Verified (tsx, real SQL ids → PDF buffer from the SQL branch):**
+- `book-receipt` — order 148647 (paid) → PDF 52 KB ✅
+- `course-receipt` — subscription 11 (parent order paid) → PDF 54 KB ✅
+- `pdf-course-receipt` — subscription 19 → PDF 1.4 KB ✅
+- `exam-solution` — exam 300001 / attempt 17 → PDF 67 KB ✅
+- `ebook-receipt` — SQL branch **proven** (reads `ws_ebook_order`, applies the paid-check) but no fully-paid
+  ebook order exists in staging (`razorpay_payment_id` empty), so a full PDF couldn't be rendered here. Staging-data
+  limitation, not a code issue — renders in prod against a paid order.
+
+**`catalog-package` NOT flipped — it's built dual-path but the controller is unwired.** `client/package/package.controller.ts`
+imports only `isPackageTypeMysql`; the package detail/list handlers (`getPackageDetail`, `listPackages`,
+`listPackagesByType`, `listPackagesByGoal`) still guard on `mongoose.Types.ObjectId.isValid()` with no
+`isPackageMysql()` branch. The SQL service fns (`findPackageById`, `listActivePackages`) exist but aren't called.
+Flipping the flag would be a no-op. Wiring it is real build work (full package DTO has Mongo-only fields +
+goal/exam/material/video/plan/promo/chat joins) — tracked separately, NOT a flag flip.
+
+`backfill-c4-testseries.ts` reported `test_series_exam: inserted=0 skipped=2`. Root cause (proven, not a code
+bug): the 2 Mongo `TestSeriesExam` links reference exams titled **"Exam One" / "Exam Twos"**, but staging
+`ws_exam` holds only 1 unrelated row (`"test"`). `ws_exam` is **introspected legacy/production source** (no
+script writes to it — confirmed: no `prisma.exam.create` anywhere), so in this subset DB the referenced exams
+simply don't exist. The natural-key join (Mongo `Exam.title` → SQL `Exam.name`, which maps to `ws_exam.title`)
+is correct; in production `ws_exam` already holds the real exams, so the links resolve there.
+
+- **End-to-end proof (seed → verify → revert):** temporarily inserted `ws_exam` rows titled "Exam One"/"Exam Twos",
+  re-ran the backfill → `test_series_exam: inserted=2`, and `GET /admin/test-series/1/papers` returned **2 papers
+  from SQL** (integer `_id`, populated `examId {_id,title,durationMinutes,questionCount}` + `contentCategoryId`,
+  no `__v`). Then deleted the temp exams and re-ran → links back to 0. Staging restored exactly
+  (`ws_exam`=1, `ws_test_series_exam`=0, `ws_test_series_content_category`=2 retained).
+- **`scripts/backfill-c4-testseries.ts`** — now logs WHICH natural key failed per skipped link
+  (`↳ exams not found in ws_exam (by name): …` / series / content-category), so a prod run surfaces exactly
+  what's missing instead of a bare skip count. No behavioural change to the insert path.
+
+---
+
+## 2026-06-22 — backfills for the two residual pending-module data gaps (promo-code + live-reminder customer_id)
+
+Follow-up to the rows 29–42 verification. Two `scripts/` backfills added (both idempotent, natural-key
+bridged, skip-what-can't-map — same contract as `backfill-c4-wishlist`):
+
+- **`scripts/backfill-promo-code.ts`** — Mongo `ws_promo_codes` (`PromoCode`, C5 appliesTo schema) → SQL
+  `ws_promo_code` (`PromoCodeRule`). Maps `promo_start_at`/`promo_expire_at`→`promoStartAt`/`promoExpireAt`,
+  resolves `promoterId` via ws_promoter email→phone, and `appliesTo.ids` via ws_<entity> name/title
+  (all-or-nothing per code). Keyed on unique `promocode` (upper-cased). **Run result (staging): inserted=1
+  (FIRST50), promoterRefDropped=1** (the Mongo "WebSankul" promoter is not in the SQL promoter subset →
+  null, ref is optional). `GET /admin/promocodes` now serves it from SQL (`_id:"1"`, no `__v`, flat ₹50).
+
+- **`scripts/backfill-live-reminder-customer-id.ts`** — repair pass that UPDATEs
+  `ws_live_session_reminder.customer_id` where NULL, correlating each Mongo `livesessionreminders` doc to its
+  SQL row by `live_session_id` (session natural key: title+scheduledAt) + `remind_at`, then filling the
+  customer via the phone bridge. Idempotent (only touches `customer_id IS NULL`). **Run result (staging):
+  updated=0, sessionUnresolved=0 (9/9 sessions correlated), customerUnresolved=9** — the 9 reminders belong
+  to 2 Mongo-only test customers (phones 9106929076 / 8888888888) absent from `ws_customer` (27 rows). The
+  script logic is correct (session side proven 9/9); it resolves the customers once they exist in SQL (prod
+  full-customer set). NULLs left as-is in staging — customers are never fabricated.
+
+---
+
+## 2026-06-22 — client `/referral/terms` + `/referral/faqs` gain a MySQL branch (were Mongo-only despite referral-content ON)
+
+Found during pending-module SQL verification: the **admin** referral content endpoints
+(`/admin/referrals/terms|faqs`) already branched on `referral-content` (SQL ✅), but the **client**
+read endpoints (`/client/referral/terms`, `/client/referral/faqs`) went straight to the Mongoose
+`ReferralTerm`/`ReferralFaq` models with **no `isMysqlModule` branch** — so they kept serving Mongo
+even with the flag on. Same class of gap as `toggleBookTrending` (sibling missing the SQL branch).
+
+- **`modules/referral-content/referral-content.service.ts`** — new client read helpers:
+  - `listActiveTermsForClient()` → `prisma.refferalTerm.findMany({ where: { status: true }, orderBy: [{orderBy:asc},{createdAt:asc}], select: {id,text,orderBy} })` → `{ _id, text, order }`.
+  - `listActiveFaqsForClient()` → `prisma.refferalFaq.findMany({ where: { status: true }, orderBy: [...], select: {id,question,answer,orderBy} })` → `{ _id, question, answer, order }`.
+  - Slim, status-filtered projections that match the legacy client contract exactly (admin `listTerms()`/`listFaqs()` return all rows + extra fields, so they could not be reused as-is).
+- **`client/referral/content.controller.ts`** — `getTerms`/`getFaqs` now branch on `rcService.isReferralContentMysql()` first; Mongo fallback retained.
+
+Verified live: both client endpoints return `_id` as integer-string (`"1"`), no `__v`, status-filtered,
+matching `ws_refferal_term`/`ws_refferal_faq` (1 active each). `yarn typecheck` ✅. Contract unchanged.
+
 ## 2026-06-19 — `toggleBookTrending` gains a MySQL branch (was Mongo-only despite admin-book ON)
 
 Found during live admin write-path verification: `PATCH admin/books/:id/trending` 400'd for MySQL integer ids because

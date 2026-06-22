@@ -16,12 +16,14 @@
 // logger because the logger itself is initialized lazily and we want the
 // check to run as early as possible.
 
-import { hasMysqlMigrationModules } from "./migration";
+import { hasMysqlMigrationModules, isMongoFallbackEnabled } from "./migration";
 
 const REQUIRED = [
   "JWT_ACCESS_SECRET",
   "JWT_REFRESH_SECRET",
-  "MONGODB_URI",
+  // MONGODB_URI is no longer always-required — migration is complete and Mongo is
+  // an opt-in fallback (MONGO_FALLBACK_ENABLED). It's required only when re-enabled
+  // (see the conditional check below).
 ] as const;
 
 const REQUIRED_IN_PROD = [
@@ -58,6 +60,14 @@ export const validateEnv = (): EnvValidationResult => {
     const dbUrl = env.DATABASE_URL?.trim();
     if (!dbUrl) {
       missing.push("DATABASE_URL");
+    }
+  }
+
+  // MONGODB_URI only required when the legacy Mongo fallback is explicitly on.
+  if (isMongoFallbackEnabled()) {
+    const mongoUri = env.MONGODB_URI?.trim();
+    if (!mongoUri) {
+      missing.push("MONGODB_URI");
     }
   }
 

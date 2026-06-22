@@ -1,6 +1,7 @@
 import { Queue, Worker, QueueEvents, Job } from "bullmq";
 import Redis, { Redis as RedisType } from "ioredis";
 import { Notification } from "../../models/system/Notification.model";
+import { isMongoFallbackEnabled } from "../../config/migration";
 import { dispatchScheduledById } from "./dispatcher";
 import logger from "../../utils/logger";
 import { queueDepth, queueDlqTotal } from "../../utils/metrics";
@@ -183,20 +184,24 @@ async function rehydrateScheduledNotifications(): Promise<number> {
     }
   }
 
-  // Mongo scheduled rows: always read when flag is off; when on, these are
-  // pre-cutover stragglers still needing their original Mongo-keyed jobs.
-  try {
-    const rows = await Notification.find({ status: "scheduled" })
-      .select("_id scheduledAt")
-      .lean();
-    for (const row of rows) {
-      if (!row.scheduledAt) continue;
-      recovery.push({ id: String(row._id), scheduledAt: row.scheduledAt });
+  // Mongo scheduled rows: pre-cutover stragglers. Only read when the Mongo
+  // fallback is enabled — once it's off (migration complete) there's no Mongo
+  // connection, so skip to avoid a buffering timeout. SQL rehydrate above is
+  // the canonical source.
+  if (isMongoFallbackEnabled()) {
+    try {
+      const rows = await Notification.find({ status: "scheduled" })
+        .select("_id scheduledAt")
+        .lean();
+      for (const row of rows) {
+        if (!row.scheduledAt) continue;
+        recovery.push({ id: String(row._id), scheduledAt: row.scheduledAt });
+      }
+    } catch (err) {
+      logger.error("Rehydrate: failed to read Mongo scheduled notifications", {
+        error: (err as Error).message,
+      });
     }
-  } catch (err) {
-    logger.error("Rehydrate: failed to read Mongo scheduled notifications", {
-      error: (err as Error).message,
-    });
   }
 
   let count = 0;
@@ -281,7 +286,7 @@ export async function initNotificationScheduler(): Promise<void> {
           (await sqlNotificationExists(job.data.notificationId));
         if (inSql) {
           await sqlMarkFailed(job.data.notificationId, err.message);
-        } else {
+        } else if (isMongoFallbackEnabled()) {
           await Notification.updateOne(
             { _id: job.data.notificationId, status: "scheduled" },
             { $set: { status: "failed", failureReason: err.message } }

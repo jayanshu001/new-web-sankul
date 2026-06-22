@@ -1067,6 +1067,11 @@ model Package {
   packageType               PackageType?                @relation(fields: [packageTypeId], references: [id])
   packageCategoryId         Int?                        @map("package_category_id")
   educator_id               Int?
+  goalLabelId               Int?                        @map("goal_label_id")
+  goalId                    Int?                        @map("goal_id")
+  isPaid                    Boolean                     @default(true) @map("is_paid")
+  isSmartCourse             Boolean                     @default(false) @map("is_smart_course")
+  isPlannerCourse           Boolean                     @default(false) @map("is_planner_course")
   examId                    Int?                        @map("exam_id")
   Exam                      CustomerTargetGoal?         @relation(fields: [examId], references: [id])
   created_at                DateTime?
@@ -1098,8 +1103,10 @@ model VideoCategory {
   video                  Video[]
   videoCategoryRelation  VideoCategoryRelation[]
   subjectKey             String?                  @map("subject_key") @db.VarChar(255)
+  liveCourseId           Int?                     @map("live_course_id")
 
   @@index([subjectKey], name: "idx_vcat_subject_key")
+  @@index([liveCourseId], name: "idx_vcat_live_course")
   @@map("ws_video_category")
 }
 

@@ -622,6 +622,14 @@ export const deletePoll = async (pollId: number): Promise<boolean> => {
 // Client live-course reads (Groups A + B) — SQL entitlement + listing/schedule
 // ════════════════════════════════════════════════════════════════════════════
 import { computeDaysLeft } from "../../utils/planDuration";
+import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { qualitiesFromSessionRecordings } from "../../utils/videoQualities";
+import { formatScheduledAt } from "../../utils/displayTime";
+
+// Streamos sometimes appends stray quote chars to recording paths — strip them
+// (mirrors sanitizeRecordingPath in client/live-course.controller).
+const sanitizeRecPath = <T extends string | null | undefined>(p: T): T =>
+  (typeof p === "string" ? (p.replace(/(?:"|%22|%2522)+$/i, "") as T) : p);
 
 // ── entitlement (ported from src/client/live-course/entitlement.ts; SQL) ──────
 export const hasAccessToAnyLiveCourse = async (customerId: number | null, liveCourseIds: number[]): Promise<boolean> => {
@@ -675,6 +683,289 @@ const plansGrouped = async (courseIds: number[]) => {
   const byCourse = new Map<number, any[]>();
   for (const p of plans) { const a = byCourse.get(p.liveCourseId) ?? []; a.push(toClientPlan(p)); byCourse.set(p.liveCourseId, a); }
   return byCourse;
+};
+
+// ── getLiveCourseForClient (detail) — SQL ────────────────────────────────────
+// Mongo populates courseEducatorId (name/image/about) + packageCategoryId
+// (title/slug/image) — both tables exist in SQL so we populate them too.
+// subjectsCount = schedule folders under the course (JSON); materialsCount has no
+// SQL home on ws_live_course → 0 (documented drift). Playback URLs never here.
+export const getLiveCourseDetailForClient = async (
+  id: number,
+  customerId: number | null,
+  baseUrl?: string
+): Promise<"not_found" | any> => {
+  const row = await repo.findById(id);
+  if (!row || !row.status) return "not_found";
+
+  const [educator, pkgCat, plansRaw, subscribed, daysLeftMap] = await Promise.all([
+    row.educatorId != null ? repo.findEducator(row.educatorId) : Promise.resolve(null),
+    row.packageCategoryId != null ? repo.findPackageCategory(row.packageCategoryId) : Promise.resolve(null),
+    repo.listPlans(id),
+    hasAccessToAnyLiveCourse(customerId, [id]),
+    getDaysLeftMap(customerId, [id]),
+  ]);
+
+  const plans = plansRaw
+    .filter((p) => p.status)
+    .sort((a, b) => a.price - b.price)
+    .map((p) => toClientPlan(p));
+
+  const shareableLink = buildShareUrl("live-courses", String(id), baseUrl);
+  const folders = jArr(row.scheduleFolders);
+  const stats = { subjectsCount: folders.length, materialsCount: 0, classType: row.classType ?? "live" };
+  const liveCourse = {
+    ...toCourseDto(row),
+    courseEducatorId: educator
+      ? { _id: String(educator.id), name: educator.name, image: educator.image, about: educator.about }
+      : null,
+    packageCategoryId: pkgCat
+      ? { _id: String(pkgCat.id), title: pkgCat.title, slug: pkgCat.slug, image: pkgCat.image }
+      : null,
+    isPaid: row.isPaid,
+    shareableLink,
+  };
+  const daysLeft = daysLeftMap.has(String(id)) ? daysLeftMap.get(String(id)) ?? null : null;
+  return { liveCourse, scope: { kind: "liveCourse", id: String(id) }, stats, plans, subscribed, isPaid: row.isPaid, isPurchased: subscribed, daysLeft, shareableLink };
+};
+
+// ── listMyLiveCourses — SQL ──────────────────────────────────────────────────
+export const listMyLiveCoursesForClient = async (
+  customerId: number,
+  filterStatus: string,
+  baseUrl?: string
+) => {
+  const now = new Date();
+  const subs = await repo.myLiveCourseSubs(customerId, filterStatus, now);
+  const courseIds = [...new Set(subs.map((s) => s.liveCourseId).filter((n): n is number => n != null))];
+  const planIds = [...new Set(subs.map((s) => s.planId).filter((n): n is number => n != null))];
+  const [courses, plans] = await Promise.all([
+    courseIds.length ? repo.coursesSlimByIds(courseIds) : Promise.resolve([]),
+    planIds.length ? repo.plansByIds(planIds) : Promise.resolve([]),
+  ]);
+  const courseById = new Map(courses.map((c) => [c.id, c]));
+  const planById = new Map(plans.map((p) => [p.id, p]));
+
+  const liveCourses = subs.map((s) => {
+    const active = s.status === true && (s.endAt == null || new Date(s.endAt).getTime() >= now.getTime());
+    const c = s.liveCourseId != null ? courseById.get(s.liveCourseId) : null;
+    const p = s.planId != null ? planById.get(s.planId) : null;
+    return {
+      subscriptionId: String(s.id),
+      liveCourse: c
+        ? { _id: String(c.id), name: c.name, image: c.image, level: c.level, isPaid: c.isPaid, status: c.status, shareableLink: buildShareUrl("live-courses", String(c.id), baseUrl) }
+        : null,
+      plan: p ? { _id: String(p.id), name: p.name, duration: p.duration, price: p.price } : null,
+      startAt: s.startAt ?? null,
+      endAt: s.endAt ?? null,
+      paymentStatus: s.paymentStatus,
+      active,
+      daysLeft: active ? computeDaysLeft(s.endAt ?? null, now) : 0,
+    };
+  });
+  return { liveCourses, total: liveCourses.length };
+};
+
+// ── purchase options (ported from entitlement.buildPurchaseOptions; SQL) ──────
+export const buildPurchaseOptionsSql = async (courseIds: number[]) => {
+  if (!courseIds.length) return [];
+  const [courses, plans] = await Promise.all([
+    prisma.liveCourse.findMany({ where: { id: { in: courseIds }, status: true }, select: { id: true, name: true, image: true } }),
+    prisma.liveCoursePlan.findMany({ where: { liveCourseId: { in: courseIds }, status: true }, orderBy: { price: "asc" } }),
+  ]);
+  const byCourse = new Map<number, any[]>();
+  for (const p of plans) { const a = byCourse.get(p.liveCourseId) ?? []; a.push(p); byCourse.set(p.liveCourseId, a); }
+  return courses.map((c) => ({
+    liveCourseId: String(c.id), name: c.name, image: c.image,
+    plans: (byCourse.get(c.id) ?? []).map((p) => ({ planId: String(p.id), name: p.name ?? null, duration: p.duration, price: p.price, isDefault: p.isDefault })),
+  }));
+};
+
+// ── listLiveCourseRecordings (folders + lectures + per-quality) — SQL ──────────
+export const getRecordingsForClient = async (
+  courseId: number,
+  customerId: number | null
+): Promise<"not_found" | any> => {
+  const course = await repo.findById(courseId);
+  if (!course || !course.status) return "not_found";
+
+  const folders = await prisma.videoCategory.findMany({
+    where: { liveCourseId: courseId, status: true },
+    orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
+    select: { id: true, title: true, image: true, order_by: true },
+  });
+  const folderIds = folders.map((f) => f.id);
+  const videos = folderIds.length
+    ? await prisma.video.findMany({ where: { videoCategoryId: { in: folderIds }, status: true }, orderBy: [{ order: "asc" }, { created_at: "asc" }] })
+    : [];
+
+  const [subscribed, daysLeftMap] = await Promise.all([
+    hasAccessToAnyLiveCourse(customerId, [courseId]),
+    getDaysLeftMap(customerId, [courseId]),
+  ]);
+  const daysLeft = daysLeftMap.has(String(courseId)) ? daysLeftMap.get(String(courseId)) ?? null : null;
+
+  // per-quality recordings from the source live session
+  const sessionIds = [...new Set(videos.map((v) => v.liveSessionId).filter((n): n is number => n != null))];
+  const recBySession = new Map<number, Array<{ quality: string | null; file_size: number | null; path: string }>>();
+  if (sessionIds.length) {
+    const sessions = await prisma.liveSession.findMany({ where: { id: { in: sessionIds } }, select: { id: true, recordings: true } });
+    for (const s of sessions) {
+      const arr = Array.isArray(s.recordings) ? (s.recordings as any[]) : [];
+      recBySession.set(s.id, arr.filter((r) => typeof r?.path === "string" && r.path.length > 0).map((r) => ({
+        quality: typeof r.quality === "string" ? r.quality : null,
+        file_size: typeof r.file_size === "number" ? r.file_size : null,
+        path: sanitizeRecPath(r.path),
+      })));
+    }
+  }
+
+  // per-video resume progress
+  const progByVideo = new Map<number, any>();
+  if (customerId && videos.length) {
+    const rows = await prisma.lectureProgress.findMany({
+      where: { customerId, videoId: { in: videos.map((v) => v.id) } },
+      select: { videoId: true, positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true },
+    });
+    for (const r of rows) if (r.videoId != null) progByVideo.set(r.videoId, r);
+  }
+
+  const byFolder = new Map<number, typeof videos>();
+  for (const v of videos) { const a = byFolder.get(v.videoCategoryId as number) ?? []; a.push(v); byFolder.set(v.videoCategoryId as number, a); }
+
+  const shapeLecture = (v: (typeof videos)[number]) => {
+    const canPlay = subscribed || v.priceType === "free";
+    const p = progByVideo.get(v.id);
+    const recordings = v.liveSessionId ? recBySession.get(v.liveSessionId) ?? [] : [];
+    return {
+      _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, order: v.order,
+      locked: !canPlay, youtube_id: v.youtube_id ?? null, aws_id: sanitizeRecPath(v.aws_id ?? null), vimeo_id: v.vimeo_id ?? null,
+      recordings, qualities: qualitiesFromSessionRecordings(recordings),
+      progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
+    };
+  };
+
+  const folderPayload = folders.map((f) => ({
+    folderId: String(f.id), title: f.title, image: f.image, order: f.order_by,
+    lectures: (byFolder.get(f.id) ?? []).map(shapeLecture),
+  }));
+
+  return {
+    liveCourse: { _id: String(course.id), name: course.name, image: course.image },
+    subscribed, daysLeft, totalLectures: videos.length, folders: folderPayload,
+    purchaseOptions: subscribed ? [] : await buildPurchaseOptionsSql([courseId]),
+  };
+};
+
+// ── getLiveCourseLecture: ownership check (controller does encryptLecture) ─────
+export const clientLectureVideoInCourse = async (
+  courseId: number,
+  videoId: number
+): Promise<"video_not_found" | "mismatch" | { _id: number; platform: string; youtube_id: string | null; aws_id: string | null; vimeo_id: string | null; title: string; topic: string; priceType: "free" | "paid" }> => {
+  const v = await prisma.video.findFirst({ where: { id: videoId, status: true } });
+  if (!v) return "video_not_found";
+  const folder = await prisma.videoCategory.findFirst({ where: { id: v.videoCategoryId ?? -1, liveCourseId: courseId }, select: { id: true } });
+  if (!folder) return "mismatch";
+  return { _id: v.id, platform: v.platform, youtube_id: v.youtube_id ?? null, aws_id: v.aws_id ?? null, vimeo_id: v.vimeo_id ?? null, title: v.title ?? "", topic: v.topic ?? "", priceType: v.priceType };
+};
+
+export const isLectureEntitled = async (courseId: number, customerId: number | null, priceType: "free" | "paid"): Promise<boolean> =>
+  priceType === "free" ? true : hasAccessToAnyLiveCourse(customerId, [courseId]);
+
+// ── listLiveCourseSessionRecordings — SQL (SCHEDULED/CREATED sessions) ─────────
+export const listSessionRecordingsForClient = async (
+  courseId: number,
+  customerId: number | null,
+  page: number,
+  limit: number
+): Promise<"not_found" | { liveCourse: any; subscribed: boolean; total: number; page: number; limit: number; lectures: any[] }> => {
+  const course = await repo.findById(courseId);
+  if (!course || !course.status) return "not_found";
+
+  const links = await prisma.liveSessionCourse.findMany({ where: { liveCourseId: courseId }, select: { liveSessionId: true } });
+  const sessionIds = [...new Set(links.map((l) => l.liveSessionId).filter((n): n is number => n != null))];
+  const where = { id: { in: sessionIds.length ? sessionIds : [-1] }, status: { in: ["SCHEDULED", "CREATED"] } };
+  const [sessions, total, subscribed] = await Promise.all([
+    prisma.liveSession.findMany({ where, orderBy: [{ scheduledAt: "asc" }, { createdAt: "asc" }], skip: (page - 1) * limit, take: limit }),
+    prisma.liveSession.count({ where }),
+    hasAccessToAnyLiveCourse(customerId, [courseId]),
+  ]);
+
+  const lectures = sessions.map((s) => ({
+    sessionId: String(s.id), title: s.title, status: s.status, isLive: s.status === "CREATED" && !!s.hlsUrl,
+    subject: s.subject ?? null, streamId: s.streamId ?? null, scheduledAt: s.scheduledAt ?? null,
+    scheduledAtDisplay: formatScheduledAt(s.scheduledAt), endAt: s.endAt ?? null, locked: !subscribed,
+  }));
+  return { liveCourse: { _id: String(course.id), name: course.name, image: course.image }, subscribed, total, page, limit, lectures };
+};
+
+// ── live-session preview/trial (ported from entitlement.resolveLivePreviewState; SQL) ──
+const LIVE_PREVIEW_SECONDS = 180; // mirrors entitlement.PREVIEW_SECONDS
+export type LivePreviewStateSql = { accessLevel: "full" | "preview" | "preview_ended"; previewExpiresAt: Date | null; previewSecondsRemaining: number };
+export const resolveLivePreviewStateSql = async (
+  customerId: number | null,
+  liveSessionId: number,
+  liveCourseIds: number[],
+  track: boolean
+): Promise<LivePreviewStateSql> => {
+  if (!liveCourseIds.length) return { accessLevel: "full", previewExpiresAt: null, previewSecondsRemaining: 0 };
+  if (await hasAccessToAnyLiveCourse(customerId, liveCourseIds)) return { accessLevel: "full", previewExpiresAt: null, previewSecondsRemaining: 0 };
+  if (!track || !customerId) return { accessLevel: "preview", previewExpiresAt: null, previewSecondsRemaining: 0 };
+  const now = new Date();
+  let preview = await prisma.liveSessionPreview.findFirst({ where: { customerId, liveSessionId } });
+  if (!preview) {
+    try { preview = await prisma.liveSessionPreview.create({ data: { customerId, liveSessionId, startedAt: now, createdAt: now } }); }
+    catch { preview = await prisma.liveSessionPreview.findFirst({ where: { customerId, liveSessionId } }); }
+  }
+  if (!preview?.startedAt) return { accessLevel: "preview", previewExpiresAt: null, previewSecondsRemaining: 0 };
+  const expires = new Date(preview.startedAt.getTime() + LIVE_PREVIEW_SECONDS * 1000);
+  if (now.getTime() >= expires.getTime()) return { accessLevel: "preview_ended", previewExpiresAt: expires, previewSecondsRemaining: 0 };
+  return { accessLevel: "preview", previewExpiresAt: expires, previewSecondsRemaining: Math.ceil((expires.getTime() - now.getTime()) / 1000) };
+};
+
+// ── recording auto-promote (ported from recording.promote.maybeAutoPromoteRecording; SQL) ──
+const normalizeSubjectKey = (s?: string | null): string | null => {
+  if (typeof s !== "string") return null;
+  const k = s.trim().toLowerCase().replace(/\s+/g, " ");
+  return k.length ? k : null;
+};
+const pickRecording = (recs: any[]): any | null => {
+  if (!recs?.length) return null;
+  for (const q of ["1080p", "720p", "480p", "360p", "240p", "144p"]) {
+    const hit = recs.find((r) => r?.quality?.toLowerCase() === q);
+    if (hit) return hit;
+  }
+  return recs[0] ?? null;
+};
+/** Silent best-effort (never throws): file the best recording into each course's subject folder. */
+export const maybeAutoPromoteRecordingSql = async (session: {
+  id: number; title: string | null; subject: string | null; recordings: any; liveCourseIds: number[];
+}): Promise<void> => {
+  try {
+    const recs = Array.isArray(session.recordings) ? session.recordings : [];
+    const rec = pickRecording(recs);
+    if (!rec?.path) return;
+    const subjectKey = normalizeSubjectKey(session.subject);
+    if (!subjectKey || !session.liveCourseIds.length) return;
+    const path = String(rec.path).replace(/(?:"|%22|%2522)+$/i, "");
+    for (const liveCourseId of session.liveCourseIds) {
+      try {
+        let folder = await prisma.videoCategory.findFirst({ where: { liveCourseId, subjectKey }, select: { id: true } });
+        if (!folder) {
+          const last = await prisma.videoCategory.findFirst({ where: { liveCourseId }, orderBy: { order_by: "desc" }, select: { order_by: true } });
+          folder = await prisma.videoCategory.create({
+            data: { title: (session.subject ?? "").trim(), slug: subjectKey.replace(/\s+/g, "-"), subjectKey, liveCourseId, parent: 0, educatorId: 0, image: " ", pdf: " ", order_by: (last?.order_by ?? 0) + 1, status: true } as any,
+            select: { id: true },
+          });
+        }
+        const dup = await prisma.video.findFirst({ where: { videoCategoryId: folder.id, aws_id: path }, select: { id: true } });
+        if (dup) continue;
+        await prisma.video.create({
+          data: { videoCategoryId: folder.id, liveSessionId: session.id, title: session.title ?? "", topic: "", platform: "aws", slug: subjectKey.replace(/\s+/g, "-"), aws_id: path, priceType: "paid", order: 0, status: true } as any,
+        });
+      } catch { /* per-course best-effort */ }
+    }
+  } catch { /* non-fatal */ }
 };
 
 // ── listLiveCoursesForClient ────────────────────────────────────────────────

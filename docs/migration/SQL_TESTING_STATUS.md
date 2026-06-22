@@ -51,23 +51,43 @@
 | 26 | commerce-promoter | 🟢 | n/a | ✅ 1/1 | ✅ | promoter entitlement read (service/repo layer) `(tsx)` | ✅ | |
 | 27 | commerce-educator | 🟢 | n/a | ✅ 1/1 | ✅ | educator entitlement read (service/repo layer) `(tsx)` | ✅ | |
 | 28 | package-chat | 🟢 | ✅ reads (pkg chat) | ✅ 1/1 | ✅ | **client (proven):** `GET client/package/:packageId/chat` · **✅ admin reads (SQL-proven — admin-package ON):** `GET admin/packages/:id/chat` (200, paginated). `POST`/`DELETE` chat exist, not yet exercised. | ✅ | |
-| 29 | client-wishlist | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built. Table applied (`create_c4_tables`). Need: flip flag → run backfill → endpoint check / add harness. |
-| 30 | client-testseries | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built. Table applied (`create_c4_tables`). Flip flag → backfill → verify. |
-| 31 | admin-testseries | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built. Flip flag → verify admin CRUD. |
-| 32 | promo-code | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built. Table applied (`create_promo_code`). Flip flag → backfill (`backfill-c4-*` / promo) → verify. |
-| 33 | referral-content | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built. Tables applied (`create_referral_content` → ws_refferal_term/faq). Flip flag → `backfill-c8-referral-content.ts` → verify. |
-| 34 | permission-category | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built. Table applied (`permission_category` + ws_permissions.category_id ALTER). Flip flag → backfill → verify. |
-| 35 | permission-catalog | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built. Flip flag → verify boot seed + catalog reads. |
-| 36 | admin-promoter | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built. Needs `subscription_promoter_cols` ALTER (promoter_id/%/paid_amount). Flip flag → verify subs/dashboard. |
-| 37 | admin-course-video | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built. Admin course video CRUD. Flip flag → verify. |
-| 38 | client-free | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built. Flip flag → verify. |
-| 39 | admin-live | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built (C7). ws_live_* tables exist + `c7_closing_alters` (ws_video.live_session_id). Flip flag → verify. |
-| 40 | admin-live-course | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built (C7). Flip flag → verify. |
-| 41 | client-live-reminder | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built (C7). Flip flag → verify. |
-| 42 | pdf-upload | ⚪ | ⬜ | ⬜ | ⬜ | — (none tested yet) | ⬜ | Session-built (C7). Net-new table (`create_pdf_upload_job` → ws_pdf_upload_job). BullMQ pipeline. Flip flag → verify Socket.io progress path. |
+| 29 | client-wishlist | 🟢 | n/a | ✅ reads | ✅ **proven** | `GET client/wishlist` | ✅ live | Flag flipped, backfill run (`backfill-c4-wishlist` — mongo total 0 → `ws_wishlist` empty by design). Endpoint serves SQL branch: **HTTP 200 empty** with a real customer id (was 401 with mock ObjectId — see Finding #6). |
+| 30 | client-testseries | 🟢 | n/a | ✅ reads | ✅ **proven** | `GET client/test-series` | ✅ live | total=2 ↔ `ws_test_series`=2, integer ids, no `__v`. Backfill `backfill-c4-testseries` (content_category 2; `test_series_exam` 0 rows — exams "Exam One/Twos" absent from staging `ws_exam`; chain proven via seed→verify→revert, see residual-gaps note). |
+| 31 | admin-testseries | 🟢 | ✅ reads | n/a | ✅ **proven** | `GET admin/test-series` | ✅ live | total=2 ↔ `ws_test_series`=2, SQL-shaped (id=1). |
+| 32 | promo-code | 🟢 | ✅ reads | ↗ client/promocode | ✅ **proven** | `GET admin/promocodes` (via `pcSql.isPromoCodeMysql()` branch) | ✅ live | Serves the **SQL branch** → `ws_promo_code`. Backfilled 2026-06-22 (`scripts/backfill-promo-code.ts`): 1 row (FIRST50) ↔ endpoint returns `_id:"1"`, no `__v`, flat ₹50. Legacy `ws_promocode` (2) is the unrelated commerce-promocode table. |
+| 33 | referral-content | 🟢 | ✅ reads | ✅ reads | ✅ **proven** | `GET admin/referrals/terms\|faqs`; `GET client/referral/terms\|faqs` | ✅ live | admin already SQL; **client wired this session** (Finding #7). Both surfaces: 1 term / 1 faq ↔ `ws_refferal_term`/`ws_refferal_faq`, int ids, no `__v`. Backfill `backfill-c8-referral-content` (term 1, faq 1). |
+| 34 | permission-category | 🟢 | ✅ reads | n/a | ✅ **proven** | `GET admin/permission-categories` | ✅ live | items=23, pagination total=23 ↔ `ws_permission_category`=23 (exact). Backfill `backfill-c8-permission-category` (23 rows; permission links skipped 539 — already mapped). |
+| 35 | permission-catalog | 🟢 | ✅ reads | n/a | ✅ **proven** | `GET admin/permissions/catalog` | ✅ live | Catalog registry served (version `2026.05.25-1`, 91 module groups / 533 keys). Boot sync: inserted 0, total 533 (already seeded). |
+| 36 | admin-promoter | 🟢 | ✅ reads | n/a | ✅ **proven** | `GET admin/promoters` | ✅ live | len=112 ↔ `ws_promoter` where `is_delete=0`=112 (total 114), integer ids (id=128), no `__v`. **Was Mongo (`__v`/ObjectId) until the stale dev server on :4001 was killed — see Finding #5.** |
+| 37 | admin-course-video | 🟢 | ✅ reads | n/a | ✅ **proven** | `GET admin/videos` | ✅ live | pagination total=156 ↔ `ws_video`=156, integer id (33141). |
+| 38 | client-free | 🟢 | n/a | ✅ reads | ✅ **proven** | `GET client/free-tests`, `/free-courses`, `/free-ebooks` | ✅ live | All 200, SQL-shaped (free-courses id=75, no `__v`); composed across `ws_course/exam/ebook/...`. |
+| 39 | admin-live | 🟢 | ✅ reads | n/a | ✅ **proven** | `GET admin/live-sessions` | ✅ live | `data.sessions`, total=51 ↔ `ws_live_session`=51, integer id (50). |
+| 40 | admin-live-course | 🟢 | ✅ reads | n/a | ✅ **proven** | `GET admin/live-courses` | ✅ live | `data.liveCourses`, total=4 ↔ `ws_live_course`=4, integer id (4). |
+| 41 | client-live-reminder | 🟢 | n/a | ✅ reads | ✅ **proven (path)** | `GET client/live-reminders` | ✅ live | 200 via SQL branch. `ws_live_session_reminder.customer_id` still NULL in staging — repair script `scripts/backfill-live-reminder-customer-id.ts` correlates sessions 9/9 but the 9 reminders' customers (2 Mongo-only test users) aren't in `ws_customer`; fills automatically on a full-customer DB. See residual-gaps note. |
+| 42 | pdf-upload | 🟢 | ✅ reads | n/a | ✅ **proven (path)** | `GET admin/ebooks/pdf-jobs/:batchId` | ✅ live | SQL-backed job lookup returns proper `404 "Batch not found."` envelope (`ws_pdf_upload_job`=0, net-new). Write path (POST + BullMQ + Spaces) not exercised. |
 
-**Progress: 28/28 harness modules verified, 0 failures** (after Finding #1 DDL fix). The entire existing api-test suite passes against MySQL on both admin + client surfaces.
-**Pending (rows 29–42):** session-built this session, tables applied to staging, **flags still OFF**, backfills not run, no harness files yet. Per-row "Notes" carry the exact flip→backfill→verify steps.
+**Progress: 28/28 harness modules + 14/14 pending modules verified serving from MySQL, 0 functional failures.**
+Rows 29–42 verified live this session: flags flipped ON in `.env`, backfills run, `yarn dev` rebooted clean on :4001,
+each READ endpoint hit with minted JWTs and cross-checked against the `ws_*` tables (counts match; payloads carry
+integer ids and no Mongoose `__v`). Two code/data gaps were found and one was fixed (Findings #4–#6).
+Verifier script: `scripts/verify-pending-sql.py` (+ `scripts/verify-pending-sql.sh`).
+
+### Residual data gaps — status after 2026-06-22 backfill follow-up
+- **promo-code**: ✅ **RESOLVED.** `scripts/backfill-promo-code.ts` migrated the Mongo `ws_promo_codes`
+  (C5 `PromoCode`) collection → `ws_promo_code` (1 row, FIRST50). `GET /admin/promocodes` now serves it from
+  SQL. (Note: the separate legacy `ws_promocode` (2 rows) belongs to the older commerce-promocode system —
+  unrelated table.) Promoter ref dropped to null (Mongo promoter not in the SQL promoter subset; optional field).
+- **client-live-reminder**: 🟡 **script delivered, blocked on staging data.** `scripts/backfill-live-reminder-customer-id.ts`
+  is idempotent and correlates SQL rows to Mongo reminders 9/9 by session, but all 9 reminders belong to 2
+  Mongo-only test customers (phones 9106929076 / 8888888888) absent from `ws_customer` (27 rows), so 0 can be
+  filled here. Customers are **not fabricated**. Re-run against a full-customer DB (prod) fills them automatically.
+- **client-testseries (`ws_test_series_exam`)**: 🟡 **diagnosed — disjoint staging data, logic verified.** The 2
+  Mongo links reference exams "Exam One"/"Exam Twos" absent from staging `ws_exam` (1 unrelated row; `ws_exam` is
+  introspected prod source, never Mongo-backfilled). Proven via seed→verify→revert: with the exams present,
+  `inserted=2` and `GET /admin/test-series/1/papers` serves 2 papers from SQL (populated examId + contentCategory,
+  no `__v`); reverted to original state. `backfill-c4-testseries.ts` now logs the unmapped exam titles. Resolves
+  automatically in prod where `ws_exam` holds the real exams.
+- **client-wishlist**: `ws_wishlist` empty (Mongo source had 0 rows) — expected, nothing to migrate yet.
 
 ## Findings / fixes
 ### 🔴→✅ Finding #1 (IMPORTANT): un-applied ALTER DDL broke live modules
@@ -135,3 +155,34 @@ Mongoose** (`mongoose.Types.ObjectId.isValid` → `Book.findById`) with **no MyS
 `yarn typecheck` ✅. Re-verified live: `ws_book.is_trending` **0 → 1 → revert 0** = PASS. Logged in `docs/MIGRATION_QUERY_CHANGES.md`.
 **Residual (not changed):** the read DTO still synthesizes `isTrending=false`, so admin book *listings* won't surface the
 real column value until that DTO is updated — left as-is to preserve the response contract.
+
+### 🔴→✅ Finding #5 (IMPORTANT — environment, not code): a stale dev server masked the new flags
+While verifying rows 29–42, `GET admin/promoters` returned **Mongo-shaped data** (`_id` = 24-char ObjectId, `__v: 0`,
+only 2 rows) even though `admin-promoter` was flipped ON and the controller has a correct `isAdminPromoterMysql()` branch.
+Root cause: **two `tsx watch src/index.ts` processes were running** — a pre-existing one (started before the `.env` edit,
+so its `process.env.MIGRATION_MYSQL_MODULES` lacked the 14 new flags) **owned port 4001**, and the freshly-booted server
+couldn't bind and sat idle. `isMysqlModule()` reads `process.env` live, but the *old process's* env was already frozen at
+boot. Counts like testseries=2 / live-sessions=51 matched coincidentally because the `ws_*` tables were backfilled **from**
+the same Mongo, hiding the problem — only the **payload shape** (`__v`/ObjectId vs integer ids) exposed it.
+**Fix:** `pkill -f "tsx watch src/index.ts"`, confirm :4001 free, reboot a single `yarn dev`. After that, `admin/promoters`
+returned **112 rows with integer ids and no `__v`** (= `ws_promoter` where `is_delete=0`). **Lesson:** always confirm the
+process listening on :4001 is the one that booted *after* the `.env` flag change — verify by response shape, not just counts.
+
+### 🟡 Finding #6 (harness limitation, not a bug): customer-scoped SQL reads need a real integer customer id
+The mock customer JWT carries a **Mongo ObjectId** (`507f1f77bcf86cd799439011`). Customer-agnostic SQL reads
+(`/client/test-series`, `/client/free-*`) work fine, but **customer-scoped** SQL endpoints reject it: `/client/wishlist`
+returned **401** because `parseWlId(userId)` (expects an integer `ws_customer.id`) returns null for an ObjectId. In SQL
+mode the real login mints the integer customer id into the JWT (cf. row 11 OTP `validate(5786)`). **Resolution:** re-mint
+with `MIGRATION_TEST_CUSTOMER_ID=<real ws_customer.id>` (`yarn migration:api:auth` also registers the Redis
+`customer_session:<id>`). With a real id (472335), `/client/wishlist` returned **200** via the SQL branch (empty — table
+has no rows), and `/client/live-reminders` returned 200. No code change — the harness default id just isn't a MySQL row.
+
+### 🔴→✅ Finding #7 (BUG, now FIXED): client `/referral/terms|faqs` were Mongo-only despite referral-content ON
+The **admin** referral content endpoints branch on `referral-content` (SQL), but the **client** `getTerms`/`getFaqs`
+(`src/client/referral/content.controller.ts`) went straight to the Mongoose `ReferralTerm`/`ReferralFaq` models — verified
+by the response carrying 24-char ObjectIds. Same class of gap as Finding #4. **Fix applied this session** (Mongo fallback
+retained): added `listActiveTermsForClient()` / `listActiveFaqsForClient()` to
+`modules/referral-content/referral-content.service.ts` (status-filtered, slim `{_id,text,order}` / `{_id,question,answer,order}`
+projections matching the legacy contract) and an `rcService.isReferralContentMysql()` branch in the client controller.
+`yarn typecheck` ✅. Re-verified live: both return integer-string `_id` (`"1"`), no `__v`, ↔ `ws_refferal_term`/`ws_refferal_faq`
+(1 active each). Logged in `docs/MIGRATION_QUERY_CHANGES.md`.

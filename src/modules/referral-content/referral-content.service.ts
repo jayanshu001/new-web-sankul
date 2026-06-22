@@ -63,6 +63,37 @@ const toFaqDto = (r: RefferalFaq): FaqDto => ({
   updatedAt: r.updatedAt,
 });
 
+// ─── Client read helpers ───────────────────────────────────────────────────
+// Slim, status-filtered projections matching the legacy client contract
+// (`/client/referral/terms` -> {_id,text,order}; `/faqs` -> {_id,question,answer,order}).
+
+export const listActiveTermsForClient = async (): Promise<
+  { _id: string; text: string; order: number }[]
+> => {
+  const rows = await prisma.refferalTerm.findMany({
+    where: { status: true },
+    orderBy: [{ orderBy: "asc" }, { createdAt: "asc" }],
+    select: { id: true, text: true, orderBy: true },
+  });
+  return rows.map((r) => ({ _id: String(r.id), text: r.text, order: r.orderBy }));
+};
+
+export const listActiveFaqsForClient = async (): Promise<
+  { _id: string; question: string; answer: string; order: number }[]
+> => {
+  const rows = await prisma.refferalFaq.findMany({
+    where: { status: true },
+    orderBy: [{ orderBy: "asc" }, { createdAt: "asc" }],
+    select: { id: true, question: true, answer: true, orderBy: true },
+  });
+  return rows.map((r) => ({
+    _id: String(r.id),
+    question: r.question,
+    answer: r.answer,
+    order: r.orderBy,
+  }));
+};
+
 // ─── Terms ───────────────────────────────────────────────────────────────────
 
 export const listTerms = async (): Promise<TermDto[]> => {

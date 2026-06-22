@@ -171,7 +171,17 @@
       "Bash(docker exec *)",
       "Bash(grep -nA12 \"toggleBookStatus\" src/modules/admin-book/admin-book.service.ts)",
       "Bash(grep -nA10 \"toggleBookStatus\\\\|updateStatus\\\\|status:\" src/modules/admin-book/admin-book.repository.ts)",
-      "Bash(graphify update *)"
+      "Bash(graphify update *)",
+      "Bash(yarn tsx *)",
+      "Bash(rm -f /tmp/wsdev.log)",
+      "Bash(PORT=4001 yarn dev)",
+      "Bash(echo \"started pid $!\")",
+      "Bash(nohup yarn dev)",
+      "Bash(echo \"launched $!\")",
+      "Bash(echo \"rebooting pid $!\")",
+      "Bash(grep -vE \"injected env|yarn run|\\\\\\\\$ |Done in\")",
+      "Bash(curl -s -o /dev/null http://localhost:4001/api/v1/admin/test-series)",
+      "Bash(break)"
     ]
   }
 }

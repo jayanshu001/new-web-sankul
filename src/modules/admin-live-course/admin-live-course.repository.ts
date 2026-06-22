@@ -24,6 +24,20 @@ export const adminLiveCourseRepository = {
   count: (opts: { search?: string; status?: boolean }) => prisma.liveCourse.count({ where: buildWhere(opts) }),
   findById: (id: number) => prisma.liveCourse.findUnique({ where: { id } }),
   exists: (id: number) => prisma.liveCourse.findUnique({ where: { id }, select: { id: true } }),
+
+  // ── client detail / my-courses populates ───────────────────────────────────
+  findEducator: (id: number) =>
+    prisma.courseEducator.findUnique({ where: { id }, select: { id: true, name: true, image: true, about: true } }),
+  findPackageCategory: (id: number) =>
+    prisma.packageCategory.findUnique({ where: { id }, select: { id: true, title: true, slug: true, image: true } }),
+  coursesSlimByIds: (ids: number[]) =>
+    prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, level: true, isPaid: true, status: true } }),
+  myLiveCourseSubs: (customerId: number, filterStatus: string, now: Date) => {
+    const where: any = { customerId, paymentStatus: "verified" };
+    if (filterStatus === "active") { where.status = true; where.OR = [{ endAt: null }, { endAt: { gte: now } }]; }
+    else if (filterStatus === "expired") { where.OR = [{ status: false }, { endAt: { lt: now } }]; }
+    return prisma.liveCourseSubscription.findMany({ where, orderBy: { createdAt: "desc" } });
+  },
   create: (data: Prisma.LiveCourseUncheckedCreateInput) => prisma.liveCourse.create({ data }),
   update: (id: number, data: Prisma.LiveCourseUncheckedUpdateInput) => prisma.liveCourse.update({ where: { id }, data }),
   delete: (id: number) =>

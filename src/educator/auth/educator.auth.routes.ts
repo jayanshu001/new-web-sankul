@@ -11,6 +11,8 @@ import {
 } from "./educator.auth.controller";
 import { logoutAllDevicesHandler } from "../../middlewares/logoutAllDevices";
 import { EducatorAccessToken } from "../../models/educator/EducatorAccessToken.model";
+import { isMysqlModule } from "../../config/migration";
+import { educatorAuthRepository } from "../../modules/educator-auth/educator-auth.repository";
 
 const router = Router();
 
@@ -25,6 +27,13 @@ router.post(
   logoutAllDevicesHandler({
     type: "educator",
     extraTeardown: async (educatorId) => {
+      // SQL bookkeeping cleanup (authoritative revocation is the Redis cutoff in
+      // revokeAllTokensForUser); mirror the customer surface's dual-path.
+      if (isMysqlModule("educator-auth")) {
+        const numId = Number(educatorId);
+        if (Number.isInteger(numId) && numId > 0) await educatorAuthRepository.deactivateAllTokens(numId);
+        return;
+      }
       await EducatorAccessToken.updateMany(
         { educatorId, active: true },
         { active: false, deleted: true }
