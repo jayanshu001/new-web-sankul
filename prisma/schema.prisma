@@ -550,6 +550,21 @@ model Book {
   @@map("ws_book")
 }
 
+model BookSetting {
+  id                         Int       @id @default(autoincrement())
+  settingKey                 String    @unique @map("setting_key")
+  freeShippingMinOrderAmount Float     @map("free_shipping_min_order_amount")
+  supportPhone               String?   @map("support_phone")
+  termsAndConditions         Json?     @map("terms_and_conditions")
+  gstRate                    Float     @map("gst_rate")
+  originCity                 String?   @map("origin_city")
+  originHub                  String?   @map("origin_hub")
+  createdAt                  DateTime? @map("created_at")
+  updatedAt                  DateTime? @map("updated_at")
+
+  @@map("ws_book_setting")
+}
+
 model BookCart {
   id               Int               @id @default(autoincrement())
   cart_id          String

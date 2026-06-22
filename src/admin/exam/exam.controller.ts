@@ -15,6 +15,7 @@ import { ExamStatus, ExamResultType, ExamType } from "../../models/enums";
 import { formatScheduledAt } from "../../utils/displayTime";
 import { buildRegexCondition } from "../../utils/searchFilter";
 import * as adminExam from "../../modules/admin-exam/admin-exam.service";
+import * as catalogExam from "../../modules/catalog-exam/catalog-exam.service";
 import {
   createCategorySchema,
   updateCategorySchema,
@@ -61,14 +62,37 @@ async function recomputeExamQuestionCount(
 export const getCategories = async (req: Request, res: Response) => {
   try {
     const { parentId, search, status } = req.query as Record<string, string>;
+    const statusBool = status === "true" ? true : status === "false" ? false : undefined;
+
+    // Pagination is OPTIONAL + additive: `data` stays the array (back-compat),
+    // with a `pagination` sibling. Honored only when `page`/`limit` (or
+    // `per_page`) is supplied; otherwise all matching rows are returned as before.
+    const page = Math.max(parseInt(req.query.page as string) || 1, 1);
+    const limitRaw = (req.query.limit ?? req.query.per_page) as string | undefined;
+    const limit = limitRaw !== undefined ? Math.min(Math.max(parseInt(limitRaw) || 20, 1), 500) : undefined;
+    const skip = limit !== undefined ? (page - 1) * limit : undefined;
+    const meta = (total: number) => ({ page, limit: limit ?? total, total, totalPages: limit ? Math.ceil(total / limit) : 1 });
+
+    // ─── MySQL branch (ws_exam_category; soft-deleted rows excluded) ───────
+    if (catalogExam.isExamMysql()) {
+      const [items, total] = await Promise.all([
+        catalogExam.listCategories({ parentId, search, status: statusBool, skip, take: limit }),
+        catalogExam.countCategories({ parentId, search, status: statusBool }),
+      ]);
+      return res.status(200).json({ success: true, data: items, pagination: meta(total) });
+    }
+
     const filter: any = {};
     if (parentId === "root" || parentId === "null") filter.parentId = null;
     else if (parentId && isObjectId(parentId)) filter.parentId = parentId;
     { const c = buildRegexCondition(search); if (c) filter.name = c; }
     if (status === "true" || status === "false") filter.status = status === "true";
 
-    const categories = await ExamCategory.find(filter).sort({ orderBy: 1, name: 1 });
-    return res.status(200).json({ success: true, data: categories });
+    let mq = ExamCategory.find(filter).sort({ orderBy: 1, name: 1 });
+    if (skip !== undefined) mq = mq.skip(skip);
+    if (limit !== undefined) mq = mq.limit(limit);
+    const [categories, total] = await Promise.all([mq, ExamCategory.countDocuments(filter)]);
+    return res.status(200).json({ success: true, data: categories, pagination: meta(total) });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -76,6 +100,12 @@ export const getCategories = async (req: Request, res: Response) => {
 
 export const getCategoryTree = async (_req: Request, res: Response) => {
   try {
+    // ─── MySQL branch (ws_exam_category) ──────────────────────────────────
+    if (catalogExam.isExamMysql()) {
+      const roots = await catalogExam.getCategoryTree();
+      return res.status(200).json({ success: true, data: roots });
+    }
+
     const all = await ExamCategory.find({ status: true }).sort({ orderBy: 1, name: 1 }).lean();
     const byParent = new Map<string, any[]>();
     all.forEach((c) => {
@@ -98,6 +128,16 @@ export const getCategoryTree = async (_req: Request, res: Response) => {
 export const getCategoryById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_exam_category) ──────────────────────────────────
+    if (catalogExam.isExamMysql()) {
+      const numId = catalogExam.parseExamCategoryId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const data = await catalogExam.getCategoryByIdWithParent(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Category not found." });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const cat = await ExamCategory.findById(id);
@@ -120,6 +160,28 @@ export const getCategoryById = async (req: Request, res: Response) => {
 export const getCategoryPackages = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_exam_category_package) ──────────────────────────
+    if (catalogExam.isExamMysql()) {
+      const numId = catalogExam.parseExamCategoryId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      if (!(await catalogExam.categoryExists(numId)))
+        return res.status(404).json({ success: false, message: "Category not found." });
+      const { search, status } = req.query as Record<string, string>;
+      const { page, per_page, skip } = parseListPaging(req.query as Record<string, string>);
+      const { items, total } = await catalogExam.getCategoryPackages(numId, {
+        search,
+        status: status === "true" ? true : status === "false" ? false : undefined,
+        page,
+        per_page,
+        skip,
+      });
+      return res.status(200).json({
+        success: true,
+        data: { items, meta: buildMeta(page, per_page, total) },
+      });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const exists = await ExamCategory.exists({ _id: id });
@@ -184,6 +246,28 @@ export const getCategoryPackages = async (req: Request, res: Response) => {
 export const getCategoryCourses = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_exam_category_course) ───────────────────────────
+    if (catalogExam.isExamMysql()) {
+      const numId = catalogExam.parseExamCategoryId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      if (!(await catalogExam.categoryExists(numId)))
+        return res.status(404).json({ success: false, message: "Category not found." });
+      const { search, status } = req.query as Record<string, string>;
+      const { page, per_page, skip } = parseListPaging(req.query as Record<string, string>);
+      const { items, total } = await catalogExam.getCategoryCourses(numId, {
+        search,
+        status: status === "true" ? true : status === "false" ? false : undefined,
+        page,
+        per_page,
+        skip,
+      });
+      return res.status(200).json({
+        success: true,
+        data: { items, meta: buildMeta(page, per_page, total) },
+      });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const exists = await ExamCategory.exists({ _id: id });

@@ -1,3 +1,11 @@
+> # ✅ MIGRATION COMPLETE — 2026-06-22 · running MySQL-only
+>
+> WebSankul now runs on **MySQL (Prisma) only**. Every admin + client + educator + promoter API, every write path, background job, and boot-time seeding serves from MySQL. **MongoDB is disconnected by default** (`MONGO_FALLBACK_ENABLED=false` → `connectDB()` is skipped at boot); the app boots and serves with **no Mongo connection** — empirically verified (22 endpoints returned 200, 0 Mongo calls at boot). `MONGODB_URI` is no longer required. Re-enabling Mongo is a single reversible flag.
+>
+> The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code** (nothing connects to Mongo).
+>
+> **This document is retained for historical context.** The live source of truth for changes is `docs/MIGRATION_QUERY_CHANGES.md`. Anything below describing "pending / in-progress / flag OFF / blocker / Mongo fallback / remaining" reflects an earlier point in time and is **superseded** by the completed state above.
+
 # 🗺️ Mongo-Only → MySQL Migration Plan (RESUMABLE)
 
 > **Created:** 2026-06-17 · **Owner doc for the FINAL push: convert every remaining MongoDB-only module to MySQL.**
@@ -12,7 +20,7 @@
 
 ---
 
-## ▶️ RESUME POINTER (update this every time)
+## ▶️ RESUME POINTER (update this every time) — ✅ DONE (superseded; see banner) · nothing left to resume, running MySQL-only
 
 > **🎯 ZERO-MONGO PUSH (2026-06-19) — user wants EVERYTHING on MySQL. Canonical roadmap:
 > [`MODULE_STATUS_ROADMAP.md`](./MODULE_STATUS_ROADMAP.md) + work plan [`ZERO_MONGO_PLAN.md`](./ZERO_MONGO_PLAN.md).**

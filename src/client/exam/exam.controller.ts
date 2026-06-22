@@ -30,6 +30,7 @@ import {
   getSolutionAnalytics as svcGetSolutionAnalytics,
   getDailyExams as svcGetDailyExams,
 } from "../../modules/client-exam/client-exam.service";
+import * as catalogExam from "../../modules/catalog-exam/catalog-exam.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 const norm = (s: string) => (s ?? "").trim().toLowerCase();
@@ -44,6 +45,17 @@ export const listCategories = async (req: Request, res: Response) => {
   try {
     const { parentId } = req.query as Record<string, string>;
     const { search, page, limit, skip } = parseListQuery(req.query);
+
+    // ─── MySQL branch (ws_exam_category) ──────────────────────────────────
+    if (catalogExam.isExamMysql()) {
+      const [categories, total] = await Promise.all([
+        catalogExam.listClientCategories({ parentId, search, skip, take: limit }),
+        catalogExam.countClientCategories({ parentId, search }),
+      ]);
+      logger.info("listCategories success", { traceId, count: categories.length });
+      return res.status(200).json({ success: true, data: categories, pagination: buildPagination(total, page, limit) });
+    }
+
     const filter: any = { status: true };
     if (!parentId || parentId === "root") filter.parentId = null;
     else if (isObjectId(parentId)) filter.parentId = parentId;

@@ -44,6 +44,26 @@ const withLabelIds = (
   return labels.map((l) => ({ id: idByName.get(l.name) ?? next++, name: l.name }));
 };
 
+/**
+ * Active goals for onboarding (client `address/characteristic`). Mirrors the
+ * Mongo `Goal.find({ isActive: true }).select("title image labels").sort({ createdAt: 1 })`
+ * — returns the same fields (`_id`, title, image, labels) in createdAt asc order.
+ */
+export const listActiveGoalsSql = async (): Promise<
+  { _id: string; title: string; image: string | null; labels: any[] }[]
+> => {
+  const rows = await prisma.goal.findMany({
+    where: { isActive: true },
+    orderBy: { createdAt: "asc" },
+  });
+  return rows.map((g) => ({
+    _id: String(g.id),
+    title: g.title,
+    image: g.image ?? null,
+    labels: Array.isArray(g.labels) ? (g.labels as any[]) : [],
+  }));
+};
+
 export const createGoalSql = async (input: {
   title: string; labels: { name: string }[]; image?: string | null; isActive: boolean;
 }) => {

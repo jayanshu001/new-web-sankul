@@ -624,6 +624,11 @@ export const getSettings = async (_req: Request, res: Response) => {
   logger.info("getSettings invoked", { traceId, path: _req.originalUrl });
 
   try {
+    if (adminBook.isAdminBookMysql()) {
+      const data = await adminBook.getBookSettings();
+      logger.info("getSettings success (mysql)", { traceId });
+      return res.status(200).json({ success: true, data });
+    }
     let setting = await BookSetting.findOne({ key: "default" });
     if (!setting) setting = await BookSetting.create({ key: "default" });
     logger.info("getSettings success", { traceId });
@@ -640,6 +645,11 @@ export const updateSettings = async (req: Request, res: Response) => {
 
   try {
     const data = updateSettingsSchema.parse(req.body);
+    if (adminBook.isAdminBookMysql()) {
+      const updated = await adminBook.updateBookSettings(data as any);
+      logger.info("updateSettings success (mysql)", { traceId });
+      return res.status(200).json({ success: true, data: updated });
+    }
     const setting = await BookSetting.findOneAndUpdate(
       { key: "default" },
       { $set: data },

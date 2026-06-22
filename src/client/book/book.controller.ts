@@ -25,6 +25,11 @@ import {
   getActiveCartState,
   getPurchasedBookIdSet,
 } from "../../modules/book-order/book-order.service";
+import {
+  isClientTrendingMysql,
+  fetchTrendingBooksOnly as fetchTrendingBooksOnlySql,
+  fetchTrendingEbooksOnly as fetchTrendingEbooksOnlySql,
+} from "../../modules/client-trending/client-trending.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -256,6 +261,34 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
     const wantPaid = type === "paid" || !type; // default to paid
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
 
+    // ── SQL branch (client-trending) ─────────────────────────────────────────
+    // Combined trending: fetch books + ebooks from SQL, merge by createdAt desc,
+    // cap at limitNum, then attach the shareableLink. Byte-identical to Mongo.
+    if (isClientTrendingMysql()) {
+      const [bookRes, ebookRes] = await Promise.all([
+        fetchTrendingBooksOnlySql({ type, search, language, limit: 100 }),
+        fetchTrendingEbooksOnlySql({ type, search, language, limit: 100 }),
+      ]);
+      const base = resolveBase(req);
+      const merged = [...bookRes.items, ...ebookRes.items]
+        .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
+        .slice(0, limitNum)
+        .map((item) => ({
+          ...item,
+          shareableLink: buildShareUrl(
+            item.type === "ebook" ? "ebooks" : "books",
+            String(item._id),
+            base
+          ),
+        }));
+      const resType = wantFree ? "free" : "paid";
+      logger.info("listTrendingBooks success (mysql)", { traceId, type: resType, count: merged.length });
+      return res.status(200).json({
+        success: true,
+        data: { type: resType, items: merged, total: merged.length },
+      });
+    }
+
     const bookFilter: any = { status: true, isTrending: true };
     const ebookFilter: any = { status: true, isTrending: true };
     if (language) {
@@ -377,7 +410,9 @@ export const listTrendingBooksOnly = async (req: Request, res: Response) => {
   try {
     const { type, search, language, limit } = req.query as Record<string, string>;
     const limitNum = parseInt(limit, 10) || 20;
-    const result = await fetchTrendingBooksOnly({ type, search, language, limit: limitNum });
+    const result = isClientTrendingMysql()
+      ? await fetchTrendingBooksOnlySql({ type, search, language, limit: limitNum })
+      : await fetchTrendingBooksOnly({ type, search, language, limit: limitNum });
 
     const base = resolveBase(req);
     const items = result.items.map((item) => ({
@@ -404,7 +439,9 @@ export const listTrendingEbooksOnly = async (req: Request, res: Response) => {
   try {
     const { type, search, language, limit } = req.query as Record<string, string>;
     const limitNum = parseInt(limit, 10) || 20;
-    const result = await fetchTrendingEbooksOnly({ type, search, language, limit: limitNum });
+    const result = isClientTrendingMysql()
+      ? await fetchTrendingEbooksOnlySql({ type, search, language, limit: limitNum })
+      : await fetchTrendingEbooksOnly({ type, search, language, limit: limitNum });
 
     const base = resolveBase(req);
     const items = result.items.map((item) => ({

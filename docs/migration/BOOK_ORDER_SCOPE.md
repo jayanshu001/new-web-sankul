@@ -1,13 +1,21 @@
+# ✅ MIGRATION COMPLETE — 2026-06-22 · running MySQL-only
+
+WebSankul now runs on **MySQL (Prisma) only**. Every admin + client + educator + promoter API, every write path, background job, and boot-time seeding serves from MySQL. **MongoDB is disconnected by default** (`MONGO_FALLBACK_ENABLED=false` → `connectDB()` is skipped at boot); the app boots and serves with **no Mongo connection** — empirically verified (22 endpoints returned 200, 0 Mongo calls at boot). `MONGODB_URI` is no longer required. Re-enabling Mongo is a single reversible flag.
+
+The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code** (nothing connects to Mongo).
+
+**This document is retained for historical context.** The live source of truth for changes is `docs/MIGRATION_QUERY_CHANGES.md`. Anything below describing "pending / in-progress / flag OFF / blocker / Mongo fallback / remaining" reflects an earlier point in time and is **superseded** by the completed state above.
+
 # 📦 BOOK_ORDER_SCOPE.md — Phase 3b: the book-order write path
 
-> **Status:** SIGNED OFF (2026-06-13) — build may begin.
+> **Status:** SIGNED OFF (2026-06-13) — build may begin. — ✅ DONE (superseded; see banner)
 > **Decisions:** Q2 → **synthesize the single verify `history` entry in the DTO** (flat status row
 > persisted; multi-step timeline is a noted fidelity gap). Q4 → **use `ws_book_tracking.tracking_id`
 > AUTO_INCREMENT as the AWB allocator** (verify the live base first). Q5 → **book-order only now; wire
 > catalog-book as a follow-up.** Q1/Q3 follow the proposals (create-order writes order + item rows in one
 > txn; verify writes tracking + flips cart `status=0` only, leaving cart_item rows).
 >
-> **Status (orig):** DRAFT for sign-off — *no book-order code written yet.*
+> **Status (orig):** DRAFT for sign-off — *no book-order code written yet.* — ✅ DONE (superseded; see banner)
 > **Date:** 2026-06-13 · **Branch:** `migration`
 > **Companions:** [`WRITE_PATH_SCOPE.md`](./WRITE_PATH_SCOPE.md) (course+ebook, done) · [`RESUME_HERE.md`](./RESUME_HERE.md)
 > **Why a separate scope:** book-order is a genuinely DIFFERENT shape from course/ebook

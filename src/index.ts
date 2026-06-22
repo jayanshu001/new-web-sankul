@@ -2,9 +2,19 @@ import dotenv from "dotenv";
 // dotenv must load BEFORE env validation runs.
 dotenv.config();
 
+// JSON.stringify cannot serialize BigInt → "Do not know how to serialize a BigInt".
+// Prisma returns BigInt for columns like ws_*.tracking (AWB) and unsigned-bigint
+// ids, which can reach res.json() on raw-row endpoints (e.g. /admin/dashboard
+// recent subscriptions carry PackageCourseSubscription.trackingId). Serialize all
+// BigInt as strings globally so those responses are safe.
+(BigInt.prototype as any).toJSON = function () {
+  return this.toString();
+};
+
 import { validateEnvOrExit } from "./config/env";
-// Fail fast if JWT_ACCESS_SECRET / JWT_REFRESH_SECRET / MONGODB_URI are
-// missing. In prod, also requires ALLOWED_ORIGINS + RAZORPAY_WEBHOOK_SECRET.
+// Fail fast if JWT_ACCESS_SECRET / JWT_REFRESH_SECRET are missing (MONGODB_URI
+// only required when MONGO_FALLBACK_ENABLED=true). In prod, also requires
+// ALLOWED_ORIGINS + RAZORPAY_WEBHOOK_SECRET.
 validateEnvOrExit();
 
 import { createServer } from "http";

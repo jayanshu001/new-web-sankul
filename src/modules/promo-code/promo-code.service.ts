@@ -341,6 +341,58 @@ export const bulkDelete = async (ids: number[]) => {
   return { ok: true as const };
 };
 
+// ── Client public list ───────────────────────────────────────────────────────
+/**
+ * Client-facing public promocode list — mirrors the Mongo client list:
+ * `status:true, type:"public"` within the active window, sorted by
+ * promo_expire_at asc, projected to the same fields the Mongo `.select(...)`
+ * exposes. Returns `{ data, pagination }` byte-identical to the Mongo path.
+ */
+export const listPublicPromocodes = async (opts: {
+  skip: number;
+  limitNum: number;
+  pageNum: number;
+}) => {
+  const now = new Date();
+  const where: any = {
+    status: true,
+    type: "public",
+    promoStartAt: { lt: now },
+    promoExpireAt: { gt: now },
+  };
+
+  const [rows, total] = await Promise.all([
+    prisma.promoCodeRule.findMany({
+      where,
+      orderBy: { promoExpireAt: "asc" },
+      skip: opts.skip,
+      take: opts.limitNum,
+    }),
+    prisma.promoCodeRule.count({ where }),
+  ]);
+
+  const data = rows.map((r) => ({
+    _id: String(r.id),
+    promocode: r.promocode,
+    title: r.title ?? "",
+    description: r.description ?? "",
+    discountType: r.discountType,
+    discountValue: Number(r.discountValue ?? 0),
+    promo_start_at: r.promoStartAt ?? null,
+    promo_expire_at: r.promoExpireAt ?? null,
+  }));
+
+  return {
+    data,
+    pagination: {
+      total,
+      page: opts.pageNum,
+      limit: opts.limitNum,
+      totalPages: Math.ceil(total / opts.limitNum),
+    },
+  };
+};
+
 // ── Client apply ─────────────────────────────────────────────────────────────
 /** Find an active (status + window) promocode by (upper-cased) code. */
 export const findActiveByCode = async (code: string) => {

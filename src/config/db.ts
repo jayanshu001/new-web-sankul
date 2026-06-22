@@ -21,6 +21,14 @@ const configureMongoSrvDns = (): void => {
 
 configureMongoSrvDns();
 
+// Migration is MySQL-only and Mongo is disconnected by default. Disable Mongoose
+// command buffering so any *un-migrated* (Mongo-only) path fails INSTANTLY with a
+// clear "Client must be connected" error instead of hanging 10s ("buffering timed
+// out") — makes residual Mongo-only handlers obvious to find + fix, and keeps
+// request latency bounded. (When the fallback is re-enabled, the connection opens
+// before traffic, so this has no downside.)
+mongoose.set("bufferCommands", false);
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Mongoose query / aggregate timing hooks
 //

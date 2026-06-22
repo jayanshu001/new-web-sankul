@@ -61,6 +61,18 @@ export const listPromocodes = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
+    // ── SQL branch (promo-code) ──────────────────────────────────────────────
+    // Public, active-window promocode list from MySQL. Response shape identical.
+    if (pcSql.isPromoCodeMysql()) {
+      const result = await pcSql.listPublicPromocodes({ skip, limitNum, pageNum });
+      logger.info("listPromocodes success (mysql)", { traceId, total: result.pagination.total });
+      return res.status(200).json({
+        success: true,
+        data: result.data,
+        pagination: result.pagination,
+      });
+    }
+
     const now = new Date();
     const filter = {
       status: true,

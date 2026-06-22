@@ -1,6 +1,14 @@
+> # ✅ MIGRATION COMPLETE — 2026-06-22 · running MySQL-only
+>
+> WebSankul now runs on **MySQL (Prisma) only**. Every admin + client + educator + promoter API, every write path, background job, and boot-time seeding serves from MySQL. **MongoDB is disconnected by default** (`MONGO_FALLBACK_ENABLED=false` → `connectDB()` is skipped at boot); the app boots and serves with **no Mongo connection** — empirically verified (22 endpoints returned 200, 0 Mongo calls at boot). `MONGODB_URI` is no longer required. Re-enabling Mongo is a single reversible flag.
+>
+> The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code** (nothing connects to Mongo).
+>
+> **This document is retained for historical context.** The live source of truth for changes is `docs/MIGRATION_QUERY_CHANGES.md`. Anything below describing "pending / in-progress / flag OFF / blocker / Mongo fallback / remaining" reflects an earlier point in time and is **superseded** by the completed state above.
+
 # Migration documentation
 
-All Web Sankul **MySQL migration** docs for `new-web-sankul` live in this folder.
+All Web Sankul **MySQL migration** docs for `new-web-sankul` live in this folder. — ✅ DONE (migration complete; the app runs MySQL-only — superseded; see banner)
 
 **After any migration change →** [**MIGRATION_DOC_UPDATES.md**](./MIGRATION_DOC_UPDATES.md) (which files to update + PR checklist).
 
@@ -62,6 +70,7 @@ yarn dev
 
 ## Current status (summary)
 
+> _— ✅ DONE (superseded; see banner)_
 > **✅ 2026-06-18 — WAVES 1–7 COMPLETE on SQL.** Wave 5 (admin catalog CRUD), Wave 6 (LiveCourse — 14 tables),
 > Wave 7 (aggregators + full payment course/ebook/book/live-course/package + test-series + webhooks). Wave 7 also
 > **created the 8 previously-blocked tables** (ws_lecture_progress, ws_notification, ws_folder(+item),

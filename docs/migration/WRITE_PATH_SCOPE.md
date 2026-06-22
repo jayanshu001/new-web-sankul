@@ -1,6 +1,14 @@
+> # ✅ MIGRATION COMPLETE — 2026-06-22 · running MySQL-only
+>
+> WebSankul now runs on **MySQL (Prisma) only**. Every admin + client + educator + promoter API, every write path, background job, and boot-time seeding serves from MySQL. **MongoDB is disconnected by default** (`MONGO_FALLBACK_ENABLED=false` → `connectDB()` is skipped at boot); the app boots and serves with **no Mongo connection** — empirically verified (22 endpoints returned 200, 0 Mongo calls at boot). `MONGODB_URI` is no longer required. Re-enabling Mongo is a single reversible flag.
+>
+> The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code** (nothing connects to Mongo).
+>
+> **This document is retained for historical context.** The live source of truth for changes is `docs/MIGRATION_QUERY_CHANGES.md`. Anything below describing "pending / in-progress / flag OFF / blocker / Mongo fallback / remaining" reflects an earlier point in time and is **superseded** by the completed state above.
+
 # 🖊️ WRITE_PATH_SCOPE.md — Phase 3b: migrating the payment write path
 
-> **Status:** ✅ COURSE + EBOOK PATHS BUILT + WIRED (2026-06-13) — flag OFF, tsx 28/28 each, typecheck clean.
+> **Status:** ✅ COURSE + EBOOK PATHS BUILT + WIRED (2026-06-13) — flag OFF, tsx 28/28 each, typecheck clean. — ✅ DONE (superseded; see banner)
 > Modules: `src/modules/commerce-order/` (course) + `src/modules/ebook-order/` (ebook). Endpoints wired:
 > `create-order/{course,ebook}` + verify {course,ebook} branches (dual-read fallback). ebook is 2 tables
 > (no tracking) and re-derives ebook_id from the plan. ✅ **book-order** also DONE (2026-06-13, own scope:

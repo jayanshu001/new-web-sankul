@@ -42,6 +42,10 @@ import {
   isOfflineCityMysql,
   listActiveCities as svcListActiveCities,
 } from "../../modules/offline-city/offline-city.service";
+import {
+  isGoalMysql,
+  listActiveGoalsSql,
+} from "../../modules/goal/goal.service";
 
 const LOOKUPS_MODULE = "customer-lookups";
 
@@ -529,9 +533,14 @@ export const getCharacteristic = async (_req: Request, res: Response) => {
         )
       : CustomerEducation.find({ status: true }).select("_id name").sort({ name: 1 });
 
+    // Goals: SQL when the goal module is flagged on, else legacy Mongo.
+    const goalsPromise = isGoalMysql()
+      ? listActiveGoalsSql()
+      : Goal.find({ isActive: true }).select("title image labels").sort({ createdAt: 1 });
+
     const [educations, goals] = await Promise.all([
       educationsPromise,
-      Goal.find({ isActive: true }).select("title image labels").sort({ createdAt: 1 }),
+      goalsPromise,
     ]);
     logger.info("getCharacteristic success", { traceId, educations: educations.length, goals: goals.length });
     return res.status(200).json({ success: true, data: { educations, goals } });

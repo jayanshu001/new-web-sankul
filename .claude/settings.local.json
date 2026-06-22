@@ -181,7 +181,10 @@
       "Bash(echo \"rebooting pid $!\")",
       "Bash(grep -vE \"injected env|yarn run|\\\\\\\\$ |Done in\")",
       "Bash(curl -s -o /dev/null http://localhost:4001/api/v1/admin/test-series)",
-      "Bash(break)"
+      "Bash(break)",
+      "Bash(grep -v \"^legacy_system_migration_strategy.md$\")",
+      "Bash(grep -vc \"^legacy_system_migration_strategy.md$\")",
+      "Bash(curl -s -H 'Authorization: Bearer __TRACKED_VAR__' 'http://localhost:4001/api/v1/admin/dashboard?orderRange=today&totalRange=today&recentLimit=7' -o /tmp/dash.json -w 'HTTP %{http_code}\\\\n')"
     ]
   }
 }

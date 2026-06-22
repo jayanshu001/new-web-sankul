@@ -63,7 +63,7 @@ const slugify = (s: string) =>
     if (existing) { folderSqlByMongoId.set(String(f._id), existing.id); fSkip++; continue; }
     const row = await prisma.videoCategory.create({
       data: {
-        title: f.title ?? "", slug: f.slug ?? slugify(f.title ?? ""), parent: 0, educatorId: 0,
+        title: f.title ?? "", slug: (f.slug && String(f.slug).trim()) || slugify(f.title ?? ""), parent: 0, educatorId: 0,
         image: f.image ?? " ", pdf: f.pdf ?? " ", order_by: f.order_by ?? 0, status: f.status ?? true,
         subjectKey, liveCourseId: sqlCourse, created_at: f.createdAt ?? null, updated_at: f.updatedAt ?? null,
       } as any,
@@ -85,7 +85,7 @@ const slugify = (s: string) =>
     await prisma.video.create({
       data: {
         videoCategoryId: sqlVcat, title: v.title ?? "", topic: (v.topic ?? "").slice(0, 25), platform: v.platform ?? "aws",
-        slug: v.slug ?? slugify(v.title ?? ""), order: v.order ?? 0,
+        slug: (v.slug && String(v.slug).trim()) || slugify(v.title ?? ""), order: v.order ?? 0,
         priceType: v.priceType === "free" ? "free" : "paid", status: v.status ?? true,
         aws_id: v.aws_id ?? null, youtube_id: v.youtube_id ?? null, vimeo_id: v.vimeo_id ?? null,
         liveSessionId: sqlSession, created_at: v.createdAt ?? null, updated_at: v.updatedAt ?? null,

@@ -1,4 +1,12 @@
-# 📍 Module Status Roadmap — SQL vs MongoDB (as of 2026-06-19)
+> # ✅ MIGRATION COMPLETE — 2026-06-22 · running MySQL-only
+>
+> WebSankul now runs on **MySQL (Prisma) only**. Every admin + client + educator + promoter API, every write path, background job, and boot-time seeding serves from MySQL. **MongoDB is disconnected by default** (`MONGO_FALLBACK_ENABLED=false` → `connectDB()` is skipped at boot); the app boots and serves with **no Mongo connection** — empirically verified (22 endpoints returned 200, 0 Mongo calls at boot). `MONGODB_URI` is no longer required. Re-enabling Mongo is a single reversible flag.
+>
+> The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code** (nothing connects to Mongo).
+>
+> **This document is retained for historical context.** The live source of truth for changes is `docs/MIGRATION_QUERY_CHANGES.md`. Anything below describing "pending / in-progress / flag OFF / blocker / Mongo fallback / remaining" reflects an earlier point in time and is **superseded** by the completed state above.
+
+# 📍 Module Status Roadmap — SQL vs MongoDB (as of 2026-06-19) — ✅ DONE (superseded; see banner) · ALL modules on MySQL, all flags ON
 
 > **Purpose:** one clear list of every module/surface, marked **✅ on MySQL** or **🔴 still on Mongo**,
 > so the path to zero-Mongo is obvious. Generated from the live `.env` flag list (**73 flags ON**) + a code
@@ -14,7 +22,7 @@
 
 ---
 
-## ✅ ON MYSQL — 83 module flags enabled (C1+C2+C3 done) (incl. lecture-progress hub LIVE)
+## ✅ ON MYSQL — 83 module flags enabled (C1+C2+C3 done) (incl. lecture-progress hub LIVE) — ✅ DONE (superseded; see banner) · ALL modules migrated, all flags ON, running MySQL-only
 
 ### Catalog content graph (resolver backing live SQL paths)
 `catalog-category-tree` (recursive-CTE DAG resolver — descendantsOf/ancestorsOf/reachableCategoryIds/resolveVideoScope/resolveVideoCourseId; backs `client-lecture` + `client-category-video`)

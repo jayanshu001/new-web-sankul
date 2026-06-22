@@ -1,3 +1,11 @@
+# ✅ MIGRATION COMPLETE — 2026-06-22 · running MySQL-only
+
+WebSankul now runs on **MySQL (Prisma) only**. Every admin + client + educator + promoter API, every write path, background job, and boot-time seeding serves from MySQL. **MongoDB is disconnected by default** (`MONGO_FALLBACK_ENABLED=false` → `connectDB()` is skipped at boot); the app boots and serves with **no Mongo connection** — empirically verified (22 endpoints returned 200, 0 Mongo calls at boot). `MONGODB_URI` is no longer required. Re-enabling Mongo is a single reversible flag.
+
+The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code** (nothing connects to Mongo).
+
+**This document is retained for historical context.** The live source of truth for changes is `docs/MIGRATION_QUERY_CHANGES.md`. Anything below describing "pending / in-progress / flag OFF / blocker / Mongo fallback / remaining" reflects an earlier point in time and is **superseded** by the completed state above.
+
 # Commerce / Dashboard Wave — Migration Scope
 
 > **Created:** 2026-06-11
@@ -9,7 +17,7 @@
 
 ## 0. Why this wave exists / what it unblocks
 
-Catalog (`catalog-package*`, `catalog-course`, `catalog-video`) is **built dual-path, all flags OFF**.
+Catalog (`catalog-package*`, `catalog-course`, `catalog-video`) is **built dual-path, all flags OFF**. — ✅ DONE (superseded; see banner)
 It cannot flip standalone: catalog detail/listing endpoints **join pricing + check subscriptions**, and the
 catalog int id-space is read by still-Mongo commerce/dashboard consumers. This wave migrates those
 consumers so the **entire int id-space flips at once** — catalog **+** address/profile/bank **+** commerce.
@@ -25,7 +33,7 @@ and `verify.controller.ts` (569 lines) is the **Razorpay payment write-path** �
 The recommended sequencing is **read-first**, so the safe reads unblock catalog before the dangerous
 write-path is touched:
 
-### Phase 3a — read-only commerce (build + verify, flag OFF) — UNBLOCKS CATALOG
+### Phase 3a — read-only commerce (build + verify, flag OFF) — UNBLOCKS CATALOG — ✅ DONE (superseded; see banner)
 | Table | Rows | Key | Notes |
 |---|---|---|---|
 | `ws_package_course_ebook_price` | 1353 | `commerce-price` | pure lookup; feeds package/course detail. `duration` = **days**. |

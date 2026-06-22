@@ -1,8 +1,18 @@
+> # ✅ MIGRATION COMPLETE — 2026-06-22 · running MySQL-only
+>
+> WebSankul now runs on **MySQL (Prisma) only**. Every admin + client + educator + promoter API, every write path, background job, and boot-time seeding serves from MySQL. **MongoDB is disconnected by default** (`MONGO_FALLBACK_ENABLED=false` → `connectDB()` is skipped at boot); the app boots and serves with **no Mongo connection** — empirically verified (22 endpoints returned 200, 0 Mongo calls at boot). `MONGODB_URI` is no longer required. Re-enabling Mongo is a single reversible flag.
+>
+> The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code** (nothing connects to Mongo).
+>
+> **This document is retained for historical context.** The live source of truth for changes is `docs/MIGRATION_QUERY_CHANGES.md`. Anything below describing "pending / in-progress / flag OFF / blocker / Mongo fallback / remaining" reflects an earlier point in time and is **superseded** by the completed state above.
+
+**Nothing to resume — the migration is complete (MySQL-only).**
+
 # 🔖 RESUME HERE — MySQL Migration Checkpoint (read this FIRST)
 
 > **Purpose:** Cold-start context so any session can resume **exactly** here without losing flow, behaviour,
 > or any established rule. This is THE single source of truth for "where we are."
-> **Last updated:** 2026-06-18 — ✅ **Waves 1–8 COMPLETE on SQL.** Wave 6 (LiveCourse, 14 tables) + Wave 7
+> **Last updated:** 2026-06-18 — ✅ **Waves 1–8 COMPLETE on SQL.** — ✅ DONE (superseded; see banner) Wave 6 (LiveCourse, 14 tables) + Wave 7
 > (aggregators + full payment + 8 net-new tables) DONE. `client-notification` FULLY migrated + flag ON (device-token
 > table + admin write subsystem + dual-read BullMQ cutover). `client-lecture-progress` free-video slice migrated +
 > flag ON (container/DAG paths still Mongo — need VideoCategory childCategoryIds DAG → SQL). **Wave 8 DONE** (misc +

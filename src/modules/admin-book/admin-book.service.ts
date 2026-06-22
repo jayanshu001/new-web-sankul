@@ -1,4 +1,5 @@
 import { isMysqlModule } from "../../config/migration";
+import { prisma } from "../../config/prisma";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminBookRepository as repo } from "./admin-book.repository";
 import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
@@ -376,4 +377,49 @@ export const getOrder = async (id: number) => {
     createdAt: order.createdAt ?? null,
     updatedAt: order.updatedAt ?? null,
   };
+};
+
+// ── book settings (ws_book_setting; single 'default' config row) ──────────────
+// Mirrors the Mongo BookSetting doc shape.
+const toBookSettingDto = (r: any) => ({
+  _id: String(r.id),
+  key: r.settingKey,
+  freeShippingMinOrderAmount: r.freeShippingMinOrderAmount,
+  supportPhone: r.supportPhone ?? undefined,
+  termsAndConditions: Array.isArray(r.termsAndConditions) ? r.termsAndConditions : [],
+  gstRate: r.gstRate,
+  originCity: r.originCity ?? undefined,
+  originHub: r.originHub ?? undefined,
+  createdAt: r.createdAt ?? null,
+  updatedAt: r.updatedAt ?? null,
+});
+
+export const getBookSettings = async () => {
+  let row = await prisma.bookSetting.findFirst({ where: { settingKey: "default" } });
+  if (!row) {
+    const now = new Date();
+    row = await prisma.bookSetting.create({
+      data: { settingKey: "default", freeShippingMinOrderAmount: 0, gstRate: 0, termsAndConditions: [] as any, createdAt: now, updatedAt: now },
+    });
+  }
+  return toBookSettingDto(row);
+};
+
+export const updateBookSettings = async (data: {
+  freeShippingMinOrderAmount?: number; supportPhone?: string; termsAndConditions?: string[]; gstRate?: number; originCity?: string; originHub?: string;
+}) => {
+  const now = new Date();
+  const upd: any = { updatedAt: now };
+  if (data.freeShippingMinOrderAmount !== undefined) upd.freeShippingMinOrderAmount = data.freeShippingMinOrderAmount;
+  if (data.gstRate !== undefined) upd.gstRate = data.gstRate;
+  if (data.supportPhone !== undefined) upd.supportPhone = data.supportPhone;
+  if (data.termsAndConditions !== undefined) upd.termsAndConditions = data.termsAndConditions as any;
+  if (data.originCity !== undefined) upd.originCity = data.originCity;
+  if (data.originHub !== undefined) upd.originHub = data.originHub;
+  const row = await prisma.bookSetting.upsert({
+    where: { settingKey: "default" },
+    create: { settingKey: "default", freeShippingMinOrderAmount: data.freeShippingMinOrderAmount ?? 0, gstRate: data.gstRate ?? 0, supportPhone: data.supportPhone ?? null, termsAndConditions: (data.termsAndConditions ?? []) as any, originCity: data.originCity ?? null, originHub: data.originHub ?? null, createdAt: now, updatedAt: now },
+    update: upd,
+  });
+  return toBookSettingDto(row);
 };

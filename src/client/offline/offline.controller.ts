@@ -17,7 +17,14 @@ import {
   listBatches as listBatchesMysql,
   getCenterDetail as getCenterDetailMysql,
   getBatchDetail as getBatchDetailMysql,
+  listBanners as listBannersMysql,
+  getCentersWithBatchesByCities as getCentersWithBatchesByCitiesMysql,
+  listUpcomingBatches as listUpcomingBatchesMysql,
 } from "../../modules/offline-batch/offline-batch.service";
+import {
+  isOfflineCityMysql,
+  listActiveCities as listActiveCitiesMysql,
+} from "../../modules/offline-city/offline-city.service";
 import {
   isOfflineEnquiryMysql,
   enquiryBatchExists,
@@ -43,8 +50,44 @@ export const getOfflineDashboard = async (_req: Request, res: Response) => {
 
   try {
     const now = new Date();
+
+    // ── MySQL dashboard composition (offline-batch + offline-city flagged on) ──
+    // Mirrors the Mongo path: banners + cities with nested centers/batches +
+    // upcoming batches. Sections are only pushed when non-empty.
+    if (isOfflineBatchMysql() && isOfflineCityMysql()) {
+      const [banners, cities, upcomingBatches] = await Promise.all([
+        listBannersMysql(),
+        listActiveCitiesMysql(),
+        listUpcomingBatchesMysql(now, 10),
+      ]);
+
+      const cityIds = cities
+        .map((c) => parseOfflineId(c._id))
+        .filter((n): n is number => n != null);
+      const centersByCity = await getCentersWithBatchesByCitiesMysql(cityIds);
+
+      const citiesWithNested = cities.map((c) => ({
+        ...c,
+        centers: centersByCity.get(c._id) ?? [],
+      }));
+
+      const dashboard: Array<{ title: string; type: string; data: unknown }> = [];
+      if (banners.length) dashboard.push({ title: "Banner", type: "banner", data: banners });
+      if (citiesWithNested.length)
+        dashboard.push({ title: "City", type: "city", data: citiesWithNested });
+      if (upcomingBatches.length)
+        dashboard.push({ title: "Upcoming Batches", type: "upcoming_batch", data: upcomingBatches });
+
+      logger.info("getOfflineDashboard success", { traceId, sections: dashboard.length, source: "mysql" });
+      return res.status(200).json({ success: true, data: { dashboard } });
+    }
+
+    // Banners: SQL when the offline-batch module is flagged on, else Mongo.
+    const bannersPromise = isOfflineBatchMysql()
+      ? listBannersMysql()
+      : OfflineBannerSlider.find().sort({ orderBy: 1 }).lean();
     const [banners, cities, upcomingBatches] = await Promise.all([
-      OfflineBannerSlider.find().sort({ orderBy: 1 }).lean(),
+      bannersPromise,
       OfflineCity.find({ status: true }).sort({ order: 1 }).lean(),
       OfflineBatch.find({ status: true, startAt: { $gt: now } })
         .populate({

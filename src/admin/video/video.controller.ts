@@ -44,10 +44,12 @@ const toItem = (v: any) => ({
   topic: v.topic,
   type: v.priceType,
   status: v.status,
+  // Uniform object shape (never a bare string) so the admin table renders rows
+  // whose category ref doesn't populate (orphaned).
   video_category: v.videoCategoryId
     ? typeof v.videoCategoryId === "object"
       ? { id: v.videoCategoryId._id, name: v.videoCategoryId.title, slug: v.videoCategoryId.slug }
-      : v.videoCategoryId
+      : { id: v.videoCategoryId, name: null, slug: null }
     : null,
   platform: v.platform,
   youtube: v.platform === "youtube",

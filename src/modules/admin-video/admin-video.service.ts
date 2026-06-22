@@ -18,7 +18,12 @@ const toItem = (v: any) => ({
   topic: v.topic,
   type: v.priceType,
   status: v.status,
-  video_category: v.VideoCategory ? { id: String(v.VideoCategory.id), name: v.VideoCategory.title, slug: v.VideoCategory.slug } : (v.videoCategoryId != null ? String(v.videoCategoryId) : null),
+  // Always a uniform object shape (id always present; name/slug null when the
+  // category row doesn't resolve) — never a bare string. A mixed object/string
+  // shape breaks the admin table for unresolved (orphaned) category refs.
+  video_category: v.videoCategoryId != null
+    ? { id: String(v.videoCategoryId), name: v.VideoCategory?.title ?? null, slug: v.VideoCategory?.slug ?? null }
+    : null,
   platform: v.platform,
   youtube: v.platform === "youtube",
   youtubeId: v.youtube_id,

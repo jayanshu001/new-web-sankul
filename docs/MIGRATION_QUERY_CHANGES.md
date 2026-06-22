@@ -4,6 +4,127 @@
 
 ---
 
+## 2026-06-22 — `/admin/quizzes/categories` pagination + the 121-vs-111 explanation
+
+**Why the UI shows 111 of "121":** `ws_exam_category` has 121 rows but **10 are soft-deleted (`deleted=1`)**. The Mongo `ExamCategory` model has NO `deleted` field (Mongo hard-deletes), so the live data Mongo always served was **111**. The SQL list correctly excludes `deleted=1` (Mongo parity) → 111. NOT a bug; the 10 are legacy soft-deletes that should not appear.
+
+**Pagination added (additive, non-breaking):** `getCategories` (`admin/exam/exam.controller.ts`) now honors `page` + `limit`/`per_page` (skip/take via `catalog-exam.listCategories` + `countCategories`) and returns a `pagination: {page, limit, total, totalPages}` sibling. `data` STAYS the array (back-compat) — when no `limit` is passed it still returns all matching rows. Verified: `?limit=500`→111 items/total 111; `?page=1&limit=10`→10 items/total 111/12 pages. `yarn typecheck` ✅.
+
+## 2026-06-22 — swept + closed ALL remaining Mongo-only list endpoints (MySQL-only, no fallback)
+
+With Mongo disconnected, residual unmigrated handlers buffer-timed-out. Resolved systematically:
+1. `mongoose.set("bufferCommands", false)` in `config/db.ts` → stray Mongo calls fail **instantly** with a clear error, not a 10s hang.
+2. **Empirically swept all 194 admin+client list-GET endpoints** with Mongo off → found **10 Mongo-only** (6 handler groups), then migrated each to SQL (Mongo fallback retained): exam-categories (admin+client, via `catalog-exam`), client books-trending ×3 (`client-trending`), client promocodes list (`promo-code.listPublicPromocodes`), client address characteristic (`goal.listActiveGoalsSql`), client offline dashboard (`offline-batch`+`offline-city`), and admin book-settings → **net-new `ws_book_setting` table** (`2026-06-22_book_setting.sql`) + Prisma `BookSetting` + `admin-book.getBookSettings/updateBookSettings`.
+3. **Re-swept: admin 100/100 + client 94/94 list-GETs Mongo-clean (0 broken)**; all 10 originally-failing endpoints now `success:true`. `yarn typecheck` ✅.
+
+Scope note: the sweep covered list-GETs. `:id` GETs and write endpoints (e.g. exam-category create/update/delete) weren't exhaustively exercised — they serve SQL where their module is migrated; any residual Mongo-only write now fast-fails visibly (see #1) rather than hanging. (Per-handler detail in the dated entries below.)
+
+## 2026-06-22 — feat: exam-category admin+client read handlers gain SQL branches (Mongo fallback intact)
+
+Migrated the exam-category READ handlers off Mongo onto `ws_exam_category` (Prisma
+`examCategory`) via the existing `catalog-exam` module (flag `catalog-exam`,
+`isExamMysql()`). All keep the Mongo `else` fallback; response shapes unchanged.
+
+Handlers gated:
+1. **Admin** (`src/admin/exam/exam.controller.ts`): `getCategories`, `getCategoryTree`,
+   `getCategoryById`, `getCategoryPackages`, `getCategoryCourses`.
+2. **Client** (`src/client/exam/exam.controller.ts`): `listCategories`
+   (GET /api/v1/client/quizzes/categories).
+
+New service helpers (`src/modules/catalog-exam/catalog-exam.service.ts`):
+`listCategories`, `countCategories`, `listClientCategories`, `countClientCategories`,
+`getCategoryTree`, `getCategoryByIdWithParent`, `categoryExists`, `getCategoryPackages`,
+`getCategoryCourses`. New repo methods (`catalog-exam.repository.ts`): `listCategories`,
+`countCategories`, `categoryWhere`, `listAllActive`, `listCategoryPackages`,
+`countCategoryPackages`, `categoryPackageWhere`, `listPackagePrices`,
+`listCategoryCourses`, `countCategoryCourses`, `categoryCourseWhere`.
+
+Query notes:
+- Root filter: SQL sentinel `parent_id = 0` (Mongo `parentId: null`); roots map 0 → null
+  on output. All queries exclude soft-deleted (`deleted = false`) for Mongo parity.
+- Category→package/course links resolved via `ws_exam_category_package` /
+  `ws_exam_category_course` (`examCategoryPackage/Course { some: { examCategoryId } }`).
+- Package representative price: default plan wins, else lowest active price
+  (`ws_package_course_ebook_price`, status=true) — mirrors the Mongo logic.
+- Admin docs preserve Mongo key names (`_id, name, image, parentId, orderBy, status,
+  createdAt, updatedAt`); package/course item shapes preserve `{ id, name, price,
+  shareableLink, status }` / `{ id, name, status, orderBy }`.
+
+---
+
+## 2026-06-22 — feat: 4 client read handlers gain SQL branches (Mongo fallback intact)
+
+Added flag-gated SQL branches to four client handlers so they stop hitting Mongo. All
+keep the Mongo `else` path. Response shapes verified identical.
+
+1. **Client book trending** (`src/client/book/book.controller.ts`) — `listTrendingBooks`
+   (combined), `listTrendingBooksOnly`, `listTrendingEbooksOnly` now branch on
+   `isClientTrendingMysql()` and call `client-trending.service`'s `fetchTrendingBooksOnly`
+   / `fetchTrendingEbooksOnly`. Combined handler merges both by `createdAt` desc, slices
+   to `limitNum`, attaches `shareableLink` — same as Mongo.
+2. **Client promocode list** (`src/client/promocode/promocode.controller.ts`
+   `listPromocodes`) — branches on `pcSql.isPromoCodeMysql()`. New SQL fn
+   `listPublicPromocodes({skip,limitNum,pageNum})` in `modules/promo-code/promo-code.service.ts`:
+   queries `prisma.promoCodeRule` with `status:true, type:"public"`, active window
+   (`promoStartAt<now`, `promoExpireAt>now`), `orderBy promoExpireAt asc`, projecting the
+   same fields the Mongo `.select(...)` exposed (`_id, promocode, title, description,
+   discountType, discountValue, promo_start_at, promo_expire_at`). Returns `{data,pagination}`.
+3. **Client address characteristic** (`src/client/address/address.controller.ts`
+   `getCharacteristic`) — goals now branch on `isGoalMysql()`. New SQL fn
+   `listActiveGoalsSql()` in `modules/goal/goal.service.ts`: `prisma.goal.findMany({where:{isActive:true},
+   orderBy:{createdAt:"asc"}})` → `{_id,title,image,labels}` matching Mongo
+   `.select("title image labels")`.
+4. **Client offline banner** (`src/client/offline/offline.controller.ts`
+   `getOfflineDashboard`) — banners now branch on `isOfflineBatchMysql()` calling existing
+   `offline-batch.service.listBanners()` (repo sorts `orderBy asc`, same as Mongo
+   `sort({orderBy:1})`). Cities/upcoming-batches stay Mongo (out of scope).
+
+`yarn typecheck` green.
+
+---
+
+## 2026-06-22 — fix: `/admin/videos` `video_category` inconsistent shape (UI dropped rows)
+
+`GET /admin/videos` returned `video_category` as a populated object `{id,name,slug}` when the category resolved,
+but a **bare string id** when it didn't — a mixed-type array the admin table couldn't render uniformly (rows with
+the unexpected shape were dropped → "only 7 of 10 showing"). Root cause is two-fold: (1) the transformer
+(`admin-video.service.ts` + the Mongo `toItem` in `admin/video/video.controller.ts`) emitted object-or-string; and
+(2) a **staging data gap** — 156 of 159 `ws_video` rows are orphans whose `vcategory_id` has no matching
+`ws_video_category` row (only 3 resolve), so most fell to the string branch. (In prod every category resolves, so
+it never surfaced.)
+
+**Fix:** both transformers now emit a **uniform object** — `{ id: String(videoCategoryId), name: <title|null>, slug: <slug|null> }`,
+or `null` when there's no category id. Never a bare string. Verified: `/admin/videos` returns `video_category` as an
+object for all 10 rows (resolved → name/slug; orphans → name/slug null). `yarn typecheck` ✅.
+
+Note: orphan rows show `name: null` in staging (the category rows simply aren't in the SQL subset); in production
+those categories exist and populate normally.
+
+**Follow-up (the actual UI row-drop):** the 3 hidden rows were the live-recording promoted videos (33259–61) — they
+had **empty `slug`** (`recording.promote` creates videos with no slug → Mongoose default `""`, and
+`backfill-live-recordings.ts` used `v.slug ?? slugify(...)` which doesn't replace `""`). The admin table drops
+empty-slug rows. Fixed: backfill now uses `(v.slug && trim) || slugify(...)`; and patched the 3 existing rows
+`UPDATE ws_video SET slug=CONCAT('video-',id) WHERE slug IS NULL OR slug=''`. Verified `/admin/videos` → 10 rows,
+**0 empty slugs**, `video_category` uniform objects. (Duplicate slugs are fine — the list already renders
+two identical "Direct - Indirect Speech" rows; only empty slugs were dropped.)
+
+---
+
+## 2026-06-22 — fix: global BigInt JSON serializer (`/admin/dashboard` 500 "Do not know how to serialize a BigInt")
+
+`GET /admin/dashboard` 500'd with `Do not know how to serialize a BigInt`. Cause: the SQL dashboard's recent
+subscription lists (`admin-dashboard.service.ts` `recentPackageSubs`/`recentCourseSubs`) use Prisma `include`
+(full row), so `PackageCourseSubscription.trackingId` (`BigInt? @map("tracking")`, the AWB) reached `res.json()`,
+which `JSON.stringify` cannot serialize. (BigInt columns also exist on `BookOrder.tracking_id` + the unsigned-bigint
+RBAC ids, so this is a class of bug.)
+
+**Fix:** added a global `BigInt.prototype.toJSON = () => this.toString()` at boot (`src/index.ts`, top) — any BigInt
+reaching a JSON response now serializes as a string. One line, fixes every raw-row endpoint. Verified:
+`/admin/dashboard?orderRange=today&totalRange=today&recentLimit=7` → 200; `trackingId` now `"119400280393"` (string).
+`yarn typecheck` ✅.
+
+---
+
 ## 2026-06-22 — Phase B COMPLETE (operational): MongoDB connection removed; app runs MySQL-only
 
 The app now boots and serves with **no MongoDB connection** — Mongo is an opt-in fallback, OFF by default.
