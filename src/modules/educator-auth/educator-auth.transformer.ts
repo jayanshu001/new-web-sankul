@@ -43,17 +43,26 @@ export interface EducatorListDto {
   updatedAt: Date | null;
 }
 
-export const toEducatorListDto = (row: CourseEducator): EducatorListDto => ({
-  _id: String(row.id),
-  name: row.name,
-  email: row.email,
-  image: row.image ?? "",
-  about: row.about ?? "",
-  view: row.view ?? 0,
-  status: row.status,
-  createdAt: row.createdAt ?? null,
-  updatedAt: row.updatedAt ?? null,
-});
+export const toEducatorListDto = (row: CourseEducator): EducatorListDto => {
+  // Mongo (timestamps:true) always populated both dates, so the admin UI assumes
+  // a non-null updatedAt per row (it formats the date and silently drops rows it
+  // can't). Legacy ws_course_educator rows have updated_at = NULL, which broke
+  // that contract. Coalesce each timestamp to the other so a row that has either
+  // reports both — restoring Mongo parity.
+  const createdAt = row.createdAt ?? row.updatedAt ?? null;
+  const updatedAt = row.updatedAt ?? row.createdAt ?? null;
+  return {
+    _id: String(row.id),
+    name: row.name,
+    email: row.email,
+    image: row.image ?? "",
+    about: row.about ?? "",
+    view: row.view ?? 0,
+    status: row.status,
+    createdAt,
+    updatedAt,
+  };
+};
 
 /**
  * Verify a plaintext password against the stored hash. Legacy `ws_course_educator`

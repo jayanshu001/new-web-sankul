@@ -135,10 +135,14 @@ export const updateAdministrator = async (
   return buildListDto(row);
 };
 
-/** Soft delete has no SQL column → disable the account + revoke tokens. */
-export const disableAdministrator = async (id: bigint): Promise<void> => {
-  await adminAuthRepository.deactivateAllTokens(id);
-  await adminAuthRepository.setStatus(id, false);
+/**
+ * Hard delete the administrator. `ws_users` has no soft-delete column, so to
+ * remove it from the list (Mongo parity, where delete sets `deleted: true`) the
+ * row is physically deleted along with its tokens + spatie role/permission
+ * pivots.
+ */
+export const deleteAdministrator = async (id: bigint): Promise<void> => {
+  await adminAuthRepository.deleteAdmin(id, ADMIN_MODEL_TYPE);
 };
 
 export const setAdministratorStatus = async (

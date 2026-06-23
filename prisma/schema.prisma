@@ -253,6 +253,7 @@ model CustomerState {
   customer         Customer[]
   customerAddress  CustomerAddress[]
   CustomerShipping CustomerShipping[]
+  offlineCity      OfflineCity[]
 
   @@map("ws_customer_state")
 }
@@ -1171,6 +1172,7 @@ model CourseEducator {
   password        String
   view            Int
   status          Boolean
+  deleted         Boolean                 @default(false)
   lastSeenAt      DateTime?               @map("last_seen_at") @db.Date
   emailVerifiedAt DateTime?               @map("email_verified_at") @db.Date
   createdAt       DateTime?               @map("created_at")
@@ -1178,6 +1180,7 @@ model CourseEducator {
   course          Course[]
   accessTokens    EducatorAccessToken[]
 
+  @@index([deleted], map: "idx_course_educator_deleted")
   @@map("ws_course_educator")
 }
 
@@ -1551,6 +1554,8 @@ model OfflineCity {
   image     String          @map("image")
   status    Boolean         @default(true)
   order     Int             @default(0) @map("order")
+  state     Int?            @map("state")
+  State     CustomerState?  @relation(fields: [state], references: [id])
   createdAt DateTime        @map("created_at")
   updatedAt DateTime        @map("updated_at")
   centers   OfflineCenter[]

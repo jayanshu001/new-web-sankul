@@ -446,8 +446,9 @@ export const deleteAdministrator = async (req: Request, res: Response) => {
         return res.status(404).json({ success: false, message: "Administrator not found" });
       }
       if (existing.image) deleteFromS3FileUrl(existing.image).catch(() => {});
-      // ws_users has no soft-delete column → disable + revoke tokens.
-      await adminSql.disableAdministrator(bigId);
+      // ws_users has no soft-delete column → hard delete the row (+ tokens and
+      // spatie role/permission pivots) so it disappears from the list.
+      await adminSql.deleteAdministrator(bigId);
       logger.info("deleteAdministrator success (sql)", { traceId, id });
       return res.status(200).json({
         success: true,

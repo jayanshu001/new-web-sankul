@@ -32,6 +32,58 @@ export const adminSubscriptionRepository = {
     prisma.packageCourseSubscription.count({ where: buildSubWhere(opts) }),
   findCourseSubById: (id: number) => prisma.packageCourseSubscription.findUnique({ where: { id } }),
 
+  // ── write (admin manual grant) ──────────────────────────────────────────────
+  // Full plan row for create-time validation + pricing/duration.
+  findPlanById: (id: number) =>
+    prisma.packageCourseEbookPrice.findUnique({
+      where: { id },
+      select: { id: true, courseId: true, packageId: true, duration: true, price: true, withMaterial: true, materialPrice: true, status: true },
+    }),
+  // Latest active subscription for a customer's course/package target (upsert-extend).
+  findActiveSubForTarget: (opts: { customerId: number; courseId: number | null; packageId: number | null }) => {
+    const where: Prisma.PackageCourseSubscriptionWhereInput = { customerId: opts.customerId, status: true };
+    if (opts.courseId) where.courseId = opts.courseId;
+    else if (opts.packageId) { where.courseId = null; where.packageId = opts.packageId; }
+    return prisma.packageCourseSubscription.findFirst({ where, orderBy: { endAt: "desc" } });
+  },
+  createSub: (d: {
+    customerId: number; courseId: number | null; packageId: number | null; planId: number;
+    shippingId: number | null; startAt: Date; endAt: Date; status: boolean; amount: number;
+    courseAmount: number | null; materialAmount: number | null;
+    payment_type: "backend" | "online"; remarks: string | null; now: Date;
+  }) =>
+    prisma.packageCourseSubscription.create({
+      data: {
+        customerId: d.customerId,
+        courseId: d.courseId,
+        packageId: d.packageId,
+        planId: d.planId,
+        shippingId: d.shippingId,
+        startAt: d.startAt,
+        endAt: d.endAt,
+        status: d.status,
+        amount: d.amount,
+        courseAmount: d.courseAmount,
+        materialAmount: d.materialAmount,
+        payment_type: d.payment_type,
+        remarks: d.remarks,
+        createdAt: d.now,
+        updatedAt: d.now,
+      },
+    }),
+  extendSub: (id: number, d: { endAt: Date; planId: number; amount: number; shippingId?: number | null; remarks?: string | null; now: Date }) =>
+    prisma.packageCourseSubscription.update({
+      where: { id },
+      data: {
+        endAt: d.endAt,
+        planId: d.planId,
+        amount: d.amount,
+        ...(d.shippingId !== undefined ? { shippingId: d.shippingId } : {}),
+        ...(d.remarks !== undefined ? { remarks: d.remarks } : {}),
+        updatedAt: d.now,
+      },
+    }),
+
   // ── hydration ────────────────────────────────────────────────────────────────
   customersByIds: (ids: number[]) =>
     ids.length ? prisma.customer.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } }) : Promise.resolve([]),

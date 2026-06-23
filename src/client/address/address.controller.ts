@@ -413,8 +413,17 @@ export const listCities = async (req: Request, res: Response) => {
     const { search, page, limit, skip } = parseListQuery(req.query);
 
     if (isOfflineCityMysql()) {
-      const data = await svcListActiveCities(search);
-      logger.info("listCities success", { traceId, count: data.length, source: "mysql" });
+      // Optional state scope. Invalid stateId → 400 (mirrors the Mongo branch).
+      let stateNum: number | undefined;
+      if (stateId) {
+        const n = Number(stateId);
+        if (!Number.isInteger(n) || n <= 0) {
+          return res.status(400).json({ success: false, message: "Invalid stateId." });
+        }
+        stateNum = n;
+      }
+      const data = await svcListActiveCities(search, stateNum);
+      logger.info("listCities success", { traceId, count: data.length, source: "mysql", stateId: stateNum ?? null });
       return res.status(200).json({ success: true, data });
     }
 

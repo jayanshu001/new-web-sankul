@@ -68,8 +68,11 @@ export const vcDelete = async (id: number) => { if (!(await repo.vcFind(id))) re
 // ════════════════════════════════════════════════════════════════════════════
 // FULL admin videoCategory controller (src/admin/videoCategory) — parent-FK based.
 // ⚠ Mongo childCategoryIds[] (a DAG) → SQL single `parent` self-FK. On SQL the
-// children are derived from each child's `parent`; childCategoryIds is NOT a
-// writable field (single-parent model). `duplicate` (DAG clone) stays on Mongo.
+// children are derived from each child's `parent`. childCategoryIds IS writable:
+// binding it sets each listed child's `parent` to this category (and detaches any
+// removed ones back to root). A child can have only one parent (single-parent
+// model), so attaching a child here moves it out of any previous parent.
+// `duplicate` (DAG clone) stays on Mongo.
 // ════════════════════════════════════════════════════════════════════════════
 const toFullVcDto = (c: any, children: any[], educator: any | null) => ({
   id: String(c.id),
@@ -95,7 +98,7 @@ const loadFullVc = async (c: any) => {
 export const fullVcList = async (q: { search?: string; status?: string; educatorId?: string; page: number; per_page: number; sort_by: string; sort_dir: string }) => {
   const opts = {
     search: q.search,
-    status: q.status === "true" ? true : q.status === "false" ? false : undefined,
+    status: q.status === "active" ? true : q.status === "inactive" ? false : undefined,
     educatorId: q.educatorId ? parseMasterId(q.educatorId) ?? undefined : undefined,
     sortBy: q.sort_by, sortDir: (q.sort_dir === "asc" ? "asc" : "desc") as "asc" | "desc",
   };
@@ -117,18 +120,59 @@ export const fullVcPreRequisites = async () => {
 
 export const fullVcGet = async (id: number) => { const c = await repo.vcFind(id); return c ? loadFullVc(c) : null; };
 
-export const fullVcCreate = async (d: any): Promise<{ ok: false; reason: "slug" | "educator" } | { ok: true; data: any }> => {
+// Normalize a childCategoryIds payload to a unique list of valid positive ids,
+// excluding `selfId` (a category can't be its own child). Returns "child" when
+// any id doesn't reference an existing category.
+const resolveChildIds = async (raw: any, selfId: number): Promise<number[] | "child"> => {
+  const desired = Array.from(
+    new Set((Array.isArray(raw) ? raw : []).map((x) => toInt(x)).filter((n) => n > 0 && n !== selfId))
+  );
+  if (desired.length) {
+    const existing = await repo.vcExistingIds(desired);
+    if (existing.length !== desired.length) return "child";
+  }
+  return desired;
+};
+
+// Bind `desired` as the full set of children of `parentId`: attach new ones and
+// detach (parent → 0) any current child no longer listed.
+const reconcileChildren = async (parentId: number, desired: number[]): Promise<void> => {
+  const current = (await repo.vcChildren(parentId)).map((c) => c.id);
+  const desiredSet = new Set(desired);
+  const currentSet = new Set(current);
+  const toAttach = desired.filter((id) => !currentSet.has(id));
+  const toDetach = current.filter((id) => !desiredSet.has(id));
+  if (toAttach.length) await repo.vcSetParent(toAttach, parentId);
+  if (toDetach.length) await repo.vcSetParent(toDetach, 0);
+};
+
+export const fullVcCreate = async (d: any): Promise<{ ok: false; reason: "slug" | "educator" | "child" } | { ok: true; data: any }> => {
   if (await repo.vcSlugTaken(d.slug)) return { ok: false, reason: "slug" };
   if (d.educatorId) { const eid = parseMasterId(String(d.educatorId)); if (!eid || !(await repo.educator(eid))) return { ok: false, reason: "educator" }; }
+  // Validate children up-front (-1 = no self yet) so an invalid list never leaves an orphan row.
+  let children: number[] = [];
+  if (d.childCategoryIds !== undefined) {
+    const resolved = await resolveChildIds(d.childCategoryIds, -1);
+    if (resolved === "child") return { ok: false, reason: "child" };
+    children = resolved;
+  }
   const created = await repo.vcCreate({ title: d.name, slug: d.slug, image: d.image, parent: 0, order_by: toInt(d.order), status: d.status ?? true, educatorId: d.educatorId ? toInt(d.educatorId) : 0, pdf: "" });
+  if (children.length) await reconcileChildren(created.id, children);
   return { ok: true, data: await loadFullVc(created) };
 };
 
-export const fullVcUpdate = async (id: number, d: any): Promise<"not_found" | "slug" | "educator" | any> => {
+export const fullVcUpdate = async (id: number, d: any): Promise<"not_found" | "slug" | "educator" | "child" | any> => {
   const cat = await repo.vcFind(id);
   if (!cat) return "not_found";
   if (d.slug && d.slug !== cat.slug && (await repo.vcSlugTaken(d.slug, id))) return "slug";
   if (d.educatorId) { const eid = parseMasterId(String(d.educatorId)); if (!eid || !(await repo.educator(eid))) return "educator"; }
+  // Validate children before any write so an invalid list doesn't partially apply.
+  let children: number[] | null = null;
+  if (d.childCategoryIds !== undefined) {
+    const resolved = await resolveChildIds(d.childCategoryIds, id);
+    if (resolved === "child") return "child";
+    children = resolved;
+  }
   const data: Record<string, unknown> = {};
   if (d.name !== undefined) data.title = d.name;
   if (d.slug !== undefined) data.slug = d.slug;
@@ -137,6 +181,7 @@ export const fullVcUpdate = async (id: number, d: any): Promise<"not_found" | "s
   if (d.image !== undefined && d.image) data.image = d.image;
   if (d.educatorId !== undefined) data.educatorId = d.educatorId ? toInt(d.educatorId) : 0;
   await repo.vcUpdate(id, data);
+  if (children !== null) await reconcileChildren(id, children);
   return loadFullVc(await repo.vcFind(id));
 };
 
@@ -158,7 +203,7 @@ export const fullVcToggle = async (id: number): Promise<boolean | null> => {
 export const fullVcCategoryExists = async (id: number) => !!(await repo.vcFind(id));
 
 export const listCategoryCourses = async (categoryId: number, q: { search?: string; status?: string; page: number; per_page: number }) => {
-  const opts = { search: q.search, status: q.status === "true" ? true : q.status === "false" ? false : undefined };
+  const opts = { search: q.search, status: q.status === "active" ? true : q.status === "inactive" ? false : undefined };
   const [rows, total] = await Promise.all([
     repo.coursesForCategory(categoryId, { ...opts, skip: (q.page - 1) * q.per_page, take: q.per_page }),
     repo.countCoursesForCategory(categoryId, opts),
@@ -167,7 +212,7 @@ export const listCategoryCourses = async (categoryId: number, q: { search?: stri
 };
 
 export const listCategoryVideos = async (categoryId: number, q: { search?: string; status?: string; platform?: string; page: number; per_page: number }) => {
-  const opts = { search: q.search, status: q.status === "true" ? true : q.status === "false" ? false : undefined, platform: q.platform };
+  const opts = { search: q.search, status: q.status === "active" ? true : q.status === "inactive" ? false : undefined, platform: q.platform };
   const [rows, total] = await Promise.all([
     repo.videosForCategory(categoryId, { ...opts, skip: (q.page - 1) * q.per_page, take: q.per_page }),
     repo.countVideosForCategory(categoryId, opts),

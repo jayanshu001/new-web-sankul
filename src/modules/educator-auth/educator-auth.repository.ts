@@ -13,9 +13,10 @@ const buildAdminWhere = (opts: {
   search?: string;
   status?: boolean;
 }): Prisma.CourseEducatorWhereInput => {
-  // ws_course_educator has NO `deleted` column — a "deleted" educator is just
-  // status=false. The list shows all rows; callers filter by status.
-  const where: Prisma.CourseEducatorWhereInput = {};
+  // Soft-deleted educators are never listed (Mongo parity). The row is retained
+  // so course/live-course/package/session `educator_id` references still resolve
+  // the educator name; `deleted=1` just hides it from the admin list.
+  const where: Prisma.CourseEducatorWhereInput = { deleted: false };
   if (opts.search) {
     const q = opts.search.trim();
     where.OR = [{ name: { contains: q } }, { email: { contains: q } }];
@@ -124,10 +125,13 @@ export const educatorAuthRepository = {
   countAdmin: (opts: { search?: string; status?: boolean }) =>
     prisma.courseEducator.count({ where: buildAdminWhere(opts) }),
 
+  // Exclude soft-deleted rows so a deleted educator's email frees up for reuse
+  // (matches the Mongo partial unique index behavior).
   emailInUse: (email: string, exceptId?: number) =>
     prisma.courseEducator.findFirst({
       where: {
         email: email.toLowerCase().trim(),
+        deleted: false,
         ...(exceptId ? { id: { not: exceptId } } : {}),
       },
       select: { id: true },
@@ -179,7 +183,12 @@ export const educatorAuthRepository = {
       },
     }),
 
-  /** Soft delete has no SQL column → disable + revoke tokens. */
+  /**
+   * Soft delete: set deleted=1 + status=false and revoke tokens, retaining the
+   * row so course/live-course/package/session educator references still resolve
+   * the name (hard delete would violate the ws_course.educator_id FK). The list
+   * filters deleted=0, so the educator disappears from the admin list.
+   */
   disableAdmin: async (id: number) => {
     await prisma.educatorAccessToken.updateMany({
       where: { educatorId: id },
@@ -187,7 +196,7 @@ export const educatorAuthRepository = {
     });
     return prisma.courseEducator.update({
       where: { id },
-      data: { status: false, updatedAt: new Date() },
+      data: { deleted: true, status: false, updatedAt: new Date() },
     });
   },
 };

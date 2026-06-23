@@ -14,6 +14,8 @@ import {
   listPlansForTarget,
   listCustomerAddresses,
   adminCreateCustomerAddress,
+  adminUpdateCustomerAddress,
+  adminDeleteCustomerAddress,
 } from "./subscription.controller";
 
 const router = Router();
@@ -33,6 +35,8 @@ router.get("/ebook", listEbookSubscriptions);
 router.get("/plans", listPlansForTarget);
 router.get("/customer-addresses/:customerId", listCustomerAddresses);
 router.post("/customer-addresses", adminCreateCustomerAddress);
+router.put("/customer-addresses/:id", adminUpdateCustomerAddress);
+router.delete("/customer-addresses/:id", adminDeleteCustomerAddress);
 
 // Course/package subscriptions CRUD
 router.get("/", listCourseSubscriptions);

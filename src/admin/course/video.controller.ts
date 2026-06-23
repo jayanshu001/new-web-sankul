@@ -78,7 +78,7 @@ export const getVideos = async (req: Request, res: Response) => {
       }
       const { data, total } = await acvListVideos({
         videoCategoryId: catId,
-        status: status === "true" ? true : status === "false" ? false : undefined,
+        status: status === "active" ? true : status === "inactive" ? false : undefined,
         skip,
         take: limitNum,
       });
@@ -101,8 +101,8 @@ export const getVideos = async (req: Request, res: Response) => {
       }
       filters.videoCategoryId = videoCategoryId;
     }
-    if (status === "true" || status === "false") {
-      filters.status = status === "true";
+    if (status === "active" || status === "inactive") {
+      filters.status = status === "active";
     }
 
     const [data, total] = await Promise.all([

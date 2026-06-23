@@ -50,7 +50,7 @@ const uniqueSlug = async (base: string, exceptId?: number): Promise<string> => {
 export const listVideos = async (q: { search?: string; status?: string; type?: string; platform?: string; videoCategoryId?: string; page: number; per_page: number; sort_by: string; sort_dir: string }) => {
   const opts = {
     search: q.search,
-    status: q.status === "true" ? true : q.status === "false" ? false : undefined,
+    status: q.status === "active" ? true : q.status === "inactive" ? false : undefined,
     type: (q.type === "free" || q.type === "paid" ? q.type : undefined) as "free" | "paid" | undefined,
     platform: q.platform,
     videoCategoryId: q.videoCategoryId ? parseVideoId(q.videoCategoryId) ?? undefined : undefined,

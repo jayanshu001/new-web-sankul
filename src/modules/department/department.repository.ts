@@ -13,12 +13,23 @@ const withContacts = {
 };
 
 export const departmentRepository = {
-  /** List departments (+ contacts), sorted by `order`. Optional active filter. */
-  findMany: (opts?: { activeOnly?: boolean }) =>
+  /**
+   * List departments (+ contacts), sorted by `order`. Optional `active` filter
+   * (true/false; omit for all) and optional `skip`/`take` for pagination.
+   */
+  findMany: (opts?: { active?: boolean; skip?: number; take?: number }) =>
     prisma.department.findMany({
-      where: opts?.activeOnly ? { active: true } : undefined,
+      where: opts?.active !== undefined ? { active: opts.active } : undefined,
       orderBy: { order: "asc" },
       include: withContacts,
+      skip: opts?.skip,
+      take: opts?.take,
+    }),
+
+  /** Count departments matching the optional `active` filter (for pagination). */
+  count: (opts?: { active?: boolean }) =>
+    prisma.department.count({
+      where: opts?.active !== undefined ? { active: opts.active } : undefined,
     }),
 
   findById: (id: number) =>

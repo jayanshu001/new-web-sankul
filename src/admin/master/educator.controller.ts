@@ -14,6 +14,7 @@ import bcrypt from "bcryptjs";
 import { isMysqlModule } from "../../config/migration";
 import { educatorAuthRepository as eduRepo } from "../../modules/educator-auth/educator-auth.repository";
 import { toEducatorListDto } from "../../modules/educator-auth/educator-auth.transformer";
+import { getEducatorAssociations } from "../../modules/educator-auth/educator-details.service";
 
 const EDUCATOR_SORT_FIELDS = new Set(["createdAt", "updatedAt", "name", "email"]);
 // Admin educator master shares the educator-auth migration flag.
@@ -188,28 +189,17 @@ export const getEducatorDetails = async (req: Request, res: Response) => {
     const id = req.params.id as string;
 
     // ─── MySQL branch (ws_course_educator) ────────────────────────────────
-    // Profile from SQL; course/live-course/package/session associations depend
-    // on models not yet migrated, so they return empty until those land.
+    // Profile + associations (courses/live-courses/packages/video-categories/
+    // sessions) all from SQL, matching the Mongo handler's DTO shape exactly.
     if (isMysqlModule(MODULE)) {
       const numId = parseEducatorIntId(id);
       if (!numId) return res.status(400).json({ success: false, message: "Invalid Educator ID" });
       const row = await eduRepo.findById(numId);
       if (!row) return res.status(404).json({ success: false, message: "Educator not found" });
+      const { associations, summary } = await getEducatorAssociations(numId);
       return res.status(200).json({
         success: true,
-        data: {
-          profile: toEducatorListDto(row),
-          associations: {
-            courses: [], liveCourses: [], liveCourseFolders: [],
-            liveSessions: [], videoCategories: [], packages: [],
-          },
-          summary: {
-            totals: { courses: 0, liveCourses: 0, liveCourseFolders: 0, liveSessions: 0, videoCategories: 0, packages: 0 },
-            active: { courses: 0, liveCourses: 0, packages: 0 },
-            totalSubscribers: 0,
-            totalSessionsConducted: 0,
-          },
-        },
+        data: { profile: toEducatorListDto(row), associations, summary },
       });
     }
 

@@ -4,6 +4,53 @@
 
 ---
 
+## 2026-06-23 — admin educator-details (MySQL): implement associations aggregate (was a stub)
+
+**Bug:** `/admin/master/educators/:id/details` runs on the MySQL branch (`educator-auth` flagged) but only returned the SQL profile and **hardcoded empty `associations`/`summary`** — so an educator's courses/packages/sessions never showed (e.g. educator 20 has a `ws_course` row with 4 subscribers).
+
+**Fix:** new read-aggregation module `src/modules/educator-auth/educator-details.{repository,transformer,service}.ts`, called from the controller's MySQL branch. Queries by `educator_id` (no new tables): `ws_course`, `ws_live_course`, `ws_package`, `ws_video_category` (split into recording **folders** = rows with `live_course_id` vs root **videoCategories**, mirroring the Mongo `liveCourseId` split), `ws_live_session`. Subscriber counts via `groupBy` on `ws_package_course_subscription` (by `course_id` / `package_id`) and `ws_live_course_subscription` (by `live_course_id`), `status=true`. Course `purchase`/`is_featured` (CourseFlag01 enum, '1'=yes) → `isPaid`/`isPopular` booleans. `totalSessionsConducted` = sessions with `status='ENDED'`. Output shape verified identical to the Mongo handler against live data (educator 20: 1 course, 4 subscribers). `yarn typecheck` ✅. Mongo branch untouched.
+
+## 2026-06-23 — admin customer-details (MySQL): implement purchase aggregate (was a stub)
+
+**Bug:** `/admin/customers/:id/details` runs on the MySQL branch (`customer-auth` flagged), but that branch only returned the SQL profile and **hardcoded empty `purchases`/`summary`** ("models not yet migrated") — so bought subscriptions never showed even though the rows exist (e.g. customer 472369 has a `ws_package_course_subscription` row).
+
+**Fix:** new read-aggregation module `src/modules/admin-customer/admin-customer-details.{repository,transformer,service}.ts`, called from the controller's MySQL branch. Queries (no new tables): `ws_package_course_subscription` (split into **courses** = rows with `course_id`, **packages** = `package_id` & no `course_id`, mirroring Mongo `courseId`/`targetPackageId`), `ws_live_course_subscription`, `ws_test_series_subscription`, `ws_ebook_subscription`, `ws_book_order` (+`ws_book_order_item` joined by `order_id`), `ws_customer_address`. References hydrated by id (course/package/plan=`ws_package_course_ebook_price`, live course/`ws_live_course_plan`, test series/`ws_test_series_price`, ebook/`ws_ebook_order`, book, `ws_states`) and emitted as Mongo-style populated `{ _id, name, … }` sub-objects; Decimals→numbers; `isActive = status && endAt>now`.
+
+⚠ Column inversion vs Mongo: SQL `package_id` = the package (Mongo `targetPackageId`); SQL `pcb_id`/`planId` = the price/plan (Mongo `packageId`). `ws_package_course_subscription` has no `payment_status` → `paymentStatus` derived from `status` (verified/pending). Response shape verified identical to the Mongo handler against live data (customer 472369: 1 package, 1 address). `yarn typecheck` ✅. Mongo branch untouched.
+
+## 2026-06-23 — educator soft-delete column (MySQL): deleted educators leave the list
+
+**Schema change (additive DDL) + repository wiring.** Deleting an educator on the `educator-auth` MySQL branch only set `status=false`; the admin list didn't filter that, so "deleted" educators kept showing. Hard delete is unsafe here — `ws_course.educator_id` has a real FK to `ws_course_educator`, and the Mongo model intentionally soft-deletes to keep course/package/session educator names resolvable.
+
+**DDL** (`docs/migration/schema-changes/2026-06-23_course_educator_soft_delete.sql`, applied to staging):
+```sql
+ALTER TABLE ws_course_educator ADD COLUMN deleted TINYINT(1) NOT NULL DEFAULT 0;
+ALTER TABLE ws_course_educator ADD KEY idx_course_educator_deleted (deleted);
+```
+`schema.prisma` `CourseEducator` got `deleted Boolean @default(false)` + the index (added **surgically by hand**, NOT via `db:pull` — a full introspection against staging reverts the hand-curated enums/relations/comments and breaks unrelated files; `prisma:generate` only).
+
+**Repository** (`educator-auth.repository.ts`): admin list/count `where` now defaults to `{ deleted: false }`; `disableAdmin` sets `deleted:true` (+ `status:false`, revokes tokens) retaining the row; `emailInUse` excludes `deleted` rows so a deleted educator's email frees up for reuse (Mongo partial-unique-index parity). Login lookups already gate on `status:true`, so deleted educators can't authenticate. Mongo path unchanged. `yarn typecheck` ✅.
+
+## 2026-06-23 — educator admin list (MySQL): coalesce null timestamps (UI dropped rows)
+
+**Transformer fix — restores Mongo parity.** `/admin/master/educators` on the `educator-auth` MySQL branch returned `updatedAt: null` for legacy `ws_course_educator` rows (only ever-edited rows have `updated_at`). Mongo (`timestamps:true`) always populated both dates, and the admin UI assumes a non-null `updatedAt` per row (formats it, silently drops rows it can't) — so only the 2 rows with a real `updatedAt` rendered out of 10. `toEducatorListDto` now coalesces each timestamp to the other (`createdAt ?? updatedAt`, `updatedAt ?? createdAt`), so any row with either date reports both. No query/schema change; Mongo path unaffected. `yarn typecheck` ✅.
+
+## 2026-06-23 — administrator delete (MySQL): hard delete instead of disable
+
+**Behavior change on the `admin-auth` MySQL branch.** Deleting an administrator previously only set `ws_users.status = inactive` (`disableAdministrator`), because `ws_users` has no soft-delete column. But the list query (`buildAdminListWhere`) does not exclude inactive rows by default, so a "deleted" admin kept appearing in the list — unlike the Mongo path (sets `deleted: true`, list filters `deleted: false`).
+
+Fixed by physically deleting the row for Mongo parity. New `admin-auth.repository.deleteAdmin(id, modelType)` runs one `$transaction`: delete `ws_admin_access_tokens` (FK on `admin_user_id`), `ws_model_has_roles` + `ws_model_has_permissions` pivots (by `model_id` + `model_type`), then the `ws_users` row. Service `disableAdministrator` → replaced by `deleteAdministrator`; controller delete path calls it. No schema/DDL change (uses existing tables). Mongo branch unchanged (still soft-deletes). `yarn typecheck` ✅.
+
+## 2026-06-23 — admin video + administrator validation: accept MySQL numeric ids; role compulsory on create
+
+**Validation-layer only — no query/schema/index/DB-behavior change.** Two fixes surfaced by the migrated backends:
+
+1. **`videoCategoryId` "Invalid id" on `/api/v1/admin/videos`** (`src/admin/video/video.validation.ts`). The `admin-video` module runs on MySQL (numeric ids via `parseVideoId`), and the FE sends those category ids as JSON **numbers** (e.g. `12`). The prior `objectIdSchema` was a union of two `z.string().regex(...)` branches, which still rejected a numeric (non-string) value → `"Invalid id"`. Fixed by switching to `z.coerce.string().refine(...)`: the value is coerced to a string first, then accepted if it matches **either** a Mongo ObjectId **or** a MySQL numeric id (`^[1-9]\d*$`). Covers `videoCategoryId` (list/create/update) and reorder `id`; works on both backends and for both string and numeric input.
+
+2. **Role compulsory on Add Administrator** (`src/admin/administrator/administrator.validation.ts`). Split the role union into `roleValue` (built-in enum | Mongo ObjectId | MySQL numeric) and wired `createAdministratorSchema.role` to a required variant (`requiredRoleField`); update still uses the optional `roleField`. Missing/empty role → 422 `"Role is required"`. Controller already handled role defensively.
+
+`yarn typecheck` ✅. No transformer/repository/Prisma changes; Mongo fallback paths untouched.
+
 ## 2026-06-22 — `/admin/quizzes/categories` pagination + the 121-vs-111 explanation
 
 **Why the UI shows 111 of "121":** `ws_exam_category` has 121 rows but **10 are soft-deleted (`deleted=1`)**. The Mongo `ExamCategory` model has NO `deleted` field (Mongo hard-deletes), so the live data Mongo always served was **111**. The SQL list correctly excludes `deleted=1` (Mongo parity) → 111. NOT a bug; the 10 are legacy soft-deletes that should not appear.

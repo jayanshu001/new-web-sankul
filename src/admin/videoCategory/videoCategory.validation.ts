@@ -1,7 +1,14 @@
 import { z } from "zod";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
-const objectIdSchema = z.string().regex(objectIdRegex, "Invalid id");
+// Accept either a Mongo ObjectId (24-hex) OR a MySQL numeric id, so the same
+// validation works on MySQL where ids are integers. Coerce first: the FE sends
+// MySQL ids as JSON numbers (e.g. 3157), so without coercion z.string() rejects
+// them. Mirrors the dual-id handling in video.validation.ts.
+const objectIdSchema = z.coerce.string().refine(
+  (v) => objectIdRegex.test(v) || /^[1-9]\d*$/.test(v),
+  { message: "Invalid id" }
+);
 
 const parseChildIds = z
   .union([
@@ -38,7 +45,7 @@ export const updateVideoCategorySchema = z.object({
 
 export const listQuerySchema = z.object({
   search: z.string().trim().optional(),
-  status: z.enum(["true", "false"]).optional(),
+  status: z.enum(["active", "inactive"]).optional(),
   educatorId: objectIdSchema.optional(),
   childCategoryId: objectIdSchema.optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
@@ -57,7 +64,7 @@ export const sortFieldMap: Record<string, string> = {
 // Query schema for the category-scoped Courses tab list.
 export const categoryCoursesQuerySchema = z.object({
   search: z.string().trim().optional(),
-  status: z.enum(["true", "false"]).optional(),
+  status: z.enum(["active", "inactive"]).optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
   per_page: z.coerce.number().int().min(1).max(200).optional().default(20),
 });
@@ -65,7 +72,7 @@ export const categoryCoursesQuerySchema = z.object({
 // Query schema for the category-scoped Videos tab list.
 export const categoryVideosQuerySchema = z.object({
   search: z.string().trim().optional(),
-  status: z.enum(["true", "false"]).optional(),
+  status: z.enum(["active", "inactive"]).optional(),
   platform: z.enum(["youtube", "vimeo", "aws"]).optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
   per_page: z.coerce.number().int().min(1).max(200).optional().default(20),

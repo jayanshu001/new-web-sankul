@@ -1,0 +1,54 @@
+import { prisma } from "../../config/prisma";
+
+/**
+ * Prisma persistence for the admin customer-details aggregate (MySQL branch).
+ * Read-only aggregation over already-migrated subscription/order tables — no new
+ * tables. Each subscription type is fetched for the customer, then its foreign
+ * references (course/package/plan/ebook/book/state names) are hydrated by id so
+ * the transformer can emit the same populated DTO the Mongo handler returned.
+ *
+ * ⚠ ws_package_course_subscription column mapping (inverted vs Mongo):
+ *   package_id → the PACKAGE (Mongo `targetPackageId`)
+ *   pcb_id     → the PLAN price row (Mongo `packageId`, carries duration/price)
+ */
+export const adminCustomerDetailsRepository = {
+  // ── subscriptions / orders for the customer (newest first) ──────────────────
+  packageCourseSubs: (customerId: number) =>
+    prisma.packageCourseSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" } }),
+  liveCourseSubs: (customerId: number) =>
+    prisma.liveCourseSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" } }),
+  testSeriesSubs: (customerId: number) =>
+    prisma.testSeriesSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" } }),
+  ebookSubs: (customerId: number) =>
+    prisma.eBookSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" } }),
+  bookOrders: (customerId: number) =>
+    prisma.bookOrder.findMany({ where: { userId: customerId }, orderBy: { createdAt: "desc" } }),
+  addresses: (customerId: number) =>
+    prisma.customerAddress.findMany({ where: { userId: customerId }, orderBy: { created_at: "desc" } }),
+
+  // ── hydration (by id) ───────────────────────────────────────────────────────
+  coursesByIds: (ids: number[]) =>
+    ids.length ? prisma.course.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, level: true } }) : Promise.resolve([]),
+  packagesByIds: (ids: number[]) =>
+    ids.length ? prisma.package.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
+  plansByIds: (ids: number[]) =>
+    ids.length ? prisma.packageCourseEbookPrice.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, duration: true, price: true } }) : Promise.resolve([]),
+  liveCoursesByIds: (ids: number[]) =>
+    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, level: true } }) : Promise.resolve([]),
+  liveCoursePlansByIds: (ids: number[]) =>
+    ids.length ? prisma.liveCoursePlan.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, duration: true, price: true } }) : Promise.resolve([]),
+  testSeriesByIds: (ids: number[]) =>
+    ids.length ? prisma.testSeries.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, thumbnail: true } }) : Promise.resolve([]),
+  testSeriesPricesByIds: (ids: number[]) =>
+    ids.length ? prisma.testSeriesPrice.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, durationDays: true, price: true } }) : Promise.resolve([]),
+  ebooksByIds: (ids: number[]) =>
+    ids.length ? prisma.eBook.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, author: true, publisher: true, image: true, thumbnail: true } }) : Promise.resolve([]),
+  ebookOrdersByIds: (ids: number[]) =>
+    ids.length ? prisma.eBookOrder.findMany({ where: { id: { in: ids } }, select: { id: true, paymentMethod: true, orderPrice: true, status: true, createdAt: true } }) : Promise.resolve([]),
+  bookOrderItemsByReceipts: (receiptIds: string[]) =>
+    receiptIds.length ? prisma.bookOrderItem.findMany({ where: { order_id: { in: receiptIds } } }) : Promise.resolve([]),
+  booksByIds: (ids: number[]) =>
+    ids.length ? prisma.book.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
+  statesByIds: (ids: number[]) =>
+    ids.length ? prisma.customerState.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, state_code: true } }) : Promise.resolve([]),
+};

@@ -95,7 +95,7 @@ export const listVideos = async (req: Request, res: Response) => {
 
     const filter: any = {};
     Object.assign(filter, buildSearchFilter(search, ["title", "slug", "topic"]));
-    if (status === "true" || status === "false") filter.status = status === "true";
+    if (status === "active" || status === "inactive") filter.status = status === "active";
     if (type) filter.priceType = type;
     if (platform) filter.platform = platform;
     if (videoCategoryId) filter.videoCategoryId = videoCategoryId;
@@ -246,9 +246,6 @@ export const createVideo = async (req: Request, res: Response) => {
 export const updateVideo = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Video ID" });
-    }
     const parsed = updateVideoSchema.safeParse(req.body);
     if (!parsed.success) {
       return res.status(422).json({
@@ -269,6 +266,9 @@ export const updateVideo = async (req: Request, res: Response) => {
       return res.status(200).json({ success: true, message: "Video updated successfully", data: r });
     }
 
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: "Invalid Video ID" });
+    }
     const video = await Video.findById(id);
     if (!video) return res.status(404).json({ success: false, message: "Video not found" });
 

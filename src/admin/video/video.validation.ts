@@ -1,7 +1,15 @@
 import { z } from "zod";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
-const objectIdSchema = z.string().regex(objectIdRegex, "Invalid id");
+// Accept either a Mongo ObjectId (24-hex) OR a MySQL numeric id, so the same
+// validation works on both migration backends (admin-video runs on MySQL where
+// ids are integers). Mirrors the dual-id handling in administrator.validation.ts.
+// Coerce first: the FE sends MySQL category ids as JSON numbers (e.g. 12), so
+// without coercion z.string() rejects them with "Invalid id".
+const objectIdSchema = z.coerce.string().refine(
+  (v) => objectIdRegex.test(v) || /^[1-9]\d*$/.test(v),
+  { message: "Invalid id" }
+);
 
 const baseShape = {
   name: z.string().min(1, "Name is required").max(255),
@@ -107,7 +115,7 @@ export const updateVideoSchema = z
 
 export const listQuerySchema = z.object({
   search: z.string().trim().optional(),
-  status: z.enum(["true", "false"]).optional(),
+  status: z.enum(["active", "inactive"]).optional(),
   type: z.enum(["free", "paid"]).optional(),
   platform: z.enum(["youtube", "vimeo", "aws"]).optional(),
   videoCategoryId: objectIdSchema.optional(),

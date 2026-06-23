@@ -23,6 +23,7 @@ The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code
 
 | Phase / module | Status | Last tested | Tester |
 |----------------|--------|-------------|--------|
+| admin-video + administrator validation (numeric id accept; role required) | ✅ | 2026-06-23 | `yarn typecheck` (validation-only fix) |
 | Phase 1 — MySQL + dump | ✅ | 2026-06-04 | Agent (automated) |
 | Phase 2 — `app-update` | 🔄 | 2026-06-04 | Agent (automated only) |
 | Phase 2 — `version` | 🔄 | 2026-06-04 | Agent (automated only) |

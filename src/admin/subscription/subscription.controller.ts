@@ -14,11 +14,22 @@ import {
   updateSubscriptionSchema,
   createEbookSubscriptionSchema,
   adminCreateAddressSchema,
+  adminUpdateAddressSchema,
 } from "./subscription.validation";
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
-import { PackageCourseEbookOrderStatus } from "../../models/enums";
+import { PackageCourseEbookOrderStatus, PaymentMethod } from "../../models/enums";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import * as subSql from "../../modules/admin-subscription/admin-subscription.service";
+import {
+  listAddresses as sqlListAddresses,
+  createAddress as sqlCreateAddress,
+  updateAddress as sqlUpdateAddress,
+  deleteAddress as sqlDeleteAddress,
+  parseAddressId,
+} from "../../modules/customer-address/customer-address.service";
+import type { AddressCreateInput, AddressUpdateInput } from "../../modules/customer-address/customer-address.types";
+import { getCustomer as sqlGetCustomer } from "../../modules/admin-customer/admin-customer.service";
+import { resolveCityName } from "../../modules/offline-city/offline-city.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -154,9 +165,45 @@ export const getCourseSubscriptionById = async (req: Request, res: Response) => 
 // ws_package_course_subscription lacks those columns. The address handlers touch
 // CustomerAddress (held OFF — offline-city dep). Only the read/report surface is
 // on SQL (admin-subscription module, Wave 7). Revisit writes with the payment wave.
+// Gateway methods map to the SQL 2-value `payment_type` enum; everything else
+// (admin/offline grants — backend/bank/cash/free) is treated as "backend".
+const ONLINE_METHODS: string[] = [PaymentMethod.RAZORPAY, PaymentMethod.PAYKUN, PaymentMethod.PAYTM];
+
 export const createCourseSubscription = async (req: Request, res: Response) => {
   try {
     const data = createSubscriptionSchema.parse(req.body);
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (subSql.isAdminSubscriptionMysql()) {
+      const customerId = subSql.parseSubId(String(data.customerId));
+      if (!customerId) return res.status(400).json({ success: false, message: "Invalid customerId." });
+      const planId = subSql.parseSubId(String(data.planId));
+      if (!planId) return res.status(400).json({ success: false, message: "Invalid planId." });
+      if (!(await sqlGetCustomer(customerId)))
+        return res.status(404).json({ success: false, message: "Customer not found." });
+
+      const r = await subSql.createCourseSubscription({
+        customerId,
+        courseId: data.courseId ? subSql.parseSubId(String(data.courseId)) ?? undefined : undefined,
+        packageId: data.packageId ? subSql.parseSubId(String(data.packageId)) ?? undefined : undefined,
+        planId,
+        withMaterial: !!data.withMaterial,
+        paymentType: ONLINE_METHODS.includes(data.paymentMethod) ? "online" : "backend",
+        amount: data.amount,
+        durationDays: data.durationDays,
+        startAt: data.startAt,
+        customerShippingId: data.customerShippingId ? subSql.parseSubId(String(data.customerShippingId)) ?? null : null,
+        remark: data.remark,
+        status: data.status,
+      });
+      if (!r.ok) {
+        if (r.reason === "plan_not_found") return res.status(404).json({ success: false, message: "Plan not found." });
+        if (r.reason === "course_mismatch") return res.status(400).json({ success: false, message: "Plan does not belong to the selected course." });
+        if (r.reason === "package_mismatch") return res.status(400).json({ success: false, message: "Plan does not belong to the selected package." });
+        return res.status(400).json({ success: false, message: "Shipping address (customerShippingId) is required when withMaterial is true." });
+      }
+      return res.status(r.extended ? 200 : 201).json({ success: true, data: r.data, ...(r.extended ? { extended: true } : {}) });
+    }
 
     // Validate customer exists
     const customer = await Customer.findById(data.customerId).select("_id");
@@ -303,14 +350,11 @@ export const listPlansForTarget = async (req: Request, res: Response) => {
 export const listCustomerAddresses = async (req: Request, res: Response) => {
   try {
     const { customerId } = req.params as Record<string, string>;
-    if (!isObjectId(customerId))
-      return res.status(400).json({ success: false, message: "Invalid customerId." });
+    const cid = parseAddressId(customerId);
+    if (!cid) return res.status(400).json({ success: false, message: "Invalid customerId." });
 
-    const addresses = await CustomerAddress.find({ customerId, status: true })
-      .populate("stateId", "_id name")
-      .populate("cityId", "_id name")
-      .sort({ createdAt: -1 });
-    return res.status(200).json({ success: true, data: addresses });
+    const data = await sqlListAddresses(cid);
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -320,14 +364,85 @@ export const listCustomerAddresses = async (req: Request, res: Response) => {
 export const adminCreateCustomerAddress = async (req: Request, res: Response) => {
   try {
     const data = adminCreateAddressSchema.parse(req.body);
-    const customer = await Customer.findById(data.customerId).select("_id");
-    if (!customer)
+    const cid = parseAddressId(String(data.customerId));
+    if (!cid) return res.status(400).json({ success: false, message: "Invalid customerId." });
+    if (!(await sqlGetCustomer(cid)))
       return res.status(404).json({ success: false, message: "Customer not found." });
 
-    const address = await CustomerAddress.create({ ...data });
+    const cityId = data.cityId != null && data.cityId !== "" ? Number(data.cityId) : null;
+    const stateId = data.stateId != null && data.stateId !== "" ? Number(data.stateId) : null;
+    // `ws_customer_address.city` is NOT NULL VARCHAR(20) — fill the freeform name
+    // from the selected cityId (truncated to the column width).
+    const cityName = cityId ? ((await resolveCityName(cityId))?.name ?? "").slice(0, 20) : "";
+
+    const input: AddressCreateInput = {
+      customerId: cid,
+      name: data.name,
+      phone: data.phone ?? null,
+      alternatePhone: data.alternatePhone ?? null,
+      email: data.email ?? null,
+      address: data.address,
+      address2: data.address2 ?? "",
+      city: cityName,
+      stateId,
+      cityId,
+      pincode: data.pincode,
+      status: true,
+    };
+    const address = await sqlCreateAddress(input);
     return res.status(201).json({ success: true, data: address });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// PUT /admin/subscriptions/customer-addresses/:id
+export const adminUpdateCustomerAddress = async (req: Request, res: Response) => {
+  try {
+    const data = adminUpdateAddressSchema.parse(req.body);
+    const aid = parseAddressId(req.params.id as string);
+    const cid = parseAddressId(String(data.customerId));
+    if (!aid) return res.status(400).json({ success: false, message: "Invalid address id." });
+    if (!cid) return res.status(400).json({ success: false, message: "Invalid customerId." });
+
+    const input: AddressUpdateInput = {};
+    if (data.name !== undefined) input.name = data.name;
+    if (data.phone !== undefined) input.phone = data.phone;
+    if (data.alternatePhone !== undefined) input.alternatePhone = data.alternatePhone;
+    if (data.email !== undefined) input.email = data.email;
+    if (data.address !== undefined) input.address = data.address;
+    if (data.address2 !== undefined) input.address2 = data.address2;
+    if (data.stateId !== undefined) input.stateId = data.stateId != null && data.stateId !== "" ? Number(data.stateId) : null;
+    if (data.label !== undefined) input.label = data.label;
+    if (data.status !== undefined) input.status = data.status;
+    if (data.cityId !== undefined) {
+      const cityId = data.cityId != null && data.cityId !== "" ? Number(data.cityId) : null;
+      input.cityId = cityId;
+      // Keep the NOT-NULL `city` name column in sync with the selected city.
+      input.city = cityId ? ((await resolveCityName(cityId))?.name ?? "").slice(0, 20) : "";
+    }
+
+    const r = await sqlUpdateAddress(aid, cid, input);
+    if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+    return res.status(200).json({ success: true, data: r.data });
+  } catch (error: any) {
+    if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// DELETE /admin/subscriptions/customer-addresses/:id?customerId=...
+export const adminDeleteCustomerAddress = async (req: Request, res: Response) => {
+  try {
+    const aid = parseAddressId(req.params.id as string);
+    const cid = parseAddressId(String(req.query.customerId ?? ""));
+    if (!aid) return res.status(400).json({ success: false, message: "Invalid address id." });
+    if (!cid) return res.status(400).json({ success: false, message: "Invalid customerId." });
+    const r = await sqlDeleteAddress(aid, cid);
+    if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+    return res.status(200).json({ success: true, message: "Address deleted." });
+  } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -1,16 +1,6 @@
-# ✅ MIGRATION COMPLETE — 2026-06-22 · running MySQL-only
-
-WebSankul now runs on **MySQL (Prisma) only**. Every admin + client + educator + promoter API, every write path, background job, and boot-time seeding serves from MySQL. **MongoDB is disconnected by default** (`MONGO_FALLBACK_ENABLED=false` → `connectDB()` is skipped at boot); the app boots and serves with **no Mongo connection** — empirically verified (22 endpoints returned 200, 0 Mongo calls at boot). `MONGODB_URI` is no longer required. Re-enabling Mongo is a single reversible flag.
-
-The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code** (nothing connects to Mongo).
-
-**This document is retained for historical context.** The live source of truth for changes is `docs/MIGRATION_QUERY_CHANGES.md`. Anything below describing "pending / in-progress / flag OFF / blocker / Mongo fallback / remaining" reflects an earlier point in time and is **superseded** by the completed state above.
-
----
-
 # Migrated modules (MySQL / Prisma)
 
-> **Generated:** 2026-06-18 — re-run `yarn docs:migrated-modules` when you add a module  
+> **Generated:** 2026-06-23 — re-run `yarn docs:migrated-modules` when you add a module  
 > **Scope:** Only modules with **repository → service → transformer** on **legacy MySQL** tables  
 > **Enable in runtime:** `MIGRATION_MYSQL_MODULES` in `.env`
 
@@ -20,7 +10,7 @@ The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code
 
 | | |
 |---|---|
-| **Total migrated (code complete)** | 67 — ✅ DONE: ALL modules now migrated and all flags ON; running MySQL-only (superseded; see banner) |
+| **Total migrated (code complete)** | 67 |
 | **Active in env** (this generation) | `app-update, version, faq, banner-slider, testimonial, department, terms, popup, customer-auth, customer-lookups, customer-address, customer-profile, customer-bank-account, offline-city, catalog-package-type, catalog-package, catalog-course, catalog-video, catalog-ebook, catalog-material, catalog-book, offline-batch, commerce-order, ebook-order, book-order, offline-enquiry, package-chat, catalog-exam, commerce-price, commerce-subscription, commerce-ebook-sub, commerce-promoter, commerce-promocode, commerce-educator, admin-auth, customer-admin-crud, educator-auth, promoter-auth, promoter-data, referral, admin-rbac, client-exam, client-cart, admin-exam, client-educator, admin-plan, admin-master, admin-video, admin-book, admin-ebook, admin-course, admin-package, admin-material, live-course, client-purchase-history, admin-subscription, client-my-subscriptions, catalog-video, client-orders, live-course-order, package-order, test-series-order, wave7-new-tables (lecture-progress/notification/folder/ebook-download), client-ebook-download, client-folder, client-notification, client-lecture-progress` |
 | **Full registry keys** | `app-update,version,faq,banner-slider,testimonial,department,terms,popup,customer-auth,customer-lookups,customer-address,customer-profile,customer-bank-account,offline-city,catalog-package-type,catalog-package,catalog-course,catalog-video,catalog-ebook,catalog-material,catalog-book,offline-batch,commerce-order,ebook-order,book-order,offline-enquiry,package-chat,catalog-exam,commerce-price,commerce-subscription,commerce-ebook-sub,commerce-promoter,commerce-promocode,commerce-educator,admin-auth,customer-admin-crud,educator-auth,promoter-auth,promoter-data,referral,admin-rbac,client-exam,client-cart,admin-exam,client-educator,admin-plan,admin-master,admin-video,admin-book,admin-ebook,admin-course,admin-package,admin-material,live-course,client-purchase-history,admin-subscription,client-my-subscriptions,client-orders,live-course-order,package-order,test-series-order,wave7-new-tables (lecture-progress/notification/folder/ebook-download),client-ebook-download,client-folder,client-notification,client-lecture-progress` |
 

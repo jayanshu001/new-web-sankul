@@ -44,6 +44,8 @@ const cityCreateSqlSchema = z.object({
   image: z.string().min(1).max(500),
   order: z.coerce.number().int().default(0),
   status: z.boolean().optional(),
+  // Parent state (ws_customer_state id). Nullable — a city may be unassigned.
+  stateId: z.coerce.number().int().positive().nullable().optional(),
 });
 const cityUpdateSqlSchema = cityCreateSqlSchema.partial();
 
@@ -172,9 +174,9 @@ export const listCities = async (req: Request, res: Response) => {
   try {
     const { status, stateId } = req.query as Record<string, string>;
     if (isOfflineCityMysql()) {
-      // stateId filter is a no-op on SQL (no state column).
       const st = status === "true" ? true : status === "false" ? false : undefined;
-      return res.status(200).json({ success: true, data: await sqlListCities(st) });
+      const stateNum = stateId && Number.isInteger(Number(stateId)) && Number(stateId) > 0 ? Number(stateId) : undefined;
+      return res.status(200).json({ success: true, data: await sqlListCities(st, stateNum) });
     }
     const filter: any = {};
     if (status === "true" || status === "false") filter.status = status === "true";

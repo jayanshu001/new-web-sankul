@@ -137,10 +137,25 @@ const departmentUpdateSchema = departmentCreateSchema.partial();
 const departmentIdInvalid = (id: string) =>
   isMysqlModule("department") ? !parseDepartmentId(id) : !isObjectId(id);
 
-export const listDepartments = async (_req: Request, res: Response) => {
+export const listDepartments = async (req: Request, res: Response) => {
   try {
-    const data = await listDepartmentsService();
-    return res.status(200).json({ success: true, data });
+    const { page = "1", limit = "10", active } = req.query as Record<string, string>;
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 10, 1);
+    // `active` filters by status: "true"/"false". Omit (undefined) for all.
+    const activeFilter = active === undefined ? undefined : active === "true";
+
+    const { items, total } = await listDepartmentsService({
+      page: pageNum,
+      limit: limitNum,
+      active: activeFilter,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: items,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }

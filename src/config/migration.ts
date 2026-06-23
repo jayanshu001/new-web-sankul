@@ -21,17 +21,19 @@ export const getMysqlMigrationModules = (): string[] => {
     .filter(Boolean);
 };
 
-export const isMysqlModule = (module: string): boolean =>
-  getMysqlMigrationModules().includes(module.trim().toLowerCase());
+/**
+ * MySQL-only mode: the migration is complete and Mongo is permanently retired.
+ * EVERY module reads/writes MySQL (Prisma), regardless of MIGRATION_MYSQL_MODULES,
+ * and the Mongo connection is never opened. `_module` is accepted for call-site
+ * compatibility but no longer gates anything.
+ */
+export const isMysqlModule = (_module: string): boolean => true;
 
-export const hasMysqlMigrationModules = (): boolean =>
-  getMysqlMigrationModules().length > 0;
+// Always true so Prisma connects at boot (every path is MySQL now).
+export const hasMysqlMigrationModules = (): boolean => true;
 
 /**
- * Whether to connect to MongoDB at boot. The migration is complete — every API
- * path serves from MySQL — so Mongo is now an OPT-IN fallback, OFF by default.
- * Set MONGO_FALLBACK_ENABLED=true in .env to re-enable the legacy connection
- * (e.g. to temporarily fall back a not-yet-flipped module). Reversible by design.
+ * MongoDB is permanently disabled — the app runs MySQL-only and never connects
+ * to Mongo. Kept as a function (returning false) so existing call sites compile.
  */
-export const isMongoFallbackEnabled = (): boolean =>
-  process.env.MONGO_FALLBACK_ENABLED === "true";
+export const isMongoFallbackEnabled = (): boolean => false;

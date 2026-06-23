@@ -1,7 +1,14 @@
 import { z } from "zod";
 import { PaymentMethod } from "../../models/enums";
 
-const objectIdSchema = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id.");
+// Accept either a Mongo ObjectId (24-hex) OR a MySQL numeric id, so the same
+// validation works on MySQL where ids are integers. Coerce first: the FE sends
+// MySQL ids as JSON numbers, so without coercion z.string() rejects them.
+// Mirrors the dual-id handling in video.validation.ts.
+const objectIdSchema = z.coerce.string().refine(
+  (v) => /^[0-9a-fA-F]{24}$/.test(v) || /^[1-9]\d*$/.test(v),
+  { message: "Invalid id." }
+);
 
 export const createSubscriptionSchema = z
   .object({
@@ -69,4 +76,21 @@ export const adminCreateAddressSchema = z.object({
   pincode: z.string().min(4).max(10),
   label: z.enum(["home", "work", "other"]).optional().default("home"),
   status: z.boolean().optional().default(true),
+});
+
+// Admin edits an existing address. customerId scopes the update to its owner;
+// every other field is optional (partial update).
+export const adminUpdateAddressSchema = z.object({
+  customerId: objectIdSchema,
+  name: z.string().min(1).max(50).optional(),
+  phone: z.string().min(10).max(15).optional().nullable(),
+  alternatePhone: z.string().max(15).optional().nullable(),
+  email: z.string().email().max(100).optional().nullable(),
+  address: z.string().min(1).max(255).optional(),
+  address2: z.string().max(255).optional(),
+  cityId: objectIdSchema.optional().nullable(),
+  stateId: objectIdSchema.optional().nullable(),
+  pincode: z.string().min(4).max(10).optional(),
+  label: z.enum(["home", "work", "other"]).optional(),
+  status: z.boolean().optional(),
 });

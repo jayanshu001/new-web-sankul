@@ -58,9 +58,7 @@ const startServer = async () => {
   try {
     if (hasMysqlMigrationModules()) {
       await connectPrisma();
-      logger.info(
-        `[migration] MySQL modules active: ${process.env.MIGRATION_MYSQL_MODULES}`
-      );
+      logger.info("[migration] MySQL-only mode: all modules served from MySQL (Prisma).");
     }
     // Mongo is now an opt-in fallback (migration complete → MySQL-only). Only
     // connect when explicitly re-enabled via MONGO_FALLBACK_ENABLED=true.

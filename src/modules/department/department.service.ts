@@ -36,15 +36,49 @@ const fromMongoDoc = (d: Record<string, unknown>): DepartmentDto => {
   };
 };
 
-/** Admin list — all departments (+ contacts), sorted by `order`. */
-export const listDepartments = async (): Promise<DepartmentDto[]> => {
+export interface ListDepartmentsOptions {
+  page?: number;
+  limit?: number;
+  /** Filter by status (true/false). Omit for all departments. */
+  active?: boolean;
+}
+
+export interface ListDepartmentsResult {
+  items: DepartmentDto[];
+  total: number;
+}
+
+/**
+ * Admin list — departments (+ contacts), sorted by `order`. Supports an optional
+ * `active` status filter and `page`/`limit` pagination; returns the matching
+ * `total` alongside the page of items so the caller can build pagination meta.
+ */
+export const listDepartments = async (
+  opts: ListDepartmentsOptions = {}
+): Promise<ListDepartmentsResult> => {
+  const { page, limit, active } = opts;
+  const paginate = page !== undefined && limit !== undefined;
+  const skip = paginate ? (page - 1) * limit : undefined;
+
   if (isMysqlModule(MODULE)) {
-    const rows = await departmentRepository.findMany();
-    return rows.map(toDepartmentDto);
+    const [rows, total] = await Promise.all([
+      departmentRepository.findMany({ active, skip, take: paginate ? limit : undefined }),
+      departmentRepository.count({ active }),
+    ]);
+    return { items: rows.map(toDepartmentDto), total };
   }
 
-  const docs = await Department.find().sort({ order: 1 }).lean();
-  return docs.map((d) => fromMongoDoc(d as Record<string, unknown>));
+  const filter = active !== undefined ? { active } : {};
+  const query = Department.find(filter).sort({ order: 1 });
+  if (paginate) query.skip(skip!).limit(limit!);
+  const [docs, total] = await Promise.all([
+    query.lean(),
+    Department.countDocuments(filter),
+  ]);
+  return {
+    items: docs.map((d) => fromMongoDoc(d as Record<string, unknown>)),
+    total,
+  };
 };
 
 /**
@@ -53,7 +87,7 @@ export const listDepartments = async (): Promise<DepartmentDto[]> => {
  */
 export const listActiveContactDepartments = async (): Promise<DepartmentDto[]> => {
   if (isMysqlModule(MODULE)) {
-    const rows = await departmentRepository.findMany({ activeOnly: true });
+    const rows = await departmentRepository.findMany({ active: true });
     return rows.map(toDepartmentDto).map((d) => ({
       ...d,
       contacts: d.contacts.filter((c) => c.active).sort((a, b) => a.order - b.order),

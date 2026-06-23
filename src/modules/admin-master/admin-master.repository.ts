@@ -55,6 +55,13 @@ export const adminMasterRepository = {
   },
   vcChildren: (parentId: number) =>
     prisma.videoCategory.findMany({ where: { parent: parentId }, select: { id: true, title: true, slug: true, status: true, order_by: true }, orderBy: { order_by: "asc" } }),
+  // Existing ids among the given set — used to validate childCategoryIds before binding.
+  vcExistingIds: (ids: number[]) =>
+    prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true } }),
+  // Re-parent the given categories (parent = 0 detaches to root). Children of a
+  // category are derived from this self-FK, so this is how childCategoryIds binds.
+  vcSetParent: (childIds: number[], parent: number) =>
+    prisma.videoCategory.updateMany({ where: { id: { in: childIds } }, data: { parent, updated_at: new Date() } }),
   vcSlugTaken: (slug: string, exceptId?: number) =>
     prisma.videoCategory.findFirst({ where: { slug, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true } }),
   educator: (id: number) => prisma.courseEducator.findUnique({ where: { id }, select: { id: true, name: true } }),

@@ -1,5 +1,6 @@
 import { isMysqlModule } from "../../config/migration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
+import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
 
 export const ADMIN_SUBSCRIPTION_MODULE = "admin-subscription";
@@ -95,6 +96,91 @@ export const getCourseSubscriptionById = async (id: number): Promise<"not_found"
     withMaterial: r.pcMaterialId != null && r.pcMaterialId > 0,
     createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
   };
+};
+
+// ── course/package subscription create (admin manual grant) ──────────────────
+// MySQL model divergence vs Mongo: SQL has no payment_status (status conveys
+// active) and no material/shipping catalog wired into the admin form, so
+// `withMaterial` is reflected via `material_amount` (not a pc_material_id row),
+// and `customerShippingId` is stored in the `shipping` column as given.
+export interface CreateCourseSubInput {
+  customerId: number;
+  courseId?: number | null;
+  packageId?: number | null;
+  planId: number;
+  withMaterial: boolean;
+  paymentType: "backend" | "online";
+  amount?: number;
+  durationDays?: number;
+  startAt?: string;
+  customerShippingId?: number | null;
+  remark?: string | null;
+  status: boolean;
+}
+
+export type CreateCourseSubResult =
+  | { ok: false; reason: "plan_not_found" | "course_mismatch" | "package_mismatch" | "shipping_required" }
+  | { ok: true; extended: boolean; data: any };
+
+export const createCourseSubscription = async (input: CreateCourseSubInput): Promise<CreateCourseSubResult> => {
+  const plan = await repo.findPlanById(input.planId);
+  if (!plan) return { ok: false, reason: "plan_not_found" };
+  if (input.courseId && Number(plan.courseId ?? 0) !== input.courseId) return { ok: false, reason: "course_mismatch" };
+  if (input.packageId && Number(plan.packageId ?? 0) !== input.packageId) return { ok: false, reason: "package_mismatch" };
+  if (input.withMaterial && !input.customerShippingId) return { ok: false, reason: "shipping_required" };
+
+  const resolvedCourseId = input.courseId || plan.courseId || null;
+  const resolvedPackageId = input.packageId || plan.packageId || null;
+  const computedAmount =
+    input.amount != null ? input.amount : (plan.price || 0) + (input.withMaterial ? (plan.materialPrice || 0) : 0);
+  const now = new Date();
+
+  // Upsert-extend: with no explicit startAt, extend the customer's existing active
+  // subscription for this same target instead of inserting a duplicate row.
+  const existing =
+    !input.startAt && (resolvedCourseId || resolvedPackageId)
+      ? await repo.findActiveSubForTarget({ customerId: input.customerId, courseId: resolvedCourseId, packageId: resolvedPackageId })
+      : null;
+
+  if (existing) {
+    const newEndAt =
+      input.durationDays && input.durationDays > 0
+        ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: input.durationDays, asDays: true, now })
+        : extendEndAt({ currentEndAt: existing.endAt, durationMonths: plan.duration || 0, now });
+    await repo.extendSub(existing.id, {
+      endAt: newEndAt,
+      planId: plan.id,
+      amount: (existing.amount != null ? Number(existing.amount) : 0) + computedAmount,
+      shippingId: input.customerShippingId ?? undefined,
+      remarks: input.remark ?? undefined,
+      now,
+    });
+    return { ok: true, extended: true, data: await getCourseSubscriptionById(existing.id) };
+  }
+
+  const startAt = input.startAt ? new Date(input.startAt) : now;
+  const endAt =
+    input.durationDays && input.durationDays > 0
+      ? computeEndAt({ startAt, durationMonths: input.durationDays, asDays: true })
+      : computeEndAt({ startAt, durationMonths: plan.duration || 0 });
+
+  const created = await repo.createSub({
+    customerId: input.customerId,
+    courseId: resolvedCourseId,
+    packageId: resolvedPackageId,
+    planId: plan.id,
+    shippingId: input.customerShippingId ?? null,
+    startAt,
+    endAt,
+    status: input.status,
+    amount: computedAmount,
+    courseAmount: plan.price ?? null,
+    materialAmount: input.withMaterial ? (plan.materialPrice ?? 0) : null,
+    payment_type: input.paymentType,
+    remarks: input.remark ?? null,
+    now,
+  });
+  return { ok: true, extended: false, data: await getCourseSubscriptionById(created.id) };
 };
 
 export const listPlansForTarget = async (courseId?: number, packageId?: number) => {

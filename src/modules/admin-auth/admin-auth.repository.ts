@@ -221,6 +221,19 @@ export const adminAuthRepository = {
       data: { status: status ? "active" : "inactive", updatedAt: new Date() },
     }),
 
+  /**
+   * Hard delete. `ws_users` has no soft-delete column, so deletion physically
+   * removes the row. Dependents are cleared first to avoid orphans / FK errors:
+   * access tokens (FK on admin_user_id) + the spatie role/permission pivots.
+   */
+  deleteAdmin: (id: bigint, modelType: string) =>
+    prisma.$transaction([
+      prisma.adminAccessToken.deleteMany({ where: { adminUserId: id } }),
+      prisma.adminModelHasRole.deleteMany({ where: { modelId: id, modelType } }),
+      prisma.adminModelHasPermission.deleteMany({ where: { modelId: id, modelType } }),
+      prisma.adminUser.delete({ where: { id } }),
+    ]),
+
   // ─── Role assignment (spatie pivot ws_model_has_roles) ───────────────────
   /** Replace an admin's role assignments with a single role id. */
   setAdminRole: async (adminId: bigint, roleId: bigint, modelType: string) => {

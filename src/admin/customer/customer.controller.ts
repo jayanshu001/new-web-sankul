@@ -15,6 +15,7 @@ import { ensureDefaultFolders } from "../../client/folder/folder.controller";
 import { buildSearchFilter } from "../../utils/searchFilter";
 import { isMysqlModule } from "../../config/migration";
 import * as customerSql from "../../modules/admin-customer/admin-customer.service";
+import { getCustomerPurchaseDetails } from "../../modules/admin-customer/admin-customer-details.service";
 
 // Admin customer CRUD shares the customer-auth migration flag — when ws_customer
 // is the source of truth for auth, it is for admin management too.
@@ -498,25 +499,17 @@ export const getCustomerDetails = async (req: Request, res: Response) => {
     const id = req.params.id as string;
 
     // ─── MySQL branch (ws_customer) ───────────────────────────────────────
-    // Profile comes from SQL; purchase aggregates depend on subscription/order
-    // models not yet migrated, so they return empty until those modules land.
+    // Profile + purchase aggregates (subscriptions/orders/addresses) all from SQL.
+    // The aggregate is built to match the Mongo handler's DTO shape exactly.
     if (isMysqlModule(MODULE)) {
       const numId = customerSql.parseCustomerId(id);
       if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
       const profile = await customerSql.getCustomer(numId);
       if (!profile) return res.status(404).json({ success: false, message: "Customer not found" });
+      const { addresses, purchases, summary } = await getCustomerPurchaseDetails(numId, new Date());
       return res.status(200).json({
         success: true,
-        data: {
-          profile,
-          addresses: [],
-          purchases: { courses: [], packages: [], liveCourses: [], testSeries: [], ebooks: [], physicalBooks: [] },
-          summary: {
-            totals: { courses: 0, packages: 0, liveCourses: 0, testSeries: 0, ebooks: 0, physicalBooks: 0, addresses: 0 },
-            active: { courses: 0, packages: 0, liveCourses: 0, testSeries: 0, ebooks: 0 },
-            lifetimeSpend: 0,
-          },
-        },
+        data: { profile, addresses, purchases, summary },
       });
     }
 
