@@ -37,7 +37,10 @@ export const createCourseSqlSchema = z.object({
   name: z.string().min(1, "Name is required"),
   subtitle: z.string().optional(),
   description: z.string().min(1, "Description is required"),
-  image: z.string().url("Image must be a valid URL"),
+  // Accept a full URL (new S3 uploads) OR a legacy relative path/filename
+  // (e.g. "twitter-image.png") that edit round-trips — strict .url() rejected
+  // legacy course images and blocked editing. New uploads are still full URLs.
+  image: z.string().min(1, "Image is required"),
   ordered: z.coerce.number().int("Ordered must be an integer"),
   shareableLink: z.string().optional(),
   withMaterial: z.string().optional(),

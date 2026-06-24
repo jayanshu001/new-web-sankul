@@ -51,6 +51,7 @@ export const adminBookRepository = {
     orderIdsIn?: string[]; // VARCHAR business keys (search match on items)
     customerIdsIn?: number[]; // search match on customer
     receiptSearch?: string;
+    bookOrderKeysIn?: string[]; // AND restriction: orders containing a given book
     sortBy: string;
     sortDir: "asc" | "desc";
     skip: number;
@@ -66,7 +67,7 @@ export const adminBookRepository = {
       skip: opts.skip,
       take: opts.take,
     }),
-  countOrders: (opts: { customerId?: number; status?: string; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string }) =>
+  countOrders: (opts: { customerId?: number; status?: string; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string; bookOrderKeysIn?: string[] }) =>
     prisma.bookOrder.count({ where: buildOrderWhere(opts) }),
 
   findOrderById: (id: number) =>
@@ -126,6 +127,27 @@ export const adminBookRepository = {
     for (const r of rows) keys.add(r.order_id);
     return [...keys];
   },
+
+  /**
+   * Order business keys that contain a specific book id. Same dual scan as the
+   * name search: child rows (ws_book_order_item.bookId) AND the JSON snapshot,
+   * where items serialize as `"item":<id>`. The regex anchors the id with a
+   * non-digit/quote boundary so id 5 doesn't match 50/"54" etc.
+   */
+  findOrderKeysByBookId: async (bookId: number): Promise<string[]> => {
+    const keys = new Set<string>();
+    const items = await prisma.bookOrderItem.findMany({
+      where: { bookId },
+      select: { order_id: true },
+    });
+    for (const it of items) keys.add(it.order_id);
+    // JSON: "item":54 or "item":"54", not followed by another digit.
+    const re = `"item":"?${bookId}"?([^0-9]|$)`;
+    const rows = await prisma.$queryRaw<Array<{ order_id: string }>>`
+      SELECT order_id FROM ws_book_order WHERE order_items REGEXP ${re}`;
+    for (const r of rows) keys.add(r.order_id);
+    return [...keys];
+  },
 };
 
 function buildWhere(opts: { search?: string; language?: string; isMagazine?: boolean; isCombo?: boolean; status?: boolean }): Prisma.BookWhereInput {
@@ -148,7 +170,7 @@ function orderSortCol(sortBy: string): string {
   return "createdAt";
 }
 
-function buildOrderWhere(opts: { customerId?: number; status?: string; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string }): Prisma.BookOrderWhereInput {
+function buildOrderWhere(opts: { customerId?: number; status?: string; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string; bookOrderKeysIn?: string[] }): Prisma.BookOrderWhereInput {
   const where: Prisma.BookOrderWhereInput = {};
   if (opts.customerId !== undefined) where.userId = opts.customerId;
   if (opts.status) where.status = opts.status;
@@ -157,6 +179,9 @@ function buildOrderWhere(opts: { customerId?: number; status?: string; fromDate?
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;
     if (opts.toDate) where.createdAt.lte = opts.toDate;
   }
+  // bookId filter: AND restriction to orders that contain the book (by business
+  // key). Empty array → matches nothing (no order has that book).
+  if (opts.bookOrderKeysIn) where.receiptId = { in: opts.bookOrderKeysIn };
   // Search OR: receiptId match | order belongs to a matched customer | order_id
   // appears in the item-matched key set. Each clause optional; AND with filters.
   const or: Prisma.BookOrderWhereInput[] = [];

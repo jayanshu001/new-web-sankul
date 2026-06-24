@@ -29,7 +29,9 @@ export const adminCourseRepository = {
     prisma.course.findMany({
       where: buildCourseWhere(opts),
       include,
-      orderBy: { [courseSortCol(opts.sortBy)]: opts.sortDir },
+      // `id desc` tiebreaker so newest-added stays on top even when the primary
+      // column ties or is null (migrated rows). Default sort is createdAt desc.
+      orderBy: [{ [courseSortCol(opts.sortBy)]: opts.sortDir }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
     }),
@@ -104,15 +106,18 @@ export const adminCourseRepository = {
     prisma.course.update({ where: { id }, data: { is_featured: isPopular ? "yes" : "no", updatedAt: new Date() } }),
 
   // ── plans (course-owned price rows) ─────────────────────────────────────────
+  // ws_package_course_ebook_price is shared (package/course/ebook). A course-OWNED
+  // plan has packageId=0 AND ebookId=0 (createPlan writes exactly that), so scope to
+  // those — never surface package/ebook (or course+ebook combo) rows under a course.
   listPlans: (courseId: number) =>
-    prisma.packageCourseEbookPrice.findMany({ where: { courseId }, orderBy: [{ isDefault: "desc" }, { created_at: "desc" }] }),
+    prisma.packageCourseEbookPrice.findMany({ where: { courseId, packageId: 0, ebookId: 0 }, orderBy: [{ isDefault: "desc" }, { created_at: "desc" }] }),
   findPlanById: (id: number) => prisma.packageCourseEbookPrice.findUnique({ where: { id } }),
   createPlan: (data: Prisma.PackageCourseEbookPriceUncheckedCreateInput) => prisma.packageCourseEbookPrice.create({ data }),
   updatePlan: (id: number, data: Prisma.PackageCourseEbookPriceUncheckedUpdateInput) => prisma.packageCourseEbookPrice.update({ where: { id }, data }),
   deletePlan: (id: number) => prisma.packageCourseEbookPrice.delete({ where: { id } }),
-  /** Single-default invariant: flip all OTHER course plans to isDefault=false. */
+  /** Single-default invariant: flip all OTHER course-owned plans to isDefault=false. */
   clearSiblingDefaults: (courseId: number, exceptId: number) =>
-    prisma.packageCourseEbookPrice.updateMany({ where: { courseId, id: { not: exceptId } }, data: { isDefault: false } }),
+    prisma.packageCourseEbookPrice.updateMany({ where: { courseId, packageId: 0, ebookId: 0, id: { not: exceptId } }, data: { isDefault: false } }),
 
   // ── pre-requisites ──────────────────────────────────────────────────────────
   activeEducators: () => prisma.courseEducator.findMany({ where: { status: true }, select: { id: true, name: true } }),

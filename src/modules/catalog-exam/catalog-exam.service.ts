@@ -115,7 +115,7 @@ const resolveParentFilter = (parentId?: string): { parentRoot?: boolean; parentN
   return {};
 };
 
-/** List exam categories (admin getCategories / client listCategories shape). */
+/** List exam categories (admin getCategories shape) — newest-created first. */
 export const listCategories = async (input: ListCategoriesInput) => {
   const { parentRoot, parentNum } = resolveParentFilter(input.parentId);
   const rows = await repo.listCategories({
@@ -125,6 +125,7 @@ export const listCategories = async (input: ListCategoriesInput) => {
     status: input.status,
     skip: input.skip,
     take: input.take,
+    newestFirst: true,
   });
   return rows.map(toExamCategoryDoc);
 };
@@ -216,6 +217,67 @@ export const getCategoryByIdWithParent = async (id: number) => {
 /** Does a category exist (admin package/course guards)? */
 export const categoryExists = async (id: number): Promise<boolean> =>
   Boolean(await repo.findCategoryById(id));
+
+// ─── category writes (admin) ────────────────────────────────────────────────
+// SQL is single-parent: the Mongo `childCategoryIds[]`/`ancestors[]` DAG has no
+// columns and is dropped. Root sentinel is parent_id = 0.
+
+export const createCategory = async (input: {
+  name: string; image?: string | null; parentId?: string | null; orderBy?: number; status?: boolean;
+}) => {
+  const now = new Date();
+  const parent = input.parentId ? parseExamCategoryId(input.parentId) ?? 0 : 0;
+  const row = await repo.createCategory({
+    name: input.name,
+    image: input.image ?? null,
+    parent,
+    status: input.status ?? true,
+    order_by: input.orderBy ?? 0,
+    deleted: false,
+    created_at: now,
+    updated_at: now,
+  });
+  return toExamCategoryDoc(row as ExamCategoryRow);
+};
+
+export const updateCategory = async (
+  id: number,
+  input: { name?: string; image?: string | null; parentId?: string | null; orderBy?: number; status?: boolean }
+): Promise<"not_found" | "self_parent" | "parent_not_found" | { data: ReturnType<typeof toExamCategoryDoc>; orphanImageUrl: string | null }> => {
+  const existing = await repo.findCategoryById(id);
+  if (!existing) return "not_found";
+
+  const data: any = { updated_at: new Date() };
+  let orphanImageUrl: string | null = null;
+  if (input.name !== undefined) data.name = input.name;
+  if (input.orderBy !== undefined) data.order_by = input.orderBy;
+  if (input.status !== undefined) data.status = input.status;
+  if (input.parentId !== undefined) {
+    const parent = input.parentId ? parseExamCategoryId(input.parentId) ?? 0 : 0;
+    if (parent === id) return "self_parent";
+    if (parent !== 0 && !(await repo.findCategoryById(parent))) return "parent_not_found";
+    data.parent = parent;
+  }
+  // null clears the image (+ orphans the old S3 object); a new URL replaces it.
+  if (input.image === null) {
+    data.image = null;
+    orphanImageUrl = existing.image ?? null;
+  } else if (input.image !== undefined) {
+    data.image = input.image;
+    if (existing.image && existing.image !== input.image) orphanImageUrl = existing.image;
+  }
+
+  const row = await repo.updateCategory(id, data);
+  return { data: toExamCategoryDoc(row as ExamCategoryRow), orphanImageUrl };
+};
+
+export const deleteCategory = async (id: number): Promise<"not_found" | "has_children" | "has_exams" | true> => {
+  if (!(await repo.findCategoryById(id))) return "not_found";
+  if ((await repo.childCount(id)) > 0) return "has_children";
+  if ((await repo.examCountForCategory(id)) > 0) return "has_exams";
+  await repo.softDeleteCategory(id);
+  return true;
+};
 
 /** Paginated packages linked to a category (admin getCategoryPackages shape). */
 export const getCategoryPackages = async (

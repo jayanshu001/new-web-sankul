@@ -175,9 +175,10 @@ export const createBook = async (req: Request, res: Response) => {
     }
     if (adminBook.isAdminBookMysql()) {
       // C6: examCountdownIds/examCountdownCategoryIds NOW persist to ws_book JSON
-      // columns (parseIdArray-normalised in the service). Still dropped on SQL:
-      // packageIds/termsAndConditions/demoFileName/bookFileName/bookUrl/isTrending
-      // — those Mongo-only fields have no SQL columns (documented gap).
+      // columns (parseIdArray-normalised in the service). demoFileName now persists
+      // too (ws_book.demo_file_name). Still dropped on SQL: packageIds/
+      // termsAndConditions/bookFileName/bookUrl/isTrending — books have no
+      // full-book PDF and those fields have no SQL columns (documented gap).
       const created = await adminBook.createBook(data as any);
       logger.info("createBook success (mysql)", { traceId, bookId: created._id });
       return res.status(201).json({ success: true, data: created });
@@ -360,6 +361,7 @@ export const getOrders = async (req: Request, res: Response) => {
   try {
     const {
       customerId,
+      bookId,
       status,
       fromDate,
       toDate,
@@ -376,6 +378,7 @@ export const getOrders = async (req: Request, res: Response) => {
     if (adminBook.isAdminBookMysql()) {
       const { items, total } = await adminBook.listOrders({
         customerId,
+        bookId,
         status: status && Object.values(BookOrderStatus).includes(status as BookOrderStatus) ? status : undefined,
         fromDate,
         toDate,

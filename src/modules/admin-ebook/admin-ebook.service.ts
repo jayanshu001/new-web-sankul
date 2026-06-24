@@ -17,8 +17,9 @@ export const parseEbookId = (id: string): number | null => {
 /**
  * `ws_ebook` row → admin Ebook DTO (Mongo `Ebook` shape). Field renames:
  * terms_and_conditions→termsAndConditions, order_by→order, demo_url→demoUrl,
- * book_url→bookUrl, link→link. SQL-absent fields synthesized: isTrending=false,
- * demoFileName/bookFileName=null, and the PDF-upload status fields
+ * book_url→bookUrl, link→link, book_file_name→bookFileName,
+ * demo_file_name→demoFileName (original PDF upload names). SQL-absent fields
+ * synthesized: isTrending=false; the PDF-upload status fields
  * (book/demoUploadStatus/Progress) are omitted (Mongo-only).
  *
  * examCountdown* are stored as JSON int-arrays on ws_ebook (C6) and populated on
@@ -47,8 +48,10 @@ export const toEbookDto = (
   order: row.orderby,
   demoUrl: row.bookDemoUrl,
   bookUrl: row.bookUrl,
-  demoFileName: null,
-  bookFileName: null,
+  // Original upload filenames (persisted by the PDF-upload pipeline) so edit can
+  // show the same name. Columns: book_file_name / demo_file_name.
+  demoFileName: row.demoFileName ?? null,
+  bookFileName: row.bookFileName ?? null,
   link: row.shareableLink,
   isTrending: false,
   status: row.active,

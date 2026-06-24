@@ -635,8 +635,6 @@ export const duplicateCategory = async (req: Request, res: Response) => {
 export const getCategoryCourses = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid category id." });
 
     if (adminMaterial.isAdminMaterialMysql()) {
       const numId = adminMaterial.parseMaterialId(id);
@@ -644,6 +642,8 @@ export const getCategoryCourses = async (req: Request, res: Response) => {
       const data = await adminMaterial.getCategoryCourses(numId);
       return res.status(200).json({ success: true, data });
     }
+    if (!mongoose.Types.ObjectId.isValid(id))
+      return res.status(400).json({ success: false, message: "Invalid category id." });
     const courses = await Course.find({ "materialCategories.category": id })
       .select("_id name image level status");
     return res.status(200).json({ success: true, data: courses });
@@ -772,6 +772,9 @@ function applyUploadedFile(req: Request) {
   const file = req.file as any;
   if (file?.location) {
     req.body.file = file.location;
+    // Keep the user's original filename (e.g. "Test 151 - Class 3.pdf") separate
+    // from the generated storage key in `file`. Caller-supplied fileName wins.
+    if (file.originalname && req.body.fileName == null) req.body.fileName = file.originalname;
     if (file.size != null && req.body.fileSize == null) req.body.fileSize = file.size;
     if (file.mimetype && !req.body.fileMime) req.body.fileMime = file.mimetype;
   }

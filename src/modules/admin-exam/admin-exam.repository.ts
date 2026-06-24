@@ -1,6 +1,25 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 
+/** Shape used by question create/bulk inserts (option image/order dropped — no columns). */
+export interface QuestionWrite {
+  examId: number;
+  name: string;
+  answer: string;
+  image: string | null;
+  solutionText: string; // ws_exam_question.solution_text is NOT NULL
+  solutionImage: string | null;
+  orderBy: number;
+  status: boolean;
+  options: { name: string }[];
+}
+
+/** ws_exam.questions = count of ACTIVE (status=true) questions — mirrors the Mongo recompute. */
+async function recomputeCount(tx: Prisma.TransactionClient, examId: number) {
+  const count = await tx.examQuestion.count({ where: { exam: examId, status: true } });
+  await tx.exam.update({ where: { id: examId }, data: { numberOfQuestions: count } });
+}
+
 /**
  * Prisma persistence for the admin-exam MySQL branch (READ-focused + invalidate).
  * Same ws_exam* tables as client-exam; admin-shaped queries (filters, populated
@@ -36,6 +55,40 @@ export const adminExamRepository = {
     prisma.exam.findUnique({ where: { id }, include: { ExamCategory: { select: { id: true, name: true } } } }),
   countQuestionsForExam: (examId: number) => prisma.examQuestion.count({ where: { exam: examId } }),
 
+  // ── exam writes ──────────────────────────────────────────────────────────────
+  /** Minimal columns needed to merge an update / run the daily-overlap rule. */
+  findExamMeta: (id: number) =>
+    prisma.exam.findUnique({ where: { id }, select: { id: true, type: true, status: true, startAt: true, endAt: true, solution: true } }),
+  /**
+   * Another PUBLISHED daily test whose availability window overlaps [startAt,endAt).
+   * Overlap = existing.startAt < candidate.endAt AND existing.endAt > candidate.startAt
+   * (strict, so back-to-back windows don't clash). `excludeId` drops the row being edited.
+   */
+  findDailyOverlap: (opts: { startAt: Date; endAt: Date; excludeId?: number }) =>
+    prisma.exam.findFirst({
+      where: {
+        type: "daily",
+        status: true,
+        startAt: { lt: opts.endAt },
+        endAt: { gt: opts.startAt },
+        ...(opts.excludeId != null ? { id: { not: opts.excludeId } } : {}),
+      },
+      select: { id: true, name: true, startAt: true, endAt: true },
+    }),
+  createExam: (data: Prisma.ExamUncheckedCreateInput) => prisma.exam.create({ data }),
+  updateExam: (id: number, data: Prisma.ExamUncheckedUpdateInput) => prisma.exam.update({ where: { id }, data }),
+  setExamStatus: (id: number, status: boolean) => prisma.exam.update({ where: { id }, data: { status, updatedAt: new Date() } }),
+  setExamOrder: (id: number, order: number) => prisma.exam.update({ where: { id }, data: { order_by: order, updatedAt: new Date() } }),
+  /** Cascade delete: result-details → results → options → questions → exam (FK-safe order). */
+  deleteExamCascade: (id: number) =>
+    prisma.$transaction([
+      prisma.examResultDetail.deleteMany({ where: { examId: id } }),
+      prisma.examResult.deleteMany({ where: { examId: id } }),
+      prisma.examQuestionOption.deleteMany({ where: { ExamQuestion: { exam: id } } }),
+      prisma.examQuestion.deleteMany({ where: { exam: id } }),
+      prisma.exam.delete({ where: { id } }),
+    ]),
+
   // ── questions ────────────────────────────────────────────────────────────────
   listQuestions: (opts: { examId?: number; search?: string; status?: boolean; skip: number; take: number }) => {
     const where: Prisma.ExamQuestionWhereInput = {};
@@ -54,6 +107,68 @@ export const adminExamRepository = {
   findQuestion: (id: number) => prisma.examQuestion.findUnique({ where: { id } }),
   optionsForQuestions: (questionIds: number[]) =>
     prisma.examQuestionOption.findMany({ where: { question: { in: questionIds } }, orderBy: { id: "asc" } }),
+
+  // ── question writes ────────────────────────────────────────────────────────
+  examExists: (id: number) => prisma.exam.findUnique({ where: { id }, select: { id: true } }),
+  maxQuestionOrder: async (examId: number): Promise<number> => {
+    const top = await prisma.examQuestion.findFirst({ where: { exam: examId }, orderBy: { order_by: "desc" }, select: { order_by: true } });
+    return top?.order_by ?? -1;
+  },
+  /** ws_exam_question_option has only title + question_id — option image/order are dropped (no columns). */
+  createQuestion: (input: QuestionWrite) =>
+    prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const q = await tx.examQuestion.create({ data: {
+        exam: input.examId, name: input.name, answer: input.answer, image: input.image,
+        solutionDescription: input.solutionText, solutionFile: input.solutionImage,
+        order_by: input.orderBy, status: input.status, createdAt: now, updatedAt: now,
+      } });
+      if (input.options.length)
+        await tx.examQuestionOption.createMany({ data: input.options.map((o) => ({ question: q.id, name: o.name, createdAt: now, updatedAt: now })) });
+      await recomputeCount(tx, input.examId);
+      const options = await tx.examQuestionOption.findMany({ where: { question: q.id }, orderBy: { id: "asc" } });
+      return { q, options };
+    }),
+  bulkCreateQuestions: (examId: number, items: Array<QuestionWrite>) =>
+    prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const out: any[] = [];
+      for (const input of items) {
+        const q = await tx.examQuestion.create({ data: {
+          exam: examId, name: input.name, answer: input.answer, image: input.image,
+          solutionDescription: input.solutionText, solutionFile: input.solutionImage,
+          order_by: input.orderBy, status: input.status, createdAt: now, updatedAt: now,
+        } });
+        if (input.options.length)
+          await tx.examQuestionOption.createMany({ data: input.options.map((o) => ({ question: q.id, name: o.name, createdAt: now, updatedAt: now })) });
+        const options = await tx.examQuestionOption.findMany({ where: { question: q.id }, orderBy: { id: "asc" } });
+        out.push({ q, options });
+      }
+      await recomputeCount(tx, examId);
+      return out;
+    }),
+  updateQuestion: (id: number, examId: number, data: Prisma.ExamQuestionUncheckedUpdateInput, newOptions: { name: string }[] | null, recount: boolean) =>
+    prisma.$transaction(async (tx) => {
+      const q = await tx.examQuestion.update({ where: { id }, data });
+      if (newOptions) {
+        await tx.examQuestionOption.deleteMany({ where: { question: id } });
+        const now = new Date();
+        if (newOptions.length)
+          await tx.examQuestionOption.createMany({ data: newOptions.map((o) => ({ question: id, name: o.name, createdAt: now, updatedAt: now })) });
+      }
+      if (recount) await recomputeCount(tx, examId);
+      const options = await tx.examQuestionOption.findMany({ where: { question: id }, orderBy: { id: "asc" } });
+      return { q, options };
+    }),
+  deleteQuestion: (id: number, examId: number) =>
+    prisma.$transaction(async (tx) => {
+      await tx.examResultDetail.deleteMany({ where: { questionId: id } });
+      await tx.examQuestionOption.deleteMany({ where: { question: id } });
+      await tx.examQuestion.delete({ where: { id } });
+      await recomputeCount(tx, examId);
+    }),
+  setQuestionOrder: (id: number, order: number) =>
+    prisma.examQuestion.update({ where: { id }, data: { order_by: order, updatedAt: new Date() } }),
 
   // ── submissions / results ──────────────────────────────────────────────────
   listSubmissions: (examId: number, skip: number, take: number) =>

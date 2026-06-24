@@ -42,6 +42,7 @@ export const createMaterialSchema = z.object({
   description: z.string().optional(),
   materialCategoryId: z.string().min(1),
   file: z.string().min(1).max(1000),
+  fileName: z.string().max(255).optional(),
   directLink: z.string().max(1000).optional(),
   thumbnail: z.string().max(500).optional(),
   fileSize: z.number().int().nonnegative().optional(),

@@ -30,6 +30,12 @@ const DEFAULT_DELIVERY_ETA = "5-7 days";
  * surfaces; the single-book detail (`getBook`) resolves them to the Mongo
  * `.populate()` shape via `populateExamCountdowns`.
  */
+// ws_book.thumbnail is NOT NULL, so create stores a " " (space) sentinel when no
+// thumbnail is given. Normalise blank/whitespace back to null on read so the API
+// signals "no thumbnail" correctly instead of leaking the sentinel.
+const blankToNull = (v: string | null | undefined): string | null =>
+  v != null && v.trim() !== "" ? v : null;
+
 export const toBookDto = (row: Book) => ({
   _id: String(row.id),
   name: row.name,
@@ -37,14 +43,16 @@ export const toBookDto = (row: Book) => ({
   examCountdownCategoryIds: [],
   examCountdownIds: [],
   packageIds: [],
-  thumbnail: row.thumbnail ?? null,
+  thumbnail: blankToNull(row.thumbnail),
   author: row.author ?? null,
   image: row.image ?? null,
   description: row.description ?? null,
   termsAndConditions: null,
   demoUrl: row.demo_url ?? null,
   bookUrl: null,
-  demoFileName: null,
+  // Original demo-PDF upload name (books have no full-book PDF, so bookFileName
+  // stays null). Columns: demo_file_name.
+  demoFileName: blankToNull(row.demoFileName),
   bookFileName: null,
   weight: row.weight ?? 0,
   pages: row.pages ?? 0,
@@ -126,6 +134,7 @@ export interface BookWriteInput {
   image?: string;
   description?: string;
   demoUrl?: string;
+  demoFileName?: string | null;
   weight?: number;
   pages?: number;
   dynamicLink?: string;
@@ -153,6 +162,7 @@ export const createBook = async (d: BookWriteInput) => {
     image: d.image ?? null,
     description: d.description ?? null,
     demo_url: d.demoUrl ?? null,
+    demoFileName: d.demoFileName ?? null,
     weight: d.weight ?? SENTINEL.weight,
     pages: d.pages ?? SENTINEL.pages,
     dynamic_link: d.dynamicLink ?? SENTINEL.dynamic_link,
@@ -181,7 +191,12 @@ export const updateBook = async (id: number, d: BookWriteInput): Promise<ReturnT
   if (d.author !== undefined) data.author = d.author;
   if (d.image !== undefined) data.image = d.image;
   if (d.description !== undefined) data.description = d.description;
-  if (d.demoUrl !== undefined) data.demo_url = d.demoUrl;
+  if (d.demoUrl !== undefined) {
+    data.demo_url = d.demoUrl;
+    // Clearing the demo PDF clears its original name too (unless one is set explicitly).
+    if (!d.demoUrl && d.demoFileName === undefined) data.demoFileName = null;
+  }
+  if (d.demoFileName !== undefined) data.demoFileName = d.demoFileName ?? null;
   if (d.weight !== undefined) data.weight = d.weight;
   if (d.pages !== undefined) data.pages = d.pages;
   if (d.dynamicLink !== undefined) data.dynamic_link = d.dynamicLink;
@@ -262,7 +277,7 @@ const toOrderItemDto = (it: OrderItemShape, books: Map<number, any>) => {
   const book = it.bookId != null ? books.get(it.bookId) : undefined;
   return {
     bookId: book
-      ? { _id: String(book.id), name: book.name, image: book.image ?? null, thumbnail: book.thumbnail ?? null, author: book.author ?? null }
+      ? { _id: String(book.id), name: book.name, image: book.image ?? null, thumbnail: blankToNull(book.thumbnail), author: book.author ?? null }
       : it.bookId != null
       ? String(it.bookId)
       : null,
@@ -274,6 +289,7 @@ const toOrderItemDto = (it: OrderItemShape, books: Map<number, any>) => {
 
 export const listOrders = async (q: {
   customerId?: string;
+  bookId?: string;
   status?: string;
   fromDate?: string;
   toDate?: string;
@@ -286,6 +302,16 @@ export const listOrders = async (q: {
   const customerId = q.customerId ? parseBookId(q.customerId) ?? undefined : undefined;
   const fromDate = q.fromDate ? new Date(q.fromDate) : undefined;
   const toDate = q.toDate ? new Date(q.toDate) : undefined;
+
+  // Optional server-side bookId filter: restrict to orders containing that book.
+  // Resolve the matching order keys up front; none → no orders, short-circuit.
+  let bookOrderKeysIn: string[] | undefined;
+  if (q.bookId) {
+    const bookId = parseBookId(q.bookId);
+    if (!bookId) return { items: [], total: 0 };
+    bookOrderKeysIn = await repo.findOrderKeysByBookId(bookId);
+    if (!bookOrderKeysIn.length) return { items: [], total: 0 };
+  }
 
   // Resolve the cross-table search (customer name/phone + book name on items)
   // up front; receiptId is matched in-query (LIKE).
@@ -308,6 +334,7 @@ export const listOrders = async (q: {
     customerIdsIn,
     orderIdsIn,
     receiptSearch,
+    bookOrderKeysIn,
     sortBy: q.sortBy ?? "createdAt",
     sortDir: (q.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc",
   };

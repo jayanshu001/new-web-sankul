@@ -396,6 +396,19 @@ export const createCategory = async (req: Request, res: Response) => {
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
     const data = createCategorySchema.parse(req.body);
+
+    // ─── MySQL branch (ws_exam_category; single-parent — childCategoryIds DAG dropped) ───
+    if (catalogExam.isExamMysql()) {
+      const created = await catalogExam.createCategory({
+        name: data.name,
+        image: data.image ?? null,
+        parentId: data.parentId ?? null,
+        orderBy: data.orderBy,
+        status: data.status,
+      });
+      return res.status(201).json({ success: true, data: created });
+    }
+
     const { childCategoryIds, ...catFields } = data;
     const ancestors = await buildAncestors(catFields.parentId ?? null);
     const cat = await ExamCategory.create({
@@ -426,6 +439,28 @@ export const createCategory = async (req: Request, res: Response) => {
 export const updateCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_exam_category; single-parent — DAG reparenting dropped) ───
+    if (catalogExam.isExamMysql()) {
+      const numId = catalogExam.parseExamCategoryId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const file = req.file as any;
+      if (file?.location) req.body.image = file.location;
+      const data = updateCategorySchema.parse(req.body);
+      const r = await catalogExam.updateCategory(numId, {
+        name: data.name,
+        image: data.image,
+        parentId: data.parentId,
+        orderBy: data.orderBy,
+        status: data.status,
+      });
+      if (r === "not_found") return res.status(404).json({ success: false, message: "Category not found." });
+      if (r === "self_parent") return res.status(400).json({ success: false, message: "Category cannot be its own parent." });
+      if (r === "parent_not_found") return res.status(400).json({ success: false, message: "Parent category not found." });
+      if (r.orphanImageUrl) deleteFromS3FileUrl(r.orphanImageUrl).catch(() => {});
+      return res.status(200).json({ success: true, data: r.data });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const file = req.file as any;
@@ -552,6 +587,18 @@ export const updateCategory = async (req: Request, res: Response) => {
 export const deleteCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_exam_category; soft-delete) ─────────────────────────
+    if (catalogExam.isExamMysql()) {
+      const numId = catalogExam.parseExamCategoryId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const r = await catalogExam.deleteCategory(numId);
+      if (r === "not_found") return res.status(404).json({ success: false, message: "Category not found." });
+      if (r === "has_children") return res.status(400).json({ success: false, message: "Category has sub-categories. Delete or reassign them first." });
+      if (r === "has_exams") return res.status(400).json({ success: false, message: "Category has exams. Reassign or delete them first." });
+      return res.status(200).json({ success: true, message: "Category deleted." });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid category id." });
     const childCount = await ExamCategory.countDocuments({ parentId: id });
@@ -659,7 +706,12 @@ export const getExamById = async (req: Request, res: Response) => {
 
 function applyExamUpload(req: Request) {
   const file = req.file as any;
-  if (file?.location) req.body.solutionPdfUrl = file.location;
+  if (file?.location) {
+    req.body.solutionPdfUrl = file.location;
+    // Keep the user's original filename separate from the generated storage key.
+    // Caller-supplied solutionPdfName wins.
+    if (file.originalname && req.body.solutionPdfName == null) req.body.solutionPdfName = file.originalname;
+  }
 }
 
 // Map the form's boolean Status toggle to the underlying enum.
@@ -743,6 +795,20 @@ export const createExam = async (req: Request, res: Response) => {
     applyExamUpload(req);
     const data = createExamSchema.parse(req.body);
 
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const clash = await adminExam.examDailyOverlap({
+        type: data.type,
+        published: data.status === true,
+        startAt: data.startAt,
+        endAt: data.endAt,
+      });
+      if (clash) return sendDailyOverlap(res, clash);
+      const created = await adminExam.createExam(data as any);
+      if (created === "category_required") return res.status(400).json({ success: false, message: "categoryId is required." });
+      return res.status(201).json({ success: true, data: created });
+    }
+
     const newStatus = mapStatusFlagToEnum(data.status);
 
     const clash = await findDailyOverlap({
@@ -769,6 +835,40 @@ export const createExam = async (req: Request, res: Response) => {
 export const updateExam = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const numId = adminExam.parseExamId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid exam id." });
+      applyExamUpload(req);
+      const data = updateExamSchema.parse(req.body);
+
+      const current = await adminExam.getExamMeta(numId);
+      if (!current) return res.status(404).json({ success: false, message: "Exam not found." });
+      // Resolve effective type/window/status by merging the partial update over
+      // the current row, then run the shared daily-overlap rule (same as Mongo).
+      const effectiveType = data.type ?? current.type;
+      const effectiveStartAt = data.startAt ?? current.startAt;
+      const effectiveEndAt = data.endAt ?? current.endAt;
+      const effectivePublished = data.status !== undefined ? data.status === true : current.status;
+      if (effectiveType === "daily" && (!effectiveStartAt || !effectiveEndAt))
+        return res.status(400).json({ success: false, message: "startAt and endAt are required for daily tests." });
+      const clash = await adminExam.examDailyOverlap({
+        type: effectiveType,
+        published: effectivePublished,
+        startAt: effectiveStartAt,
+        endAt: effectiveEndAt,
+        excludeId: numId,
+      });
+      if (clash) return sendDailyOverlap(res, clash);
+
+      const result = await adminExam.updateExam(numId, data as any);
+      if (result === "not_found") return res.status(404).json({ success: false, message: "Exam not found." });
+      if (result === "category_required") return res.status(400).json({ success: false, message: "categoryId is required." });
+      if (result.orphanPdfUrl) deleteFromS3FileUrl(result.orphanPdfUrl).catch(() => {});
+      return res.status(200).json({ success: true, data: result.data });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
     applyExamUpload(req);
@@ -836,6 +936,19 @@ export const updateExam = async (req: Request, res: Response) => {
 };
 
 export const deleteExam = async (req: Request, res: Response) => {
+  // ─── MySQL branch ─────────────────────────────────────────────────────
+  if (adminExam.isAdminExamMysql()) {
+    try {
+      const numId = adminExam.parseExamId(req.params.id as string);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid exam id." });
+      const r = await adminExam.deleteExam(numId);
+      if (r === "not_found") return res.status(404).json({ success: false, message: "Exam not found." });
+      return res.status(200).json({ success: true, message: "Exam and related data deleted." });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   const session = await mongoose.startSession();
   try {
     const id = req.params.id as string;
@@ -865,6 +978,37 @@ export const deleteExam = async (req: Request, res: Response) => {
 export const updateExamStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const numId = adminExam.parseExamId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid exam id." });
+      // ws_exam.status is boolean; accept the legacy enum string (published →
+      // true, anything else → false) or a raw boolean.
+      const raw = (req.body as any)?.status;
+      let publish: boolean;
+      if (typeof raw === "boolean") publish = raw;
+      else if (Object.values(ExamStatus).includes(raw)) publish = raw === ExamStatus.PUBLISHED;
+      else return res.status(400).json({ success: false, message: "Invalid status value." });
+
+      const meta = await adminExam.getExamMeta(numId);
+      if (!meta) return res.status(404).json({ success: false, message: "Exam not found." });
+      // Publishing must obey the same daily-overlap rule as create/update.
+      if (publish) {
+        const clash = await adminExam.examDailyOverlap({
+          type: meta.type,
+          published: true,
+          startAt: meta.startAt,
+          endAt: meta.endAt,
+          excludeId: numId,
+        });
+        if (clash) return sendDailyOverlap(res, clash);
+      }
+      const updated = await adminExam.updateExamStatus(numId, publish);
+      if (updated === "not_found") return res.status(404).json({ success: false, message: "Exam not found." });
+      return res.status(200).json({ success: true, data: updated });
+    }
+
     if (!isObjectId(id))
       return res.status(400).json({ success: false, message: "Invalid exam id." });
     const { status } = req.body as { status: ExamStatus };
@@ -903,6 +1047,14 @@ export const updateExamStatus = async (req: Request, res: Response) => {
 export const reorderExams = async (req: Request, res: Response) => {
   try {
     const { orders } = reorderExamsSchema.parse(req.body);
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const r = await adminExam.reorderExams(orders);
+      if (r === "no_valid") return res.status(400).json({ success: false, message: "No valid ids." });
+      return res.status(200).json({ success: true, message: "Exam order updated." });
+    }
+
     const ops = orders
       .filter((o) => isObjectId(o.id))
       .map((o) => ({ updateOne: { filter: { _id: o.id }, update: { $set: { orderBy: o.orderBy } } } }));
@@ -1054,6 +1206,22 @@ const coerceQuestionImages = (req: Request): QuestionImageError | null => {
 };
 
 export const createQuestion = async (req: Request, res: Response) => {
+  // ─── MySQL branch (no Mongo session) ──────────────────────────────────────
+  if (adminExam.isAdminExamMysql()) {
+    try {
+      const coerceErr = coerceQuestionImages(req);
+      if (coerceErr) return res.status(400).json({ success: false, message: coerceErr.message });
+      const data = createQuestionSchema.parse(req.body);
+      const r = await adminExam.createQuestion(data as any);
+      if (r === "exam_not_found") return res.status(404).json({ success: false, message: "Exam not found." });
+      if (typeof r === "object" && "error" in r) return res.status(400).json({ success: false, message: r.error });
+      return res.status(201).json({ success: true, data: r });
+    } catch (error: any) {
+      if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   const session = await mongoose.startSession();
   try {
     const coerceErr = coerceQuestionImages(req);
@@ -1115,6 +1283,20 @@ export const createQuestion = async (req: Request, res: Response) => {
 };
 
 export const bulkCreateQuestions = async (req: Request, res: Response) => {
+  // ─── MySQL branch (no Mongo session) ──────────────────────────────────────
+  if (adminExam.isAdminExamMysql()) {
+    try {
+      const { examId, questions } = bulkCreateQuestionsSchema.parse(req.body);
+      const r = await adminExam.bulkCreateQuestions(examId, questions as any);
+      if (r === "exam_not_found") return res.status(404).json({ success: false, message: "Exam not found." });
+      if (!Array.isArray(r) && "error" in r) return res.status(400).json({ success: false, message: r.error });
+      return res.status(201).json({ success: true, data: r, count: (r as any[]).length });
+    } catch (error: any) {
+      if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   const session = await mongoose.startSession();
   try {
     const { examId, questions } = bulkCreateQuestionsSchema.parse(req.body);
@@ -1176,6 +1358,25 @@ export const bulkCreateQuestions = async (req: Request, res: Response) => {
 };
 
 export const updateQuestion = async (req: Request, res: Response) => {
+  // ─── MySQL branch (no Mongo session) ──────────────────────────────────────
+  if (adminExam.isAdminExamMysql()) {
+    try {
+      const numId = adminExam.parseExamId(req.params.id as string);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid question id." });
+      const coerceErr = coerceQuestionImages(req);
+      if (coerceErr) return res.status(400).json({ success: false, message: coerceErr.message });
+      const data = updateQuestionSchema.parse(req.body);
+      const r = await adminExam.updateQuestion(numId, data as any);
+      if (r === "not_found") return res.status(404).json({ success: false, message: "Question not found." });
+      if ("error" in r) return res.status(400).json({ success: false, message: r.error });
+      if (r.orphanUrls.length) Promise.all(r.orphanUrls.map((u) => deleteFromS3FileUrl(u).catch(() => {}))).catch(() => {});
+      return res.status(200).json({ success: true, data: r.data });
+    } catch (error: any) {
+      if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   const session = await mongoose.startSession();
   try {
     const id = req.params.id as string;
@@ -1279,6 +1480,19 @@ export const updateQuestion = async (req: Request, res: Response) => {
 };
 
 export const deleteQuestion = async (req: Request, res: Response) => {
+  // ─── MySQL branch (no Mongo session) ──────────────────────────────────────
+  if (adminExam.isAdminExamMysql()) {
+    try {
+      const numId = adminExam.parseExamId(req.params.id as string);
+      if (!numId) return res.status(400).json({ success: false, message: "Invalid question id." });
+      const r = await adminExam.deleteQuestion(numId);
+      if (r === "not_found") return res.status(404).json({ success: false, message: "Question not found." });
+      return res.status(200).json({ success: true, message: "Question deleted." });
+    } catch (error: any) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
+
   const session = await mongoose.startSession();
   try {
     const id = req.params.id as string;
@@ -1305,6 +1519,14 @@ export const deleteQuestion = async (req: Request, res: Response) => {
 export const reorderQuestions = async (req: Request, res: Response) => {
   try {
     const { orders } = reorderQuestionsSchema.parse(req.body);
+
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (adminExam.isAdminExamMysql()) {
+      const r = await adminExam.reorderQuestions(orders);
+      if (r === "no_valid") return res.status(400).json({ success: false, message: "No valid ids." });
+      return res.status(200).json({ success: true, message: "Question order updated." });
+    }
+
     const ops = orders
       .filter((o) => isObjectId(o.id))
       .map((o) => ({ updateOne: { filter: { _id: o.id }, update: { $set: { orderBy: o.orderBy } } } }));

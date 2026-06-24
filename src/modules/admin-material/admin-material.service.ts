@@ -38,8 +38,11 @@ export const toMaterialDto = (row: MatRow) => ({
   _id: String(row.id),
   title: row.name,
   description: null,
-  materialCategoryId: row.MaterialCategory ? { _id: String(row.MaterialCategory.id), title: row.MaterialCategory.name } : (row.materialCategoryId != null ? String(row.materialCategoryId) : null),
+  materialCategoryId: row.materialCategoryId != null ? String(row.materialCategoryId) : null,
+  // Related category (id + name) for display — joined via the repo's include.
+  materialCategory: row.MaterialCategory ? { id: String(row.MaterialCategory.id), name: row.MaterialCategory.name } : null,
   file: row.file,
+  fileName: row.fileName ?? null,
   directLink: row.direct_link ?? "",
   thumbnail: null,
   fileSize: null,
@@ -180,7 +183,7 @@ export const getMaterialById = async (id: number) => {
   return row ? toMaterialDto(row as MatRow) : null;
 };
 
-export interface MaterialWriteInput { title?: string; materialCategoryId?: string; file?: string; directLink?: string; order?: number; status?: boolean }
+export interface MaterialWriteInput { title?: string; materialCategoryId?: string; file?: string; fileName?: string; directLink?: string; order?: number; status?: boolean }
 
 export const createMaterial = async (d: MaterialWriteInput): Promise<"category" | any> => {
   const catId = d.materialCategoryId ? parseMaterialId(d.materialCategoryId) : null;
@@ -192,6 +195,7 @@ export const createMaterial = async (d: MaterialWriteInput): Promise<"category" 
     materialCategoryId: catId,
     name: d.title ?? "",
     file: d.file ?? "",
+    fileName: d.fileName ?? null,
     direct_link: d.directLink ?? null,
     order_by: d.order ?? 0,
     status: d.status ?? true,
@@ -210,6 +214,7 @@ export const updateMaterial = async (id: number, d: MaterialWriteInput): Promise
   }
   if (d.title !== undefined) data.name = d.title;
   if (d.file !== undefined) data.file = d.file;
+  if (d.fileName !== undefined) data.fileName = d.fileName ?? null;
   if (d.directLink !== undefined) data.direct_link = d.directLink ?? null;
   if (d.order !== undefined) data.order_by = d.order;
   if (d.status !== undefined) data.status = d.status;

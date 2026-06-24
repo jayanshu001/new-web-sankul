@@ -6,7 +6,25 @@ import * as master from "../../modules/admin-master/admin-master.service";
 
 export const getSubjectCategories = async (req: Request, res: Response) => {
   try {
-    if (master.isAdminMasterMysql()) return res.status(200).json({ success: true, data: await master.subjList() });
+    if (master.isAdminMasterMysql()) {
+      const { search, sortBy, sortOrder, page, limit } = req.query as Record<string, string>;
+      // Pagination is opt-in: page/limit present → paginate + return a `pagination`
+      // block; otherwise the full list (back-compat for dropdown/form callers).
+      const paginate = page !== undefined || limit !== undefined;
+      const pageNum = Math.max(parseInt(page ?? "1", 10) || 1, 1);
+      const limitNum = Math.max(parseInt(limit ?? "20", 10) || 20, 1);
+      const { data, total } = await master.subjList({
+        search,
+        sortBy,
+        sortDir: sortOrder === "desc" ? "desc" : "asc",
+        ...(paginate ? { skip: (pageNum - 1) * limitNum, take: limitNum } : {}),
+      });
+      return res.status(200).json(
+        paginate
+          ? { success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } }
+          : { success: true, data }
+      );
+    }
     const categories = await CourseSubjectCategory.find().sort({ order: 1 });
     res.status(200).json({ success: true, data: categories });
   } catch (error: any) {

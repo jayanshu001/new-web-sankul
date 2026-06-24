@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import type { Prisma } from "@prisma/client";
 
 /**
  * Prisma persistence for the catalog · exam READ branch (flag OFF). Scoped to
@@ -7,9 +8,24 @@ import { prisma } from "../../config/prisma";
  * a has-grandchildren check.
  */
 export const catalogExamRepository = {
-  /** Single exam category by id. */
+  /** Single non-deleted exam category by id (soft-deleted rows read as absent → 404). */
   findCategoryById: (id: number) =>
-    prisma.examCategory.findUnique({ where: { id } }),
+    prisma.examCategory.findFirst({ where: { id, deleted: false } }),
+
+  // ── category writes ─────────────────────────────────────────────────────────
+  createCategory: (data: Prisma.ExamCategoryUncheckedCreateInput) =>
+    prisma.examCategory.create({ data }),
+  updateCategory: (id: number, data: Prisma.ExamCategoryUncheckedUpdateInput) =>
+    prisma.examCategory.update({ where: { id }, data }),
+  /** Soft-delete (deleted=true) — reads already exclude these; avoids dangling pivots. */
+  softDeleteCategory: (id: number) =>
+    prisma.examCategory.update({ where: { id }, data: { deleted: true, updated_at: new Date() } }),
+  /** Active (not soft-deleted) direct children of a category. */
+  childCount: (id: number) =>
+    prisma.examCategory.count({ where: { parent: id, deleted: false } }),
+  /** Exams referencing this category (any status). */
+  examCountForCategory: (id: number) =>
+    prisma.exam.count({ where: { examCategoryId: id } }),
 
   /**
    * List exam categories with optional parent / name-search / status filters.
@@ -25,11 +41,15 @@ export const catalogExamRepository = {
     status?: boolean;
     skip?: number;
     take?: number;
+    /** Admin listing: newest-created first. Default keeps the curated order_by sort. */
+    newestFirst?: boolean;
   }) => {
     const where = catalogExamRepository.categoryWhere(opts);
     return prisma.examCategory.findMany({
       where,
-      orderBy: [{ order_by: "asc" }, { name: "asc" }],
+      orderBy: opts.newestFirst
+        ? [{ created_at: "desc" }, { id: "desc" }]
+        : [{ order_by: "asc" }, { name: "asc" }],
       ...(opts.skip !== undefined ? { skip: opts.skip } : {}),
       ...(opts.take !== undefined ? { take: opts.take } : {}),
     });

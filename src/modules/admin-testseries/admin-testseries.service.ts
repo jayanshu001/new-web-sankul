@@ -220,7 +220,9 @@ export const listTestSeries = async (opts: ListSeriesOpts) => {
   const [rows, total] = await Promise.all([
     prisma.testSeries.findMany({
       where,
-      orderBy: [{ orderBy: "asc" }, { createdAt: "desc" }],
+      // Recently-added on top; id (autoincrement) is a deterministic tiebreaker
+      // for null/duplicate createdAt (migrated rows).
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: (opts.page - 1) * opts.limit,
       take: opts.limit,
     }),

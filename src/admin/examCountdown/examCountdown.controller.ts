@@ -28,11 +28,41 @@ function parseExamDate(raw: any): { date: Date | null; error?: string } {
 // ─── Categories ─────────────────────────────────────────────────────────────
 
 // GET /admin/exam-countdowns/categories
-export const adminListCategories = async (_req: Request, res: Response) => {
+export const adminListCategories = async (req: Request, res: Response) => {
   try {
-    const data = ecSql.isExamCountdownMysql()
-      ? await ecSql.listCategoriesAdmin()
-      : await ExamCountdownCategory.find({}).sort({ order: 1, name: 1 }).lean();
+    const search = (req.query.search ?? "").toString().trim();
+    // Pagination is opt-in: if page/limit are sent we paginate + return a
+    // `pagination` block (same shape as GET /admin/exam-countdowns); if neither
+    // is sent we return the full list (legacy contract) for non-paging callers.
+    const paginate = req.query.page !== undefined || req.query.limit !== undefined;
+    const pageNum = Math.max(parseInt(String(req.query.page ?? "1"), 10) || 1, 1);
+    const limitNum = Math.max(parseInt(String(req.query.limit ?? "20"), 10) || 20, 1);
+    const skip = (pageNum - 1) * limitNum;
+
+    if (ecSql.isExamCountdownMysql()) {
+      const { data, total } = await ecSql.listCategoriesAdmin({
+        search: search || null,
+        skip: paginate ? skip : undefined,
+        take: paginate ? limitNum : undefined,
+      });
+      return res.status(200).json(
+        paginate
+          ? { success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } }
+          : { success: true, data }
+      );
+    }
+
+    const filter: any = {};
+    const c = buildRegexCondition(search);
+    if (c) filter.name = c;
+    if (paginate) {
+      const [data, total] = await Promise.all([
+        ExamCountdownCategory.find(filter).sort({ order: 1, name: 1 }).skip(skip).limit(limitNum).lean(),
+        ExamCountdownCategory.countDocuments(filter),
+      ]);
+      return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
+    }
+    const data = await ExamCountdownCategory.find(filter).sort({ order: 1, name: 1 }).lean();
     return res.status(200).json({ success: true, data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

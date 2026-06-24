@@ -4,6 +4,149 @@
 
 ---
 
+## 2026-06-24 — admin test-series list: recently-added on top
+
+**Request:** newest test series should appear first in `GET /admin/test-series` (pagination/search already worked). Sort was `[{ orderBy: asc }, { createdAt: desc }]` — curated `orderBy` first, so newest wasn't on top.
+
+**Fix:** `admin-testseries.service.listTestSeries` orderBy → `[{ createdAt: "desc" }, { id: "desc" }]` (newest-first; `id` autoincrement tiebreaker for null/duplicate createdAt — legacy null-createdAt rows sort last). Verified createdAt descending against live DB. `yarn typecheck` ✅. MySQL-only.
+
+## 2026-06-24 — admin master package-categories: add search + sort + server pagination
+
+**Request:** `GET /admin/master/package-categories` ignored its query (`listAll()` returned all rows sorted by order).
+
+**Fix:** `package-category.service.listAll(q)` now takes `search` (title `contains`), `sortBy` (`order`|`title`|`createdAt`, default `order`, `id asc` tiebreaker), `sortDir`, optional `skip/take`, and returns `{ data, total }` (+count). Controller (MySQL branch) parses params with **opt-in pagination** — `page`/`limit` present → adds `pagination:{total,page,limit,totalPages}`; absent → full flat array (back-compat for dropdown callers). Only caller is this controller. MySQL-only; Mongo fallback unchanged. Verified: page1/limit2 → 2 of 3, search "IP" → 1 match. `yarn typecheck` ✅.
+
+## 2026-06-24 — admin master subject-categories: add search + sort + server pagination
+
+**Request:** `GET /admin/master/subject-categories?page&limit&sortBy&sortOrder&search` ignored its query entirely (`subjList()` returned all rows sorted by order).
+
+**Fix:** `admin-master.repository.subjList(opts)` now takes `search` (title `contains`), `sortBy` (`order`|`title`|`createdAt`, default `order`, `id asc` tiebreaker), `sortDir`, and optional `skip/take`; added `subjCount`. Service `subjList` returns `{ data, total }`. Controller (MySQL branch) parses params with **opt-in pagination** — `page`/`limit` present → adds `pagination:{total,page,limit,totalPages}`; absent → full flat array (back-compat for dropdown/form callers). MySQL-only; Mongo fallback unchanged. Verified: search "t" → 1 match, paging + sort honored. `yarn typecheck` ✅.
+
+## 2026-06-24 — admin courses list: recently-added on top (deterministic)
+
+**Request:** newly created courses should appear at the top of `GET /admin/courses`. Default sort was already `createdAt desc`, but as a single column with no tiebreaker — migrated rows with null/duplicate `created_at` ordered unpredictably.
+
+**Fix:** `admin-course.repository.list` orderBy is now `[{ <sortCol>: <dir> }, { id: "desc" }]` — `id` (autoincrement = creation order; new courses now have the highest ids after the auto-increment bump) is a deterministic tiebreaker so newest stays on top under the default sort and within ties of any explicit sort. Verified: a freshly created course is row 1 by default. `yarn typecheck` ✅.
+
+## 2026-06-24 — course plans leak: new course inherited orphaned pricing rows
+
+**Bug:** `GET /admin/courses/:id/plans` for a brand-new course returned other plans. Diagnosis (NOT what it looked like): the new course **does** get a real auto-increment id, and the leaked rows are **orphaned pure-course plans** (`course_id>0, package_id=0, ebook_id=0`, created 2023) from long-deleted courses — so a `package_id=0 AND ebook_id=0` filter does NOT catch them. Root cause: `ws_package_course_ebook_price` (shared package/course/ebook) references `course_id` up to **113**, but `ws_course` max id is **83** with auto-increment in that range — new courses got ids 84..113 and inherited 120 orphaned plan rows (333 orphan rows total).
+
+**Fix (two parts):**
+1. **Query scope** (`admin-course.repository`): `listPlans` + `clearSiblingDefaults` now require `packageId: 0, ebookId: 0` (course-OWNED shape, exactly what `createPlan` writes). Defensive + also excludes ~96 course+ebook combo rows; does NOT by itself fix the orphan leak (orphans are pure-course).
+2. **Auto-increment bump** (DDL `2026-06-24_course_autoincrement_bump.sql`): `ALTER TABLE ws_course AUTO_INCREMENT = 114` (= max(maxCourseId, maxReferencedCourseId)+1) so new courses skip the legacy id range and never collide with orphaned pricing. Non-destructive. Verified: new course → id 114, 0 plans; +1 added → 1.
+
+**Prod note:** recompute the auto-increment as `GREATEST(MAX(ws_course.id), MAX(ws_package_course_ebook_price.course_id))+1`. Optional hygiene (destructive, not run): delete orphaned plan rows `WHERE course_id<>0 AND course_id NOT IN (SELECT id FROM ws_course)`. Course deletes already cascade plan rows (`deleteCourse`), so no NEW orphans are created. `yarn typecheck` ✅.
+
+## 2026-06-24 — admin course update: accept legacy non-URL image
+
+**Bug:** editing a course (`PUT /admin/courses/:id`) failed with `"Image must be a valid URL"` (path `image`). `updateCourse` (SQL) validates with `createCourseSqlSchema.partial()`, whose `image` was `z.string().url()`. Legacy courses store `image` as a bare filename (e.g. course 75 = `"twitter-image.png"`), which the edit form round-trips → strict `.url()` rejected it, blocking edits of every legacy course. (GET `/:id` has no validation — the failing call was the save, not the load.)
+
+**Fix:** relaxed `createCourseSqlSchema.image` from `.url()` to `z.string().min(1, "Image is required")` — accepts both full URLs (new S3 uploads still produce these) and legacy relative paths/filenames; empty still rejected. Used by both create + update (SQL). Mongo `createCourseSchema` left untouched (dead path). Verified: bare filename ✓, full URL ✓, empty ✗. `yarn typecheck` ✅.
+
+## 2026-06-24 — admin book orders list: add server-side bookId filter
+
+**Request:** `GET /admin/books/orders/list` should support `?bookId=<id>` (orders containing that book) so the per-book tab can drop its 200-row client filter — same pattern as ebook subscriptions' `?ebookId`.
+
+**Context verified:** envelope is `{ success, items, pagination:{page,limit,total,totalPages} }` (`items`, not `data`); each `items[].items[].bookId` is populated as `{ _id, name, image, thumbnail, author }` when the book exists (bare string id if the book was deleted, null if absent). Line items live mostly in the `order_items` JSON snapshot (`"item":<bookId>`); the child table `ws_book_order_item` is near-empty.
+
+**Fix:** repo `findOrderKeysByBookId(bookId)` — dual scan like the name search: child rows by `bookId` + JSON via `order_items REGEXP '"item":"?<id>"?([^0-9]|$)'` (digit/quote boundary so 5 ≠ 54/"54"). New `bookOrderKeysIn` opt → AND restriction `receiptId IN (keys)` in `buildOrderWhere` (separate from the search OR). Service resolves keys up front and short-circuits to `{items:[],total:0}` when none. Controller reads `bookId` query param. Verified: `bookId=7`→only its order, non-existent→0, `bookId=5`→0 (no false-match on an order with item 54). `yarn typecheck` ✅. MySQL-only (Mongo fallback untouched).
+
+## 2026-06-24 — admin book: persist original demo-PDF filename
+
+**Request:** same `fileName` round-trip as ebooks. Books only have a demo PDF (`demo_url`; no full-book PDF / `book_url`), so only `demoFileName` applies. The controller already captured `req.file.originalname` → `req.body.demoFileName` and the Zod schema already accepted it, but there was no column, the service didn't persist it, and the DTO hardcoded `demoFileName: null`.
+
+**Schema:** `ALTER TABLE ws_book ADD COLUMN demo_file_name VARCHAR(255) NULL AFTER demo_url;` (DDL `docs/migration/schema-changes/2026-06-24_book_demo_file_name.sql`, applied to `websankul_staging`). `prisma/schema.prisma` Book model gained `demoFileName String? @map("demo_file_name")`; `prisma:generate` re-run.
+
+**Code:** `BookWriteInput.demoFileName`; create persists `demoFileName`; update sets it (and clears it when `demoUrl` is cleared); `toBookDto` returns `demoFileName: blankToNull(row.demoFileName)`. `bookFileName` stays null (no book_url for books). Verified create→get→clear round-trip. `yarn typecheck` ✅.
+
+## 2026-06-24 — admin book DTO: thumbnail returns null instead of " " sentinel
+
+**Bug:** `POST /admin/books` (and reads) returned `thumbnail: " "` (a space) when none was provided. `ws_book.thumbnail` is **NOT NULL**, so create stores a `" "` sentinel (`SENTINEL.thumbnail`); the transformer's `row.thumbnail ?? null` doesn't catch a space (not nullish), leaking the sentinel and giving the frontend a false "has thumbnail" signal.
+
+**Fix:** added a `blankToNull` helper (whitespace/empty → null) applied to `thumbnail` in `toBookDto` and the book-ref DTO. Read-only; write still stores the NOT-NULL sentinel. Real thumbnails pass through unchanged. Verified: create/get → `null` (DB raw still `" "`), update with a real value → preserved. `yarn typecheck` ✅.
+
+## 2026-06-24 — admin ebook DTO: return book/demo PDF original filenames
+
+**Request:** ebook edit should show the original uploaded PDF filename. The PDF-upload pipeline already persists it (`setEbookUploadStatusSql` writes `book_file_name`/`demo_file_name` on completion), and `ws_ebook` has those columns, but the admin-ebook read transformer **hardcoded** `bookFileName: null, demoFileName: null`.
+
+**Fix:** transformer now returns `bookFileName: row.bookFileName ?? null` and `demoFileName: row.demoFileName ?? null` (Prisma fields `bookFileName @map("book_file_name")` / `demoFileName @map("demo_file_name")`; the read repo returns the full row, no `select` to widen). No schema/DDL change. Now list + get-by-id (edit) return the original names paired with `bookUrl`/`demoUrl`. Verified against live DB. `yarn typecheck` ✅.
+
+## 2026-06-24 — pdf-upload (ebook PDF) BullMQ jobId: prefix to avoid integer ids
+
+**Bug:** `POST /admin/ebooks/:id/pdf` returned `"Custom Id cannot be integers"`. BullMQ rejects a custom `jobId` where `\`${parseInt(jobId)}\` === jobId` (a pure-integer string). The pdf-upload job row id was the BullMQ jobId; under Mongo it was a 24-char ObjectId (non-numeric, fine), but the migrated SQL `ws_pdf_upload_job` id is a plain int → numeric string → rejected.
+
+**Fix:** `enqueuePdfUploadJob` now sets `jobId: \`pdf-${jobRecordId}\`` (non-numeric, colon-free) — still deterministic so enqueue stays idempotent. The worker resolves the row from `job.data.jobRecordId` (not `job.id`), and nothing looks a job up by BullMQ id (only logging uses `job.id`), so the format change is safe. Single `queue.add` choke point covers controller + boot-rehydrate paths. No DB/schema change; API response `jobId` (the record id) is unchanged. `yarn typecheck` ✅.
+
+## 2026-06-24 — admin exam categories list: newest-created first
+
+**Request:** `GET /admin/quizzes/categories` should show latest-created rows on top.
+
+**Fix:** `catalog-exam.repository.listCategories` gained an opt-in `newestFirst` flag → `orderBy [{ created_at: "desc" }, { id: "desc" }]` (id as deterministic tiebreaker / null-date guard). The **admin** `listCategories` service passes `newestFirst: true`; the **client** `listClientCategories` is unchanged (keeps curated `order_by, name`). MySQL-only path. Verified newest-on-top for admin, client order untouched. `yarn typecheck` ✅.
+
+## 2026-06-24 — admin exam CATEGORY writes: add missing MySQL branches (create/update/delete)
+
+**Bug:** exam-category reads (`getCategoryById`, `getCategoryPackages`, `getCategoryCourses`, list/tree) were migrated, but `createCategory`/`updateCategory`/`deleteCategory` were Mongo-only. In MySQL-only mode update/delete returned `"Invalid category id."` (integer id fails Mongo `isObjectId`) and create hit a Mongoose error. (The plain `GET /admin/quizzes/categories/:id` already works on current code — earlier 400s there were a stale running server.)
+
+**Fix:** added category write methods to `catalog-exam.repository.ts` (`createCategory`, `updateCategory`, `softDeleteCategory`, `childCount`, `examCountForCategory`) + service logic in `catalog-exam.service.ts` (`createCategory`, `updateCategory`, `deleteCategory`), and wired MySQL branches into the three controller handlers. Single-parent SQL: the Mongo `childCategoryIds[]`/`ancestors[]` DAG (and reparenting cascade) is dropped (no columns); root = `parent_id = 0`. Update guards self-parent + parent-exists; image `null` clears + best-effort S3 orphan delete. Delete guards sub-categories + referenced exams, then **soft-deletes** (`deleted = true`) — consistent with the table's soft-delete convention (all reads filter `deleted=false`).
+
+**Also:** `repo.findCategoryById` switched `findUnique`→`findFirst({ id, deleted:false })` so a soft-deleted category reads as absent (detail GET → 404, `categoryExists` → false, update/delete → not_found) — matching Mongo where delete = gone. Verified end-to-end (create root+child, parent resolve, self/parent guards, rename, has-children/has-exams delete guards, soft-delete hidden from reads). `yarn typecheck` ✅.
+
+## 2026-06-24 — admin-exam QUESTION writes: add missing MySQL branches (create/bulk/update/delete/reorder)
+
+**Bug:** like the exam writes, the question write handlers (`createQuestion`, `bulkCreateQuestions`, `updateQuestion`, `deleteQuestion`, `reorderQuestions`) had no MySQL branch and used Mongoose + `mongoose.startSession()`. In MySQL-only mode `POST /admin/quizzes/questions/bulk` threw `"Cannot read properties of undefined (reading 'startSession')"` (no Mongo connection). The crash was on the `const session = await mongoose.startSession()` at the top of each handler — so the MySQL branch is placed BEFORE that line.
+
+**Fix:** added Prisma write methods to `admin-exam.repository.ts` (`examExists`, `maxQuestionOrder`, `createQuestion`, `bulkCreateQuestions`, `updateQuestion`, `deleteQuestion`, `setQuestionOrder`, plus a `recomputeCount` helper) and service logic in `admin-exam.service.ts` (`createQuestion`, `bulkCreateQuestions`, `updateQuestion`, `deleteQuestion`, `reorderQuestions` + answer↔option validation). Wired MySQL branches into all five controller handlers. Behavior mirrors Mongo: answer must match an option name; new question `order_by` = max+1 when omitted; `ws_exam.questions` recomputed (count of `status=true` questions) on create/bulk/delete and on update when status changes; delete cascades result-details → options → question in one `$transaction`; question image/solutionImage `""`→clear with best-effort S3 orphan cleanup.
+
+**Contract/schema notes:**
+- `ws_exam_question.solution_text` is **NOT NULL** (no default) → defaults to `""` when absent.
+- `ws_exam_question_option` has **only** `title` + `question_id` (no image/order columns) — option `image`/`orderBy` from the payload are dropped, matching the read DTO (`options: [{_id, title, questionId}]`).
+- Question DTO unchanged. Verified end-to-end (create, bad-answer reject, bulk, active-count recompute, update options+answer, reorder, cascade delete) against live DB. `yarn typecheck` ✅.
+
+## 2026-06-24 — admin-exam: persist original solution-PDF filename
+
+**Request:** same as ws_material.file_name — keep the user's original solution-PDF filename separate from the generated storage key, and return it.
+
+**Schema:** `ALTER TABLE ws_exam ADD COLUMN solution_pdf_name VARCHAR(255) NULL AFTER solution_pdf;` (DDL `docs/migration/schema-changes/2026-06-24_exam_solution_pdf_name.sql`, applied to `websankul_staging`). `prisma/schema.prisma` Exam model gained `solutionName String? @map("solution_pdf_name")`; `prisma:generate` re-run.
+
+**Code:** `applyExamUpload` captures `req.file.originalname` → `req.body.solutionPdfName`. `createExamSchema` accepts optional `solutionPdfName` (max 255). Service persists it on create/update and the DTO emits `solutionPdfName: e.solutionName ?? null`. Clearing the PDF (`solutionPdfUrl:null`) clears the name too; replacing sets both; rename-only supported. Verified create→get→replace→clear→delete against live DB. `yarn typecheck` ✅. MySQL-only (exam writes have no Mongo path now).
+
+## 2026-06-24 — admin-exam WRITES: add missing MySQL branches (create/update/delete/status/reorder)
+
+**Bug:** admin-exam was only **read**-migrated. `createExam`/`updateExam`/`deleteExam`/`updateExamStatus`/`reorderExams` had no `isAdminExamMysql()` branch and called Mongoose directly. In MySQL-only mode (`isMysqlModule` always true, Mongo never connected) this surfaced as: edit/delete/status → `"Invalid exam id."` (the Mongo `isObjectId` guard rejects integer ids like `300001`), and create → `"Cannot call ws_exam.insertOne() before initial connection is complete…"` (Mongoose with no connection).
+
+**Fix:** added Prisma write methods to `admin-exam.repository.ts` (`findExamMeta`, `findDailyOverlap`, `createExam`, `updateExam`, `setExamStatus`, `setExamOrder`, `deleteExamCascade`) and service logic in `admin-exam.service.ts` (`createExam`, `updateExam`, `updateExamStatus`, `deleteExam`, `reorderExams`, `examDailyOverlap`, `getExamMeta`), then wired MySQL branches into all five controller handlers. Behavior mirrors Mongo: daily-tests' no-overlap rule (PUBLISHED + complete window; strict bounds so back-to-back is allowed) reused across create/update/status; solution-PDF clear → best-effort S3 delete of the orphan; delete cascades result-details → results → options → questions → exam in one `$transaction`.
+
+**Field/contract notes:**
+- DTO mapping unchanged from the read transformer: title↔`title`, durationMinutes↔`time`, questionCount↔`questions`, categoryId↔`exam_category_id`, status is **boolean** in SQL (published=`true`), createdAt↔`created_at`. Create/update return categoryId as a **string id** (unpopulated), matching the Mongo create/update responses.
+- `ws_exam.type` is `ENUM('daily','subject')`; the Mongo enum's `mock`/`weekly` have no SQL column and collapse to `subject` (only `daily` uses the window rule).
+- **Schema drift found:** `ws_exam.start_date` & `end_date` are **NOT NULL** in the DB but `DateTime?` in `schema.prisma`. Subject exams ignore the window, so create defaults both to `now` when absent to satisfy the constraint (daily-overlap only matches `type='daily'`, so placeholder dates can't cause false clashes). Schema not changed (introspection is source of truth; no functional impact).
+- **`exam_category_id` is NOT NULL** in the DB (also `Int?` in schema; no FK, no `0` sentinel — every exam has a real category). Mongo allowed a null category; SQL cannot. So create now **requires** a valid `categoryId` (→ `400 "categoryId is required."`) and update rejects an explicit null/invalid `categoryId` (omitting it leaves it unchanged). Existence isn't checked (matches Mongo, which stored the id without verifying).
+- **Solution PDF upload:** the routes already mount `uploadS3Mixed.single("solutionPdfUrl")` (PDF ≤50MB; `solutionPdfUrl` ∈ PDF_FIELDS) and `applyExamUpload` sets `req.body.solutionPdfUrl` from the uploaded file. Create/update persist it to `ws_exam.solution` (`@map("solution_pdf")`); clearing (`solutionPdfUrl:null`) best-effort deletes the old S3 object (replace does NOT delete the old file — parity with Mongo). Added `solutionPdfUrl: e.solution ?? null` to the read DTO so it round-trips in list/get/create/update (it was persisted but previously omitted from responses, diverging from Mongo). Verified full round-trip (create-with-pdf → get → list → replace → clear → delete) against live DB.
+- `updateExamStatus` accepts the legacy enum string (`published`→true, else false) or a raw boolean.
+
+Verified end-to-end against live DB: create (subject+daily), overlap detection (clash + back-to-back-allowed), update, status toggle, reorder, cascade delete. `yarn typecheck` ✅. Mongo branches left intact below each MySQL branch.
+
+## 2026-06-24 — admin exam-countdown categories: add search + server pagination
+
+**Request:** `GET /admin/exam-countdowns/categories` ignored its query string — no search, and no pagination despite the frontend sending `page`/`limit` and expecting a meta block (the countdowns list `GET /admin/exam-countdowns` already supported both — unchanged).
+
+**Fix:** `adminListCategories` now reads `search` (filters by category `name`) and `page`/`limit`. MySQL: `listCategoriesAdmin({ search, skip, take })` → `where.name = { contains: search }`, plus `count` for total. Mongo fallback: `buildRegexCondition(search)` on `name` + `skip/limit/countDocuments`. **Pagination is opt-in:** if `page` or `limit` is present the response adds `pagination: { total, page, limit, totalPages }` (same shape as the countdowns endpoint) and pages the result; if neither is sent it returns the full flat array (legacy contract preserved for non-paging callers e.g. category pickers). Search is applied at the DB level before paging, so `total` reflects all matches. `yarn typecheck` ✅, verified against live DB (page1/limit2 → 2 rows, page2 → 1 row, total 3; search filters correctly).
+
+## 2026-06-24 — admin materials (MySQL): persist original upload filename
+
+**Request:** keep the user's original filename (e.g. `Test 151 - Class 3.pdf`) separate from the generated storage key in `file` (URL ends `…/1782281052706-file.pdf`); expose it as `fileName` on create/update, `GET /admin/materials/:id`, and the list endpoint.
+
+**Schema:** `ALTER TABLE ws_material ADD COLUMN file_name VARCHAR(255) NULL AFTER file;` (DDL: `docs/migration/schema-changes/2026-06-24_material_file_name.sql`, applied to `websankul_staging`). `prisma/schema.prisma` Material model gained `fileName String? @map("file_name")`; `prisma:generate` re-run. Additive/nullable — legacy rows are NULL.
+
+**Code (MySQL-only):** `applyUploadedFile` (controller) captures `req.file.originalname` → `req.body.fileName` (caller-supplied wins). `createMaterialSchema` accepts optional `fileName` (max 255). `admin-material.service` persists it in create/update and the transformer emits `fileName: row.fileName ?? null`. Repo selects need no change (scalar returned by default). Mongo branch untouched per request — it neither stores nor returns `fileName`. Verified end-to-end against live DB (create→get→list→update→delete). `yarn typecheck` ✅.
+
+## 2026-06-24 — admin materials (MySQL): expose related category name on list + detail
+
+**Request:** `GET /admin/materials` and `GET /admin/materials/:id` returned only `materialCategoryId` (e.g. `"98"`); the frontend needs the category name.
+
+**Fix:** transformer-only change in `src/modules/admin-material/admin-material.service.ts` (`toMaterialDto`). `materialCategoryId` now always serializes as a plain string id, and a new nested `materialCategory: { id, name } | null` field is added for display. The repo (`listMaterials` / `findMaterialById`) already `include`d `MaterialCategory: { select: { id, name } }`, so no query/index change was needed. MySQL-only per request — the Mongo fallback branch (`.populate("materialCategoryId","_id title")`) was left untouched, so on Mongo `materialCategoryId` remains the populated `{_id,title}` object. `yarn typecheck` ✅.
+
 ## 2026-06-23 — admin educator-details (MySQL): implement associations aggregate (was a stub)
 
 **Bug:** `/admin/master/educators/:id/details` runs on the MySQL branch (`educator-auth` flagged) but only returned the SQL profile and **hardcoded empty `associations`/`summary`** — so an educator's courses/packages/sessions never showed (e.g. educator 20 has a `ws_course` row with 4 subscribers).

@@ -33,9 +33,22 @@ export const toPkgCatDto = (r: any) => ({
 });
 
 // ── Admin CRUD ────────────────────────────────────────────────────────────────
-export const listAll = async () => {
-  const rows = await prisma.packageCategory.findMany({ orderBy: { order: "asc" } });
-  return rows.map(toPkgCatDto);
+// Optional search (title) + sort + pagination. skip/take omitted → full list.
+export const listAll = async (q?: { search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number }) => {
+  const where: any = {};
+  if (q?.search) where.title = { contains: q.search.trim() };
+  const col = q?.sortBy === "title" ? "title" : q?.sortBy === "createdAt" ? "createdAt" : "order";
+  const orderBy: any[] = [{ [col]: q?.sortDir ?? "asc" }, { id: "asc" }];
+  const [rows, total] = await Promise.all([
+    prisma.packageCategory.findMany({
+      where,
+      orderBy,
+      ...(q?.skip !== undefined ? { skip: q.skip } : {}),
+      ...(q?.take !== undefined ? { take: q.take } : {}),
+    }),
+    prisma.packageCategory.count({ where }),
+  ]);
+  return { data: rows.map(toPkgCatDto), total };
 };
 
 export const create = async (input: { title: string; slug: string; image?: string; order?: number; status?: boolean }) => {

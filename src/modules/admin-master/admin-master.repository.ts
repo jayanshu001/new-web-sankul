@@ -20,7 +20,15 @@ export const adminMasterRepository = {
   pcmDelete: (id: number) => prisma.packageCourseMaterial.delete({ where: { id } }),
 
   // ── CourseSubjectCategory ───────────────────────────────────────────────────
-  subjList: () => prisma.courseSubjectCategory.findMany({ orderBy: { order: "asc" } }),
+  // Optional search (title) + sort + pagination. skip/take omitted → full list.
+  subjList: (opts?: { search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number }) =>
+    prisma.courseSubjectCategory.findMany({
+      where: subjWhere(opts),
+      orderBy: subjOrderBy(opts?.sortBy, opts?.sortDir ?? "asc"),
+      ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts?.take !== undefined ? { take: opts.take } : {}),
+    }),
+  subjCount: (opts?: { search?: string }) => prisma.courseSubjectCategory.count({ where: subjWhere(opts) }),
   subjFind: (id: number) => prisma.courseSubjectCategory.findUnique({ where: { id } }),
   subjCreate: (data: { title: string; slug: string; image: string; parent: number; order: number; status: boolean }) =>
     prisma.courseSubjectCategory.create({ data: { ...data, createdAt: new Date(), updatedAt: new Date() } }),
@@ -98,3 +106,14 @@ export const adminMasterRepository = {
   videoInCategory: (categoryId: number) => prisma.video.findFirst({ where: { videoCategoryId: categoryId }, select: { id: true } }),
   hasChildren: (categoryId: number) => prisma.videoCategory.findFirst({ where: { parent: categoryId }, select: { id: true } }),
 };
+
+function subjWhere(opts?: { search?: string }) {
+  const where: any = {};
+  if (opts?.search) where.title = { contains: opts.search.trim() };
+  return where;
+}
+
+function subjOrderBy(sortBy: string | undefined, dir: "asc" | "desc"): any[] {
+  const col = sortBy === "title" ? "title" : sortBy === "createdAt" ? "createdAt" : "order";
+  return [{ [col]: dir }, { id: "asc" }];
+}

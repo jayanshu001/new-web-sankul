@@ -104,9 +104,16 @@ export const populateExamCountdowns = async (row: {
 };
 
 // ── Category CRUD ──────────────────────────────────────────────────────────────
-export const listCategoriesAdmin = async () => {
-  const rows = await prisma.examCountdownCategory.findMany({ orderBy: [{ order: "asc" }, { name: "asc" }] });
-  return rows.map(catDto);
+// Pagination is opt-in: pass skip/take to page, omit to return the full list
+// (preserves the legacy "all categories" behaviour for non-paginating callers).
+export const listCategoriesAdmin = async (opts?: { search?: string | null; skip?: number; take?: number }) => {
+  const where: any = {};
+  if (opts?.search) where.name = { contains: opts.search };
+  const [rows, total] = await Promise.all([
+    prisma.examCountdownCategory.findMany({ where, orderBy: [{ order: "asc" }, { name: "asc" }], skip: opts?.skip, take: opts?.take }),
+    prisma.examCountdownCategory.count({ where }),
+  ]);
+  return { data: rows.map(catDto), total };
 };
 
 /** Returns {conflict:true} if the name already exists (→ 409). */

@@ -42,6 +42,11 @@ export const createExamSchema = z
       (v) => (v === "" ? null : v),
       z.string().max(500).nullable().optional()
     ),
+    // Original filename of the uploaded solution PDF (paired with solutionPdfUrl).
+    solutionPdfName: z.preprocess(
+      (v) => (v === "" ? null : v),
+      z.string().max(255).nullable().optional()
+    ),
     sendPush: z.coerce.boolean().optional(),
     isPaid: z.coerce.boolean().optional(),
     status: z.coerce.boolean().optional(),

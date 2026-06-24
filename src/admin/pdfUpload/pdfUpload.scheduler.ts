@@ -95,7 +95,11 @@ export async function enqueuePdfUploadJob(jobRecordId: string): Promise<void> {
     "upload",
     { jobRecordId },
     {
-      jobId: jobRecordId,
+      // BullMQ rejects a purely-numeric custom jobId ("Custom Id cannot be
+      // integers"). SQL pdf-upload row ids are plain ints, so prefix to keep the
+      // jobId non-numeric (and colon-free). Still deterministic → idempotent.
+      // The worker resolves the row from job.data.jobRecordId, not job.id.
+      jobId: `pdf-${jobRecordId}`,
       attempts: 3,
       backoff: { type: "exponential", delay: 5_000 },
       removeOnComplete: { count: 1000, age: 24 * 60 * 60 },
