@@ -45,10 +45,17 @@ export const resolveCityName = async (cityId: string | number): Promise<CityName
 // dropdown: list/admin filter by `stateId` and the DTO populates `stateId`.
 type Envelope<T> = { ok: true; data: T } | { ok: false; status: number; message: string };
 
-/** Admin list (includes inactive); optional status + state filter. */
-export const listCitiesAdmin = async (status?: boolean, stateId?: number): Promise<CityDto[]> => {
-  const rows = await repo.listAll({ status, stateId });
-  return rows.map(toCityDto);
+/** Admin list (includes inactive); optional status + state filter + name search,
+ *  newest first, paginated when skip/take are provided. */
+export const listCitiesAdmin = async (opts?: {
+  status?: boolean;
+  stateId?: number;
+  search?: string;
+  skip?: number;
+  take?: number;
+}): Promise<{ data: CityDto[]; total: number }> => {
+  const [rows, total] = await Promise.all([repo.listAll(opts), repo.countAll(opts)]);
+  return { data: rows.map(toCityDto), total };
 };
 
 export const getCityAdmin = async (id: number): Promise<CityDto | null> => {

@@ -51,16 +51,19 @@ export const listPlans = async (req: Request, res: Response) => {
       isDefault,
       withMaterial,
       search,
+      sortBy,
+      sortOrder,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
 
     const pageNum0 = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum0 = Math.max(parseInt(limit, 10) || 20, 1);
+    const sortDir: "asc" | "desc" = sortOrder === "asc" ? "asc" : "desc";
 
     // ─── MySQL branch (ws_package_course_ebook_price) ─────────────────────
     if (planSql.isAdminPlanMysql()) {
-      const { items, total } = await planSql.listPlans({ entityType, courseId, packageId, ebookId, status, isDefault, withMaterial, search, page: pageNum0, limit: limitNum0 });
+      const { items, total } = await planSql.listPlans({ entityType, courseId, packageId, ebookId, status, isDefault, withMaterial, search, sortBy, sortDir, page: pageNum0, limit: limitNum0 });
       return res.status(200).json({ success: true, data: items, pagination: { total, page: pageNum0, limit: limitNum0, totalPages: Math.ceil(total / limitNum0) } });
     }
 
@@ -84,12 +87,25 @@ export const listPlans = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
+    // Query-driven sort when sortBy is whitelisted; else the legacy default
+    // (default-plan first, duration asc, newest). Mirrors the MySQL branch.
+    const dir = sortDir === "asc" ? 1 : -1;
+    const sortField =
+      sortBy === "name" ? "name" :
+      sortBy === "duration" ? "duration" :
+      sortBy === "price" ? "price" :
+      sortBy === "createdAt" ? "createdAt" :
+      sortBy === "updatedAt" ? "updatedAt" : null;
+    const sortSpec: Record<string, 1 | -1> = sortField
+      ? { [sortField]: dir as 1 | -1, _id: -1 }
+      : { createdAt: -1, _id: -1 }; // default: recently-added on top
+
     const [data, total] = await Promise.all([
       PackageCourseEbookPrice.find(filter)
         .populate("courseId", "_id name")
         .populate("packageId", "_id name")
         .populate("ebookId", "_id name")
-        .sort({ isDefault: -1, duration: 1, createdAt: -1 })
+        .sort(sortSpec)
         .skip(skip)
         .limit(limitNum),
       PackageCourseEbookPrice.countDocuments(filter),

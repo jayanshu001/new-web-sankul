@@ -3,6 +3,13 @@ import { prisma } from "../../config/prisma";
 // Populate the parent state (Mongo `stateId` populated shape) for city DTOs.
 const stateInclude = { State: { select: { id: true, name: true, state_code: true } } } as const;
 
+// Shared WHERE for the admin city list + count (status/state filters + name search).
+const adminCityWhere = (opts?: { status?: boolean; stateId?: number; search?: string }) => ({
+  ...(opts?.status === undefined ? {} : { status: opts.status }),
+  ...(opts?.stateId ? { state: opts.stateId } : {}),
+  ...(opts?.search ? { name: { contains: opts.search } } : {}),
+});
+
 /** Prisma persistence for the offline-city MySQL branch (ws_offline_city). */
 export const offlineCityRepository = {
   /** Active cities, by manual `order` then name — mirrors Mongo `{status:true}` sort `{order:1}`. */
@@ -25,16 +32,20 @@ export const offlineCityRepository = {
     prisma.offlineCity.findUnique({ where: { id }, select: { id: true, name: true } }),
 
   // ── admin (Wave 8) ──────────────────────────────────────────────────────────
-  /** Admin list: optional status + state filter (includes inactive), manual order. */
-  listAll: (opts?: { status?: boolean; stateId?: number }) =>
+  /** Admin list: optional status + state filter + name search (includes inactive),
+   *  newest first, paginated when skip/take are provided. */
+  listAll: (opts?: { status?: boolean; stateId?: number; search?: string; skip?: number; take?: number }) =>
     prisma.offlineCity.findMany({
-      where: {
-        ...(opts?.status === undefined ? {} : { status: opts.status }),
-        ...(opts?.stateId ? { state: opts.stateId } : {}),
-      },
+      where: adminCityWhere(opts),
       include: stateInclude,
-      orderBy: [{ order: "asc" }, { name: "asc" }],
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: opts?.skip,
+      take: opts?.take,
     }),
+
+  /** Total admin cities matching the same filters (pagination count). */
+  countAll: (opts?: { status?: boolean; stateId?: number; search?: string }) =>
+    prisma.offlineCity.count({ where: adminCityWhere(opts) }),
 
   create: (data: { name: string; image: string; order: number; status: boolean; state?: number | null }) => {
     const now = new Date();

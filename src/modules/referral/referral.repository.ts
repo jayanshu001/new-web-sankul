@@ -107,7 +107,14 @@ export const referralRepository = {
     }),
 
   // ─── Admin: program CRUD (ws_refferal_program) ────────────────────────────
-  listPrograms: () => prisma.refferalProgram.findMany({ orderBy: { id: "desc" } }),
+  listPrograms: (opts: { where?: Prisma.RefferalProgramWhereInput; orderBy?: Prisma.RefferalProgramOrderByWithRelationInput[]; skip?: number; take?: number } = {}) =>
+    prisma.refferalProgram.findMany({
+      where: opts.where,
+      orderBy: opts.orderBy ?? [{ id: "desc" }],
+      ...(opts.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts.take !== undefined ? { take: opts.take } : {}),
+    }),
+  countPrograms: (where?: Prisma.RefferalProgramWhereInput) => prisma.refferalProgram.count({ where }),
   findProgram: (id: number) => prisma.refferalProgram.findUnique({ where: { id } }),
   programNameExists: (name: string, exceptId?: number) =>
     prisma.refferalProgram.findFirst({

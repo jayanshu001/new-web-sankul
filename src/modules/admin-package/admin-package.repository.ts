@@ -13,10 +13,12 @@ import type { Prisma } from "@prisma/client";
  *  - video relations→ ws_video_category_package_relation
  *
  * ⚠ Drift: ws_package has NO column for isPaid, isSmartCourse, isPlannerCourse,
- * subtitle, notificationTopic, packageCategoryId, goalId/goalLabelId, or the
- * examCountdown* arrays. SQL has exam_id (→ goal), educator_id, package_type_id.
- * with_material/without_material are descriptive VARCHAR text. package_type_id /
- * exam_id are NOT NULL → sentinels on write.
+ * subtitle, notificationTopic, packageCategoryId, or the examCountdown* arrays.
+ * SQL has exam_id (→ goal), educator_id, package_type_id, goal_id and
+ * goal_label_id (the latter stores the goal's JSON-label numeric id; the API
+ * boundary resolves it to/from the label NAME). with_material/without_material
+ * are descriptive VARCHAR text. package_type_id / exam_id are NOT NULL →
+ * sentinels on write.
  */
 const pkgInclude = { packageType: { select: { id: true, name: true } } };
 
@@ -36,6 +38,11 @@ export const adminPackageRepository = {
   findById: (id: number) => prisma.package.findUnique({ where: { id }, include: pkgInclude }),
   findBare: (id: number) => prisma.package.findUnique({ where: { id } }),
   exists: (id: number) => prisma.package.findUnique({ where: { id }, select: { id: true } }),
+
+  // ── goal labels (JSON [{ id, name }] on ws_goal) — for name↔id resolution ──────
+  goalById: (id: number) => prisma.goal.findUnique({ where: { id }, select: { id: true, labels: true } }),
+  goalsByIds: (ids: number[]) =>
+    ids.length ? prisma.goal.findMany({ where: { id: { in: ids } }, select: { id: true, labels: true } }) : Promise.resolve([]),
 
   /** Active plans for a set of packages (list-row pricing buckets). */
   plansForPackages: (packageIds: number[]) =>

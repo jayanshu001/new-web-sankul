@@ -41,7 +41,7 @@ const toDto = (p: any) => ({
 });
 
 // ── list / get ────────────────────────────────────────────────────────────────
-export const listPlans = async (q: { entityType?: string; courseId?: string; packageId?: string; ebookId?: string; status?: string; isDefault?: string; withMaterial?: string; search?: string; page: number; limit: number }) => {
+export const listPlans = async (q: { entityType?: string; courseId?: string; packageId?: string; ebookId?: string; status?: string; isDefault?: string; withMaterial?: string; search?: string; sortBy?: string; sortDir?: "asc" | "desc"; page: number; limit: number }) => {
   const opts = {
     entityType: q.entityType,
     courseId: q.courseId ? toInt(q.courseId) ?? undefined : undefined,
@@ -51,6 +51,8 @@ export const listPlans = async (q: { entityType?: string; courseId?: string; pac
     isDefault: q.isDefault === "true" ? true : q.isDefault === "false" ? false : undefined,
     withMaterial: q.withMaterial === "true" ? true : q.withMaterial === "false" ? false : undefined,
     search: q.search,
+    sortBy: q.sortBy,
+    sortDir: q.sortDir,
   };
   const [rows, total] = await Promise.all([
     repo.list({ ...opts, skip: (q.page - 1) * q.limit, take: q.limit }),

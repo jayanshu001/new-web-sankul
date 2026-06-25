@@ -21,7 +21,9 @@ export interface IPackage extends Document {
   isPlannerCourse: boolean;
   packageTypeId?: Types.ObjectId | null;
   goalId?: Types.ObjectId | null;
-  goalLabelId?: Types.ObjectId | null;
+  // The goal label NAME (e.g. "UPSC"), not an id. Goal labels are stored as
+  // { name } only, so the package references the label by its name string.
+  goalLabelId?: string | null;
   examCountdownCategoryIds: Types.ObjectId[];
   examCountdownIds: Types.ObjectId[];
   packageCategoryId?: Types.ObjectId | null;
@@ -59,7 +61,7 @@ const packageSchema = new Schema<IPackage>(
     isPlannerCourse: { type: Boolean, default: false },
     packageTypeId: { type: Schema.Types.ObjectId, ref: "PackageType", default: null },
     goalId: { type: Schema.Types.ObjectId, ref: "Goal", default: null },
-    goalLabelId: { type: Schema.Types.ObjectId, default: null },
+    goalLabelId: { type: String, default: null },
     examCountdownCategoryIds: {
       type: [{ type: Schema.Types.ObjectId, ref: "ExamCountdownCategory" }],
       default: [],

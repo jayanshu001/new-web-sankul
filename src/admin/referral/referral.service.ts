@@ -14,6 +14,7 @@ import {
   RefferalTransactionStatus,
 } from "../../models/enums";
 import { HttpError } from "../../middlewares/errorHandler";
+import { buildRegexCondition } from "../../utils/searchFilter";
 import * as refSql from "../../modules/referral/referral.service";
 
 const { isReferralMysql, parseId } = refSql;
@@ -28,9 +29,47 @@ const assertObjectId = (id: string, label: string): void => {
 // Programs (small master)
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const listPrograms = async () => {
-  if (isReferralMysql()) return refSql.adminListPrograms();
-  return ReferralProgram.find().sort({ createdAt: -1 }).lean();
+export interface ListProgramsQuery {
+  search?: string;
+  sortBy?: string; // name | title | createdAt
+  sortOrder?: string;
+  page?: string;
+  limit?: string;
+}
+
+/**
+ * Programs list with optional title/name search + sort. Pagination is opt-in
+ * (page/limit present → `pagination` block; absent → flat array — back-compat).
+ */
+export const listPrograms = async (query: ListProgramsQuery = {}) => {
+  const paginate = query.page !== undefined || query.limit !== undefined;
+  const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
+  const limitNum = Math.max(parseInt(query.limit ?? "20", 10) || 20, 1);
+  const sortDir: "asc" | "desc" = query.sortOrder === "desc" ? "desc" : "asc";
+
+  if (isReferralMysql()) {
+    const { data, total } = await refSql.adminListPrograms({
+      search: query.search, sortBy: query.sortBy, sortDir,
+      ...(paginate ? { skip: (pageNum - 1) * limitNum, take: limitNum } : {}),
+    });
+    return paginate
+      ? { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } }
+      : { data };
+  }
+
+  const filter: any = {};
+  { const c = buildRegexCondition(query.search); if (c) filter.$or = [{ name: c }, { title: c }]; }
+  const col = query.sortBy === "name" ? "name" : query.sortBy === "title" ? "title" : "createdAt";
+  const sortSpec: Record<string, 1 | -1> = { [col]: sortDir === "desc" ? -1 : 1, _id: -1 };
+  if (!paginate) {
+    const data = await ReferralProgram.find(filter).sort(sortSpec).lean();
+    return { data };
+  }
+  const [data, total] = await Promise.all([
+    ReferralProgram.find(filter).sort(sortSpec).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
+    ReferralProgram.countDocuments(filter),
+  ]);
+  return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
 
 export const getProgramById = async (id: string) => {

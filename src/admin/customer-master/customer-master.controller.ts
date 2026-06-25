@@ -33,14 +33,39 @@ const toBool = (v?: string) => (v === "true" ? true : v === "false" ? false : un
 
 export const getStates = async (req: Request, res: Response) => {
   try {
-    const { active } = req.query as Record<string, string>;
+    // Pagination is opt-in: only when page/limit is passed (preserves the full-list
+    // contract for dropdown consumers). `search` matches name + stateCode.
+    const { active, search, page, limit } = req.query as Record<string, string>;
+    const paginate = page !== undefined || limit !== undefined;
+    const pageNum = Math.max(parseInt(page ?? "1", 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit ?? "20", 10) || 20, 1);
+    const meta = (total: number) => ({
+      total,
+      page: paginate ? pageNum : 1,
+      limit: paginate ? limitNum : total,
+      totalPages: paginate ? Math.ceil(total / limitNum) : 1,
+    });
+
     if (isCustomerMasterMysql()) {
-      return res.status(200).json({ success: true, data: await sqlListStates(toBool(active)) });
+      const { data, total } = await sqlListStates({
+        active: toBool(active),
+        search: search?.trim() || undefined,
+        skip: paginate ? (pageNum - 1) * limitNum : undefined,
+        take: paginate ? limitNum : undefined,
+      });
+      return res.status(200).json({ success: true, data, pagination: meta(total) });
     }
+
     const filters: any = {};
     if (active === "true" || active === "false") filters.active = active === "true";
-    const states = await CustomerState.find(filters).sort({ name: 1 });
-    return res.status(200).json({ success: true, data: states });
+    if (search && search.trim()) {
+      const safe = search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      filters.$or = [{ name: { $regex: safe, $options: "i" } }, { stateCode: { $regex: safe, $options: "i" } }];
+    }
+    const query = CustomerState.find(filters).sort({ _id: -1 }); // newest first
+    if (paginate) query.skip((pageNum - 1) * limitNum).limit(limitNum);
+    const [states, total] = await Promise.all([query.lean(), CustomerState.countDocuments(filters)]);
+    return res.status(200).json({ success: true, data: states, pagination: meta(total) });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

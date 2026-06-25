@@ -29,12 +29,25 @@ type Envelope<T> = { ok: true; data: T } | { ok: false; status: number; message:
 // ─── States ─────────────────────────────────────────────────────────────────────
 const stateDto = (s: any) => ({ _id: String(s.id), name: s.name, stateCode: s.state_code, active: s.active });
 
-export const listStates = async (active?: boolean) => {
-  const rows = await prisma.customerState.findMany({
-    where: active === undefined ? {} : { active },
-    orderBy: { name: "asc" },
-  });
-  return rows.map(stateDto);
+export const listStates = async (opts?: {
+  active?: boolean;
+  search?: string;
+  skip?: number;
+  take?: number;
+}): Promise<{ data: any[]; total: number }> => {
+  const where: any = {};
+  if (opts?.active !== undefined) where.active = opts.active;
+  if (opts?.search) where.OR = [{ name: { contains: opts.search } }, { state_code: { contains: opts.search } }];
+  const [rows, total] = await Promise.all([
+    prisma.customerState.findMany({
+      where,
+      orderBy: { id: "desc" }, // newest first (ws_customer_state has no created_at column)
+      skip: opts?.skip,
+      take: opts?.take,
+    }),
+    prisma.customerState.count({ where }),
+  ]);
+  return { data: rows.map(stateDto), total };
 };
 
 export const createState = async (input: { name: string; stateCode: string; active: boolean }) => {

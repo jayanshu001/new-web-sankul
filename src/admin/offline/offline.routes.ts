@@ -42,7 +42,10 @@ router.put("/batches/:id", uploadS3.single("image"), updateBatch);
 router.delete("/batches/:id", deleteBatch);
 
 // Enquiries (read/delete only — created from client)
+// `/batch-enquiries` is an alias for `/enquiries` (admin UI path); both support
+// server-side search (batchId, search, fromDate, toDate) + pagination (page, limit).
 router.get("/enquiries", listEnquiries);
+router.get("/batch-enquiries", listEnquiries);
 router.delete("/enquiries/:id", deleteEnquiry);
 
 export default router;

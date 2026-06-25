@@ -141,6 +141,31 @@ const caDto = (r: any) => ({
 export const listCurrentAffairs = async () =>
   (await prisma.currentAffair.findMany({ orderBy: { createdAt: "desc" } })).map(caDto);
 
+const CA_SORT_COLUMNS: Record<string, string> = { createdAt: "createdAt", title: "title", status: "status" };
+
+/**
+ * Admin search + sort + opt-in pagination. `skip`/`take` apply only when
+ * provided (absent → full filtered list). Always returns the total count.
+ */
+export const listCurrentAffairsPaged = async (q: {
+  search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number;
+}) => {
+  const qq = q.search?.trim();
+  const where = qq
+    ? { OR: [{ title: { contains: qq } }, { youtubeLink: { contains: qq } }, { image: { contains: qq } }] }
+    : {};
+  const [rows, total] = await Promise.all([
+    prisma.currentAffair.findMany({
+      where,
+      orderBy: { [CA_SORT_COLUMNS[q.sortBy ?? ""] ?? "createdAt"]: q.sortDir ?? "desc" },
+      ...(q.skip != null ? { skip: q.skip } : {}),
+      ...(q.take != null ? { take: q.take } : {}),
+    }),
+    prisma.currentAffair.count({ where }),
+  ]);
+  return { items: rows.map(caDto), total };
+};
+
 // Client read: active affairs, newest first, only the fields the client
 // renders (image, title, youtubeLink). `limit` (>0) caps the list. Mirrors the
 // Mongo CurrentAffair.find({status:true}).sort({createdAt:-1}).select(...).
@@ -187,6 +212,29 @@ const lbDto = (r: any) => ({
 
 export const listLiveBanners = async () =>
   (await prisma.liveBannerSlider.findMany({ orderBy: { orderBy: "asc" } })).map(lbDto);
+
+const LB_SORT_COLUMNS: Record<string, string> = { orderBy: "orderBy", createdAt: "createdAt" };
+
+/**
+ * Admin search + sort + opt-in pagination. `skip`/`take` apply only when
+ * provided (absent → full filtered list). Always returns the total count.
+ */
+export const listLiveBannersPaged = async (q: {
+  search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number;
+}) => {
+  const qq = q.search?.trim();
+  const where = qq ? { image: { contains: qq } } : {};
+  const [rows, total] = await Promise.all([
+    prisma.liveBannerSlider.findMany({
+      where,
+      orderBy: { [LB_SORT_COLUMNS[q.sortBy ?? ""] ?? "orderBy"]: q.sortDir ?? "asc" },
+      ...(q.skip != null ? { skip: q.skip } : {}),
+      ...(q.take != null ? { take: q.take } : {}),
+    }),
+    prisma.liveBannerSlider.count({ where }),
+  ]);
+  return { items: rows.map(lbDto), total };
+};
 
 export const getLiveBanner = async (id: number) => {
   const r = await prisma.liveBannerSlider.findUnique({ where: { id } });

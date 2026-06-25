@@ -1,4 +1,5 @@
 import { isMysqlModule } from "../../config/migration";
+import { HttpError } from "../../middlewares/errorHandler";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminPackageRepository as repo } from "./admin-package.repository";
 import type { Package, PackageType } from "@prisma/client";
@@ -13,6 +14,49 @@ export const parsePackageId = (id: string): number | null => {
 
 const idStrOrNull = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
 
+// ── goal-label resolution ──────────────────────────────────────────────────────
+// goalLabelId is the label NAME at the API boundary (labels carry no usable id
+// in Mongo); SQL stores the JSON-label numeric id in ws_package.goal_label_id.
+// These bridge the two: name → id on write, id → name on read.
+const labelNameById = (labels: unknown, labelId: number | null | undefined): string | null => {
+  if (labelId == null) return null;
+  const arr = Array.isArray(labels) ? labels : [];
+  const hit = arr.find((l: any) => Number(l?.id) === labelId);
+  return hit ? String((hit as any).name) : null;
+};
+const labelIdByName = (labels: unknown, name: string): number | null => {
+  const arr = Array.isArray(labels) ? labels : [];
+  const hit = arr.find((l: any) => l?.name === name);
+  return hit && (hit as any).id != null ? Number((hit as any).id) : null;
+};
+
+/**
+ * Resolve + validate a (goalId, goalLabelName) pair for writes. Mirrors the Mongo
+ * `assertGoalLabelPair`: when a label name is supplied, goalId is required and the
+ * name MUST exist under that goal — else the contract reject string. Returns the
+ * numeric ids to persist (and the canonical name for the response DTO).
+ */
+const resolveGoalFields = async (
+  goalIdStr: string | null | undefined,
+  goalLabelName: string | null | undefined
+): Promise<{ goalId: number | null; goalLabelId: number | null; goalLabelName: string | null }> => {
+  const goalId = goalIdStr ? parsePackageId(goalIdStr) : null;
+  if (!goalLabelName) return { goalId, goalLabelId: null, goalLabelName: null };
+  if (!goalId) throw new HttpError(400, "goalId is required when goalLabelId is provided.");
+  const goal = await repo.goalById(goalId);
+  if (!goal) throw new HttpError(404, "Goal not found for the supplied goalId.");
+  const labelId = labelIdByName(goal.labels, goalLabelName);
+  if (labelId == null) throw new HttpError(400, "goalLabelId does not belong to the supplied goalId.");
+  return { goalId, goalLabelId: labelId, goalLabelName };
+};
+
+/** Resolve a persisted row's goal_label_id (int) → label name for the response DTO. */
+const resolveLabelNameForRow = async (row: { goalId?: number | null; goalLabelId?: number | null }): Promise<string | null> => {
+  if (row.goalLabelId == null || row.goalId == null) return null;
+  const goal = await repo.goalById(row.goalId);
+  return labelNameById(goal?.labels, row.goalLabelId);
+};
+
 // ── transformers ─────────────────────────────────────────────────────────────
 const toTypeDto = (t: PackageType) => ({ _id: String(t.id), name: t.name, createdAt: t.created_at ?? null, updatedAt: t.updated_at ?? null });
 
@@ -21,15 +65,21 @@ type PkgRow = Package & { packageType?: { id: number; name: string } | null };
 /**
  * `ws_package` row → Mongo-shaped Package doc. SQL-absent fields synthesized:
  * isPaid=true (Mongo default), isSmartCourse/isPlannerCourse=false, subtitle="",
- * notificationTopic="", packageCategoryId/goalId/goalLabelId=null, examCountdown*=[].
+ * notificationTopic="", packageCategoryId=null, examCountdown*=[]. goalId is the
+ * numeric id as a string (unpopulated, mirroring Mongo); goalLabelId is the label
+ * NAME string (resolved by the caller, passed in as `goalLabelName`).
  * with_material/without_material are the descriptive *Text fields in Mongo.
  */
-const toPackageDto = (row: PkgRow, embeds?: { specificSubjects: any[]; materialCategories: any[]; examCategories: any[] }) => ({
+const toPackageDto = (
+  row: PkgRow,
+  embeds?: { specificSubjects: any[]; materialCategories: any[]; examCategories: any[] },
+  goalLabelName?: string | null
+) => ({
   _id: String(row.id),
   name: row.name,
   subtitle: "",
   description: row.description,
-  image: row.image,
+  image: row.image || null,
   shareableLink: row.shareable_link ?? null,
   withMaterialText: row.withMaterial,
   withoutMaterialText: row.withoutMaterial,
@@ -39,8 +89,8 @@ const toPackageDto = (row: PkgRow, embeds?: { specificSubjects: any[]; materialC
   isSmartCourse: false,
   isPlannerCourse: false,
   packageTypeId: row.packageType ? { _id: String(row.packageType.id), name: row.packageType.name } : idStrOrNull(row.packageTypeId),
-  goalId: null,
-  goalLabelId: null,
+  goalId: idStrOrNull(row.goalId),
+  goalLabelId: goalLabelName ?? null,
   examCountdownCategoryIds: [],
   examCountdownIds: [],
   packageCategoryId: null,
@@ -132,14 +182,21 @@ export const listPackages = async (q: ListPackagesQuery) => {
     if (!bucket) { bucket = { withMaterial: [], withoutMaterial: [] }; byPkg.set(p.packageId, bucket); }
     (p.withMaterial ? bucket.withMaterial : bucket.withoutMaterial).push(toPlanDto(p));
   }
-  const data = rows.map((row) => ({ ...toPackageDto(row), plans: byPkg.get(row.id) ?? { withMaterial: [], withoutMaterial: [] } }));
+  // Resolve each row's goal_label_id → label name (batch-load the referenced goals).
+  const goalIds = [...new Set(rows.map((r) => r.goalId).filter((g): g is number => g != null))];
+  const goals = await repo.goalsByIds(goalIds);
+  const labelsByGoal = new Map<number, unknown>(goals.map((g) => [g.id, g.labels]));
+  const data = rows.map((row) => ({
+    ...toPackageDto(row, undefined, labelNameById(labelsByGoal.get(row.goalId as number), row.goalLabelId)),
+    plans: byPkg.get(row.id) ?? { withMaterial: [], withoutMaterial: [] },
+  }));
   return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
 
 export const getPackageById = async (id: number): Promise<"not_found" | any> => {
   const row = await repo.findById(id);
   if (!row) return "not_found";
-  return toPackageDto(row, await loadEmbeds(id));
+  return toPackageDto(row, await loadEmbeds(id), await resolveLabelNameForRow(row));
 };
 
 // ── packages: write ───────────────────────────────────────────────────────────
@@ -147,6 +204,7 @@ export interface PackageWriteInput {
   name?: string; subtitle?: string; description?: string; image?: string; shareableLink?: string;
   withMaterialText?: string; withoutMaterialText?: string; order?: number; active?: boolean;
   packageTypeId?: string | null; educatorId?: string | null;
+  goalId?: string | null; goalLabelId?: string | null; // goalLabelId = label NAME
   specificSubjects?: Array<{ category: string; order?: number; status?: boolean }>;
   materialCategories?: Array<{ category: string; order?: number }>;
   examCategories?: Array<{ category: string; order?: number }>;
@@ -159,6 +217,7 @@ const catRows = (refs?: Array<{ category: string; order?: number }>) =>
 
 export const createPackage = async (d: PackageWriteInput) => {
   const now = new Date();
+  const gf = await resolveGoalFields(d.goalId, d.goalLabelId);
   const pkg = await repo.createPackage({
     data: {
       name: d.name ?? "",
@@ -173,17 +232,20 @@ export const createPackage = async (d: PackageWriteInput) => {
       packageTypeId: d.packageTypeId ? parsePackageId(d.packageTypeId) ?? 1 : 1,
       examId: 0,
       educator_id: d.educatorId ? parsePackageId(d.educatorId) : null,
+      goalId: gf.goalId,
+      goalLabelId: gf.goalLabelId,
       created_at: now, updated_at: now,
     },
     specificSubjects: subjectRows(d.specificSubjects),
     materialCategories: catRows(d.materialCategories),
     examCategories: catRows(d.examCategories),
   });
-  return toPackageDto(await repo.findById(pkg.id) as PkgRow, await loadEmbeds(pkg.id));
+  return toPackageDto(await repo.findById(pkg.id) as PkgRow, await loadEmbeds(pkg.id), gf.goalLabelName);
 };
 
 export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"not_found" | any> => {
-  if (!(await repo.exists(id))) return "not_found";
+  const existing = await repo.findBare(id);
+  if (!existing) return "not_found";
   const data: any = { updated_at: new Date() };
   if (d.name !== undefined) data.name = d.name;
   if (d.description !== undefined) data.description = d.description ?? "";
@@ -196,12 +258,31 @@ export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"
   if (d.packageTypeId !== undefined) data.packageTypeId = d.packageTypeId ? parsePackageId(d.packageTypeId) ?? 1 : 1;
   if (d.educatorId !== undefined) data.educator_id = d.educatorId ? parsePackageId(d.educatorId) : null;
 
+  // Goal/label: validate the merged (goalId, labelName) pair when either is supplied,
+  // then persist both numeric ids. Mirrors the Mongo branch's assertGoalLabelPair.
+  if (d.goalId !== undefined || d.goalLabelId !== undefined) {
+    const nextGoalIdStr = d.goalId !== undefined ? (d.goalId || null) : idStrOrNull(existing.goalId);
+    let nextLabelName: string | null;
+    if (d.goalLabelId !== undefined) {
+      nextLabelName = d.goalLabelId || null;
+    } else if (existing.goalLabelId != null) {
+      const exGoal = existing.goalId != null ? await repo.goalById(existing.goalId) : null;
+      nextLabelName = labelNameById(exGoal?.labels, existing.goalLabelId);
+    } else {
+      nextLabelName = null;
+    }
+    const gf = await resolveGoalFields(nextGoalIdStr, nextLabelName);
+    data.goalId = gf.goalId;
+    data.goalLabelId = gf.goalLabelId;
+  }
+
   await repo.updatePackage(id, data, {
     specificSubjects: d.specificSubjects !== undefined ? subjectRows(d.specificSubjects) : undefined,
     materialCategories: d.materialCategories !== undefined ? catRows(d.materialCategories) : undefined,
     examCategories: d.examCategories !== undefined ? catRows(d.examCategories) : undefined,
   });
-  return toPackageDto(await repo.findById(id) as PkgRow, await loadEmbeds(id));
+  const row = (await repo.findById(id)) as PkgRow;
+  return toPackageDto(row, await loadEmbeds(id), await resolveLabelNameForRow(row));
 };
 
 export const deletePackage = async (id: number): Promise<"not_found" | "has_subscribers" | true> => {

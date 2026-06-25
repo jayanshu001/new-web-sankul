@@ -14,7 +14,11 @@ const promocodeBase = z.object({
   type: z.enum([PromocodeType.PUBLIC, PromocodeType.PRIVATE]).default(PromocodeType.PRIVATE),
   status: z.boolean().optional(),
   discountType: z.enum(["flat", "percentage"]).default("percentage"),
-  discountValue: z.number().nonnegative("discountValue must be >= 0"),
+  // Optional: this promocode model is per-plan-percentage based — the effective
+  // discount is each plan's customerPercentage, so there is no global discount in
+  // the admin UI. Create defaults this to 0 (see createPromocodeSchema); update
+  // leaves it untouched when omitted.
+  discountValue: z.number().nonnegative("discountValue must be >= 0").optional(),
   promoterId: z.string().regex(objectIdOrIntRegex).nullable().optional(),
 });
 
@@ -35,7 +39,6 @@ export const appliesToSchema = z.object({
     .min(1, "Select at least one item"),
 });
 
-const objectId = z.string().regex(/^[a-f0-9]{24}$/i, "Invalid id");
 const percentage = z
   .number()
   .min(0, "must be >= 0")
@@ -45,7 +48,9 @@ const percentage = z
 // (replace-semantics); rows whose parent entity isn't in `appliesTo.ids` are
 // ignored rather than rejected (see TASK 2 #3).
 export const planLinkSchema = z.object({
-  planId: objectId,
+  // Accept a Mongo ObjectId OR a positive-int id — the MySQL branch returns
+  // numeric-string plan ids (e.g. "97", "1166"), same format as appliesTo.ids.
+  planId: z.string().regex(objectIdOrIntRegex, "Invalid id"),
   promoterPercentage: percentage.default(0),
   customerPercentage: percentage.default(0),
 });
@@ -56,6 +61,9 @@ export const createPromocodeSchema = promocodeBase
   .extend({
     appliesTo: appliesToSchema,
     plans: z.array(planLinkSchema).optional().default([]),
+    // Backend default for the plan-%-based model: persist 0 when the UI omits a
+    // global discount (the real discount lives per-plan in customerPercentage).
+    discountValue: z.number().nonnegative("discountValue must be >= 0").default(0),
   })
   .refine(validateDiscount, discountErr);
 

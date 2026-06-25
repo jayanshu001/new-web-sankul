@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { Testimonial } from "../../models/system/Testimonial.model";
 import { isMysqlModule } from "../../config/migration";
+import { buildSearchFilter } from "../../utils/searchFilter";
 import { testimonialRepository } from "./testimonial.repository";
 import { toTestimonialDto } from "./testimonial.transformer";
 import type {
@@ -38,6 +39,36 @@ export const listTestimonials = async (): Promise<TestimonialDto[]> => {
 
   const docs = await Testimonial.find().sort({ rating: -1 }).lean();
   return docs.map((d) => fromMongoDoc(d as never));
+};
+
+/**
+ * Admin server-side search + sort + opt-in pagination. `skip`/`take` apply only
+ * when provided (absent → full filtered list). Always returns the total count.
+ */
+export const listTestimonialsPaged = async (q: {
+  search?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  skip?: number;
+  take?: number;
+}): Promise<{ items: TestimonialDto[]; total: number }> => {
+  if (isMysqlModule(MODULE)) {
+    const opts = { search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take };
+    const [rows, total] = await Promise.all([
+      testimonialRepository.findPage(opts),
+      testimonialRepository.count(opts),
+    ]);
+    return { items: rows.map(toTestimonialDto), total };
+  }
+
+  const filter = buildSearchFilter(q.search, ["name", "title", "description"]);
+  const sortField = q.sortBy === "name" ? "name" : q.sortBy === "title" ? "title" : "rating";
+  const sortNum = q.sortDir === "asc" ? 1 : -1;
+  let query = Testimonial.find(filter).sort({ [sortField]: sortNum });
+  if (q.skip != null) query = query.skip(q.skip);
+  if (q.take != null) query = query.limit(q.take);
+  const [docs, total] = await Promise.all([query.lean(), Testimonial.countDocuments(filter)]);
+  return { items: docs.map((d) => fromMongoDoc(d as never)), total };
 };
 
 export const getTestimonialById = async (

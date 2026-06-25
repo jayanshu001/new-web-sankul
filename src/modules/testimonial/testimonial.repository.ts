@@ -8,10 +8,48 @@ import {
   toPrismaTestimonialUpdate,
 } from "./testimonial.transformer";
 
+export type TestimonialListOpts = {
+  search?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  skip?: number;
+  take?: number;
+};
+
+const TESTIMONIAL_SORT_COLUMNS: Record<string, string> = {
+  rating: "rating",
+  name: "name",
+  title: "title",
+};
+
+const buildTestimonialWhere = (opts: TestimonialListOpts) => {
+  const q = opts.search?.trim();
+  if (!q) return {} as Record<string, unknown>;
+  return {
+    OR: [
+      { name: { contains: q } },
+      { title: { contains: q } },
+      { discription: { contains: q } },
+    ],
+  };
+};
+
 export const testimonialRepository = {
   /** Client + admin list. Legacy API sorts by rating desc. */
   findMany: () =>
     prisma.testimonial.findMany({ orderBy: { rating: "desc" } }),
+
+  /** Admin paginated + search list. */
+  findPage: (opts: TestimonialListOpts) =>
+    prisma.testimonial.findMany({
+      where: buildTestimonialWhere(opts),
+      orderBy: { [TESTIMONIAL_SORT_COLUMNS[opts.sortBy ?? ""] ?? "rating"]: opts.sortDir ?? "desc" },
+      ...(opts.skip != null ? { skip: opts.skip } : {}),
+      ...(opts.take != null ? { take: opts.take } : {}),
+    }),
+
+  count: (opts: TestimonialListOpts) =>
+    prisma.testimonial.count({ where: buildTestimonialWhere(opts) }),
 
   findById: (id: number) => prisma.testimonial.findUnique({ where: { id } }),
 

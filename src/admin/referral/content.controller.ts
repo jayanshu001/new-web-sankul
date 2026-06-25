@@ -8,20 +8,64 @@ import {
   createFaqSchema,
   updateFaqSchema,
 } from "./content.validation";
+import { buildRegexCondition } from "../../utils/searchFilter";
 import * as rcService from "../../modules/referral-content/referral-content.service";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
+// Shared list-query parsing for content lists. Pagination is opt-in: when
+// page/limit are present the response carries a `pagination` block; otherwise
+// the flat array is returned (back-compat for callers that read `data` directly).
+const parseListQuery = (req: Request) => {
+  const { search, sortBy, sortOrder, page, limit } = req.query as Record<string, string>;
+  const paginate = page !== undefined || limit !== undefined;
+  const pageNum = Math.max(parseInt(page ?? "1", 10) || 1, 1);
+  const limitNum = Math.max(parseInt(limit ?? "20", 10) || 20, 1);
+  const sortDir: "asc" | "desc" = sortOrder === "desc" ? "desc" : "asc";
+  return { search, sortBy, sortDir, paginate, pageNum, limitNum };
+};
+// Mongo sort field for content lists (SQL col `orderBy` ↔ Mongo `order`).
+// Default (no sortBy) is recently-added on top; explicit sortBy is honored.
+const mongoContentSort = (sortBy: string | undefined, sortDir: "asc" | "desc"): Record<string, 1 | -1> => {
+  const d: 1 | -1 = sortDir === "desc" ? -1 : 1;
+  switch (sortBy) {
+    case "order": return { order: d, _id: -1 };
+    case "createdAt": return { createdAt: d, _id: -1 };
+    case "updatedAt": return { updatedAt: d, _id: -1 };
+    default: return { createdAt: -1, _id: -1 };
+  }
+};
+
 // ─── Terms ───────────────────────────────────────────────────────────────────
 
-export const listTerms = async (_req: Request, res: Response) => {
+export const listTerms = async (req: Request, res: Response) => {
   try {
+    const { search, sortBy, sortDir, paginate, pageNum, limitNum } = parseListQuery(req);
+
     if (rcService.isReferralContentMysql()) {
-      const data = await rcService.listTerms();
+      const { data, total } = await rcService.listTerms({
+        search, sortBy, sortDir,
+        ...(paginate ? { skip: (pageNum - 1) * limitNum, take: limitNum } : {}),
+      });
+      return res.status(200).json(
+        paginate
+          ? { success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } }
+          : { success: true, data }
+      );
+    }
+
+    const filter: any = {};
+    { const c = buildRegexCondition(search); if (c) filter.text = c; }
+    const sortSpec = mongoContentSort(sortBy, sortDir);
+    if (!paginate) {
+      const data = await ReferralTerm.find(filter).sort(sortSpec);
       return res.status(200).json({ success: true, data });
     }
-    const data = await ReferralTerm.find().sort({ order: 1, createdAt: 1 });
-    return res.status(200).json({ success: true, data });
+    const [data, total] = await Promise.all([
+      ReferralTerm.find(filter).sort(sortSpec).skip((pageNum - 1) * limitNum).limit(limitNum),
+      ReferralTerm.countDocuments(filter),
+    ]);
+    return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -114,14 +158,34 @@ export const deleteTerm = async (req: Request, res: Response) => {
 
 // ─── FAQs ────────────────────────────────────────────────────────────────────
 
-export const listFaqs = async (_req: Request, res: Response) => {
+export const listFaqs = async (req: Request, res: Response) => {
   try {
+    const { search, sortBy, sortDir, paginate, pageNum, limitNum } = parseListQuery(req);
+
     if (rcService.isReferralContentMysql()) {
-      const data = await rcService.listFaqs();
+      const { data, total } = await rcService.listFaqs({
+        search, sortBy, sortDir,
+        ...(paginate ? { skip: (pageNum - 1) * limitNum, take: limitNum } : {}),
+      });
+      return res.status(200).json(
+        paginate
+          ? { success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } }
+          : { success: true, data }
+      );
+    }
+
+    const filter: any = {};
+    { const c = buildRegexCondition(search); if (c) filter.$or = [{ question: c }, { answer: c }]; }
+    const sortSpec = mongoContentSort(sortBy, sortDir);
+    if (!paginate) {
+      const data = await ReferralFaq.find(filter).sort(sortSpec);
       return res.status(200).json({ success: true, data });
     }
-    const data = await ReferralFaq.find().sort({ order: 1, createdAt: 1 });
-    return res.status(200).json({ success: true, data });
+    const [data, total] = await Promise.all([
+      ReferralFaq.find(filter).sort(sortSpec).skip((pageNum - 1) * limitNum).limit(limitNum),
+      ReferralFaq.countDocuments(filter),
+    ]);
+    return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

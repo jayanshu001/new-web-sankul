@@ -10,6 +10,29 @@ import {
   toPrismaBannerUpdate,
 } from "./banner-slider.transformer";
 
+export type BannerListOpts = {
+  key?: BannerKey;
+  search?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  skip?: number;
+  take?: number;
+};
+
+const BANNER_SORT_COLUMNS: Record<string, string> = {
+  orderBy: "orderBy",
+  createdAt: "created_at",
+  updatedAt: "updated_at",
+};
+
+const buildBannerWhere = (opts: BannerListOpts) => {
+  const where: Record<string, unknown> = {};
+  if (opts.key) where.key = BANNER_KEY_TO_MYSQL[opts.key];
+  const q = opts.search?.trim();
+  if (q) where.OR = [{ image: { contains: q } }, { key: { contains: q } }];
+  return where;
+};
+
 export const bannerSliderRepository = {
   /** Legacy API sorts by orderBy asc; optional `key` filter (client). */
   findMany: (opts?: { key?: BannerKey }) =>
@@ -17,6 +40,18 @@ export const bannerSliderRepository = {
       where: opts?.key ? { key: BANNER_KEY_TO_MYSQL[opts.key] } : undefined,
       orderBy: { orderBy: "asc" },
     }),
+
+  /** Admin paginated + search list. */
+  findPage: (opts: BannerListOpts) =>
+    prisma.bannerSlider.findMany({
+      where: buildBannerWhere(opts),
+      orderBy: { [BANNER_SORT_COLUMNS[opts.sortBy ?? ""] ?? "orderBy"]: opts.sortDir ?? "asc" },
+      ...(opts.skip != null ? { skip: opts.skip } : {}),
+      ...(opts.take != null ? { take: opts.take } : {}),
+    }),
+
+  count: (opts: BannerListOpts) =>
+    prisma.bannerSlider.count({ where: buildBannerWhere(opts) }),
 
   findById: (id: number) => prisma.bannerSlider.findUnique({ where: { id } }),
 

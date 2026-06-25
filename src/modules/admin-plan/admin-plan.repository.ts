@@ -11,12 +11,12 @@ import type { Prisma } from "@prisma/client";
 const OWNED = (v: number | null | undefined) => v != null && v > 0;
 
 export const adminPlanRepository = {
-  list: (opts: { entityType?: string; courseId?: number; packageId?: number; ebookId?: number; status?: boolean; isDefault?: boolean; withMaterial?: boolean; search?: string; skip: number; take: number }) => {
+  list: (opts: { entityType?: string; courseId?: number; packageId?: number; ebookId?: number; status?: boolean; isDefault?: boolean; withMaterial?: boolean; search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip: number; take: number }) => {
     const where = buildWhere(opts);
     return prisma.packageCourseEbookPrice.findMany({
       where,
       include: { Course: { select: { id: true, name: true } }, Package: { select: { id: true, name: true } }, EBook: { select: { id: true, name: true } } },
-      orderBy: [{ isDefault: "desc" }, { duration: "asc" }, { created_at: "desc" }],
+      orderBy: buildOrderBy(opts),
       skip: opts.skip,
       take: opts.take,
     });
@@ -56,6 +56,24 @@ export const adminPlanRepository = {
       data: { isDefault: false },
     }),
 };
+
+/**
+ * Sort: query-driven when `sortBy` is one of the whitelisted columns (newest-id
+ * tiebreaker for determinism); otherwise the legacy default
+ * (default-plan first, then duration asc, then newest).
+ */
+function buildOrderBy(opts: { sortBy?: string; sortDir?: "asc" | "desc" }): Prisma.PackageCourseEbookPriceOrderByWithRelationInput[] {
+  const dir: "asc" | "desc" = opts.sortDir === "asc" ? "asc" : "desc";
+  switch (opts.sortBy) {
+    case "name": return [{ name: dir }, { id: "desc" }];
+    case "duration": return [{ duration: dir }, { id: "desc" }];
+    case "price": return [{ price: dir }, { id: "desc" }];
+    case "createdAt": return [{ created_at: dir }, { id: "desc" }];
+    case "updatedAt": return [{ updated_at: dir }, { id: "desc" }];
+    // Default: recently-added on top (newest id first).
+    default: return [{ created_at: "desc" }, { id: "desc" }];
+  }
+}
 
 function buildWhere(opts: { entityType?: string; courseId?: number; packageId?: number; ebookId?: number; status?: boolean; isDefault?: boolean; withMaterial?: boolean; search?: string }): Prisma.PackageCourseEbookPriceWhereInput {
   const where: Prisma.PackageCourseEbookPriceWhereInput = {};

@@ -94,8 +94,9 @@ const toCategoryRefs = (
 
 /**
  * Validates that, when goalLabelId is supplied, goalId is also supplied AND
- * the label _id exists inside that goal's labels[]. Throws HttpError on
- * violation; resolves silently on success or when label not supplied.
+ * the label NAME exists inside that goal's labels[]. goalLabelId is the label
+ * name string (labels are stored as { name } only), not an id. Throws HttpError
+ * on violation; resolves silently on success or when label not supplied.
  */
 const assertGoalLabelPair = async (
   goalId: string | null | undefined,
@@ -104,11 +105,9 @@ const assertGoalLabelPair = async (
   if (!goalLabelId) return;
   if (!goalId) throw new HttpError(400, "goalId is required when goalLabelId is provided.");
   if (!mongoose.Types.ObjectId.isValid(goalId)) throw new HttpError(400, "Invalid goalId.");
-  if (!mongoose.Types.ObjectId.isValid(goalLabelId))
-    throw new HttpError(400, "Invalid goalLabelId.");
-  const goal = await Goal.findById(goalId).select("labels._id").lean();
+  const goal = await Goal.findById(goalId).select("labels.name").lean();
   if (!goal) throw new HttpError(404, "Goal not found for the supplied goalId.");
-  const owns = (goal.labels ?? []).some((l: any) => l._id?.toString() === goalLabelId);
+  const owns = (goal.labels ?? []).some((l: any) => l.name === goalLabelId);
   if (!owns) throw new HttpError(400, "goalLabelId does not belong to the supplied goalId.");
 };
 
@@ -294,9 +293,10 @@ export const getPackageById = async (id: string) => {
 
 export const createPackage = async (validated: any) => {
   if (isAdminPackageMysql()) {
-    // Mongo-only fields (goal/packageCategory/examCountdown/isPaid/smart/planner/
+    // Mongo-only fields (packageCategory/examCountdown/isPaid/smart/planner/
     // subtitle/notificationTopic) are dropped on SQL (no columns). Embedded arrays
-    // → pivot tables. The goalLabel/examCountdown validations are Mongo-only too.
+    // → pivot tables. goalId/goalLabelId DO persist on SQL (ws_package columns) and
+    // the goal-label validation runs inside adminPackage; examCountdown stays Mongo-only.
     return adminPackage.createPackage(validated);
   }
   await assertGoalLabelPair(validated.goalId, validated.goalLabelId);

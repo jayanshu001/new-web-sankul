@@ -5,22 +5,38 @@ import { prisma } from "../../config/prisma";
  * Neither `ws_offline_center` nor `ws_offline_batch` has a `status` column, so
  * there is NO status filter — all rows are active (the DTO synthesizes true).
  */
+// Shared WHERE builders for the admin center/batch list + count.
+const centerListWhere = (opts?: { cityId?: number; search?: string }) => ({
+  ...(opts?.cityId != null ? { cityId: opts.cityId } : {}),
+  ...(opts?.search ? { name: { contains: opts.search } } : {}),
+});
+
+const batchListWhere = (opts?: { centerId?: number; search?: string; upcomingAfter?: Date }) => ({
+  ...(opts?.centerId != null ? { centerId: opts.centerId } : {}),
+  ...(opts?.search ? { name: { contains: opts.search } } : {}),
+  ...(opts?.upcomingAfter ? { startAt: { gt: opts.upcomingAfter } } : {}),
+});
+
 export const offlineBatchRepository = {
   // ── centers ────────────────────────────────────────────────────────────────
   /** Single center by id, with its city. */
   findCenterById: (id: number) =>
     prisma.offlineCenter.findUnique({ where: { id }, include: { city: true } }),
 
-  /** Centers, optional city filter + name search, with city. Newest first. */
-  listCenters: (opts?: { cityId?: number; search?: string }) =>
+  /** Centers, optional city filter + name search, with city. Newest first.
+   *  Paginated when skip/take are provided (admin list). */
+  listCenters: (opts?: { cityId?: number; search?: string; skip?: number; take?: number }) =>
     prisma.offlineCenter.findMany({
-      where: {
-        ...(opts?.cityId != null ? { cityId: opts.cityId } : {}),
-        ...(opts?.search ? { name: { contains: opts.search } } : {}),
-      },
+      where: centerListWhere(opts),
       include: { city: true },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: opts?.skip,
+      take: opts?.take,
     }),
+
+  /** Total centers matching the same city/search filters (pagination count). */
+  countCentersList: (opts?: { cityId?: number; search?: string }) =>
+    prisma.offlineCenter.count({ where: centerListWhere(opts) }),
 
   /** Centers for a set of cities (dashboard nesting). */
   listCentersByCities: (cityIds: number[]) =>
@@ -51,6 +67,21 @@ export const offlineBatchRepository = {
       include: { center: { include: { city: true } } },
       orderBy: [{ startAt: "asc" }, { id: "asc" }],
     }),
+
+  /** Admin batches: optional center/name/upcoming filters, with center → city,
+   *  newest created first, paginated when skip/take are provided. */
+  listBatchesAdmin: (opts?: { centerId?: number; search?: string; upcomingAfter?: Date; skip?: number; take?: number }) =>
+    prisma.offlineBatch.findMany({
+      where: batchListWhere(opts),
+      include: { center: { include: { city: true } } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      skip: opts?.skip,
+      take: opts?.take,
+    }),
+
+  /** Total batches matching the same admin filters (pagination count). */
+  countBatchesList: (opts?: { centerId?: number; search?: string; upcomingAfter?: Date }) =>
+    prisma.offlineBatch.count({ where: batchListWhere(opts) }),
 
   /** Batches for a set of centers (dashboard / center-detail nesting). */
   listBatchesByCenters: (centerIds: number[]) =>

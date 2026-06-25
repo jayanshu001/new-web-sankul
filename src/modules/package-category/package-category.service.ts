@@ -38,7 +38,10 @@ export const listAll = async (q?: { search?: string; sortBy?: string; sortDir?: 
   const where: any = {};
   if (q?.search) where.title = { contains: q.search.trim() };
   const col = q?.sortBy === "title" ? "title" : q?.sortBy === "createdAt" ? "createdAt" : "order";
-  const orderBy: any[] = [{ [col]: q?.sortDir ?? "asc" }, { id: "asc" }];
+  // Newest-first tiebreaker so recently-added categories surface on top among
+  // equal sort-key rows (the common case: most share order=0). `id desc` mirrors
+  // the admin test-series / courses lists' "recently added on top" behavior.
+  const orderBy: any[] = [{ [col]: q?.sortDir ?? "asc" }, { id: "desc" }];
   const [rows, total] = await Promise.all([
     prisma.packageCategory.findMany({
       where,

@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import { FAQ } from "../../models/system/FAQ.model";
 import { FaqType } from "../../models/system/FaqType.model";
 import { isMysqlModule } from "../../config/migration";
+import { buildSearchFilter } from "../../utils/searchFilter";
 import { faqRepository } from "./faq.repository";
 import { toFaqDto, toFaqTypeDto } from "./faq.transformer";
 import type {
@@ -59,6 +60,50 @@ export const listFaqs = async (opts?: {
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
   }));
+};
+
+/**
+ * Admin server-side search + sort + opt-in pagination. `skip`/`take` apply only
+ * when provided (absent → full filtered list). Always returns the total count.
+ */
+export const listFaqsPaged = async (q: {
+  typeId?: string;
+  search?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  skip?: number;
+  take?: number;
+}): Promise<{ items: FaqDto[]; total: number }> => {
+  if (isMysqlModule(MODULE)) {
+    const type = resolveCategoryFilter(q.typeId);
+    const opts = { type, search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take };
+    const [rows, total] = await Promise.all([
+      faqRepository.findPage(opts),
+      faqRepository.count(opts),
+    ]);
+    return { items: rows.map(toFaqDto), total };
+  }
+
+  const filter: Record<string, unknown> = {};
+  if (q.typeId && mongoose.Types.ObjectId.isValid(q.typeId)) filter.typeId = q.typeId;
+  Object.assign(filter, buildSearchFilter(q.search, ["question", "answer"]));
+  const sortField = q.sortBy === "question" ? "question" : q.sortBy === "updatedAt" ? "updatedAt" : "createdAt";
+  const sortNum = q.sortDir === "desc" ? -1 : 1;
+  let query = FAQ.find(filter).populate("typeId", "_id title").sort({ [sortField]: sortNum });
+  if (q.skip != null) query = query.skip(q.skip);
+  if (q.take != null) query = query.limit(q.take);
+  const [docs, total] = await Promise.all([query.lean(), FAQ.countDocuments(filter)]);
+  return {
+    items: docs.map((d) => ({
+      _id: String(d._id),
+      typeId: d.typeId as unknown as FaqTypeDto | string,
+      question: d.question,
+      answer: d.answer,
+      createdAt: d.createdAt,
+      updatedAt: d.updatedAt,
+    })),
+    total,
+  };
 };
 
 export const getFaqById = async (id: string): Promise<FaqDto | null> => {

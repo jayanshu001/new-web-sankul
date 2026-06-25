@@ -44,6 +44,25 @@ export const listCenters = async (opts?: {
   return rows.map((r) => ({ ...toOfflineCenterDto(r), city: toOfflineCityRef(r.city) }));
 };
 
+/** Admin centers (+ city ref): optional cityId + name search, newest first,
+ *  paginated when skip/take are provided. Returns rows + total for the UI. */
+export const listCentersAdmin = async (opts?: {
+  cityId?: number;
+  search?: string;
+  skip?: number;
+  take?: number;
+}): Promise<{ data: OfflineCenterWithCityDto[]; total: number }> => {
+  const filter = { cityId: opts?.cityId, search: opts?.search?.trim() || undefined };
+  const [rows, total] = await Promise.all([
+    repo.listCenters({ ...filter, skip: opts?.skip, take: opts?.take }),
+    repo.countCentersList(filter),
+  ]);
+  return {
+    data: rows.map((r) => ({ ...toOfflineCenterDto(r), city: toOfflineCityRef(r.city) })),
+    total,
+  };
+};
+
 /** Single center (+ city) with its batches nested, or null. */
 export const getCenterDetail = async (
   id: number
@@ -89,6 +108,39 @@ export const listBatches = async (opts?: {
       ? { ...toOfflineCenterDto(r.center), city: toOfflineCityRef(r.center.city) }
       : null,
   }));
+};
+
+/** Admin batches (+ center→city): optional center/name/upcoming filters, newest
+ *  created first, paginated when skip/take are provided. Returns rows + total. */
+export const listBatchesAdmin = async (opts?: {
+  centerId?: number;
+  search?: string;
+  upcoming?: boolean;
+  now?: Date;
+  skip?: number;
+  take?: number;
+}): Promise<{
+  data: Array<OfflineBatchDto & { center: OfflineCenterWithCityDto | null }>;
+  total: number;
+}> => {
+  const filter = {
+    centerId: opts?.centerId,
+    search: opts?.search?.trim() || undefined,
+    upcomingAfter: opts?.upcoming ? opts?.now ?? new Date() : undefined,
+  };
+  const [rows, total] = await Promise.all([
+    repo.listBatchesAdmin({ ...filter, skip: opts?.skip, take: opts?.take }),
+    repo.countBatchesList(filter),
+  ]);
+  return {
+    data: rows.map((r) => ({
+      ...toOfflineBatchDto(r),
+      center: r.center
+        ? { ...toOfflineCenterDto(r.center), city: toOfflineCityRef(r.center.city) }
+        : null,
+    })),
+    total,
+  };
 };
 
 /** Single batch (+ center→city), or null. */

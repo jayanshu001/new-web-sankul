@@ -1,6 +1,6 @@
 import { isMysqlModule } from "../../config/migration";
 import { referralRepository as repo } from "./referral.repository";
-import type { RefferalProgram, RefferalTransaction } from "@prisma/client";
+import type { Prisma, RefferalProgram, RefferalTransaction } from "@prisma/client";
 
 export const REFERRAL_MODULE = "referral";
 export const isReferralMysql = (): boolean => isMysqlModule(REFERRAL_MODULE);
@@ -244,7 +244,25 @@ const num = (v: unknown): number => {
 };
 
 // ─── Programs ────────────────────────────────────────────────────────────────
-export const adminListPrograms = async () => (await repo.listPrograms()).map(toProgramDto);
+export const adminListPrograms = async (
+  opts: { search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number } = {}
+): Promise<{ data: any[]; total: number }> => {
+  const where: Prisma.RefferalProgramWhereInput = {};
+  if (opts.search?.trim()) {
+    const s = opts.search.trim();
+    where.OR = [{ name: { contains: s } }, { title: { contains: s } }];
+  }
+  const dir: "asc" | "desc" = opts.sortDir === "desc" ? "desc" : "asc";
+  const orderBy: Prisma.RefferalProgramOrderByWithRelationInput[] =
+    opts.sortBy === "name" ? [{ name: dir }, { id: "desc" }] :
+    opts.sortBy === "title" ? [{ title: dir }, { id: "desc" }] :
+    [{ id: "desc" }];
+  const [rows, total] = await Promise.all([
+    repo.listPrograms({ where, orderBy, skip: opts.skip, take: opts.take }),
+    repo.countPrograms(where),
+  ]);
+  return { data: rows.map(toProgramDto), total };
+};
 
 export const adminGetProgram = async (id: number) => {
   const p = await repo.findProgram(id);

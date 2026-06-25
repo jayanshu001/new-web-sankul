@@ -4,6 +4,94 @@
 
 ---
 
+## 2026-06-25 — admin CMS lists: server-side search + sort + opt-in pagination
+
+**Request:** `/admin/cms/popups`, `/admin/cms/current-affairs`, `/admin/cms/banners`, `/admin/cms/live-banners`, `/admin/cms/testimonials`, `/admin/cms/faqs` should support server-side search + pagination (FE calls them with `?limit=100`).
+
+**Opt-in pagination (matches the address/offline + referral convention):** `page`/`limit` present → `pagination { total, page, limit, totalPages }` block + `skip`/`take`; both absent → full filtered list, flat `data` only (back-compat — existing full-list consumers unaffected). `search`/`sortBy`/`sortOrder` always apply. Params parsed via shared `utils/listQuery.parseListQuery` (limit clamped [1,100]) + a local `parseSort`; Mongo search via `utils/searchFilter.buildSearchFilter` (escaped `$or` regex), SQL via Prisma `OR { contains }`. Default ordering on every endpoint is **unchanged** from before (no `sortBy` → legacy default).
+
+Per endpoint (both SQL + Mongo branches; new repo `findPage` + `count`, new service `list*Paged({search,sortBy,sortDir,skip?,take?}) → {items,total}`, admin controller only — client CMS controllers still call the original flat `list*` services):
+- **FAQs** (`faq`): search `question`+`answer`; sort `createdAt|updatedAt|question` (default `created_at asc`).
+- **Popups** (`popup`): search `title`+`description`+`discount`+`promocode`; sort `createdAt|updatedAt|title|status` (default `created_at desc`).
+- **Banners** (`banner-slider`): search `image`+`key`; sort `orderBy|createdAt|updatedAt` (default `orderBy asc`); keeps optional `key` filter.
+- **Testimonials** (`testimonial`): search `name`+`title`+`description`/`discription`; sort `rating|name|title` (default `rating desc`). Table has no timestamps.
+- **Live banners** (`cms-extra`): search `image`; sort `orderBy|createdAt` (default `orderBy asc`). New `cms-extra.listLiveBannersPaged`; admin Mongo branch rewritten (was unconditional `LiveBannerSlider.find().sort({orderBy:1})`).
+- **Current affairs** (`cms-extra`): search `title`+`youtubeLink`+`image`; sort `createdAt|title|status` (default `createdAt desc`). New `cms-extra.listCurrentAffairsPaged`; admin Mongo branch no longer uses `genericList(CurrentAffair)`.
+
+All MySQL paths keep their Mongo fallback. No schema/DDL changes (query-only). `yarn typecheck` ✅.
+
+## 2026-06-25 — admin address/offline lists: server-side search + pagination + recently-added on top
+
+**Request:** `/admin/address/states`, `/admin/address/cities`, `/admin/offline/centers`, `/admin/offline/batches` should support server-side search + pagination, with newly-added rows on top. (`/admin/notifications` already had all three — left unchanged.)
+
+**Pagination is opt-in on all four:** the `pagination` block is always returned, but `skip`/`take` only apply when `page` or `limit` is present in the query. Absent → full list (preserves the dropdown/full-list contract; existing consumers reading `data` are unaffected).
+
+- **States** (`/admin/address/states`): added `search` (name + stateCode) + pagination. `ws_customer_state` has **no `created_at` column**, so "recently added" = `orderBy id desc` (was `name asc`). `customer-master.service.listStates` now takes `{active,search,skip,take}` and returns `{data,total}`; `count` added. Mongo branch: `$or` regex search, `sort {_id:-1}`, opt-in skip/limit.
+- **Cities** (`/admin/address/cities`): added `search` (name) + pagination; default sort flipped `[{order asc},{name asc}]` → `[{created_at desc},{id desc}]`. `offline-city.repository` got a shared `adminCityWhere` + `countAll`; `listAll` takes `search/skip/take`. `listCitiesAdmin(opts)` returns `{data,total}`. Mongo branch uses `buildSearchFilter(["name"])`, `sort {createdAt:-1,_id:-1}`. (Client `listActive` city ordering unchanged.)
+- **Centers** (`/admin/offline/centers`): controller now reads `search` (was dropped) + pagination. `offline-batch.repository.listCenters` got `skip/take` + shared `centerListWhere` + `countCentersList`. New **admin-only** `offline-batch.service.listCentersAdmin(opts) → {data,total}` (client `listCenters` left returning an array). SQL order already `[{createdAt desc},{id desc}]`. Mongo: `buildSearchFilter`, opt-in skip/limit.
+- **Batches** (`/admin/offline/batches`): added `search` (name) + pagination; default sort flipped `[{startAt asc},{id asc}]` → `[{createdAt desc},{id desc}]` for the admin path only. New repo `listBatchesAdmin` + `countBatchesList` (shared `batchListWhere`, keeps `upcoming` filter); new **admin-only** `service.listBatchesAdmin(opts) → {data,total}`. Client browse `listBatches` (soonest-first `startAt asc`) untouched. Mongo: `buildSearchFilter`, `sort {createdAt:-1,_id:-1}`.
+
+Controllers switched their SQL imports `listCenters→listCentersAdmin`, `listBatches→listBatchesAdmin`. All MySQL paths keep Mongo fallback. No schema/DDL changes. `yarn typecheck` ✅.
+
+## 2026-06-25 — admin offline batch-enquiries: route alias (404 fix)
+
+**Bug:** `GET /admin/offline/batch-enquiries` returned 404 — the handler is registered at `/admin/offline/enquiries`. Added `router.get("/batch-enquiries", listEnquiries)` as an alias (same handler; already supports `batchId`/`search`/`fromDate`/`toDate` + pagination). Original path retained. `yarn typecheck` ✅.
+
+## 2026-06-25 — promocode create: accept numeric-string ids + optional discountValue
+
+**Bug (a):** `POST/PUT /admin/promocodes` rejected `plans[].planId` with "Invalid id". `planLinkSchema.planId` used a strict 24-hex ObjectId regex, but the MySQL branch returns numeric-string plan ids (e.g. "97", "1166"). `appliesTo.ids[]` already used the widened `objectIdOrIntRegex`.
+
+**Bug (b):** create rejected with `discountValue: "Required"`. This promocode model is per-plan-percentage based (effective discount = each plan's `customerPercentage`); the UI has no global discount field, but the create Zod schema marked `discountValue` required.
+
+**Fix (`admin/promocode/promocode.validation.ts`, validation-only):**
+- `planLinkSchema.planId` → `z.string().regex(objectIdOrIntRegex, "Invalid id")` (removed the dedicated strict `objectId` const; nothing else used it). Now matches the appliesTo.ids id format.
+- `promocodeBase.discountValue` → `.optional()`; `createPromocodeSchema` overrides it with `.default(0)` so create persists a neutral 0 when the UI omits it (backend default, not a frontend-sent fake). Update already treated it as optional via `.partial()` and the service guards `if (discountValue !== undefined)`. `validateDiscount` (≤100 for percentage) still applies. No controller/service/DB change needed; both branches keep the same write path. `yarn typecheck` ✅.
+
+## 2026-06-25 — referral admin lists: server-side search / pagination / sort
+
+**Request:** `/admin/plans`, `/admin/promoters`, `/admin/promocodes`, and the whole `/admin/referral/*` surface should support server-side search + pagination.
+
+**Audit:** promoters (search `fullName/email/phone`), promocodes (search `promocode`), referral transactions, withdrawals report (search), and referrers (search) ALREADY had search+pagination on both branches — left unchanged. Real gaps fixed:
+
+- **Plans** (`/admin/plans`): had search+pagination but ignored `sortBy`/`sortOrder`. Added a whitelisted sort (`name|duration|price|createdAt|updatedAt`, `id`/`_id` desc tiebreaker) on BOTH branches — `admin-plan.repository.buildOrderBy`, `admin-plan.service.listPlans` (passes `sortBy`/`sortDir`), and the Mongo branch in `plan.controller`. No sortBy → legacy default (`isDefault desc, duration asc, created desc`).
+- **Referral Terms** (`/admin/referral/terms`): was a flat array. Added search (`text`) + sort (`order|createdAt|updatedAt`) + **opt-in pagination** (page/limit present → `pagination` block; absent → flat array, back-compat). `referral-content.service.listTerms` now takes opts and returns `{ data, total }`; `content.controller` handles both branches (Mongo `order`, SQL `orderBy`).
+- **Referral FAQs** (`/admin/referral/faqs`): same as terms; search on `question` + `answer` (Mongo `$or`, SQL `OR`).
+- **Referral Programs** (`/admin/referral/programs`): was a flat array. Added search (`name`+`title`) + sort (`name|title`, Mongo also `createdAt`) + opt-in pagination. `modules/referral` `listPrograms(opts)` + new `countPrograms`; `adminListPrograms(opts)` returns `{ data, total }`; admin `referral.service.listPrograms(query)` returns `{ data, pagination? }`; controller spreads pagination only when present.
+
+All MySQL-gated paths keep their Mongo fallback; `yarn typecheck` ✅. (Note: admin promoters/promocodes already paginate+search; query-driven sort not added there — can be added on request.)
+
+**Default ordering = recently-added on top:** promoters / promocodes / transactions / programs SQL defaults were already `createdAt`/`id desc`. Flipped the two that defaulted to a manual order: **Plans** default `[{isDefault desc},{duration asc},{created desc}]` → `[{created_at desc},{id desc}]` (repo `buildOrderBy` + Mongo controller); **Terms/FAQs** default `orderBy asc` → `createdAt desc, id desc` (`rcOrderBy` + `mongoContentSort`). Explicit `sortBy=order` still available. Referrers keeps its stats default (`earned`) by design. `yarn typecheck` ✅.
+
+## 2026-06-25 — admin master package-categories: recently-added on top
+
+**Request:** `GET /admin/master/package-categories` (sortBy=order) should surface newly-added categories on top by default.
+
+**Fix:** `package-category.service.listAll` orderBy tiebreaker flipped `{ id: "asc" }` → `{ id: "desc" }`. Primary sort key (order|title|createdAt, dir from query) is unchanged; within equal sort-key rows (most categories share `order=0`) newest id now wins, so recently-added rows rise to the top. Matches the test-series/courses "recently added on top" pattern. MySQL-only; Mongo branch (`PackageCategory.find().sort({ order: 1 })`) unchanged. `yarn typecheck` ✅.
+
+## 2026-06-25 — admin packages (MySQL): populate + persist goalId / goalLabelId
+
+**Bug:** `GET/POST/PATCH /admin/packages` on the MySQL branch always returned `goalId: null, goalLabelId: null` and silently dropped them on write. The `admin-package` transformer hardcoded both to null (stale comment claimed `ws_package` had no such columns) — but `ws_package.goal_id` and `ws_package.goal_label_id` (both `Int?`) exist and `catalog-package` already reads them.
+
+**Fix (`modules/admin-package`):**
+- **Repository:** added `goalById` / `goalsByIds` (`prisma.goal.findUnique/findMany` selecting `{ id, labels }`) for label name↔id resolution. Goal labels live as JSON `[{ id, name }]` on `ws_goal.labels` (see `modules/goal` `withLabelIds`); `ws_package.goal_label_id` stores that numeric label id.
+- **Read:** `toPackageDto` now emits `goalId = String(goal_id)` (numeric id, unpopulated — mirrors Mongo) and `goalLabelId = <label NAME>` (resolved from the goal's JSON labels). `listPackages` batch-loads the referenced goals (one `goalsByIds`); `getPackageById` resolves per-row.
+- **Write:** `PackageWriteInput` gains `goalId`/`goalLabelId` (the latter = label **name**). `createPackage`/`updatePackage` resolve name→id via `resolveGoalFields`, which validates the pair exactly like the Mongo `assertGoalLabelPair` (same reject string `"goalLabelId does not belong to the supplied goalId."`, plus `"goalId is required when goalLabelId is provided."`). Update merges existing goalId/label for partial payloads. Persists `goal_id` / `goal_label_id` ints.
+
+API shape now identical across both backends: `goalLabelId` is the label name string on read, the contract pre-fill (`toIdValue`) matches. `yarn typecheck` ✅. (Note: the SQL `listPackages` `goalId` query-filter is still ignored — column exists now, can be added if filtering is needed.)
+
+## 2026-06-25 — package goalLabelId is the label NAME, not an id (Mongo)
+
+**Request:** Frontend contract — `goalLabelId` references a goal label by its **name** string (labels are stored as `{ name }` only, no usable id), and edit-mode pre-fill expects it returned as that same name string (e.g. `"UPSC"`), never a populated `{ _id, name }` object.
+
+**Fix:**
+- `models/course/Package.model.ts`: `goalLabelId` field `Schema.Types.ObjectId` → `String` (interface `Types.ObjectId | null` → `string | null`). Index `{ goalLabelId: 1, active: 1 }` unchanged (now a string index).
+- `admin/package/package.service.ts` `assertGoalLabelPair`: dropped the `ObjectId.isValid(goalLabelId)` check; lookup now `select("labels.name")` and matches `goal.labels.some(l => l.name === goalLabelId)`. Same reject string preserved: `"goalLabelId does not belong to the supplied goalId."`. Runs on both create and update (update merges existing goalId/goalLabelId for partial payloads).
+- Reads: admin list/detail never populated `goalLabelId`, so they return the stored name string verbatim — pre-fill contract satisfied with no read-path change.
+
+Mongo branch only (admin-package SQL branch already drops goalLabelId → null). `yarn typecheck` ✅.
+
+⚠ **Follow-up (out of scope, flagged):** `client/package/package.controller.ts listPackagesByGoal` (Mongo branch) still resolves labels by `labels._id` and filters `Package.find({ goalLabelId: <ObjectId> })`. With name-based `goalLabelId` this won't match name-keyed packages — that endpoint's own label contract needs revisiting separately.
+
 ## 2026-06-24 — admin test-series list: recently-added on top
 
 **Request:** newest test series should appear first in `GET /admin/test-series` (pagination/search already worked). Sort was `[{ orderBy: asc }, { createdAt: desc }]` — curated `orderBy` first, so newest wasn't on top.

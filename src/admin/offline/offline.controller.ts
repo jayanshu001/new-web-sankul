@@ -21,9 +21,9 @@ import { buildSearchFilter } from "../../utils/searchFilter";
 import { z } from "zod";
 import {
   isOfflineBatchMysql, parseOfflineId,
-  listCenters as sqlListCenters, getCenterDetail as sqlGetCenter,
+  listCentersAdmin as sqlListCenters, getCenterDetail as sqlGetCenter,
   createCenter as sqlCreateCenter, updateCenter as sqlUpdateCenter, deleteCenter as sqlDeleteCenter,
-  listBatches as sqlListBatches, getBatchDetail as sqlGetBatch,
+  listBatchesAdmin as sqlListBatches, getBatchDetail as sqlGetBatch,
   createBatch as sqlCreateBatch, updateBatch as sqlUpdateBatch, deleteBatch as sqlDeleteBatch,
   listBanners as sqlListBanners, createBanner as sqlCreateBanner, updateBanner as sqlUpdateBanner,
   deleteBanner as sqlDeleteBanner, reorderBanners as sqlReorderBanners,
@@ -172,20 +172,41 @@ export const reorderBanners = async (req: Request, res: Response) => {
 
 export const listCities = async (req: Request, res: Response) => {
   try {
-    const { status, stateId } = req.query as Record<string, string>;
+    // Pagination opt-in (page/limit); `search` matches city name; newest first.
+    const { status, stateId, search, page, limit } = req.query as Record<string, string>;
+    const paginate = page !== undefined || limit !== undefined;
+    const pageNum = Math.max(parseInt(page ?? "1", 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit ?? "20", 10) || 20, 1);
+    const meta = (total: number) => ({
+      total,
+      page: paginate ? pageNum : 1,
+      limit: paginate ? limitNum : total,
+      totalPages: paginate ? Math.ceil(total / limitNum) : 1,
+    });
+
     if (isOfflineCityMysql()) {
       const st = status === "true" ? true : status === "false" ? false : undefined;
       const stateNum = stateId && Number.isInteger(Number(stateId)) && Number(stateId) > 0 ? Number(stateId) : undefined;
-      return res.status(200).json({ success: true, data: await sqlListCities(st, stateNum) });
+      const { data, total } = await sqlListCities({
+        status: st,
+        stateId: stateNum,
+        search: search?.trim() || undefined,
+        skip: paginate ? (pageNum - 1) * limitNum : undefined,
+        take: paginate ? limitNum : undefined,
+      });
+      return res.status(200).json({ success: true, data, pagination: meta(total) });
     }
+
     const filter: any = {};
     if (status === "true" || status === "false") filter.status = status === "true";
     if (stateId && isObjectId(stateId)) filter.stateId = stateId;
-    const data = await OfflineCity.find(filter)
+    Object.assign(filter, buildSearchFilter(search, ["name"]));
+    const query = OfflineCity.find(filter)
       .populate({ path: "stateId", model: CustomerState, select: "_id name stateCode" })
-      .sort({ order: 1 })
-      .lean();
-    return res.status(200).json({ success: true, data });
+      .sort({ createdAt: -1, _id: -1 });
+    if (paginate) query.skip((pageNum - 1) * limitNum).limit(limitNum);
+    const [data, total] = await Promise.all([query.lean(), OfflineCity.countDocuments(filter)]);
+    return res.status(200).json({ success: true, data, pagination: meta(total) });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }
@@ -284,20 +305,40 @@ export const deleteCity = async (req: Request, res: Response) => {
 
 export const listCenters = async (req: Request, res: Response) => {
   try {
-    const { cityId, status } = req.query as Record<string, string>;
+    // Pagination opt-in (page/limit); `search` matches center name; newest first.
+    const { cityId, status, search, page, limit } = req.query as Record<string, string>;
+    const paginate = page !== undefined || limit !== undefined;
+    const pageNum = Math.max(parseInt(page ?? "1", 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit ?? "20", 10) || 20, 1);
+    const meta = (total: number) => ({
+      total,
+      page: paginate ? pageNum : 1,
+      limit: paginate ? limitNum : total,
+      totalPages: paginate ? Math.ceil(total / limitNum) : 1,
+    });
+
     if (isOfflineBatchMysql()) {
       const cid = cityId ? parseOfflineId(cityId) ?? undefined : undefined;
       // status filter is a no-op on SQL (no status column — all rows active)
-      return res.status(200).json({ success: true, data: await sqlListCenters({ cityId: cid }) });
+      const { data, total } = await sqlListCenters({
+        cityId: cid,
+        search: search?.trim() || undefined,
+        skip: paginate ? (pageNum - 1) * limitNum : undefined,
+        take: paginate ? limitNum : undefined,
+      });
+      return res.status(200).json({ success: true, data, pagination: meta(total) });
     }
+
     const filter: any = {};
     if (cityId && isObjectId(cityId)) filter.cityId = cityId;
     if (status === "true" || status === "false") filter.status = status === "true";
-    const data = await OfflineCenter.find(filter)
+    Object.assign(filter, buildSearchFilter(search, ["name"]));
+    const query = OfflineCenter.find(filter)
       .populate({ path: "cityId", model: OfflineCity, select: "name" })
-      .sort({ createdAt: -1 })
-      .lean();
-    return res.status(200).json({ success: true, data });
+      .sort({ createdAt: -1, _id: -1 });
+    if (paginate) query.skip((pageNum - 1) * limitNum).limit(limitNum);
+    const [data, total] = await Promise.all([query.lean(), OfflineCenter.countDocuments(filter)]);
+    return res.status(200).json({ success: true, data, pagination: meta(total) });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }
@@ -416,28 +457,46 @@ export const deleteCenter = async (req: Request, res: Response) => {
 
 export const listBatches = async (req: Request, res: Response) => {
   try {
-    const { centerId, status, upcoming } = req.query as Record<string, string>;
+    // Pagination opt-in (page/limit); `search` matches batch name; newest first.
+    const { centerId, status, upcoming, search, page, limit } = req.query as Record<string, string>;
+    const paginate = page !== undefined || limit !== undefined;
+    const pageNum = Math.max(parseInt(page ?? "1", 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit ?? "20", 10) || 20, 1);
+    const meta = (total: number) => ({
+      total,
+      page: paginate ? pageNum : 1,
+      limit: paginate ? limitNum : total,
+      totalPages: paginate ? Math.ceil(total / limitNum) : 1,
+    });
+
     if (isOfflineBatchMysql()) {
       const cid = centerId ? parseOfflineId(centerId) ?? undefined : undefined;
-      return res.status(200).json({
-        success: true,
-        data: await sqlListBatches({ centerId: cid, upcoming: upcoming === "true" }),
+      const { data, total } = await sqlListBatches({
+        centerId: cid,
+        upcoming: upcoming === "true",
+        search: search?.trim() || undefined,
+        skip: paginate ? (pageNum - 1) * limitNum : undefined,
+        take: paginate ? limitNum : undefined,
       });
+      return res.status(200).json({ success: true, data, pagination: meta(total) });
     }
+
     const filter: any = {};
     if (centerId && isObjectId(centerId)) filter.centerId = centerId;
     if (status === "true" || status === "false") filter.status = status === "true";
     if (upcoming === "true") filter.startAt = { $gt: new Date() };
+    Object.assign(filter, buildSearchFilter(search, ["name"]));
 
-    const data = await OfflineBatch.find(filter)
+    const query = OfflineBatch.find(filter)
       .populate({
         path: "centerId",
         model: OfflineCenter,
         populate: { path: "cityId", model: OfflineCity, select: "name" },
       })
-      .sort({ startAt: 1 })
-      .lean();
-    return res.status(200).json({ success: true, data });
+      .sort({ createdAt: -1, _id: -1 });
+    if (paginate) query.skip((pageNum - 1) * limitNum).limit(limitNum);
+    const [data, total] = await Promise.all([query.lean(), OfflineBatch.countDocuments(filter)]);
+    return res.status(200).json({ success: true, data, pagination: meta(total) });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }

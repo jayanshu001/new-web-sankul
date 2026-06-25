@@ -5,6 +5,7 @@ import {
   type BannerKey as MongoBannerKey,
 } from "../../models/system/BannerSlider.model";
 import { isMysqlModule } from "../../config/migration";
+import { buildSearchFilter } from "../../utils/searchFilter";
 import { bannerSliderRepository } from "./banner-slider.repository";
 import { toBannerDto, resolveBannerKey } from "./banner-slider.transformer";
 import type {
@@ -51,6 +52,40 @@ export const listBanners = async (opts?: {
     .populate("keyId")
     .lean();
   return docs.map((d) => fromMongoDoc(d as Record<string, unknown>));
+};
+
+/**
+ * Admin server-side search + sort + opt-in pagination. `skip`/`take` apply only
+ * when provided (absent → full filtered list). Always returns the total count.
+ */
+export const listBannersPaged = async (q: {
+  key?: string;
+  search?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  skip?: number;
+  take?: number;
+}): Promise<{ items: BannerSliderDto[]; total: number }> => {
+  if (isMysqlModule(MODULE)) {
+    const key = resolveBannerKey(q.key);
+    const opts = { key, search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take };
+    const [rows, total] = await Promise.all([
+      bannerSliderRepository.findPage(opts),
+      bannerSliderRepository.count(opts),
+    ]);
+    return { items: rows.map(toBannerDto), total };
+  }
+
+  const filter: Record<string, unknown> = {};
+  if (q.key) filter.key = q.key;
+  Object.assign(filter, buildSearchFilter(q.search, ["image", "key"]));
+  const sortField = q.sortBy === "createdAt" ? "createdAt" : q.sortBy === "updatedAt" ? "updatedAt" : "orderBy";
+  const sortNum = q.sortDir === "desc" ? -1 : 1;
+  let query = BannerSlider.find(filter).sort({ [sortField]: sortNum }).populate("keyId");
+  if (q.skip != null) query = query.skip(q.skip);
+  if (q.take != null) query = query.limit(q.take);
+  const [docs, total] = await Promise.all([query.lean(), BannerSlider.countDocuments(filter)]);
+  return { items: docs.map((d) => fromMongoDoc(d as Record<string, unknown>)), total };
 };
 
 export const getBannerById = async (

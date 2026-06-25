@@ -3,7 +3,7 @@ import mongoose, { Model } from "mongoose";
 import { FaqType } from "../../models/system/FaqType.model";
 import { isMysqlModule } from "../../config/migration";
 import {
-  listFaqs as listFaqsService,
+  listFaqsPaged as listFaqsPagedService,
   getFaqById,
   createFaq as createFaqService,
   updateFaq as updateFaqService,
@@ -17,7 +17,7 @@ import {
   faqUpdateSchemaMysql,
 } from "../../modules/faq/faq.validation";
 import {
-  listPopups as listPopupsService,
+  listPopupsPaged as listPopupsPagedService,
   getPopupById as getPopupByIdService,
   createPopup as createPopupService,
   updatePopup as updatePopupService,
@@ -25,7 +25,7 @@ import {
   parsePopupId,
 } from "../../modules/popup/popup.service";
 import {
-  listBanners as listBannersService,
+  listBannersPaged as listBannersPagedService,
   getBannerById as getBannerByIdService,
   createBanner as createBannerService,
   updateBanner as updateBannerService,
@@ -34,7 +34,7 @@ import {
   parseBannerId,
 } from "../../modules/banner-slider/banner-slider.service";
 import {
-  listTestimonials as listTestimonialsService,
+  listTestimonialsPaged as listTestimonialsPagedService,
   getTestimonialById as getTestimonialByIdService,
   createTestimonial as createTestimonialService,
   updateTestimonial as updateTestimonialService,
@@ -98,8 +98,53 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { z } from "zod";
 import * as cmsx from "../../modules/cms/cms-extra.service";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { buildSearchFilter } from "../../utils/searchFilter";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
+
+// Parse the standard admin list query: search/page/limit (via parseListQuery)
+// plus sortBy/sortOrder. `sortBy` stays a raw string — each service whitelists
+// its own sortable columns and falls back to that resource's default ordering.
+const parseSort = (query: Record<string, any>): { sortBy?: string; sortDir?: "asc" | "desc" } => {
+  const sortBy = typeof query.sortBy === "string" && query.sortBy ? query.sortBy : undefined;
+  const sortDir = query.sortOrder === "asc" ? "asc" : query.sortOrder === "desc" ? "desc" : undefined;
+  return { sortBy, sortDir };
+};
+
+// Resolve search + sort + opt-in pagination for an admin list endpoint.
+// `skip`/`take` are only set when `page` or `limit` is present in the query, so
+// callers absent of pagination params still get the full filtered list (the
+// pagination block is then omitted from the response — back-compat with the
+// flat-array contract the FE relied on previously).
+const parseAdminList = (query: Record<string, any>) => {
+  const { search, page, limit, skip } = parseListQuery(query);
+  const { sortBy, sortDir } = parseSort(query);
+  const paginate = query.page !== undefined || query.limit !== undefined;
+  return {
+    search,
+    sortBy,
+    sortDir,
+    page,
+    limit,
+    paginate,
+    skip: paginate ? skip : undefined,
+    take: paginate ? limit : undefined,
+  };
+};
+
+// Build the standard list response: flat `data` plus a `pagination` block only
+// when pagination was requested.
+const listResponse = (
+  res: Response,
+  items: unknown[],
+  total: number,
+  ctx: { paginate: boolean; page: number; limit: number }
+) => {
+  const body: Record<string, unknown> = { success: true, data: items };
+  if (ctx.paginate) body.pagination = buildPagination(total, ctx.page, ctx.limit);
+  return res.status(200).json(body);
+};
 
 // cms-extra (SocialLink/Type, CurrentAffair, LiveBanner) SQL flag + helpers.
 const cmsxOn = () => cmsx.isCmsExtraMysql();
@@ -217,11 +262,13 @@ const genericDelete = (model: Model<any>) => async (req: Request, res: Response)
 };
 
 // ─── FAQ ──
-export const listFaqs = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
+export const listFaqs = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
   try {
-    const data = await listFaqsService();
-    return res.status(200).json({ success: true, data });
+    const q = parseAdminList(req.query as Record<string, any>);
+    const typeId = typeof req.query.typeId === "string" ? req.query.typeId : undefined;
+    const { items, total } = await listFaqsPagedService({ typeId, search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
+    return listResponse(res, items, total, q);
   } catch (e: any) {
     logger.error("listFaqs failed", { traceId, error: getErrorMessage(e) });
     return res.status(500).json({ success: false, message: e.message });
@@ -364,11 +411,12 @@ export const deleteFaqType = async (req: Request, res: Response) => {
 const popupIdInvalid = (id: string) =>
   isMysqlModule("popup") ? !parsePopupId(id) : !isObjectId(id);
 
-export const listPopups = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
+export const listPopups = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
   try {
-    const data = await listPopupsService();
-    return res.status(200).json({ success: true, data });
+    const q = parseAdminList(req.query as Record<string, any>);
+    const { items, total } = await listPopupsPagedService({ search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
+    return listResponse(res, items, total, q);
   } catch (e: any) {
     logger.error("listPopups failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -434,14 +482,16 @@ export const deletePopup = async (req: Request, res: Response) => {
 const bannerIdInvalid = (id: string) =>
   isMysqlModule("banner-slider") ? !parseBannerId(id) : !isObjectId(id);
 
-export const listBanners = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listBanners invoked", { traceId, path: _req.originalUrl });
+export const listBanners = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listBanners invoked", { traceId, path: req.originalUrl });
 
   try {
-    const data = await listBannersService();
-    logger.info("listBanners success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    const q = parseAdminList(req.query as Record<string, any>);
+    const key = typeof req.query.key === "string" ? req.query.key : undefined;
+    const { items, total } = await listBannersPagedService({ key, search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
+    logger.info("listBanners success", { traceId, count: items.length, total });
+    return listResponse(res, items, total, q);
   } catch (e: any) {
     logger.error("listBanners failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -531,18 +581,27 @@ export const reorderBanners = async (req: Request, res: Response) => {
 };
 
 // ─── Live Banner ──
-export const listLiveBanners = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listLiveBanners invoked", { traceId, path: _req.originalUrl });
+export const listLiveBanners = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listLiveBanners invoked", { traceId, path: req.originalUrl });
 
   try {
-    if (cmsxOn()) return res.status(200).json({ success: true, data: await cmsx.listLiveBanners() });
-    const data = await LiveBannerSlider.find()
-      .sort({ orderBy: 1 })
-      .populate("liveCourseId")
-      .lean();
-    logger.info("listLiveBanners success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    const q = parseAdminList(req.query as Record<string, any>);
+
+    if (cmsxOn()) {
+      const { items, total } = await cmsx.listLiveBannersPaged({ search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
+      return listResponse(res, items, total, q);
+    }
+
+    const filter = buildSearchFilter(q.search, ["image"]);
+    const sortField = q.sortBy === "createdAt" ? "createdAt" : "orderBy";
+    const sortNum = q.sortDir === "desc" ? -1 : 1;
+    let query = LiveBannerSlider.find(filter).sort({ [sortField]: sortNum }).populate("liveCourseId");
+    if (q.skip != null) query = query.skip(q.skip);
+    if (q.take != null) query = query.limit(q.take);
+    const [data, total] = await Promise.all([query.lean(), LiveBannerSlider.countDocuments(filter)]);
+    logger.info("listLiveBanners success", { traceId, count: data.length, total });
+    return listResponse(res, data, total, q);
   } catch (e: any) {
     logger.error("listLiveBanners failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -641,11 +700,12 @@ export const reorderLiveBanners = async (req: Request, res: Response) => {
 const testimonialIdInvalid = (id: string) =>
   isMysqlModule("testimonial") ? !parseTestimonialId(id) : !isObjectId(id);
 
-export const listTestimonials = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
+export const listTestimonials = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
   try {
-    const data = await listTestimonialsService();
-    return res.status(200).json({ success: true, data });
+    const q = parseAdminList(req.query as Record<string, any>);
+    const { items, total } = await listTestimonialsPagedService({ search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
+    return listResponse(res, items, total, q);
   } catch (e: any) {
     logger.error("listTestimonials failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -836,8 +896,21 @@ export const deleteSocialLink = async (req: Request, res: Response) => {
 // ─── Current Affairs ── (dual-path)
 export const listCurrentAffairs = async (req: Request, res: Response) => {
   try {
-    if (cmsxOn()) return res.status(200).json({ success: true, data: await cmsx.listCurrentAffairs() });
-    return genericList(CurrentAffair, { createdAt: -1 })(req, res);
+    const q = parseAdminList(req.query as Record<string, any>);
+
+    if (cmsxOn()) {
+      const { items, total } = await cmsx.listCurrentAffairsPaged({ search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
+      return listResponse(res, items, total, q);
+    }
+
+    const filter = buildSearchFilter(q.search, ["title", "youtubeLink", "image"]);
+    const sortField = q.sortBy === "title" ? "title" : q.sortBy === "status" ? "status" : "createdAt";
+    const sortNum = q.sortDir === "asc" ? 1 : -1;
+    let query = CurrentAffair.find(filter).sort({ [sortField]: sortNum });
+    if (q.skip != null) query = query.skip(q.skip);
+    if (q.take != null) query = query.limit(q.take);
+    const [data, total] = await Promise.all([query.lean(), CurrentAffair.countDocuments(filter)]);
+    return listResponse(res, data, total, q);
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 export const getCurrentAffair = async (req: Request, res: Response) => {

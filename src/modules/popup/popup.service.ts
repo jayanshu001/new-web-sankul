@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { PopupNotification } from "../../models/system/PopupNotification.model";
 import { isMysqlModule } from "../../config/migration";
+import { buildSearchFilter } from "../../utils/searchFilter";
 import { popupRepository } from "./popup.repository";
 import { toPopupDto } from "./popup.transformer";
 import type { PopupCreateInput, PopupDto, PopupUpdateInput } from "./popup.types";
@@ -32,6 +33,36 @@ export const listPopups = async (): Promise<PopupDto[]> => {
   }
   const docs = await PopupNotification.find().sort({ createdAt: -1 }).lean();
   return docs.map((d) => fromMongoDoc(d as Record<string, unknown>));
+};
+
+/**
+ * Admin server-side search + sort + opt-in pagination. `skip`/`take` apply only
+ * when provided (absent → full filtered list). Always returns the total count.
+ */
+export const listPopupsPaged = async (q: {
+  search?: string;
+  sortBy?: string;
+  sortDir?: "asc" | "desc";
+  skip?: number;
+  take?: number;
+}): Promise<{ items: PopupDto[]; total: number }> => {
+  if (isMysqlModule(MODULE)) {
+    const opts = { search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take };
+    const [rows, total] = await Promise.all([
+      popupRepository.findPage(opts),
+      popupRepository.count(opts),
+    ]);
+    return { items: rows.map(toPopupDto), total };
+  }
+
+  const filter = buildSearchFilter(q.search, ["title", "description", "discount", "promocode"]);
+  const sortField = q.sortBy === "title" ? "title" : q.sortBy === "status" ? "status" : q.sortBy === "updatedAt" ? "updatedAt" : "createdAt";
+  const sortNum = q.sortDir === "asc" ? 1 : -1;
+  let query = PopupNotification.find(filter).sort({ [sortField]: sortNum });
+  if (q.skip != null) query = query.skip(q.skip);
+  if (q.take != null) query = query.limit(q.take);
+  const [docs, total] = await Promise.all([query.lean(), PopupNotification.countDocuments(filter)]);
+  return { items: docs.map((d) => fromMongoDoc(d as Record<string, unknown>)), total };
 };
 
 export const getPopupById = async (id: string): Promise<PopupDto | null> => {

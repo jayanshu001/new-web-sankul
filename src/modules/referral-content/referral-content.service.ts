@@ -94,13 +94,40 @@ export const listActiveFaqsForClient = async (): Promise<
   }));
 };
 
+// ─── List options (admin search + sort + opt-in pagination) ──────────────────
+export interface RcListOpts {
+  search?: string;
+  sortBy?: string; // order | createdAt | updatedAt
+  sortDir?: "asc" | "desc";
+  skip?: number;
+  take?: number;
+}
+const rcOrderBy = (opts: RcListOpts): any[] => {
+  const dir = opts.sortDir ?? "asc";
+  switch (opts.sortBy) {
+    case "order": return [{ orderBy: dir }, { id: "desc" }];
+    case "createdAt": return [{ createdAt: dir }, { id: "desc" }];
+    case "updatedAt": return [{ updatedAt: dir }, { id: "desc" }];
+    // Default: recently-added on top (newest id first).
+    default: return [{ createdAt: "desc" }, { id: "desc" }];
+  }
+};
+
 // ─── Terms ───────────────────────────────────────────────────────────────────
 
-export const listTerms = async (): Promise<TermDto[]> => {
-  const rows = await prisma.refferalTerm.findMany({
-    orderBy: [{ orderBy: "asc" }, { createdAt: "asc" }],
-  });
-  return rows.map(toTermDto);
+export const listTerms = async (opts: RcListOpts = {}): Promise<{ data: TermDto[]; total: number }> => {
+  const where: any = {};
+  if (opts.search?.trim()) where.text = { contains: opts.search.trim() };
+  const [rows, total] = await Promise.all([
+    prisma.refferalTerm.findMany({
+      where,
+      orderBy: rcOrderBy(opts),
+      ...(opts.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts.take !== undefined ? { take: opts.take } : {}),
+    }),
+    prisma.refferalTerm.count({ where }),
+  ]);
+  return { data: rows.map(toTermDto), total };
 };
 
 export const getTerm = async (id: number): Promise<TermDto | null> => {
@@ -153,11 +180,22 @@ export const deleteTerm = async (id: number): Promise<boolean> => {
 
 // ─── FAQs ────────────────────────────────────────────────────────────────────
 
-export const listFaqs = async (): Promise<FaqDto[]> => {
-  const rows = await prisma.refferalFaq.findMany({
-    orderBy: [{ orderBy: "asc" }, { createdAt: "asc" }],
-  });
-  return rows.map(toFaqDto);
+export const listFaqs = async (opts: RcListOpts = {}): Promise<{ data: FaqDto[]; total: number }> => {
+  const where: any = {};
+  if (opts.search?.trim()) {
+    const s = opts.search.trim();
+    where.OR = [{ question: { contains: s } }, { answer: { contains: s } }];
+  }
+  const [rows, total] = await Promise.all([
+    prisma.refferalFaq.findMany({
+      where,
+      orderBy: rcOrderBy(opts),
+      ...(opts.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts.take !== undefined ? { take: opts.take } : {}),
+    }),
+    prisma.refferalFaq.count({ where }),
+  ]);
+  return { data: rows.map(toFaqDto), total };
 };
 
 export const getFaq = async (id: number): Promise<FaqDto | null> => {

@@ -19,9 +19,11 @@ import * as referralService from "./referral.service";
 // Programs
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const getPrograms = asyncHandler(async (_req: Request, res: Response) => {
-  const data = await referralService.listPrograms();
-  return res.status(200).json({ success: true, data });
+export const getPrograms = asyncHandler(async (req: Request, res: Response) => {
+  const { data, pagination } = await referralService.listPrograms(
+    req.query as referralService.ListProgramsQuery
+  );
+  return res.status(200).json({ success: true, data, ...(pagination ? { pagination } : {}) });
 });
 
 export const getProgramById = asyncHandler(async (req: Request, res: Response) => {
