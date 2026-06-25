@@ -18,6 +18,11 @@ export interface ITestSeriesSubscription extends Document {
   paymentType: PackageCourseEbookPaymentType;
   status: boolean;
   promocodeId?: Types.ObjectId | null;
+  promoterId?: Types.ObjectId | null;
+  // Promoter commission locked in at purchase (currency). See
+  // PackageCourseSubscription for the rationale.
+  promoterPercentage?: number | null;
+  promoterCommission?: number | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -39,6 +44,9 @@ const TestSeriesSubscriptionSchema = new Schema<ITestSeriesSubscription>(
     },
     status: { type: Boolean, default: true },
     promocodeId: { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
+    promoterId: { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
+    promoterPercentage: { type: Number, default: null },
+    promoterCommission: { type: Number, default: null },
   },
   { collection: "ws_test_series_subscriptions", timestamps: true }
 );
@@ -47,6 +55,7 @@ TestSeriesSubscriptionSchema.index({ customerId: 1, testSeriesId: 1 });
 TestSeriesSubscriptionSchema.index({ customerId: 1, status: 1, endAt: 1 });
 TestSeriesSubscriptionSchema.index({ testSeriesId: 1 });
 TestSeriesSubscriptionSchema.index({ endAt: 1 });
+TestSeriesSubscriptionSchema.index({ promoterId: 1, createdAt: -1 });
 
 export const TestSeriesSubscription = model<ITestSeriesSubscription>(
   "TestSeriesSubscription",

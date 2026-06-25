@@ -7,6 +7,7 @@ import {
   listCenters, getCenter, createCenter, updateCenter, deleteCenter,
   listBatches, getBatch, createBatch, updateBatch, deleteBatch,
   listEnquiries, deleteEnquiry,
+  listBatchEnquiries, deleteBatchEnquiry,
 } from "./offline.controller";
 
 const router = Router();
@@ -47,5 +48,9 @@ router.delete("/batches/:id", deleteBatch);
 router.get("/enquiries", listEnquiries);
 router.get("/batch-enquiries", listEnquiries);
 router.delete("/enquiries/:id", deleteEnquiry);
+
+// Batch enquiries — offline-batch "Register" form (read/delete only)
+router.get("/batch-enquiries", listBatchEnquiries);
+router.delete("/batch-enquiries/:id", deleteBatchEnquiry);
 
 export default router;

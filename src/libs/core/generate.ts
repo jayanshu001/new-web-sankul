@@ -99,7 +99,18 @@ export async function renderPdfFromHtml(html: string): Promise<Buffer> {
   });
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "domcontentloaded" });
+    await page.setContent(html, { waitUntil: "load" });
+    // Block until every @font-face used on the page has actually loaded.
+    // `display=block` in the template hides text until the font is ready, and
+    // `document.fonts.ready` resolves only once those fonts have loaded — so the
+    // PDF is never rasterised with a fallback font that lacks Indic (Gujarati/
+    // Hindi) glyphs. Cap the wait so a slow/blocked font CDN can't hang the PDF.
+    await page.evaluate(async () => {
+      await Promise.race([
+        (document as any).fonts.ready,
+        new Promise((resolve) => setTimeout(resolve, 5000)),
+      ]);
+    });
     const pdf = await page.pdf({
       format: "A4",
       printBackground: true,

@@ -8,6 +8,7 @@ import { ExamCategory } from "../../models/exam/ExamCategory.model";
 import { collectCategoryTreeIds } from "../../utils/categoryTree";
 import { buildRegexCondition } from "../../utils/searchFilter";
 import { Exam } from "../../models/exam/Exam.model";
+import { ExamResult } from "../../models/exam/ExamResult.model";
 import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
 import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
 import { ExamStatus, ExamType } from "../../models/enums";
@@ -487,10 +488,36 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
       Exam.countDocuments(filter),
     ]);
 
-    logger.info("listExamsByCategory success", { traceId, categoryId: id, total, returned: list.length });
+    // Decorate each exam with the current user's latest attempt (mirrors the
+    // exam.controller listExamsByCategory contract: isCompleted + lastResult).
+    const customerId = req.user?.id;
+    const resultByExam = new Map<string, any>();
+    if (customerId && list.length) {
+      const examIds = list.map((e: any) => e._id);
+      const results = await ExamResult.find({
+        customerId,
+        examId: { $in: examIds },
+        status: true,
+      })
+        .select("examId score total success failed skip attempt timing updatedAt")
+        .sort({ updatedAt: -1, attemptNumber: -1 })
+        .lean();
+      for (const r of results) {
+        const key = String(r.examId);
+        if (!resultByExam.has(key)) resultByExam.set(key, r);
+      }
+    }
+
+    const decoratedList = list.map((e: any) => ({
+      ...e,
+      isCompleted: resultByExam.has(String(e._id)),
+      lastResult: resultByExam.get(String(e._id)) ?? null,
+    }));
+
+    logger.info("listExamsByCategory success", { traceId, categoryId: id, total, returned: decoratedList.length });
     return res.status(200).json({
       success: true,
-      data: { category, list },
+      data: { category, list: decoratedList },
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {

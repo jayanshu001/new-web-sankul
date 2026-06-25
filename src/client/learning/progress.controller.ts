@@ -223,19 +223,19 @@ export const listMyLearningProgress = async (req: Request, res: Response) => {
       await Promise.all([
         courseIds.length
           ? Course.find({ _id: { $in: courseIds }, status: true })
-              .select("_id name image courseEducatorId")
+              .select("_id name image isPaid courseEducatorId")
               .populate({ path: "courseEducatorId", model: CourseEducator, select: "name image" })
               .lean()
           : [],
         packageIds.length
           ? Package.find({ _id: { $in: packageIds }, active: true })
-              .select("_id name image educatorId")
+              .select("_id name image isPaid educatorId")
               .populate({ path: "educatorId", model: CourseEducator, select: "name image" })
               .lean()
           : [],
         liveIds.length
           ? LiveCourse.find({ _id: { $in: liveIds }, status: true })
-              .select("_id name image courseEducatorId")
+              .select("_id name image isPaid courseEducatorId")
               .populate({ path: "courseEducatorId", model: CourseEducator, select: "name image" })
               .lean()
           : [],
@@ -446,6 +446,10 @@ export const listMyLearningProgress = async (req: Request, res: Response) => {
       const c = courseById.get(String(p._id));
       if (!c) continue;
       const sub = courseSubBy.get(String(p._id));
+      // Show a card ONLY when the course is paid AND the user has purchased it
+      // (an active, verified, non-expired subscription = purchased). Progress
+      // rows outlive entitlement, so without this gate the list leaks courses.
+      if (!c.isPaid || !sub) continue;
       const total = courseTotalBy.get(String(p._id)) ?? 0;
       cards.push({
         type: "course",
@@ -477,6 +481,8 @@ export const listMyLearningProgress = async (req: Request, res: Response) => {
       const pkg = packageById.get(String(p._id));
       if (!pkg) continue;
       const sub = packageSubBy.get(String(p._id));
+      // Paid AND purchased only — see the course loop above.
+      if (!pkg.isPaid || !sub) continue;
       const total = packageTotalBy.get(String(p._id)) ?? 0;
       cards.push({
         type: "package",
@@ -508,6 +514,8 @@ export const listMyLearningProgress = async (req: Request, res: Response) => {
       const lc = liveById.get(String(p._id));
       if (!lc) continue;
       const sub = liveSubBy.get(String(p._id));
+      // Paid AND purchased only — see the course loop above.
+      if (!lc.isPaid || !sub) continue;
       const total = liveTotalBy.get(String(p._id)) ?? 0;
       cards.push({
         type: "live",

@@ -139,7 +139,7 @@ export const getEbookSubscriptionById = async (req: Request, res: Response) => {
     }
 
     const subscription = await EbookSubscription.findById(subscriptionId)
-      .populate("customerId", "_id full_name mobile email")
+      .populate("customerId", "_id firstName middleName lastName phoneNumber emailAddress")
       .populate("ebookId", "_id name author")
       .populate("orderId");
 

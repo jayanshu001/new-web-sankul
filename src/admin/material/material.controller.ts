@@ -599,6 +599,7 @@ export const duplicateCategory = async (req: Request, res: Response) => {
           title: m.title,
           description: m.description,
           file: m.file,
+          originalName: m.originalName,
           directLink: m.directLink,
           thumbnail: m.thumbnail,
           fileSize: m.fileSize,
@@ -777,6 +778,9 @@ function applyUploadedFile(req: Request) {
     if (file.originalname && req.body.fileName == null) req.body.fileName = file.originalname;
     if (file.size != null && req.body.fileSize == null) req.body.fileSize = file.size;
     if (file.mimetype && !req.body.fileMime) req.body.fileMime = file.mimetype;
+    // Persist the admin's original filename so the FE can display it instead of
+    // the server-generated key in the stored URL.
+    if (file.originalname && !req.body.originalName) req.body.originalName = file.originalname;
   }
   if (typeof req.body.fileSize === "string") req.body.fileSize = Number(req.body.fileSize);
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);

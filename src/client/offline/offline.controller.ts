@@ -6,6 +6,10 @@ import { OfflineCity } from "../../models/offline/OfflineCity.model";
 import { OfflineCenter } from "../../models/offline/OfflineCenter.model";
 import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
 import { OfflineEnquiry } from "../../models/offline/OfflineEnquiry.model";
+import {
+  OfflineBatchEnquiry,
+  OFFLINE_BATCH_QUALIFICATIONS,
+} from "../../models/offline/OfflineBatchEnquiry.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildRegexCondition } from "../../utils/searchFilter";
@@ -434,6 +438,55 @@ export const submitEnquiry = async (req: Request, res: Response) => {
   } catch (e: any) {
     if (e.issues) { logger.warn("submitEnquiry validation failed", { traceId, customerId: userId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
     logger.error("submitEnquiry failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// POST /api/v1/client/offline/batch-enquiry
+// The offline-batch "Register" form (name/email/number/qualification +
+// optional free-text when "other" is chosen). Auth is REQUIRED — customerId is
+// always recorded against the logged-in customer.
+const batchEnquirySchema = z
+  .object({
+    name: z.string().min(1).max(255),
+    email: z.string().email().max(255),
+    mobile: z.string().min(6).max(20),
+    qualification: z.enum(OFFLINE_BATCH_QUALIFICATIONS),
+    otherQualification: z.string().min(1).max(255).optional(),
+    batchId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid batch id."),
+  })
+  .refine((d) => d.qualification !== "other" || !!d.otherQualification, {
+    message: "otherQualification is required when qualification is 'other'.",
+    path: ["otherQualification"],
+  });
+
+export const submitBatchEnquiry = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id || null;
+  logger.info("submitBatchEnquiry invoked", { traceId, path: req.originalUrl, customerId: userId });
+
+  try {
+    const data = batchEnquirySchema.parse(req.body);
+
+    const batch = await OfflineBatch.exists({ _id: data.batchId });
+    if (!batch) { logger.warn("submitBatchEnquiry batch not found", { traceId, batchId: data.batchId }); return res.status(404).json({ success: false, message: "Batch not found." }); }
+
+    const enquiry = await OfflineBatchEnquiry.create({
+      customerId: userId,
+      name: data.name,
+      email: data.email,
+      mobile: data.mobile,
+      qualification: data.qualification,
+      // Only retain the free-text when "other" is selected.
+      otherQualification: data.qualification === "other" ? data.otherQualification : null,
+      batchId: data.batchId,
+    });
+
+    logger.info("submitBatchEnquiry success", { traceId, customerId: userId, batchId: data.batchId, enquiryId: enquiry._id });
+    return res.status(201).json({ success: true, data: enquiry });
+  } catch (e: any) {
+    if (e.issues) { logger.warn("submitBatchEnquiry validation failed", { traceId, customerId: userId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    logger.error("submitBatchEnquiry failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };

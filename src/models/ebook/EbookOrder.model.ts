@@ -14,6 +14,13 @@ export interface IEbookOrder extends Document {
   promocodeId?: mongoose.Types.ObjectId | null;
   originalAmount?: number | null;
   discountAmount?: number | null;
+  // Promoter commission carried from order → copied onto the subscription at
+  // /verify. promoterCommission is the currency amount locked in at purchase.
+  promoterId?: mongoose.Types.ObjectId | null;
+  promoterPercentage?: number | null;
+  promoterCommission?: number | null;
+  // Wallet ("coin") applied; debited from rewardPoints at /verify success.
+  coinsUsed?: number | null;
   razorpayOrderId?: string | null;
   razorpayPaymentId?: string | null;
   ipAddress?: string | null;
@@ -34,6 +41,10 @@ const ebookOrderSchema: Schema = new Schema(
     promocodeId: { type: Schema.Types.ObjectId, ref: "PromoCode", default: null },
     originalAmount: { type: Number, default: null },
     discountAmount: { type: Number, default: null },
+    promoterId: { type: Schema.Types.ObjectId, ref: "Promoter", default: null },
+    promoterPercentage: { type: Number, default: null },
+    promoterCommission: { type: Number, default: null },
+    coinsUsed: { type: Number, default: null },
     razorpayOrderId: { type: String, default: null },
     razorpayPaymentId: { type: String, default: null },
     ipAddress: { type: String, default: null },

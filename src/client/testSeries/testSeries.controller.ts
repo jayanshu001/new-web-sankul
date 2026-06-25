@@ -397,14 +397,16 @@ export const previewCheckout = async (req: Request, res: Response) => {
       const { result, error } = await resolveLivePromo(body.promocode, plan.price, {
         type: "testSeries",
         id: String(plan.testSeriesId),
-      });
+      }, String(plan._id), customerId);
       if (error || !result) { logger.warn("previewCheckout promo rejected", { traceId, customerId, promocode: body.promocode, error }); return failure(res, error ?? "Invalid promo code.", 400); }
       discountAmount = result.discountAmount;
-      promocodeId = String(result.promo._id);
+      // promo is null on the referral path; there's no promocode doc to record.
+      promocodeId = result.promo ? String(result.promo._id) : null;
       promoMeta = {
-        promocode: result.promo.promocode,
+        promocode: result.promo ? result.promo.promocode : body.promocode.trim().toUpperCase(),
         discountType: result.discountType,
         discountValue: result.discountValue,
+        isReferral: !!result.referrerId,
       };
     }
 

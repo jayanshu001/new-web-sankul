@@ -16,6 +16,8 @@ import {
   BookOrderStatus,
 } from "../../models/enums";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { creditReferrer } from "../referral/credit-referrer";
+import { applyWalletDebit } from "../referral/wallet-debit";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import {
@@ -96,6 +98,18 @@ export const paymentWebhook = async (req: Request, res: Response) => {
         ebookOrder.razorpayPaymentId = razorpayPaymentId;
         await ebookOrder.save();
 
+        // Wallet debit — idempotent on orderId, so whichever path (this webhook
+        // or /payment/verify) fulfills first deducts; the other is a no-op.
+        if (ebookOrder.coinsUsed && ebookOrder.coinsUsed > 0) {
+          await applyWalletDebit({
+            customerId: ebookOrder.customerId,
+            orderId: ebookOrder._id as any,
+            coin: ebookOrder.coinsUsed,
+            source: "ebook",
+            traceId,
+          });
+        }
+
         const plan = await EbookPrice.findById(ebookOrder.planId);
         if (plan) {
           // `duration` is stored as DAYS — shared helper applies setDate so
@@ -122,6 +136,12 @@ export const paymentWebhook = async (req: Request, res: Response) => {
             });
             existingActive.price = (existingActive.price || 0) + (ebookOrder.orderPrice || 0);
             existingActive.orderId = ebookOrder._id;
+            // Accumulate promoter commission (currency) across re-purchases —
+            // mirrors verify.controller.
+            existingActive.promoterCommission =
+              (existingActive.promoterCommission || 0) + (ebookOrder.promoterCommission || 0);
+            if (ebookOrder.promoterId) existingActive.promoterId = ebookOrder.promoterId;
+            if (ebookOrder.promoterPercentage != null) existingActive.promoterPercentage = ebookOrder.promoterPercentage;
             await existingActive.save();
           } else {
             const endAt = computeEndAt({ startAt, durationMonths: plan.duration, asDays: true });
@@ -134,6 +154,10 @@ export const paymentWebhook = async (req: Request, res: Response) => {
               endAt,
               paymentType: PackageCourseEbookPaymentType.ONLINE,
               status: true,
+              promocodeId: ebookOrder.promocodeId ?? null,
+              promoterId: ebookOrder.promoterId ?? null,
+              promoterPercentage: ebookOrder.promoterPercentage ?? null,
+              promoterCommission: ebookOrder.promoterCommission ?? null,
             });
           }
         }
@@ -217,6 +241,31 @@ export const paymentWebhook = async (req: Request, res: Response) => {
         liveCourseSub.startAt = now;
         liveCourseSub.endAt = endAt;
         await liveCourseSub.save();
+
+        // Credit the referrer when this purchase redeemed a referral code.
+        // Idempotent on the subscription _id, so this is safe even when
+        // /payment/verify already credited for the same order.
+        if (liveCourseSub.referrerId) {
+          await creditReferrer({
+            referrerId: liveCourseSub.referrerId,
+            buyerId: liveCourseSub.customerId,
+            orderId: liveCourseSub._id as any,
+            paidAmount: liveCourseSub.paidAmount ?? 0,
+            source: "liveCourse",
+          });
+        }
+
+        // Wallet debit — idempotent, so safe even if /payment/verify already
+        // debited for the same order.
+        if (liveCourseSub.coinsUsed && liveCourseSub.coinsUsed > 0) {
+          await applyWalletDebit({
+            customerId: liveCourseSub.customerId,
+            orderId: liveCourseSub._id as any,
+            coin: liveCourseSub.coinsUsed,
+            source: "liveCourse",
+            traceId,
+          });
+        }
       }
       logger.info("paymentWebhook live course activated", { traceId, razorpayOrderId, subscriptionId: liveCourseSub._id });
       return res
