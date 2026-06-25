@@ -546,10 +546,11 @@ export const updatePromocode = async (req: Request, res: Response) => {
         // Resolve the *effective* appliesTo (the just-saved value if appliesTo
         // was part of this update, else the existing row's).
         const effective = await pcSql.getPromocodeById(nid);
-        const effType = (effective as any).data?.appliesTo?.type as
-          | pcSql.AppliesToType
-          | undefined;
-        const effIds = ((effective as any).data?.appliesTo?.ids ?? [])
+        // getPromocodeById returns { data: { promocode, plans } } — the resolved
+        // appliesTo lives on `data.promocode.appliesTo`, NOT `data.appliesTo`.
+        const effAppliesTo = (effective as any).data?.promocode?.appliesTo;
+        const effType = effAppliesTo?.type as pcSql.AppliesToType | undefined;
+        const effIds = (effAppliesTo?.ids ?? [])
           .map((x: any) => Number(x?._id ?? x))
           .filter((n: number) => Number.isInteger(n) && n > 0);
         if (data.plans !== undefined) {

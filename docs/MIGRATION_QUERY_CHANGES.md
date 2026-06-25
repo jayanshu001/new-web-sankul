@@ -4,6 +4,46 @@
 
 ---
 
+## 2026-06-25 — payment create-order: SQL promo resolution + SQL address check (all 5 surfaces)
+
+**Bug:** in an SQL deployment (Mongo not connected) `POST /client/payment/create-order/*` 500'd: (1) the SQL branches called the Mongo-only `client/live-course/promo.resolveLivePromo` → `PromoCode.findOne()` on `ws_promo_codes` → "Cannot call ... before initial connection is complete"; (2) the package/course address ownership check used the Mongo `CustomerAddress` model with a SQL int `customerId` → "Cast to ObjectId failed for value \"472369\" ... CustomerAddress". Additionally the **course** and **ebook** SQL paths silently ignored `promocode` entirely (charged full price).
+
+**Changes:**
+- `modules/promo-code/promo-code.service.ts`: new `resolvePromoForPlanSql(code, baseAmount, entity{type,id}, planId)` — all-SQL mirror of `resolveLivePromo` using `findActiveByCode` + `promoCovers` + the link table: entity-level coverage, **per-plan scope** (code with ≥1 link row is valid only for a linked plan; unlinked plan → "not valid for this plan"), per-plan `customerPercentage` discount with legacy global fallback for codes with zero links. No referral path (SQL referral out of scope, mirrors the apply branch). Also new `addressBelongsToCustomerSql(addressId, customerId)` (`prisma.customerAddress.findFirst({ where: { id, userId } })`).
+- `client/payment/package-payment.controller.ts`: SQL branch now uses `resolvePromoForPlanSql` (planId = `body.packageId`) + `addressBelongsToCustomerSql`.
+- `client/payment/live-course-payment.controller.ts` + `test-series-payment.controller.ts`: SQL branches (create-order; test-series also the SQL promo *preview*) use `resolvePromoForPlanSql`.
+- `client/payment/course-payment.controller.ts` + `ebook-payment.controller.ts`: SQL paths now accept `promocode` (+ course: `customerShippingId`), resolve via `resolvePromoForPlanSql`, charge the reduced amount, and return the same `promo` block + `amountInRupees` as the Mongo branch. Mongo branches untouched.
+
+**Verified on staging** (`DSDSDS`, links 97→25/98→30/1293→50): package create-order plan 98 ₹14000 → ₹9800 (30%); unlinked plan 317 → rejected "not valid for this plan"; `addressBelongsToCustomerSql` true for owner / false for non-owner. `yarn typecheck`: 17 → **11** errors (the SQL branches' previously-nullable `result.promo` errors are now resolved; the remaining 11 are pre-existing Mongo-branch `result.promo` nullables + `credit-referrer.ts` — untouched by this change).
+
+**Still open:** the live-course & test-series **promo preview** endpoints' *Mongo* branches and all order **verify** controllers were not part of this pass; the live-course preview (`applyLiveCoursePromo`) still reads its plan from Mongo (not flag-gated). Promoter commission remains stored-but-unapplied.
+
+---
+
+## 2026-06-25 — client promocode apply: integer entity id rejected in MySQL mode
+
+**Bug:** `POST /client/promocodes/apply` returned `400 "Invalid course selection!"` for a valid SQL target (`targetType:"package", targetId:"3"`). The guard `if (!isObjectId(rawId))` (controller line ~156) runs *before* the MySQL branch and only accepts 24-hex Mongo ObjectIds; in MySQL mode the entity id is a positive integer (`"3"`), so the request was rejected before the SQL apply path (which correctly uses `parsePcId`) could handle it.
+
+**Fix 1 (id guard):** `client/promocode/promocode.controller.ts` `applyPromocode` — accept the id when `isObjectId(rawId)` **OR** (`pcSql.isPromoCodeMysql()` && `parsePcId(rawId)` resolves). Mongo mode still requires an ObjectId; the SQL branch re-validates downstream.
+
+**Fix 2 (per-plan checkout discount — TASK 2):** the SQL apply branch previously applied the single global `discountValue` to every plan, so per-plan codes (global `discountValue:0`) got "no discount configured." Now: new `promo-code.service.loadPlanDiscountsSql(promocodeId)` → `Map<planId, customerPercentage>` (price-kind links only). Apply branch resolves **each plan's** discount from its link row; a covered plan with **no link row gets no discount** (`offerAvailable:false`); legacy codes with **no link rows at all** fall back to the global `discountValue`. Returns 404 "not applicable" only when the entity is covered but none of its plans have a link row. Response envelope unchanged (per-plan `offerPercentage`/`discountValue`/`price` carry the values; top-level `discountType`/`discountValue` still emit the stored global). live/testSeries still use their own `/payment/apply-promo/*` endpoints.
+
+**Verified on staging:** promocode `DSDSDS` (global discount 0; links 97→25%, 98→30%, 1293→50%) applied to package 3 → plan 97 ₹9000→₹6750, plan 98 ₹14000→₹9800; plans 317/763/764 (no link row) → no discount. `yarn typecheck` ✅ (pre-existing payment/referral errors remain).
+
+**Still open (not in this change):** the actual *payment* controllers (package/live/test-series) that charge the order are not audited here — if they recompute discount from the global `discountValue`, the charged amount won't match the per-plan preview. Flag for a payment-flow pass.
+
+---
+
+## 2026-06-25 — admin promocode update: per-plan links never persisted (wrong `appliesTo` path)
+
+**Bug:** `PUT /admin/promocodes/:id` (SQL branch) updated the rule but wrote **zero** `ws_promoted_package_course_ebook` link rows — `GET /:id` always returned `plans: []`. Root cause in `admin/promocode/promocode.controller.ts` `updatePromocode`: it re-reads the effective `appliesTo` from `pcSql.getPromocodeById(nid)` to build the `validPlans` allow-list, but read it from `data.appliesTo`. `getPromocodeById` returns `{ data: { promocode, plans } }` — `appliesTo` lives on `data.promocode.appliesTo`. So `effType` was `undefined` and `effIds` `[]` → `validPlans` an empty `Map` → every incoming `plans[]` row filtered out as "orphan" → nothing written (and the `deleteMany notIn []` wiped existing links). `syncPlanLinksSql`/`loadPlanLinksSql` themselves were correct (proved end-to-end against staging).
+
+**Fix:** read `effective.data.promocode.appliesTo` (via a local `effAppliesTo`). No query/schema/index change; behavior-only fix on the MySQL path. Mongo branch unaffected.
+
+**Verified on staging** (promocode 2, appliesTo packages [3,88], payload plans `[97,98,1293]`): replicating the corrected controller sequence persists all 3 links and `loadPlanLinksSql` returns them with populated `planId` (duration/price/withMaterial + parent `{_id,name}`) and both percentages — the exact TASK 3 shape. `yarn typecheck` ✅ (pre-existing payment/referral errors remain).
+
+---
+
 ## 2026-06-25 — client promocodes list: optional `type`+`id` entity filter (both backends)
 
 **Request:** `GET /client/promocodes` should optionally return only the public codes whose `appliesTo` covers a specific entity. Param shape: `?type=<package|course|testSeries|ebook|liveCourse>&id=<entityId>` (kebab aliases `test-series`/`live-course`/`e-book` accepted). Rationale: integer SQL PKs are ambiguous across tables, so the module `type` is required alongside `id` to know which entity the id is.

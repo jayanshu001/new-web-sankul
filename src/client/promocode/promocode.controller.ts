@@ -153,7 +153,13 @@ export const applyPromocode = async (req: Request, res: Response) => {
     // type is detected below, so a mislabelled target can't break the apply.
     const rawId =
       parsed.targetId || parsed.package || parsed.course || parsed.ebook || null;
-    if (!isObjectId(rawId)) {
+    // In MySQL mode the entity id is a positive integer (e.g. "3"), not a Mongo
+    // ObjectId — accept either so SQL ids reach the SQL branch below (which
+    // re-validates via parsePcId). Mongo mode still requires an ObjectId.
+    const idLooksValid =
+      isObjectId(rawId) ||
+      (pcSql.isPromoCodeMysql() && pcSql.parsePcId(rawId ?? "") != null);
+    if (!idLooksValid) {
       logger.warn("applyPromocode invalid selection", { traceId, customerId: userId, promocode });
       return res.status(400).json({ success: false, message: "Invalid course selection!" });
     }
@@ -214,23 +220,56 @@ export const applyPromocode = async (req: Request, res: Response) => {
 
       const promoDiscountType = promo.discountType as "flat" | "percentage";
       const promoDiscountValue = Number(promo.discountValue ?? 0);
-      if (!(promoDiscountValue > 0)) {
+
+      // Per-plan link rows are the authoritative discount source (TASK 2
+      // checkout): each plan's discount = its own customerPercentage, and a plan
+      // with NO link row gets no discount. Legacy codes with no link rows at all
+      // fall back to the global discountValue so old promocodes keep working.
+      const planDiscounts = await pcSql.loadPlanDiscountsSql(promo.id);
+      const hasLinks = planDiscounts.size > 0;
+
+      if (!hasLinks && !(promoDiscountValue > 0)) {
         logger.warn("applyPromocode zero discount (sql)", { traceId, customerId: userId, promocode: code });
         return res.status(400).json({ success: false, message: "This promocode has no discount configured." });
       }
 
+      let matchedAny = false;
       pricingPlans.forEach((plan) => {
         plan.orginalPrice = plan.price;
-        plan.offerAvailable = true;
-        plan.discountType = promoDiscountType;
-        plan.discountValue = promoDiscountValue;
-        const discount = computePromoDiscount(
-          { discountType: promoDiscountType, discountValue: promoDiscountValue },
-          plan.price
-        );
-        if (promoDiscountType === "percentage") plan.offerPercentage = promoDiscountValue;
+        // Resolve THIS plan's discount: per-plan % when link rows exist, else
+        // the legacy global discount for old codes.
+        let dType: "flat" | "percentage";
+        let dValue: number;
+        if (hasLinks) {
+          const pct = planDiscounts.get(Number((plan as any).id));
+          if (pct == null) {
+            // entity is covered, but this specific plan has no link row → no discount
+            plan.offerAvailable = false;
+            plan.discountType = promoDiscountType;
+            plan.discountValue = 0;
+            plan.offerPercentage = 0;
+            return;
+          }
+          dType = "percentage";
+          dValue = pct;
+        } else {
+          dType = promoDiscountType;
+          dValue = promoDiscountValue;
+        }
+        matchedAny = true;
+        plan.offerAvailable = dValue > 0;
+        plan.discountType = dType;
+        plan.discountValue = dValue;
+        const discount = computePromoDiscount({ discountType: dType, discountValue: dValue }, plan.price);
+        if (dType === "percentage") plan.offerPercentage = dValue;
         plan.price = Math.max(0, plan.price - discount);
       });
+
+      if (hasLinks && !matchedAny) {
+        // covered entity but none of its plans have a link row for this code
+        logger.warn("applyPromocode no plan links for item (sql)", { traceId, customerId: userId, promocode: code, sqlEntity });
+        return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
+      }
 
       logger.info("applyPromocode success (sql)", { traceId, customerId: userId, promocode: code, sqlEntity });
       return res.status(200).json({

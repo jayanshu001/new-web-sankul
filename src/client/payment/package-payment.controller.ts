@@ -14,6 +14,7 @@ import {
   findPackagePlanForOrder,
   createPackageOrderMysql,
 } from "../../modules/commerce-order/commerce-order.service";
+import { resolvePromoForPlanSql, addressBelongsToCustomerSql } from "../../modules/promo-code/promo-code.service";
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
@@ -72,8 +73,8 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       }
       const body = createPackageOrderSqlSchema.parse(req.body);
       if (body.customerShippingId) {
-        const addr = await CustomerAddress.findOne({ _id: String(body.customerShippingId), customerId }).select("_id");
-        if (!addr) return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
+        const ok = await addressBelongsToCustomerSql(body.customerShippingId, customerIdInt);
+        if (!ok) return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
       }
       const planSql = await findPackagePlanForOrder(body.packageId);
       if (!planSql) {
@@ -87,7 +88,7 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       let originalAmount: number | null = null;
       let discountAmount: number | null = null;
       if (body.promocode) {
-        const { result, error } = await resolveLivePromo(body.promocode, planSql.price, { type: "package", id: String(planSql.packageId) });
+        const { result, error } = await resolvePromoForPlanSql(body.promocode, planSql.price, { type: "package", id: planSql.packageId }, body.packageId);
         if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
         if (result.finalAmount < 1) return res.status(400).json({ success: false, message: "This promo code reduces the price below the minimum payable amount. Please contact support." });
         chargeAmount = result.finalAmount;

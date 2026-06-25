@@ -842,6 +842,136 @@ export const loadPlanLinksSql = async (promocodeId: number): Promise<any[]> => {
   });
 };
 
+/**
+ * Checkout per-plan discount lookup (TASK 2 checkout): map of planId →
+ * customerPercentage for a promocode's link rows. Presence of a key means the
+ * code is valid for that plan; the value is its discount %. Empty map ⇒ a
+ * legacy code with no per-plan links (caller falls back to the global discount).
+ * Scoped to price-kind links (package/course/ebook); live/testSeries use their
+ * own plan-based apply endpoints.
+ */
+export const loadPlanDiscountsSql = async (
+  promocodeId: number
+): Promise<Map<number, number>> => {
+  const links = await prisma.promotedPackageCourseEbook.findMany({
+    where: { promocodeId },
+    select: { planId: true, planKind: true, customerPercentage: true },
+  });
+  const map = new Map<number, number>();
+  for (const l of links) {
+    if (l.planId == null) continue;
+    if (l.planKind === "livePlan" || l.planKind === "testSeriesPrice") continue;
+    map.set(l.planId, Number(l.customerPercentage ?? 0));
+  }
+  return map;
+};
+
+/**
+ * All-SQL promo resolution for the payment/checkout flow — the SQL counterpart
+ * of `client/live-course/promo.resolveLivePromo` (which is Mongo-only and breaks
+ * when Mongo isn't connected). Validates the code, enforces entity-level + per-
+ * plan scope, and computes the discount for ONE plan:
+ *   - code must be active and cover `entity` (appliesTo)
+ *   - if the code has ANY link rows it is "per-plan scoped": valid ONLY for a
+ *     plan that has a (promocodeId, planId) row — an unlinked plan is rejected
+ *   - discount = that plan's `customerPercentage` (%), else (legacy codes with
+ *     zero link rows) the top-level `discountType`/`discountValue`
+ * Referral codes are intentionally NOT handled (SQL referral is out of scope —
+ * mirrors the apply controller's SQL branch). Result shape mirrors the fields
+ * the payment controllers read off `resolveLivePromo`'s result.
+ */
+export interface PromoResolveResultSql {
+  promo: { _id: string; promocode: string };
+  discountType: "flat" | "percentage";
+  discountValue: number;
+  originalAmount: number;
+  discountAmount: number;
+  finalAmount: number;
+  promoterPercentage: number;
+  promoterCommission: number;
+}
+
+export const resolvePromoForPlanSql = async (
+  rawCode: string,
+  baseAmount: number,
+  entity: { type: AppliesToType; id: number },
+  planId: number
+): Promise<{ result?: PromoResolveResultSql; error?: string }> => {
+  const code = typeof rawCode === "string" ? rawCode.trim().toUpperCase() : "";
+  if (!code) return { error: "Promo code is required." };
+  if (!(baseAmount > 0)) return { error: "Promo codes don't apply to a zero-priced plan." };
+  if (!entity?.id) return { error: "Entity context is required." };
+
+  const promo = await findActiveByCode(code);
+  if (!promo) return { error: "Invalid or expired promo code." };
+  if (!promoCovers(promo, entity)) return { error: "This promo code is not valid for this item." };
+
+  // Per-plan scope: a code with link rows is valid only for linked plans.
+  const [totalLinks, link] = await Promise.all([
+    prisma.promotedPackageCourseEbook.count({ where: { promocodeId: promo.id } }),
+    prisma.promotedPackageCourseEbook.findFirst({
+      where: { promocodeId: promo.id, planId },
+      select: { customerPercentage: true, promoterPercentage: true },
+    }),
+  ]);
+  if (totalLinks > 0 && !link) {
+    return { error: "This promo code is not valid for this plan." };
+  }
+
+  // Resolve discount: per-plan % when a link row exists, else legacy global.
+  let discountType: "flat" | "percentage";
+  let discountValue: number;
+  let promoterPercentage = 0;
+  const perPlanPct = link ? Number(link.customerPercentage ?? 0) : 0;
+  if (link && perPlanPct > 0) {
+    discountType = "percentage";
+    discountValue = perPlanPct;
+    promoterPercentage = Number(link.promoterPercentage ?? 0);
+  } else {
+    discountType = (promo.discountType as "flat" | "percentage") ?? "percentage";
+    discountValue = Number(promo.discountValue ?? 0);
+  }
+
+  const rawDiscount =
+    discountType === "percentage"
+      ? Math.round((baseAmount * discountValue) / 100)
+      : Math.round(discountValue);
+  const discountAmount = Math.min(baseAmount, Math.max(0, rawDiscount));
+  if (!(discountAmount > 0)) return { error: "This promo code has no discount configured." };
+
+  const finalAmount = baseAmount - discountAmount;
+  const promoterCommission = Math.max(0, Math.round((finalAmount * promoterPercentage) / 100));
+
+  return {
+    result: {
+      promo: { _id: String(promo.id), promocode: promo.promocode },
+      discountType,
+      discountValue,
+      originalAmount: baseAmount,
+      discountAmount,
+      finalAmount,
+      promoterPercentage,
+      promoterCommission,
+    },
+  };
+};
+
+/**
+ * SQL delivery-address ownership check (replaces the Mongo `CustomerAddress`
+ * lookup in the payment SQL branches — Mongo can't cast the int customerId).
+ * Returns true iff address `addressId` belongs to customer `customerId`.
+ */
+export const addressBelongsToCustomerSql = async (
+  addressId: number,
+  customerId: number
+): Promise<boolean> => {
+  const row = await prisma.customerAddress.findFirst({
+    where: { id: addressId, userId: customerId },
+    select: { id: true },
+  });
+  return !!row;
+};
+
 // ── getPromocodePlans picker (grouped by entity + exam-type via Goal) ─────────
 const ALL_APPLIES_TO_TYPES: AppliesToType[] = [
   "package",

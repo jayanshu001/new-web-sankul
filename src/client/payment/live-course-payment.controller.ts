@@ -5,6 +5,7 @@ import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { resolveLivePromo } from "../live-course/promo";
+import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -142,7 +143,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       let originalAmount: number | null = null;
       let discountAmount: number | null = null;
       if (body.promocode) {
-        const { result, error } = await resolveLivePromo(body.promocode, planSql.price, { type: "liveCourse", id: String(planSql.liveCourseId) });
+        const { result, error } = await resolvePromoForPlanSql(body.promocode, planSql.price, { type: "liveCourse", id: planSql.liveCourseId }, body.planId);
         if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
         if (result.finalAmount < 1) return res.status(400).json({ success: false, message: "This promo code reduces the price below the minimum payable amount. Please contact support." });
         chargeAmount = result.finalAmount;

@@ -9,6 +9,7 @@ import {
   PaymentMethod,
 } from "../../models/enums";
 import { resolveLivePromo } from "../live-course/promo";
+import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
 import { _shared } from "../testSeries/testSeries.controller";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
@@ -46,7 +47,7 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
       const body = applyPromoSqlSchema.parse(req.body);
       const plan = await tsSql.findPlanForOrder(body.planId);
       if (!plan) return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
-      const { result, error } = await resolveLivePromo(body.promocode, plan.price, { type: "testSeries", id: String(plan.testSeriesId) });
+      const { result, error } = await resolvePromoForPlanSql(body.promocode, plan.price, { type: "testSeries", id: plan.testSeriesId }, body.planId);
       if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
       const bd = _shared.computeBreakdown(plan.price, result.discountAmount, String(result.promo._id));
       return res.status(200).json({ success: true, data: {
@@ -136,7 +137,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
 
       let discountAmount = 0; let promocodeIdNum: number | null = null;
       if (body.promocode) {
-        const { result, error } = await resolveLivePromo(body.promocode, plan.price, { type: "testSeries", id: String(plan.testSeriesId) });
+        const { result, error } = await resolvePromoForPlanSql(body.promocode, plan.price, { type: "testSeries", id: plan.testSeriesId }, body.planId);
         if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
         discountAmount = result.discountAmount;
         const pid = Number(String(result.promo._id)); promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;

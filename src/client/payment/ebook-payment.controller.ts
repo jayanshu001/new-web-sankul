@@ -9,6 +9,7 @@ import {
   PaymentMethod,
 } from "../../models/enums";
 import { resolveLivePromo } from "../live-course/promo";
+import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -33,9 +34,12 @@ const createEbookOrderSchema = z.object({
   promocode: z.string().trim().min(1).optional(),
 });
 
-// MySQL ebook write path: the plan id is an INT (the migrated id-space).
+// MySQL ebook write path: the plan id is an INT (the migrated id-space). Accepts
+// the same optional promo code as the Mongo branch (ebooks are digital — no
+// delivery address).
 const createEbookOrderMysqlSchema = z.object({
   planId: z.coerce.number().int().positive(),
+  promocode: z.string().trim().min(1).optional(),
 });
 
 // POST /api/v1/client/payment/create-order/ebook
@@ -194,7 +198,7 @@ const createEbookOrderMysqlPath = async (
   ctx: { traceId?: string; customerId: number; rp: RazorpayClient }
 ) => {
   const { traceId, customerId, rp } = ctx;
-  const { planId } = createEbookOrderMysqlSchema.parse(req.body);
+  const { planId, promocode } = createEbookOrderMysqlSchema.parse(req.body);
 
   const plan = await findEbookPlanForOrder(planId);
   if (!plan) {
@@ -211,9 +215,29 @@ const createEbookOrderMysqlPath = async (
     return res.status(404).json({ success: false, message: "Ebook not found or inactive." });
   }
 
+  // Resolve the promo code (if any) against THIS ebook; charge the reduced
+  // amount. Re-validated here — the /promocodes/apply preview is never trusted.
+  let chargeAmount = plan.price;
+  let promocodeIdNum: number | null = null;
+  let originalAmount: number | null = null;
+  let discountAmount: number | null = null;
+  if (promocode) {
+    const { result, error } = await resolvePromoForPlanSql(promocode, plan.price, { type: "ebook", id: plan.ebookId }, planId);
+    if (error || !result) {
+      logger.warn("createEbookOrderPayment[mysql] promo rejected", { traceId, customerId, promocode, error });
+      return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
+    }
+    if (result.finalAmount < 1) return res.status(400).json({ success: false, message: "This promo code reduces the price below the minimum payable amount. Please contact support." });
+    chargeAmount = result.finalAmount;
+    const pid = Number(result.promo._id);
+    promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
+    originalAmount = result.originalAmount;
+    discountAmount = result.discountAmount;
+  }
+
   const receiptId = `ebook-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const rzpOrder = await createRazorpayOrder(rp, {
-    amount: Math.round(plan.price * 100), // paise
+    amount: Math.round(chargeAmount * 100), // paise
     currency: "INR",
     receipt: receiptId,
     notes: {
@@ -221,25 +245,26 @@ const createEbookOrderMysqlPath = async (
       ebookId: String(plan.ebookId),
       planId: String(planId),
       customerId: String(customerId),
+      ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}),
     },
   });
 
   const { orderId } = await createEbookOrderMysql({
     customerId,
     planId,
-    orderPrice: plan.price,
+    orderPrice: chargeAmount,
     razorpayOrderId: rzpOrder.id,
     uniqueId: receiptId,
   });
 
-  logger.info("createEbookOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: plan.price });
+  logger.info("createEbookOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
   return res.status(201).json({
     success: true,
     data: {
       ebookOrderId: String(orderId),
       receiptId,
       razorpay: razorpayResponseFor(rzpOrder),
-      amountInRupees: plan.price,
+      amountInRupees: chargeAmount,
       ebook: {
         _id: ebook._id,
         name: ebook.name,
@@ -249,6 +274,9 @@ const createEbookOrderMysqlPath = async (
         duration: plan.duration,
         price: plan.price,
       },
+      promo: promocodeIdNum
+        ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount }
+        : null,
     },
   });
 };

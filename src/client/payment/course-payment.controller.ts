@@ -6,6 +6,7 @@ import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookP
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { resolveLivePromo } from "../live-course/promo";
+import { resolvePromoForPlanSql, addressBelongsToCustomerSql } from "../../modules/promo-code/promo-code.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -38,9 +39,12 @@ const createCourseOrderSchema = z.object({
 });
 
 // MySQL course write path: the plan id is an INT (the migrated id-space), not an
-// ObjectId. Accept a positive-int packageId (as number or numeric string).
+// ObjectId. Accept a positive-int packageId (as number or numeric string) plus
+// the same optional promocode + delivery-address fields as the Mongo branch.
 const createCourseOrderMysqlSchema = z.object({
   packageId: z.coerce.number().int().positive(),
+  customerShippingId: z.coerce.number().int().positive().optional(),
+  promocode: z.string().trim().min(1).optional(),
 });
 
 // POST /api/v1/client/payment/create-order/course
@@ -219,7 +223,7 @@ const createCourseOrderMysqlPath = async (
   ctx: { traceId?: string; customerId: number; rp: RazorpayClient }
 ) => {
   const { traceId, customerId, rp } = ctx;
-  const { packageId } = createCourseOrderMysqlSchema.parse(req.body);
+  const { packageId, customerShippingId, promocode } = createCourseOrderMysqlSchema.parse(req.body);
 
   const plan = await findCoursePlanForOrder(packageId);
   if (!plan) {
@@ -236,9 +240,35 @@ const createCourseOrderMysqlPath = async (
     return res.status(404).json({ success: false, message: "Course not found or inactive." });
   }
 
+  // Validate the delivery address (when supplied) belongs to this customer (SQL).
+  if (customerShippingId) {
+    const ok = await addressBelongsToCustomerSql(customerShippingId, customerId);
+    if (!ok) return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
+  }
+
+  // Resolve the promo code (if any) against THIS course; charge the reduced
+  // amount. Re-validated here — the /promocodes/apply preview is never trusted.
+  let chargeAmount = plan.price;
+  let promocodeIdNum: number | null = null;
+  let originalAmount: number | null = null;
+  let discountAmount: number | null = null;
+  if (promocode) {
+    const { result, error } = await resolvePromoForPlanSql(promocode, plan.price, { type: "course", id: plan.courseId }, packageId);
+    if (error || !result) {
+      logger.warn("createCourseOrderPayment[mysql] promo rejected", { traceId, customerId, promocode, error });
+      return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
+    }
+    if (result.finalAmount < 1) return res.status(400).json({ success: false, message: "This promo code reduces the price below the minimum payable amount. Please contact support." });
+    chargeAmount = result.finalAmount;
+    const pid = Number(result.promo._id);
+    promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
+    originalAmount = result.originalAmount;
+    discountAmount = result.discountAmount;
+  }
+
   const receiptId = `course-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const rzpOrder = await createRazorpayOrder(rp, {
-    amount: Math.round(plan.price * 100), // paise
+    amount: Math.round(chargeAmount * 100), // paise
     currency: "INR",
     receipt: receiptId,
     notes: {
@@ -246,6 +276,7 @@ const createCourseOrderMysqlPath = async (
       courseId: String(plan.courseId),
       packageId: String(packageId),
       customerId: String(customerId),
+      ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}),
     },
   });
 
@@ -253,18 +284,18 @@ const createCourseOrderMysqlPath = async (
   const { orderId } = await createCourseOrderMysql({
     customerId,
     planId: packageId,
-    price: plan.price,
+    price: chargeAmount,
     razorpayOrderId: rzpOrder.id,
   });
 
-  logger.info("createCourseOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: plan.price });
+  logger.info("createCourseOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
   return res.status(201).json({
     success: true,
     data: {
       subscriptionId: String(orderId),
       receiptId,
       razorpay: razorpayResponseFor(rzpOrder),
-      amountInRupees: plan.price,
+      amountInRupees: chargeAmount,
       course: {
         _id: course._id,
         name: course.name,
@@ -274,6 +305,9 @@ const createCourseOrderMysqlPath = async (
         duration: plan.duration,
         price: plan.price,
       },
+      promo: promocodeIdNum
+        ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount }
+        : null,
     },
   });
 };

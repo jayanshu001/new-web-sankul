@@ -189,7 +189,11 @@
       "Bash(awk '/model MaterialCategory /,/^}/' prisma/schema.prisma)",
       "Bash(git stash *)",
       "Bash(command -v mysql)",
-      "Bash(mysql -h127.0.0.1 -P3307 -uroot -pwebsankul_dev websankul_staging -e \"SELECT id, title, \\\\`order\\\\`, status FROM ws_video ORDER BY \\\\`order\\\\` ASC, id ASC LIMIT 15;\")"
+      "Bash(mysql -h127.0.0.1 -P3307 -uroot -pwebsankul_dev websankul_staging -e \"SELECT id, title, \\\\`order\\\\`, status FROM ws_video ORDER BY \\\\`order\\\\` ASC, id ASC LIMIT 15;\")",
+      "Bash(lsof -nP -iTCP:4001 -sTCP:LISTEN)",
+      "Bash(npx pm2 *)",
+      "Bash(ps -o pid,lstart,command -p 12233)",
+      "Bash(ps -eo pid,ppid,lstart,command)"
     ]
   }
 }
