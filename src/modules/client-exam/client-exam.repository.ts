@@ -33,6 +33,35 @@ export const clientExamRepository = {
       orderBy: [{ order_by: "asc" }, { createAt: "desc" }],
     }),
 
+  /** Single exam category (for the listing header). */
+  findCategory: (id: number) =>
+    prisma.examCategory.findFirst({ where: { id }, select: { id: true, name: true, image: true, order_by: true } }),
+
+  /** Published non-daily exams in a category, paginated + optional title search. */
+  examsByCategoryPaged: (categoryId: number, now: Date, search: string | null, skip: number, take: number) =>
+    prisma.exam.findMany({
+      where: {
+        examCategoryId: categoryId,
+        status: true,
+        type: "subject",
+        ...(search ? { name: { contains: search } } : {}),
+        OR: [{ endAt: null }, { endAt: { gte: now } }],
+      },
+      orderBy: [{ order_by: "asc" }, { createAt: "desc" }],
+      skip,
+      take,
+    }),
+  countExamsByCategoryPaged: (categoryId: number, now: Date, search: string | null) =>
+    prisma.exam.count({
+      where: {
+        examCategoryId: categoryId,
+        status: true,
+        type: "subject",
+        ...(search ? { name: { contains: search } } : {}),
+        OR: [{ endAt: null }, { endAt: { gte: now } }],
+      },
+    }),
+
   /** Questions of an exam (without revealing the answer field). */
   questionsForExam: (examId: number) =>
     prisma.examQuestion.findMany({

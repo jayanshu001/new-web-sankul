@@ -88,8 +88,9 @@ export const listFaqsPaged = async (q: {
   if (q.typeId && mongoose.Types.ObjectId.isValid(q.typeId)) filter.typeId = q.typeId;
   Object.assign(filter, buildSearchFilter(q.search, ["question", "answer"]));
   const sortField = q.sortBy === "question" ? "question" : q.sortBy === "updatedAt" ? "updatedAt" : "createdAt";
-  const sortNum = q.sortDir === "desc" ? -1 : 1;
-  let query = FAQ.find(filter).populate("typeId", "_id title").sort({ [sortField]: sortNum });
+  // No explicit sort → newest first; explicit sortBy without dir → asc (e.g. question A-Z).
+  const sortNum = q.sortDir === "asc" ? 1 : q.sortDir === "desc" ? -1 : q.sortBy ? 1 : -1;
+  let query = FAQ.find(filter).populate("typeId", "_id title").sort({ [sortField]: sortNum, _id: -1 });
   if (q.skip != null) query = query.skip(q.skip);
   if (q.take != null) query = query.limit(q.take);
   const [docs, total] = await Promise.all([query.lean(), FAQ.countDocuments(filter)]);

@@ -14,6 +14,13 @@ export const parsePackageId = (id: string): number | null => {
 
 const idStrOrNull = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
 
+// string[] (numeric ids) → int[] for the JSON countdown columns; drops non-numerics.
+const toIntIdArray = (arr?: string[]): number[] =>
+  (arr ?? []).map((s) => Number(s)).filter((n) => Number.isInteger(n) && n > 0);
+// JSON int[] column → string[] for the DTO (mirrors Mongo's id-string arrays).
+const jsonIdsToStrings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.map((x) => String(x)) : [];
+
 // ── goal-label resolution ──────────────────────────────────────────────────────
 // goalLabelId is the label NAME at the API boundary (labels carry no usable id
 // in Mongo); SQL stores the JSON-label numeric id in ws_package.goal_label_id.
@@ -63,12 +70,16 @@ const toTypeDto = (t: PackageType) => ({ _id: String(t.id), name: t.name, create
 type PkgRow = Package & { packageType?: { id: number; name: string } | null };
 
 /**
- * `ws_package` row → Mongo-shaped Package doc. SQL-absent fields synthesized:
- * isPaid=true (Mongo default), isSmartCourse/isPlannerCourse=false, subtitle="",
- * notificationTopic="", packageCategoryId=null, examCountdown*=[]. goalId is the
- * numeric id as a string (unpopulated, mirroring Mongo); goalLabelId is the label
- * NAME string (resolved by the caller, passed in as `goalLabelName`).
- * with_material/without_material are the descriptive *Text fields in Mongo.
+ * `ws_package` row → Mongo-shaped Package doc. isPaid/isSmartCourse/
+ * isPlannerCourse/packageCategoryId now persist on real ws_package columns and
+ * are read straight from the row (packageCategoryId surfaced as a bare id string,
+ * not the populated {_id,title,slug,image} object the Mongo getById returns).
+ * examCountdownCategoryIds/examCountdownIds now persist on ws_package JSON
+ * columns (id-string arrays out). Still SQL-absent (synthesized): subtitle="",
+ * notificationTopic="". goalId is the numeric id as a string (unpopulated, mirroring
+ * Mongo); goalLabelId is the label NAME string (resolved by the caller, passed in
+ * as `goalLabelName`). with_material/without_material are the descriptive *Text
+ * fields in Mongo.
  */
 const toPackageDto = (
   row: PkgRow,
@@ -85,15 +96,15 @@ const toPackageDto = (
   withoutMaterialText: row.withoutMaterial,
   order: row.order_by,
   active: row.active,
-  isPaid: true,
-  isSmartCourse: false,
-  isPlannerCourse: false,
+  isPaid: row.isPaid,
+  isSmartCourse: row.isSmartCourse,
+  isPlannerCourse: row.isPlannerCourse,
   packageTypeId: row.packageType ? { _id: String(row.packageType.id), name: row.packageType.name } : idStrOrNull(row.packageTypeId),
   goalId: idStrOrNull(row.goalId),
   goalLabelId: goalLabelName ?? null,
-  examCountdownCategoryIds: [],
-  examCountdownIds: [],
-  packageCategoryId: null,
+  examCountdownCategoryIds: jsonIdsToStrings(row.examCountdownCategoryIds),
+  examCountdownIds: jsonIdsToStrings(row.examCountdownIds),
+  packageCategoryId: idStrOrNull(row.packageCategoryId),
   educatorId: idStrOrNull(row.educator_id),
   notificationTopic: "",
   ...(embeds ?? {}),
@@ -205,6 +216,9 @@ export interface PackageWriteInput {
   withMaterialText?: string; withoutMaterialText?: string; order?: number; active?: boolean;
   packageTypeId?: string | null; educatorId?: string | null;
   goalId?: string | null; goalLabelId?: string | null; // goalLabelId = label NAME
+  isPaid?: boolean; isSmartCourse?: boolean; isPlannerCourse?: boolean;
+  packageCategoryId?: string | null;
+  examCountdownCategoryIds?: string[]; examCountdownIds?: string[];
   specificSubjects?: Array<{ category: string; order?: number; status?: boolean }>;
   materialCategories?: Array<{ category: string; order?: number }>;
   examCategories?: Array<{ category: string; order?: number }>;
@@ -234,6 +248,12 @@ export const createPackage = async (d: PackageWriteInput) => {
       educator_id: d.educatorId ? parsePackageId(d.educatorId) : null,
       goalId: gf.goalId,
       goalLabelId: gf.goalLabelId,
+      isPaid: d.isPaid ?? true,
+      isSmartCourse: d.isSmartCourse ?? false,
+      isPlannerCourse: d.isPlannerCourse ?? false,
+      packageCategoryId: d.packageCategoryId ? parsePackageId(d.packageCategoryId) : null,
+      examCountdownCategoryIds: toIntIdArray(d.examCountdownCategoryIds),
+      examCountdownIds: toIntIdArray(d.examCountdownIds),
       created_at: now, updated_at: now,
     },
     specificSubjects: subjectRows(d.specificSubjects),
@@ -257,6 +277,12 @@ export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"
   if (d.active !== undefined) data.active = d.active;
   if (d.packageTypeId !== undefined) data.packageTypeId = d.packageTypeId ? parsePackageId(d.packageTypeId) ?? 1 : 1;
   if (d.educatorId !== undefined) data.educator_id = d.educatorId ? parsePackageId(d.educatorId) : null;
+  if (d.isPaid !== undefined) data.isPaid = d.isPaid;
+  if (d.isSmartCourse !== undefined) data.isSmartCourse = d.isSmartCourse;
+  if (d.isPlannerCourse !== undefined) data.isPlannerCourse = d.isPlannerCourse;
+  if (d.packageCategoryId !== undefined) data.packageCategoryId = d.packageCategoryId ? parsePackageId(d.packageCategoryId) : null;
+  if (d.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = toIntIdArray(d.examCountdownCategoryIds);
+  if (d.examCountdownIds !== undefined) data.examCountdownIds = toIntIdArray(d.examCountdownIds);
 
   // Goal/label: validate the merged (goalId, labelName) pair when either is supplied,
   // then persist both numeric ids. Mirrors the Mongo branch's assertGoalLabelPair.

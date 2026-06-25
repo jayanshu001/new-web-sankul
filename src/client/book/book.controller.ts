@@ -45,13 +45,21 @@ export const listBooks = async (req: Request, res: Response) => {
     const { language } = req.query as Record<string, string>;
     const { search, page, limit, skip } = parseListQuery(req.query);
 
+    // `type` is REQUIRED — each book category (magazine / combo / regular) is its
+    // own independently searched + paginated list. magazine→isMagazine,
+    // combo→isCombo, regular→neither flag set.
+    const type = String(req.query.type ?? "").trim().toLowerCase();
+    if (type !== "magazine" && type !== "combo" && type !== "regular") {
+      return res.status(422).json({ success: false, message: "Invalid or missing type. Use one of: magazine, combo, regular." });
+    }
+
     // ── MySQL book listing (catalog-book + book-order, flag-gated) ───────────
     // catalog-book supplies the data + computed fields; book-order supplies the
     // per-customer cart `qty`/`cartId` + `isPurchased`. Response byte-identical.
     if (isBookMysql()) {
       const base = resolveBase(req);
       const buildShareLink = (bid: string) => buildShareUrl("books", bid, base);
-      const rows = await listBooksData({ search, language }, buildShareLink);
+      const { items: rows, total } = await listBooksData({ search, language, type, skip, take: limit }, buildShareLink);
 
       let cartId: string | null = null;
       let qtyByBookId = new Map<string, number>();
@@ -69,8 +77,8 @@ export const listBooks = async (req: Request, res: Response) => {
         qty: qtyByBookId.get(b._id) ?? 0,
         isPurchased: purchasedSet.has(b._id),
       }));
-      logger.info("listBooks success (mysql)", { traceId, customerId, count: decoratedMysql.length });
-      return res.status(200).json({ success: true, data: { cartId, books: decoratedMysql } });
+      logger.info("listBooks success (mysql)", { traceId, customerId, type, count: decoratedMysql.length });
+      return res.status(200).json({ success: true, data: { cartId, books: decoratedMysql }, pagination: buildPagination(total, page, limit) });
     }
 
     const filter: any = { status: true };
@@ -79,6 +87,10 @@ export const listBooks = async (req: Request, res: Response) => {
       if (rx) filter.$or = [{ name: rx }, { author: rx }];
     }
     if (language) filter.language = language;
+    // Same mutually-exclusive type buckets as the SQL branch.
+    if (type === "magazine") filter.isMagazine = true;
+    else if (type === "combo") filter.isCombo = true;
+    else { filter.isMagazine = { $ne: true }; filter.isCombo = { $ne: true }; }
 
     const [books, total] = await Promise.all([
       Book.find(filter).sort({ orderBy: 1, createdAt: -1 }).skip(skip).limit(limit),

@@ -4,6 +4,109 @@
 
 ---
 
+## 2026-06-25 — client promocodes list: optional `type`+`id` entity filter (both backends)
+
+**Request:** `GET /client/promocodes` should optionally return only the public codes whose `appliesTo` covers a specific entity. Param shape: `?type=<package|course|testSeries|ebook|liveCourse>&id=<entityId>` (kebab aliases `test-series`/`live-course`/`e-book` accepted). Rationale: integer SQL PKs are ambiguous across tables, so the module `type` is required alongside `id` to know which entity the id is.
+
+**Semantics:** BOTH `type`+`id` ⇒ filter to codes where `appliesTo.type === type` AND `appliesTo.ids` contains `id` (the existing `promoCovers` rule). NEITHER ⇒ all public (unchanged). Exactly one ⇒ **422**. Invalid `type` or non-parseable `id` ⇒ **422**.
+
+**Changes:**
+- `modules/promo-code/promo-code.service.ts`: `listPublicPromocodes` gains optional `appliesTo:{type,id}` — narrows to `appliesToType` at the DB, then in-memory filters by `parseIdArray(appliesToIds).includes(id)` (small per-type set → exact pagination, mirrors `listPromocodesForPackage`). Extracted `toPublicPromoDto`. New `normalizeAppliesToType` (kebab→canonical).
+- `client/promocode/promocode.controller.ts` `listPromocodes`: parses/validates `type`+`id`; SQL branch passes `appliesTo` (id via `parsePcId`); Mongo branch adds `appliesTo.type` + `appliesTo.ids` (ObjectId membership) to the filter. Response shape + pagination unchanged.
+
+Verified on staging: public code `FIRST50` (appliesTo package [88]) → returned for `?type=package&id=88`, absent for id=94 / type=course, present with no filter. `yarn typecheck` ✅ (pre-existing payment/referral errors remain).
+
+---
+
+## 2026-06-25 — client books list: required `type` bucket + per-type pagination (both backends)
+
+**Request:** `GET /client/books` should split into three independently searched + paginated lists by a required `type` param: `magazine` (is_magazine), `combo` (is_combo), `regular` (neither). Buckets are mutually exclusive (verified on staging: magazine=0, combo=1, regular=9, overlap=0).
+
+**Changes:**
+- `catalog-book.types.ts`: `ListBooksOptions` gains `type?: "magazine"|"combo"|"regular"`, `skip?`, `take?` (+ exported `BookType`).
+- `catalog-book.repository.ts`: extracted `buildWhere` (adds the type predicate — `is_magazine:true` / `isCombo:true` / both-false); `listActive` now takes `skip`/`take`; new `countActive` for pagination totals.
+- `catalog-book.service.ts`: `listBooksData` now returns `{ items, total }` (was `BookListItemDto[]`) — runs `listActive` + `countActive` in parallel. Sole caller is `listBooks`.
+- `client/book/book.controller.ts` `listBooks`: validates `type` (**422** "Invalid or missing type…" when absent/invalid); MySQL branch threads `type`+`skip`+`take` and now returns a `pagination` object (previously unpaginated) so the SQL envelope matches the Mongo one (`{ cartId, books, pagination }`); Mongo branch adds the same mutually-exclusive type predicate (`isMagazine:true` / `isCombo:true` / `{$ne:true}` on both).
+
+**Contract note:** `type` is now mandatory — callers hitting `/client/books` without it get 422 (per product decision). The MySQL branch gains a `pagination` block it didn't emit before. `yarn typecheck` ✅ (pre-existing payment/referral errors remain).
+
+---
+
+## 2026-06-25 — catalog materials tab: restore category name + inline materials (MySQL parity)
+
+**Bug 1 (name missing):** `client-catalog.catalogMaterials` built the category DTO with `cat.title`, but the `MaterialCategory` Prisma field is `name` (maps to column `title`) → `undefined` → dropped from JSON. The category search filter had the same `cat.title` bug. Fixed → `cat.name` (DTO now emits both `title` and `name`, matching the tests branch); search filters on name.
+
+**Bug 2 (response shape drift):** the Mongo branch of `GET /client/catalog/:type/:id/materials` spreads the FULL embedded category doc and FULL material doc per group: `{ category: {_id,title,slug,image,parent,ancestors,childCategoryIds,order,status,createdAt,updatedAt,__v,havingChildDirectory,count}, materials: [{_id,title,materialCategoryId,file,directLink,fileSize,fileMime,language,isPreview,isPaid,downloadCount,order,status,createdAt,updatedAt,__v,isPurchased,(description/thumbnail if set)}] }`. The SQL branch returned a reduced/renamed subset and no `materials`. Fixed: `catalogMaterials` now emits BOTH docs in full via dedicated `shapeMaterialCategoryDoc`/`shapeMaterialDoc` (parent 0→null; `ancestors` computed by parent-walk; `childCategoryIds` = active children; `havingChildDirectory` = childCategoryIds.length>0; `__v:0`; file/directLink gated for unpurchased paid). Direct materials fetched per category, ownership resolved once via `client-material.getPurchasedMaterialIds`. New `customerId` param threaded from the controller (`req.user.id`). Verified vs the Mongo doc: pkg 94 / cat 949 → material 9173 surfaces with identical field set.
+
+No schema/DDL change. `yarn typecheck` ✅ (pre-existing payment/referral errors remain).
+
+## 2026-06-25 — client category listings: add missing MySQL branches (materials / exams / package-category)
+
+**Bug:** Three `src/client/categories/categories.controller.ts` handlers had NO MySQL branch — they ran `mongoose.Types.ObjectId.isValid(id)` first, so numeric MySQL ids (e.g. `949`) 400'd with "Invalid category id." (reported: `GET /client/material-categories/949/materials`).
+
+**Fixes (gated, Mongo fallback intact):**
+- `listMaterialsByCategory` → SQL branch via new `client-material.listMaterialsByCategoryPaged(categoryId, customerId, {skip,take,search,type})` (paginated leaf materials + entitlement gating via existing `getPurchasedMaterialIds`/`shapeMaterial`; category DTO `{_id,title,image}`). Returns `{ data:{category,list}, pagination }`. Verified: cat 949 → 1 material.
+- `listExamsByCategory` → SQL branch via new `client-exam.listExamsByCategoryPaged(...)` + repo `findCategory`/`examsByCategoryPaged`/`countExamsByCategoryPaged` (published non-daily, title search, paginated; isCompleted/lastResult deco reuses `toExamDto`/`toResultDto`). Verified: exam_category 146 has subject exams.
+- `listPackagesByCategory` → SQL branch via new `package-category.listPackagesAndLiveByCategory(categoryId)` → `{ recorded, live }`. Packages (active, `package_category_id`) with plans/defaultPlan/startingPrice + live courses (`ws_live_course.package_category_id`). Now SQL-backed because ws_package carries is_paid/is_smart_course/is_planner_course and ws_live_course carries package_category_id (superseded the module's stale "stays Mongo" drift note).
+
+No schema/DDL change. `yarn typecheck` ✅ (pre-existing payment/referral errors remain).
+
+## 2026-06-25 — client exam-countdown listings: ALTER ws_package + wire 4 handlers (MySQL)
+
+**Schema (DDL `docs/migration/schema-changes/2026-06-25_package_exam_countdown_cols.sql`):**
+`ALTER TABLE ws_package ADD COLUMN exam_countdown_category_ids JSON NULL, ADD COLUMN exam_countdown_ids JSON NULL` (mirrors ws_live_course/ws_book/ws_ebook which already had them). Applied to staging; `schema.prisma` Package model hand-edited (+`examCountdownCategoryIds Json?`, `examCountdownIds Json?`); `prisma:generate` run. JSON_CONTAINS membership verified on staging (seed [3]/[7] on pkg 94 matched, then reverted).
+
+**Write wiring (admin-package):** `PackageWriteInput` + create/update map `examCountdownCategoryIds`/`examCountdownIds` (string[]→int[]); `toPackageDto` reads them back as id-string arrays. `package.validation.ts` regex loosened to accept numeric ids OR 24-hex (SQL branch sends ints). Backfill: `scripts/backfill-package-examcountdown-cols.ts` (Mongo→SQL by natural key, mirrors c6).
+
+**Read wiring (4 handlers in categories.controller.ts via new `modules/exam-countdown/exam-countdown.client.ts`):**
+- `listPackagesByExamCountdownCategory` → `listPackagesByCountdownCategory` (packages w/ plans split withMaterial/withoutMaterial + subscriberCount; JSON_CONTAINS on exam_countdown_category_ids).
+- `listProductsByExamCountdown` → `listProductsByCountdown` (packages + live courses merged, tagged type; live carries plans/subscriberCount/isPurchased/daysLeft via LiveCourseSubscription).
+- `listBooksAndEbooksByExamCountdownCategory` / `listBooksAndEbooksByExamCountdown` → `listBooksEbooksByCountdown[Category]` (book ownership via `book-order.getPurchasedBookIdSet`; ebook pricing via PackageCourseEbookPrice + ownership via ws_ebook_subscription; merged sorted createdAt desc).
+
+All gated by `isExamCountdownMysql()`; Mongo fallback intact. Membership match by `JSON_CONTAINS(col, CAST(? AS JSON))` (raw), status-active, name search, order_by sort. `yarn typecheck` ✅ (pre-existing payment/referral errors remain). Existing rows return empty until the backfill runs.
+
+## 2026-06-25 — admin package update: wire is_paid/is_smart_course/is_planner_course/package_category_id (MySQL)
+
+**Bug:** `PUT /admin/packages/:id` (e.g. 94) didn't round-trip `isPaid`, `isSmartCourse`, `isPlannerCourse`, `packageCategoryId` on the SQL branch. The Zod schema + controller accepted them and they reached `adminPackage.updatePackage(validated)`, but the module never mapped them: `PackageWriteInput` omitted the fields, create/update `data` never set them, and `toPackageDto()` **hardcoded** `isPaid:true, isSmartCourse:false, isPlannerCourse:false, packageCategoryId:null`. The columns exist on `ws_package` (`is_paid`, `is_smart_course`, `is_planner_course` BOOL; `package_category_id` INT?), so no DDL — pure wiring gap. Verified on staging: pkg 94 had `package_category_id = NULL` after a PUT that sent `"3"`.
+
+**Fix (`modules/admin-package/admin-package.service.ts`, no schema/DDL change):**
+- `PackageWriteInput`: added `isPaid?/isSmartCourse?/isPlannerCourse?: boolean`, `packageCategoryId?: string|null`.
+- `createPackage` data: `isPaid: d.isPaid ?? true`, `isSmartCourse: d.isSmartCourse ?? false`, `isPlannerCourse: d.isPlannerCourse ?? false`, `packageCategoryId: d.packageCategoryId ? parsePackageId(...) : null`.
+- `updatePackage` data: conditional `if (d.x !== undefined) data.x = ...` for all four (packageCategoryId parsed to int or null).
+- `toPackageDto`: read `row.isPaid/isSmartCourse/isPlannerCourse`; `packageCategoryId: idStrOrNull(row.packageCategoryId)`.
+
+**Contract note:** Mongo `getById` populates `packageCategoryId` to `{_id,title,slug,image}`; the SQL DTO returns it as a **bare id string** (matches how the admin edit form preselects, and consistent with goalId/educatorId). Flagged in code comments. subtitle/notificationTopic/examCountdown* remain Mongo-only (no SQL columns).
+
+**(A) category pivots — NOT a bug:** investigated the delete-then-createMany transaction. On staging all posted FKs are valid (video 105/127/41, material 270/949, exam 149/148 all exist; package_category 3 exists) and pivot rows already persist for pkg 94 (3/2/2). The PUT returns 200; no rollback.
+
+`yarn typecheck` ✅ (pre-existing unrelated payment/referral errors on this WIP branch remain).
+
+## 2026-06-25 — admin package promoted-codes: add missing MySQL branch
+
+**Bug:** `GET /admin/packages/:id/promoted-codes` (numeric id, e.g. `94`) returned `{"success":false,"message":"Invalid package id."}`. `package.service.ts` `listPromotedCodes` was the only package handler with NO MySQL branch — it called `assertObjectId(packageId)` unconditionally, which 400s a numeric id, then queried Mongo `PromoCode`.
+
+**Fix:**
+- `modules/promo-code/promo-code.service.ts`: new export `listPromocodesForPackage(packageId: number)` — SQL equivalent of the Mongo `PromoCode.find({ "appliesTo.type": "package", "appliesTo.ids": id }).sort({ createdAt: -1 })`. Queries `prisma.promoCodeRule.findMany({ where: { appliesToType: "package" }, orderBy: { createdAt: "desc" } })`, then filters in-memory on `parseIdArray(appliesToIds).includes(packageId)` (appliesToIds is a JSON int[]), maps through the existing `listDto`.
+- `admin/package/package.service.ts` `listPromotedCodes`: added `if (promoCode.isPromoCodeMysql()) return promoCode.listPromocodesForPackage(assertPkgSqlId(packageId, "package"));` before the Mongo `assertObjectId` path. Imported `* as promoCode` from the promo-code module.
+
+Gated by `isPromoCodeMysql()` (`promo-code` flag); Mongo fallback intact. No schema/DDL change. `yarn typecheck` ✅ (pre-existing unrelated payment/referral errors on this WIP branch remain).
+
+## 2026-06-25 — admin CMS FAQ list: default to recently-added on top
+
+**Request:** `GET /admin/cms/faqs?page=1&limit=10` should show newest FAQs first by default. Both branches defaulted to `created_at`/`createdAt` **asc** (oldest first).
+
+**Fix (sort-default only):**
+- `modules/faq/faq.repository.ts` `findPage`: `orderBy` → `[{ <col> : dir }, { id: "desc" }]` where default dir is `desc` when no `sortBy` is given (explicit `sortBy` without `sortOrder` still defaults `asc`, e.g. question A-Z), plus an `id desc` tiebreaker.
+- `modules/faq/faq.service.ts` Mongo branch: `sortNum` default → `-1` when no `sortBy`; added `_id: -1` tiebreaker.
+
+Explicit `sortBy`/`sortOrder` behavior unchanged; whitelist (`createdAt|updatedAt|question`) unchanged. No schema/DDL change. `yarn typecheck` ✅ (pre-existing unrelated payment/referral errors remain).
+
+## 2026-06-25 — admin CMS FAQ update: honor `typeId` alias (type never updated)
+
+**Bug:** `PUT /admin/cms/faqs/:id` with body `{ typeId: "referral", question, answer }` updated question/answer but NOT the category — the row stayed `type: "general"`. MySQL `ws_faq` stores the category in the `type` enum column ("general"|"referral"), but the admin UI sends the slug as `typeId` (matching the response's `typeId._id`). The MySQL Zod schema (`faqUpdateSchemaMysql`/`faqCreateSchemaMysql`) only declared `type`, so Zod silently stripped the unknown `typeId` key → `toPrismaFaqUpdate` got no `type` → nothing mapped.
+
+**Fix (`modules/faq/faq.validation.ts`, validation-only):** wrapped both MySQL schemas in `z.preprocess(aliasTypeId, …)` that copies `typeId` → `type` when `type` is absent. Inner object schemas (and their inferred output types) are unchanged, so create/update behavior is identical except the `typeId` alias is now honored. `typeId` must be a valid slug (`general`/`referral`); the inner `z.object` strips the alias key after copy. Mongo branch (separate `ws_faq_types` ObjectId ref) untouched. No schema/repository/transformer/DDL change. `yarn typecheck` ✅ (pre-existing unrelated payment/referral errors on this WIP branch remain).
+
 ## 2026-06-25 — admin CMS lists: server-side search + sort + opt-in pagination
 
 **Request:** `/admin/cms/popups`, `/admin/cms/current-affairs`, `/admin/cms/banners`, `/admin/cms/live-banners`, `/admin/cms/testimonials`, `/admin/cms/faqs` should support server-side search + pagination (FE calls them with `?limit=100`).

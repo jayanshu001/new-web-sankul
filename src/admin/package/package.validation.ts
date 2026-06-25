@@ -22,8 +22,9 @@ export const createPackageSchema = z.object({
   packageTypeId: z.string().nullable().optional(),
   goalId: z.string().nullable().optional(),
   goalLabelId: z.string().nullable().optional(),
-  examCountdownCategoryIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId")).optional(),
-  examCountdownIds: z.array(z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId")).optional(),
+  // Accept a 24-hex Mongo ObjectId OR a numeric MySQL id (SQL branch sends ints).
+  examCountdownCategoryIds: z.array(z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id")).optional(),
+  examCountdownIds: z.array(z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id")).optional(),
   packageCategoryId: z.string().nullable().optional(),
   educatorId: z.string().nullable().optional(),
   specificSubjects: z.array(categoryRefSchema).optional(),

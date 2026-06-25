@@ -5,9 +5,11 @@
  *
  * Scope: admin CRUD (list/create/update/delete) + the client category LISTING
  * (`listPackageCategories`, with per-category active-package count + the
- * ?live=true filter). The client `listPackagesByCategory` detail join stays
- * Mongo — it returns Mongo-only Package fields (isSmartCourse/isPlannerCourse/…)
- * that ws_package does not carry (documented catalog drift).
+ * ?live=true filter) + the client `listPackagesByCategory` detail join
+ * (`listPackagesAndLiveByCategory`). The detail join is now SQL-backed:
+ * ws_package carries is_paid/is_smart_course/is_planner_course and
+ * ws_live_course carries package_category_id, so packages + live courses for a
+ * category resolve entirely on MySQL.
  */
 import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
@@ -31,6 +33,86 @@ export const toPkgCatDto = (r: any) => ({
   createdAt: r.createdAt ?? null,
   updatedAt: r.updatedAt ?? null,
 });
+
+const idStr = (v: number | null | undefined): string | null => (v != null ? String(v) : null);
+
+// ws_package row + its plans → the Mongo `recorded[]` shape (plans sorted
+// default-first then by duration; defaultPlan + startingPrice derived).
+const toCategoryPackageDto = (p: any, allPlans: any[]) => {
+  const plans = allPlans
+    .filter((pl) => pl.packageId === p.id)
+    .map((pl) => ({
+      _id: String(pl.id),
+      packageId: idStr(pl.packageId),
+      name: pl.name ?? null,
+      duration: pl.duration,
+      price: pl.price,
+      withMaterial: pl.withMaterial,
+      materialPrice: pl.materialPrice ?? 0,
+      isDefault: pl.isDefault,
+    }))
+    .sort((a, b) => {
+      if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+      return (a.duration ?? 0) - (b.duration ?? 0);
+    });
+  const defaultPlan = plans.find((pl) => pl.isDefault) ?? plans[0] ?? null;
+  return {
+    _id: String(p.id),
+    name: p.name,
+    description: p.description,
+    image: p.image ?? null,
+    shareableLink: p.shareable_link ?? null,
+    order: p.order_by,
+    isPaid: p.isPaid,
+    isSmartCourse: p.isSmartCourse,
+    isPlannerCourse: p.isPlannerCourse,
+    withMaterialText: p.withMaterial,
+    withoutMaterialText: p.withoutMaterial,
+    packageTypeId: idStr(p.packageTypeId),
+    goalId: idStr(p.goalId),
+    educatorId: idStr(p.educator_id),
+    plans,
+    defaultPlan,
+    startingPrice: defaultPlan ? defaultPlan.price : null,
+  };
+};
+
+// ws_live_course row → the Mongo `live[]` shape (courseEducatorId ← educator_id).
+const toCategoryLiveDto = (c: any) => ({
+  _id: String(c.id),
+  name: c.name,
+  description: c.description ?? null,
+  image: c.image ?? null,
+  shareableLink: c.shareableLink ?? null,
+  ordered: c.ordered,
+  isPaid: c.isPaid,
+  isPopular: c.isPopular,
+  level: c.level ?? null,
+  classType: c.classType,
+  withMaterial: c.withMaterial ?? null,
+  withoutMaterial: c.withoutMaterial ?? null,
+  courseEducatorId: idStr(c.educatorId),
+});
+
+/**
+ * GET /client/package-categories/:id → { recorded, live }. Active packages (with
+ * plans/defaultPlan/startingPrice) and active live courses in this package
+ * category. No category existence check / 404 — mirrors the Mongo handler, which
+ * returns empty arrays for an unknown id.
+ */
+export const listPackagesAndLiveByCategory = async (categoryId: number) => {
+  const [packages, liveCourses] = await Promise.all([
+    prisma.package.findMany({ where: { active: true, packageCategoryId: categoryId }, orderBy: { order_by: "asc" } }),
+    prisma.liveCourse.findMany({ where: { status: true, packageCategoryId: categoryId }, orderBy: { ordered: "asc" } }),
+  ]);
+  const plans = packages.length
+    ? await prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packages.map((p) => p.id) }, status: true } })
+    : [];
+  return {
+    recorded: packages.map((p) => toCategoryPackageDto(p, plans)),
+    live: liveCourses.map(toCategoryLiveDto),
+  };
+};
 
 // ── Admin CRUD ────────────────────────────────────────────────────────────────
 // Optional search (title) + sort + pagination. skip/take omitted → full list.

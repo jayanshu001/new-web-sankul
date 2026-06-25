@@ -11,7 +11,10 @@ export const adminVideoRepository = {
     prisma.video.findMany({
       where: buildWhere(opts),
       include: { VideoCategory: { select: { id: true, title: true, slug: true } } },
-      orderBy: { [sortCol(opts.sortBy)]: opts.sortDir },
+      // Stable secondary sort on id (asc) so rows that tie on the primary key
+      // (e.g. many share order=0) always come back in ascending-id order — the
+      // DB's natural order — matching the legacy/Mongo response exactly.
+      orderBy: [{ [sortCol(opts.sortBy)]: opts.sortDir }, { id: "asc" }],
       skip: opts.skip,
       take: opts.take,
     }),

@@ -30,6 +30,10 @@ import { LectureProgress } from "../../models/customer/LectureProgress.model";
 import { collapseProgressByVideo } from "../learning/collapseProgress";
 import { resolveVideoScope } from "../course/resolveVideoScope";
 import * as cvSql from "../../modules/client-category-video/client-category-video.service";
+import * as clientMatSql from "../../modules/client-material/client-material.service";
+import * as clientExamSql from "../../modules/client-exam/client-exam.service";
+import { isExamCountdownMysql, parseEcId } from "../../modules/exam-countdown/exam-countdown.service";
+import * as ecClientSql from "../../modules/exam-countdown/exam-countdown.client";
 import { getPurchasedMaterialIds, shapeMaterialForClient, listDirectMaterialsForCategory } from "../material/entitlement";
 import { LiveSession } from "../../models/course/LiveSession.model";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
@@ -419,6 +423,24 @@ export const listMaterialsByCategory = async (req: Request, res: Response) => {
   logger.info("listMaterialsByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
+    // ─── SQL branch (int id-space) ───
+    if (clientMatSql.isClientMaterialMysql()) {
+      const catId = clientMatSql.parseMatId(id);
+      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const { pageNum, limitNum, skip, search } = parsePaging(req);
+      const typeQ = String(req.query.type ?? "").toLowerCase();
+      const type = typeQ === "free" || typeQ === "paid" ? (typeQ as "free" | "paid") : null;
+      const userNum = clientMatSql.parseMatId(String(req.user?.id ?? ""));
+      const r = await clientMatSql.listMaterialsByCategoryPaged(catId, userNum, { skip, take: limitNum, search, type });
+      if (!r) return res.status(404).json({ success: false, message: "Material category not found." });
+      logger.info("listMaterialsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
+      return res.status(200).json({
+        success: true,
+        data: { category: r.category, list: r.list },
+        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listMaterialsByCategory invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
@@ -467,6 +489,22 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
   logger.info("listExamsByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
+    // ─── SQL branch (int id-space) ───
+    if (clientExamSql.isClientExamMysql()) {
+      const catId = clientExamSql.parseExamId(id);
+      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const { pageNum, limitNum, skip, search } = parsePaging(req);
+      const userNum = clientExamSql.parseExamId(String(req.user?.id ?? ""));
+      const r = await clientExamSql.listExamsByCategoryPaged(catId, userNum, { skip, take: limitNum, search });
+      if (!r) return res.status(404).json({ success: false, message: "Exam category not found." });
+      logger.info("listExamsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
+      return res.status(200).json({
+        success: true,
+        data: { category: r.category, list: r.list },
+        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listExamsByCategory invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
@@ -767,6 +805,21 @@ export const listPackagesByExamCountdownCategory = async (req: Request, res: Res
   logger.info("listPackagesByExamCountdownCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
+    // ─── SQL branch (int id-space) ───
+    if (isExamCountdownMysql()) {
+      const catId = parseEcId(id);
+      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const { pageNum, limitNum, skip, search } = parsePaging(req);
+      const userNum = parseEcId(String(req.user?.id ?? ""));
+      const r = await ecClientSql.listPackagesByCountdownCategory(catId, userNum, { skip, take: limitNum, search });
+      if (!r) return res.status(404).json({ success: false, message: "Exam countdown category not found." });
+      return res.status(200).json({
+        success: true,
+        data: { category: r.category, list: r.list },
+        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listPackagesByExamCountdownCategory invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
@@ -835,6 +888,21 @@ export const listProductsByExamCountdown = async (req: Request, res: Response) =
   logger.info("listProductsByExamCountdown invoked", { traceId, path: req.originalUrl, examCountdownId: id, userId: req.user?.id });
 
   try {
+    // ─── SQL branch (int id-space) ───
+    if (isExamCountdownMysql()) {
+      const ecId = parseEcId(id);
+      if (ecId == null) return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
+      const { pageNum, limitNum, skip, search } = parsePaging(req);
+      const userNum = parseEcId(String(req.user?.id ?? ""));
+      const r = await ecClientSql.listProductsByCountdown(ecId, userNum, { skip, take: limitNum, search });
+      if (!r) return res.status(404).json({ success: false, message: "Exam countdown not found." });
+      return res.status(200).json({
+        success: true,
+        data: { examCountdown: r.examCountdown, list: r.list },
+        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listProductsByExamCountdown invalid id", { traceId, examCountdownId: id });
       return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
@@ -1072,6 +1140,21 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
   logger.info("listBooksAndEbooksByExamCountdownCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
+    // ─── SQL branch (int id-space) ───
+    if (isExamCountdownMysql()) {
+      const catId = parseEcId(id);
+      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
+      const { pageNum, limitNum, skip, search } = parsePaging(req);
+      const userNum = parseEcId(String(req.user?.id ?? ""));
+      const r = await ecClientSql.listBooksEbooksByCountdownCategory(catId, userNum, { skip, take: limitNum, search });
+      if (!r) return res.status(404).json({ success: false, message: "Exam countdown category not found." });
+      return res.status(200).json({
+        success: true,
+        data: { category: r.category, list: r.list },
+        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listBooksAndEbooksByExamCountdownCategory invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
@@ -1124,6 +1207,21 @@ export const listBooksAndEbooksByExamCountdown = async (req: Request, res: Respo
   logger.info("listBooksAndEbooksByExamCountdown invoked", { traceId, path: req.originalUrl, examCountdownId: id, userId: req.user?.id });
 
   try {
+    // ─── SQL branch (int id-space) ───
+    if (isExamCountdownMysql()) {
+      const ecId = parseEcId(id);
+      if (ecId == null) return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
+      const { pageNum, limitNum, skip, search } = parsePaging(req);
+      const userNum = parseEcId(String(req.user?.id ?? ""));
+      const r = await ecClientSql.listBooksEbooksByCountdown(ecId, userNum, { skip, take: limitNum, search });
+      if (!r) return res.status(404).json({ success: false, message: "Exam countdown not found." });
+      return res.status(200).json({
+        success: true,
+        data: { examCountdown: r.examCountdown, list: r.list },
+        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
+      });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listBooksAndEbooksByExamCountdown invalid id", { traceId, examCountdownId: id });
       return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
@@ -1246,6 +1344,15 @@ export const listPackagesByCategory = async (req: Request, res: Response) => {
   logger.info("listPackagesByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
+    // ─── SQL branch (int id-space) ───
+    if (pkgCatSql.isPackageCategoryMysql()) {
+      const catId = pkgCatSql.parsePkgCatId(id);
+      if (catId == null) return res.status(400).json({ success: false, message: "Invalid package category id" });
+      const data = await pkgCatSql.listPackagesAndLiveByCategory(catId);
+      logger.info("listPackagesByCategory success (sql)", { traceId, categoryId: id, recordedCount: data.recorded.length, liveCount: data.live.length });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("listPackagesByCategory invalid id", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid package category id" });

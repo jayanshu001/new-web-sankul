@@ -78,7 +78,14 @@ export interface BookListItemDto extends BookDto {
 }
 
 /** Options for the book listing (from the query string). */
+/** Book category filter — mutually exclusive buckets, one required per request. */
+export type BookType = "magazine" | "combo" | "regular";
+
 export interface ListBooksOptions {
   search?: string;
   language?: string;
+  /** magazine → is_magazine; combo → isCombo; regular → neither. */
+  type?: BookType;
+  skip?: number;
+  take?: number;
 }

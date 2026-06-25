@@ -31,6 +31,7 @@ import {
   parsePackageChatId,
 } from "../../modules/package-chat/package-chat.service";
 import * as adminPackage from "../../modules/admin-package/admin-package.service";
+import * as promoCode from "../../modules/promo-code/promo-code.service";
 
 // Re-exported so the thin controllers can branch validation if needed.
 export const isAdminPackageMysql = adminPackage.isAdminPackageMysql;
@@ -293,10 +294,10 @@ export const getPackageById = async (id: string) => {
 
 export const createPackage = async (validated: any) => {
   if (isAdminPackageMysql()) {
-    // Mongo-only fields (packageCategory/examCountdown/isPaid/smart/planner/
-    // subtitle/notificationTopic) are dropped on SQL (no columns). Embedded arrays
-    // → pivot tables. goalId/goalLabelId DO persist on SQL (ws_package columns) and
-    // the goal-label validation runs inside adminPackage; examCountdown stays Mongo-only.
+    // isPaid/isSmartCourse/isPlannerCourse/packageCategoryId/examCountdown* DO
+    // persist on SQL (ws_package columns), as do goalId/goalLabelId. Embedded
+    // arrays → pivot tables. Still Mongo-only (no columns): subtitle/
+    // notificationTopic. Goal-label validation runs inside adminPackage.
     return adminPackage.createPackage(validated);
   }
   await assertGoalLabelPair(validated.goalId, validated.goalLabelId);
@@ -591,6 +592,12 @@ export const listSubscribers = async (packageId: string, query: PaginationQuery)
 // ws_promocode has no appliesTo/package-linkage column (same gap as
 // commerce-promocode's empty appliesTo). No admin-package SQL branch.
 export const listPromotedCodes = async (packageId: string) => {
+  // ── MySQL promo-code read (flag-gated) ─────────────────────────────────────
+  // On SQL the package id is numeric; the Mongo assertObjectId would 400 it.
+  if (promoCode.isPromoCodeMysql()) {
+    return promoCode.listPromocodesForPackage(assertPkgSqlId(packageId, "package"));
+  }
+
   assertObjectId(packageId, "package");
   return PromoCode.find({
     "appliesTo.type": "package",

@@ -108,7 +108,6 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
 
   try {
     if (!type) return failure(res, "Invalid type. Use course | package | live-course.", 422);
-    if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid id.", 422);
 
     // ─── SQL branch (course/package only; live-course stays Mongo) ───
     if (catSql.isClientCatalogMysql() && type !== "live-course") {
@@ -125,6 +124,8 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
       return success(res, { parent: { _id: id, type, name: sp.name }, ...r }, "Video categories fetched.");
     }
 
+    // Mongo path only: legacy ObjectId validation (SQL path uses numeric PKs).
+    if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid id.", 422);
     const parent = await loadParent(type, id);
     if (!parent) return failure(res, `${type} not found.`, 404);
 
@@ -300,7 +301,6 @@ export const getCatalogMaterials = async (req: Request, res: Response) => {
 
   try {
     if (!type) return failure(res, "Invalid type. Use course | package | live-course.", 422);
-    if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid id.", 422);
 
     // ─── SQL branch (course/package only; live-course stays Mongo) ───
     if (catSql.isClientCatalogMysql() && type !== "live-course") {
@@ -308,10 +308,13 @@ export const getCatalogMaterials = async (req: Request, res: Response) => {
       if (idNum == null) return failure(res, "Invalid id.", 422);
       const sp = await catSql.loadParent(type, idNum);
       if (!sp) return failure(res, `${type} not found.`, 404);
-      const r = await catSql.catalogMaterials({ type, id: idNum, search: getSearch(req) || null });
+      const userNum = catSql.parseCatId(String(req.user?.id ?? ""));
+      const r = await catSql.catalogMaterials({ type, id: idNum, search: getSearch(req) || null, customerId: userNum });
       return success(res, { parent: { _id: id, type, name: sp.name }, ...r }, "Material categories fetched.");
     }
 
+    // Mongo path only: legacy ObjectId validation (SQL path uses numeric PKs).
+    if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid id.", 422);
     const parent = await loadParent(type, id);
     if (!parent) return failure(res, `${type} not found.`, 404);
 
@@ -378,7 +381,6 @@ export const getCatalogTests = async (req: Request, res: Response) => {
 
   try {
     if (!type) return failure(res, "Invalid type. Use course | package | live-course.", 422);
-    if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid id.", 422);
 
     // ─── SQL branch (course/package only; live-course stays Mongo) ───
     if (catSql.isClientCatalogMysql() && type !== "live-course") {
@@ -390,6 +392,8 @@ export const getCatalogTests = async (req: Request, res: Response) => {
       return success(res, { parent: { _id: id, type, name: sp.name }, ...r }, "Test categories fetched.");
     }
 
+    // Mongo path only: legacy ObjectId validation (SQL path uses numeric PKs).
+    if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid id.", 422);
     const parent = await loadParent(type, id);
     if (!parent) return failure(res, `${type} not found.`, 404);
 

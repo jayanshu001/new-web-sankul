@@ -56,20 +56,26 @@ export const getBookById = async (
 };
 
 /**
- * Active books (name/author search + language filter) with the data-only
- * computed fields. The caller layers on cart `qty` + `isPurchased` from the
- * (still-Mongo) order/cart tables until those migrate.
+ * One page of active books (name/author search + language + `type` bucket) with
+ * the data-only computed fields, plus the total for pagination. The caller
+ * layers on cart `qty` + `isPurchased` from the (still-Mongo) order/cart tables
+ * until those migrate.
  */
 export const listBooksData = async (
   opts: ListBooksOptions = {},
   buildShareLink: (bookId: string) => string = (bid) => bid,
   now: Date = new Date()
-): Promise<BookListItemDto[]> => {
-  const rows = await repo.listActive({
+): Promise<{ items: BookListItemDto[]; total: number }> => {
+  const filter: ListBooksOptions = {
     search: opts.search?.trim() || undefined,
     language: opts.language,
-  });
-  return rows.map((r) => decorate(toBookDto(r), buildShareLink, now));
+    type: opts.type,
+  };
+  const [rows, total] = await Promise.all([
+    repo.listActive({ ...filter, skip: opts.skip, take: opts.take }),
+    repo.countActive(filter),
+  ]);
+  return { items: rows.map((r) => decorate(toBookDto(r), buildShareLink, now)), total };
 };
 
 /** Books by ids (bulk hydration — purchase-history/cart book thumbnails). */

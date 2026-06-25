@@ -33,14 +33,18 @@ export const faqRepository = {
       orderBy: { created_at: "asc" },
     }),
 
-  /** Admin paginated + search list. */
-  findPage: (opts: FaqListOpts) =>
-    prisma.fAQ.findMany({
+  /** Admin paginated + search list. Default (no sortBy) = recently added on top. */
+  findPage: (opts: FaqListOpts) => {
+    const col = FAQ_SORT_COLUMNS[opts.sortBy ?? ""] ?? "created_at";
+    // No explicit sort → newest first; explicit sortBy without dir → asc (e.g. question A-Z).
+    const dir = opts.sortDir ?? (opts.sortBy ? "asc" : "desc");
+    return prisma.fAQ.findMany({
       where: buildFaqWhere(opts),
-      orderBy: { [FAQ_SORT_COLUMNS[opts.sortBy ?? ""] ?? "created_at"]: opts.sortDir ?? "asc" },
+      orderBy: [{ [col]: dir }, { id: "desc" }],
       ...(opts.skip != null ? { skip: opts.skip } : {}),
       ...(opts.take != null ? { take: opts.take } : {}),
-    }),
+    });
+  },
 
   count: (opts: FaqListOpts) => prisma.fAQ.count({ where: buildFaqWhere(opts) }),
 

@@ -12,8 +12,9 @@ import type { Prisma } from "@prisma/client";
  *  - subscribers    → ws_package_course_subscription (package_id = the package)
  *  - video relations→ ws_video_category_package_relation
  *
- * ⚠ Drift: ws_package has NO column for isPaid, isSmartCourse, isPlannerCourse,
- * subtitle, notificationTopic, packageCategoryId, or the examCountdown* arrays.
+ * ⚠ Drift: ws_package has NO column for subtitle, notificationTopic, or the
+ * examCountdown* arrays. It DOES have is_paid, is_smart_course, is_planner_course
+ * and package_category_id (all wired through service write/read).
  * SQL has exam_id (→ goal), educator_id, package_type_id, goal_id and
  * goal_label_id (the latter stores the goal's JSON-label numeric id; the API
  * boundary resolves it to/from the label NAME). with_material/without_material

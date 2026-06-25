@@ -56,16 +56,43 @@ export const listPromocodes = async (req: Request, res: Response) => {
   logger.info("listPromocodes invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { page = "1", limit = "20" } = req.query as Record<string, string>;
+    const { page = "1", limit = "20", type: rawType, id: rawId } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
+    // Optional entity filter — show only the public codes whose `appliesTo`
+    // covers a specific entity. Requires BOTH `type` and `id` (or neither): a
+    // bare int id is ambiguous across modules, so the module `type` is needed
+    // to know which entity the id belongs to. type accepts kebab aliases
+    // (test-series / live-course / e-book).
+    const hasType = typeof rawType === "string" && rawType.trim() !== "";
+    const hasId = typeof rawId === "string" && rawId.trim() !== "";
+    if (hasType !== hasId) {
+      return res.status(422).json({ success: false, message: "Provide both `type` and `id` to filter, or neither." });
+    }
+    let appliesToType: ReturnType<typeof pcSql.normalizeAppliesToType> = null;
+    if (hasType) {
+      appliesToType = pcSql.normalizeAppliesToType(rawType);
+      if (!appliesToType) {
+        return res.status(422).json({ success: false, message: "Invalid type. Use one of: package, course, testSeries, ebook, liveCourse." });
+      }
+    }
+    const filterById = appliesToType !== null && hasId;
+
     // ── SQL branch (promo-code) ──────────────────────────────────────────────
     // Public, active-window promocode list from MySQL. Response shape identical.
     if (pcSql.isPromoCodeMysql()) {
-      const result = await pcSql.listPublicPromocodes({ skip, limitNum, pageNum });
-      logger.info("listPromocodes success (mysql)", { traceId, total: result.pagination.total });
+      let appliesTo: { type: NonNullable<typeof appliesToType>; id: number } | undefined;
+      if (filterById) {
+        const nid = pcSql.parsePcId(rawId.trim());
+        if (nid == null) {
+          return res.status(422).json({ success: false, message: "Invalid id." });
+        }
+        appliesTo = { type: appliesToType!, id: nid };
+      }
+      const result = await pcSql.listPublicPromocodes({ skip, limitNum, pageNum, appliesTo });
+      logger.info("listPromocodes success (mysql)", { traceId, total: result.pagination.total, type: appliesToType, filtered: filterById });
       return res.status(200).json({
         success: true,
         data: result.data,
@@ -74,12 +101,21 @@ export const listPromocodes = async (req: Request, res: Response) => {
     }
 
     const now = new Date();
-    const filter = {
+    const filter: any = {
       status: true,
       type: "public",
       promo_start_at: { $lt: now },
       promo_expire_at: { $gt: now },
     };
+    if (filterById) {
+      const idVal = rawId.trim();
+      if (!isObjectId(idVal)) {
+        return res.status(422).json({ success: false, message: "Invalid id." });
+      }
+      // Mongo matches a scalar against the ObjectId array by membership.
+      filter["appliesTo.type"] = appliesToType;
+      filter["appliesTo.ids"] = idVal;
+    }
 
     const [data, total] = await Promise.all([
       PromoCode.find(filter)
@@ -91,7 +127,7 @@ export const listPromocodes = async (req: Request, res: Response) => {
       PromoCode.countDocuments(filter),
     ]);
 
-    logger.info("listPromocodes success", { traceId, total });
+    logger.info("listPromocodes success", { traceId, total, type: appliesToType, filtered: filterById });
     return res.status(200).json({
       success: true,
       data,

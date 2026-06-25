@@ -214,6 +214,23 @@ export const listPromocodes = async (opts: {
   };
 };
 
+/**
+ * Promo codes whose appliesTo targets a given package — the SQL equivalent of
+ * the Mongo `PromoCode.find({ "appliesTo.type": "package", "appliesTo.ids": id })`.
+ * appliesToIds is a JSON int[]; filter in-memory after narrowing to package-type
+ * rows so the match is exact regardless of JSON storage quirks. Sorted newest
+ * first to mirror the Mongo `.sort({ createdAt: -1 })`.
+ */
+export const listPromocodesForPackage = async (packageId: number) => {
+  const rows = await prisma.promoCodeRule.findMany({
+    where: { appliesToType: "package" },
+    orderBy: { createdAt: "desc" },
+  });
+  return rows
+    .filter((r) => parseIdArray(r.appliesToIds).includes(packageId))
+    .map(listDto);
+};
+
 /** getById — populates appliesTo; the OUT-OF-SCOPE plan links return []. */
 export const getPromocodeById = async (id: number) => {
   const row = await prisma.promoCodeRule.findUnique({ where: { id } });
@@ -348,42 +365,62 @@ export const bulkDelete = async (ids: number[]) => {
  * promo_expire_at asc, projected to the same fields the Mongo `.select(...)`
  * exposes. Returns `{ data, pagination }` byte-identical to the Mongo path.
  */
+const toPublicPromoDto = (r: any) => ({
+  _id: String(r.id),
+  promocode: r.promocode,
+  title: r.title ?? "",
+  description: r.description ?? "",
+  discountType: r.discountType,
+  discountValue: Number(r.discountValue ?? 0),
+  promo_start_at: r.promoStartAt ?? null,
+  promo_expire_at: r.promoExpireAt ?? null,
+});
+
 export const listPublicPromocodes = async (opts: {
   skip: number;
   limitNum: number;
   pageNum: number;
+  /** Optional entity filter: only codes whose appliesTo covers (type, id). */
+  appliesTo?: { type: AppliesToType; id: number };
 }) => {
   const now = new Date();
-  const where: any = {
+  const baseWhere: any = {
     status: true,
     type: "public",
     promoStartAt: { lt: now },
     promoExpireAt: { gt: now },
   };
 
+  // Entity-scoped: narrow to the module type at the DB, then keep only codes
+  // whose JSON appliesToIds array contains this id. Public codes per type are a
+  // small set, so the in-memory id filter keeps pagination totals exact without
+  // a JSON query. Mirrors `listPromocodesForPackage`.
+  if (opts.appliesTo) {
+    const rows = await prisma.promoCodeRule.findMany({
+      where: { ...baseWhere, appliesToType: opts.appliesTo.type },
+      orderBy: { promoExpireAt: "asc" },
+    });
+    const covered = rows.filter((r) => parseIdArray(r.appliesToIds).includes(opts.appliesTo!.id));
+    const total = covered.length;
+    const pageRows = covered.slice(opts.skip, opts.skip + opts.limitNum);
+    return {
+      data: pageRows.map(toPublicPromoDto),
+      pagination: { total, page: opts.pageNum, limit: opts.limitNum, totalPages: Math.ceil(total / opts.limitNum) },
+    };
+  }
+
   const [rows, total] = await Promise.all([
     prisma.promoCodeRule.findMany({
-      where,
+      where: baseWhere,
       orderBy: { promoExpireAt: "asc" },
       skip: opts.skip,
       take: opts.limitNum,
     }),
-    prisma.promoCodeRule.count({ where }),
+    prisma.promoCodeRule.count({ where: baseWhere }),
   ]);
 
-  const data = rows.map((r) => ({
-    _id: String(r.id),
-    promocode: r.promocode,
-    title: r.title ?? "",
-    description: r.description ?? "",
-    discountType: r.discountType,
-    discountValue: Number(r.discountValue ?? 0),
-    promo_start_at: r.promoStartAt ?? null,
-    promo_expire_at: r.promoExpireAt ?? null,
-  }));
-
   return {
-    data,
+    data: rows.map(toPublicPromoDto),
     pagination: {
       total,
       page: opts.pageNum,
@@ -391,6 +428,25 @@ export const listPublicPromocodes = async (opts: {
       totalPages: Math.ceil(total / opts.limitNum),
     },
   };
+};
+
+/**
+ * Normalize an FE `type` param (kebab aliases allowed) to the canonical
+ * appliesTo type, or null if unrecognized. Shared by the client listing.
+ */
+export const normalizeAppliesToType = (raw: string): AppliesToType | null => {
+  const k = raw.trim().toLowerCase();
+  const map: Record<string, AppliesToType> = {
+    package: "package",
+    course: "course",
+    ebook: "ebook",
+    "e-book": "ebook",
+    testseries: "testSeries",
+    "test-series": "testSeries",
+    livecourse: "liveCourse",
+    "live-course": "liveCourse",
+  };
+  return map[k] ?? null;
 };
 
 // ── Client apply ─────────────────────────────────────────────────────────────

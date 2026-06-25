@@ -1091,6 +1091,8 @@ model Package {
   isPaid                    Boolean                     @default(true) @map("is_paid")
   isSmartCourse             Boolean                     @default(false) @map("is_smart_course")
   isPlannerCourse           Boolean                     @default(false) @map("is_planner_course")
+  examCountdownCategoryIds  Json?                       @map("exam_countdown_category_ids")
+  examCountdownIds          Json?                       @map("exam_countdown_ids")
   examId                    Int?                        @map("exam_id")
   Exam                      CustomerTargetGoal?         @relation(fields: [examId], references: [id])
   created_at                DateTime?

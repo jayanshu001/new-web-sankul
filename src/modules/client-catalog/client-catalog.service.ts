@@ -20,6 +20,7 @@
 import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { defaultListingQualities } from "../../utils/videoQualities";
+import { getPurchasedMaterialIds } from "../client-material/client-material.service";
 
 export const CLIENT_CATALOG_MODULE = "client-catalog";
 export const isClientCatalogMysql = (): boolean => isMysqlModule(CLIENT_CATALOG_MODULE);
@@ -106,7 +107,78 @@ export const catalogVideos = async (opts: {
 };
 
 // ── MATERIALS ──────────────────────────────────────────────────────────────
-export const catalogMaterials = async (opts: { type: "course" | "package"; id: number; search: string | null }) => {
+// ws_material_category row → the FULL Mongo MaterialCategory doc shape (the
+// catalog controller spreads the whole embedded category, so parity needs every
+// field: slug/parent/ancestors/childCategoryIds/status/timestamps/__v).
+const shapeMaterialCategoryDoc = (
+  cat: any,
+  ancestors: string[],
+  childCategoryIds: string[],
+  count: number
+) => ({
+  _id: String(cat.id),
+  title: cat.name,
+  slug: cat.slug,
+  image: cat.image ?? null,
+  parent: cat.parent && cat.parent > 0 ? String(cat.parent) : null,
+  ancestors,
+  childCategoryIds,
+  order: cat.order_by,
+  status: !!cat.status,
+  createdAt: cat.created_at ?? null,
+  updatedAt: cat.updated_at ?? null,
+  __v: 0,
+  havingChildDirectory: childCategoryIds.length > 0,
+  count,
+});
+
+// ws_material row → the FULL Mongo Material doc shape + isPurchased, with
+// file/directLink gated for unpurchased paid items (mirrors shapeMaterialForClient).
+// description/thumbnail are emitted only when set (Mongoose omits unset optionals).
+const shapeMaterialDoc = (m: any, owned: Set<number>) => {
+  const isPaid = !!m.isPaid;
+  const isPurchased = !isPaid || owned.has(m.id);
+  const gated = isPaid && !isPurchased;
+  const out: any = {
+    _id: String(m.id),
+    title: m.name,
+    materialCategoryId: m.materialCategoryId != null ? String(m.materialCategoryId) : null,
+    file: gated ? "" : m.file ?? "",
+    directLink: gated ? "" : m.direct_link ?? "",
+    fileSize: m.fileSize != null ? Number(m.fileSize) : null,
+    fileMime: m.fileMime ?? null,
+    language: m.language ?? null,
+    isPreview: !!m.isPreview,
+    isPaid,
+    downloadCount: m.downloadCount ?? 0,
+    order: m.order_by,
+    status: !!m.status,
+    createdAt: m.created_at ?? null,
+    updatedAt: m.updated_at ?? null,
+    __v: 0,
+    isPurchased,
+  };
+  if (m.description != null) out.description = m.description;
+  if (m.thumbnail != null) out.thumbnail = m.thumbnail;
+  return out;
+};
+
+/** Ancestor id chain (root → parent, excludes self) for a category. [] for roots. */
+const materialCategoryAncestors = async (parentId: number): Promise<string[]> => {
+  const chain: string[] = [];
+  const seen = new Set<number>();
+  let pid = parentId;
+  while (pid && pid > 0 && !seen.has(pid)) {
+    seen.add(pid);
+    const row = await prisma.materialCategory.findUnique({ where: { id: pid }, select: { id: true, parent: true } });
+    if (!row) break;
+    chain.push(String(row.id));
+    pid = row.parent;
+  }
+  return chain.reverse();
+};
+
+export const catalogMaterials = async (opts: { type: "course" | "package"; id: number; search: string | null; customerId?: number | null }) => {
   const refs = opts.type === "course"
     ? await prisma.materialCategoryCourse.findMany({ where: { courseId: opts.id }, orderBy: { order: "asc" } })
     : await prisma.materialCategoryPackage.findMany({ where: { packageId: opts.id }, orderBy: { order: "asc" } });
@@ -114,15 +186,36 @@ export const catalogMaterials = async (opts: { type: "course" | "package"; id: n
   let cats = catIds.length ? await prisma.materialCategory.findMany({ where: { id: { in: catIds }, status: true } }) : [];
   const byId = new Map(cats.map((c) => [c.id, c]));
   let ordered = refs.map((r) => byId.get(r.materialCategoryId!)).filter(Boolean) as any[];
-  if (opts.search) ordered = ordered.filter((c) => (c.title ?? "").toLowerCase().includes(opts.search!.toLowerCase()));
+  if (opts.search) ordered = ordered.filter((c) => (c.name ?? "").toLowerCase().includes(opts.search!.toLowerCase()));
+
+  // Per category: subtree count + child-folder list + the folder's OWN direct
+  // materials (inlined), mirroring the Mongo branch. Direct materials are
+  // fetched across all categories, ownership resolved once, then grouped.
+  const directByCat = new Map<number, any[]>();
+  const allDirect: any[] = [];
+  await Promise.all(ordered.map(async (cat) => {
+    const mats = await prisma.material.findMany({
+      where: { materialCategoryId: cat.id, status: true },
+      orderBy: [{ order_by: "asc" }, { created_at: "desc" }],
+    });
+    directByCat.set(cat.id, mats);
+    allDirect.push(...mats);
+  }));
+  const ownedIds = await getPurchasedMaterialIds(
+    opts.customerId ?? null,
+    allDirect.map((m) => ({ _id: m.id, materialCategoryId: m.materialCategoryId, isPaid: !!m.isPaid }))
+  );
 
   const list = await Promise.all(ordered.map(async (cat) => {
-    const ids = await descendantIds("ws_material_category", "parent", cat.id);
-    const [count, childCount] = await Promise.all([
-      prisma.material.count({ where: { materialCategoryId: { in: ids }, status: true } }),
-      prisma.materialCategory.count({ where: { parent: cat.id, status: true } }),
+    const subtreeIds = await descendantIds("ws_material_category", "parent", cat.id);
+    const [count, children, ancestors] = await Promise.all([
+      prisma.material.count({ where: { materialCategoryId: { in: subtreeIds }, status: true } }),
+      prisma.materialCategory.findMany({ where: { parent: cat.id, status: true }, select: { id: true } }),
+      materialCategoryAncestors(cat.parent),
     ]);
-    return { category: { _id: String(cat.id), title: cat.title, image: cat.image, havingChildDirectory: childCount > 0, count } };
+    const childCategoryIds = children.map((c) => String(c.id));
+    const materials = (directByCat.get(cat.id) ?? []).map((m) => shapeMaterialDoc(m, ownedIds));
+    return { category: shapeMaterialCategoryDoc(cat, ancestors, childCategoryIds, count), materials };
   }));
   return { list, totals: { categories: list.length, items: list.reduce((n, g) => n + g.category.count, 0) } };
 };

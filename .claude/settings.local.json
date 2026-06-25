@@ -186,7 +186,10 @@
       "Bash(grep -vc \"^legacy_system_migration_strategy.md$\")",
       "Bash(curl -s -H 'Authorization: Bearer __TRACKED_VAR__' 'http://localhost:4001/api/v1/admin/dashboard?orderRange=today&totalRange=today&recentLimit=7' -o /tmp/dash.json -w 'HTTP %{http_code}\\\\n')",
       "Bash(awk '/model Material /,/^}/' prisma/schema.prisma)",
-      "Bash(awk '/model MaterialCategory /,/^}/' prisma/schema.prisma)"
+      "Bash(awk '/model MaterialCategory /,/^}/' prisma/schema.prisma)",
+      "Bash(git stash *)",
+      "Bash(command -v mysql)",
+      "Bash(mysql -h127.0.0.1 -P3307 -uroot -pwebsankul_dev websankul_staging -e \"SELECT id, title, \\\\`order\\\\`, status FROM ws_video ORDER BY \\\\`order\\\\` ASC, id ASC LIMIT 15;\")"
     ]
   }
 }

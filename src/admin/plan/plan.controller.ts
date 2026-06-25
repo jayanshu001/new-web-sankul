@@ -157,45 +157,49 @@ export const getPlanById = async (req: Request, res: Response) => {
 };
 
 export const createPlan = async (req: Request, res: Response) => {
-  // Audit P0 fix: wrap the plan insert + sibling default-flip in a single
-  // transaction so two `isDefault: true` rows for the same entity can't
-  // exist between writes.
-  const session = await mongoose.startSession();
   try {
     const data = createPlanSchema.parse(req.body);
 
     // ─── MySQL branch ─────────────────────────────────────────────────────
+    // Must run before any mongoose.startSession() — in a MySQL-only deployment
+    // the Mongo connection is absent, so starting a session here would throw.
     if (planSql.isAdminPlanMysql()) {
       const created = await planSql.createPlan(data as any);
       return res.status(201).json({ success: true, data: created });
     }
 
-    const payload: any = {
-      ...data,
-      withMaterial: data.withMaterial ?? false,
-      materialPrice: data.materialPrice ?? 0,
-      courseId: data.courseId || null,
-      packageId: data.packageId || null,
-      ebookId: data.ebookId || null,
-    };
+    // Audit P0 fix: wrap the plan insert + sibling default-flip in a single
+    // transaction so two `isDefault: true` rows for the same entity can't
+    // exist between writes.
+    const session = await mongoose.startSession();
+    try {
+      const payload: any = {
+        ...data,
+        withMaterial: data.withMaterial ?? false,
+        materialPrice: data.materialPrice ?? 0,
+        courseId: data.courseId || null,
+        packageId: data.packageId || null,
+        ebookId: data.ebookId || null,
+      };
 
-    let createdPlan: any;
-    await session.withTransaction(async () => {
-      const [plan] = await PackageCourseEbookPrice.create([payload], { session });
-      createdPlan = plan;
-      if (plan.isDefault) {
-        const key = resolveEntityKey(plan)!;
-        const entityId = plan[key] as mongoose.Types.ObjectId;
-        await enforceSingleDefault(plan._id.toString(), key, entityId, session);
-      }
-    });
+      let createdPlan: any;
+      await session.withTransaction(async () => {
+        const [plan] = await PackageCourseEbookPrice.create([payload], { session });
+        createdPlan = plan;
+        if (plan.isDefault) {
+          const key = resolveEntityKey(plan)!;
+          const entityId = plan[key] as mongoose.Types.ObjectId;
+          await enforceSingleDefault(plan._id.toString(), key, entityId, session);
+        }
+      });
 
-    return res.status(201).json({ success: true, data: createdPlan });
+      return res.status(201).json({ success: true, data: createdPlan });
+    } finally {
+      session.endSession();
+    }
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
-  } finally {
-    session.endSession();
   }
 };
 

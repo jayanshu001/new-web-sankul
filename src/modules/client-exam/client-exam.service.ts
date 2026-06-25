@@ -77,6 +77,41 @@ export const listExamsByCategory = async (categoryId: number, customerId: number
   return { subjects: subjects.map(toCategoryDto), exams: decorated, completedTests };
 };
 
+// ─── listExamsByCategoryPaged ─────────────────────────────────────────────────
+// Paginated variant for GET /client/exam-categories/:id/exams — returns the
+// category header + decorated exam list + total (Mongo parity: status published,
+// non-daily, optional title search). Each row carries isCompleted + lastResult.
+export const listExamsByCategoryPaged = async (
+  categoryId: number,
+  customerId: number | null,
+  opts: { skip: number; take: number; search?: string | null }
+) => {
+  const category = await repo.findCategory(categoryId);
+  if (!category) return null;
+
+  const now = new Date();
+  const [exams, total] = await Promise.all([
+    repo.examsByCategoryPaged(categoryId, now, opts.search ?? null, opts.skip, opts.take),
+    repo.countExamsByCategoryPaged(categoryId, now, opts.search ?? null),
+  ]);
+
+  const resultByExam = new Map<string, any>();
+  if (customerId && exams.length) {
+    const results = await repo.resultsForCustomerExams(customerId, exams.map((e) => e.id));
+    for (const r of results) {
+      const k = String(r.examId);
+      if (!resultByExam.has(k)) resultByExam.set(k, toResultDto(r));
+    }
+  }
+
+  const list = exams.map((e) => {
+    const dto = toExamDto(e);
+    return { ...dto, isCompleted: resultByExam.has(dto._id), lastResult: resultByExam.get(dto._id) ?? null };
+  });
+
+  return { category: toCategoryDto(category), list, total };
+};
+
 // ─── getExamQuestions ─────────────────────────────────────────────────────────
 export const getExamQuestions = async (examId: number) => {
   const exam = await repo.findPublishedExam(examId);

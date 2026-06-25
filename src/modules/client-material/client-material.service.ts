@@ -176,6 +176,35 @@ export const getCategoryContents = async (categoryId: number, customerId: number
   return { current: { _id: String(current.id), title: current.name, image: current.image }, breadcrumbs, subjects, materials };
 };
 
+/**
+ * Paginated leaf materials directly under a category — SQL equivalent of the
+ * Mongo `listMaterialsByCategory` (GET /client/material-categories/:id/materials).
+ * Returns the category DTO, the shaped+entitlement-gated material list, and the
+ * total for pagination. `type` mirrors the Mongo `?type=free|paid` filter.
+ */
+export const listMaterialsByCategoryPaged = async (
+  categoryId: number,
+  customerId: number | null,
+  opts: { skip: number; take: number; search?: string | null; type?: "free" | "paid" | null }
+) => {
+  const category = await findCategory(categoryId);
+  if (!category) return null;
+
+  const where: any = { materialCategoryId: categoryId, status: true };
+  if (opts.search) where.name = { contains: opts.search };
+  if (opts.type === "free") where.isPaid = false;
+  else if (opts.type === "paid") where.isPaid = true;
+
+  const [matsRaw, total] = await Promise.all([
+    prisma.material.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "desc" }], skip: opts.skip, take: opts.take, select: MAT_SELECT }),
+    prisma.material.count({ where }),
+  ]);
+  const ownedIds = await getPurchasedMaterialIds(customerId, matsRaw.map(toLite));
+  const list = matsRaw.map((m) => shapeMaterial(m, ownedIds));
+
+  return { category: { _id: String(category.id), title: category.name, image: category.image }, list, total };
+};
+
 export const getMaterialDetail = async (materialId: number, customerId: number | null) => {
   const m = await prisma.material.findFirst({ where: { id: materialId, status: true }, select: { ...MAT_SELECT, MaterialCategory: { select: { id: true, name: true } } } });
   if (!m) return null;
