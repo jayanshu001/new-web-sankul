@@ -2,6 +2,7 @@ import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import {
   listLiveCoursesForClient,
+  listRecentlyAddedLiveCourses,
   listUpcomingLiveBatches,
   getLiveCourseForClient,
   listSessionsForCourseClient,
@@ -22,6 +23,7 @@ const router = Router();
 router.use(authenticate, requireRole("customer"));
 
 router.get("/",                     listLiveCoursesForClient);     // GET /api/v1/client/live-courses
+router.get("/recently-added",       listRecentlyAddedLiveCourses); // GET /api/v1/client/live-courses/recently-added  (newest-first feed)
 router.get("/upcoming-batches",     listUpcomingLiveBatches);      // GET /api/v1/client/live-courses/upcoming-batches  (home carousel + category tab bar)
 router.get("/my",                   listMyLiveCourses);            // GET /api/v1/client/live-courses/my
 router.get("/my/schedule",          listMyScheduleByCategory);     // GET /api/v1/client/live-courses/my/schedule  (home-screen schedule list, grouped by category)

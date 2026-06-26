@@ -25,6 +25,17 @@ function parseExamDate(raw: any): { date: Date | null; error?: string } {
   return { date: utcMidnight(d) };
 }
 
+// Parse an optional positive-int field (goalId / goalLabelId). Returns
+// `{}` when the key is absent (leave unchanged), `{ value: null }` when sent
+// empty/null (explicit clear), `{ value: n }` for a valid id, or `{ error }`.
+function parseOptionalId(raw: any, field: string): { value?: number | null; error?: string } {
+  if (raw === undefined) return {};
+  if (raw === null || raw === "") return { value: null };
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return { error: `Invalid ${field}.` };
+  return { value: n };
+}
+
 // ─── Categories ─────────────────────────────────────────────────────────────
 
 // GET /admin/exam-countdowns/categories
@@ -270,6 +281,14 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
     if (title.length > 200)
       return res.status(400).json({ success: false, message: "title too long (max 200)." });
 
+    // Optional goal tagging (goalId → Goal, goalLabelId → a label within it).
+    const g = parseOptionalId(req.body?.goalId, "goalId");
+    if (g.error) return res.status(400).json({ success: false, message: g.error });
+    const gl = parseOptionalId(req.body?.goalLabelId, "goalLabelId");
+    if (gl.error) return res.status(400).json({ success: false, message: gl.error });
+    const goalId = g.value ?? null;
+    const goalLabelId = gl.value ?? null;
+
     const useSql = ecSql.isExamCountdownMysql();
     if (!useSql && !mongoose.Types.ObjectId.isValid(categoryId))
       return res.status(400).json({ success: false, message: "Invalid categoryId." });
@@ -280,9 +299,10 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
     if (useSql) {
       const nid = ecSql.parseEcId(categoryId);
       if (nid == null) return res.status(400).json({ success: false, message: "Invalid categoryId." });
-      const r = await ecSql.createCountdown({ title, categoryId: nid, examDate: date, description, status });
+      const r = await ecSql.createCountdown({ title, categoryId: nid, examDate: date, description, status, goalId, goalLabelId });
       if ((r as any).catNotFound) return res.status(404).json({ success: false, message: "Category not found." });
       if ((r as any).catDisabled) return res.status(400).json({ success: false, message: "Category is disabled; enable it before assigning." });
+      if ((r as any).goalError) return res.status(400).json({ success: false, message: (r as any).goalError });
       return res.status(201).json({ success: true, data: (r as any).data });
     }
 
@@ -299,6 +319,8 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
       examDate: date,
       description,
       status,
+      goalId: req.body?.goalId ?? null,
+      goalLabelId,
     });
     return res.status(201).json({ success: true, data: doc });
   } catch (error: any) {
@@ -348,6 +370,19 @@ export const adminUpdateCountdown = async (req: Request, res: Response) => {
     if (req.body?.description !== undefined) update.description = req.body.description.toString();
     if (req.body?.status !== undefined) update.status = Boolean(req.body.status);
 
+    // Optional goal tagging. Only included in the update when the key is sent,
+    // so existing values are preserved unless the admin explicitly changes them.
+    if (req.body?.goalId !== undefined) {
+      const g = parseOptionalId(req.body.goalId, "goalId");
+      if (g.error) return res.status(400).json({ success: false, message: g.error });
+      update.goalId = useSql ? (g.value ?? null) : (req.body.goalId || null);
+    }
+    if (req.body?.goalLabelId !== undefined) {
+      const gl = parseOptionalId(req.body.goalLabelId, "goalLabelId");
+      if (gl.error) return res.status(400).json({ success: false, message: gl.error });
+      update.goalLabelId = gl.value ?? null;
+    }
+
     if (useSql) {
       const nid = ecSql.parseEcId(id);
       if (nid == null) return res.status(400).json({ success: false, message: "Invalid countdown id." });
@@ -355,6 +390,7 @@ export const adminUpdateCountdown = async (req: Request, res: Response) => {
       if ((r as any).notFound) return res.status(404).json({ success: false, message: "Countdown not found." });
       if ((r as any).catNotFound) return res.status(404).json({ success: false, message: "Category not found." });
       if ((r as any).catDisabled) return res.status(400).json({ success: false, message: "Category is disabled; enable it before assigning." });
+      if ((r as any).goalError) return res.status(400).json({ success: false, message: (r as any).goalError });
       return res.status(200).json({ success: true, data: (r as any).data });
     }
 

@@ -3,6 +3,11 @@ import mongoose, { Schema, Document, Types } from "mongoose";
 export interface IExamCountdown extends Document {
   title: string;
   categoryId: Types.ObjectId;
+  // Optional goal tagging (mirrors Package): goalId → Goal, goalLabelId → a
+  // label id inside that goal's labels[]. Used to prioritise the dashboard
+  // exam-countdown section by the user's selected goal-labels.
+  goalId?: Types.ObjectId | null;
+  goalLabelId?: number | null;
   examDate: Date;
   description?: string;
   status: boolean;
@@ -18,6 +23,8 @@ const examCountdownSchema = new Schema<IExamCountdown>(
       ref: "ExamCountdownCategory",
       required: true,
     },
+    goalId: { type: Schema.Types.ObjectId, ref: "Goal", default: null },
+    goalLabelId: { type: Number, default: null },
     examDate: { type: Date, required: true },
     description: { type: String, default: "" },
     status: { type: Boolean, default: true },

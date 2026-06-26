@@ -97,6 +97,12 @@ export async function sendPush(
   let successCount = 0;
   let failureCount = 0;
   const invalidTokens: string[] = [];
+  // Aggregate per-device FCM error codes so failures are diagnosable. Without
+  // this, "All sends failed." hides whether it's a bad token, a project/
+  // credential mismatch (messaging/mismatched-credential, sender-id-mismatch),
+  // or a missing APNs key for iOS (messaging/third-party-auth-error).
+  const errorCodes: Record<string, number> = {};
+  let sampleErrorMessage: string | null = null;
 
   for (let i = 0; i < unique.length; i += FCM_BATCH_SIZE) {
     const batch = unique.slice(i, i + FCM_BATCH_SIZE);
@@ -117,8 +123,12 @@ export async function sendPush(
       successCount += resp.successCount;
       failureCount += resp.failureCount;
       resp.responses.forEach((r, idx) => {
-        if (!r.success && r.error && INVALID_TOKEN_ERRORS.has(r.error.code)) {
-          invalidTokens.push(batch[idx]);
+        if (!r.success && r.error) {
+          errorCodes[r.error.code] = (errorCodes[r.error.code] ?? 0) + 1;
+          if (!sampleErrorMessage) sampleErrorMessage = r.error.message;
+          if (INVALID_TOKEN_ERRORS.has(r.error.code)) {
+            invalidTokens.push(batch[idx]);
+          }
         }
       });
     } catch (err) {
@@ -148,6 +158,19 @@ export async function sendPush(
         count: invalidTokens.length,
       });
     }
+  }
+
+  if (failureCount > 0) {
+    logger.error("FCM send had failures", {
+      attempted: unique.length,
+      successCount,
+      failureCount,
+      invalidTokensPruned: invalidTokens.length,
+      errorCodes,
+      sampleErrorMessage,
+    });
+  } else {
+    logger.info("FCM send ok", { attempted: unique.length, successCount });
   }
 
   return {

@@ -38,12 +38,36 @@ const countdownAdminDto = (r: any) => ({
   _id: String(r.id),
   title: r.title,
   categoryId: r.category ? { _id: String(r.category.id), name: r.category.name, colorHex: r.category.colorHex } : null,
+  goalId: r.goalId != null ? String(r.goalId) : null,
+  goalLabelId: r.goalLabelId != null ? r.goalLabelId : null,
   examDate: r.examDate,
   description: r.description ?? "",
   status: r.status,
   createdAt: r.createdAt ?? null,
   updatedAt: r.updatedAt ?? null,
 });
+
+/**
+ * Validate an optional goal/label pair (mirrors Package.assertGoalLabelPair).
+ * goalLabelId requires goalId; goalId must reference an existing Goal; and the
+ * label id must exist inside that goal's labels JSON ([{ id, name }]). Returns
+ * an error string (→ 400/404 at the controller) or null when valid/omitted.
+ */
+export const validateGoalPair = async (
+  goalId: number | null | undefined,
+  goalLabelId: number | null | undefined
+): Promise<string | null> => {
+  if (goalLabelId != null && goalId == null) return "goalId is required when goalLabelId is provided.";
+  if (goalId == null) return null;
+  const goal = await prisma.goal.findUnique({ where: { id: goalId }, select: { labels: true } });
+  if (!goal) return "Goal not found for the supplied goalId.";
+  if (goalLabelId != null) {
+    const labels = Array.isArray(goal.labels) ? (goal.labels as any[]) : [];
+    const owns = labels.some((l) => Number(l?.id) === goalLabelId);
+    if (!owns) return "goalLabelId does not belong to the supplied goalId.";
+  }
+  return null;
+};
 
 // ── Embedded populate resolvers (C6) ────────────────────────────────────────
 // Catalog detail responses (book/course/ebook/live-course) store the attached
@@ -172,22 +196,38 @@ const attachCategories = async (rows: any[]) => {
 };
 
 /** Returns {notFound} if category missing, {disabled} if category status=false. */
-export const createCountdown = async (input: { title: string; categoryId: number; examDate: Date; description: string; status: boolean }) => {
+export const createCountdown = async (input: { title: string; categoryId: number; examDate: Date; description: string; status: boolean; goalId?: number | null; goalLabelId?: number | null }) => {
   const cat = await prisma.examCountdownCategory.findUnique({ where: { id: input.categoryId }, select: { id: true, status: true } });
   if (!cat) return { catNotFound: true as const };
   if (!cat.status) return { catDisabled: true as const };
-  const row = await prisma.examCountdown.create({ data: input });
+  const goalError = await validateGoalPair(input.goalId, input.goalLabelId);
+  if (goalError) return { goalError };
+  const row = await prisma.examCountdown.create({
+    data: {
+      title: input.title, categoryId: input.categoryId, examDate: input.examDate,
+      description: input.description, status: input.status,
+      goalId: input.goalId ?? null, goalLabelId: input.goalLabelId ?? null,
+    },
+  });
   const [withCat] = await attachCategories([row]);
   return { data: countdownAdminDto(withCat) };
 };
 
-export const updateCountdown = async (id: number, update: Partial<{ title: string; categoryId: number; examDate: Date; description: string; status: boolean }>) => {
-  const exists = await prisma.examCountdown.findUnique({ where: { id }, select: { id: true } });
-  if (!exists) return { notFound: true as const };
+export const updateCountdown = async (id: number, update: Partial<{ title: string; categoryId: number; examDate: Date; description: string; status: boolean; goalId: number | null; goalLabelId: number | null }>) => {
+  const existing = await prisma.examCountdown.findUnique({ where: { id }, select: { id: true, goalId: true, goalLabelId: true } });
+  if (!existing) return { notFound: true as const };
   if (update.categoryId !== undefined) {
     const cat = await prisma.examCountdownCategory.findUnique({ where: { id: update.categoryId }, select: { id: true, status: true } });
     if (!cat) return { catNotFound: true as const };
     if (!cat.status) return { catDisabled: true as const };
+  }
+  // Validate the goal pair against the resulting (merged) values so a partial
+  // update that touches only one of the two is still checked as a whole.
+  if (update.goalId !== undefined || update.goalLabelId !== undefined) {
+    const nextGoalId = update.goalId !== undefined ? update.goalId : existing.goalId;
+    const nextGoalLabelId = update.goalLabelId !== undefined ? update.goalLabelId : existing.goalLabelId;
+    const goalError = await validateGoalPair(nextGoalId, nextGoalLabelId);
+    if (goalError) return { goalError };
   }
   const row = await prisma.examCountdown.update({ where: { id }, data: update });
   const [withCat] = await attachCategories([row]);

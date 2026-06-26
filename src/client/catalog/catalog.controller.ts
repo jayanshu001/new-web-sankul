@@ -110,7 +110,7 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
     if (!type) return failure(res, "Invalid type. Use course | package | live-course.", 422);
 
     // ─── SQL branch (course/package only; live-course stays Mongo) ───
-    if (catSql.isClientCatalogMysql() && type !== "live-course") {
+    if (catSql.isClientCatalogMysql()) {
       const idNum = catSql.parseCatId(id);
       if (idNum == null) return failure(res, "Invalid id.", 422);
       const sp = await catSql.loadParent(type, idNum);
@@ -303,7 +303,7 @@ export const getCatalogMaterials = async (req: Request, res: Response) => {
     if (!type) return failure(res, "Invalid type. Use course | package | live-course.", 422);
 
     // ─── SQL branch (course/package only; live-course stays Mongo) ───
-    if (catSql.isClientCatalogMysql() && type !== "live-course") {
+    if (catSql.isClientCatalogMysql()) {
       const idNum = catSql.parseCatId(id);
       if (idNum == null) return failure(res, "Invalid id.", 422);
       const sp = await catSql.loadParent(type, idNum);
@@ -383,7 +383,7 @@ export const getCatalogTests = async (req: Request, res: Response) => {
     if (!type) return failure(res, "Invalid type. Use course | package | live-course.", 422);
 
     // ─── SQL branch (course/package only; live-course stays Mongo) ───
-    if (catSql.isClientCatalogMysql() && type !== "live-course") {
+    if (catSql.isClientCatalogMysql()) {
       const idNum = catSql.parseCatId(id);
       if (idNum == null) return failure(res, "Invalid id.", 422);
       const sp = await catSql.loadParent(type, idNum);

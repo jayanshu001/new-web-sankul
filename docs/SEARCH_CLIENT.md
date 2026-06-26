@@ -83,6 +83,11 @@ GET /api/v1/client/search?q=upsc&type=books&page=2&limit=10
 - **Empty query:** don't call the API until the user has typed at least 2 characters; the server rejects shorter queries with 400.
 - **No relevance ranking yet:** results are ordered by `createdAt` desc, not by match score. If product needs ranking later, we'd migrate to `$text` or Atlas Search without changing this contract.
 
+## Related
+
+- **Recent search history** (latest 10 per customer, auto-recorded on search):
+  see [SEARCH_HISTORY_CLIENT.md](SEARCH_HISTORY_CLIENT.md).
+
 ## Files
 
 - Controller: [src/client/search/search.controller.ts](../src/client/search/search.controller.ts)

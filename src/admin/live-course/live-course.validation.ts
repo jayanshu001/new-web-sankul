@@ -66,6 +66,8 @@ export const createLiveCourseSqlSchema = z
     examCountdownCategoryIds: z.array(z.any()).optional(),
     examCountdownIds:         z.array(z.any()).optional(),
     timetableFiles:           z.array(z.any()).optional(),
+    materialCategories:       z.array(z.any()).optional(),
+    examCategories:           z.array(z.any()).optional(),
   })
   .strict();
 

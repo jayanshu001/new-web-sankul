@@ -14,9 +14,12 @@ export const createGoalHandler = async (req: Request, res: Response) => {
   try {
     const { title, labels, isActive } = req.body;
 
-    if (!title || !labels) {
-      logger.warn("createGoalHandler validation failed", { traceId, title, labels });
-      return failure(res, "Title and at least one label are required.", 422);
+    // Labels are OPTIONAL: a goal may have zero labels. The form sends labels as
+    // "[]" (multipart) for none; a missing/null field is also accepted. Only the
+    // title is required. parseLabels() normalizes "[]"/missing → [] downstream.
+    if (!title) {
+      logger.warn("createGoalHandler validation failed", { traceId, title });
+      return failure(res, "Title is required.", 422);
     }
 
     const file = req.file as any;

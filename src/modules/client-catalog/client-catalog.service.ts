@@ -38,18 +38,41 @@ const descendantIds = async (table: string, parentCol: string, rootId: number): 
 };
 
 // ── parent existence ──────────────────────────────────────────────────────────
-export const loadParent = async (type: "course" | "package", id: number): Promise<{ name: string } | null> => {
+export const loadParent = async (type: "course" | "package" | "live-course", id: number): Promise<{ name: string } | null> => {
   if (type === "course") {
     const c = await prisma.course.findFirst({ where: { id }, select: { name: true } });
     return c ? { name: c.name ?? "" } : null;
+  }
+  if (type === "live-course") {
+    const lc = await prisma.liveCourse.findFirst({ where: { id, status: true }, select: { name: true } });
+    return lc ? { name: lc.name } : null;
   }
   const p = await prisma.package.findFirst({ where: { id, active: true }, select: { name: true } });
   return p ? { name: p.name } : null;
 };
 
+// Live courses store their material/exam category refs as a JSON array on the
+// live-course row (ws_live_course.material_categories / exam_categories), NOT in
+// the course/package link tables. Each entry is either { category, order } or a
+// bare id — extract the category ids tolerantly, preserving order.
+const liveCourseCategoryIds = async (
+  id: number,
+  col: "materialCategories" | "examCategories"
+): Promise<number[]> => {
+  const lc = await prisma.liveCourse.findFirst({ where: { id, status: true }, select: { [col]: true } as any });
+  const arr = Array.isArray((lc as any)?.[col]) ? ((lc as any)[col] as any[]) : [];
+  const ids: number[] = [];
+  for (const e of arr) {
+    const raw = e && typeof e === "object" ? (e.category ?? e.materialCategoryId ?? e.examCategoryId ?? e.id ?? e._id) : e;
+    const n = Number(raw);
+    if (Number.isInteger(n) && n > 0) ids.push(n);
+  }
+  return [...new Set(ids)];
+};
+
 // ── VIDEOS ──────────────────────────────────────────────────────────────────
 export const catalogVideos = async (opts: {
-  type: "course" | "package"; id: number; customerId: number | null; search: string | null; categoryIds: number[] | null;
+  type: "course" | "package" | "live-course"; id: number; customerId: number | null; search: string | null; categoryIds: number[] | null;
 }) => {
   // Resolve the root video categories for the product.
   let roots: { id: number; title: string | null; image: string | null }[] = [];
@@ -59,6 +82,14 @@ export const catalogVideos = async (opts: {
       const vc = await prisma.videoCategory.findFirst({ where: { id: c.videoCategoryId, status: true }, select: { id: true, title: true, image: true } });
       if (vc) roots = [vc];
     }
+  } else if (opts.type === "live-course") {
+    // Live courses own their video-category folders directly via liveCourseId
+    // (the recordings folders), unlike course/package single-root or subjects.
+    roots = await prisma.videoCategory.findMany({
+      where: { liveCourseId: opts.id, status: true },
+      orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
+      select: { id: true, title: true, image: true },
+    });
   } else {
     const subs = await prisma.packageSpecificSubject.findMany({ where: { packageId: opts.id, status: true }, select: { subjectId: true, order_by: true }, orderBy: { order_by: "asc" } });
     const subIds = subs.map((s) => s.subjectId).filter((n): n is number => n != null);
@@ -178,14 +209,22 @@ const materialCategoryAncestors = async (parentId: number): Promise<string[]> =>
   return chain.reverse();
 };
 
-export const catalogMaterials = async (opts: { type: "course" | "package"; id: number; search: string | null; customerId?: number | null }) => {
-  const refs = opts.type === "course"
-    ? await prisma.materialCategoryCourse.findMany({ where: { courseId: opts.id }, orderBy: { order: "asc" } })
-    : await prisma.materialCategoryPackage.findMany({ where: { packageId: opts.id }, orderBy: { order: "asc" } });
-  const catIds = refs.map((r) => r.materialCategoryId).filter((n): n is number => n != null);
+export const catalogMaterials = async (opts: { type: "course" | "package" | "live-course"; id: number; search: string | null; customerId?: number | null }) => {
+  // Ordered material-category ids: course/package via link tables, live-course
+  // via the row's material_categories JSON.
+  let catIds: number[];
+  if (opts.type === "course") {
+    const refs = await prisma.materialCategoryCourse.findMany({ where: { courseId: opts.id }, orderBy: { order: "asc" } });
+    catIds = refs.map((r) => r.materialCategoryId).filter((n): n is number => n != null);
+  } else if (opts.type === "package") {
+    const refs = await prisma.materialCategoryPackage.findMany({ where: { packageId: opts.id }, orderBy: { order: "asc" } });
+    catIds = refs.map((r) => r.materialCategoryId).filter((n): n is number => n != null);
+  } else {
+    catIds = await liveCourseCategoryIds(opts.id, "materialCategories");
+  }
   let cats = catIds.length ? await prisma.materialCategory.findMany({ where: { id: { in: catIds }, status: true } }) : [];
   const byId = new Map(cats.map((c) => [c.id, c]));
-  let ordered = refs.map((r) => byId.get(r.materialCategoryId!)).filter(Boolean) as any[];
+  let ordered = catIds.map((cid) => byId.get(cid)).filter(Boolean) as any[];
   if (opts.search) ordered = ordered.filter((c) => (c.name ?? "").toLowerCase().includes(opts.search!.toLowerCase()));
 
   // Per category: subtree count + child-folder list + the folder's OWN direct
@@ -221,14 +260,20 @@ export const catalogMaterials = async (opts: { type: "course" | "package"; id: n
 };
 
 // ── TESTS ──────────────────────────────────────────────────────────────────
-export const catalogTests = async (opts: { type: "course" | "package"; id: number; search: string | null }) => {
-  const refs = opts.type === "course"
-    ? await prisma.examCategoryCourse.findMany({ where: { courseId: opts.id }, orderBy: { order: "asc" } })
-    : await prisma.examCategoryPackage.findMany({ where: { packageId: opts.id }, orderBy: { order: "asc" } });
-  const catIds = refs.map((r) => r.examCategoryId).filter((n): n is number => n != null);
+export const catalogTests = async (opts: { type: "course" | "package" | "live-course"; id: number; search: string | null }) => {
+  let catIds: number[];
+  if (opts.type === "course") {
+    const refs = await prisma.examCategoryCourse.findMany({ where: { courseId: opts.id }, orderBy: { order: "asc" } });
+    catIds = refs.map((r) => r.examCategoryId).filter((n): n is number => n != null);
+  } else if (opts.type === "package") {
+    const refs = await prisma.examCategoryPackage.findMany({ where: { packageId: opts.id }, orderBy: { order: "asc" } });
+    catIds = refs.map((r) => r.examCategoryId).filter((n): n is number => n != null);
+  } else {
+    catIds = await liveCourseCategoryIds(opts.id, "examCategories");
+  }
   let cats = catIds.length ? await prisma.examCategory.findMany({ where: { id: { in: catIds }, status: true } }) : [];
   const byId = new Map(cats.map((c) => [c.id, c]));
-  let ordered = refs.map((r) => byId.get(r.examCategoryId!)).filter(Boolean) as any[];
+  let ordered = catIds.map((cid) => byId.get(cid)).filter(Boolean) as any[];
   if (opts.search) ordered = ordered.filter((c) => (c.name ?? "").toLowerCase().includes(opts.search!.toLowerCase()));
 
   const list = await Promise.all(ordered.map(async (cat) => {

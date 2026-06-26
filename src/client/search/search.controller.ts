@@ -15,6 +15,7 @@ import { BookOrder } from "../../models/book/BookOrder.model";
 import { BookOrderStatus } from "../../models/enums";
 import { isNewItem } from "../../utils/isNew";
 import * as searchSql from "../../modules/client-search/client-search.service";
+import * as searchHistory from "../../modules/client-search-history/client-search-history.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
@@ -289,6 +290,17 @@ export const globalSearch = async (req: Request, res: Response) => {
     const limit = Math.min(Math.max(parseInt(req.query.limit as string, 10) || 10, 1), 50);
 
     const skip = (page - 1) * limit;
+
+    // Record this term in the customer's recent-search history (dedupe →
+    // move-to-top → trim to newest 10). Fire-and-forget: history persistence
+    // must never block or fail the actual search response. Only the first page
+    // is recorded so paginating an existing query doesn't re-stamp it.
+    const historyCustomerId = req.user?.id ? Number(req.user.id) : null;
+    if (page === 1 && historyCustomerId) {
+      searchHistory
+        .record(historyCustomerId, q)
+        .catch((err) => logger.warn("search history record failed", { traceId, error: getErrorMessage(err) }));
+    }
 
     // ─── SQL branch (int id-space) ───
     if (searchSql.isClientSearchMysql()) {

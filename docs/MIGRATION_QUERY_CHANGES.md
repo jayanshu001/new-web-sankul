@@ -4,6 +4,207 @@
 
 ---
 
+## 2026-06-26 — Fix: client catalog videos/materials/tests for live-course (422 "Invalid id.")
+
+**Bug:** `GET /client/catalog/live-course/:id/{videos|materials|tests}` returned `422 "Invalid id."`. The three handlers gated the SQL branch on `isClientCatalogMysql() && type !== "live-course"` ("live-course stays Mongo"), so live-course fell to the Mongo branch whose `mongoose.Types.ObjectId.isValid(id)` rejects integer ids (and Mongo is disconnected anyway).
+
+**Fix (SQL support for live-course, no schema change):**
+- `modules/client-catalog/client-catalog.service.ts`:
+  - `loadParent` accepts `live-course` (reads `ws_live_course` name, status=true).
+  - New `liveCourseCategoryIds(id, "materialCategories"|"examCategories")` — extracts category ids from the live course's `material_categories`/`exam_categories` JSON (tolerant of `{category,order}` or bare id).
+  - `catalogMaterials` / `catalogTests` made category-id-driven; live-course sources ids from the JSON (course/package still use link tables). Per-category resolution unchanged.
+  - `catalogVideos` live-course roots = `videoCategory` where `liveCourseId = id` (the recording folders).
+- `client/catalog/catalog.controller.ts`: dropped `&& type !== "live-course"` in all three handlers so live-course enters the SQL branch (int id via `parseCatId`).
+
+**Verified (live course id 4):** loadParent ok; materials/tests return 200 with empty lists (no categories tagged yet); videos return the course's 1 folder. `yarn typecheck`: 11 pre-existing errors, none in changed files.
+
+---
+
+## 2026-06-26 — Goal: labels now optional on create/update
+
+**Change:** a goal can be created/updated with **zero labels**. Removed the "at least one label" requirement.
+
+- `admin/goal/goal.admin.controller.ts` `createGoalHandler`: validation relaxed from `!title || !labels` → **`!title`** only (message "Title is required."). Accepts `labels` as `"[]"` (multipart empty array), missing, or null without a 422.
+- No other change needed — persistence already correct: `goal.service.parseLabels("[]"/undefined)` → `[]`; `createGoalSql`/Mongo store `labels: []`; `updateGoalSql` clears when `labels: []` is sent (`if (input.labels !== undefined) data.labels = withLabelIds([])`); list/detail `dto` returns `labels: Array.isArray(g.labels) ? g.labels : []` (never null).
+
+**Verified:** create with `labels="[]"` → `labels: []`; create with missing labels → `labels: []`; add-then-update `labels="[]"` clears to `[]` (isArray true); label assignment still works. `yarn typecheck`: 11 pre-existing errors, none in changed files.
+
+---
+
+## 2026-06-26 — Audit + fix: client live-course schedule endpoints were Mongo-only (broke in MySQL-only runtime)
+
+**Audit:** exercised every client live-course service path against the DB. 15 were already SQL-clean; **2 were not migrated** and would error since Mongo is not connected (`isMongoFallbackEnabled()` = false, so `connectDB()` is skipped):
+- `GET /client/live-courses/:id/schedule` (`getLiveCourseSchedule`) — Mongo-only; also rejected integer SQL ids via `mongoose.Types.ObjectId.isValid()` → 422 before any query.
+- `GET /client/live-courses/my/schedule` (`listMyScheduleByCategory`) — Mongo-only (`LiveCourseSubscription.find().populate(...)`).
+
+**Fix (read-only SQL ports, no schema change):**
+- `modules/admin-live-course/admin-live-course.service.ts`: new `getScheduleForClient(courseId, customerId, upcoming)` (timetable from `repo.sessionsForCourse` filtered to `scheduledAt != null`, educator populated via `repo.findEducator`, `scheduleFolders` from the course JSON, `daysLeft`) and `listMyScheduleForClient(customerId)` (owned courses via `repo.ownedCourseIds` → active folders + daysLeft). Response contracts mirror the Mongo handlers.
+- `client/live-course/live-course.controller.ts`: added `isLiveCourseMysql()` SQL branches to both handlers (id parsed via `parseLiveId`).
+
+**Verified:** full audit re-run — **18/18 client live-course service paths PASS, ALL CLEAR**. `yarn typecheck`: 11 pre-existing errors (payment `result.promo`), none in changed files.
+
+---
+
+## 2026-06-26 — Fix: exam-countdown products query crashed on ws_live_course (Unknown column 'order_by')
+
+**Bug:** `GET /client/exam-countdown/:id/packages` (and any path hitting live courses) 500'd: `Raw query failed. Code: 1054. Unknown column 'order_by'`. `modules/exam-countdown/exam-countdown.client.ts` `matchingIds()` is generic over `ws_package`/`ws_live_course`/`ws_book`/`ws_ebook` but hardcoded `ORDER BY order_by` — and **`ws_live_course` has no `order_by` column; it uses `ordered`** (package/book/ebook do have `order_by`).
+
+**Fix:** added an `orderCol` param to `matchingIds` (default `"order_by"`, fixed internal identifier — not user input) and pass `"ordered"` for the `ws_live_course` call. Other call sites unchanged.
+
+**Verified:** `listProductsByCountdown(1, …)` now returns `{ examCountdown, list, total }` with no SQL error. `yarn typecheck`: 11 pre-existing errors, none in changed files.
+
+---
+
+## 2026-06-26 — Recently Added Live Courses: standalone endpoint (dashboard section reverted)
+
+**Change:** replaced the previously-added dashboard "Recently Added Live Courses" section with a **standalone paginated API** (per request — no new dashboard section).
+
+- **Reverted** `modules/client-dashboard/client-dashboard.service.ts`: removed the live-course import/limit/Promise.all entry/section push — `buildHomeDashboard` is back to its prior sections.
+- `modules/admin-live-course/admin-live-course.service.ts`: `listRecentForDashboard` → renamed **`listRecentLiveCourses(customerId, { page, limit })`**, now paginated + returns `{ liveCourses, total, page, limit }`. Newest-first (`createdAt desc`), same `plans`/`daysLeft`/`isPurchased` card contract as `listClient` (reuses `toCourseDto`/`getDaysLeftMap`/`getOwnedCourseIds`/`plansGrouped`).
+- `client/live-course/live-course.controller.ts`: new `listRecentlyAddedLiveCourses` handler (adds `shareableLink`, `success()` envelope).
+- `client/live-course/live-course.routes.ts`: `GET /recently-added` declared **before** `/:id` so the literal path resolves.
+
+**Endpoint:** `GET /api/v1/client/live-courses/recently-added?page=&limit=` (Bearer). FE doc: `docs/LIVE_COURSE_RECENTLY_ADDED_CLIENT.md`.
+
+**Verified:** total 4, page1/limit2 → 2 newest-first cards with full contract. `yarn typecheck`: 11 pre-existing errors, none in changed files.
+
+---
+
+## 2026-06-26 — client/dashboard: new "Recently Added Live Courses" section
+
+**Change:** mirror the packages "Recently Added" carousel for live courses on the home dashboard.
+
+- `modules/admin-live-course/admin-live-course.service.ts`: new `listRecentForDashboard(customerId, limit)` — newest-first active live courses (`prisma.liveCourse.findMany` `orderBy createdAt desc`, `status:true`), decorated with the SAME `plans` / `daysLeft` / `isPurchased` contract as `listClient` (reuses `toCourseDto`, `getDaysLeftMap`, `getOwnedCourseIds`, `plansGrouped`). No hero ranking (listing-only).
+- `modules/client-dashboard/client-dashboard.service.ts`: `buildHomeDashboard` now also fetches recent live courses (limit 10) and pushes a section `{ title: "Recently Added Live Courses", type: "live-course", data }` right after the packages "Recently Added" section.
+
+**Verified:** returns 4 cards newest-first with `_id/name/isPaid/isPurchased/daysLeft/plans`. `yarn typecheck`: 11 pre-existing errors, none in changed files. FE doc: `docs/DASHBOARD_RECENTLY_ADDED_LIVE_FE.md`.
+
+---
+
+## 2026-06-26 — client/dashboard exam-countdown: goal-prioritised, capped at 2
+
+**Change:** the home dashboard `exam-countdown` section now prioritises the user's
+selected goal then caps at 2 (was an un-prioritised nearest-10).
+
+- `modules/client-dashboard/client-dashboard.service.ts`: `EXAM_COUNTDOWN_LIMIT` 10 → **2**; new `fetchPrioritizedCountdowns(customerId, limit)` replaces the flat `examCountdown.findMany`.
+  - Reads `ws_customer.goal` (int[] of goal-label ids), fetches upcoming active countdowns whose `goalLabelId ∈ selected` (orderBy examDate asc, take limit) FIRST, then fills the remainder with nearest-upcoming (`id notIn` already-picked). No goal / no match → pure nearest-upcoming (prior behaviour).
+- Live SQL path only (the dashboard runs MySQL). Mongo `dashboard.controller.ts` is legacy (already limit 2, no goal logic) — left as-is.
+
+**Verified:** goal customer (goal=[1,2]) → `[UPSC Prelims (goalLabelId=1, first), IPSC Prelims (filler)]`; no-goal → nearest-2; both ≤ 2. `yarn typecheck`: 11 pre-existing errors, none in changed files.
+
+---
+
+## 2026-06-26 — Data backfill: convert all free packages/courses/live-courses → paid
+
+**Request:** make every existing package, course, and live course paid (no free items).
+
+**Statements (staging):**
+```sql
+UPDATE ws_package      SET is_paid = 1    WHERE is_paid = 0;     -- 0 rows (none free)
+UPDATE ws_live_course  SET is_paid = 1    WHERE is_paid = 0;     -- 0 rows (none free)
+UPDATE ws_course       SET purchase = '1' WHERE purchase = '0';  -- 2 rows converted
+```
+- Package/LiveCourse "paid" = `is_paid` boolean. Course "paid" = `purchase` enum('0','1') where `'0'`=free, `'1'`=paid.
+- Result: 0 free packages, 0 free live courses, 0 free courses (`ws_course` now all `purchase='1'`).
+
+**Note (latent inconsistency, not changed here):** `modules/admin-course/admin-course.service.ts` writes `purchase: "yes"/"no"` and reads `toIsPaid = v !== "no"`, but the DB column is `enum('0','1')` — so writing "yes"/"no" doesn't match the enum, and `'0' !== "no"` reads as paid. Setting `'1'` makes courses unambiguously paid across all readers (`!== "0"` and `!== "no"` both agree). Worth aligning the course isPaid↔purchase mapping to `'0'/'1'` in a follow-up.
+
+---
+
+## 2026-06-26 — ExamCountdown goal tagging (goalId + goalLabelId)
+
+**Feature (prerequisite for goal-prioritised dashboard exam-countdown section):** admins can tag an exam countdown to a `Goal` (ws_goal) and a specific label within it, mirroring `Package.goalId`/`goalLabelId`.
+
+**Schema (DDL `docs/migration/schema-changes/2026-06-26-exam-countdown-goal.sql`):**
+- `ALTER ws_exam_countdown ADD goal_id INT NULL, ADD goal_label_id INT NULL` + index `(goal_label_id, exam_date)`. Applied to staging.
+- `prisma/schema.prisma` ExamCountdown: added `goalId @map("goal_id")` + `goalLabelId @map("goal_label_id")` + the index. `prisma:generate` run.
+- Mongo `ExamCountdown.model.ts`: added `goalId` (ObjectId→Goal) + `goalLabelId` (Number).
+
+**Code:**
+- `modules/exam-countdown/exam-countdown.service.ts`: new `validateGoalPair(goalId, goalLabelId)` — goalLabelId requires goalId; goalId must exist in ws_goal; goalLabelId must exist in that goal's `labels` JSON (`[{id,name}]`). `createCountdown`/`updateCountdown` accept + persist the pair (update validates the merged pair); `countdownAdminDto` returns `goalId` (string) + `goalLabelId` (int).
+- `admin/examCountdown/examCountdown.controller.ts`: create + update parse optional `goalId`/`goalLabelId` (`parseOptionalId`), 400 on bad ids / goalError.
+
+**Identity model:** `ws_goal.labels` JSON = `[{id:int,name}]`; `ws_customer.goal` JSON = `int[]` of label ids. So `goalLabelId` (int) is the dashboard match key against the user's selected goal-labels (next step).
+
+**Verification:** `scripts/verify-exam-countdown-goal.ts` — valid pair persists (goalId 2 / label 1), bad label + label-without-goal rejected, cleanup ok. `yarn typecheck`: 11 pre-existing errors, none in changed files.
+
+**Next (not in this change):** dashboard `exam-countdown` section prioritises countdowns whose `goalLabelId ∈ customer.goal`, falling back to nearest-2 upcoming.
+
+---
+
+## 2026-06-26 — push notifications: device-token registration was silently broken + honest dispatch status
+
+**Root cause (why notifications never arrived & `ws_customer_device_token` was empty):**
+`CustomerDeviceToken.token` was introspected as a NAMED single-field unique
+`@@unique([token], name: "uniq_device_token")`. For that form Prisma's **query
+engine demands `where: { uniq_device_token: { token } }`**, but the generated
+**TypeScript types only accept `where: { token }`** — so the repository's
+`upsertDeviceToken` (`{ token }`) compiled fine yet **threw at runtime** on every
+call. Result: `PUT /client/profile/device-token` (and the by-phone sync) never
+persisted a token → empty table → every broadcast resolved 0 tokens → status
+`failed / "All sends failed."`.
+
+**Schema fix (no DDL — DB unchanged):**
+- `prisma/schema.prisma` `CustomerDeviceToken`: replaced `@@unique([token], name:
+  "uniq_device_token")` with a **field-level** `token String @unique(map:
+  "uniq_device_token")`. Now the TS types AND the engine both use `where: { token }`,
+  and `map` preserves the existing DB constraint name (`uniq_device_token`, verified
+  via SHOW INDEX). `yarn prisma:generate` run. No ALTER required.
+
+**Status-honesty fix (Phase 2.1 of docs/NOTIFICATIONS_E2E_PLAN.md):**
+- `modules/admin-notification/admin-notification.service.ts` + `admin/notification/
+  dispatcher.ts` (Mongo parity): a zero-recipient send now reports failureReason
+  **"No registered devices for the selected audience."** instead of the misleading
+  "All sends failed." (`attempted === 0` branch). `attempted > 0 && success === 0`
+  still → "All sends failed.".
+
+**Verification:** `scripts/verify-device-token.ts` exercises the real repository path
+end-to-end (register → row appears → broadcast would collect it → cleanup). After the
+fix: `setDeviceToken -> {count:1}`, row created, broadcast collects the token, cleanup
+removes it. `yarn typecheck`: 11 pre-existing errors, none in changed files.
+
+**Runtime note:** the running dev server caches the OLD Prisma client — **restart
+`yarn dev`** for the registration fix to take effect.
+
+---
+
+## 2026-06-26 — admin live-course: materialCategories / examCategories SQL parity (422 fix)
+
+**Bug:** `PUT /admin/live-courses/:id` (and create) returned `422 "Unrecognized key(s) in object: 'materialCategories', 'examCategories'"`. The app runs MySQL-only, so the strict `createLiveCourseSqlSchema`/`updateLiveCourseSqlSchema` validate the body — but unlike the Mongo schema they omitted these two keys, and `ws_live_course` had no columns for them. The controller already coerces both (`live-course.controller.ts:39-42`), so the omission was a migration oversight (the SQL service only handled `examCountdown*`).
+
+**Schema (DDL `docs/migration/schema-changes/2026-06-26-live-course-categories.sql`):**
+- `ALTER ws_live_course ADD material_categories JSON NULL, ADD exam_categories JSON NULL` (after `exam_countdown_ids`). Applied to staging.
+- `prisma/schema.prisma` LiveCourse: added `materialCategories Json? @map("material_categories")` + `examCategories Json? @map("exam_categories")`; ran `yarn prisma:generate`.
+
+**Code:**
+- `admin/live-course/live-course.validation.ts`: added `materialCategories` + `examCategories` (`z.array(z.any()).optional()`) to `createLiveCourseSqlSchema` (update schema inherits via `.partial()`).
+- `modules/admin-live-course/admin-live-course.service.ts`: `toCourseDto` now returns both (via `jArr`); `createLiveCourse`/`updateLiveCourse` now persist them (JSON passthrough, mirroring `examCountdown*`). Repo needed no change (typed `Prisma.LiveCourse*Input` picks up the new fields after generate).
+
+**Verification:** `yarn typecheck` — still 11 pre-existing errors (payment `result.promo` nullables + `credit-referrer.ts`), no new ones. Both columns confirmed present in `ws_live_course`.
+
+---
+
+## 2026-06-26 — Recent Search History (client global search) — NEW table + module
+
+**Feature:** per-customer recent-search history for the client search screen. Stores the latest **10** search terms per customer; recording a new term dedupes & moves it to the top, and older entries beyond the newest 10 are trimmed away.
+
+**Schema (new table — DDL `docs/migration/schema-changes/2026-06-26-search-history.sql`):**
+- `ws_search_history(id PK, customer_id INT, query VARCHAR(255), created_at DATETIME)`.
+- **UNIQUE `(customer_id, query)`** `uq_search_history_customer_query` → powers dedupe / move-to-top via Prisma `upsert`.
+- INDEX `(customer_id, created_at)` `idx_search_history_customer_created` → newest-first list.
+- `prisma/schema.prisma`: hand-added `model SearchHistory` (no `db:pull`); ran `yarn prisma:generate`.
+
+**Code (MySQL-only — net-new data, no Mongo legacy):**
+- New module `src/modules/client-search-history/` (repository/service/transformer/types/validation).
+  - Queries: `upsert` by `(customerId, query)` (refresh `created_at`); `findMany` newest-first `take 10`; `deleteMany` overflow (`id notIn` newest-10); `deleteMany` clear-all; `deleteMany` scoped single-delete.
+- `src/client/search/search-history.controller.ts` + routes in `search.routes.ts`:
+  - `GET /api/v1/client/search/history`, `DELETE /api/v1/client/search/history`, `DELETE /api/v1/client/search/history/:id` (all Bearer-auth; `success()`/`failure()` envelope).
+- `globalSearch` (`search.controller.ts`): fire-and-forget `searchHistory.record()` on **page 1** with a valid `q` (≥2 chars) — never blocks/fails the search response.
+
+**Verification:** `yarn typecheck` — no new errors (pre-existing payment/referral `result.promo` + `credit-referrer.ts` errors unchanged). Frontend integration doc: `docs/SEARCH_HISTORY_CLIENT.md`.
+
+---
+
 ## 2026-06-25 — payment create-order: SQL promo resolution + SQL address check (all 5 surfaces)
 
 **Bug:** in an SQL deployment (Mongo not connected) `POST /client/payment/create-order/*` 500'd: (1) the SQL branches called the Mongo-only `client/live-course/promo.resolveLivePromo` → `PromoCode.findOne()` on `ws_promo_codes` → "Cannot call ... before initial connection is complete"; (2) the package/course address ownership check used the Mongo `CustomerAddress` model with a SQL int `customerId` → "Cast to ObjectId failed for value \"472369\" ... CustomerAddress". Additionally the **course** and **ebook** SQL paths silently ignored `promocode` entirely (charged full price).

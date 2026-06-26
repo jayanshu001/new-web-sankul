@@ -46,6 +46,8 @@ export const toCourseDto = (row: LiveCourse) => ({
   timetableFiles: jArr(row.timetableFiles),
   examCountdownCategoryIds: jArr(row.examCountdownCategoryIds),
   examCountdownIds: jArr(row.examCountdownIds),
+  materialCategories: jArr(row.materialCategories),
+  examCategories: jArr(row.examCategories),
   createdAt: row.createdAt ?? null,
   updatedAt: row.updatedAt ?? null,
 });
@@ -114,6 +116,7 @@ export const createLiveCourse = async (v: any, createdById?: string) => {
     scheduleEntries: v.scheduleEntries ?? undefined, scheduleFolders: v.scheduleFolders ?? undefined,
     timetableFiles: v.timetableFiles ?? undefined,
     examCountdownCategoryIds: v.examCountdownCategoryIds ?? undefined, examCountdownIds: v.examCountdownIds ?? undefined,
+    materialCategories: v.materialCategories ?? undefined, examCategories: v.examCategories ?? undefined,
     createdAt: now, updatedAt: now,
   });
   // rootFolder is Mongo-only (no live_course_id on ws_video_category) → null.
@@ -143,6 +146,8 @@ export const updateLiveCourse = async (id: number, v: any): Promise<"not_found" 
   if (v.timetableFiles !== undefined) data.timetableFiles = v.timetableFiles;
   if (v.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = v.examCountdownCategoryIds;
   if (v.examCountdownIds !== undefined) data.examCountdownIds = v.examCountdownIds;
+  if (v.materialCategories !== undefined) data.materialCategories = v.materialCategories;
+  if (v.examCategories !== undefined) data.examCategories = v.examCategories;
   const updated = await repo.update(id, data);
   return { liveCourse: toCourseDto(updated) };
 };
@@ -987,6 +992,36 @@ export const listClient = async (customerId: number | null, q: { search?: string
   return { liveCourses, total, page: q.page, limit: q.limit };
 };
 
+// ── Recently Added Live Courses (standalone API) ─────────────────────────────
+// Newest active live courses (pure createdAt desc — NOT the listing's
+// ordered-first sort), decorated with the SAME plans / daysLeft / isPurchased
+// contract as listClient so a card here and the /client/live-courses listing
+// agree. No hero ranking (that's listing-only). Paginated.
+export const listRecentLiveCourses = async (customerId: number | null, q: { page: number; limit: number }) => {
+  const where = { status: true } as const;
+  const [rows, total] = await Promise.all([
+    prisma.liveCourse.findMany({ where, orderBy: { createdAt: "desc" }, skip: (q.page - 1) * q.limit, take: q.limit }),
+    prisma.liveCourse.count({ where }),
+  ]);
+  const ids = rows.map((r) => r.id);
+  if (!ids.length) return { liveCourses: [], total, page: q.page, limit: q.limit };
+  const [daysLeft, owned, plans] = await Promise.all([
+    getDaysLeftMap(customerId, ids),
+    getOwnedCourseIds(customerId),
+    plansGrouped(ids),
+  ]);
+  const liveCourses = rows.map((r) => {
+    const key = String(r.id);
+    return {
+      ...toCourseDto(r),
+      daysLeft: daysLeft.has(key) ? daysLeft.get(key) ?? null : null,
+      isPurchased: owned.has(key),
+      plans: plans.get(r.id) ?? [],
+    };
+  });
+  return { liveCourses, total, page: q.page, limit: q.limit };
+};
+
 // ── listUpcomingLiveBatches ──────────────────────────────────────────────────
 export const listUpcomingBatches = async (customerId: number | null, q: { search?: string; categoryId?: number; page: number; limit: number }) => {
   const now = new Date();
@@ -1059,6 +1094,112 @@ export const getScheduleFolderForClient = async (id: number, folderId: string): 
   const folder = jArr(row.scheduleFolders).find((f: any) => String(f._id) === folderId);
   if (!folder) return "folder_not_found";
   return { scheduleFolder: { _id: folder._id, title: folder.title, image: folder.image ?? null, order: folder.order ?? 0, status: folder.status !== false, entries: [...(folder.entries ?? [])].sort((x: any, y: any) => (x.order ?? 0) - (y.order ?? 0)) } };
+};
+
+// ── GET /:id/schedule (timetable + scheduleFolders) — SQL ─────────────────────
+// Mirrors the Mongo getLiveCourseSchedule contract: timetable = sessions with a
+// scheduledAt (educator populated), scheduleFolders = the course's active folder
+// JSON, plus daysLeft. Session educator comes from ws_live_session.educator_id.
+export const getScheduleForClient = async (
+  courseId: number,
+  customerId: number | null,
+  upcoming: boolean
+): Promise<"not_found" | { liveCourse: { _id: string; name: string }; timetable: any[]; scheduleFolders: any[]; total: number; daysLeft: number | null }> => {
+  const course = await repo.findById(courseId);
+  if (!course || !course.status) return "not_found";
+
+  const now = new Date();
+  const { rows } = await repo.sessionsForCourse(courseId, { upcoming, now, skip: 0, take: 500 });
+  const sched = rows.filter((s) => s.scheduledAt != null);
+  // upcoming → ascending; otherwise future-first (nearest), then past most-recent-first.
+  const ordered = upcoming
+    ? sched.sort((a, b) => a.scheduledAt!.getTime() - b.scheduledAt!.getTime())
+    : sched.sort((a, b) => {
+        const fa = a.scheduledAt!.getTime() >= now.getTime() ? 0 : 1;
+        const fb = b.scheduledAt!.getTime() >= now.getTime() ? 0 : 1;
+        if (fa !== fb) return fa - fb;
+        return Math.abs(a.scheduledAt!.getTime() - now.getTime()) - Math.abs(b.scheduledAt!.getTime() - now.getTime());
+      });
+
+  // Populate session-level educator ({ _id, name, image } | null).
+  const eduIds = [...new Set(ordered.map((s) => s.educatorId).filter((n): n is number => n != null))];
+  const eduById = new Map<number, { _id: string; name: string | null; image: string | null }>();
+  if (eduIds.length) {
+    const edus = await Promise.all(eduIds.map((eid) => repo.findEducator(eid)));
+    for (const e of edus) if (e) eduById.set(e.id, { _id: String(e.id), name: e.name ?? null, image: e.image ?? null });
+  }
+
+  const timetable = ordered.map((s) => ({
+    sessionId: String(s.id),
+    subject: s.subject || s.title,
+    title: s.title,
+    educator: s.educatorId != null ? eduById.get(s.educatorId) ?? null : null,
+    date: s.scheduledAt ?? null,
+    startAt: s.scheduledAt ?? null,
+    startAtDisplay: formatScheduledAt(s.scheduledAt),
+    endAt: s.endAt ?? null,
+    status: s.status,
+    streamId: s.streamId ?? null,
+  }));
+
+  const scheduleFolders = jArr(course.scheduleFolders)
+    .filter((f: any) => f.status !== false)
+    .slice()
+    .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+    .map((f: any) => ({
+      _id: String(f._id),
+      title: f.title,
+      image: f.image ?? null,
+      order: f.order ?? 0,
+      status: f.status !== false,
+      entries: (f.entries ?? []).slice().sort(
+        (a: any, b: any) => ((a.order ?? 0) - (b.order ?? 0)) || (new Date(a.date).getTime() - new Date(b.date).getTime())
+      ),
+    }));
+
+  const daysLeftMap = await getDaysLeftMap(customerId, [courseId]);
+  const daysLeft = daysLeftMap.has(String(courseId)) ? daysLeftMap.get(String(courseId)) ?? null : null;
+
+  return { liveCourse: { _id: String(course.id), name: course.name }, timetable, scheduleFolders, total: timetable.length, daysLeft };
+};
+
+// ── GET /my/schedule (owned courses' schedule folders) — SQL ──────────────────
+// Mirrors the Mongo listMyScheduleByCategory contract: for every owned live
+// course (active/lifetime verified sub), its active schedule folders + daysLeft.
+export const listMyScheduleForClient = async (customerId: number) => {
+  const now = new Date();
+  const ownedIds = await repo.ownedCourseIds(customerId, now);
+  if (!ownedIds.length) return { liveCourses: [], totalLiveCourses: 0 };
+  const [courses, daysLeftMap] = await Promise.all([
+    prisma.liveCourse.findMany({
+      where: { id: { in: ownedIds }, status: true },
+      select: { id: true, name: true, image: true, level: true, scheduleFolders: true },
+    }),
+    getDaysLeftMap(customerId, ownedIds),
+  ]);
+  const liveCourses = courses.map((c) => {
+    const folders = jArr(c.scheduleFolders)
+      .filter((f: any) => f.status !== false)
+      .slice()
+      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
+      .map((f: any) => ({
+        _id: String(f._id),
+        title: f.title,
+        image: f.image ?? null,
+        order: f.order ?? 0,
+        entryCount: Array.isArray(f.entries) ? f.entries.length : 0,
+      }));
+    const key = String(c.id);
+    return {
+      _id: String(c.id),
+      name: c.name,
+      image: c.image,
+      level: c.level,
+      scheduleFolders: folders,
+      daysLeft: daysLeftMap.has(key) ? daysLeftMap.get(key) ?? null : null,
+    };
+  });
+  return { liveCourses, totalLiveCourses: liveCourses.length };
 };
 
 // ════════════════════════════════════════════════════════════════════════════

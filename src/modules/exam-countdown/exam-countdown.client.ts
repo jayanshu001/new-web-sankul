@@ -31,14 +31,18 @@ const matchingIds = async (
   table: string,
   jsonCol: string,
   id: number,
-  search: string | null
+  search: string | null,
+  // Ordering column differs per table: ws_package/ws_book/ws_ebook use
+  // `order_by`, but ws_live_course uses `ordered` (it has no `order_by` column).
+  // Caller-supplied fixed identifier (never user input) — safe to inline.
+  orderCol: string = "order_by"
 ): Promise<number[]> => {
   const like = likeParam(search);
   const sql =
     `SELECT id FROM ${table} WHERE status = 1 ` +
     `AND JSON_CONTAINS(${jsonCol}, CAST(? AS JSON))` +
     (like ? ` AND name LIKE ?` : ``) +
-    ` ORDER BY order_by ASC, id DESC`;
+    ` ORDER BY ${orderCol} ASC, id DESC`;
   const params: any[] = like ? [id, like] : [id];
   const rows = await prisma.$queryRawUnsafe<{ id: number }[]>(sql, ...params);
   return rows.map((r) => Number(r.id));
@@ -250,7 +254,7 @@ export const listProductsByCountdown = async (
   if (!examCountdown) return null;
   const [pkgIds, liveIds] = await Promise.all([
     matchingIds("ws_package", "exam_countdown_ids", countdownId, opts.search ?? null),
-    matchingIds("ws_live_course", "exam_countdown_ids", countdownId, opts.search ?? null),
+    matchingIds("ws_live_course", "exam_countdown_ids", countdownId, opts.search ?? null, "ordered"),
   ]);
   const [packages, live] = await Promise.all([loadPackages(pkgIds), loadLiveCourses(liveIds, customerId)]);
   const merged = [

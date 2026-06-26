@@ -215,6 +215,27 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/client/live-courses/recently-added
+// Newest-first active live courses (pure createdAt desc), with the same card
+// contract (plans / isPaid / isPurchased / daysLeft / shareableLink) as the
+// main listing — a standalone "Recently Added Live Courses" feed.
+export const listRecentlyAddedLiveCourses = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listRecentlyAddedLiveCourses invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+  try {
+    const page = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limit = Math.min(50, parseInt(req.query.limit as string) || 10);
+    const r = await liveSql.listRecentLiveCourses(liveSql.parseLiveId(String(req.user?.id ?? "")), { page, limit });
+    const base = resolveBase(req);
+    const liveCourses = r.liveCourses.map((c: any) => ({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }));
+    logger.info("listRecentlyAddedLiveCourses success", { traceId, total: r.total, returned: liveCourses.length });
+    return success(res, { liveCourses, total: r.total, page: r.page, limit: r.limit }, "Recently added live courses fetched.");
+  } catch (err) {
+    logger.error("listRecentlyAddedLiveCourses failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to list recently added live courses.", 500);
+  }
+};
+
 // GET /api/v1/client/live-courses/upcoming-batches
 // Powers the home-screen "Upcoming Live Batches" carousel with its
 // All / <category> filter tab bar (see the design mockup). An "upcoming
@@ -1312,6 +1333,16 @@ export const getLiveCourseSchedule = async (req: Request, res: Response) => {
   logger.info("getLiveCourseSchedule invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
 
   try {
+    // ─── SQL branch ───
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(id);
+      if (cid == null) return failure(res, "Invalid live course id.", 422);
+      const r = await liveSql.getScheduleForClient(cid, liveSql.parseLiveId(String(req.user?.id ?? "")), req.query.upcoming === "true");
+      if (r === "not_found") return failure(res, "Live course not found.", 404);
+      logger.info("getLiveCourseSchedule success (sql)", { traceId, id, timetableCount: r.timetable.length, folderCount: r.scheduleFolders.length });
+      return success(res, r, "Schedule fetched.");
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       logger.warn("getLiveCourseSchedule invalid id", { traceId, id });
       return failure(res, "Invalid live course id.", 422);
@@ -1442,6 +1473,15 @@ export const listMyScheduleByCategory = async (req: Request, res: Response) => {
     if (!customerId) {
       logger.warn("listMyScheduleByCategory unauthorized", { traceId });
       return failure(res, "Unauthorized.", 401);
+    }
+
+    // ─── SQL branch ───
+    if (liveSql.isLiveCourseMysql()) {
+      const cid = liveSql.parseLiveId(String(customerId));
+      if (cid == null) return success(res, { liveCourses: [], totalLiveCourses: 0 }, "Your schedule fetched.");
+      const r = await liveSql.listMyScheduleForClient(cid);
+      logger.info("listMyScheduleByCategory success (sql)", { traceId, customerId, totalLiveCourses: r.totalLiveCourses });
+      return success(res, r, "Your schedule fetched.");
     }
 
     const now = new Date();

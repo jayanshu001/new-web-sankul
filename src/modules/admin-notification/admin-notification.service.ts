@@ -183,7 +183,9 @@ export async function dispatchAudience(
     status === "failed"
       ? sendResult.skipped
         ? "FCM not configured."
-        : "All sends failed."
+        : sendResult.attempted === 0
+          ? "No registered devices for the selected audience."
+          : "All sends failed."
       : null;
 
   if (!isBroadcast && resolved.customerIds.length && status === "sent") {

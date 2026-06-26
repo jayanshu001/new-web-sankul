@@ -19,9 +19,52 @@ import { fetchTrendingBooksOnly, fetchTrendingEbooksOnly } from "../client-trend
 
 const RECENTLY_ADDED_LIMIT = 10;
 const COURSE_CATEGORY_LIMIT = 20;
-const EXAM_COUNTDOWN_LIMIT = 10;
+const EXAM_COUNTDOWN_LIMIT = 2;
 const todayUTC = () => { const n = new Date(); return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())); };
 const daysLeftFor = (examDate: Date) => Math.ceil((new Date(examDate).getTime() - todayUTC().getTime()) / 86_400_000);
+
+/**
+ * Upcoming exam countdowns for the dashboard, prioritised by the user's selected
+ * goal-labels then filled with the nearest upcoming, capped at `limit`.
+ *
+ * The customer's `goal` JSON column is an int[] of goal-label ids
+ * (ws_goal.labels[].id). A countdown tagged with `goalLabelId` in that set is
+ * shown first (ordered by examDate); if fewer than `limit` match (or the user
+ * has no goal), the remainder are filled with the nearest upcoming countdowns
+ * (excluding the already-picked ones). Falls back to pure nearest-upcoming when
+ * there are no goal matches — identical to the previous behaviour.
+ */
+export const fetchPrioritizedCountdowns = async (customerId: number | null, limit: number) => {
+  const baseWhere = { status: true, examDate: { gte: todayUTC() } };
+
+  // Selected goal-label ids from the customer's goal JSON ([1,2,...]).
+  let selectedLabelIds: number[] = [];
+  if (customerId) {
+    const c = await prisma.customer.findUnique({ where: { id: customerId }, select: { goal: true } });
+    const raw = Array.isArray(c?.goal) ? (c!.goal as any[]) : [];
+    selectedLabelIds = [...new Set(raw.map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0))];
+  }
+
+  // Goal-matched first (by examDate asc).
+  let matched: Awaited<ReturnType<typeof prisma.examCountdown.findMany>> = [];
+  if (selectedLabelIds.length) {
+    matched = await prisma.examCountdown.findMany({
+      where: { ...baseWhere, goalLabelId: { in: selectedLabelIds } },
+      orderBy: { examDate: "asc" },
+      take: limit,
+    });
+  }
+  if (matched.length >= limit) return matched.slice(0, limit);
+
+  // Fill the remainder with the nearest upcoming, excluding the already-picked.
+  const pickedIds = matched.map((m) => m.id);
+  const fillers = await prisma.examCountdown.findMany({
+    where: { ...baseWhere, id: { notIn: pickedIds.length ? pickedIds : [0] } },
+    orderBy: { examDate: "asc" },
+    take: limit - matched.length,
+  });
+  return [...matched, ...fillers];
+};
 
 /** Per-customer active endAt for a set of course ids + package ids (longest wins; null=lifetime). */
 const resolveOwnedEndAt = async (customerId: number | null, courseIds: number[], packageIds: number[]) => {
@@ -56,7 +99,7 @@ export const buildHomeDashboard = async (customerId: number | null) => {
     fetchTrendingEbooksOnly({ type: "paid" }),
     prisma.testimonial.findMany({ orderBy: { rating: "desc" } }),
     prisma.courseSubjectCategory.findMany({ where: { status: true }, orderBy: { id: "asc" }, take: COURSE_CATEGORY_LIMIT }),
-    prisma.examCountdown.findMany({ where: { status: true, examDate: { gte: todayUTC() } }, orderBy: { examDate: "asc" }, take: EXAM_COUNTDOWN_LIMIT }),
+    fetchPrioritizedCountdowns(customerId, EXAM_COUNTDOWN_LIMIT),
     prisma.exam.findFirst({ where: { type: "daily" as any, status: true, startAt: { lte: now }, endAt: { gte: now } }, orderBy: { startAt: "desc" } }),
     customerId ? prisma.notification.count({ where: { isRead: false, OR: [{ customerId }, { broadcast: true }] } }).catch(() => 0) : 0,
   ]);
