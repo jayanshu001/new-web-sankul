@@ -106,6 +106,7 @@ const toPackageDto = (
   examCountdownIds: jsonIdsToStrings(row.examCountdownIds),
   packageCategoryId: idStrOrNull(row.packageCategoryId),
   educatorId: idStrOrNull(row.educator_id),
+  pcMaterialId: idStrOrNull(row.pcMaterialId),
   notificationTopic: "",
   ...(embeds ?? {}),
   createdAt: row.created_at ?? null,
@@ -218,6 +219,8 @@ export interface PackageWriteInput {
   goalId?: string | null; goalLabelId?: string | null; // goalLabelId = label NAME
   isPaid?: boolean; isSmartCourse?: boolean; isPlannerCourse?: boolean;
   packageCategoryId?: string | null;
+  // Physical-material kit id (ws_package.pc_material_id). null detaches.
+  pcMaterialId?: string | null;
   examCountdownCategoryIds?: string[]; examCountdownIds?: string[];
   specificSubjects?: Array<{ category: string; order?: number; status?: boolean }>;
   materialCategories?: Array<{ category: string; order?: number }>;
@@ -252,6 +255,7 @@ export const createPackage = async (d: PackageWriteInput) => {
       isSmartCourse: d.isSmartCourse ?? false,
       isPlannerCourse: d.isPlannerCourse ?? false,
       packageCategoryId: d.packageCategoryId ? parsePackageId(d.packageCategoryId) : null,
+      pcMaterialId: d.pcMaterialId ? parsePackageId(d.pcMaterialId) ?? null : null,
       examCountdownCategoryIds: toIntIdArray(d.examCountdownCategoryIds),
       examCountdownIds: toIntIdArray(d.examCountdownIds),
       created_at: now, updated_at: now,
@@ -281,6 +285,7 @@ export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"
   if (d.isSmartCourse !== undefined) data.isSmartCourse = d.isSmartCourse;
   if (d.isPlannerCourse !== undefined) data.isPlannerCourse = d.isPlannerCourse;
   if (d.packageCategoryId !== undefined) data.packageCategoryId = d.packageCategoryId ? parsePackageId(d.packageCategoryId) : null;
+  if (d.pcMaterialId !== undefined) data.pcMaterialId = d.pcMaterialId ? parsePackageId(d.pcMaterialId) ?? null : null;
   if (d.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = toIntIdArray(d.examCountdownCategoryIds);
   if (d.examCountdownIds !== undefined) data.examCountdownIds = toIntIdArray(d.examCountdownIds);
 

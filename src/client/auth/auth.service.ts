@@ -133,10 +133,22 @@ export async function generateOtp(rawPhone: string, traceId?: string): Promise<{
       customerId = row.id;
       logger.info("generateOtp service existing user OTP updated", { traceId, phone, customerId });
     } else {
+      // No ACTIVE account for this phone → fresh signup (any soft-deleted history
+      // for the same phone stays intact and untouched). The uq_customer_phone_active
+      // index permits this because deleted rows expose NULL for phone_active.
       isNewUser = true;
-      const created = await customerAuthRepository.createStub(phone, otp, expiresAt);
-      customerId = created.id;
-      logger.info("generateOtp service new user created", { traceId, phone, customerId });
+      try {
+        const created = await customerAuthRepository.createStub(phone, otp, expiresAt);
+        customerId = created.id;
+        logger.info("generateOtp service new user created", { traceId, phone, customerId });
+      } catch (err: any) {
+        // P2002 = concurrent signup raced us to the single active slot.
+        if (err?.code === "P2002") {
+          logger.warn("generateOtp service duplicate active phone race condition", { traceId, phone });
+          return { ok: false, message: "Please wait before requesting a new OTP." };
+        }
+        throw err;
+      }
     }
     await customerAuthRepository.recordOtp(customerId, otp);
     logger.info("generateOtp service completed", { traceId, phone, isNewUser });

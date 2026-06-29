@@ -194,4 +194,111 @@ export const clientExamRepository = {
     prisma.examResultDetail.findMany({ where: { examResultId: resultId } }),
   questionsByIds: (ids: number[]) =>
     prisma.examQuestion.findMany({ where: { id: { in: ids } } }),
+
+  // ─── attempt lifecycle (resumable attempts) ────────────────────────────────
+  /** The customer's open (in-progress) attempt for an exam, if any. */
+  findInProgressAttempt: (customerId: number, examId: number) =>
+    prisma.examResult.findFirst({
+      where: { customerId, examId, status: false },
+      orderBy: [{ id: "desc" }],
+    }),
+
+  /** Highest attempt number this customer has used for an exam (null if none). */
+  maxAttemptNumber: async (customerId: number, examId: number): Promise<number> => {
+    const r = await prisma.examResult.aggregate({
+      where: { customerId, examId },
+      _max: { attemptNumber: true },
+    });
+    return r._max.attemptNumber ?? 0;
+  },
+
+  /** Open a fresh in-progress attempt row (status=false). */
+  createInProgressAttempt: (input: {
+    customerId: number; examId: number; attemptNumber: number; startedAt: Date;
+  }) =>
+    prisma.examResult.create({
+      data: {
+        customerId: input.customerId, examId: input.examId, attemptNumber: input.attemptNumber,
+        total: 0, attempt: 0, skip: 0, success: 0, failed: 0, score: 0, timing: "00:00",
+        startedAt: input.startedAt, submittedAt: null, inProgress: true, status: false,
+        created_at: input.startedAt,
+      },
+    }),
+
+  /** A specific attempt scoped to its owner + exam. */
+  findAttempt: (id: number, customerId: number, examId: number) =>
+    prisma.examResult.findFirst({ where: { id, customerId, examId } }),
+
+  /** Upsert a single saved answer detail by (attempt, question). */
+  upsertAttemptDetail: async (input: {
+    examResultId: number; customerId: number; examId: number; questionId: number;
+    answerId: number | null; result: "true" | "false" | "skip"; point: number;
+  }) => {
+    const existing = await prisma.examResultDetail.findFirst({
+      where: { examResultId: input.examResultId, questionId: input.questionId },
+      select: { id: true },
+    });
+    if (existing) {
+      return prisma.examResultDetail.update({
+        where: { id: existing.id },
+        data: { answerId: input.answerId, result: input.result, point: input.point },
+      });
+    }
+    return prisma.examResultDetail.create({
+      data: {
+        examResultId: input.examResultId, customerId: input.customerId, examId: input.examId,
+        questionId: input.questionId, answerId: input.answerId, result: input.result, point: input.point,
+      },
+    });
+  },
+
+  /** Published question ids for an exam (for submit's unanswered → skip fill). */
+  questionIdsForExam: (examId: number) =>
+    prisma.examQuestion.findMany({ where: { exam: examId, status: true }, select: { id: true } }),
+
+  /**
+   * Finalize an attempt: insert SKIP details for any unanswered question, then
+   * write the rolled-up totals + mark submitted. Returns the updated row.
+   */
+  finalizeAttempt: (input: {
+    attemptId: number; customerId: number; examId: number;
+    missingQuestionIds: number[];
+    total: number; attempt: number; skip: number; success: number; failed: number;
+    score: number; timing: string; ratting: string | null; submittedAt: Date;
+  }) =>
+    prisma.$transaction(async (tx) => {
+      for (const qid of input.missingQuestionIds) {
+        await tx.examResultDetail.create({
+          data: {
+            examResultId: input.attemptId, customerId: input.customerId, examId: input.examId,
+            questionId: qid, answerId: null, result: "skip", point: 0,
+          },
+        });
+      }
+      return tx.examResult.update({
+        where: { id: input.attemptId },
+        data: {
+          total: input.total, attempt: input.attempt, skip: input.skip,
+          success: input.success, failed: input.failed, score: input.score,
+          timing: input.timing, ratting: input.ratting,
+          status: true, inProgress: false, submittedAt: input.submittedAt,
+        },
+      });
+    }),
+
+  /** All of a customer's attempts for an exam (history, newest first). */
+  attemptsForExam: (customerId: number, examId: number) =>
+    prisma.examResult.findMany({
+      where: { customerId, examId },
+      orderBy: [{ attemptNumber: "desc" }, { id: "desc" }],
+    }),
+
+  /** Aggregate stats across a customer's SUBMITTED attempts for an exam. */
+  aggregateForExam: (customerId: number, examId: number) =>
+    prisma.examResult.aggregate({
+      where: { customerId, examId, status: true },
+      _count: { _all: true },
+      _sum: { total: true, attempt: true, skip: true, success: true, failed: true, score: true },
+      _max: { score: true, submittedAt: true },
+    }),
 };

@@ -34,7 +34,7 @@ export const parseBookOrderId = (id: string): number | null => {
 };
 
 /** The book free-shipping threshold (ws_termsandcondition, module='book'). */
-const getFreeShippingMin = async (): Promise<number> => {
+export const getFreeShippingMin = async (): Promise<number> => {
   const row = await prisma.termsAndConditions.findFirst({
     where: { module: "book", status: true },
     select: { freeShippingMinimumOrderAmount: true },
@@ -228,4 +228,50 @@ export const fulfillBookWebhookMysql = async (
   const order = await repo.findOrderByRazorpayOnly(razorpayOrderId);
   if (!order) return null;
   return verifyBookOrderMysql(toBookOrderRow(order), razorpayPaymentId);
+};
+
+// ── Shipment tracking (SQL) ──────────────────────────────────────────────────
+// SQL counterpart of the Mongo getMyOrderTracking. Drift vs Mongo: ws_book_order
+// has no shipped_at/delivered_at and no origin (book-settings) on SQL, and
+// ws_book_tracking carries a single status row (no courier/location/history
+// array). So those fields default to null/[]; the core (awb, to-address,
+// consignee, status, bookedAt) populate. Returns null if the order isn't the
+// customer's.
+export const getOrderTrackingMysql = async (orderId: number, customerId: number) => {
+  const order = await prisma.bookOrder.findFirst({
+    where: { id: orderId, userId: customerId },
+    include: { shipping: true, BookTracking: true },
+  });
+  if (!order) return null;
+  const ship: any = order.shipping ?? {};
+  const awb = order.trackingId != null ? Number(order.trackingId) : null;
+  const trackStatus = order.BookTracking?.status ?? null;
+  const trackAt = order.BookTracking?.updatedAt ?? order.BookTracking?.createdAt ?? null;
+  return {
+    orderId: String(order.id),
+    receiptId: order.receiptId,
+    awb,
+    courier: null, // not stored on SQL (the AWB range drives buildTrackingUrl)
+    from: { city: null, hub: null }, // no SQL book-settings origin
+    to: { city: ship.city ?? null, hub: ship.address ?? null, pincode: ship.pincode ?? null },
+    consignee: ship.name ?? null,
+    consigneePhone: ship.phone != null ? String(ship.phone) : null,
+    bookedAt: order.paidAt ?? order.createdAt ?? null,
+    currentStatus: trackStatus ?? order.status,
+    orderStatus: order.status,
+    shippedAt: null,
+    deliveredAt: null,
+    // Single tracking row → one history entry (keeps the UI timeline non-empty).
+    history: trackStatus ? [{ status: trackStatus, location: null, note: null, at: trackAt }] : [],
+  };
+};
+
+/** Live-tracking lookup: order status + AWB (BigInt→number). Null if not owned. */
+export const getOrderTrackingLiveMysql = async (orderId: number, customerId: number) => {
+  const order = await prisma.bookOrder.findFirst({
+    where: { id: orderId, userId: customerId },
+    select: { status: true, trackingId: true },
+  });
+  if (!order) return null;
+  return { status: order.status, trackingId: order.trackingId != null ? Number(order.trackingId) : null };
 };

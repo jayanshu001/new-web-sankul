@@ -286,6 +286,7 @@ const createCourseOrderMysqlPath = async (
     planId: packageId,
     price: chargeAmount,
     razorpayOrderId: rzpOrder.id,
+    customerShippingId: customerShippingId ?? null,
   });
 
   logger.info("createCourseOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });

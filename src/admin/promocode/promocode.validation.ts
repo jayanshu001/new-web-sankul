@@ -32,12 +32,23 @@ const discountErr = {
 export const APPLIES_TO_TYPES = ["package", "course", "liveCourse", "ebook", "testSeries"] as const;
 export type AppliesToType = (typeof APPLIES_TO_TYPES)[number];
 
-export const appliesToSchema = z.object({
+// A single entity-type group: one type + its selected ids.
+export const appliesToGroupSchema = z.object({
   type: z.enum(APPLIES_TO_TYPES),
   ids: z
     .array(z.string().regex(objectIdOrIntRegex, "Invalid id"))
     .min(1, "Select at least one item"),
 });
+
+// Multi-type input: accept EITHER a single { type, ids } object (legacy) OR an
+// array [{ type, ids }, …] (a single promocode spanning multiple module types,
+// e.g. Test Series + Packages + Courses). Both normalize to an array of groups.
+export const appliesToSchema = z.union([
+  appliesToGroupSchema.transform((g) => [g]),
+  z.array(appliesToGroupSchema).min(1, "Select at least one item"),
+]);
+
+export type AppliesToInput = z.infer<typeof appliesToSchema>; // { type, ids: string[] }[]
 
 const percentage = z
   .number()

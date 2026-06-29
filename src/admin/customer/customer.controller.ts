@@ -11,6 +11,7 @@ import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
 import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSchema } from "./customer.validation";
+import { invalidateCustomerGate } from "../../middlewares/authenticate";
 import { ensureDefaultFolders } from "../../client/folder/folder.controller";
 import { buildSearchFilter } from "../../utils/searchFilter";
 import { isMysqlModule } from "../../config/migration";
@@ -265,6 +266,8 @@ export const updateCustomer = async (req: Request, res: Response) => {
       }
 
       const updated = await customerSql.updateCustomer(numId, validatedData);
+      // Status/deletion may have changed → drop the cached auth gate so it bites now.
+      await invalidateCustomerGate(numId);
       return res.status(200).json({ success: true, data: updated });
     }
 
@@ -309,6 +312,9 @@ export const updateCustomer = async (req: Request, res: Response) => {
       .populate("educationId", "_id name");
 
     if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
+
+    // Status/deletion may have changed → drop the cached auth gate so it bites now.
+    await invalidateCustomerGate(id);
 
     return res.status(200).json({ success: true, data: customer });
   } catch (error: any) {

@@ -5,15 +5,19 @@ import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
 import { resolveLivePromo } from "../live-course/promo";
-import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
+import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadLivePlanDiscountsSql } from "../../modules/promo-code/promo-code.service";
+import { computePromoDiscount } from "../promocode/applies-to";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import {
   isLiveCourseOrderMysql,
   findLiveCoursePlanForOrder,
+  findLiveCourse,
+  listPlansForLiveCourse,
   createLiveCourseOrderMysql,
 } from "../../modules/live-course-order/live-course-order.service";
+import { customerAddressRepository } from "../../modules/customer-address/customer-address.repository";
 
 // SQL planId is numeric (migrated id-space), unlike the Mongo ObjectId schema.
 const createOrderSqlSchema = z.object({
@@ -45,6 +49,12 @@ const applyPromoSchema = z.object({
   promocode: z.string().trim().min(1),
 });
 
+// SQL variant: planId is a numeric id (migrated id-space), not a Mongo ObjectId.
+const applyPromoSqlSchema = z.object({
+  planId: z.coerce.number().int().positive(),
+  promocode: z.string().trim().min(1),
+});
+
 // POST /api/v1/client/payment/apply-promo/live-course
 // Preview-only: validates a promo code against a plan and returns the price
 // breakdown. The discount is re-validated server-side at create-order time —
@@ -56,6 +66,95 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) { logger.warn("applyLiveCoursePromo unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    // ── MySQL live-course promo preview (live-course-order flag) ──────────────
+    // Returns the SAME shape as POST /client/promocodes/apply: the entity + ALL
+    // its pricing plans, each annotated with the per-plan offer.
+    if (isLiveCourseOrderMysql()) {
+      const body = applyPromoSqlSchema.parse(req.body);
+      const plan = await findLiveCoursePlanForOrder(body.planId);
+      if (!plan) return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
+      const liveCourseId = plan.liveCourseId;
+
+      const promo = await findActiveByCode(body.promocode);
+      if (!promo) return res.status(400).json({ success: false, message: "Invalid or expired promo code." });
+      if (!promoCovers(promo, { type: "liveCourse", id: liveCourseId })) {
+        return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
+      }
+
+      const promoDiscountType = promo.discountType as "flat" | "percentage";
+      const promoDiscountValue = Number(promo.discountValue ?? 0);
+      const planDiscounts = await loadLivePlanDiscountsSql(promo.id);
+      const hasLinks = planDiscounts.size > 0;
+      if (!hasLinks && !(promoDiscountValue > 0)) {
+        return res.status(400).json({ success: false, message: "This promocode has no discount configured." });
+      }
+
+      const rows = await listPlansForLiveCourse(liveCourseId);
+      let matchedAny = false;
+      const plans = rows.map((p: any) => {
+        const basePrice = Number(p.price);
+        const out: any = {
+          id: p.id,
+          liveCourseId: p.liveCourseId,
+          name: p.name ?? null,
+          duration: p.duration,
+          price: basePrice,
+          originalPrice: p.originalPrice != null ? Number(p.originalPrice) : null,
+          withMaterial: !!p.withMaterial,
+          materialPrice: p.materialPrice != null ? Number(p.materialPrice) : null,
+          isDefault: p.isDefault,
+          status: p.status,
+          created_at: p.createdAt ?? null,
+          updated_at: p.updatedAt ?? null,
+          orginalPrice: basePrice,
+          offerAvailable: false,
+          discountType: promoDiscountType,
+          discountValue: 0,
+          offerPercentage: 0,
+        };
+        let dType: "flat" | "percentage";
+        let dValue: number;
+        if (hasLinks) {
+          const pct = planDiscounts.get(p.id);
+          if (pct == null) return out; // covered entity, but this plan has no link → no discount
+          dType = "percentage";
+          dValue = pct;
+        } else {
+          dType = promoDiscountType;
+          dValue = promoDiscountValue;
+        }
+        matchedAny = true;
+        out.offerAvailable = dValue > 0;
+        out.discountType = dType;
+        out.discountValue = dValue;
+        const discount = computePromoDiscount({ discountType: dType, discountValue: dValue }, basePrice);
+        if (dType === "percentage") out.offerPercentage = dValue;
+        out.price = Math.max(0, basePrice - discount);
+        return out;
+      });
+
+      if (hasLinks && !matchedAny) {
+        return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
+      }
+
+      logger.info("applyLiveCoursePromo success (sql)", { traceId, customerId, liveCourseId, promocode: body.promocode });
+      return res.status(200).json({
+        success: true,
+        data: {
+          _id: String(promo.id),
+          promocode: promo.promocode,
+          discountType: promoDiscountType,
+          discountValue: promoDiscountValue,
+          id: liveCourseId,
+          key: "liveCourse",
+          plans: {
+            withMaterial: plans.filter((p: any) => p.withMaterial),
+            withoutMaterial: plans.filter((p: any) => !p.withMaterial),
+          },
+        },
+      });
+    }
 
     const { planId, promocode } = applyPromoSchema.parse(req.body);
 
@@ -136,7 +235,20 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         logger.warn("createLiveCourseOrderPayment[mysql] plan not found/zero-price", { traceId, customerId, planId: body.planId });
         return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
       }
-      const courseSql = await LiveCourse.findOne({ _id: planSql.liveCourseId }).select("_id name").lean();
+      const courseSql = await findLiveCourse(planSql.liveCourseId);
+
+      // Material is a property of the selected PLAN (mirrors Course/Package).
+      // When the plan ships material, accept + validate the delivery address.
+      const withMaterialSql = planSql.withMaterial;
+      let shippingIdSql: number | null = null;
+      if (withMaterialSql && body.customerShippingId) {
+        const owned = await customerAddressRepository.findOwned(body.customerShippingId, customerIdInt);
+        if (!owned) {
+          logger.warn("createLiveCourseOrderPayment[mysql] address not owned", { traceId, customerId, customerShippingId: body.customerShippingId });
+          return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });
+        }
+        shippingIdSql = body.customerShippingId;
+      }
 
       let chargeAmount = planSql.price;
       let promocodeIdNum: number | null = null;
@@ -161,7 +273,8 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       });
       const { subscriptionId } = await createLiveCourseOrderMysql({
         customerId: customerIdInt, liveCourseId: planSql.liveCourseId, planId: body.planId,
-        amount: chargeAmount, razorpayOrderId: rzpOrder.id, promocodeId: promocodeIdNum, originalAmount, discountAmount, now: nowSql,
+        amount: chargeAmount, razorpayOrderId: rzpOrder.id, promocodeId: promocodeIdNum, originalAmount, discountAmount,
+        withMaterial: withMaterialSql, customerShippingId: shippingIdSql, now: nowSql,
       });
       logger.info("createLiveCourseOrderPayment[mysql] success", { traceId, customerId, subscriptionId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
       return res.status(201).json({
@@ -175,7 +288,9 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       });
     }
 
-    const { planId, promocode, withMaterial, customerShippingId } = createOrderSchema.parse(req.body);
+    // `withMaterial` from the body is ignored — material is now a property of the
+    // selected plan (see plan.withMaterial below), mirroring Course/Package.
+    const { planId, promocode, customerShippingId } = createOrderSchema.parse(req.body);
 
     if (customerShippingId) {
       const addr = await CustomerAddress.findOne({ _id: customerShippingId, customerId }).select("_id");
@@ -246,7 +361,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       paidAmount: chargeAmount,
       paymentStatus: "pending",
       status: true,
-      withMaterial: !!withMaterial,
+      withMaterial: !!plan.withMaterial,
       customerShippingId: customerShippingId ?? null,
     });
 

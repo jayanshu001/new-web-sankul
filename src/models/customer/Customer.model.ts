@@ -44,7 +44,9 @@ const CustomerSchema = new Schema<ICustomer>(
     firstName: { type: String, maxlength: 100 },
     middleName: { type: String, maxlength: 100 },
     lastName: { type: String, maxlength: 100 },
-    phoneNumber: { type: String, required: true, unique: true, maxlength: 11 },
+    // Not globally unique: a soft-deleted phone may sign up again as a new doc.
+    // Uniqueness is enforced only among ACTIVE docs via the partial index below.
+    phoneNumber: { type: String, required: true, maxlength: 11 },
     emailAddress: { type: String, maxlength: 255 },
     password: { type: String, maxlength: 255, select: false },
     isPhoneVerified: { type: Boolean, required: true, default: false },
@@ -97,6 +99,12 @@ const CustomerSchema = new Schema<ICustomer>(
 
 // Indexes for performance
 CustomerSchema.index({ status: 1, isAccountDeleted: 1 });
+// One ACTIVE account per phone; unlimited soft-deleted duplicates allowed.
+// Partial filter mirrors the MySQL `phone_active` generated-column unique index.
+CustomerSchema.index(
+  { phoneNumber: 1 },
+  { unique: true, partialFilterExpression: { isAccountDeleted: false } }
+);
 CustomerSchema.index({ referralCode: 1 }, { unique: true, sparse: true });
 CustomerSchema.index({ "firebaseTokens.token": 1 }, { sparse: true });
 CustomerSchema.index({ osType: 1, "firebaseTokens.token": 1 });

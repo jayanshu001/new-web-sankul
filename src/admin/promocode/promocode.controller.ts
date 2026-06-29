@@ -428,10 +428,13 @@ export const createPromocode = async (req: Request, res: Response) => {
     const data = createPromocodeSchema.parse(req.body);
     const code = data.promocode.toUpperCase();
 
+    // appliesTo is normalized to [{type, ids:string[]}] by the schema (single
+    // object OR array). Convert to numeric groups (multi-type aware).
+    const groups = data.appliesTo.map((g) => ({ type: g.type as pcSql.AppliesToType, ids: g.ids.map((x) => Number(x)) }));
+    if (groups.some((g) => g.ids.some((n) => !Number.isInteger(n) || n <= 0)))
+      return res.status(400).json({ success: false, message: "Invalid appliesTo ids." });
+
     if (pcSql.isPromoCodeMysql()) {
-      const ids = data.appliesTo.ids.map((x) => Number(x));
-      if (ids.some((n) => !Number.isInteger(n) || n <= 0))
-        return res.status(400).json({ success: false, message: "Invalid appliesTo ids." });
       const promoterId = data.promoterId != null ? pcSql.parsePcId(data.promoterId) : null;
       try {
         const r = await pcSql.createPromocode({
@@ -445,15 +448,15 @@ export const createPromocode = async (req: Request, res: Response) => {
           discountType: data.discountType,
           discountValue: data.discountValue,
           promoterId,
-          appliesTo: { type: data.appliesTo.type, ids },
+          appliesTo: groups,
         });
         if ((r as any).conflict)
           return res.status(409).json({ success: false, message: "Promocode already exists." });
-        // C5: real plan-link % sync (replaces the prior stub).
+        // Plan-link % sync across ALL referenced types (multi-type aware).
         if (data.plans.length) {
           const nid = pcSql.parsePcId(String((r as any).data._id));
           if (nid != null) {
-            const validPlans = await pcSql.resolveValidPlansSql(data.appliesTo.type, ids);
+            const validPlans = await pcSql.resolveValidPlansMultiSql(groups);
             await pcSql.syncPlanLinksSql(nid, data.plans, validPlans);
           }
         }
@@ -465,11 +468,14 @@ export const createPromocode = async (req: Request, res: Response) => {
       }
     }
 
+    // ── Mongo fallback (dead in MySQL-only mode) — single-type only ──
+    const first = groups[0];
+    const mongoAppliesTo = { type: first.type as any, ids: first.ids.map(String) };
     const exists = await PromoCode.findOne({ promocode: code });
     if (exists)
       return res.status(409).json({ success: false, message: "Promocode already exists." });
 
-    await assertAppliesToExists(data.appliesTo);
+    await assertAppliesToExists(mongoAppliesTo);
 
     const promo = await PromoCode.create({
       promocode: code,
@@ -482,11 +488,11 @@ export const createPromocode = async (req: Request, res: Response) => {
       discountType: data.discountType,
       discountValue: data.discountValue,
       promoterId: data.promoterId || null,
-      appliesTo: { type: data.appliesTo.type, ids: data.appliesTo.ids },
+      appliesTo: mongoAppliesTo,
     });
 
     if (data.plans.length) {
-      const resolved = await loadPlansForEntities(data.appliesTo.type, data.appliesTo.ids);
+      const resolved = await loadPlansForEntities(mongoAppliesTo.type, mongoAppliesTo.ids);
       const validPlans = new Map(resolved.map((p) => [p.id, p]));
       await syncPlanLinks(promo._id as mongoose.Types.ObjectId, data.plans, validPlans);
     }
@@ -510,12 +516,11 @@ export const updatePromocode = async (req: Request, res: Response) => {
       if (nid == null)
         return res.status(400).json({ success: false, message: "Invalid promocode id." });
 
-      let appliesTo: { type: pcSql.AppliesToType; ids: number[] } | undefined;
+      let appliesTo: pcSql.AppliesGroup[] | undefined;
       if (data.appliesTo) {
-        const ids = data.appliesTo.ids.map((x) => Number(x));
-        if (ids.some((n) => !Number.isInteger(n) || n <= 0))
+        appliesTo = data.appliesTo.map((g) => ({ type: g.type as pcSql.AppliesToType, ids: g.ids.map((x) => Number(x)) }));
+        if (appliesTo.some((g) => g.ids.some((n) => !Number.isInteger(n) || n <= 0)))
           return res.status(400).json({ success: false, message: "Invalid appliesTo ids." });
-        appliesTo = { type: data.appliesTo.type, ids };
       }
       const promoterId =
         data.promoterId === undefined
@@ -542,29 +547,18 @@ export const updatePromocode = async (req: Request, res: Response) => {
           return res.status(404).json({ success: false, message: "Promocode not found." });
         if ((r as any).conflict)
           return res.status(409).json({ success: false, message: "Promocode already exists." });
-        // C5: real plan-link % replace-semantics, mirroring the Mongo branch.
-        // Resolve the *effective* appliesTo (the just-saved value if appliesTo
-        // was part of this update, else the existing row's).
-        const effective = await pcSql.getPromocodeById(nid);
-        // getPromocodeById returns { data: { promocode, plans } } — the resolved
-        // appliesTo lives on `data.promocode.appliesTo`, NOT `data.appliesTo`.
-        const effAppliesTo = (effective as any).data?.promocode?.appliesTo;
-        const effType = effAppliesTo?.type as pcSql.AppliesToType | undefined;
-        const effIds = (effAppliesTo?.ids ?? [])
-          .map((x: any) => Number(x?._id ?? x))
-          .filter((n: number) => Number.isInteger(n) && n > 0);
+        // Plan-link % replace-semantics across ALL referenced types. Effective
+        // groups = the just-saved appliesTo (if part of this update), else the
+        // existing row's groups.
         if (data.plans !== undefined) {
-          const validPlans = effType
-            ? await pcSql.resolveValidPlansSql(effType, effIds)
-            : new Map();
+          const effGroups = appliesTo ?? (await pcSql.getAppliesToGroupsById(nid));
+          const validPlans = await pcSql.resolveValidPlansMultiSql(effGroups);
           await pcSql.syncPlanLinksSql(nid, data.plans, validPlans);
         } else if (appliesTo) {
-          // appliesTo changed but plans omitted: drop now-orphaned links.
-          const resolved = await pcSql.loadPlansForEntitiesSql(appliesTo.type, appliesTo.ids);
-          await pcSql.prunePlanLinksSql(
-            nid,
-            resolved.map((p) => p.id)
-          );
+          // appliesTo changed but plans omitted: drop now-orphaned links across
+          // the full (multi-type) covered set.
+          const validPlans = await pcSql.resolveValidPlansMultiSql(appliesTo);
+          await pcSql.prunePlanLinksSql(nid, [...validPlans.keys()]);
         }
         return res.status(200).json({ success: true, data: (r as any).data });
       } catch (e: any) {
@@ -581,15 +575,20 @@ export const updatePromocode = async (req: Request, res: Response) => {
     if (!existing)
       return res.status(404).json({ success: false, message: "Promocode not found." });
 
+    // ── Mongo fallback (dead in MySQL-only mode) — single-type only ──
+    const mongoAppliesTo = data.appliesTo
+      ? { type: data.appliesTo[0].type as any, ids: data.appliesTo[0].ids.map(String) }
+      : undefined;
+
     const update: any = { ...data };
     delete update.plans; // links live in their own collection, not on the promo doc
     if (data.promocode) update.promocode = data.promocode.toUpperCase();
     if (data.promo_start_at) update.promo_start_at = new Date(data.promo_start_at);
     if (data.promo_expire_at) update.promo_expire_at = new Date(data.promo_expire_at);
 
-    if (data.appliesTo) {
-      await assertAppliesToExists(data.appliesTo);
-      update.appliesTo = { type: data.appliesTo.type, ids: data.appliesTo.ids };
+    if (mongoAppliesTo) {
+      await assertAppliesToExists(mongoAppliesTo);
+      update.appliesTo = mongoAppliesTo;
     } else {
       delete update.appliesTo;
     }
@@ -607,12 +606,12 @@ export const updatePromocode = async (req: Request, res: Response) => {
       const resolved = type ? await loadPlansForEntities(type, ids) : [];
       const validPlans = new Map(resolved.map((p) => [p.id, p]));
       await syncPlanLinks(promo._id as mongoose.Types.ObjectId, data.plans, validPlans);
-    } else if (data.appliesTo) {
+    } else if (mongoAppliesTo) {
       // appliesTo changed but plans omitted: drop links whose parent entity is no
       // longer covered, so stale percentages don't linger.
       const resolved = await loadPlansForEntities(
-        data.appliesTo.type,
-        data.appliesTo.ids
+        mongoAppliesTo.type,
+        mongoAppliesTo.ids
       );
       const validIds = resolved.map((p) => new mongoose.Types.ObjectId(p.id));
       await PromotedPackageCourseEbook.deleteMany({

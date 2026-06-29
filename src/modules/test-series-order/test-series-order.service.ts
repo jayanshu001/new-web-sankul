@@ -33,6 +33,10 @@ export const findPlanForOrder = async (planId: number) => {
 export const findSeries = (id: number) =>
   prisma.testSeries.findFirst({ where: { id, status: true }, select: { id: true, title: true } });
 
+/** All active pricing plans for a test series (apply-promo plan list). */
+export const listPlansForSeries = (testSeriesId: number) =>
+  prisma.testSeriesPrice.findMany({ where: { testSeriesId, status: true }, orderBy: { durationDays: "asc" } });
+
 // ── create-order (write pending ws_test_series_order) ─────────────────────────
 export const createOrderMysql = async (input: {
   customerId: number; testSeriesId: number; planId: number;

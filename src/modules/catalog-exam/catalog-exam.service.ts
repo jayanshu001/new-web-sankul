@@ -127,7 +127,12 @@ export const listCategories = async (input: ListCategoriesInput) => {
     take: input.take,
     newestFirst: true,
   });
-  return rows.map(toExamCategoryDoc);
+  // Flag non-leaf rows so pickers can restrict selection to leaves even when the
+  // list is a search-filtered/paginated subset (a parent's children may be absent
+  // from this page).
+  const parents = await repo.childParentIds(rows.map((r) => r.id));
+  const withChildren = new Set(parents.map((p) => p.parent));
+  return rows.map((row) => ({ ...toExamCategoryDoc(row), hasChildren: withChildren.has(row.id) }));
 };
 
 /** Count for client pagination (same filter as listCategories). */

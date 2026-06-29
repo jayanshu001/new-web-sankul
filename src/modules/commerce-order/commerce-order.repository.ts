@@ -2,6 +2,21 @@ import { prisma } from "../../config/prisma";
 import { Prisma } from "@prisma/client";
 
 /**
+ * Physical-material split written onto a fresh subscription (PC_MATERIAL_SUBSCRIPTION_FLOW).
+ * Computed by the service from the paid amount + plan; the repo just persists it.
+ *  - courseAmount   : digital portion (always set; = full paid amount when no material)
+ *  - materialAmount : physical portion, residual of (paid − course); null when no material
+ *  - pcMaterialId   : the entitled material kit copied from the Course/Package; null when no material
+ *  - withMaterial   : gates the tracking row's status (pending kit-ship vs complete)
+ */
+export type MaterialFulfillment = {
+  courseAmount: number;
+  materialAmount: number | null;
+  pcMaterialId: number | null;
+  withMaterial: boolean;
+};
+
+/**
  * Prisma persistence for the commerce · order WRITE branch (Phase 3b, COURSE
  * path). Tables: `ws_package_course_order` (the order-of-record),
  * `ws_package_course_subscription` (the entitlement), and
@@ -32,12 +47,46 @@ export const commerceOrderRepository = {
       where: { gatewayOrderId: razorpayOrderId, userId: Number(customerIdStr) },
     }),
 
-  /** A plan row (PackageCourseEbookPrice) — to read its course_id + duration. */
+  /**
+   * A plan row (PackageCourseEbookPrice) — to read its course_id + duration, plus
+   * the material facts (`with_material` / `material_price`) the verify path needs
+   * to split the paid amount into course/material portions.
+   */
   findPlan: (planId: number) =>
     prisma.packageCourseEbookPrice.findUnique({
       where: { id: planId },
-      select: { id: true, courseId: true, packageId: true, duration: true, price: true },
+      select: {
+        id: true,
+        courseId: true,
+        packageId: true,
+        duration: true,
+        price: true,
+        withMaterial: true,
+        materialPrice: true,
+      },
     }),
+
+  /**
+   * The material kit (`pc_material_id`) the customer is entitled to — copied from
+   * the purchased Course onto the subscription when the plan has material. Null if
+   * the course has no material kit configured.
+   */
+  findCoursePcMaterialId: async (courseId: number): Promise<number | null> => {
+    const course = await prisma.course.findUnique({
+      where: { id: courseId },
+      select: { pcMaterialId: true },
+    });
+    return course?.pcMaterialId ?? null;
+  },
+
+  /** Twin of findCoursePcMaterialId for PACKAGE plans (reads ws_package). */
+  findPackagePcMaterialId: async (packageId: number): Promise<number | null> => {
+    const pkg = await prisma.package.findUnique({
+      where: { id: packageId },
+      select: { pcMaterialId: true },
+    });
+    return pkg?.pcMaterialId ?? null;
+  },
 
   /**
    * The customer's existing ACTIVE verified course subscription for the same
@@ -104,6 +153,7 @@ export const commerceOrderRepository = {
     planId: number | null;
     amount: number;
     now: Date;
+    material: MaterialFulfillment;
     fresh?: { startAt: Date; endAt: Date };
     extend?: { existingSubId: number; newEndAt: Date; newAmount: number };
   }) =>
@@ -121,8 +171,10 @@ export const commerceOrderRepository = {
         return { order, subscription: sub, extended: true as const };
       }
 
+      // Tracking row status starts "pending" for material plans (the kit still has
+      // to ship) and "complete" for digital-only orders (nothing to dispatch).
       const tracking = await tx.packageCourseSubscriptionTracking.create({
-        data: { orderId: input.orderId, status: "complete" },
+        data: { orderId: input.orderId, status: input.material.withMaterial ? "pending" : "complete" },
       });
       const sub = await tx.packageCourseSubscription.create({
         data: {
@@ -131,10 +183,20 @@ export const commerceOrderRepository = {
           packageId: input.packageId,
           courseId: null,
           planId: input.planId,
+          // Material kit + price split — copied from the package when the plan
+          // carries material; null/full-course otherwise (see MaterialFulfillment).
+          pcMaterialId: input.material.pcMaterialId,
+          // Dispatch address captured at order time (null for digital-only).
+          shippingId: order.shipping ?? undefined,
           trackingId: tracking.id,
           startAt: input.fresh!.startAt,
           endAt: input.fresh!.endAt,
           amount: new Prisma.Decimal(input.amount),
+          courseAmount: new Prisma.Decimal(input.material.courseAmount),
+          materialAmount:
+            input.material.materialAmount != null
+              ? new Prisma.Decimal(input.material.materialAmount)
+              : null,
           status: true,
           payment_type: "online",
         },
@@ -148,12 +210,17 @@ export const commerceOrderRepository = {
    * Create a pending course order. customerId is an int; cast to string for the
    * VARCHAR order column. `OrigianalPrice` (SQL `price`) and `amount` (SQL
    * `discount_price`) both = the plan price (no promocode applied here).
+   *
+   * `shippingId` (the chosen CustomerShipping address) is persisted on the order
+   * row for "With Materials" plans so the physical kit has a dispatch address;
+   * null/undefined for digital-only orders.
    */
   createPendingOrder: (input: {
     customerId: number;
     planId: number;
     price: number;
     razorpayOrderId: string;
+    shippingId?: number | null;
   }) =>
     prisma.packageCourseOrder.create({
       data: {
@@ -164,6 +231,7 @@ export const commerceOrderRepository = {
         OrigianalPrice: Math.round(input.price),
         amount: Math.round(input.price),
         gatewayOrderId: input.razorpayOrderId,
+        shipping: input.shippingId ?? undefined,
         status: "pending",
       },
     }),
@@ -188,6 +256,7 @@ export const commerceOrderRepository = {
     planId: number | null;
     amount: number;
     now: Date;
+    material: MaterialFulfillment;
     // fresh-grant case
     fresh?: { startAt: Date; endAt: Date };
     // extend case
@@ -208,9 +277,10 @@ export const commerceOrderRepository = {
       }
 
       // fresh grant: tracking row first (its id is the subscription.tracking FK),
-      // then the subscription pointing at both order + tracking.
+      // then the subscription pointing at both order + tracking. Tracking status
+      // starts "pending" for material plans (kit still to ship), else "complete".
       const tracking = await tx.packageCourseSubscriptionTracking.create({
-        data: { orderId: input.orderId, status: "complete" },
+        data: { orderId: input.orderId, status: input.material.withMaterial ? "pending" : "complete" },
       });
       const sub = await tx.packageCourseSubscription.create({
         data: {
@@ -218,10 +288,20 @@ export const commerceOrderRepository = {
           orderId: input.orderId,
           courseId: input.courseId,
           planId: input.planId,
+          // Material kit + price split — copied from the course when the plan
+          // carries material; null/full-course otherwise (see MaterialFulfillment).
+          pcMaterialId: input.material.pcMaterialId,
+          // Dispatch address captured at order time (null for digital-only).
+          shippingId: order.shipping ?? undefined,
           trackingId: tracking.id,
           startAt: input.fresh!.startAt,
           endAt: input.fresh!.endAt,
           amount: new Prisma.Decimal(input.amount),
+          courseAmount: new Prisma.Decimal(input.material.courseAmount),
+          materialAmount:
+            input.material.materialAmount != null
+              ? new Prisma.Decimal(input.material.materialAmount)
+              : null,
           status: true,
           payment_type: "online",
         },

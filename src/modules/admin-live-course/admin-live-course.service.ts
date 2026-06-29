@@ -59,6 +59,8 @@ const toPlanDto = (p: LiveCoursePlan) => ({
   duration: p.duration,
   price: p.price,
   originalPrice: p.originalPrice ?? null,
+  withMaterial: p.withMaterial ?? false,
+  materialPrice: p.materialPrice ?? null,
   isDefault: p.isDefault,
   status: p.status,
   createdAt: p.createdAt ?? null,
@@ -191,7 +193,8 @@ export const createPlan = async (liveCourseId: number, v: any): Promise<"not_fou
   if (v.isDefault) await repo.clearDefaultPlans(liveCourseId);
   const created = await repo.createPlan({
     liveCourseId, name: v.name ?? null, duration: v.duration, price: v.price,
-    originalPrice: v.originalPrice ?? null, isDefault: !!v.isDefault, status: v.status !== false,
+    originalPrice: v.originalPrice ?? null, withMaterial: !!v.withMaterial,
+    materialPrice: v.materialPrice ?? null, isDefault: !!v.isDefault, status: v.status !== false,
     createdAt: now, updatedAt: now,
   });
   return toPlanDto(created);
@@ -207,7 +210,7 @@ export const updatePlan = async (planId: number, v: any): Promise<"not_found" | 
   if (!plan) return "not_found";
   if (v.isDefault === true) await repo.clearDefaultPlans(plan.liveCourseId, planId);
   const data: any = { updatedAt: new Date() };
-  for (const k of ["name", "duration", "price", "originalPrice", "isDefault", "status"]) if (v[k] !== undefined) data[k] = v[k];
+  for (const k of ["name", "duration", "price", "originalPrice", "withMaterial", "materialPrice", "isDefault", "status"]) if (v[k] !== undefined) data[k] = v[k];
   const updated = await repo.updatePlan(planId, data);
   return toPlanDto(updated);
 };
@@ -677,6 +680,7 @@ const toClientPlan = (p: LiveCoursePlan) => {
   return {
     _id: String(p.id), liveCourseId: String(p.liveCourseId), name: p.name ?? null, duration: p.duration,
     price: p.price, originalPrice: original, discountPercent: original ? Math.round(((original - p.price) / original) * 100) : 0,
+    withMaterial: p.withMaterial ?? false, materialPrice: p.materialPrice ?? null,
     isDefault: p.isDefault, status: p.status,
   };
 };
@@ -689,6 +693,14 @@ const plansGrouped = async (courseIds: number[]) => {
   for (const p of plans) { const a = byCourse.get(p.liveCourseId) ?? []; a.push(toClientPlan(p)); byCourse.set(p.liveCourseId, a); }
   return byCourse;
 };
+
+// Split a course's flat plan list into the { withMaterial, withoutMaterial }
+// shape the client/courses detail + live-course detail endpoints use, so the
+// live-course listing matches that contract.
+const splitPlansByMaterial = (arr: any[]) => ({
+  withMaterial: arr.filter((p) => p.withMaterial),
+  withoutMaterial: arr.filter((p) => !p.withMaterial),
+});
 
 // ── getLiveCourseForClient (detail) — SQL ────────────────────────────────────
 // Mongo populates courseEducatorId (name/image/about) + packageCategoryId
@@ -711,10 +723,16 @@ export const getLiveCourseDetailForClient = async (
     getDaysLeftMap(customerId, [id]),
   ]);
 
-  const plans = plansRaw
+  const planList = plansRaw
     .filter((p) => p.status)
     .sort((a, b) => a.price - b.price)
     .map((p) => toClientPlan(p));
+  // Split by material variant — mirrors the package detail contract
+  // (catalog-package.detail.sql.ts): plans: { withMaterial, withoutMaterial }.
+  const plans = {
+    withMaterial: planList.filter((p) => p.withMaterial),
+    withoutMaterial: planList.filter((p) => !p.withMaterial),
+  };
 
   const shareableLink = buildShareUrl("live-courses", String(id), baseUrl);
   const folders = jArr(row.scheduleFolders);
@@ -987,7 +1005,7 @@ export const listClient = async (customerId: number | null, q: { search?: string
   const featuredId = upcoming[0]?.id ?? null, comingSoonId = upcoming[1]?.id ?? null;
   const liveCourses = rows.map((r) => {
     const key = String(r.id);
-    return { ...toCourseDto(r), daysLeft: daysLeft.has(key) ? daysLeft.get(key) ?? null : null, isPurchased: owned.has(key), purchaseCount: counts.get(key) ?? 0, cardVariant: key === featuredId ? "featured" : key === comingSoonId ? "coming_soon" : null, plans: plans.get(r.id) ?? [] };
+    return { ...toCourseDto(r), daysLeft: daysLeft.has(key) ? daysLeft.get(key) ?? null : null, isPurchased: owned.has(key), purchaseCount: counts.get(key) ?? 0, cardVariant: key === featuredId ? "featured" : key === comingSoonId ? "coming_soon" : null, plans: splitPlansByMaterial(plans.get(r.id) ?? []) };
   });
   return { liveCourses, total, page: q.page, limit: q.limit };
 };

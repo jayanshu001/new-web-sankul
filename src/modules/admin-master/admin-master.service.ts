@@ -40,8 +40,13 @@ export const subjDelete = async (id: number) => { if (!(await repo.subjFind(id))
 
 // ── VideoCategory ──────────────────────────────────────────────────────────────
 const toVcDto = (c: any) => ({ _id: String(c.id), title: c.title, slug: c.slug, image: c.image, pdf: c.pdf ?? null, parent: c.parent ?? null, educatorId: c.educatorId ?? null, order_by: c.order_by, status: c.status, createdAt: c.created_at ?? null, updatedAt: c.updated_at ?? null });
-/** List with child_categories (resolved via the `parent` self-FK) + hasChildren. */
-export const vcList = async () => {
+/**
+ * List with child_categories (resolved via the `parent` self-FK) + hasChildren.
+ * `hasChildren` is computed over the full set first, so a category matched by
+ * `search` still reports children even when they don't match the query. `search`
+ * (title substring) and `limit` are applied afterwards for picker server-search.
+ */
+export const vcList = async (opts: { search?: string; limit?: number } = {}) => {
   const all = await repo.vcList();
   const childrenByParent = new Map<number, any[]>();
   for (const c of all) {
@@ -51,10 +56,14 @@ export const vcList = async () => {
       );
     }
   }
-  return all.map((c) => {
+  let rows = all.map((c) => {
     const children = childrenByParent.get(c.id) ?? [];
     return { ...toVcDto(c), child_categories: children, hasChildren: children.length > 0 };
   });
+  const q = opts.search?.trim().toLowerCase();
+  if (q) rows = rows.filter((r) => (r.title ?? "").toLowerCase().includes(q));
+  if (opts.limit && opts.limit > 0) rows = rows.slice(0, opts.limit);
+  return rows;
 };
 export const vcCreate = async (d: any) => toVcDto(await repo.vcCreate({ title: d.title, slug: d.slug, image: d.image, parent: d.parent !== undefined ? toInt(d.parent) : 0, order_by: toInt(d.order_by), status: d.status ?? true, educatorId: d.educatorId ? toInt(d.educatorId) : 0, pdf: d.pdf ?? "" }));
 export const vcUpdate = async (id: number, d: any) => {

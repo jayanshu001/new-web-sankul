@@ -15,6 +15,10 @@ const createPlanSchema = z
     price:     z.number().nonnegative("price must be a non-negative number"),
     // MRP shown struck-through next to `price`. Optional.
     originalPrice: z.number().nonnegative("originalPrice must be a non-negative number").optional(),
+    // Per-plan material variant (mirrors Course/Package). withMaterial marks the
+    // plan as shipping physical material; materialPrice is the material portion.
+    withMaterial: z.boolean().optional().default(false),
+    materialPrice: z.number().nonnegative("materialPrice must be a non-negative number").optional(),
     isDefault: z.boolean().optional().default(false),
     status:    z.boolean().optional().default(true),
   })

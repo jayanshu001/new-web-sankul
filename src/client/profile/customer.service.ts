@@ -7,6 +7,7 @@ import { redisClient } from "../../config/redis";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { isMysqlModule } from "../../config/migration";
 import { customerAuthRepository } from "../../modules/customer-auth/customer-auth.repository";
+import { invalidateCustomerGate } from "../../middlewares/authenticate";
 import {
   PROFILE_MODULE,
   parseProfileId,
@@ -392,6 +393,7 @@ export async function deleteCustomerAccount(customerId: string, traceId?: string
     if (!result.ok) return result;
     // Revoke tokens (MySQL ws_customer_access_token) + clear session cache.
     await customerAuthRepository.deactivateTokens(cid);
+    await invalidateCustomerGate(cid);
     try {
       await redisClient.del(`customer_session:${customerId}`);
     } catch (err) {
@@ -412,6 +414,7 @@ export async function deleteCustomerAccount(customerId: string, traceId?: string
       return { ok: false, message: "Customer not found." };
     }
     await CustomerAccessToken.updateMany({ customerId }, { active: false, deleted: true });
+    await invalidateCustomerGate(customerId);
     await redisClient.del(`customer_session:${customerId}`);
     logger.info("deleteCustomerAccount service completed", { traceId, customerId });
     return { ok: true, message: "Account deleted successfully." };

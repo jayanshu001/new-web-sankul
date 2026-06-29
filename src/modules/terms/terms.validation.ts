@@ -2,9 +2,9 @@ import { z } from "zod";
 import { TERMS_MODULES } from "./terms.types";
 
 /**
- * MySQL `ws_termsandcondition` — `module` is a fixed enum
- * (`book` | `pendrive` | `referral code`), unlike the free-string Mongo schema.
- * Writes must use a legacy enum value or MySQL rejects the row (error 1265).
+ * MySQL `ws_termsandcondition` — `module` accepts `book` | `referral code`
+ * (pendrive retired), unlike the free-string Mongo schema. Writes must use a
+ * valid value or MySQL rejects the row (error 1265).
  */
 export const termsCreateSchemaMysql = z.object({
   module: z.enum(TERMS_MODULES),

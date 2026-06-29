@@ -4,6 +4,310 @@
 
 ---
 
+## 2026-06-29 — Behavior: startAttempt "not started yet" gate now scheduled-only
+
+`startAttempt` previously rejected ANY exam with a future `startAt` ("Exam has not
+started yet."), including `subject` exams — which the catalog/questions/saveAnswers
+paths all treat as always-available. Now the gate applies **only to non-`subject`
+(scheduled/daily) exams**. Changed on both backends to stay identical:
+- SQL: `modules/client-exam/client-exam.service.ts` `startAttempt` (`exam.type !== "subject"`).
+- Mongo: `client/exam/exam.controller.ts` `startAttempt` (`type !== ExamType.SUBJECT`).
+No schema change. `yarn typecheck`: no new errors.
+
+---
+
+## 2026-06-29 — Schema + feature: exam attempt lifecycle ported to SQL (client-exam)
+
+**Why:** the resumable attempt flow (`POST /quizzes/:id/attempts/start`, `.../answer`,
+`.../submit`, `GET .../active`, `.../attempts`, `.../attempts/aggregate`) plus
+`GET /quizzes/:id/detail` had **no MySQL branch** — they hit `isObjectId()` and 400'd
+("Please select valid exam!!") for integer ids once `client-exam` was on MySQL.
+
+**DDL** (`docs/migration/schema-changes/2026-06-29_exam_result_attempt_lifecycle.sql`):
+`ALTER ws_exam_result ADD qresult_attempt_number INT NULL, qresult_started_at DATETIME NULL,
+qresult_submitted_at DATETIME NULL, qresult_in_progress TINYINT(1) NOT NULL DEFAULT 0` +
+index `idx_exam_result_cust_exam_status (qresult_customer_id, qresult_qtest_id, qresult_status)`.
+The legacy table only modeled COMPLETED attempts (status=1); these columns model an
+in-progress attempt (status=0, in_progress=1). Existing rows unaffected (nullable/default).
+
+**Prisma:** hand-added `attemptNumber/startedAt/submittedAt/inProgress` to `model ExamResult`
+(no `db:pull`), then `prisma:generate`.
+
+**Code:**
+- `modules/client-exam/client-exam.repository.ts`: `findInProgressAttempt`, `maxAttemptNumber`,
+  `createInProgressAttempt`, `findAttempt`, `upsertAttemptDetail`, `questionIdsForExam`,
+  `finalizeAttempt` (tx: fill unanswered→skip, roll up totals, mark submitted),
+  `attemptsForExam`, `aggregateForExam`.
+- `modules/client-exam/client-exam.service.ts`: `getExamDetail` + the 6 lifecycle services
+  (`startAttempt/getActiveAttempt/saveSingleAnswer/submitAttempt/listAttempts/getAttemptsAggregate`)
+  + `toAttemptDto`. Scoring/rank mirror existing `saveAnswers`.
+- `client/exam/exam.controller.ts`: added `isClientExamMysql()` branch to `getExamDetail`,
+  `startAttempt`, `getActiveAttempt`, `saveSingleAnswer`, `submitAttempt`, `listAttempts`,
+  `getAttemptsAggregate`. Response shapes preserved; Mongo fallback intact.
+
+**Deploy:** apply the DDL on MySQL before/with this release (writes use the new columns).
+`yarn typecheck`: no new errors (only pre-existing promo/credit-referrer).
+Known drift: pre-existing completed rows have `attempt_number = NULL` → they sort last in
+`listAttempts` (history) until backfilled; acceptable, no functional impact.
+
+---
+
+## 2026-06-27 — Change: client live-course DETAIL now returns plans bucketed (parity with package detail)
+
+**Contract change (FE must update):** `GET /api/v1/client/live-courses/:id` previously
+returned `plans` as a **flat array**; it now returns `plans: { withMaterial: [...],
+withoutMaterial: [...] }`, matching the package detail (`catalog-package.detail.sql.ts`).
+Each plan object carries `withMaterial` + `materialPrice`.
+- SQL path: `modules/admin-live-course/admin-live-course.service.ts` `getLiveCourseDetailForClient` (active MySQL path).
+- Mongo path: `client/live-course/live-course.controller.ts` `getLiveCourseForClient`.
+Verified on live-course 6: plan 7 (withMaterial=true) → withMaterial bucket, plan 8 → withoutMaterial. `yarn typecheck`: 11 pre-existing errors, none new.
+(Listing endpoints still return a flat `plans` array per existing contract — only detail was bucketed, matching the package detail the client referenced.)
+
+---
+
+## 2026-06-27 — Feature: withMaterial / withoutMaterial for Live Courses (parity with Course/Package)
+
+**Goal:** mirror the Course/Package material-variant pricing for Live Courses. The
+LiveCourse entity already had the label strings (`with_material`/`without_material`);
+this adds the **per-plan flag** + the **lightweight subscription fulfillment** fields.
+
+**DDL** (`docs/migration/schema-changes/2026-06-27_live_course_with_material.sql`):
+- `ws_live_course_plan`: `+ with_material TINYINT(1) NOT NULL DEFAULT 0`, `+ material_price INT NULL`.
+- `ws_live_course_subscription`: `+ with_material TINYINT(1) NOT NULL DEFAULT 0`, `+ customer_shipping_id INT NULL`.
+- No `course_amount`/`material_amount` split: live courses have no material-kit link (no `pc_material_id`), so the lightweight model (flag + delivery address) matches the existing Mongo LiveCourseSubscription.
+
+**Prisma** (`schema.prisma`): added `withMaterial`/`materialPrice` to `LiveCoursePlan`, `withMaterial`/`customerShippingId` to `LiveCourseSubscription`. `prisma:generate` run.
+
+**Mongo** (`models/course/LiveCoursePlan.model.ts`): added `withMaterial` (default false) + `materialPrice` (default null) to interface + schema. The existing client read paths (`client/live-course/live-course.controller.ts` listing+detail) spread `...p`, so the fields surface without further change; the Mongo subscription model already had `withMaterial`/`customerShippingId`.
+
+**Admin** (both backends):
+- `admin/live-course/live-course.plan.controller.ts` `createPlanSchema`: `+ withMaterial` (bool, default false), `+ materialPrice` (nonneg, optional). `updatePlanSchema` inherits via `.partial()`.
+- `modules/admin-live-course/admin-live-course.service.ts`: `toPlanDto` exposes both; `createPlan` persists them; `updatePlan` key-loop includes them. SQL repo passes through `Prisma.LiveCoursePlanUncheckedCreate/UpdateInput`.
+
+**Order (SQL)** (`modules/live-course-order/live-course-order.service.ts`):
+- `findLiveCoursePlanForOrder` now selects + returns `withMaterial`/`materialPrice`.
+- `createLiveCourseOrderMysql` accepts + persists `withMaterial` + `customerShippingId` (previously dropped — stale comment removed).
+
+**Payment** (`client/payment/live-course-payment.controller.ts`):
+- `withMaterial` is now **plan-driven** (from `plan.withMaterial`), not request-driven, on BOTH branches. The request body `withMaterial` is ignored.
+- SQL create branch validates the delivery address via `customerAddressRepository.findOwned` when the plan ships material, and threads `withMaterial`/`customerShippingId` into the SQL subscription.
+- SQL apply-promo now SPLITS plans into `{ withMaterial: [...], withoutMaterial: [...] }` by the flag (was dumping all into `withoutMaterial`); each plan DTO carries `withMaterial`/`materialPrice`.
+
+**Verified:** `yarn typecheck` — 11 pre-existing errors (promo `result.promo` null + credit-referrer union), none new; the live-course-payment errors are the same pre-existing ones, line numbers shifted by added code.
+
+---
+
+## 2026-06-27 — Fix: blocked/deleted customers kept passing authenticate (no live per-request gate)
+
+**Bug:** setting `status=false` (or `isAccountDeleted=true`) on a customer did NOT stop their existing token — every authenticated API still succeeded. The `status`/`isAccountDeleted` check in `authenticate` was nested **inside** the `if (await isRevoked(...))` branch, so it only ran for already-revoked tokens; the steady-state path never re-read the DB. It also read `Customer.findById` (**Mongo**) while customer-auth runs on **MySQL**, so it misreported for migrated customers anyway.
+
+**Fix (`src/middlewares/authenticate.ts`):** added a live per-request account gate for `userType === "customer"`, backend-correct (MySQL `customerAuthRepository.getAuthStateById` when `isMysqlModule("customer-auth")`, else Mongo), cached in Redis `customer_gate:<id>` (TTL 30s, fail-open). 401 `ACCOUNT_DELETED` / `ACCOUNT_DISABLED` with `data.reason`. The revoked-path reason check now uses the same helper (fixes its Mongo-only read).
+- New repo method `customerAuthRepository.getAuthStateById(id)` → `{ status, isAccountDeleted }` (findUnique, no row filter, so deleted/disabled are distinguishable).
+- Cache busted immediately on: account self-delete (`client/profile/customer.service.deleteCustomerAccount`, both branches) and admin `updateCustomer` (both branches) via exported `invalidateCustomerGate()`. Direct DB edits aren't busted but expire within the 30s TTL.
+
+**Verified:** `yarn typecheck` — 11 pre-existing promo-code/payment errors, none new; edited files clean.
+
+---
+
+## 2026-06-27 — Fix: client invoices rejected SQL int order ids (course/ebook/book)
+
+**Bug:** `GET /client/courses/orders/:id/invoice` ("Please select valid package"), `/client/ebooks/orders/:orderId/invoice` and `/client/books/orders/:id/invoice` ("Invalid order id") all rejected SQL int ids via a Mongo-ObjectId guard **before** calling the receipt builder. The builders in `libs/core/generate.ts` (`buildCourseReceiptHtml` / `generateEbookReceipt` / `generateBookReceipt`) ALREADY branch on `isMysqlModule` and read `Number(orderId)` — so only the controller guard was at fault.
+
+**Fix (controller guards accept int OR ObjectId):**
+- `client/course/course.controller.ts` `getOrderInvoiceHandler`, `client/ebook/ebook.controller.ts` `getEbookOrderInvoice`, `client/book/book.controller.ts` `getMyOrderInvoice`: guard now `!ObjectId.isValid(id) && !/^[1-9][0-9]*$/.test(id)`. Builders re-validate ownership + paid status.
+- Left `getOrderDetailsHandler` alone — its `getOrderDetailsForUser` is Mongo-only (deeper migration, separate from invoices).
+
+**Verified:** course order 28 (int) now reaches the SQL loader and returns the correct business error "Order has not been paid yet" (it's genuinely unpaid) instead of "select valid package". `yarn typecheck`: 11 pre-existing errors, none new.
+
+**Related:** book order tracking (`/books/orders/:id/tracking[/live]`) SQL branch was added in the previous entry.
+
+---
+
+## 2026-06-27 — Fix: book order tracking endpoints were Mongo-only ("Invalid order id" for int ids)
+
+**Bug:** `GET /client/books/orders/:id/tracking` and `…/tracking/live` rejected SQL int order ids (`mongoose.Types.ObjectId.isValid` → 400 "Invalid order id") and queried Mongo `BookOrder` (disconnected). No SQL branch existed.
+
+**Fix (MySQL path):**
+- `modules/book-order/book-order.service.ts`: new `getOrderTrackingMysql(orderId, customerId)` (order + `shipping` + `BookTracking`) and `getOrderTrackingLiveMysql(orderId, customerId)` (status + AWB).
+- `client/book/book.controller.ts`: `getMyOrderTracking` + `getMyOrderTrackingLive` now have `isBookOrderMysql()` SQL branches (int id via `parseBookOrderId`; live path reuses the Tirupati-range + `fetchLiveAWBData` logic). `trackingUrl` from `buildTrackingUrl(awb)`.
+
+**Drift vs Mongo (SQL data gaps → null/[]):** `courier`, `from` (origin city/hub — no SQL book-settings), `shippedAt`/`deliveredAt` (no columns), and `history` is a single entry from `ws_book_tracking.status` (no history array). Core fields (awb, to-address, consignee, status, trackingUrl) populate.
+
+**Verified:** order 148658 → `{awb:119400693005, to:{Ahmedabadss/Skyline Tagxs/398000}, consignee:"Test Add 1", status:"verified", history:[1]}`; live → `{status:"verified", trackingId:119400693005}`. `yarn typecheck`: 11 pre-existing errors, none new.
+
+---
+
+## 2026-06-27 — Cart shipping made consistent with create-order (free-shipping threshold) + attach returns summary
+
+**Bug (FE report):** cart total ≠ checkout total. `GET /client/cart` showed shipping (e.g. ₹60) while `create-order` charged ₹0 — because the cart's `getCart` never applied the **free-shipping threshold** (`ws_termsandcondition.freeShippingMinimumOrderAmount`, module='book') that `book-order.service.previewBookOrderFromCartMysql` uses (`subtotal >= min` → waived). Shipping is per-book `shipping_price × qty` waived by that subtotal threshold — **NOT address-based**.
+
+**Fix (single shipping calc everywhere):**
+- `modules/book-order/book-order.service.ts`: `getFreeShippingMin` exported (shared source of truth).
+- `modules/client-cart/client-cart.service.ts` `getCart`: applies the same waiver (`freeShippingMin > 0 && subtotal >= freeShippingMin → shipping 0`); added `summary.breakdown` matching the order's breakdown.
+- `client/cart/cart.controller.ts` `attachShippingToCart` (SQL): response now includes `data.summary` (recalculated) — one call instead of attach + re-GET.
+
+**Verified:** cart 137683 → cart `{subtotal 700, shipping 0, shippingWaived true, total 700}` == order preview `{amount 700, shipping 0, shippingWaived true}`. `yarn typecheck`: 11 pre-existing errors, none in changed files.
+
+**Note:** shipping is subtotal-threshold-based, not address-derived — `GET /cart` returns the final shipping/total even without an address; the FE's attach+refetch workaround is no longer needed for pricing.
+
+---
+
+## 2026-06-27 — Admin can attach a material kit (`pcMaterialId`) to a course/package (SQL only)
+
+**Why:** the material-on-subscription flow (prev entry) copies `pc_material_id` from the course/package onto the subscription at verify — but **no admin API accepted `pcMaterialId`**, so the source FK was always null for products created in-app. This adds the attach field to the admin course + package write/read, **MySQL/Prisma path only** (Mongo branch intentionally untouched per request). **No schema change** — `pc_material_id` already exists on `ws_course` / `ws_package`.
+
+- `admin/course/course.validation.ts`: `createCourseSqlSchema` now accepts `pcMaterialId: z.coerce.number().int().positive().nullable().optional()` (the Mongo `createCourseSchema` left unchanged — SQL-only). Update reuses `.partial()`.
+- `modules/admin-course/admin-course.service.ts`: `CourseWriteInput.pcMaterialId?: number | null`; create writes `pcMaterialId: d.pcMaterialId ?? null`; update sets it when present. Read DTO (`toCourseDto`) already returned `pcMaterialId`.
+- `admin/package/package.validation.ts`: shared `createPackageSchema` (Mongo+SQL — package has no separate SQL schema) now accepts `pcMaterialId: z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/).nullable().optional()` (same dual-id convention as `examCountdownIds`). The Mongo branch ignores it (model field not added → strict-mode drop).
+- `modules/admin-package/admin-package.service.ts`: `PackageWriteInput.pcMaterialId?: string | null`; create/update write `parsePackageId(d.pcMaterialId)`; `toPackageDto` now returns `pcMaterialId: idStrOrNull(row.pcMaterialId)` (repo `findById` already selects all scalar columns).
+
+**Validation:** `null` detaches the kit. `yarn typecheck`: 11 pre-existing errors (unrelated promo/credit-referrer WIP), **none new**.
+
+---
+
+## 2026-06-27 — Feature: soft-delete re-signup — one ACTIVE customer per phone, unlimited deleted history
+
+**Requirement (client):** Deleting a user is ALWAYS a soft delete (data kept forever). The same phone may then sign up again as a brand-new, separate account, leaving every previously-deleted account intact — repeatable any number of times. A phone can thus own N customer rows of which **exactly one** is active (`is_account_deleted = 0`); the rest are deleted. Login always follows the single active row, so an admin can "revive" an old account by flipping `is_account_deleted` (soft-delete the current active row FIRST, then clear the flag on the old one).
+
+**Blocker removed:** `phone` was globally unique on both backends, which made re-signup fail.
+
+**MySQL** (`docs/migration/schema-changes/2026-06-27_customer_phone_active_unique.sql`):
+- DROP the global `UNIQUE (phone)` on `ws_customer` (index name resolved dynamically).
+- ADD STORED generated column `phone_active = CASE WHEN is_account_deleted = 0 THEN phone ELSE NULL END`.
+- ADD `UNIQUE KEY uq_customer_phone_active (phone_active)` → constrains active rows only (NULLs ignored), so unlimited soft-deleted dups are allowed but two active rows per phone are impossible. STORED column auto-recomputes on the admin toggle, keeping the invariant correct.
+- `prisma/schema.prisma`: removed `@unique` from `Customer.phoneNumber` (DB now enforces via the generated column). `prisma:generate` run. `phone_active` intentionally omitted from the Prisma model (read/written never; DB-only enforcement).
+
+**Mongo** (`src/models/customer/Customer.model.ts`):
+- Removed `unique: true` from `phoneNumber`.
+- Added partial unique index `{ phoneNumber: 1 }` with `partialFilterExpression: { isAccountDeleted: false }` (mirrors the MySQL generated-column index). **Deploy note:** drop the legacy `phoneNumber_1` unique index on the live collection so Mongoose can build the new partial one.
+
+**App logic** (`src/client/auth/auth.service.ts` `generateOtp`): MySQL branch wraps `createStub` in try/catch for Prisma `P2002` (concurrent-signup race on the single active slot) → graceful "Please wait before requesting a new OTP.", mirroring the existing Mongo `11000` guard. The lookup → create-new path was already correct on both branches; only the phone constraint was changing.
+
+**Match key:** phone only (email is collected later at profile completion and is not unique-constrained on either backend; the existing email-exists check is already scoped to `isAccountDeleted:false`). New re-signup accounts start empty (no auto-restore).
+
+**Verified:** edited files (`auth.service.ts`, `Customer.model.ts`, `schema.prisma`) typecheck clean (confirmed by stashing the unrelated in-flight payment files). Remaining `yarn typecheck` errors are pre-existing promo-code/payment work on the `migration` branch, none new.
+
+---
+
+## 2026-06-27 — Fix: client cart summary all zeros (camelCase vs snake_case book price fields)
+
+**Bug:** `GET /client/cart` returned `subtotal/listTotal/shipping/total = 0` (and `lineSubtotal/lineList = 0`) despite books having prices. `client-cart.service.getCart` read `book.discountedPrice` / `book.listPrice` / `book.shippingPrice` (camelCase), but the Prisma `Book` row uses **snake_case** columns `discounted_price` / `list_price` / `shipping_price` → `num(undefined)` → 0. (This pre-dated and also nullified the earlier shipping×qty fix, which used `book.shippingPrice`.)
+
+**Fix:** `modules/client-cart/client-cart.service.ts` `getCart` now reads `book.discounted_price`, `book.list_price`, `book.shipping_price` (matching the Prisma Book model).
+
+**Verified:** cart 137683 → `subtotal 700, listTotal 13410, discount 12710, itemCount 6, shipping 60 (per-unit: 30×2), total 760`. `yarn typecheck`: 11 pre-existing errors, none new.
+
+---
+
+## 2026-06-27 — Fix: entity-scoped promocode listings missed multi-type ("mixed") codes (empty list)
+
+**Bug:** after enabling multi-type promocodes, the per-entity "applicable promocodes" listings returned empty for codes stored as `"mixed"`. They filtered `where appliesToType = <type>` and parsed `appliesToIds` as a flat int[] — so a mixed row (type `"mixed"`, ids `[{type,ids}]`) was excluded by the type filter AND by `parseIdArray` (which returns [] on the object shape).
+
+**Fix (use `appliesToGroups`, include `"mixed"`):**
+- `modules/promo-code/promo-code.service.ts` `listPublicPromocodes` (entity-scoped branch): `appliesToType: { in: [type, "mixed"] }` + filter via `appliesToGroups(r).some(g => g.type===type && g.ids.includes(id))`.
+- `modules/catalog-package/catalog-package.detail.sql.ts` `availablePromo`: same — include `"mixed"`, select `appliesToType`, match via `appliesToGroups`.
+- (`listPromocodesForPackage` was already fixed in the multi-type change.)
+
+The admin list (`GET /admin/promocodes` → `listPromocodes`) was already correct (no type filter; `listDto` shows `{type:"mixed", count}`).
+
+**Verified:** mixed promo `DSDSDS` (liveCourse 1/2/4 + ebook 18 + testSeries 1) now returned by `listPublicPromocodes` for liveCourse 4 / ebook 18 / testSeries 1 (total=1 each); uncovered entity → 0. `yarn typecheck`: 11 pre-existing errors, none new.
+
+---
+
+## 2026-06-27 — Fix: create-order/live-course SQL branch used Mongo LiveCourse (Cast to ObjectId failed for "4")
+
+**Bug:** `POST /client/payment/create-order/live-course` threw `Cast to ObjectId failed for value "4" … LiveCourse`. Inside the **SQL branch**, `createLiveCourseOrderPayment` fetched the course name via the **Mongo** model — `LiveCourse.findOne({ _id: planSql.liveCourseId })` — with an int id (Mongo also disconnected).
+
+**Fix (MySQL path):**
+- `modules/live-course-order/live-course-order.service.ts`: new `findLiveCourse(id)` (`prisma.liveCourse.findFirst` → `{id, name}`).
+- `client/payment/live-course-payment.controller.ts`: SQL branch now uses `findLiveCourse(planSql.liveCourseId)` instead of the Mongo model. SQL branch confirmed Mongo-free.
+
+**Verified:** `findLiveCourse(4)` → `{id:4, name:"GPSC Non-Featured Batch"}`; plan 6 → liveCourseId 4 / ₹499. `yarn typecheck`: 11 pre-existing errors (file's pre-existing `result.promo` nullables), none new.
+
+---
+
+## 2026-06-27 — Physical-material handling on package/course subscription creation (MySQL verify path)
+
+**Feature:** port the legacy V1 `pcMaterial` logic (docs/PC_MATERIAL_SUBSCRIPTION_FLOW.md) into the MySQL commerce-order verify path. On a verified COURSE/PACKAGE payment with a "With Materials" plan, the fresh subscription now records the price split, the material kit, and a shippable tracking row. **No schema change** — all columns (`course_amount`, `material_amount`, `pc_material_id`, `shipping`, `tracking`) already existed on `ws_package_course_subscription` / `ws_package_course_order` / `ws_package_course_subscription_tracking`. MySQL-only; the Mongo fallback is unchanged (its subscription model has no material columns). These fields are internal/back-office — never returned to the client, so the verify DTO is unchanged.
+
+- `modules/commerce-order/commerce-order.repository.ts`:
+  - `findPlan` select now also reads `with_material` + `material_price`.
+  - new `findCoursePcMaterialId(courseId)` / `findPackagePcMaterialId(packageId)` — read `pc_material_id` from `ws_course` / `ws_package`.
+  - `createPendingOrder` now persists `shipping` (the chosen CustomerShipping id) on the order row.
+  - `verifyCourseTx` / `verifyPackageTx` (fresh-grant branch) now write `course_amount`, `material_amount`, `pc_material_id`, and `shipping` (copied from the order row); the tracking row's `status` is `"pending"` for material plans (kit still to ship) else `"complete"` (was unconditionally `"complete"`). Extend branch unchanged.
+- `modules/commerce-order/commerce-order.service.ts`:
+  - new `computeMaterialSplit(paidAmount, plan)` — `courseAmount = max(paid − materialPrice, 0)`, `materialAmount = paid − courseAmount` (residual; null when no material). This collapses the doc's 3 discount branches, since the order already carries the post-discount paid amount. (No `minimumAmount.course` constant exists in this repo; clamp at 0 instead.)
+  - `verifyCourseOrderMysql` / `verifyPackageOrderMysql` resolve the split + `pcMaterialId` (course vs package) and pass a `MaterialFulfillment` into the tx.
+  - `createCourseOrderMysql` / `createPackageOrderMysql` accept `customerShippingId` and persist it on the order.
+- `client/payment/{course,package}-payment.controller.ts` (SQL create-order branches): pass the validated `customerShippingId` through (was validated for ownership but dropped).
+
+**Material amounts only land on a FRESH grant** — re-purchase folds window+amount onto the existing sub (doc covers fresh creation only). `yarn typecheck`: 11 pre-existing errors (unrelated promo/credit-referrer WIP), **none new**.
+
+---
+
+## 2026-06-27 — Fix: apply-promo/live-course rejected SQL int planId (no SQL branch) + reshaped to /promocodes/apply
+
+**Bug:** `POST /client/payment/apply-promo/live-course` 400'd with `planId "Invalid id"` for an int planId (e.g. "6"). The handler had **no SQL branch** — it always parsed with the Mongo ObjectId schema (`applyPromoSchema`) and queried `LiveCoursePlan` (Mongo, disconnected). (test-series already had its SQL branch; live-course was missed.)
+
+**Fix (MySQL path; mirrors the test-series reshape):**
+- `modules/promo-code/promo-code.service.ts`: new `loadLivePlanDiscountsSql(promocodeId)` — per-plan % for `planKind="livePlan"` links.
+- `modules/live-course-order/live-course-order.service.ts`: new `listPlansForLiveCourse(liveCourseId)` (active plans).
+- `client/payment/live-course-payment.controller.ts`: new `applyPromoSqlSchema` (int planId) + SQL branch in `applyLiveCoursePromo` — `findActiveByCode` → `promoCovers({type:"liveCourse"})` → per-plan link discounts (else global fallback) → annotate all plans via `computePromoDiscount`. Returns the **same shape as /promocodes/apply**: `{ _id, promocode, discountType, discountValue, id: liveCourseId, key: "liveCourse", plans: { withMaterial: [], withoutMaterial: [...] } }`. Mongo branch untouched (dead).
+
+**Verified:** live course 4 / plan 6 (₹499) + 15% promo → plan returns `price 424, orginalPrice 499, offerPercentage 15`; covers=true. `yarn typecheck`: 11 pre-existing errors (incl. the file's pre-existing `result.promo` nullables, line-shifted), none new.
+
+**Note:** a code only resolves if its appliesTo covers the live course — with multi-type promocodes a single code can now cover liveCourse + others at once.
+
+---
+
+## 2026-06-27 — Promocode: multi-type appliesTo (one code across Test Series + Packages + Courses + …)
+
+**Feature:** a single promocode can now target plans across multiple module types at once. MySQL/Prisma path only; Mongo branch untouched (dead — only adjusted to keep compiling). No schema change.
+
+- `admin/promocode/promocode.validation.ts`: `appliesTo` now accepts a single `{type,ids}` (legacy) **or** an array `[{type,ids},…]`; normalized to an array of groups.
+- `modules/promo-code/promo-code.service.ts`:
+  - new `appliesToGroups(row)` — single source of truth reading BOTH shapes: legacy (`appliesToType`+flat `int[]`) and multi (`appliesToType="mixed"` + `appliesToIds=[{type,ids}]`).
+  - `toAppliesToStorage(groups)` — 1 group → legacy shape (backward-compatible, existing rows untouched); >1 → `"mixed"`.
+  - `promoCovers` rewritten on `appliesToGroups` (covers if ANY group matches). `listDto`/`detailDto` multi-aware (`detailDto.appliesTo` is now an **array** of populated groups). `listPromocodesForPackage` includes `"mixed"` rows.
+  - new `resolveValidPlansMultiSql(groups)` (union of plans across all types), `assertAppliesToGroupsExistSql`, `getAppliesToGroupsById`. `syncPlanLinksSql` unchanged (already generic) — replace-delete now only drops links absent from the full multi-type `plans[]`.
+- `admin/promocode/promocode.controller.ts`: create/update normalize to numeric groups, use `resolveValidPlansMultiSql`.
+
+**#3/#4 confirmed (no change needed):** detail `loadPlanLinksSql` already populates each link's parent + planKind for all kinds; checkout `loadPlanDiscountsSql` (keyed by planId, partitioned by planKind) works unchanged for mixed codes — each module's checkout reads its own kind subset.
+
+**Verified E2E:** mixed promo (package 3 + testSeries 1) — stored `mixed`; both plan links kept; re-sync with package-only dropped only the testSeries link; coversPkg/coversTS true, coversBad false; loadPlanDiscountsSql→pkg plan, loadTestSeriesPlanDiscountsSql→ts plan; detail returns both groups. `yarn typecheck`: 11 pre-existing errors, none in changed files.
+
+---
+
+## 2026-06-27 — apply-promo/test-series response reshaped to match /promocodes/apply
+
+**Change:** `POST /client/payment/apply-promo/test-series` (SQL branch) now returns the **same shape** as `POST /client/promocodes/apply` — the entity + ALL its pricing plans, each annotated with the per-plan offer — instead of the old single-plan `breakdown`.
+
+New shape: `{ _id: promoId, promocode, discountType, discountValue, id: testSeriesId, key: "testSeries", plans: { withMaterial: [], withoutMaterial: [ {id, testSeriesId, name, duration, price (discounted), orginalPrice, originalPrice, isDefault, status, created_at, updated_at, offerAvailable, discountType, discountValue, offerPercentage} ] } }`.
+
+**Code:**
+- `modules/promo-code/promo-code.service.ts`: new `loadTestSeriesPlanDiscountsSql(promocodeId)` — per-plan % for `planKind="testSeriesPrice"` links (the existing `loadPlanDiscountsSql` intentionally skips testSeriesPrice).
+- `modules/test-series-order/test-series-order.service.ts`: new `listPlansForSeries(testSeriesId)` (all active plans, durationDays asc).
+- `client/payment/test-series-payment.controller.ts`: `applyTestSeriesPromo` SQL branch rebuilt to mirror the reference algorithm — `findActiveByCode` → `promoCovers({type:"testSeries"})` → per-plan link discounts (hasLinks) else global `discountValue` fallback → annotate every plan via `computePromoDiscount`. Input unchanged (`{planId, promocode}`; testSeriesId derived from the plan). Mongo branch untouched (dead).
+
+**Verified:** temp testSeries promo (20%) over series 1 → all 3 plans returned with discounted `price`/`orginalPrice`/`offerPercentage`; covers=true. `yarn typecheck`: 11 pre-existing errors (incl. the 4 pre-existing `result.promo` nullables in this file, now line-shifted), none new.
+
+**Not done (ask):** `POST /client/payment/apply-promo/live-course` still returns the old single-plan shape — reshape it the same way only if requested.
+
+---
+
+## 2026-06-27 — Book cart shipping now per-unit (× qty), matching order-create
+
+**Bug:** the cart summary showed a flat shipping charge regardless of book quantity, while the order-create path already charged shipping per unit — so the cart under-displayed shipping vs what checkout actually charged.
+
+- `modules/client-cart/client-cart.service.ts:82`: `shipping += num(book.shippingPrice)` → **`shipping += num(book.shippingPrice) * line.qty`**. Now the cart summary's `shipping`/`total` scale with qty.
+- Already consistent (no change): `book-order.service.ts:92` `rawShipping += shipping_price * qty`; order `amount = totalDiscountedPrice + effectiveShipping` (per-qty). So the charged amount was already correct.
+
+**Note (pre-existing, unrelated DRIFT):** the SQL book receipt (`client-purchase-history.service.ts`) shows `shipping: 0` because `ws_book_order` stores only `amount` (no separate `total_shipping_price` column) — the grand total is still correct (includes per-qty shipping); only the shipping/discount split isn't separately stored. Out of scope for this change.
+
+**Verified:** `yarn typecheck` — 11 pre-existing errors, none in changed files.
+
+---
+
 ## 2026-06-26 — Fix: client catalog videos/materials/tests for live-course (422 "Invalid id.")
 
 **Bug:** `GET /client/catalog/live-course/:id/{videos|materials|tests}` returned `422 "Invalid id."`. The three handlers gated the SQL branch on `isClientCatalogMysql() && type !== "live-course"` ("live-course stays Mongo"), so live-course fell to the Mongo branch whose `mongoose.Types.ObjectId.isValid(id)` rejects integer ids (and Mongo is disconnected anyway).

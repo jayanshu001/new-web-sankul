@@ -13,6 +13,7 @@ import {
   getUploadedVideoDetails,
   getOrgDetails,
   updateRecordingWebhook,
+  getRecordingHealth,
 } from "./live.controller";
 
 const router = Router();
@@ -32,6 +33,7 @@ router.post("/end",       endLiveSession);               // POST   /api/v1/admin
 router.post("/:id/start", startScheduledLiveSession);    // POST   /api/v1/admin/live-sessions/:id/start
 router.post("/:id/promote-recording", promoteSessionRecording); // POST /api/v1/admin/live-sessions/:id/promote-recording
 router.get("/:id/attendance", getLiveSessionAttendance);   // GET    /api/v1/admin/live-sessions/:id/attendance
+router.get("/:id/recording-health", getRecordingHealth);  // GET    /api/v1/admin/live-sessions/:id/recording-health
 router.get("/:id",        getLiveSessionStatus);         // GET    /api/v1/admin/live-sessions/:id
 router.patch("/:id",      updateScheduledLiveSession);   // PATCH  /api/v1/admin/live-sessions/:id
 router.delete("/:id",     deleteLiveSession);            // DELETE /api/v1/admin/live-sessions/:id

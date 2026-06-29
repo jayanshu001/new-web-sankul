@@ -13,6 +13,8 @@ import { LiveSessionAttendance } from "../models/customer/LiveSessionAttendance.
 import { resolveLiveClassId } from "../admin/live/live.guards";
 import { redisClient } from "../config/redis";
 import logger from "../utils/logger";
+import { isMysqlModule } from "../config/migration";
+import { customerAuthRepository } from "../modules/customer-auth/customer-auth.repository";
 // SQL (Prisma) persistence branches. The socket persists TWO independent data
 // sets, each gated by its own existing module flag (matching the HTTP path):
 //  - chat/ban/poll  → admin-live-course.service (isLiveCourseMysql)
@@ -171,21 +173,65 @@ async function authenticateSocket(token: string): Promise<{ customerId: string; 
     // HTTP requests. See utils/jwtSigner.ts + config/jwtKeys.ts.
     const decoded = verifyAccessToken<any>(token);
 
-    if (decoded.type !== "customer") return null;
+    if (decoded.type !== "customer") {
+      logger.warn("Live chat auth rejected: token type is not customer", {
+        type: decoded.type, id: decoded.id, tokenTail: token.slice(-6),
+      });
+      return null;
+    }
 
-    const activeToken = await redisClient.get(`customer_session:${decoded.id}`);
-    if (!activeToken || activeToken !== token) return null;
+    // TEMP (testing): single-device enforcement DISABLED so the same customer
+    // can connect from multiple devices/sessions at once — mirrors the REST
+    // side, where the `customer_session` pointer check is also commented out in
+    // middlewares/authenticate.ts. RESTORE this block (and the REST one) before
+    // re-enabling 1-session-per-user.
+    //
+    // const activeToken = await redisClient.get(`customer_session:${decoded.id}`);
+    // if (!activeToken || activeToken !== token) {
+    //   logger.warn("Live chat auth rejected: single-device session pointer mismatch", {
+    //     id: decoded.id,
+    //     pointerPresent: !!activeToken,
+    //     pointerMatches: activeToken === token,
+    //     pointerTail: activeToken ? activeToken.slice(-6) : null,
+    //     tokenTail: token.slice(-6),
+    //   });
+    //   return null;
+    // }
 
-    const customer = await Customer.findById(decoded.id)
-      .select("firstName middleName lastName status isAccountDeleted")
-      .lean();
-    if (!customer || !customer.status || customer.isAccountDeleted) return null;
-
-    const parts = [customer.firstName, customer.middleName, customer.lastName].filter(Boolean);
-    const userName = parts.length > 0 ? parts.join(" ") : `User_${decoded.id.slice(-4)}`;
+    // Resolve the customer from the active backend. Mirrors getCustomerGate in
+    // middlewares/authenticate.ts: when `customer-auth` is migrated the JWT id
+    // is the MySQL integer id, so a Mongo findById would never match.
+    let userName: string;
+    if (isMysqlModule("customer-auth")) {
+      const numId = Number(decoded.id);
+      if (!Number.isInteger(numId) || numId <= 0) {
+        logger.warn("Live chat auth rejected: non-numeric id on MySQL backend", { id: decoded.id });
+        return null;
+      }
+      // findLoginableById already filters status=true & not deleted.
+      const row = await customerAuthRepository.findLoginableById(numId);
+      if (!row) {
+        logger.warn("Live chat auth rejected: customer not found/disabled in MySQL", { id: decoded.id });
+        return null;
+      }
+      userName = (row.fullName ?? "").trim() || `User_${decoded.id.slice(-4)}`;
+    } else {
+      const customer = await Customer.findById(decoded.id)
+        .select("firstName middleName lastName status isAccountDeleted")
+        .lean();
+      if (!customer || !customer.status || customer.isAccountDeleted) {
+        logger.warn("Live chat auth rejected: customer not found/disabled in Mongo", { id: decoded.id });
+        return null;
+      }
+      const parts = [customer.firstName, customer.middleName, customer.lastName].filter(Boolean);
+      userName = parts.length > 0 ? parts.join(" ") : `User_${decoded.id.slice(-4)}`;
+    }
 
     return { customerId: decoded.id, userName };
-  } catch {
+  } catch (err) {
+    logger.warn("Live chat auth rejected: token verify threw", {
+      error: (err as Error).message, tokenTail: token.slice(-6),
+    });
     return null;
   }
 }

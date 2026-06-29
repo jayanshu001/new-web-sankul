@@ -7,7 +7,12 @@ import * as master from "../../modules/admin-master/admin-master.service";
 
 export const getVideoCategories = async (req: Request, res: Response) => {
   try {
-    if (master.isAdminMasterMysql()) return res.status(200).json({ success: true, data: await master.vcList() });
+    if (master.isAdminMasterMysql()) {
+      const search = typeof req.query.search === "string" ? req.query.search : undefined;
+      const limitRaw = (req.query.limit ?? req.query.per_page) as string | undefined;
+      const limit = limitRaw !== undefined ? Math.min(Math.max(parseInt(limitRaw) || 0, 0), 500) : undefined;
+      return res.status(200).json({ success: true, data: await master.vcList({ search, limit }) });
+    }
     // Populate childCategoryIds so each row can carry a `child_categories`
     // array (mirroring the admin /video-categories list) plus a `hasChildren`
     // boolean. This lets clients (e.g. the Course / Live Course modal, which

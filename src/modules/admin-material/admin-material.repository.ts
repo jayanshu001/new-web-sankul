@@ -25,6 +25,15 @@ export const adminMaterialRepository = {
 
   findCategoryById: (id: number) => prisma.materialCategory.findUnique({ where: { id } }),
   childCount: (id: number) => prisma.materialCategory.count({ where: { parent: id } }),
+  /**
+   * Of the given category ids, which have ≥1 child — one distinct query. Used to
+   * flag non-leaf categories in the list (a container is non-leaf regardless of
+   * its children's status).
+   */
+  parentIdsWithChildren: (categoryIds: number[]) =>
+    categoryIds.length
+      ? prisma.materialCategory.findMany({ where: { parent: { in: categoryIds } }, distinct: ["parent"], select: { parent: true } })
+      : Promise.resolve([]),
   materialCountForCategory: (id: number) => prisma.material.count({ where: { materialCategoryId: id } }),
 
   createCategory: (data: Prisma.MaterialCategoryUncheckedCreateInput) => prisma.materialCategory.create({ data }),

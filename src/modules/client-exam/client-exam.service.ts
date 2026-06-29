@@ -132,6 +132,12 @@ export const getExamQuestions = async (examId: number) => {
   return { exam: toExamDto(exam), questions: decorated };
 };
 
+// ─── getExamDetail (meta only) ───────────────────────────────────────────────
+export const getExamDetail = async (examId: number) => {
+  const exam = await repo.findPublishedExam(examId);
+  return exam ? toExamDto(exam) : null;
+};
+
 // ─── listMyResults ────────────────────────────────────────────────────────────
 export const listMyResults = async (customerId: number, page: number, limit: number) => {
   const [rows, total] = await Promise.all([
@@ -317,6 +323,225 @@ export const getSolutionAnalytics = async (customerId: number, examId: number, a
   return {
     ...toResultDto(r),
     accuracy: Math.round(accuracy * 100) / 100,
+  };
+};
+
+// ─── attempt lifecycle (resumable attempts) ──────────────────────────────────
+// SQL port of the Mongo attempt flow in client/exam/exam.controller.ts. An
+// in-progress attempt is a ws_exam_result row with status=false/inProgress=true;
+// submit flips it to status=true. Scoring mirrors saveAnswers above.
+const toAttemptDto = (r: any) => ({
+  _id: String(r.id),
+  examId: r.examId != null ? String(r.examId) : null,
+  attemptNumber: r.attemptNumber ?? null,
+  total: r.total,
+  attempt: r.attempt,
+  skip: r.skip,
+  success: r.success,
+  failed: r.failed,
+  score: num(r.score),
+  timing: r.timing,
+  ratting: r.ratting ?? null,
+  status: r.status ?? false,
+  inProgress: r.inProgress ?? false,
+  startedAt: r.startedAt ?? null,
+  submittedAt: r.submittedAt ?? null,
+  createdAt: r.created_at ?? null,
+});
+
+const attemptExpired = (startedAt: Date | null | undefined, durationMinutes: number) => {
+  if (!startedAt) return false;
+  return Date.now() > new Date(startedAt).getTime() + durationMinutes * 60_000;
+};
+
+const computeTimingFromStart = (startedAt: Date | null | undefined): string => {
+  if (!startedAt) return "00:00";
+  const totalSec = Math.max(0, Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+  const m = String(Math.floor(totalSec / 60)).padStart(2, "0");
+  const s = String(totalSec % 60).padStart(2, "0");
+  return `${m}:${s}`;
+};
+
+export const startAttempt = async (customerId: number, examId: number) => {
+  const exam = await repo.findPublishedExam(examId);
+  if (!exam) return { ok: false as const, status: 404, message: "Exam not found or not published." };
+  const now = new Date();
+  // Only scheduled exams have a real start window; `subject` exams are treated
+  // as always-available everywhere else (catalog/questions/saveAnswers), so the
+  // "not started yet" gate must not apply to them.
+  if (exam.type !== "subject" && exam.startAt && now < new Date(exam.startAt)) {
+    return { ok: false as const, status: 400, message: "Exam has not started yet." };
+  }
+  const inProgress = await repo.findInProgressAttempt(customerId, examId);
+  const attempt =
+    inProgress ??
+    (await repo.createInProgressAttempt({
+      customerId,
+      examId,
+      attemptNumber: (await repo.maxAttemptNumber(customerId, examId)) + 1,
+      startedAt: now,
+    }));
+  return {
+    ok: true as const,
+    data: {
+      attemptId: String(attempt.id),
+      attemptNumber: attempt.attemptNumber ?? null,
+      startedAt: attempt.startedAt ?? null,
+      serverNow: now,
+      durationMinutes: exam.time,
+      questionCount: exam.numberOfQuestions,
+    },
+  };
+};
+
+export const getActiveAttempt = async (customerId: number, examId: number) => {
+  const exam = await repo.findExam(examId);
+  if (!exam) return { ok: false as const, status: 404, message: "Exam not found." };
+  const attempt = await repo.findInProgressAttempt(customerId, examId);
+  if (!attempt) return { ok: true as const, data: null };
+  const details = await repo.detailsForResult(attempt.id);
+  return {
+    ok: true as const,
+    data: {
+      attemptId: String(attempt.id),
+      attemptNumber: attempt.attemptNumber ?? null,
+      startedAt: attempt.startedAt ?? null,
+      serverNow: new Date(),
+      durationMinutes: exam.time,
+      expired: attemptExpired(attempt.startedAt, exam.time),
+      savedAnswers: details.map((d) => ({
+        questionId: d.questionId != null ? String(d.questionId) : null,
+        answerId: d.answerId != null ? String(d.answerId) : null,
+      })),
+    },
+  };
+};
+
+export const saveSingleAnswer = async (
+  customerId: number,
+  examId: number,
+  attemptId: number,
+  input: { questionId: number; answerId: number | null }
+) => {
+  const attempt = await repo.findAttempt(attemptId, customerId, examId);
+  if (!attempt) return { ok: false as const, status: 404, message: "Attempt not found." };
+  if (attempt.status === true) return { ok: false as const, status: 400, message: "Attempt already submitted." };
+  const exam = await repo.findExam(examId);
+  if (!exam) return { ok: false as const, status: 404, message: "Exam not found." };
+  if (attemptExpired(attempt.startedAt, exam.time)) {
+    return { ok: false as const, status: 400, message: "Attempt has expired. Please submit." };
+  }
+
+  const question = await repo.findQuestion(input.questionId, examId);
+  if (!question) return { ok: false as const, status: 400, message: "Question does not belong to exam." };
+
+  let result: "true" | "false" | "skip";
+  let point = 0;
+  let answerId: number | null = null;
+  if (!input.answerId) {
+    result = "skip";
+  } else {
+    const option = await repo.findOption(input.answerId, input.questionId);
+    if (!option) return { ok: false as const, status: 400, message: "Answer does not belong to question." };
+    answerId = option.id;
+    if (norm(option.name) === "skip") result = "skip";
+    else if (norm(option.name) === norm(question.answer)) { result = "true"; point = num(exam.positiveMarks); }
+    else { result = "false"; point = -Math.abs(num(exam.negativeMarks)); }
+  }
+
+  await repo.upsertAttemptDetail({ examResultId: attempt.id, customerId, examId, questionId: input.questionId, answerId, result, point });
+  return { ok: true as const, data: { saved: true } };
+};
+
+export const submitAttempt = async (
+  customerId: number,
+  examId: number,
+  attemptId: number,
+  input: { timing?: string; ratting?: string | null }
+) => {
+  const attempt = await repo.findAttempt(attemptId, customerId, examId);
+  if (!attempt) return { ok: false as const, status: 404, message: "Attempt not found." };
+  if (attempt.status === true) return { ok: false as const, status: 400, message: "Attempt already submitted." };
+  const exam = await repo.findExam(examId);
+  if (!exam) return { ok: false as const, status: 404, message: "Exam not found." };
+
+  const allQIds = (await repo.questionIdsForExam(examId)).map((q) => q.id);
+  const total = allQIds.length;
+
+  const saved = await repo.detailsForResult(attempt.id);
+  const savedByQ = new Map<number, any>();
+  for (const d of saved) if (d.questionId != null) savedByQ.set(d.questionId, d);
+
+  let skip = 0, success = 0, failed = 0, score = 0;
+  const missing: number[] = [];
+  for (const qid of allQIds) {
+    const ex = savedByQ.get(qid);
+    if (!ex) { missing.push(qid); skip += 1; }
+    else {
+      if (ex.result === "skip") skip += 1;
+      else if (ex.result === "true") success += 1;
+      else failed += 1;
+      score += num(ex.point);
+    }
+  }
+
+  const submittedAt = new Date();
+  const timing = input.timing ?? computeTimingFromStart(attempt.startedAt);
+  const updated = await repo.finalizeAttempt({
+    attemptId: attempt.id, customerId, examId, missingQuestionIds: missing,
+    total, attempt: total - skip, skip, success, failed,
+    score: Math.round(score * 100) / 100, timing, ratting: input.ratting ?? attempt.ratting ?? null, submittedAt,
+  });
+
+  await repo.recomputeAnalytics(customerId);
+
+  const best = await repo.bestScoresForExam(examId);
+  const myBest = Math.max(num(updated.score), num(best.find((b) => Number(b.customerId) === customerId)?.best ?? 0));
+  const higher = best.filter((b) => num(b.best) > myBest).length;
+  const rank = `${higher + 1}/${best.length}`;
+
+  return { ok: true as const, data: { examResult: toAttemptDto(updated), rank } };
+};
+
+export const listAttempts = async (customerId: number, examId: number) => {
+  const exam = await repo.findExam(examId);
+  if (!exam) return { ok: false as const, status: 404, message: "Exam not found." };
+  const attempts = await repo.attemptsForExam(customerId, examId);
+  return {
+    ok: true as const,
+    data: {
+      exam: { _id: String(exam.id), title: exam.name, type: exam.type, durationMinutes: exam.time },
+      attempts: attempts.map(toAttemptDto),
+    },
+  };
+};
+
+export const getAttemptsAggregate = async (customerId: number, examId: number) => {
+  const exam = await repo.findExam(examId);
+  if (!exam) return { ok: false as const, status: 404, message: "Exam not found." };
+  const agg = await repo.aggregateForExam(customerId, examId);
+  const attemptsCount = agg._count._all;
+  const total = num(agg._sum.total), attempt = num(agg._sum.attempt), skip = num(agg._sum.skip);
+  const success = num(agg._sum.success), failed = num(agg._sum.failed);
+  const scoreSum = Math.round(num(agg._sum.score) * 100) / 100;
+  const bestScore = Math.round(num(agg._max.score) * 100) / 100;
+  const summary = {
+    attemptsCount, total, attempt, skip, success, failed, scoreSum, bestScore,
+    avgScore: attemptsCount > 0 ? Math.round((scoreSum / attemptsCount) * 100) / 100 : 0,
+    accuracy: total > 0 ? Math.round((success / total) * 100 * 100) / 100 : 0,
+    lastSubmittedAt: agg._max.submittedAt ?? null,
+  };
+  const best = await repo.bestScoresForExam(examId);
+  const myBest = num(best.find((b) => Number(b.customerId) === customerId)?.best ?? 0);
+  const higher = best.filter((b) => num(b.best) > myBest).length;
+  const totalCandidates = best.length;
+  return {
+    ok: true as const,
+    data: {
+      exam: { _id: String(exam.id), title: exam.name, questionCount: exam.numberOfQuestions },
+      summary,
+      rank: totalCandidates > 0 ? `${higher + 1}/${totalCandidates}` : "-",
+    },
   };
 };
 

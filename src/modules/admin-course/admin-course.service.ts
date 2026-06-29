@@ -137,6 +137,8 @@ export interface CourseWriteInput {
   name?: string; description?: string; image?: string; ordered?: number; shareableLink?: string;
   withMaterial?: string; withoutMaterial?: string; level?: string; status?: boolean; isPaid?: boolean; isPopular?: boolean;
   courseEducatorId?: number; courseSubjectCategoryId?: number; videoCategoryId?: number;
+  // Physical-material kit FK (ws_course.pc_material_id). null detaches.
+  pcMaterialId?: number | null;
   materialCategories?: Array<{ category: number; order: number }>;
   examCategories?: Array<{ category: number; order: number }>;
   // C6: embedded examCountdown attachments — stored as JSON int[] on ws_course.
@@ -163,6 +165,7 @@ export const createCourse = async (d: CourseWriteInput) => {
       courseSubjectCategoryId: d.courseSubjectCategoryId ?? 0,
       courseEducatorId: d.courseEducatorId ?? 0,
       videoCategoryId: d.videoCategoryId ?? null,
+      pcMaterialId: d.pcMaterialId ?? null,
       purchase: d.isPaid === false ? "no" : "yes",
       is_featured: d.isPopular ? "yes" : "no",
       status: d.status ?? true,
@@ -194,6 +197,7 @@ export const updateCourse = async (id: number, d: CourseWriteInput): Promise<"no
   if (d.courseSubjectCategoryId !== undefined) data.courseSubjectCategoryId = d.courseSubjectCategoryId;
   if (d.courseEducatorId !== undefined) data.courseEducatorId = d.courseEducatorId;
   if (d.videoCategoryId !== undefined) data.videoCategoryId = d.videoCategoryId;
+  if (d.pcMaterialId !== undefined) data.pcMaterialId = d.pcMaterialId;
   if (d.isPaid !== undefined) data.purchase = d.isPaid === false ? "no" : "yes";
   if (d.isPopular !== undefined) data.is_featured = d.isPopular ? "yes" : "no";
   if (d.status !== undefined) data.status = d.status;

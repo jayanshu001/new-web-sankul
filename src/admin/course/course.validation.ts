@@ -52,6 +52,13 @@ export const createCourseSqlSchema = z.object({
   courseEducatorId: z.coerce.number().int().positive().optional(),
   courseSubjectCategoryId: z.coerce.number().int().positive().optional(),
   videoCategoryId: z.coerce.number().int().positive().optional(),
+  // Physical-material kit id (ws_package_course_material). Optional; null detaches.
+  // Forms send 0 / "" / "0" to mean "no material" → normalize those to null so
+  // they detach instead of tripping the positive-int check.
+  pcMaterialId: z.preprocess(
+    (v) => (v === 0 || v === "0" || v === "" || v === null || v === undefined ? null : v),
+    z.coerce.number().int().positive().nullable().optional()
+  ),
   materialCategories: z.array(sqlCategoryRefSchema).optional(),
   examCategories: z.array(sqlCategoryRefSchema).optional(),
   // C6: embedded examCountdown attachments — stored as JSON int[] on ws_course.

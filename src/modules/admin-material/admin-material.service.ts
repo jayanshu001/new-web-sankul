@@ -82,7 +82,12 @@ export const listCategories = async (q: { parent?: string; search?: string; stat
     repo.listCategories({ ...opts, skip: (q.page - 1) * q.limit, take: q.limit }),
     repo.countCategories(opts),
   ]);
-  return { data: rows.map(toCategoryDto), total };
+  // Flag non-leaf rows so pickers can restrict selection to leaves even when the
+  // list is a search-filtered/paginated subset (a parent's children may be absent
+  // from this page).
+  const parents = await repo.parentIdsWithChildren(rows.map((r) => r.id));
+  const withChildren = new Set(parents.map((p) => p.parent));
+  return { data: rows.map((row) => ({ ...toCategoryDto(row), hasChildren: withChildren.has(row.id) })), total };
 };
 
 export const getCategoryById = async (id: number) => {

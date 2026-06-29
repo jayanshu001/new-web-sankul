@@ -302,7 +302,9 @@ export const getEbookOrderInvoice = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    if (!isObjectId(orderId)) {
+    // Accept a SQL int order id (MySQL id-space) OR a Mongo ObjectId; the
+    // receipt builder branches on isMysqlModule and re-validates ownership.
+    if (!isObjectId(orderId) && !/^[1-9][0-9]*$/.test(orderId)) {
       logger.warn("getEbookOrderInvoice invalid id", { traceId, customerId, orderId });
       return res.status(400).json({ success: false, message: "Invalid order id." });
     }

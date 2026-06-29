@@ -137,6 +137,23 @@ export const logoutHandler = async (req: Request, res: Response) => {
 };
 
 /**
+ * GET /api/v1/client/auth/account-status
+ * Lightweight "is my account still active?" probe the app calls on Home Screen
+ * load. The heavy lifting is done by `authenticate`: a disabled/soft-deleted
+ * account is already rejected there with 401 + `data.reason`
+ * (ACCOUNT_DISABLED / ACCOUNT_DELETED) BEFORE this handler runs. So reaching
+ * here means the account is good — just echo `{ active: true }`. The frontend
+ * logs out + shows the reason on any non-2xx.
+ */
+export const accountStatusHandler = async (req: Request, res: Response) => {
+  const userId = req.user?.id;
+  if (!userId) {
+    return failure(res, "Unauthorized request.", 401, {}, { reason: "UNAUTHORIZED" });
+  }
+  return success(res, { active: true }, "Account is active.", 200);
+};
+
+/**
  * POST /api/v1/auth/otp/resend
  * Body: { phoneNumber: string }
  */

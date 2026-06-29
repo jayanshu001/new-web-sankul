@@ -1,6 +1,7 @@
 import { isMysqlModule } from "../../config/migration";
 import { clientCartRepository as repo } from "./client-cart.repository";
 import { isOfflineCityMysql, resolveCityName } from "../offline-city/offline-city.service";
+import { getFreeShippingMin } from "../book-order/book-order.service";
 
 export const CLIENT_CART_MODULE = "client-cart";
 export const isClientCartMysql = (): boolean => isMysqlModule(CLIENT_CART_MODULE);
@@ -66,28 +67,50 @@ export const getCart = async (customerId: number) => {
     return {
       _id: cart ? String(cart.id) : null,
       items: [],
-      summary: { subtotal: 0, listTotal: 0, discount: 0, itemCount: 0, shipping: 0, shippingWaived: true, total: 0 },
+      summary: {
+        subtotal: 0, listTotal: 0, discount: 0, itemCount: 0, shipping: 0, shippingWaived: true, total: 0,
+        breakdown: { totalListPrice: 0, totalDiscountedPrice: 0, shipping: 0, shippingWaived: true },
+      },
     };
   }
-  let subtotal = 0, listTotal = 0, itemCount = 0, shipping = 0;
+  let subtotal = 0, listTotal = 0, itemCount = 0, rawShipping = 0;
   const items = cart.bookCartItem
     .filter((line: any) => line.book)
     .map((line: any) => {
       const book = line.book;
-      const lineSubtotal = num(book.discountedPrice) * line.qty;
-      const lineList = num(book.listPrice) * line.qty;
+      // The Prisma Book row uses snake_case price columns (list_price,
+      // discounted_price, shipping_price) — NOT camelCase.
+      const lineSubtotal = num(book.discounted_price) * line.qty;
+      const lineList = num(book.list_price) * line.qty;
       subtotal += lineSubtotal;
       listTotal += lineList;
       itemCount += line.qty;
-      shipping += num(book.shippingPrice);
+      // Per-unit shipping; the free-shipping threshold below may waive it.
+      rawShipping += num(book.shipping_price) * line.qty;
       return { bookId: String(line.bookId), qty: line.qty, book, lineSubtotal, lineList };
     });
-  const shippingWaived = shipping === 0;
-  const total = shippingWaived ? subtotal : subtotal + shipping;
+
+  // Use the SAME free-shipping logic as create-order (book-order.service) so the
+  // cart total and the charged amount always agree: shipping is waived when the
+  // discounted subtotal meets the configured minimum. (Shipping is NOT address-
+  // based — the address only gates checkout, not the amount.)
+  const freeShippingMin = await getFreeShippingMin();
+  const shippingWaived = freeShippingMin > 0 && subtotal >= freeShippingMin;
+  const shipping = shippingWaived ? 0 : rawShipping;
+  const total = subtotal + shipping;
   return {
     _id: String(cart.id),
     items,
-    summary: { subtotal, listTotal, discount: Math.max(0, listTotal - subtotal), itemCount, shipping, shippingWaived, total },
+    summary: {
+      subtotal,
+      listTotal,
+      discount: Math.max(0, listTotal - subtotal),
+      itemCount,
+      shipping,
+      shippingWaived,
+      total,
+      breakdown: { totalListPrice: listTotal, totalDiscountedPrice: subtotal, shipping, shippingWaived },
+    },
   };
 };
 

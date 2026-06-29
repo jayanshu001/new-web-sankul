@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpHandler, logoutHandler } from "./auth.controller";
+import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpHandler, logoutHandler, accountStatusHandler } from "./auth.controller";
 import authenticate from "../../middlewares/authenticate";
 import { logoutAllDevicesHandler } from "../../middlewares/logoutAllDevices";
 import { CustomerAccessToken } from "../../models/customer/CustomerAccessToken.model";
@@ -39,6 +39,17 @@ router.post("/otp/validate", validateOtpHandler);
  * @access Public
  */
 router.post("/token/refresh", refreshTokenHandler);
+
+/**
+ * @route  GET /api/v1/client/auth/account-status
+ * @desc   Lightweight gate probe for the app's Home Screen. Returns
+ *         { active: true } when the account is healthy. A disabled or
+ *         soft-deleted account is rejected by `authenticate` first with
+ *         401 + data.reason (ACCOUNT_DISABLED / ACCOUNT_DELETED) → frontend
+ *         logs out and shows the message.
+ * @access Private (Customer)
+ */
+router.get("/account-status", authenticate, accountStatusHandler);
 
 /**
  * @route  DELETE /api/v1/client/auth/logout

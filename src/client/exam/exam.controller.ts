@@ -24,11 +24,18 @@ import {
   parseExamId,
   listExamsByCategory as svcListExamsByCategory,
   getExamQuestions as svcGetExamQuestions,
+  getExamDetail as svcGetExamDetail,
   listMyResults as svcListMyResults,
   saveAnswers as svcSaveAnswers,
   getSolution as svcGetSolution,
   getSolutionAnalytics as svcGetSolutionAnalytics,
   getDailyExams as svcGetDailyExams,
+  startAttempt as svcStartAttempt,
+  getActiveAttempt as svcGetActiveAttempt,
+  saveSingleAnswer as svcSaveSingleAnswer,
+  submitAttempt as svcSubmitAttempt,
+  listAttempts as svcListAttempts,
+  getAttemptsAggregate as svcGetAttemptsAggregate,
 } from "../../modules/client-exam/client-exam.service";
 import * as catalogExam from "../../modules/catalog-exam/catalog-exam.service";
 
@@ -1065,6 +1072,16 @@ export const getExamDetail = async (req: Request, res: Response) => {
   logger.info("getExamDetail invoked", { traceId, path: req.originalUrl, examId: id, userId: req.user?.id });
 
   try {
+    // ─── MySQL branch ─────────────────────────────────────────────────────
+    if (isClientExamMysql()) {
+      const numId = parseExamId(id);
+      if (!numId) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+      const data = await svcGetExamDetail(numId);
+      if (!data) return res.status(404).json({ success: false, message: "Exam not found or not published." });
+      logger.info("getExamDetail success (sql)", { traceId, examId: id });
+      return res.status(200).json({ success: true, data });
+    }
+
     if (!isObjectId(id)) {
       logger.warn("getExamDetail invalid id", { traceId, examId: id });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
@@ -1103,6 +1120,16 @@ export const startAttempt = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
+    if (isClientExamMysql()) {
+      const cid = parseExamId(customerId);
+      const eid = parseExamId(examId);
+      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+      const r = await svcStartAttempt(cid, eid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      logger.info("startAttempt success (sql)", { traceId, customerId, examId });
+      return res.status(200).json({ success: true, data: r.data });
+    }
+
     if (!isObjectId(examId)) {
       logger.warn("startAttempt invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
@@ -1115,7 +1142,9 @@ export const startAttempt = async (req: Request, res: Response) => {
     }
 
     const now = new Date();
-    if (exam.startAt && now < new Date(exam.startAt)) {
+    // Only scheduled exams have a real start window; `subject` exams are
+    // always-available elsewhere, so the gate must not apply to them.
+    if ((exam as any).type !== ExamType.SUBJECT && exam.startAt && now < new Date(exam.startAt)) {
       logger.warn("startAttempt not yet started", { traceId, customerId, examId, startAt: exam.startAt });
       return res.status(400).json({ success: false, message: "Exam has not started yet." });
     }
@@ -1178,6 +1207,22 @@ export const saveSingleAnswer = async (req: Request, res: Response) => {
     if (!customerId) {
       logger.warn("saveSingleAnswer unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (isClientExamMysql()) {
+      const cid = parseExamId(customerId);
+      const eid = parseExamId(examId);
+      const aid = parseExamId(attemptId);
+      if (!cid || !eid || !aid) return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
+      const qid = parseExamId(String(req.body?.questionId ?? ""));
+      if (!qid) return res.status(400).json({ success: false, message: "Invalid question id." });
+      const rawAns = req.body?.answerId;
+      const ansId = rawAns == null || rawAns === "" ? null : parseExamId(String(rawAns));
+      if (rawAns != null && rawAns !== "" && !ansId) return res.status(400).json({ success: false, message: "Invalid answer id." });
+      const r = await svcSaveSingleAnswer(cid, eid, aid, { questionId: qid, answerId: ansId });
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      logger.info("saveSingleAnswer success (sql)", { traceId, customerId, examId, attemptId, questionId: qid });
+      return res.status(200).json({ success: true, data: r.data });
     }
 
     if (!isObjectId(examId) || !isObjectId(attemptId)) {
@@ -1277,6 +1322,18 @@ export const submitAttempt = async (req: Request, res: Response) => {
     if (!customerId) {
       logger.warn("submitAttempt unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (isClientExamMysql()) {
+      const cid = parseExamId(customerId);
+      const eid = parseExamId(examId);
+      const aid = parseExamId(attemptId);
+      if (!cid || !eid || !aid) return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
+      const data = submitAttemptSchema.parse(req.body ?? {});
+      const r = await svcSubmitAttempt(cid, eid, aid, { timing: data.timing, ratting: data.ratting ?? null });
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      logger.info("submitAttempt success (sql)", { traceId, customerId, examId, attemptId });
+      return res.status(200).json({ success: true, data: r.data });
     }
 
     if (!isObjectId(examId) || !isObjectId(attemptId)) {
@@ -1422,6 +1479,16 @@ export const listAttempts = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
+    if (isClientExamMysql()) {
+      const cid = parseExamId(customerId);
+      const eid = parseExamId(examId);
+      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+      const r = await svcListAttempts(cid, eid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      logger.info("listAttempts success (sql)", { traceId, customerId, examId });
+      return res.status(200).json({ success: true, data: r.data });
+    }
+
     if (!isObjectId(examId)) {
       logger.warn("listAttempts invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Please select valid exam!!" });
@@ -1465,6 +1532,16 @@ export const getAttemptsAggregate = async (req: Request, res: Response) => {
     if (!customerId) {
       logger.warn("getAttemptsAggregate unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (isClientExamMysql()) {
+      const cid = parseExamId(customerId);
+      const eid = parseExamId(examId);
+      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+      const r = await svcGetAttemptsAggregate(cid, eid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      logger.info("getAttemptsAggregate success (sql)", { traceId, customerId, examId });
+      return res.status(200).json({ success: true, data: r.data });
     }
 
     if (!isObjectId(examId)) {
@@ -1576,6 +1653,16 @@ export const getActiveAttempt = async (req: Request, res: Response) => {
     if (!customerId) {
       logger.warn("getActiveAttempt unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    if (isClientExamMysql()) {
+      const cid = parseExamId(customerId);
+      const eid = parseExamId(examId);
+      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+      const r = await svcGetActiveAttempt(cid, eid);
+      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+      logger.info("getActiveAttempt success (sql)", { traceId, customerId, examId });
+      return res.status(200).json({ success: true, data: r.data });
     }
 
     if (!isObjectId(examId)) {

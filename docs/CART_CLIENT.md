@@ -40,12 +40,17 @@ Adds a book to the customer's active cart. If the same `bookId` already exists i
 
 | field    | type    | required | notes                            |
 |----------|---------|----------|----------------------------------|
-| `bookId` | string  | yes      | 24-char Mongo ObjectId of a Book |
+| `bookId` | string  | yes      | The book id. **Now an integer id** (e.g. `"10"`) on the MySQL backend — the same id returned as `items[].bookId` / `book.id`. |
 | `qty`    | number  | no       | integer 1–99, default `1`        |
 
 ```json
-{ "bookId": "66f1c2...", "qty": 1 }
+{ "bookId": "10", "qty": 1 }
 ```
+
+> **Id note:** the cart runs on MySQL now, so `bookId` and `:bookId` path params
+> are integer ids (as strings), not Mongo ObjectIds. Use the `bookId` values the
+> cart returns. (The "Data model" section below describes the legacy Mongo shape
+> and is kept for historical context only.)
 
 ### Responses
 
@@ -81,48 +86,81 @@ Adds a book to the customer's active cart. If the same `bookId` already exists i
 
 `GET /api/v1/client/cart`
 
-Returns the customer's active cart, with each line populated with the underlying `Book` and a price summary suitable for the My Cart screen.
+Returns the customer's active cart, with each line populated with the underlying `Book` and a full price summary (including **per-unit shipping** and the final payable) suitable for the My Cart screen.
 
 ### Response
 
-- `200 OK` always. An empty cart returns `items: []` and zeroed summary — the client does not need to handle a 404.
+- `200 OK` always. An empty cart returns `items: []` and a zeroed summary (`shippingWaived: true`) — the client does not need to handle a 404.
 
 ```json
 {
   "success": true,
   "data": {
-    "_id": "...",
+    "_id": "137683",
     "items": [
       {
-        "bookId": "66f1c2...",
-        "qty": 1,
-        "book": { "_id": "66f1c2...", "title": "Constable 20 Paper set", "listPrice": 300, "discountedPrice": 270, "shippingPrice": 0, "...": "..." },
-        "lineSubtotal": 270,
-        "lineList": 300
+        "bookId": "10",
+        "qty": 2,
+        "book": {
+          "id": 10,
+          "name": "Computer",
+          "thumbnail": "...",
+          "image": "...",
+          "author": "Akram Sherasiya",
+          "list_price": 4005,
+          "discounted_price": 200,
+          "shipping_price": 30
+        },
+        "lineSubtotal": 400,
+        "lineList": 8010
       }
     ],
     "summary": {
-      "subtotal": 270,    // sum of discountedPrice * qty   -> drives "Total Amount"
-      "listTotal": 300,   // sum of listPrice       * qty   -> for showing strikethrough
-      "discount": 30,     // listTotal - subtotal
-      "itemCount": 1      // sum of qty across all lines
+      "subtotal": 700,        // Σ discounted_price * qty  -> goods total (pre-shipping)
+      "listTotal": 13410,     // Σ list_price       * qty  -> MRP, for strikethrough
+      "discount": 12710,      // listTotal - subtotal      -> savings
+      "itemCount": 6,         // Σ qty across all lines
+      "shipping": 60,         // Σ shipping_price   * qty  -> PER-UNIT shipping total
+      "shippingWaived": false,// true when shipping === 0 (free)
+      "total": 760            // amount payable = subtotal + shipping
     }
   }
 }
 ```
 
-### Field mapping to the design
+> ⚠️ **`book` price fields are snake_case**: `list_price`, `discounted_price`,
+> `shipping_price` (not camelCase). Prefer the ready-made per-line totals
+> `lineSubtotal` / `lineList` for the row UI.
 
-| UI element                    | API field                           |
-|-------------------------------|-------------------------------------|
-| Line item title / image       | `items[].book.title` / image fields |
-| `₹270 ₹300` (strike + final)  | `book.discountedPrice` / `book.listPrice` |
-| `1` (qty stepper value)       | `items[].qty`                       |
-| "Discount -2000" row          | `summary.discount`                  |
-| "Total Amount ₹2345"          | `summary.subtotal`                  |
-| Bottom-bar `₹6293`            | `summary.listTotal` (or your own `subtotal + shipping` once shipping is added in a later step) |
+### Pricing & per-unit shipping — render `summary` as-is
 
-Shipping, promo discount, and the final payable are intentionally **not** computed here yet — those come from the address + promocode + checkout endpoints in the next steps.
+The backend computes everything; the frontend must **not** recompute prices/shipping
+on the client. Display these straight from `summary`:
+
+| UI element                     | API field                          |
+|--------------------------------|------------------------------------|
+| Line title / image / author    | `items[].book.name` / `image` / `author` |
+| Per-line `₹200 ₹4005` (final + strike) | `items[].lineSubtotal` / `items[].lineList` (or `book.discounted_price` / `book.list_price` per unit) |
+| Qty stepper value              | `items[].qty`                      |
+| "Discount" row                 | `summary.discount`                 |
+| "Subtotal / Total Amount"      | `summary.subtotal`                 |
+| "Shipping" row                 | `summary.shipping` ( show **"Free"** when `summary.shippingWaived` ) |
+| Grand total / pay button       | `summary.total`                    |
+
+**Shipping is per quantity.** `shipping = Σ (book.shipping_price × qty)`, so each
+extra copy adds another shipping charge. Example — a book with `discounted_price:
+200`, `shipping_price: 30`:
+
+| qty | subtotal | shipping | total |
+|-----|----------|----------|-------|
+| 1   | 200      | 30       | 230   |
+| 2   | 400      | 60       | 440   |
+| 3   | 600      | 90       | 630   |
+
+After any quantity change (`PATCH /cart/items/:bookId`), the response's `summary`
+already reflects the new shipping/total — just re-render it. Don't cache totals
+across qty changes. Checkout (`/payment/create-order`) independently recomputes the
+same per-unit shipping, so the cart `total` and the charged amount always agree.
 
 ---
 

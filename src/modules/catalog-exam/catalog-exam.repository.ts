@@ -184,4 +184,18 @@ export const catalogExamRepository = {
           select: { parent: true },
         })
       : Promise.resolve([]),
+
+  /**
+   * Of the given category ids, which have ≥1 child (regardless of status) — one
+   * distinct query. Used to flag non-leaf categories in the list (a container is
+   * non-leaf even if its sub-categories are disabled).
+   */
+  childParentIds: (categoryIds: number[]) =>
+    categoryIds.length
+      ? prisma.examCategory.findMany({
+          where: { parent: { in: categoryIds }, deleted: false },
+          distinct: ["parent"],
+          select: { parent: true },
+        })
+      : Promise.resolve([]),
 };

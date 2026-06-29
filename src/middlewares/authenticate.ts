@@ -6,6 +6,62 @@ import { verifyAccessToken } from "../utils/jwtSigner";
 import { isRevoked, UserType } from "../libs/tokenRevocation";
 import { updateContext } from "../utils/requestContext";
 import { Customer } from "../models/customer/Customer.model";
+import { isMysqlModule } from "../config/migration";
+import { customerAuthRepository } from "../modules/customer-auth/customer-auth.repository";
+
+// Per-request customer gate state, cached briefly in Redis so the live DB read
+// doesn't fire on every authenticated request. Busted on block/delete; the
+// short TTL is the fallback for direct-DB edits that bypass the app.
+type CustomerGate = { deleted: boolean; disabled: boolean };
+const CUSTOMER_GATE_TTL_SECONDS = 30;
+const customerGateKey = (id: string) => `customer_gate:${id}`;
+
+/**
+ * Returns the live block/delete state for a customer, reading the active
+ * backend (MySQL when `customer-auth` is migrated, else Mongo). Cached in Redis
+ * for CUSTOMER_GATE_TTL_SECONDS. Returns `null` only when the customer row is
+ * missing entirely (treated as deleted by the caller). Fail-open on errors so a
+ * transient DB/Redis blip never locks every customer out.
+ */
+const getCustomerGate = async (id: string): Promise<CustomerGate | null> => {
+  const key = customerGateKey(id);
+  try {
+    const cached = await redisClient.get(key);
+    if (cached) return JSON.parse(cached) as CustomerGate;
+  } catch {
+    // Redis miss/unreachable → fall through to a live read.
+  }
+
+  let gate: CustomerGate | null = null;
+  if (isMysqlModule("customer-auth")) {
+    const numId = Number(id);
+    if (Number.isInteger(numId) && numId > 0) {
+      const row = await customerAuthRepository.getAuthStateById(numId);
+      gate = row ? { deleted: !!row.isAccountDeleted, disabled: !row.status } : null;
+    }
+  } else {
+    const customer = await Customer.findById(id).select("status isAccountDeleted");
+    gate = customer ? { deleted: !!customer.isAccountDeleted, disabled: !customer.status } : null;
+  }
+
+  try {
+    // Only cache a concrete result; a missing row stays uncached so a freshly
+    // created/restored account isn't shadowed by a negative cache entry.
+    if (gate) await redisClient.set(key, JSON.stringify(gate), "EX", CUSTOMER_GATE_TTL_SECONDS);
+  } catch {
+    // Best-effort cache; ignore write failures.
+  }
+  return gate;
+};
+
+/** Drop a customer's cached gate so a block/delete/restore takes effect now. */
+export const invalidateCustomerGate = async (id: string | number): Promise<void> => {
+  try {
+    await redisClient.del(customerGateKey(String(id)));
+  } catch {
+    // Non-fatal: the TTL will expire the stale entry shortly anyway.
+  }
+};
 
 // Augment Request to carry the decoded token payload
 declare module "express-serve-static-core" {
@@ -58,13 +114,13 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
       // happens on the already-revoked path, so it costs nothing in steady
       // state. Clients should branch on `data.reason`, not the message text.
       if (userType === "customer") {
-        const customer = await Customer.findById(decoded.id).select("status isAccountDeleted");
-        if (!customer || customer.isAccountDeleted) {
+        const gate = await getCustomerGate(decoded.id);
+        if (!gate || gate.deleted) {
           return failure(res, "This account no longer exists. Please contact support.", 401, {}, {
             reason: "ACCOUNT_DELETED",
           });
         }
-        if (!customer.status) {
+        if (gate.disabled) {
           return failure(res, "Your account has been disabled. Please contact support.", 401, {}, {
             reason: "ACCOUNT_DISABLED",
           });
@@ -73,6 +129,24 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
       return failure(res, "Session was revoked. Please log in again.", 401, {}, {
         reason: "SESSION_REVOKED",
       });
+    }
+
+    // Live account-gate check for customers on EVERY request (cached, see
+    // getCustomerGate). A valid, non-revoked token is not enough — if an admin
+    // (or a direct DB edit) has since disabled or soft-deleted the account, cut
+    // it off here. Clients should branch on `data.reason`, not the message text.
+    if (userType === "customer") {
+      const gate = await getCustomerGate(decoded.id);
+      if (!gate || gate.deleted) {
+        return failure(res, "This account no longer exists. Please contact support.", 401, {}, {
+          reason: "ACCOUNT_DELETED",
+        });
+      }
+      if (gate.disabled) {
+        return failure(res, "Your account has been disabled. Please contact support.", 401, {}, {
+          reason: "ACCOUNT_DISABLED",
+        });
+      }
     }
 
     // Enforce 1 active device rule for customers

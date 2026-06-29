@@ -202,7 +202,12 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
         isPurchased: ownedIds.has(key),
         purchaseCount: purchaseCountMap.get(key) ?? 0,
         cardVariant,
-        plans: plansByCourse.get(key) ?? [],
+        // Grouped { withMaterial, withoutMaterial } to match the client/courses
+        // + live-course detail contract (kept identical to the SQL listClient path).
+        plans: {
+          withMaterial: (plansByCourse.get(key) ?? []).filter((p) => p.withMaterial),
+          withoutMaterial: (plansByCourse.get(key) ?? []).filter((p) => !p.withMaterial),
+        },
         shareableLink: buildShareUrl("live-courses", key, base),
       };
     });
@@ -429,8 +434,10 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
       classType: course.classType ?? "live",
     };
 
-    // Plans enriched with the strikethrough-price math the UI needs.
-    const plansOut = plans.map((p) => {
+    // Plans enriched with the strikethrough-price math the UI needs, then split
+    // by material variant to mirror the package detail contract
+    // (plans: { withMaterial, withoutMaterial }).
+    const plansEnriched = plans.map((p) => {
       const original =
         typeof p.originalPrice === "number" && p.originalPrice > p.price
           ? p.originalPrice
@@ -440,6 +447,10 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
         : 0;
       return { ...p, originalPrice: original, discountPercent };
     });
+    const plansOut = {
+      withMaterial: plansEnriched.filter((p) => p.withMaterial),
+      withoutMaterial: plansEnriched.filter((p) => !p.withMaterial),
+    };
 
     logger.info("getLiveCourseForClient success", { traceId, userId, id, subscribed });
     const shareableLink = buildShareUrl("live-courses", id, resolveBase(req));

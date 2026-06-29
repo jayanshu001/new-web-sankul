@@ -25,6 +25,17 @@ export const customerAuthRepository = {
     }),
 
   /**
+   * Raw account gate state for the per-request authenticate check.
+   * Returns just status + isAccountDeleted (no row filter) so the middleware
+   * can tell "disabled" apart from "deleted". null = no such customer.
+   */
+  getAuthStateById: (id: number) =>
+    prisma.customer.findUnique({
+      where: { id },
+      select: { status: true, isAccountDeleted: true },
+    }),
+
+  /**
    * Create a stub customer for a brand-new phone.
    * `state`/`district` are NOT NULL with no default in MySQL → default to 0.
    */

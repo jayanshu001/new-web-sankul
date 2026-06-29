@@ -219,7 +219,15 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
         if (r.reason === "phone") return res.status(400).json({ success: false, message: "No phone number on file. Please update your profile before using this address for delivery." });
         return res.status(400).json({ success: false, message: "Address is missing a city. Please update the address before using it for delivery." });
       }
-      return res.status(200).json({ success: true, data: { cart: r.cart, shipping: r.shipping }, message: "Shipping address attached." });
+      // Return the recalculated pricing too, so the client needs ONE call (no
+      // attach + re-GET dance). Shipping uses the same free-shipping logic as
+      // /cart and create-order, so all three agree.
+      const priced = await cartSql.getCart(cid);
+      return res.status(200).json({
+        success: true,
+        data: { cart: r.cart, shipping: r.shipping, summary: priced.summary },
+        message: "Shipping address attached.",
+      });
     }
 
     const { addressId } = attachShippingSchema.parse(req.body);

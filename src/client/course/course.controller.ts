@@ -467,7 +467,9 @@ export const getOrderInvoiceHandler = async (req: Request, res: Response) => {
 
   try {
     if (!userId) return failure(res, "Unauthorized request.", 401);
-    if (!Types.ObjectId.isValid(orderId)) {
+    // Accept a SQL int order id (MySQL id-space) OR a Mongo ObjectId. The
+    // receipt builder branches on isMysqlModule and re-validates ownership.
+    if (!Types.ObjectId.isValid(orderId) && !/^[1-9][0-9]*$/.test(orderId)) {
       return failure(res, "Please select valid package", 400);
     }
 

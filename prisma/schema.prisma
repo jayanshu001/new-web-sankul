@@ -283,7 +283,11 @@ model CustomerTargetGoal {
 model Customer {
   id                        Int                         @id @default(autoincrement())
   fullName                  String?                     @map("full_name") @db.VarChar(255)
-  phoneNumber               String                      @unique @map("phone") @db.VarChar(11)
+  // Uniqueness is enforced DB-side only among ACTIVE rows via the generated
+  // `phone_active` column + uq_customer_phone_active index (see
+  // docs/migration/schema-changes/2026-06-27_customer_phone_active_unique.sql).
+  // A soft-deleted phone may sign up again as a new row, so this is NOT @unique.
+  phoneNumber               String                      @map("phone") @db.VarChar(11)
   emailAddress              String?                     @map("email_address") @db.VarChar(255)
   password                  String?                     @db.VarChar(255)
   isPhoneVerified           Boolean                     @map("is_phone_verified")
@@ -846,6 +850,7 @@ model ExamResult {
   customerId       Int?               @map("qresult_customer_id")
   Exam             Exam?              @relation(fields: [examId], references: [id])
   examId           Int?               @map("qresult_qtest_id")
+  attemptNumber    Int?               @map("qresult_attempt_number")
   total            Int                @map("qresult_total")
   attempt          Int                @map("qresult_attempt")
   skip             Int                @map("qresult_skip")
@@ -856,6 +861,9 @@ model ExamResult {
   ratting          String?            @map("qresult_ratting")
   solution         String?            @map("qresult_solution")
   created_at       DateTime?          @map("qresult_created_date")
+  startedAt        DateTime?          @map("qresult_started_at")
+  submittedAt      DateTime?          @map("qresult_submitted_at")
+  inProgress       Boolean?           @map("qresult_in_progress")
   status           Boolean?           @map("qresult_status")
   examResultDetail ExamResultDetail[]
 
@@ -1806,6 +1814,11 @@ model LiveCoursePlan {
   duration      Int // ⚠ MONTHS (not DAYS) — see LIVE_COURSE_DESIGN §3
   price         Int
   originalPrice Int?      @map("original_price")
+  // Per-plan material variant (mirrors PackageCourseEbookPrice.withMaterial):
+  // withMaterial=true → plan ships physical material; materialPrice is the
+  // material portion of the price (informational, like the course flow).
+  withMaterial  Boolean   @default(false) @map("with_material")
+  materialPrice Int?      @map("material_price")
   isDefault     Boolean   @default(false) @map("is_default")
   status        Boolean   @default(true)
   createdAt     DateTime? @map("created_at")
@@ -1830,6 +1843,11 @@ model LiveCourseSubscription {
   razorpayOrderId   String?   @map("razorpay_order_id")
   razorpayPaymentId String?   @map("razorpay_payment_id")
   paidAt            DateTime? @map("paid_at")
+  // Material fulfillment (lightweight, mirrors Mongo LiveCourseSubscription):
+  // withMaterial marks a shipping order; customerShippingId is the chosen
+  // delivery address (ws_customer_address.id).
+  withMaterial       Boolean   @default(false) @map("with_material")
+  customerShippingId Int?      @map("customer_shipping_id")
   createdAt         DateTime? @map("created_at")
   updatedAt         DateTime? @map("updated_at")
 

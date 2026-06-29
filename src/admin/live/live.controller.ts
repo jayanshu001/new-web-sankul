@@ -1424,6 +1424,124 @@ export const updateRecordingWebhook = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/admin/live-sessions/:id/recording-health
+// Read-only end-to-end diagnostic of the Streamos recording pipeline for one
+// session: config → webhook registration → session state → whether Streamos
+// actually holds the recording. Returns a per-check pass/warn/fail report so an
+// admin can tell whether "Waiting for Streamos webhook" is normal (still
+// processing) or a real wiring problem — without trawling logs by hand.
+export const getRecordingHealth = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("getRecordingHealth invoked", { traceId, sessionId: req.params.id, userId: req.user?.id });
+
+  try {
+    const id = String(req.params.id ?? "");
+
+    // Normalize the session snapshot across the MySQL / Mongo branches.
+    let snap: { status: string; streamId: string | null; recordingsOnSession: number } | null = null;
+    if (isAdminLiveMysql()) {
+      const row = await adminLiveSql.findSessionByAnyId(id);
+      if (row) snap = { status: String(row.status), streamId: row.streamId ?? null, recordingsOnSession: adminLiveSql.toPublicView(row, []).recordings.length };
+    } else {
+      const session = await findSessionByAnyId(id);
+      if (session) snap = { status: String(session.status), streamId: session.streamId ?? null, recordingsOnSession: session.recordings?.length ?? 0 };
+    }
+    if (!snap) return failure(res, "Live session not found.", 404);
+
+    type Check = { key: string; label: string; status: "ok" | "warn" | "fail" | "info"; detail: string };
+    const checks: Check[] = [];
+
+    // 1) Webhook shared secret configured.
+    const secretSet = STREAMOS_WEBHOOK_SECRET.length > 0;
+    checks.push({
+      key: "webhookSecret",
+      label: "Webhook secret (STREAMOS_WEBHOOK_SECRET)",
+      status: secretSet ? "ok" : "warn",
+      detail: secretSet ? "Configured." : "Not set — the public webhook is accepted unauthenticated. Set it in production.",
+    });
+
+    // 2) Streamos credentials + 3) webhook registration (orgDetails proves both).
+    let webhook: { registeredUrl: string | null; pathOk: boolean; hasKeyParam: boolean } = { registeredUrl: null, pathOk: false, hasKeyParam: false };
+    try {
+      const org = await streamosGetOrgDetails();
+      checks.push({ key: "streamosCreds", label: "Streamos credentials", status: "ok", detail: `Connected to org "${org.name ?? "unknown"}".` });
+
+      const url = org.recordingWebhook ?? "";
+      const pathOk = url.includes("/client/webhook/recording");
+      const hasKeyParam = /[?&]key=/.test(url);
+      webhook = { registeredUrl: url || null, pathOk, hasKeyParam };
+
+      let regStatus: Check["status"] = "ok";
+      let detail = `Registered: ${url}`;
+      if (!url) {
+        regStatus = "fail";
+        detail = "No recording webhook registered — Streamos has nowhere to deliver recordings. Register via POST /admin/live-sessions/streamos/webhook.";
+      } else if (!pathOk) {
+        regStatus = "warn";
+        detail = `Registered URL does not point at /client/webhook/recording: ${url}`;
+      } else if (secretSet && !hasKeyParam) {
+        regStatus = "warn";
+        detail = `Registered without a ?key= but STREAMOS_WEBHOOK_SECRET is set — Streamos callbacks will be 401-rejected: ${url}`;
+      }
+      checks.push({ key: "webhookRegistered", label: "Recording webhook registered on Streamos", status: regStatus, detail });
+    } catch (err) {
+      const msg = err instanceof StreamosError ? err.message : getErrorMessage(err);
+      checks.push({ key: "streamosCreds", label: "Streamos credentials", status: "fail", detail: msg });
+      checks.push({ key: "webhookRegistered", label: "Recording webhook registered on Streamos", status: "fail", detail: "Skipped — could not reach Streamos." });
+    }
+
+    // 4) Session state (informational).
+    checks.push({
+      key: "sessionState",
+      label: "Session state",
+      status: "info",
+      detail: `status=${snap.status}, streamId=${snap.streamId ?? "none"}, recordingsOnSession=${snap.recordingsOnSession}`,
+    });
+
+    // 5) Does Streamos actually hold the recording for this stream?
+    let streamos: { reachable: boolean; isLive?: boolean; recordingsOnStreamos?: number; error?: string } = { reachable: false };
+    if (!snap.streamId) {
+      checks.push({ key: "recordingDelivery", label: "Recording delivery", status: "warn", detail: "Session has no streamId — it was never created on Streamos." });
+    } else {
+      try {
+        const details = await streamosGetStreamDetails(snap.streamId);
+        streamos = { reachable: true, isLive: details.isLive, recordingsOnStreamos: details.recordings.length };
+        if (details.isLive) {
+          checks.push({ key: "recordingDelivery", label: "Recording delivery", status: "info", detail: "Stream is still LIVE — recordings are produced after it ends." });
+        } else if (details.recordings.length === 0) {
+          checks.push({ key: "recordingDelivery", label: "Recording delivery", status: snap.status === "READY" ? "ok" : "warn", detail: "No recording on Streamos yet — still processing, or the stream was too short / not recorded." });
+        } else if (snap.recordingsOnSession === 0) {
+          checks.push({ key: "recordingDelivery", label: "Recording delivery", status: "warn", detail: `Streamos has ${details.recordings.length} recording(s) but they are not on the session — the webhook was missed. Open/reload the session to trigger the recovery sync.` });
+        } else {
+          checks.push({ key: "recordingDelivery", label: "Recording delivery", status: "ok", detail: "Recording present on both Streamos and the session." });
+        }
+      } catch (err) {
+        const msg = err instanceof StreamosError ? err.message : getErrorMessage(err);
+        streamos = { reachable: false, error: msg };
+        checks.push({ key: "recordingDelivery", label: "Recording delivery", status: "fail", detail: `Could not query Streamos for this stream: ${msg}` });
+      }
+    }
+
+    const hasFail = checks.some((c) => c.status === "fail");
+    const hasWarn = checks.some((c) => c.status === "warn");
+    const overall: "ok" | "warn" | "fail" = hasFail ? "fail" : hasWarn ? "warn" : "ok";
+    const summary =
+      overall === "ok" ? "Recording pipeline looks healthy."
+      : overall === "warn" ? "Pipeline is wired but something needs attention — see checks."
+      : "Recording pipeline has a blocking problem — see checks.";
+    const recommendations = checks.filter((c) => c.status === "warn" || c.status === "fail").map((c) => `${c.label}: ${c.detail}`);
+
+    return success(
+      res,
+      { sessionId: id, session: snap, webhook, streamos, checks, verdict: { overall, summary, recommendations } },
+      "Recording health computed."
+    );
+  } catch (err) {
+    logger.error("getRecordingHealth failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to compute recording health.", 500);
+  }
+};
+
 // POST /api/v1/client/webhook/recording  (public — called by Streamos)
 // Authenticated via the STREAMOS_WEBHOOK_SECRET shared secret, passed either
 // as `?key=` on the URL or in the `x-webhook-secret` header. Without this an

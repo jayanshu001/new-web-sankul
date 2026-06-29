@@ -19,6 +19,7 @@
 import { isMysqlModule } from "../../config/migration";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { commerceOrderRepository as repo } from "./commerce-order.repository";
+import type { MaterialFulfillment } from "./commerce-order.repository";
 import {
   toCourseOrderRow,
   toVerifiedCourseSubscriptionDto,
@@ -48,6 +49,35 @@ export const parseCommerceOrderId = (id: string): number | null => {
 };
 
 /**
+ * Split the paid amount into the digital course portion and the physical material
+ * portion (PC_MATERIAL_SUBSCRIPTION_FLOW). Mirrors the legacy V1 logic, which —
+ * across all three discount branches — reduces to the same shape once the order
+ * already carries the post-discount paid amount:
+ *
+ *   courseAmount   = max(paidAmount − materialPrice, 0)   // digital portion
+ *   materialAmount = paidAmount − courseAmount            // residual (physical)
+ *
+ * Keeping materialAmount as the residual guarantees courseAmount + materialAmount
+ * stays exactly equal to what the customer paid. With no material, courseAmount is
+ * the full amount and materialAmount is null. The clamp at 0 (rather than the
+ * legacy `minimumAmount.course` floor, which has no constant in this codebase)
+ * just prevents a negative digital portion when a heavy promo drops the paid
+ * amount below the plan's materialPrice. `pcMaterialId` is filled in by the caller.
+ */
+const computeMaterialSplit = (
+  paidAmount: number,
+  plan: { withMaterial?: boolean | null; materialPrice?: number | null } | null
+): Omit<MaterialFulfillment, "pcMaterialId"> => {
+  if (!plan?.withMaterial) {
+    return { courseAmount: paidAmount, materialAmount: null, withMaterial: false };
+  }
+  const materialPrice = plan.materialPrice ?? 0;
+  const courseAmount = Math.max(paidAmount - materialPrice, 0);
+  const materialAmount = paidAmount - courseAmount;
+  return { courseAmount, materialAmount, withMaterial: true };
+};
+
+/**
  * Read an active COURSE plan for create-order: returns {courseId, duration,
  * price} or null if the plan doesn't exist / isn't a course plan / is free.
  * (The plan's status isn't on this select; commerce-price owns active-status
@@ -74,8 +104,11 @@ export const createCourseOrderMysql = async (input: {
   planId: number;
   price: number;
   razorpayOrderId: string;
+  // Delivery address for "With Materials" plans; persisted on the order row so
+  // verify can stamp it onto the fulfilled subscription. Null for digital-only.
+  customerShippingId?: number | null;
 }): Promise<CreatedCourseOrder> => {
-  const order = await repo.createPendingOrder(input);
+  const order = await repo.createPendingOrder({ ...input, shippingId: input.customerShippingId ?? null });
   return { orderId: order.id };
 };
 
@@ -144,6 +177,16 @@ export const verifyCourseOrderMysql = async (
   const customerId = Number(order.customerIdStr);
   const amount = order.amount ?? 0;
 
+  // Physical-material split + kit resolution (PC_MATERIAL_SUBSCRIPTION_FLOW). The
+  // material portion/kit are only meaningful on a fresh grant — the extend path
+  // just folds window + amount onto an existing row — but we resolve once and pass
+  // through so the tx input is uniform. pcMaterialId is copied from the COURSE.
+  const split = computeMaterialSplit(amount, plan);
+  const pcMaterialId = split.withMaterial
+    ? await repo.findCoursePcMaterialId(courseId)
+    : null;
+  const material: MaterialFulfillment = { ...split, pcMaterialId };
+
   // Upsert-extend: fold onto an existing active verified course subscription.
   const existingActive = await repo.findActiveCourseSub(
     customerId,
@@ -168,6 +211,7 @@ export const verifyCourseOrderMysql = async (
       planId: order.planId,
       amount,
       now,
+      material,
       extend: {
         existingSubId: existingActive.id,
         newEndAt,
@@ -188,6 +232,7 @@ export const verifyCourseOrderMysql = async (
     planId: order.planId,
     amount,
     now,
+    material,
     fresh: { startAt, endAt },
   });
   return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
@@ -213,8 +258,9 @@ export const createPackageOrderMysql = async (input: {
   planId: number;
   price: number;
   razorpayOrderId: string;
+  customerShippingId?: number | null;
 }): Promise<CreatedCourseOrder> => {
-  const order = await repo.createPendingOrder(input);
+  const order = await repo.createPendingOrder({ ...input, shippingId: input.customerShippingId ?? null });
   return { orderId: order.id };
 };
 
@@ -252,12 +298,20 @@ export const verifyPackageOrderMysql = async (
   const customerId = Number(order.customerIdStr);
   const amount = order.amount ?? 0;
 
+  // Physical-material split + kit resolution (PC_MATERIAL_SUBSCRIPTION_FLOW).
+  // pcMaterialId is copied from the PACKAGE. See verifyCourseOrderMysql for notes.
+  const split = computeMaterialSplit(amount, plan);
+  const pcMaterialId = split.withMaterial
+    ? await repo.findPackagePcMaterialId(packageId)
+    : null;
+  const material: MaterialFulfillment = { ...split, pcMaterialId };
+
   const existingActive = await repo.findActivePackageSub(customerId, packageId, null, now);
   if (existingActive) {
     const newEndAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
     const prevAmount = existingActive.amount ? Number(existingActive.amount.toString()) : 0;
     const result = await repo.verifyPackageTx({
-      orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now,
+      orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now, material,
       extend: { existingSubId: existingActive.id, newEndAt, newAmount: prevAmount + amount },
     });
     return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
@@ -266,7 +320,7 @@ export const verifyPackageOrderMysql = async (
   const startAt = now;
   const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
   const result = await repo.verifyPackageTx({
-    orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now,
+    orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now, material,
     fresh: { startAt, endAt },
   });
   return toVerifiedCourseSubscriptionDto(result.order, result.subscription);

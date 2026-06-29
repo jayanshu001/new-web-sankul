@@ -27,6 +27,62 @@ export const parsePcId = (id: string): number | null => {
 export const APPLIES_TO_TYPES = ["package", "course", "liveCourse", "ebook", "testSeries"] as const;
 export type AppliesToType = (typeof APPLIES_TO_TYPES)[number];
 
+// A normalized appliesTo group: one entity type + its int ids.
+export type AppliesGroup = { type: AppliesToType; ids: number[] };
+
+/**
+ * Read a promo row's appliesTo as normalized groups, handling BOTH shapes:
+ *  - legacy single-type: appliesToType="package", appliesToIds=[1,2,3]
+ *  - multi-type:         appliesToType="mixed",   appliesToIds=[{type,ids},…]
+ * Single source of truth used by promoCovers / detail / validPlans so a
+ * mixed-type promocode behaves identically to a single-type one everywhere.
+ */
+export const appliesToGroups = (r: { appliesToType: string | null; appliesToIds: any }): AppliesGroup[] => {
+  if (r.appliesToType === "mixed") {
+    const arr = Array.isArray(r.appliesToIds) ? r.appliesToIds : [];
+    const out: AppliesGroup[] = [];
+    for (const g of arr) {
+      const t = (g as any)?.type;
+      if (!APPLIES_TO_TYPES.includes(t)) continue;
+      const ids = parseIdArray((g as any)?.ids);
+      if (ids.length) out.push({ type: t, ids });
+    }
+    return out;
+  }
+  if (r.appliesToType && (APPLIES_TO_TYPES as readonly string[]).includes(r.appliesToType)) {
+    const ids = parseIdArray(r.appliesToIds);
+    return ids.length ? [{ type: r.appliesToType as AppliesToType, ids }] : [];
+  }
+  return [];
+};
+
+/**
+ * Convert groups → the stored columns. A SINGLE group is stored in the legacy
+ * shape (appliesToType + flat int[]) so existing readers/rows stay compatible;
+ * MULTIPLE groups use appliesToType="mixed" + appliesToIds=[{type,ids},…].
+ */
+const toAppliesToStorage = (groups: AppliesGroup[]): { appliesToType: string; appliesToIds: any } => {
+  if (groups.length === 1) {
+    return { appliesToType: groups[0].type, appliesToIds: parseIdArray(groups[0].ids) };
+  }
+  return { appliesToType: "mixed", appliesToIds: groups.map((g) => ({ type: g.type, ids: parseIdArray(g.ids) })) };
+};
+
+/** Validate every group's ids exist; throws {__badRequest} on mismatch. */
+export const assertAppliesToGroupsExistSql = async (groups: AppliesGroup[]): Promise<void> => {
+  if (!groups.length) throw badRequest("Select at least one item");
+  for (const g of groups) await assertAppliesToExistsSql(g.type, g.ids);
+};
+
+/** Raw appliesTo groups for a promo id (effective value when updating plans). */
+export const getAppliesToGroupsById = async (id: number): Promise<AppliesGroup[]> => {
+  const row = await prisma.promoCodeRule.findUnique({
+    where: { id },
+    select: { appliesToType: true, appliesToIds: true },
+  });
+  return row ? appliesToGroups(row) : [];
+};
+
 /** Coerce a stored JSON column (int[] | string[] | null) to a clean int[]. */
 export const parseIdArray = (json: any): number[] => {
   const a = Array.isArray(json) ? json : [];
@@ -149,26 +205,33 @@ const baseDto = (r: any) => ({
   updatedAt: r.updatedAt ?? null,
 });
 
-/** List DTO — appliesTo summarised to `{ type, count }`. */
+/** List DTO — appliesTo summarised to `{ type, count }` (type="mixed" for multi). */
 const listDto = (r: any) => {
-  const ids = parseIdArray(r.appliesToIds);
+  const groups = appliesToGroups(r);
+  const count = groups.reduce((n, g) => n + g.ids.length, 0);
+  const type = groups.length === 0 ? null : groups.length === 1 ? groups[0].type : "mixed";
   return {
     ...baseDto(r),
-    appliesTo: r.appliesToType ? { type: r.appliesToType, count: ids.length } : null,
+    appliesTo: type ? { type, count } : null,
   };
 };
 
-/** Detail DTO — appliesTo populated to `{ type, ids: [{_id,name,image}] }`. */
+/**
+ * Detail DTO — appliesTo as an ARRAY of populated groups:
+ *   [{ type, ids: [{_id,name,image}] }, …]
+ * (one element for single-type, N for multi-type). The FE rebuilds the per-type
+ * selection from this; the per-plan grid is rebuilt from loadPlanLinksSql.
+ */
 const detailDto = async (r: any) => {
   const dto: any = baseDto(r);
-  const type = r.appliesToType as AppliesToType | null;
-  const ids = parseIdArray(r.appliesToIds);
-  if (type && ids.length) {
-    const refs = await resolveAppliesToRefs(type, ids);
-    dto.appliesTo = { type, ids: refs };
-  } else {
-    dto.appliesTo = type ? { type, ids: [] } : null;
+  const groups = appliesToGroups(r);
+  if (!groups.length) {
+    dto.appliesTo = null;
+    return dto;
   }
+  dto.appliesTo = await Promise.all(
+    groups.map(async (g) => ({ type: g.type, ids: await resolveAppliesToRefs(g.type, g.ids) }))
+  );
   return dto;
 };
 
@@ -222,12 +285,14 @@ export const listPromocodes = async (opts: {
  * first to mirror the Mongo `.sort({ createdAt: -1 })`.
  */
 export const listPromocodesForPackage = async (packageId: number) => {
+  // Include both single-type "package" rows and multi-type "mixed" rows; the
+  // package match is resolved via appliesToGroups so mixed codes are not missed.
   const rows = await prisma.promoCodeRule.findMany({
-    where: { appliesToType: "package" },
+    where: { appliesToType: { in: ["package", "mixed"] } },
     orderBy: { createdAt: "desc" },
   });
   return rows
-    .filter((r) => parseIdArray(r.appliesToIds).includes(packageId))
+    .filter((r) => appliesToGroups(r).some((g) => g.type === "package" && g.ids.includes(packageId)))
     .map(listDto);
 };
 
@@ -250,13 +315,14 @@ export const createPromocode = async (input: {
   discountType: "flat" | "percentage";
   discountValue: number;
   promoterId: number | null;
-  appliesTo: { type: AppliesToType; ids: number[] };
+  appliesTo: AppliesGroup[];
 }) => {
   const code = input.promocode.toUpperCase();
   const dup = await prisma.promoCodeRule.findFirst({ where: { promocode: code } });
   if (dup) return { conflict: true as const };
 
-  await assertAppliesToExistsSql(input.appliesTo.type, input.appliesTo.ids);
+  await assertAppliesToGroupsExistSql(input.appliesTo);
+  const storage = toAppliesToStorage(input.appliesTo);
 
   const now = new Date();
   const row = await prisma.promoCodeRule.create({
@@ -271,8 +337,8 @@ export const createPromocode = async (input: {
       discountType: input.discountType,
       discountValue: input.discountValue,
       promoterId: input.promoterId,
-      appliesToType: input.appliesTo.type,
-      appliesToIds: parseIdArray(input.appliesTo.ids),
+      appliesToType: storage.appliesToType,
+      appliesToIds: storage.appliesToIds,
       createdAt: now,
       updatedAt: now,
     },
@@ -293,7 +359,7 @@ export const updatePromocode = async (
     discountType: "flat" | "percentage";
     discountValue: number;
     promoterId: number | null;
-    appliesTo: { type: AppliesToType; ids: number[] };
+    appliesTo: AppliesGroup[];
   }>
 ) => {
   const existing = await prisma.promoCodeRule.findUnique({ where: { id }, select: { id: true } });
@@ -318,9 +384,10 @@ export const updatePromocode = async (
   if (input.discountValue !== undefined) data.discountValue = input.discountValue;
   if (input.promoterId !== undefined) data.promoterId = input.promoterId;
   if (input.appliesTo !== undefined) {
-    await assertAppliesToExistsSql(input.appliesTo.type, input.appliesTo.ids);
-    data.appliesToType = input.appliesTo.type;
-    data.appliesToIds = parseIdArray(input.appliesTo.ids);
+    await assertAppliesToGroupsExistSql(input.appliesTo);
+    const storage = toAppliesToStorage(input.appliesTo);
+    data.appliesToType = storage.appliesToType;
+    data.appliesToIds = storage.appliesToIds;
   }
 
   const row = await prisma.promoCodeRule.update({ where: { id }, data });
@@ -396,11 +463,17 @@ export const listPublicPromocodes = async (opts: {
   // small set, so the in-memory id filter keeps pagination totals exact without
   // a JSON query. Mirrors `listPromocodesForPackage`.
   if (opts.appliesTo) {
+    // Include single-type rows of this type AND multi-type ("mixed") rows; the
+    // coverage match is resolved via appliesToGroups so mixed codes that cover
+    // this entity are not missed (they were before — type "mixed" + the
+    // [{type,ids}] JSON failed both the type filter and parseIdArray).
     const rows = await prisma.promoCodeRule.findMany({
-      where: { ...baseWhere, appliesToType: opts.appliesTo.type },
+      where: { ...baseWhere, appliesToType: { in: [opts.appliesTo.type, "mixed"] } },
       orderBy: { promoExpireAt: "asc" },
     });
-    const covered = rows.filter((r) => parseIdArray(r.appliesToIds).includes(opts.appliesTo!.id));
+    const covered = rows.filter((r) =>
+      appliesToGroups(r).some((g) => g.type === opts.appliesTo!.type && g.ids.includes(opts.appliesTo!.id))
+    );
     const total = covered.length;
     const pageRows = covered.slice(opts.skip, opts.skip + opts.limitNum);
     return {
@@ -467,10 +540,10 @@ export const findActiveByCode = async (code: string) => {
 export const promoCovers = (
   promo: { appliesToType: string | null; appliesToIds: any },
   context: { type: AppliesToType; id: number }
-): boolean => {
-  if (!promo.appliesToType || promo.appliesToType !== context.type) return false;
-  return parseIdArray(promo.appliesToIds).includes(context.id);
-};
+): boolean =>
+  // Covered if ANY appliesTo group matches the context type + id. Handles both
+  // single-type and multi-type ("mixed") promocodes via appliesToGroups.
+  appliesToGroups(promo).some((g) => g.type === context.type && g.ids.includes(context.id));
 
 /**
  * Detect what a SQL int id ACTUALLY is (package / course / ebook), mirroring the
@@ -867,6 +940,49 @@ export const loadPlanDiscountsSql = async (
 };
 
 /**
+ * Per-plan customerPercentage for TEST-SERIES price links (planKind
+ * "testSeriesPrice"). Mirror of loadPlanDiscountsSql, but scoped to test-series
+ * plans (which loadPlanDiscountsSql intentionally skips). Returns
+ * Map<testSeriesPriceId, percentage>.
+ */
+export const loadTestSeriesPlanDiscountsSql = async (
+  promocodeId: number
+): Promise<Map<number, number>> => {
+  const links = await prisma.promotedPackageCourseEbook.findMany({
+    where: { promocodeId },
+    select: { planId: true, planKind: true, customerPercentage: true },
+  });
+  const map = new Map<number, number>();
+  for (const l of links) {
+    if (l.planId == null) continue;
+    if (l.planKind !== "testSeriesPrice") continue;
+    map.set(l.planId, Number(l.customerPercentage ?? 0));
+  }
+  return map;
+};
+
+/**
+ * Per-plan customerPercentage for LIVE-COURSE plan links (planKind "livePlan").
+ * Mirror of loadTestSeriesPlanDiscountsSql for the live-course endpoint.
+ * Returns Map<liveCoursePlanId, percentage>.
+ */
+export const loadLivePlanDiscountsSql = async (
+  promocodeId: number
+): Promise<Map<number, number>> => {
+  const links = await prisma.promotedPackageCourseEbook.findMany({
+    where: { promocodeId },
+    select: { planId: true, planKind: true, customerPercentage: true },
+  });
+  const map = new Map<number, number>();
+  for (const l of links) {
+    if (l.planId == null) continue;
+    if (l.planKind !== "livePlan") continue;
+    map.set(l.planId, Number(l.customerPercentage ?? 0));
+  }
+  return map;
+};
+
+/**
  * All-SQL promo resolution for the payment/checkout flow — the SQL counterpart
  * of `client/live-course/promo.resolveLivePromo` (which is Mongo-only and breaks
  * when Mongo isn't connected). Validates the code, enforces entity-level + per-
@@ -1089,4 +1205,22 @@ export const resolveValidPlansSql = async (
 ): Promise<Map<number, ResolvedPlanSql>> => {
   const resolved = await loadPlansForEntitiesSql(type, entityIds);
   return new Map(resolved.map((p) => [p.id, p]));
+};
+
+/**
+ * Resolve validPlans across MULTIPLE appliesTo groups (multi-type promocodes) —
+ * the union of every group's plans, keyed by planId. This is what lets
+ * syncPlanLinksSql keep links spanning Test Series + Packages + Courses + … at
+ * once: a plan is valid (kept) iff it belongs to ANY referenced entity, so the
+ * replace-delete only drops links absent from the full multi-type plans[].
+ */
+export const resolveValidPlansMultiSql = async (
+  groups: AppliesGroup[]
+): Promise<Map<number, ResolvedPlanSql>> => {
+  const map = new Map<number, ResolvedPlanSql>();
+  for (const g of groups) {
+    const resolved = await loadPlansForEntitiesSql(g.type, g.ids);
+    for (const p of resolved) map.set(p.id, p);
+  }
+  return map;
 };

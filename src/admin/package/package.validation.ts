@@ -27,6 +27,10 @@ export const createPackageSchema = z.object({
   examCountdownIds: z.array(z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id")).optional(),
   packageCategoryId: z.string().nullable().optional(),
   educatorId: z.string().nullable().optional(),
+  // Physical-material kit (PackageCourseMaterial). Accepts a 24-hex Mongo
+  // ObjectId OR a numeric MySQL id (shared schema, like examCountdownIds). null
+  // detaches. Copied onto the subscription's pc_material_id at payment-verify.
+  pcMaterialId: z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id").nullable().optional(),
   specificSubjects: z.array(categoryRefSchema).optional(),
   materialCategories: z.array(categoryRefSchema).optional(),
   examCategories: z.array(categoryRefSchema).optional(),

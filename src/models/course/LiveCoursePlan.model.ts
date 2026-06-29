@@ -6,6 +6,10 @@ export interface ILiveCoursePlan extends Document {
   duration: number; // DAYS (validity window length); endAt = startAt + duration days
   price: number;          // the amount actually charged
   originalPrice?: number; // MRP / pre-discount price, for the strikethrough UI
+  // Per-plan material variant (mirrors Course/Package plans). withMaterial=true
+  // → this plan ships physical material; materialPrice is the material portion.
+  withMaterial?: boolean;
+  materialPrice?: number | null;
   isDefault: boolean;
   status: boolean;
   createdAt: Date;
@@ -21,6 +25,8 @@ const liveCoursePlanSchema: Schema = new Schema(
     // MRP shown struck-through next to `price`. Optional; when unset or <= price
     // the UI simply shows no discount.
     originalPrice: { type: Number, default: null, min: 0 },
+    withMaterial:  { type: Boolean, default: false },
+    materialPrice: { type: Number, default: null, min: 0 },
     isDefault:     { type: Boolean, default: false },
     status:       { type: Boolean, default: true },
   },

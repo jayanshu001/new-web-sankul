@@ -22,7 +22,7 @@ import { computeDaysLeft } from "../../utils/planDuration";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
 import { listActivePricesByPackage } from "../commerce-price/commerce-price.service";
 import { getActivePackageSubscription } from "../commerce-subscription/commerce-subscription.service";
-import { parseIdArray } from "../promo-code/promo-code.service";
+import { appliesToGroups } from "../promo-code/promo-code.service";
 
 const descendantIds = async (table: string, parentCol: string, rootId: number): Promise<number[]> => {
   const rows = await prisma.$queryRawUnsafe<{ id: number }[]>(
@@ -105,11 +105,13 @@ const splitPlans = async (packageId: number) => {
 const availablePromo = async (packageId: number) => {
   const now = new Date();
   const rows = await prisma.promoCodeRule.findMany({
-    where: { type: "public", status: true, promoStartAt: { lte: now }, promoExpireAt: { gte: now }, appliesToType: "package" },
-    select: { promocode: true, title: true, description: true, appliesToIds: true },
+    // Single-type "package" rows + multi-type "mixed" rows; coverage resolved
+    // via appliesToGroups so mixed codes covering this package are included.
+    where: { type: "public", status: true, promoStartAt: { lte: now }, promoExpireAt: { gte: now }, appliesToType: { in: ["package", "mixed"] } },
+    select: { promocode: true, title: true, description: true, appliesToType: true, appliesToIds: true },
   });
   return rows
-    .filter((r) => parseIdArray(r.appliesToIds).includes(packageId))
+    .filter((r) => appliesToGroups(r).some((g) => g.type === "package" && g.ids.includes(packageId)))
     .map((c) => ({ title: c.title ?? "", promocode: c.promocode, description: c.description ?? "" }));
 };
 

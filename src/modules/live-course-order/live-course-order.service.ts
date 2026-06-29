@@ -13,8 +13,10 @@ import { computeEndAt, extendEndAt } from "../../utils/planDuration";
  * ⚠ plan.duration is DAYS (per the live-course controllers + admin-live-course
  * grant — computeEndAt asDays:true). The schema comment saying MONTHS is stale;
  * DAYS is the shipped precedent. See [[project_plan_duration_unit]].
- * ⚠ withMaterial / customerShippingId are Mongo-only extras (no SQL column) — the
- * SQL row omits them; the controller still validates the address against Mongo.
+ * withMaterial / customerShippingId are now persisted on the SQL subscription
+ * (ws_live_course_subscription.with_material / customer_shipping_id). withMaterial
+ * is derived from the selected plan's flag; customerShippingId is the delivery
+ * address chosen at checkout (validated for ownership in the controller).
  */
 export const LIVE_COURSE_ORDER_MODULE = "live-course-order";
 export const isLiveCourseOrderMysql = (): boolean => isMysqlModule(LIVE_COURSE_ORDER_MODULE);
@@ -54,14 +56,31 @@ const toVerifyDto = (s: any): LiveCourseVerifyDto => ({
 /** Read a live-course plan for create-order. Returns null if missing/zero-price. */
 export const findLiveCoursePlanForOrder = async (
   planId: number
-): Promise<{ liveCourseId: number; price: number; duration: number } | null> => {
+): Promise<{ liveCourseId: number; price: number; duration: number; withMaterial: boolean; materialPrice: number | null } | null> => {
   const plan = await prisma.liveCoursePlan.findFirst({
     where: { id: planId, status: true },
-    select: { liveCourseId: true, price: true, duration: true },
+    select: { liveCourseId: true, price: true, duration: true, withMaterial: true, materialPrice: true },
   });
   if (!plan || !plan.price || plan.price <= 0) return null;
-  return { liveCourseId: plan.liveCourseId, price: plan.price, duration: plan.duration ?? 0 };
+  return {
+    liveCourseId: plan.liveCourseId,
+    price: plan.price,
+    duration: plan.duration ?? 0,
+    withMaterial: !!plan.withMaterial,
+    materialPrice: plan.materialPrice ?? null,
+  };
 };
+
+/** Minimal live-course lookup (id + name) for SQL order responses. */
+export const findLiveCourse = (id: number) =>
+  prisma.liveCourse.findFirst({ where: { id }, select: { id: true, name: true } });
+
+/** All active pricing plans for a live course (apply-promo plan list). */
+export const listPlansForLiveCourse = (liveCourseId: number) =>
+  prisma.liveCoursePlan.findMany({
+    where: { liveCourseId, status: true },
+    orderBy: [{ isDefault: "desc" }, { price: "asc" }, { id: "asc" }],
+  });
 
 /**
  * Create a pending live-course subscription row + return its id. The razorpay
@@ -76,6 +95,8 @@ export const createLiveCourseOrderMysql = async (input: {
   promocodeId?: number | null;
   originalAmount?: number | null;
   discountAmount?: number | null;
+  withMaterial?: boolean;
+  customerShippingId?: number | null;
   now: Date;
 }): Promise<{ subscriptionId: number }> => {
   const sub = await prisma.liveCourseSubscription.create({
@@ -89,6 +110,8 @@ export const createLiveCourseOrderMysql = async (input: {
       promocodeId: input.promocodeId ?? null,
       paymentStatus: "pending",
       status: true,
+      withMaterial: !!input.withMaterial,
+      customerShippingId: input.customerShippingId ?? null,
       razorpayOrderId: input.razorpayOrderId,
       createdAt: input.now,
       updatedAt: input.now,

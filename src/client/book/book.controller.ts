@@ -24,6 +24,10 @@ import {
 import {
   getActiveCartState,
   getPurchasedBookIdSet,
+  isBookOrderMysql,
+  parseBookOrderId,
+  getOrderTrackingMysql,
+  getOrderTrackingLiveMysql,
 } from "../../modules/book-order/book-order.service";
 import {
   isClientTrendingMysql,
@@ -609,7 +613,9 @@ export const getMyOrderInvoice = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    // Accept a SQL int order id (MySQL id-space) OR a Mongo ObjectId; the
+    // receipt builder branches on isMysqlModule and re-validates ownership.
+    if (!mongoose.Types.ObjectId.isValid(id) && !/^[1-9][0-9]*$/.test(id)) {
       logger.warn("getMyOrderInvoice invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid order id." });
     }
@@ -684,6 +690,17 @@ export const getMyOrderTracking = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    // ─── SQL branch ───
+    if (isBookOrderMysql()) {
+      const oid = parseBookOrderId(id);
+      const cid = parseBookOrderId(String(customerId));
+      if (oid == null || cid == null) return res.status(400).json({ success: false, message: "Invalid order id." });
+      const data = await getOrderTrackingMysql(oid, cid);
+      if (!data) return res.status(404).json({ success: false, message: "Order not found." });
+      return res.status(200).json({ success: true, data: { ...data, trackingUrl: buildTrackingUrl(data.awb ?? undefined) } });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid order id." });
     }
@@ -752,6 +769,29 @@ export const getMyOrderTrackingLive = async (req: Request, res: Response) => {
 
   try {
     if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
+
+    // ─── SQL branch ───
+    if (isBookOrderMysql()) {
+      const oid = parseBookOrderId(id);
+      const cid = parseBookOrderId(String(customerId));
+      if (oid == null || cid == null) return res.status(400).json({ success: false, message: "Invalid order id." });
+      const sqlOrder = await getOrderTrackingLiveMysql(oid, cid);
+      if (!sqlOrder) return res.status(404).json({ success: false, message: "Order not found." });
+      if (sqlOrder.status === BookOrderStatus.PENDING) return res.status(409).json({ success: false, message: "Order not yet verified." });
+      if (!sqlOrder.trackingId) return res.status(404).json({ success: false, message: "Tracking not available yet." });
+      const awb = sqlOrder.trackingId; // number (BigInt→number in the service)
+      if (awb < COURIER.TIRUPATI.INITIAL_Number) {
+        return res.status(422).json({
+          success: false,
+          message: "Live tracking is not available for this carrier. Use trackingUrl instead.",
+          data: { trackingUrl: buildTrackingUrl(awb) },
+        });
+      }
+      const awbData = await fetchLiveAWBData(awb);
+      logger.info("getMyOrderTrackingLive success (sql)", { traceId, customerId, orderId: id });
+      return res.status(200).json({ success: true, data: awbData });
+    }
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ success: false, message: "Invalid order id." });
     }

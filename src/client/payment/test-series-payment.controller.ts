@@ -9,7 +9,8 @@ import {
   PaymentMethod,
 } from "../../models/enums";
 import { resolveLivePromo } from "../live-course/promo";
-import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
+import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadTestSeriesPlanDiscountsSql } from "../../modules/promo-code/promo-code.service";
+import { computePromoDiscount } from "../promocode/applies-to";
 import { _shared } from "../testSeries/testSeries.controller";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
@@ -43,17 +44,90 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
     if (!customerId) { logger.warn("applyTestSeriesPromo unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
     // ── MySQL test-series promo preview (test-series-order flag) ──────────────
+    // Returns the SAME shape as POST /client/promocodes/apply: the entity + ALL
+    // its pricing plans, each annotated with the per-plan offer (orginalPrice,
+    // price, offerAvailable, discountType, discountValue, offerPercentage).
     if (tsSql.isTestSeriesOrderMysql()) {
       const body = applyPromoSqlSchema.parse(req.body);
       const plan = await tsSql.findPlanForOrder(body.planId);
       if (!plan) return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
-      const { result, error } = await resolvePromoForPlanSql(body.promocode, plan.price, { type: "testSeries", id: plan.testSeriesId }, body.planId);
-      if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
-      const bd = _shared.computeBreakdown(plan.price, result.discountAmount, String(result.promo._id));
-      return res.status(200).json({ success: true, data: {
-        planId: String(plan.id), testSeriesId: String(plan.testSeriesId), promocode: result.promo.promocode,
-        promocodeId: String(result.promo._id), discountType: result.discountType, discountValue: result.discountValue, breakdown: bd,
-      }});
+      const testSeriesId = plan.testSeriesId;
+
+      const promo = await findActiveByCode(body.promocode);
+      if (!promo) return res.status(400).json({ success: false, message: "Invalid or expired promo code." });
+      if (!promoCovers(promo, { type: "testSeries", id: testSeriesId })) {
+        return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
+      }
+
+      const promoDiscountType = promo.discountType as "flat" | "percentage";
+      const promoDiscountValue = Number(promo.discountValue ?? 0);
+      // Per-plan links are authoritative; a plan with no link gets no discount.
+      // Legacy codes with NO links fall back to the global discountValue.
+      const planDiscounts = await loadTestSeriesPlanDiscountsSql(promo.id);
+      const hasLinks = planDiscounts.size > 0;
+      if (!hasLinks && !(promoDiscountValue > 0)) {
+        return res.status(400).json({ success: false, message: "This promocode has no discount configured." });
+      }
+
+      const rows = await tsSql.listPlansForSeries(testSeriesId);
+      let matchedAny = false;
+      const plans = rows.map((p: any) => {
+        const basePrice = Number(p.price);
+        const out: any = {
+          id: p.id,
+          testSeriesId: p.testSeriesId,
+          name: p.name ?? null,
+          duration: p.durationDays,
+          price: basePrice,
+          originalPrice: p.originalPrice != null ? Number(p.originalPrice) : null,
+          isDefault: p.isDefault,
+          status: p.status,
+          created_at: p.createdAt ?? null,
+          updated_at: p.updatedAt ?? null,
+          orginalPrice: basePrice,
+          offerAvailable: false,
+          discountType: promoDiscountType,
+          discountValue: 0,
+          offerPercentage: 0,
+        };
+        let dType: "flat" | "percentage";
+        let dValue: number;
+        if (hasLinks) {
+          const pct = planDiscounts.get(p.id);
+          if (pct == null) return out; // covered entity, but this plan has no link → no discount
+          dType = "percentage";
+          dValue = pct;
+        } else {
+          dType = promoDiscountType;
+          dValue = promoDiscountValue;
+        }
+        matchedAny = true;
+        out.offerAvailable = dValue > 0;
+        out.discountType = dType;
+        out.discountValue = dValue;
+        const discount = computePromoDiscount({ discountType: dType, discountValue: dValue }, basePrice);
+        if (dType === "percentage") out.offerPercentage = dValue;
+        out.price = Math.max(0, basePrice - discount);
+        return out;
+      });
+
+      if (hasLinks && !matchedAny) {
+        return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
+      }
+
+      logger.info("applyTestSeriesPromo success (sql)", { traceId, customerId, testSeriesId, promocode: body.promocode });
+      return res.status(200).json({
+        success: true,
+        data: {
+          _id: String(promo.id),
+          promocode: promo.promocode,
+          discountType: promoDiscountType,
+          discountValue: promoDiscountValue,
+          id: testSeriesId,
+          key: "testSeries",
+          plans: { withMaterial: [], withoutMaterial: plans },
+        },
+      });
     }
 
     const { planId, promocode } = applyPromoSchema.parse(req.body);

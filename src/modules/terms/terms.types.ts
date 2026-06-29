@@ -7,10 +7,13 @@
  *  - `module` is a fixed MySQL `enum('book','pendrive','referral code')` — the
  *    Prisma model types it loosely as `String`, but writes MUST use a legacy
  *    enum value or MySQL rejects the row (error 1265). Mirrors faq's `type` enum.
+ *    NOTE: `pendrive` is retired (no longer a product) — it's excluded from the
+ *    accepted API values below. The physical DB enum may still list it; we just
+ *    never accept/offer it. `book` and `referral code` remain.
  */
 
-/** Legacy MySQL `ws_termsandcondition.module` enum values. */
-export const TERMS_MODULES = ["book", "pendrive", "referral code"] as const;
+/** Accepted `ws_termsandcondition.module` values (pendrive retired). */
+export const TERMS_MODULES = ["book", "referral code"] as const;
 export type TermsModule = (typeof TERMS_MODULES)[number];
 
 export interface TermsDto {
