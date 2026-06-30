@@ -54,7 +54,7 @@ const toTransactionDto = (t: RefferalTransaction) => ({
 // program / zero reward. SQL ids are ints.
 export const creditReferrerMysql = async (opts: {
   referrerId: number; buyerId: number; orderId: number; paidAmount: number;
-  source: "course" | "package" | "ebook";
+  source: "course" | "package" | "ebook" | "liveCourse" | "testSeries";
 }): Promise<void> => {
   if (!opts.referrerId || !opts.orderId || opts.paidAmount <= 0) return;
   if (opts.referrerId === opts.buyerId) return;

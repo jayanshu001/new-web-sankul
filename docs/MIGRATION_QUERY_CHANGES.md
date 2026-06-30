@@ -4,6 +4,26 @@
 
 ---
 
+## 2026-06-30 — Deploy tooling + type fix (no DDL, no query change)
+
+Cross-developer deploy support after the migration branch was pulled on a second
+(Windows) machine. No schema, query, index, or response-shape change.
+
+- `scripts/apply-ddl.ts` (new) + `package.json` `db:migrate` — one-command applier that
+  replays `docs/migration/schema-changes/*.sql` in date order, tracking applied files in a
+  `_ddl_migrations` ledger table (idempotent; delegates to `prisma db execute --file`).
+  `shell: true` on the child spawn so Windows resolves the `npx.cmd` shim. See
+  `docs/migration/DEPLOY_RUNBOOK.md` (new).
+- `docs/migration/schema-changes/2026-06-18_create_wave7_blocked_tables.sql` — dropped the
+  MariaDB-only `ADD COLUMN IF NOT EXISTS` on the `ws_book_order.paid_at` ALTER (MySQL rejects
+  it as a syntax error). Now plain `ADD COLUMN`; idempotency is handled by the ledger.
+- `src/modules/referral/referral.service.ts` — widened `creditReferrerMysql` `source` param
+  type to `"course"|"package"|"ebook"|"liveCourse"|"testSeries"` to match the caller
+  `src/client/referral/credit-referrer.ts`. Type-only; `source` is used solely in the reward
+  description string, no logic branches on it. Fixes a pre-existing `tsc` error.
+
+---
+
 ## 2026-06-30 — CP3.5 Batch 1 (subscriptions/listings): Mongo→Prisma ports
 
 Ported 4 Mongo-only handlers to Prisma. All SCHEMA-OK (no DDL). Response shapes preserved
