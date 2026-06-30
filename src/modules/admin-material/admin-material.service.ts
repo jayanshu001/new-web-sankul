@@ -1,9 +1,8 @@
-import { isMysqlModule } from "../../config/migration";
 import { adminMaterialRepository as repo, ROOT } from "./admin-material.repository";
 import type { MaterialCategory, Material } from "@prisma/client";
 
 export const ADMIN_MATERIAL_MODULE = "admin-material";
-export const isAdminMaterialMysql = (): boolean => isMysqlModule(ADMIN_MATERIAL_MODULE);
+export const isAdminMaterialMysql = (): boolean => true;
 
 export const parseMaterialId = (id: string): number | null => {
   const n = Number(id);

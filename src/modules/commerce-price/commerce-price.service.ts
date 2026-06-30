@@ -12,7 +12,6 @@
  * (the commerce-wave flip). Verify via live-DB `tsx` scripts, not HTTP, while
  * OFF. See docs/migration/COMMERCE_WAVE_SCOPE.md.
  */
-import { isMysqlModule } from "../../config/migration";
 import { commercePriceRepository as repo } from "./commerce-price.repository";
 import { toPriceDto } from "./commerce-price.transformer";
 import type { PriceDto } from "./commerce-price.types";
@@ -20,7 +19,7 @@ import type { PriceDto } from "./commerce-price.types";
 export const PRICE_MODULE = "commerce-price";
 
 /** Whether the price read-path is served from MySQL. */
-export const isPriceMysql = (): boolean => isMysqlModule(PRICE_MODULE);
+export const isPriceMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parsePriceId = (id: string): number | null => {

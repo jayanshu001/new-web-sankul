@@ -1,41 +1,16 @@
 import { Request, Response } from "express";
-import { Types } from "mongoose";
-import { LiveSession } from "../../models/course/LiveSession.model";
 import {
   getStreamDetails as streamosGetStreamDetails,
+  enrichMp4Sizes as streamosEnrichMp4Sizes,
   StreamosError,
 } from "../../admin/live/streamos.service";
 import { io, roomKey } from "../../socket/livechat.socket";
-import { maybeAutoPromoteRecording } from "../../admin/live/recording.promote";
-import {
-  resolveLivePreviewState,
-  buildPurchaseOptions,
-  PREVIEW_SECONDS,
-} from "../live-course/entitlement";
+import { PREVIEW_SECONDS } from "../live-course/entitlement";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { formatScheduledAt } from "../../utils/displayTime";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 import * as adminLive from "../../modules/admin-live/admin-live.service";
-
-// Streamos stream ids are strings (e.g. "T_17787583234029").
-function parseStreamIdParam(raw: unknown): string | null {
-  if (typeof raw !== "string" && typeof raw !== "number") return null;
-  const s = String(raw).trim();
-  return s.length > 0 ? s : null;
-}
-
-async function findSessionByAnyId(id: string) {
-  if (Types.ObjectId.isValid(id) && /^[0-9a-fA-F]{24}$/.test(id)) {
-    const byObjId = await LiveSession.findById(id);
-    if (byObjId) return byObjId;
-  }
-  const streamId = parseStreamIdParam(id);
-  if (streamId) {
-    return LiveSession.findOne({ streamId });
-  }
-  return null;
-}
 
 // GET /api/v1/client/live-sessions/:id  (id = Mongo _id or streamId)
 // Returns playback info for an authenticated student.
@@ -50,181 +25,52 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
   logger.info("getLiveSessionForClient invoked", { traceId, path: req.originalUrl, userId, id });
 
   try {
-    // ── MySQL branch (SQL session + SQL write-back; StreamOS + Socket.IO kept) ──
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const customerId = Number.isInteger(cid) ? cid : null;
-      const s = await adminLive.findSessionByAnyId(id);
-      if (!s) { logger.warn("getLiveSessionForClient not found (mysql)", { traceId, userId, id }); return failure(res, "Live session not found.", 404); }
-      const liveCourseIds = await adminLive.getLinkedCourseIds(s.id);
-
-      let isLive = false;
-      let hlsUrl = s.hlsUrl, hlsUrls: any = s.hlsUrls, status = s.status, recordings: any = s.recordings;
-      if (s.streamId && (status === "CREATED" || status === "ENDED")) {
-        try {
-          const details = await streamosGetStreamDetails(s.streamId);
-          isLive = details.isLive;
-          const patch: any = {};
-          if (details.hlsUrl && details.hlsUrl !== hlsUrl) { hlsUrl = details.hlsUrl; patch.hlsUrl = details.hlsUrl; }
-          if (details.hlsUrls && Object.keys(details.hlsUrls).length > 0) { hlsUrls = details.hlsUrls; patch.hlsUrls = details.hlsUrls; }
-          if (status === "ENDED" && details.recordings.length > 0 && (!Array.isArray(recordings) || recordings.length === 0)) {
-            recordings = details.recordings; status = "READY"; patch.recordings = details.recordings; patch.status = "READY";
-            const liveClassId = String(s.streamId);
-            io?.to(roomKey(liveClassId)).emit("recordings_ready", { streamId: s.streamId, liveClassId, status: "READY", recordings: details.recordings });
-            await liveSql.maybeAutoPromoteRecordingSql({ id: s.id, title: s.title, subject: s.subject, recordings: details.recordings, liveCourseIds });
-          }
-          if (Object.keys(patch).length) await adminLive.updateSession(s.id, patch);
-        } catch (err) {
-          if (err instanceof StreamosError) logger.warn("getLiveSessionForClient streamos check failed (mysql)", { traceId, sessionId: s.id, message: err.message, upstreamStatus: err.upstreamStatus });
-          else logger.warn("getLiveSessionForClient streamos check error (mysql)", { traceId, sessionId: s.id, error: getErrorMessage(err) });
-        }
-      }
-
-      const track = status !== "SCHEDULED";
-      const preview = await liveSql.resolveLivePreviewStateSql(customerId, s.id, liveCourseIds, track);
-      const exposePlayback = preview.accessLevel === "full" || preview.accessLevel === "preview";
-      const purchaseOptions = preview.accessLevel === "full" ? [] : await liveSql.buildPurchaseOptionsSql(liveCourseIds);
-
-      logger.info("getLiveSessionForClient success (mysql)", { traceId, userId, sessionId: s.id, status, accessLevel: preview.accessLevel });
-      return success(res, {
-        id: String(s.id), title: s.title, status, canJoin: status === "CREATED",
-        scheduledAt: s.scheduledAt ?? null, scheduledAtDisplay: formatScheduledAt(s.scheduledAt), streamId: s.streamId ?? null,
-        liveCourseIds: liveCourseIds.map(String), isLive,
-        hlsUrl: exposePlayback ? hlsUrl ?? null : null, hlsUrls: exposePlayback ? hlsUrls ?? null : null,
-        recordings: exposePlayback ? recordings ?? [] : [],
-        liveClassId: s.streamId != null ? String(s.streamId) : null,
-        accessLevel: preview.accessLevel, previewSeconds: preview.accessLevel === "full" ? null : PREVIEW_SECONDS,
-        previewExpiresAt: preview.previewExpiresAt, previewSecondsRemaining: preview.previewSecondsRemaining, purchaseOptions,
-      }, "Live session fetched.");
-    }
-
-    const session = await findSessionByAnyId(id);
-    if (!session) {
-      logger.warn("getLiveSessionForClient not found", { traceId, userId, id });
-      return failure(res, "Live session not found.", 404);
-    }
+    // SQL session + SQL write-back; StreamOS + Socket.IO kept.
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const customerId = Number.isInteger(cid) ? cid : null;
+    const s = await adminLive.findSessionByAnyId(id);
+    if (!s) { logger.warn("getLiveSessionForClient not found (mysql)", { traceId, userId, id }); return failure(res, "Live session not found.", 404); }
+    const liveCourseIds = await adminLive.getLinkedCourseIds(s.id);
 
     let isLive = false;
-
-    if (session.streamId && (session.status === "CREATED" || session.status === "ENDED")) {
+    let hlsUrl = s.hlsUrl, hlsUrls: any = s.hlsUrls, status = s.status, recordings: any = s.recordings;
+    if (s.streamId && (status === "CREATED" || status === "ENDED")) {
       try {
-        const details = await streamosGetStreamDetails(session.streamId);
+        const details = await streamosGetStreamDetails(s.streamId);
         isLive = details.isLive;
-
-        let dirty = false;
-        if (details.hlsUrl && details.hlsUrl !== session.hlsUrl) {
-          session.hlsUrl = details.hlsUrl;
-          dirty = true;
+        const patch: any = {};
+        if (details.hlsUrl && details.hlsUrl !== hlsUrl) { hlsUrl = details.hlsUrl; patch.hlsUrl = details.hlsUrl; }
+        if (details.hlsUrls && Object.keys(details.hlsUrls).length > 0) { hlsUrls = details.hlsUrls; patch.hlsUrls = details.hlsUrls; }
+        if (status === "ENDED" && details.recordings.length > 0 && (!Array.isArray(recordings) || recordings.length === 0)) {
+          recordings = details.recordings; status = "READY"; patch.recordings = details.recordings; patch.status = "READY";
+          if (details.mp4Recordings.length > 0) patch.mp4Recordings = await streamosEnrichMp4Sizes(details.mp4Recordings);
+          const liveClassId = String(s.streamId);
+          io?.to(roomKey(liveClassId)).emit("recordings_ready", { streamId: s.streamId, liveClassId, status: "READY", recordings: details.recordings });
+          await liveSql.maybeAutoPromoteRecordingSql({ id: s.id, title: s.title, subject: s.subject, recordings: details.recordings, liveCourseIds });
         }
-        if (details.hlsUrls && Object.keys(details.hlsUrls).length > 0) {
-          session.hlsUrls = details.hlsUrls;
-          dirty = true;
-        }
-        if (
-          session.status === "ENDED" &&
-          details.recordings.length > 0 &&
-          (session.recordings?.length ?? 0) === 0
-        ) {
-          session.recordings = details.recordings;
-          session.status = "READY";
-          dirty = true;
-          const liveClassId = String(session.streamId);
-          io?.to(roomKey(liveClassId)).emit("recordings_ready", {
-            streamId: session.streamId,
-            liveClassId,
-            status: "READY",
-            recordings: details.recordings,
-          });
-          await maybeAutoPromoteRecording(session);
-        }
-        if (dirty) await session.save();
+        if (Object.keys(patch).length) await adminLive.updateSession(s.id, patch);
       } catch (err) {
-        if (err instanceof StreamosError) {
-          logger.warn("getLiveSessionForClient streamos check failed", {
-            traceId,
-            sessionId: session._id,
-            message: err.message,
-            upstreamStatus: err.upstreamStatus,
-          });
-        } else {
-          logger.warn("getLiveSessionForClient streamos check error", {
-            traceId,
-            sessionId: session._id,
-            error: getErrorMessage(err),
-          });
-        }
+        if (err instanceof StreamosError) logger.warn("getLiveSessionForClient streamos check failed (mysql)", { traceId, sessionId: s.id, message: err.message, upstreamStatus: err.upstreamStatus });
+        else logger.warn("getLiveSessionForClient streamos check error (mysql)", { traceId, sessionId: s.id, error: getErrorMessage(err) });
       }
     }
 
-    // --- Entitlement ------------------------------------------------------
-    // A session attached to NO course is treated as "open" (any logged-in
-    // customer gets full access — matches the original behaviour before live
-    // courses existed). A session attached to one or more courses requires
-    // the customer to hold an active subscription to AT LEAST ONE of them;
-    // otherwise they get a PER-VIEWER 3-minute trial.
-    //
-    // The trial clock only starts once there is something to watch, so we
-    // don't track SCHEDULED sessions — that would burn a non-subscriber's
-    // preview before the stream goes live.
-    const liveCourseIds = (session.liveCourseIds ?? []).map(String);
-    const track = session.status !== "SCHEDULED";
-    const preview = await resolveLivePreviewState(
-      req.user?.id,
-      session._id as Types.ObjectId,
-      liveCourseIds,
-      track
-    );
+    const track = status !== "SCHEDULED";
+    const preview = await liveSql.resolveLivePreviewStateSql(customerId, s.id, liveCourseIds, track);
+    const exposePlayback = preview.accessLevel === "full" || preview.accessLevel === "preview";
+    const purchaseOptions = preview.accessLevel === "full" ? [] : await liveSql.buildPurchaseOptionsSql(liveCourseIds);
 
-    // Playback URLs go to full-access users and to preview users while their
-    // trial window is still open. Once it elapses ("preview_ended") we
-    // withhold hlsUrl/hlsUrls/recordings entirely — that is what makes the
-    // 3-minute cutoff server-enforced rather than client-trusted.
-    const exposePlayback =
-      preview.accessLevel === "full" || preview.accessLevel === "preview";
-
-    // purchaseOptions drives the "buy to keep watching" popup. We send it for
-    // any non-full state (including while still in "preview") so the client
-    // already has the data when the timer hits zero — no extra round-trip.
-    const purchaseOptions =
-      preview.accessLevel === "full"
-        ? []
-        : await buildPurchaseOptions(liveCourseIds);
-
-    logger.info("getLiveSessionForClient success", { traceId, userId, sessionId: session._id, status: session.status, accessLevel: preview.accessLevel });
-    return success(
-      res,
-      {
-        id: String(session._id),
-        title: session.title,
-        status: session.status,
-        // Joinable only while the live room exists on Streamos (status
-        // CREATED). The client gates the "Join" button on this.
-        canJoin: session.status === "CREATED",
-        scheduledAt: session.scheduledAt ?? null,
-        scheduledAtDisplay: formatScheduledAt(session.scheduledAt),
-        streamId: session.streamId ?? null,
-        liveCourseIds,
-        isLive,
-        hlsUrl: exposePlayback ? session.hlsUrl ?? null : null,
-        hlsUrls: exposePlayback ? session.hlsUrls ?? null : null,
-        recordings: exposePlayback ? session.recordings ?? [] : [],
-        // Use this as the Socket.IO room id for chat/polls (only valid once
-        // the session has a streamId — i.e. status is CREATED or later).
-        liveClassId: session.streamId != null ? String(session.streamId) : null,
-        // Entitlement:
-        //   - "full"          → no cutoff, play to the end.
-        //   - "preview"       → playback URLs included; client should cut at
-        //     `previewSecondsRemaining` (or `previewExpiresAt`) and then show
-        //     the purchase popup built from `purchaseOptions`.
-        //   - "preview_ended" → no playback URLs; show the purchase popup.
-        accessLevel: preview.accessLevel,
-        previewSeconds: preview.accessLevel === "full" ? null : PREVIEW_SECONDS,
-        previewExpiresAt: preview.previewExpiresAt,
-        previewSecondsRemaining: preview.previewSecondsRemaining,
-        purchaseOptions,
-      },
-      "Live session fetched."
-    );
+    logger.info("getLiveSessionForClient success (mysql)", { traceId, userId, sessionId: s.id, status, accessLevel: preview.accessLevel });
+    return success(res, {
+      id: String(s.id), title: s.title, status, canJoin: status === "CREATED",
+      scheduledAt: s.scheduledAt ?? null, scheduledAtDisplay: formatScheduledAt(s.scheduledAt), streamId: s.streamId ?? null,
+      liveCourseIds: liveCourseIds.map(String), isLive,
+      hlsUrl: exposePlayback ? hlsUrl ?? null : null, hlsUrls: exposePlayback ? hlsUrls ?? null : null,
+      recordings: exposePlayback ? recordings ?? [] : [],
+      liveClassId: s.streamId != null ? String(s.streamId) : null,
+      accessLevel: preview.accessLevel, previewSeconds: preview.accessLevel === "full" ? null : PREVIEW_SECONDS,
+      previewExpiresAt: preview.previewExpiresAt, previewSecondsRemaining: preview.previewSecondsRemaining, purchaseOptions,
+    }, "Live session fetched.");
   } catch (err) {
     logger.error("getLiveSessionForClient failed", { traceId, userId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch live session.", 500);

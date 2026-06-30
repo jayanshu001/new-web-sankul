@@ -8,7 +8,6 @@
  * READ only — `submitEnquiry` (POST → ws_offline_enquiry) is a WRITE path, not
  * built here. No SQL `status` column on center/batch → all rows treated active.
  */
-import { isMysqlModule } from "../../config/migration";
 import { offlineBatchRepository as repo } from "./offline-batch.repository";
 import {
   toOfflineBatchDto,
@@ -22,7 +21,7 @@ import type {
 } from "./offline-batch.types";
 
 export const OFFLINE_BATCH_MODULE = "offline-batch";
-export const isOfflineBatchMysql = (): boolean => isMysqlModule(OFFLINE_BATCH_MODULE);
+export const isOfflineBatchMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseOfflineId = (id: string): number | null => {

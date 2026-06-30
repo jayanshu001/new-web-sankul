@@ -5,8 +5,6 @@ import { redisClient } from "../config/redis";
 import { verifyAccessToken } from "../utils/jwtSigner";
 import { isRevoked, UserType } from "../libs/tokenRevocation";
 import { updateContext } from "../utils/requestContext";
-import { Customer } from "../models/customer/Customer.model";
-import { isMysqlModule } from "../config/migration";
 import { customerAuthRepository } from "../modules/customer-auth/customer-auth.repository";
 
 // Per-request customer gate state, cached briefly in Redis so the live DB read
@@ -17,8 +15,8 @@ const CUSTOMER_GATE_TTL_SECONDS = 30;
 const customerGateKey = (id: string) => `customer_gate:${id}`;
 
 /**
- * Returns the live block/delete state for a customer, reading the active
- * backend (MySQL when `customer-auth` is migrated, else Mongo). Cached in Redis
+ * Returns the live block/delete state for a customer, reading the customer-auth
+ * MySQL backend. Cached in Redis
  * for CUSTOMER_GATE_TTL_SECONDS. Returns `null` only when the customer row is
  * missing entirely (treated as deleted by the caller). Fail-open on errors so a
  * transient DB/Redis blip never locks every customer out.
@@ -33,15 +31,10 @@ const getCustomerGate = async (id: string): Promise<CustomerGate | null> => {
   }
 
   let gate: CustomerGate | null = null;
-  if (isMysqlModule("customer-auth")) {
-    const numId = Number(id);
-    if (Number.isInteger(numId) && numId > 0) {
-      const row = await customerAuthRepository.getAuthStateById(numId);
-      gate = row ? { deleted: !!row.isAccountDeleted, disabled: !row.status } : null;
-    }
-  } else {
-    const customer = await Customer.findById(id).select("status isAccountDeleted");
-    gate = customer ? { deleted: !!customer.isAccountDeleted, disabled: !customer.status } : null;
+  const numId = Number(id);
+  if (Number.isInteger(numId) && numId > 0) {
+    const row = await customerAuthRepository.getAuthStateById(numId);
+    gate = row ? { deleted: !!row.isAccountDeleted, disabled: !row.status } : null;
   }
 
   try {

@@ -9,13 +9,11 @@
  * MySQL-only (net-new data, no Mongo legacy). The `isMysqlModule` gate is kept
  * for call-site consistency with neighbouring modules.
  */
-import { isMysqlModule } from "../../config/migration";
 import * as repo from "./client-search-history.repository";
 import * as transformer from "./client-search-history.transformer";
 import { SEARCH_HISTORY_LIMIT, type SearchHistoryDto } from "./client-search-history.types";
 
-const MODULE = "client-search-history";
-export const isSearchHistoryMysql = (): boolean => isMysqlModule(MODULE);
+export const isSearchHistoryMysql = (): boolean => true;
 
 // Normalize so "  UPSC ", "upsc", and "UPSC" all collapse to one history
 // entry: trim, collapse internal whitespace, and lowercase (case-insensitive

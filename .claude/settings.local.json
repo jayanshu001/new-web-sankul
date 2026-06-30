@@ -193,7 +193,11 @@
       "Bash(lsof -nP -iTCP:4001 -sTCP:LISTEN)",
       "Bash(npx pm2 *)",
       "Bash(ps -o pid,lstart,command -p 12233)",
-      "Bash(ps -eo pid,ppid,lstart,command)"
+      "Bash(ps -eo pid,ppid,lstart,command)",
+      "Bash(curl -sI \"https://stream-os-assets.classx.co.in/videos/streamos-data/786451-1779694276/original-a74af8/480p/video.mp4\" --max-time 20)",
+      "Bash(curl -sI \"https://stream-os-assets.classx.co.in/videos/streamos-data/786451-1779694276/hls-drm-3d36fc/360p/master-4194458.0854551485.m3u8\" --max-time 20)",
+      "Bash(curl -s -w \"\\\\n[HTTP %{http_code} | %{content_type} | %{size_download}B]\\\\n\" \"https://stream-os-assets.classx.co.in/videos/streamos-data/786730-1779705793/hls-drm-5cefb2/480p/master-1273934.9181893144.m3u8\" --max-time 25)",
+      "Bash(curl -s -w \"\\\\n[HTTP %{http_code} | %{content_type} | %{size_download}B]\\\\n\" \"https://stream-os-assets.classx.co.in/videos/streamos-data/786451-1779694276/hls-drm-3d36fc/360p/master-4194458.0854551485.m3u8\" --max-time 25)"
     ]
   }
 }

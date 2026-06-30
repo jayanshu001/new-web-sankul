@@ -6,11 +6,10 @@
  * Reads ws_video + ws_video_category (course-membership check) + ws_package_course_subscription
  * (entitlement). Ids are SQL ints. payment_status has no SQL column → status=true.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const CLIENT_LECTURE_MODULE = "client-lecture";
-export const isClientLectureMysql = (): boolean => isMysqlModule(CLIENT_LECTURE_MODULE);
+export const isClientLectureMysql = (): boolean => true;
 
 export const parseLecId = (id: string): number | null => {
   const n = Number(id);

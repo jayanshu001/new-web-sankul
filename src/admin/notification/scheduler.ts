@@ -1,12 +1,9 @@
 import { Queue, Worker, QueueEvents, Job } from "bullmq";
 import Redis, { Redis as RedisType } from "ioredis";
-import { Notification } from "../../models/system/Notification.model";
-import { isMongoFallbackEnabled } from "../../config/migration";
 import { dispatchScheduledById } from "./dispatcher";
 import logger from "../../utils/logger";
 import { queueDepth, queueDlqTotal } from "../../utils/metrics";
 import {
-  isAdminNotificationMysql,
   listScheduledForRehydrate as sqlListScheduledForRehydrate,
   existsSql as sqlNotificationExists,
   markFailed as sqlMarkFailed,
@@ -166,42 +163,17 @@ export async function cancelNotificationJob(notificationId: string): Promise<voi
  * the queue already has the job, the second add() is a no-op.
  */
 async function rehydrateScheduledNotifications(): Promise<number> {
-  // Recovery rows: { id, scheduledAt }. Source depends on the flag.
-  //  - flag OFF: Mongo scheduled rows only (unchanged behaviour).
-  //  - flag ON: SQL scheduled rows (the canonical write store) PLUS any leftover
-  //    Mongo scheduled rows queued before the cutover — both rehydrated during
-  //    the drain window. BullMQ's deterministic jobId makes a duplicate add() a
-  //    no-op, and the worker's dual-read routing dispatches each to the right store.
+  // Recovery rows: { id, scheduledAt } from the SQL scheduled rows (the
+  // canonical write store). BullMQ's deterministic jobId makes a duplicate
+  // add() a no-op.
   const recovery: { id: string; scheduledAt: Date }[] = [];
 
-  if (isAdminNotificationMysql()) {
-    try {
-      recovery.push(...(await sqlListScheduledForRehydrate()));
-    } catch (err) {
-      logger.error("Rehydrate: failed to read SQL scheduled notifications", {
-        error: (err as Error).message,
-      });
-    }
-  }
-
-  // Mongo scheduled rows: pre-cutover stragglers. Only read when the Mongo
-  // fallback is enabled — once it's off (migration complete) there's no Mongo
-  // connection, so skip to avoid a buffering timeout. SQL rehydrate above is
-  // the canonical source.
-  if (isMongoFallbackEnabled()) {
-    try {
-      const rows = await Notification.find({ status: "scheduled" })
-        .select("_id scheduledAt")
-        .lean();
-      for (const row of rows) {
-        if (!row.scheduledAt) continue;
-        recovery.push({ id: String(row._id), scheduledAt: row.scheduledAt });
-      }
-    } catch (err) {
-      logger.error("Rehydrate: failed to read Mongo scheduled notifications", {
-        error: (err as Error).message,
-      });
-    }
+  try {
+    recovery.push(...(await sqlListScheduledForRehydrate()));
+  } catch (err) {
+    logger.error("Rehydrate: failed to read SQL scheduled notifications", {
+      error: (err as Error).message,
+    });
   }
 
   let count = 0;
@@ -279,18 +251,9 @@ export async function initNotificationScheduler(): Promise<void> {
     // AND push a copy onto the DLQ for forensics.
     if (job.attemptsMade >= (job.opts.attempts ?? 1)) {
       try {
-        // Dual-read: when the flag is on and the id is a SQL row, fail it in SQL;
-        // otherwise (legacy Mongo _id, or flag off) fail it in Mongo.
-        const inSql =
-          isAdminNotificationMysql() &&
-          (await sqlNotificationExists(job.data.notificationId));
-        if (inSql) {
+        // Mark the SQL row failed if it exists.
+        if (await sqlNotificationExists(job.data.notificationId)) {
           await sqlMarkFailed(job.data.notificationId, err.message);
-        } else if (isMongoFallbackEnabled()) {
-          await Notification.updateOne(
-            { _id: job.data.notificationId, status: "scheduled" },
-            { $set: { status: "failed", failureReason: err.message } }
-          );
         }
       } catch (updateErr) {
         logger.error("Failed to mark notification as failed after retries exhausted", {

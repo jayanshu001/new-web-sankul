@@ -1,37 +1,16 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { LiveCourse } from "../../models/course/LiveCourse.model";
-import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
 import { LiveSession } from "../../models/course/LiveSession.model";
-import { VideoCategory } from "../../models/course/VideoCategory.model";
-import { Video } from "../../models/course/Video.model";
 import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
-import { PackageCategory } from "../../models/course/PackageCategory.model";
-import { LectureProgress } from "../../models/customer/LectureProgress.model";
-import { hasAccessToAnyLiveCourse, buildPurchaseOptions, getDaysLeftForLiveCourses, getDaysLeftMapForLiveCourses } from "./entitlement";
-import { computeDaysLeft } from "../../utils/planDuration";
-import { buildRegexCondition } from "../../utils/searchFilter";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
-import cache from "../../libs/cache";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
 import { resolveVideoSource } from "../../utils/videoResolver";
 import logger from "../../utils/logger";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { formatScheduledAt } from "../../utils/displayTime";
-import { qualitiesFromSessionRecordings } from "../../utils/videoQualities";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
-
-// Streamos historically delivered some recording paths with stray quote
-// characters (raw `"`, URL-encoded `%22`, or `%2522`) tacked onto the end of
-// the URL — an upstream JSON-quoting bug. We strip those defensively so the
-// client never sees an unplayable URL.
-function sanitizeRecordingPath<T extends string | null | undefined>(p: T): T {
-  if (typeof p !== "string") return p;
-  return p.replace(/(?:"|%22|%2522)+$/i, "") as T;
-}
 
 // Builds the multi-resolution playback envelope a lecture detail endpoint
 // returns. The shape mirrors the legacy "encryptLecture" contract:
@@ -90,39 +69,6 @@ async function encryptLecture(v: {
   };
 }
 
-// Verified-subscription counts per live course. Cached for 5min — it powers
-// a popularity ranking, not entitlement, so slight staleness is fine.
-const getPurchaseCountMap = async (courseIds: mongoose.Types.ObjectId[]): Promise<Map<string, number>> => {
-  if (courseIds.length === 0) return new Map();
-  return cache.aside({
-    key: cache.key("client", "live-course", `purchase-counts:${cache.hashFilter({ ids: courseIds.map(String).sort() })}`),
-    ttlSeconds: 300,
-    load: async () => {
-      const rows = await LiveCourseSubscription.aggregate([
-        { $match: { liveCourseId: { $in: courseIds }, paymentStatus: "verified" } },
-        { $group: { _id: "$liveCourseId", count: { $sum: 1 } } },
-      ]);
-      return rows.map((r: any) => [String(r._id), r.count] as [string, number]);
-    },
-  }).then((entries) => new Map(entries));
-};
-
-// Customer's currently-active live-course subscription set. Used to stamp
-// `isPurchased` on listing/detail rows. Returns an empty set for guests.
-const getOwnedLiveCourseIds = async (customerId: string | undefined): Promise<Set<string>> => {
-  if (!customerId) return new Set();
-  const now = new Date();
-  const subs = await LiveCourseSubscription.find({
-    customerId,
-    paymentStatus: "verified",
-    status: true,
-    $or: [{ endAt: null }, { endAt: { $gte: now } }],
-  })
-    .select("liveCourseId")
-    .lean();
-  return new Set(subs.map((s) => String(s.liveCourseId)));
-};
-
 // GET /api/v1/client/live-courses
 export const listLiveCoursesForClient = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -133,87 +79,10 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
     const limit = Math.min(50, parseInt(req.query.limit as string) || 20);
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
 
-    if (liveSql.isLiveCourseMysql()) {
-      const r = await liveSql.listClient(liveSql.parseLiveId(String(req.user?.id ?? "")), { search, page, limit });
-      const base = resolveBase(req);
-      const liveCourses = r.liveCourses.map((c: any) => ({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }));
-      return success(res, { liveCourses, total: r.total, page: r.page, limit: r.limit }, "Live courses fetched.");
-    }
-
-    const query: Record<string, any> = { status: true };
-    const searchCond = buildRegexCondition(search);
-    if (searchCond) query.name = searchCond;
-
-    const [rows, total] = await Promise.all([
-      LiveCourse.find(query)
-        .sort({ ordered: 1, createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .populate("courseEducatorId", "name image")
-        .populate("packageCategoryId", "title slug image")
-        .lean(),
-      LiveCourse.countDocuments(query),
-    ]);
-
-    const rowIds = rows.map((r: any) => r._id);
-    const [daysLeftMap, purchaseCountMap, ownedIds, planRows] = await Promise.all([
-      getDaysLeftMapForLiveCourses(req.user?.id, rowIds),
-      getPurchaseCountMap(rowIds),
-      getOwnedLiveCourseIds(req.user?.id),
-      // Pricing plans for every listed course, batched into one query and
-      // grouped per course below. Same enrichment (originalPrice/discountPercent)
-      // the detail endpoint (getLiveCourseForClient) applies.
-      rowIds.length
-        ? LiveCoursePlan.find({ liveCourseId: { $in: rowIds }, status: true }).sort({ price: 1 }).lean()
-        : Promise.resolve([]),
-    ]);
-
-    const plansByCourse = new Map<string, any[]>();
-    for (const p of planRows as any[]) {
-      const original =
-        typeof p.originalPrice === "number" && p.originalPrice > p.price ? p.originalPrice : null;
-      const discountPercent = original ? Math.round(((original - p.price) / original) * 100) : 0;
-      const key = String(p.liveCourseId);
-      if (!plansByCourse.has(key)) plansByCourse.set(key, []);
-      plansByCourse.get(key)!.push({ ...p, originalPrice: original, discountPercent });
-    }
-
-    // Both hero cards require startTime > now. Among upcoming batches, the
-    // top-purchased course gets "featured" (red), the second-highest gets
-    // "coming_soon" (blue). Courses with no future startTime never appear as
-    // a hero card.
-    const now = Date.now();
-    const upcoming = (rows as any[])
-      .filter((r) => r.startTime && new Date(r.startTime).getTime() > now)
-      .map((r) => ({ id: String(r._id), score: purchaseCountMap.get(String(r._id)) ?? 0 }))
-      .sort((a, b) => b.score - a.score);
-    const featuredId: string | null = upcoming[0]?.id ?? null;
-    const comingSoonId: string | null = upcoming[1]?.id ?? null;
-
+    const r = await liveSql.listClient(liveSql.parseLiveId(String(req.user?.id ?? "")), { search, page, limit });
     const base = resolveBase(req);
-    const liveCourses = rows.map((r: any) => {
-      const key = String(r._id);
-      let cardVariant: "featured" | "coming_soon" | null = null;
-      if (key === featuredId) cardVariant = "featured";
-      else if (key === comingSoonId) cardVariant = "coming_soon";
-      return {
-        ...r,
-        daysLeft: daysLeftMap.has(key) ? daysLeftMap.get(key) ?? null : null,
-        isPurchased: ownedIds.has(key),
-        purchaseCount: purchaseCountMap.get(key) ?? 0,
-        cardVariant,
-        // Grouped { withMaterial, withoutMaterial } to match the client/courses
-        // + live-course detail contract (kept identical to the SQL listClient path).
-        plans: {
-          withMaterial: (plansByCourse.get(key) ?? []).filter((p) => p.withMaterial),
-          withoutMaterial: (plansByCourse.get(key) ?? []).filter((p) => !p.withMaterial),
-        },
-        shareableLink: buildShareUrl("live-courses", key, base),
-      };
-    });
-
-    logger.info("listLiveCoursesForClient success", { traceId, total, returned: rows.length });
-    return success(res, { liveCourses, total, page, limit }, "Live courses fetched.");
+    const liveCourses = r.liveCourses.map((c: any) => ({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }));
+    return success(res, { liveCourses, total: r.total, page: r.page, limit: r.limit }, "Live courses fetched.");
   } catch (err) {
     logger.error("listLiveCoursesForClient failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list live courses.", 500);
@@ -269,118 +138,17 @@ export const listUpcomingLiveBatches = async (req: Request, res: Response) => {
     const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
     const categoryId = typeof req.query.categoryId === "string" ? req.query.categoryId.trim() : "";
 
-    if (liveSql.isLiveCourseMysql()) {
-      const catId = categoryId ? liveSql.parseLiveId(categoryId) ?? undefined : undefined;
-      const r = await liveSql.listUpcomingBatches(liveSql.parseLiveId(String(req.user?.id ?? "")), { search, categoryId: catId, page, limit });
-      const base = resolveBase(req);
-      const liveBatches = r.liveBatches.map((c: any) => ({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }));
-      return success(res, { ...r, liveBatches }, "Upcoming live batches fetched.");
-    }
-
-    if (categoryId && !mongoose.Types.ObjectId.isValid(categoryId)) {
-      logger.warn("listUpcomingLiveBatches invalid categoryId", { traceId, categoryId });
-      return failure(res, "Invalid category id.", 422);
-    }
-
-    const now = new Date();
-    // "Upcoming" = active course whose batch start is still ahead of now.
-    const baseQuery: Record<string, any> = {
-      status: true,
-      startTime: { $ne: null, $gte: now },
-    };
-    const searchCond = buildRegexCondition(search);
-    if (searchCond) baseQuery.name = searchCond;
-
-    // The list query layers the optional category filter on top of the base
-    // "upcoming" criteria. The tab bar (below) is derived from the base query
-    // WITHOUT the category filter, so every tab reflects the same upcoming set.
-    const listQuery: Record<string, any> = { ...baseQuery };
-    if (categoryId) listQuery.packageCategoryId = new mongoose.Types.ObjectId(categoryId);
-
-    const [rows, total, catCounts] = await Promise.all([
-      LiveCourse.find(listQuery)
-        // Soonest-starting batch first; ties broken by curated order.
-        .sort({ startTime: 1, ordered: 1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .populate("courseEducatorId", "name image")
-        .populate("packageCategoryId", "title slug image")
-        .lean(),
-      LiveCourse.countDocuments(listQuery),
-      // Per-category counts over the *unfiltered* upcoming set — drives the tab
-      // bar and the count badge on each tab.
-      LiveCourse.aggregate([
-        { $match: { ...baseQuery, packageCategoryId: { $ne: null } } },
-        { $group: { _id: "$packageCategoryId", count: { $sum: 1 } } },
-      ]),
-    ]);
-
-    const rowIds = rows.map((r: any) => r._id);
-    const [daysLeftMap, purchaseCountMap, ownedIds] = await Promise.all([
-      getDaysLeftMapForLiveCourses(req.user?.id, rowIds),
-      getPurchaseCountMap(rowIds),
-      getOwnedLiveCourseIds(req.user?.id),
-    ]);
-
+    const catId = categoryId ? liveSql.parseLiveId(categoryId) ?? undefined : undefined;
+    const r = await liveSql.listUpcomingBatches(liveSql.parseLiveId(String(req.user?.id ?? "")), { search, categoryId: catId, page, limit });
     const base = resolveBase(req);
-    const liveBatches = rows.map((r: any) => {
-      const key = String(r._id);
-      return {
-        ...r,
-        daysLeft: daysLeftMap.has(key) ? daysLeftMap.get(key) ?? null : null,
-        isPurchased: ownedIds.has(key),
-        purchaseCount: purchaseCountMap.get(key) ?? 0,
-        shareableLink: buildShareUrl("live-courses", key, base),
-      };
-    });
-
-    // Build the tab bar: only categories that actually have upcoming batches,
-    // each stamped with how many. Ordered by the PackageCategory.order field.
-    const countByCategory = new Map<string, number>(
-      (catCounts as any[]).map((c) => [String(c._id), c.count])
-    );
-    const upcomingCategoryIds = Array.from(countByCategory.keys()).map(
-      (idStr) => new mongoose.Types.ObjectId(idStr)
-    );
-    const categoryRows = upcomingCategoryIds.length
-      ? await PackageCategory.find({ _id: { $in: upcomingCategoryIds }, status: true })
-          .select("title slug image order")
-          .sort({ order: 1 })
-          .lean()
-      : [];
-    const categories = categoryRows.map((c: any) => ({
-      _id: String(c._id),
-      title: c.title,
-      slug: c.slug,
-      image: c.image,
-      count: countByCategory.get(String(c._id)) ?? 0,
-    }));
-    // "All" tab count = total upcoming batches across every category.
-    const allCount = (catCounts as any[]).reduce((n, c) => n + c.count, 0);
-
-    logger.info("listUpcomingLiveBatches success", { traceId, total, returned: rows.length, categoryId: categoryId || "all" });
-    return success(
-      res,
-      { liveBatches, total, page, limit, categories, allCount, selectedCategoryId: categoryId || null },
-      "Upcoming live batches fetched."
-    );
+    const liveBatches = r.liveBatches.map((c: any) => ({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }));
+    return success(res, { ...r, liveBatches }, "Upcoming live batches fetched.");
   } catch (err) {
     logger.error("listUpcomingLiveBatches failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch upcoming live batches.", 500);
   }
 };
 
-// ⚠ STAY Mongo (no SQL branch — Wave 6 documented gaps; revisit in Wave 7):
-//   - getLiveCourseForClient: detail needs the subjects/folders count (Mongo-only
-//     VideoCategory folder layer) + packageCategory populate (no SQL table).
-//   - listLiveCourseRecordings / getLiveCourseLecture / listLiveCourseSessionRecordings:
-//     folder/video layer + LectureProgress (no SQL table) + AES lecture encryption.
-//   - getLiveCourseSchedule / listMyScheduleByCategory: blend a session-derived
-//     timetable with an educator populate (ws_course_educators is Mongo) — only
-//     the pure schedule-folder read (getMyScheduleFolder) is on SQL.
-//   - listMyLiveCourses / listMyUpcomingSessions: subscription-shaped "my" lists
-//     with status=active|expired filtering — natural Wave 7 my-subscriptions work.
-//
 // GET /api/v1/client/live-courses/:id
 // Includes plans + whether the current customer already has access.
 export const getLiveCourseForClient = async (req: Request, res: Response) => {
@@ -390,75 +158,14 @@ export const getLiveCourseForClient = async (req: Request, res: Response) => {
   logger.info("getLiveCourseForClient invoked", { traceId, path: req.originalUrl, userId, id });
 
   try {
-    // ── MySQL branch (data only — playback URLs never here) ───────────────────
-    if (liveSql.isLiveCourseMysql()) {
-      const lid = liveSql.parseLiveId(id);
-      if (!lid) { logger.warn("getLiveCourseForClient invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const r = await liveSql.getLiveCourseDetailForClient(lid, Number.isInteger(cid) ? cid : null, resolveBase(req));
-      if (r === "not_found") { logger.warn("getLiveCourseForClient not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
-      logger.info("getLiveCourseForClient success (mysql)", { traceId, userId, id });
-      return success(res, r, "Live course fetched.");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("getLiveCourseForClient invalid id", { traceId, id });
-      return failure(res, "Invalid live course id.", 422);
-    }
-
-    const [course, plans] = await Promise.all([
-      LiveCourse.findOne({ _id: id, status: true })
-        .populate("courseEducatorId", "name image about")
-        .populate("packageCategoryId", "title slug image")
-        .lean(),
-      LiveCoursePlan.find({ liveCourseId: id, status: true })
-        .sort({ price: 1 })
-        .lean(),
-    ]);
-    if (!course) {
-      logger.warn("getLiveCourseForClient not found", { traceId, id });
-      return failure(res, "Live course not found.", 404);
-    }
-
-    const [subscribed, subjectsCount, daysLeft] = await Promise.all([
-      hasAccessToAnyLiveCourse(req.user?.id, [id]),
-      // "Subjects" on the header stat bar = folders under this live course.
-      VideoCategory.countDocuments({ liveCourseId: id }),
-      getDaysLeftForLiveCourses(req.user?.id, [id]),
-    ]);
-
-    // Header stat bar.
-    const stats = {
-      subjectsCount,
-      materialsCount: course.materialCategories?.length ?? 0,
-      classType: course.classType ?? "live",
-    };
-
-    // Plans enriched with the strikethrough-price math the UI needs, then split
-    // by material variant to mirror the package detail contract
-    // (plans: { withMaterial, withoutMaterial }).
-    const plansEnriched = plans.map((p) => {
-      const original =
-        typeof p.originalPrice === "number" && p.originalPrice > p.price
-          ? p.originalPrice
-          : null;
-      const discountPercent = original
-        ? Math.round(((original - p.price) / original) * 100)
-        : 0;
-      return { ...p, originalPrice: original, discountPercent };
-    });
-    const plansOut = {
-      withMaterial: plansEnriched.filter((p) => p.withMaterial),
-      withoutMaterial: plansEnriched.filter((p) => !p.withMaterial),
-    };
-
-    logger.info("getLiveCourseForClient success", { traceId, userId, id, subscribed });
-    const shareableLink = buildShareUrl("live-courses", id, resolveBase(req));
-    return success(
-      res,
-      { liveCourse: { ...course, isPaid: course.isPaid ?? true, shareableLink }, scope: { kind: "liveCourse", id: String(course._id) }, stats, plans: plansOut, subscribed, isPaid: course.isPaid ?? true, isPurchased: subscribed, daysLeft, shareableLink },
-      "Live course fetched."
-    );
+    // Data only — playback URLs never here.
+    const lid = liveSql.parseLiveId(id);
+    if (!lid) { logger.warn("getLiveCourseForClient invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const r = await liveSql.getLiveCourseDetailForClient(lid, Number.isInteger(cid) ? cid : null, resolveBase(req));
+    if (r === "not_found") { logger.warn("getLiveCourseForClient not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
+    logger.info("getLiveCourseForClient success (mysql)", { traceId, userId, id });
+    return success(res, r, "Live course fetched.");
   } catch (err) {
     logger.error("getLiveCourseForClient failed", { traceId, userId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch live course.", 500);
@@ -477,105 +184,11 @@ export const listSessionsForCourseClient = async (req: Request, res: Response) =
   logger.info("listSessionsForCourseClient invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
 
   try {
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(id);
-      if (!cid) return failure(res, "Invalid live course id.", 422);
-      const r = await liveSql.listSessionsForCourseClient(cid, { status: req.query.status as string, upcoming: req.query.upcoming as string, page: req.query.page as string, limit: req.query.limit as string });
-      if (r === "not_found") return failure(res, "Live course not found.", 404);
-      return success(res, r, "Sessions fetched.");
-    }
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listSessionsForCourseClient invalid id", { traceId, id });
-      return failure(res, "Invalid live course id.", 422);
-    }
-
-    const exists = await LiveCourse.exists({ _id: id, status: true });
-    if (!exists) {
-      logger.warn("listSessionsForCourseClient course not found", { traceId, id });
-      return failure(res, "Live course not found.", 404);
-    }
-
-    const status = typeof req.query.status === "string" ? req.query.status : undefined;
-    const upcoming = req.query.upcoming === "true";
-    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
-
-    const query: Record<string, any> = { liveCourseIds: id };
-    if (status) query.status = status;
-    if (upcoming) {
-      query.status = "SCHEDULED";
-      query.scheduledAt = { $gte: new Date() };
-    }
-
-    const now = new Date();
-    // 0 = upcoming (still in the future), 1 = past, 2 = unscheduled (null).
-    // Within each bucket we sort by proximity to "now" so the next-to-start
-    // session is on top and the most-recent past session leads the past group.
-    const sortStage = upcoming
-      ? { scheduledAt: 1 as 1, createdAt: -1 as -1 }
-      : { _bucket: 1 as 1, _proximity: 1 as 1, createdAt: -1 as -1 };
-
-    const pipeline: any[] = [{ $match: query }];
-    if (!upcoming) {
-      pipeline.push({
-        $addFields: {
-          _bucket: {
-            $switch: {
-              branches: [
-                { case: { $eq: ["$scheduledAt", null] }, then: 2 },
-                { case: { $gte: ["$scheduledAt", now] }, then: 0 },
-              ],
-              default: 1,
-            },
-          },
-          _proximity: {
-            $cond: [
-              { $eq: ["$scheduledAt", null] },
-              Number.MAX_SAFE_INTEGER,
-              { $abs: { $subtract: ["$scheduledAt", now] } },
-            ],
-          },
-        },
-      });
-    }
-    pipeline.push({ $sort: sortStage });
-    pipeline.push({ $skip: (page - 1) * limit });
-    pipeline.push({ $limit: limit });
-    pipeline.push({
-      $project: {
-        title: 1, status: 1, scheduledAt: 1, streamId: 1,
-        recordings: 1, liveCourseIds: 1, createdAt: 1, updatedAt: 1,
-      },
-    });
-
-    const [rows, total] = await Promise.all([
-      LiveSession.aggregate(pipeline),
-      LiveSession.countDocuments(query),
-    ]);
-
-    // The list is metadata only — playback URLs (hlsUrl/recordings) are never
-    // returned here. They come from GET /client/live-sessions/:id, which
-    // applies the per-viewer preview / subscription gate. We expose just a
-    // `hasRecordings` flag so the UI can show a "watch recording" affordance.
-    const sessions = rows.map((s) => ({
-      _id: s._id,
-      title: s.title,
-      status: s.status,
-      scheduledAt: s.scheduledAt ?? null,
-      scheduledAtDisplay: formatScheduledAt(s.scheduledAt),
-      streamId: s.streamId ?? null,
-      liveCourseIds: s.liveCourseIds ?? [],
-      hasRecordings: Array.isArray(s.recordings) && s.recordings.length > 0,
-      // The session is joinable (the live room exists on Streamos) only while
-      // status is CREATED. The client should enable the "Join" button on this
-      // and disable it otherwise (SCHEDULED = not started, ENDED/READY = over).
-      canJoin: s.status === "CREATED",
-      createdAt: s.createdAt,
-      updatedAt: s.updatedAt,
-    }));
-
-    logger.info("listSessionsForCourseClient success", { traceId, id, total, returned: sessions.length });
-    return success(res, { sessions, total, page, limit }, "Sessions fetched.");
+    const cid = liveSql.parseLiveId(id);
+    if (!cid) return failure(res, "Invalid live course id.", 422);
+    const r = await liveSql.listSessionsForCourseClient(cid, { status: req.query.status as string, upcoming: req.query.upcoming as string, page: req.query.page as string, limit: req.query.limit as string });
+    if (r === "not_found") return failure(res, "Live course not found.", 404);
+    return success(res, r, "Sessions fetched.");
   } catch (err) {
     logger.error("listSessionsForCourseClient failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list sessions.", 500);
@@ -595,157 +208,14 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
   logger.info("listLiveCourseRecordings invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
 
   try {
-    // ── MySQL branch (folders + lectures + per-quality recordings; video-URL via encryptLecture on tap) ──
-    if (liveSql.isLiveCourseMysql()) {
-      const lid = liveSql.parseLiveId(id);
-      if (!lid) { logger.warn("listLiveCourseRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const r = await liveSql.getRecordingsForClient(lid, Number.isInteger(cid) ? cid : null);
-      if (r === "not_found") { logger.warn("listLiveCourseRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
-      logger.info("listLiveCourseRecordings success (mysql)", { traceId, id, totalLectures: r.totalLectures, folderCount: r.folders.length });
-      return success(res, r, "Recorded lectures fetched.");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listLiveCourseRecordings invalid id", { traceId, id });
-      return failure(res, "Invalid live course id.", 422);
-    }
-
-    const course = await LiveCourse.findOne({ _id: id, status: true })
-      .select("_id name image")
-      .lean();
-    if (!course) {
-      logger.warn("listLiveCourseRecordings course not found", { traceId, id });
-      return failure(res, "Live course not found.", 404);
-    }
-
-    const folders = await VideoCategory.find({ liveCourseId: id, status: true })
-      .sort({ order_by: 1, createdAt: 1 })
-      .select("_id title image order_by")
-      .lean();
-
-    const folderIds = folders.map((f) => f._id);
-    const videos = folderIds.length
-      ? await Video.find({ videoCategoryId: { $in: folderIds }, status: true })
-          .sort({ order: 1, createdAt: 1 })
-          .lean()
-      : [];
-
-    const [subscribed, daysLeft] = await Promise.all([
-      hasAccessToAnyLiveCourse(req.user?.id, [id]),
-      getDaysLeftForLiveCourses(req.user?.id, [id]),
-    ]);
-
-    const videosByFolder = new Map<string, typeof videos>();
-    for (const v of videos) {
-      const key = String(v.videoCategoryId);
-      if (!videosByFolder.has(key)) videosByFolder.set(key, []);
-      videosByFolder.get(key)!.push(v);
-    }
-
-    // Per-video resume state — drives the red progress sliver / completed
-    // checkmark on each lecture row. Null when the user has never started
-    // that video (or isn't logged in).
-    const userId = req.user?.id;
-    let progressByVideo = new Map<string, any>();
-    if (userId && videos.length) {
-      const progressRows = await LectureProgress.find({
-        customerId: new mongoose.Types.ObjectId(userId),
-        videoId: { $in: videos.map((v: any) => v._id) },
-      })
-        .select("videoId positionSec durationSec completed completedAt lastWatchedAt")
-        .lean();
-      progressByVideo = new Map(progressRows.map((r: any) => [String(r.videoId), r]));
-    }
-
-    // Multi-quality recordings live on the source LiveSession (Streamos
-    // returns 5 tiers per stream). Each Video derived from a live recording
-    // carries a `liveSessionId` back-link; batch-fetch the sessions and surface
-    // the full per-quality array on the lecture row so the FE can offer a
-    // resolution switcher. Manually-uploaded Videos (no liveSessionId) get an
-    // empty array and continue to play via `aws_id` alone.
-    const liveSessionIds = videos
-      .map((v: any) => v.liveSessionId)
-      .filter((id: any): id is mongoose.Types.ObjectId => !!id);
-    let recordingsBySession = new Map<string, Array<{ quality: string | null; file_size: number | null; path: string }>>();
-    if (liveSessionIds.length) {
-      const sessions = await LiveSession.find({ _id: { $in: liveSessionIds } })
-        .select("_id recordings")
-        .lean();
-      for (const s of sessions as any[]) {
-        const shaped = (s.recordings ?? [])
-          .filter((r: any) => typeof r?.path === "string" && r.path.length > 0)
-          .map((r: any) => ({
-            quality: typeof r.quality === "string" ? r.quality : null,
-            file_size: typeof r.file_size === "number" ? r.file_size : null,
-            path: sanitizeRecordingPath(r.path),
-          }));
-        recordingsBySession.set(String(s._id), shaped);
-      }
-    }
-
-    const shapeLecture = (v: (typeof videos)[number]) => {
-      const canPlay = subscribed || v.priceType === "free";
-      const p = progressByVideo.get(String(v._id));
-      const recordings = v.liveSessionId
-        ? recordingsBySession.get(String(v.liveSessionId)) ?? []
-        : [];
-      return {
-        _id: String(v._id),
-        title: v.title ?? "",
-        topic: v.topic ?? "",
-        platform: v.platform,
-        priceType: v.priceType,
-        order: v.order,
-        locked: !canPlay,
-        // Raw platform identifiers are returned for UI purposes (thumbnails,
-        // labels). They're NOT directly playable — the FE must call
-        // GET /lecture/:videoId on tap to get the resolved+encrypted envelope.
-        youtube_id: v.youtube_id ?? null,
-        aws_id: sanitizeRecordingPath(v.aws_id ?? null),
-        vimeo_id: v.vimeo_id ?? null,
-        // Per-quality MP4 list from the source LiveSession. Empty for
-        // manually-uploaded videos (no associated live session).
-        recordings,
-        // Lightweight qualities hint for the FE download picker — keeps the
-        // mobile client from calling the lecture detail endpoint per row just
-        // to render "720p — ~320 MB". Empty array for manually-uploaded videos
-        // (no live-session recordings to derive a ladder from); the FE then
-        // falls back to the detail endpoint as before.
-        qualities: qualitiesFromSessionRecordings(recordings),
-        progress: p
-          ? {
-              positionSec: p.positionSec ?? 0,
-              durationSec: p.durationSec ?? 0,
-              completed: !!p.completed,
-              completedAt: p.completedAt ?? null,
-              lastWatchedAt: p.lastWatchedAt ?? null,
-            }
-          : null,
-      };
-    };
-
-    const folderPayload = folders.map((f) => ({
-      folderId: String(f._id),
-      title: f.title,
-      image: f.image,
-      order: f.order_by,
-      lectures: (videosByFolder.get(String(f._id)) ?? []).map(shapeLecture),
-    }));
-
-    logger.info("listLiveCourseRecordings success", { traceId, id, subscribed, totalLectures: videos.length, folderCount: folderPayload.length });
-    return success(
-      res,
-      {
-        liveCourse: { _id: String(course._id), name: course.name, image: course.image },
-        subscribed,
-        daysLeft,
-        totalLectures: videos.length,
-        folders: folderPayload,
-        purchaseOptions: subscribed ? [] : await buildPurchaseOptions([id]),
-      },
-      "Recorded lectures fetched."
-    );
+    // Folders + lectures + per-quality recordings; video-URL via encryptLecture on tap.
+    const lid = liveSql.parseLiveId(id);
+    if (!lid) { logger.warn("listLiveCourseRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const r = await liveSql.getRecordingsForClient(lid, Number.isInteger(cid) ? cid : null);
+    if (r === "not_found") { logger.warn("listLiveCourseRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
+    logger.info("listLiveCourseRecordings success (mysql)", { traceId, id, totalLectures: r.totalLectures, folderCount: r.folders.length });
+    return success(res, r, "Recorded lectures fetched.");
   } catch (err) {
     logger.error("listLiveCourseRecordings failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list recorded lectures.", 500);
@@ -765,92 +235,28 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
   logger.info("getLiveCourseLecture invoked", { traceId, path: req.originalUrl, userId, id, videoId });
 
   try {
-    // ── MySQL branch (ownership check in SQL; video-URL via the SAME encryptLecture) ──
-    if (liveSql.isLiveCourseMysql()) {
-      const lid = liveSql.parseLiveId(id);
-      const vid = liveSql.parseLiveId(videoId);
-      if (!lid || !vid) { logger.warn("getLiveCourseLecture invalid ids (mysql)", { traceId, id, videoId }); return failure(res, "Invalid live course or video id.", 422); }
-      const r = await liveSql.clientLectureVideoInCourse(lid, vid);
-      if (r === "video_not_found") { logger.warn("getLiveCourseLecture video not found (mysql)", { traceId, userId, videoId }); return failure(res, "Lecture not found.", 404); }
-      if (r === "mismatch") { logger.warn("getLiveCourseLecture course mismatch (mysql)", { traceId, userId, id, videoId }); return failure(res, "Lecture does not belong to this live course.", 404); }
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const entitled = await liveSql.isLectureEntitled(lid, Number.isInteger(cid) ? cid : null, r.priceType);
-      if (!entitled) {
-        logger.warn("getLiveCourseLecture not subscribed (mysql)", { traceId, userId, id, videoId });
-        return failure(res, "Subscribe to this live course to watch this lecture.", 403, {}, { purchaseOptions: await liveSql.buildPurchaseOptionsSql([lid]) });
-      }
-      let envelopeSql;
-      try {
-        envelopeSql = await encryptLecture(r);
-      } catch (err) {
-        logger.error("getLiveCourseLecture resolve/encrypt failed (mysql)", { traceId, videoId: String(r._id), platform: r.platform, error: getErrorMessage(err) });
-        return failure(res, "Failed to resolve playable URLs for this lecture.", 502);
-      }
-      logger.info("getLiveCourseLecture success (mysql)", { traceId, userId, id, videoId, platform: r.platform });
-      return success(res, { _id: String(r._id), title: r.title, topic: r.topic, platform: r.platform, priceType: r.priceType, ...envelopeSql }, "Lecture fetched.");
+    // Ownership check in SQL; video-URL via the SAME encryptLecture.
+    const lid = liveSql.parseLiveId(id);
+    const vid = liveSql.parseLiveId(videoId);
+    if (!lid || !vid) { logger.warn("getLiveCourseLecture invalid ids (mysql)", { traceId, id, videoId }); return failure(res, "Invalid live course or video id.", 422); }
+    const r = await liveSql.clientLectureVideoInCourse(lid, vid);
+    if (r === "video_not_found") { logger.warn("getLiveCourseLecture video not found (mysql)", { traceId, userId, videoId }); return failure(res, "Lecture not found.", 404); }
+    if (r === "mismatch") { logger.warn("getLiveCourseLecture course mismatch (mysql)", { traceId, userId, id, videoId }); return failure(res, "Lecture does not belong to this live course.", 404); }
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const entitled = await liveSql.isLectureEntitled(lid, Number.isInteger(cid) ? cid : null, r.priceType);
+    if (!entitled) {
+      logger.warn("getLiveCourseLecture not subscribed (mysql)", { traceId, userId, id, videoId });
+      return failure(res, "Subscribe to this live course to watch this lecture.", 403, {}, { purchaseOptions: await liveSql.buildPurchaseOptionsSql([lid]) });
     }
-
-    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(videoId)) {
-      logger.warn("getLiveCourseLecture invalid ids", { traceId, id, videoId });
-      return failure(res, "Invalid live course or video id.", 422);
-    }
-
-    const video = await Video.findById(videoId).lean();
-    if (!video || !video.status) { logger.warn("getLiveCourseLecture video not found", { traceId, userId, videoId }); return failure(res, "Lecture not found.", 404); }
-
-    // The video must belong to a folder owned by THIS live course.
-    const folder = await VideoCategory.findOne({
-      _id: video.videoCategoryId,
-      liveCourseId: id,
-    })
-      .select("_id")
-      .lean();
-    if (!folder) { logger.warn("getLiveCourseLecture course mismatch", { traceId, userId, id, videoId }); return failure(res, "Lecture does not belong to this live course.", 404); }
-
-    if (video.priceType !== "free") {
-      const subscribed = await hasAccessToAnyLiveCourse(req.user?.id, [id]);
-      if (!subscribed) {
-        logger.warn("getLiveCourseLecture not subscribed", { traceId, userId, id, videoId });
-        return failure(
-          res,
-          "Subscribe to this live course to watch this lecture.",
-          403,
-          {},
-          { purchaseOptions: await buildPurchaseOptions([id]) }
-        );
-      }
-    }
-
-    // Reached here only when entitled (or the lecture is free). Resolve via
-    // the per-platform transcoder (ytdl-core for youtube, VideoCrypt for aws)
-    // and ship the AES-encrypted multi-resolution envelope. The resolver caches
-    // upstream responses in Redis so repeat hits don't re-pay the round-trip.
-    let envelope;
+    let envelopeSql;
     try {
-      envelope = await encryptLecture(video);
+      envelopeSql = await encryptLecture(r);
     } catch (err) {
-      logger.error("getLiveCourseLecture resolve/encrypt failed", {
-        traceId,
-        videoId: String(video._id),
-        platform: video.platform,
-        error: getErrorMessage(err),
-      });
+      logger.error("getLiveCourseLecture resolve/encrypt failed (mysql)", { traceId, videoId: String(r._id), platform: r.platform, error: getErrorMessage(err) });
       return failure(res, "Failed to resolve playable URLs for this lecture.", 502);
     }
-
-    logger.info("getLiveCourseLecture success", { traceId, userId, id, videoId, platform: video.platform });
-    return success(
-      res,
-      {
-        _id: String(video._id),
-        title: video.title ?? "",
-        topic: video.topic ?? "",
-        platform: video.platform,
-        priceType: video.priceType,
-        ...envelope,
-      },
-      "Lecture fetched."
-    );
+    logger.info("getLiveCourseLecture success (mysql)", { traceId, userId, id, videoId, platform: r.platform });
+    return success(res, { _id: String(r._id), title: r.title, topic: r.topic, platform: r.platform, priceType: r.priceType, ...envelopeSql }, "Lecture fetched.");
   } catch (err) {
     logger.error("getLiveCourseLecture failed", { traceId, userId, id, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch lecture.", 500);
@@ -871,84 +277,16 @@ export const listLiveCourseSessionRecordings = async (req: Request, res: Respons
   logger.info("listLiveCourseSessionRecordings invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
 
   try {
-    // ── MySQL branch (metadata only; playback via gated /live-sessions/:id) ────
-    if (liveSql.isLiveCourseMysql()) {
-      const lid = liveSql.parseLiveId(id);
-      if (!lid) { logger.warn("listLiveCourseSessionRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
-      const pageN = Math.max(1, parseInt(req.query.page as string) || 1);
-      const limitN = Math.min(100, parseInt(req.query.limit as string) || 50);
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const r = await liveSql.listSessionRecordingsForClient(lid, Number.isInteger(cid) ? cid : null, pageN, limitN);
-      if (r === "not_found") { logger.warn("listLiveCourseSessionRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
-      logger.info("listLiveCourseSessionRecordings success (mysql)", { traceId, id, total: r.total, returned: r.lectures.length });
-      return success(res, r, "Live classes fetched.");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listLiveCourseSessionRecordings invalid id", { traceId, id });
-      return failure(res, "Invalid live course id.", 422);
-    }
-
-    const course = await LiveCourse.findOne({ _id: id, status: true })
-      .select("_id name image")
-      .lean();
-    if (!course) {
-      logger.warn("listLiveCourseSessionRecordings course not found", { traceId, id });
-      return failure(res, "Live course not found.", 404);
-    }
-
-    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
-
-    // Upcoming + currently-live only. CREATED = stream provisioned (live or
-    // ready to go), SCHEDULED = on the timetable but stream not yet started.
-    const query = {
-      liveCourseIds: id,
-      status: { $in: ["SCHEDULED", "CREATED"] },
-    };
-
-    const [sessions, total] = await Promise.all([
-      LiveSession.find(query)
-        // Ascending — soonest first, ongoing live classes float to the top.
-        .sort({ scheduledAt: 1, createdAt: 1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .select("title status scheduledAt endAt subject streamId hlsUrl createdAt updatedAt")
-        .lean(),
-      LiveSession.countDocuments(query),
-    ]);
-
-    const subscribed = await hasAccessToAnyLiveCourse(req.user?.id, [id]);
-
-    const lectures = sessions.map((s) => ({
-      sessionId: String(s._id),
-      title: s.title,
-      // CREATED with an hlsUrl means the stream is live right now; the FE can
-      // also infer this from streamId being present.
-      status: s.status,
-      isLive: s.status === "CREATED" && !!s.hlsUrl,
-      subject: s.subject ?? null,
-      streamId: s.streamId ?? null,
-      scheduledAt: s.scheduledAt ?? null,
-      scheduledAtDisplay: formatScheduledAt(s.scheduledAt),
-      endAt: s.endAt ?? null,
-      locked: !subscribed,
-    }));
-
-    logger.info("listLiveCourseSessionRecordings success", { traceId, id, subscribed, total, returned: lectures.length });
-    return success(
-      res,
-      {
-        liveCourse: { _id: String(course._id), name: course.name, image: course.image },
-        subscribed,
-        total,
-        page,
-        limit,
-        lectures,
-        purchaseOptions: subscribed ? [] : await buildPurchaseOptions([id]),
-      },
-      "Live classes fetched."
-    );
+    // Metadata only; playback via gated /live-sessions/:id.
+    const lid = liveSql.parseLiveId(id);
+    if (!lid) { logger.warn("listLiveCourseSessionRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
+    const pageN = Math.max(1, parseInt(req.query.page as string) || 1);
+    const limitN = Math.min(100, parseInt(req.query.limit as string) || 50);
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const r = await liveSql.listSessionRecordingsForClient(lid, Number.isInteger(cid) ? cid : null, pageN, limitN);
+    if (r === "not_found") { logger.warn("listLiveCourseSessionRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
+    logger.info("listLiveCourseSessionRecordings success (mysql)", { traceId, id, total: r.total, returned: r.lectures.length });
+    return success(res, r, "Live classes fetched.");
   } catch (err) {
     logger.error("listLiveCourseSessionRecordings failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list live classes.", 500);
@@ -972,59 +310,12 @@ export const listMyLiveCourses = async (req: Request, res: Response) => {
 
     const filterStatus =
       typeof req.query.status === "string" ? req.query.status : "all";
-    const now = new Date();
 
-    // ── MySQL branch ──────────────────────────────────────────────────────────
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = Number(customerId);
-      if (!Number.isInteger(cid)) { logger.warn("listMyLiveCourses invalid customer (mysql)", { traceId, customerId }); return failure(res, "Unauthorized.", 401); }
-      const r = await liveSql.listMyLiveCoursesForClient(cid, filterStatus, resolveBase(req));
-      logger.info("listMyLiveCourses success (mysql)", { traceId, customerId, count: r.total });
-      return success(res, r, "Your live courses fetched.");
-    }
-
-    const query: Record<string, any> = { customerId, paymentStatus: "verified" };
-    if (filterStatus === "active") {
-      query.status = true;
-      query.$or = [{ endAt: null }, { endAt: { $gte: now } }];
-    } else if (filterStatus === "expired") {
-      // Verified but no longer usable: switched off, or past its endAt.
-      query.$or = [{ status: false }, { endAt: { $lt: now } }];
-    }
-
-    const subs = await LiveCourseSubscription.find(query)
-      .sort({ createdAt: -1 })
-      .populate("liveCourseId", "name image level isPaid status")
-      .populate("planId", "name duration price")
-      .lean();
-
-    const base = resolveBase(req);
-    const liveCourses = subs.map((s) => {
-      const active =
-        s.status === true &&
-        (s.endAt == null || new Date(s.endAt).getTime() >= now.getTime());
-      const lc: any = s.liveCourseId ?? null;
-      const lcWithShare = lc
-        ? { ...lc, shareableLink: buildShareUrl("live-courses", String(lc._id), base) }
-        : null;
-      return {
-        subscriptionId: String(s._id),
-        liveCourse: lcWithShare,
-        plan: s.planId ?? null,
-        startAt: s.startAt ?? null,
-        endAt: s.endAt ?? null,
-        paymentStatus: s.paymentStatus,
-        active,
-        daysLeft: active ? computeDaysLeft(s.endAt ?? null, now) : 0,
-      };
-    });
-
-    logger.info("listMyLiveCourses success", { traceId, customerId, count: liveCourses.length });
-    return success(
-      res,
-      { liveCourses, total: liveCourses.length },
-      "Your live courses fetched."
-    );
+    const cid = Number(customerId);
+    if (!Number.isInteger(cid)) { logger.warn("listMyLiveCourses invalid customer (mysql)", { traceId, customerId }); return failure(res, "Unauthorized.", 401); }
+    const r = await liveSql.listMyLiveCoursesForClient(cid, filterStatus, resolveBase(req));
+    logger.info("listMyLiveCourses success (mysql)", { traceId, customerId, count: r.total });
+    return success(res, r, "Your live courses fetched.");
   } catch (err) {
     logger.error("listMyLiveCourses failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch your live courses.", 500);
@@ -1135,95 +426,11 @@ export const listAllUpcomingSessions = async (req: Request, res: Response) => {
   try {
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
-    const now = new Date();
 
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(String(customerId ?? ""));
-      const r = await liveSql.listAllUpcomingSessions({ page, limit });
-      const sessions = await Promise.all(r.sessions.map(async (s: any) => ({ ...s, subscribed: cid ? await liveSql.hasAccessToAnyLiveCourse(cid, (s.liveCourseIds ?? []).map(Number)) : false })));
-      return success(res, { sessions, total: r.total, page: r.page, limit: r.limit }, "Upcoming sessions fetched.");
-    }
-
-    // Only sessions whose source courses are still active should surface in the
-    // discovery feed — a disabled course shouldn't advertise classes.
-    const activeCourseIds = await LiveCourse.find({ status: true })
-      .select("_id")
-      .lean();
-    if (activeCourseIds.length === 0) {
-      return success(
-        res,
-        { sessions: [], total: 0, page, limit },
-        "Upcoming sessions fetched."
-      );
-    }
-    const courseIdList = activeCourseIds.map((c) => c._id);
-
-    const query = {
-      liveCourseIds: { $in: courseIdList },
-      status: "SCHEDULED",
-      scheduledAt: { $ne: null, $gte: now },
-    };
-
-    // Pull the customer's currently-active subscriptions in parallel so we can
-    // stamp each session row with `subscribed`. Anonymous viewers (no token /
-    // no subscriptions) just get `subscribed: false` everywhere.
-    const [rows, total, subs] = await Promise.all([
-      LiveSession.find(query)
-        .sort({ scheduledAt: 1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .select("title subject educatorId scheduledAt endAt status streamId liveCourseIds")
-        .populate("educatorId", "name image")
-        .populate("liveCourseIds", "name image")
-        .lean(),
-      LiveSession.countDocuments(query),
-      customerId
-        ? LiveCourseSubscription.find({
-            customerId,
-            paymentStatus: "verified",
-            status: true,
-            $or: [{ endAt: null }, { endAt: { $gte: now } }],
-          })
-            .select("liveCourseId")
-            .lean()
-        : Promise.resolve([] as Array<{ liveCourseId: mongoose.Types.ObjectId }>),
-    ]);
-
-    const ownedCourseIds = new Set(subs.map((s) => String(s.liveCourseId)));
-
-    const sessions = rows.map((s: any) => {
-      const courseList = Array.isArray(s.liveCourseIds) ? s.liveCourseIds : [];
-      // Subscribed to ANY of the session's courses is enough — multi-course
-      // sessions unlock as soon as the student owns one of them (same rule
-      // as `hasAccessToAnyLiveCourse`).
-      const subscribed = courseList.some(
-        (c: any) => c && ownedCourseIds.has(String(c._id ?? c))
-      );
-      return {
-        sessionId: String(s._id),
-        title: s.title,
-        subject: s.subject || s.title,
-        educator: s.educatorId ?? null,
-        liveCourses: courseList,
-        scheduledAt: s.scheduledAt ?? null,
-        scheduledAtDisplay: formatScheduledAt(s.scheduledAt),
-        endAt: s.endAt ?? null,
-        status: s.status,
-        streamId: s.streamId ?? null,
-        canJoin: s.status === "CREATED",
-        // UI uses this to label the row: paid users see "Join", others see
-        // "Preview 3 min / Buy". The actual gate runs on
-        // GET /api/v1/client/live-sessions/:id.
-        subscribed,
-      };
-    });
-
-    logger.info("listAllUpcomingSessions success", { traceId, customerId, total, returned: sessions.length });
-    return success(
-      res,
-      { sessions, total, page, limit },
-      "Upcoming sessions fetched."
-    );
+    const cid = liveSql.parseLiveId(String(customerId ?? ""));
+    const r = await liveSql.listAllUpcomingSessions({ page, limit });
+    const sessions = await Promise.all(r.sessions.map(async (s: any) => ({ ...s, subscribed: cid ? await liveSql.hasAccessToAnyLiveCourse(cid, (s.liveCourseIds ?? []).map(Number)) : false })));
+    return success(res, { sessions, total: r.total, page: r.page, limit: r.limit }, "Upcoming sessions fetched.");
   } catch (err) {
     logger.error("listAllUpcomingSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch upcoming sessions.", 500);
@@ -1245,87 +452,11 @@ export const listLiveNowSessions = async (req: Request, res: Response) => {
   try {
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
-    const now = new Date();
 
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(String(customerId ?? ""));
-      const r = await liveSql.listLiveNowSessions({ page, limit });
-      const sessions = await Promise.all(r.sessions.map(async (s: any) => ({ ...s, subscribed: cid ? await liveSql.hasAccessToAnyLiveCourse(cid, (s.liveCourseIds ?? []).map(Number)) : false })));
-      return success(res, { sessions, total: r.total, page: r.page, limit: r.limit }, "Live-now sessions fetched.");
-    }
-
-    const activeCourseIds = await LiveCourse.find({ status: true })
-      .select("_id")
-      .lean();
-    if (activeCourseIds.length === 0) {
-      return success(
-        res,
-        { sessions: [], total: 0, page, limit },
-        "Live-now sessions fetched."
-      );
-    }
-    const courseIdList = activeCourseIds.map((c) => c._id);
-
-    const query = {
-      liveCourseIds: { $in: courseIdList },
-      status: "CREATED",
-    };
-
-    const [rows, total, subs] = await Promise.all([
-      LiveSession.find(query)
-        // Earliest-started first: a class that's been live longer floats up
-        // before one that just kicked off.
-        .sort({ scheduledAt: 1, createdAt: 1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .select("title subject educatorId scheduledAt endAt status streamId liveCourseIds")
-        .populate("educatorId", "name image")
-        .populate("liveCourseIds", "name image")
-        .lean(),
-      LiveSession.countDocuments(query),
-      customerId
-        ? LiveCourseSubscription.find({
-            customerId,
-            paymentStatus: "verified",
-            status: true,
-            $or: [{ endAt: null }, { endAt: { $gte: now } }],
-          })
-            .select("liveCourseId")
-            .lean()
-        : Promise.resolve([] as Array<{ liveCourseId: mongoose.Types.ObjectId }>),
-    ]);
-
-    const ownedCourseIds = new Set(subs.map((s) => String(s.liveCourseId)));
-
-    const sessions = rows.map((s: any) => {
-      const courseList = Array.isArray(s.liveCourseIds) ? s.liveCourseIds : [];
-      const subscribed = courseList.some(
-        (c: any) => c && ownedCourseIds.has(String(c._id ?? c))
-      );
-      return {
-        sessionId: String(s._id),
-        title: s.title,
-        subject: s.subject || s.title,
-        educator: s.educatorId ?? null,
-        liveCourses: courseList,
-        scheduledAt: s.scheduledAt ?? null,
-        scheduledAtDisplay: formatScheduledAt(s.scheduledAt),
-        endAt: s.endAt ?? null,
-        status: s.status,
-        streamId: s.streamId ?? null,
-        // status === CREATED guarantees this is true; keeping the flag for
-        // shape parity with /upcoming-sessions.
-        canJoin: true,
-        subscribed,
-      };
-    });
-
-    logger.info("listLiveNowSessions success", { traceId, customerId, total, returned: sessions.length });
-    return success(
-      res,
-      { sessions, total, page, limit },
-      "Live-now sessions fetched."
-    );
+    const cid = liveSql.parseLiveId(String(customerId ?? ""));
+    const r = await liveSql.listLiveNowSessions({ page, limit });
+    const sessions = await Promise.all(r.sessions.map(async (s: any) => ({ ...s, subscribed: cid ? await liveSql.hasAccessToAnyLiveCourse(cid, (s.liveCourseIds ?? []).map(Number)) : false })));
+    return success(res, { sessions, total: r.total, page: r.page, limit: r.limit }, "Live-now sessions fetched.");
   } catch (err) {
     logger.error("listLiveNowSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch live-now sessions.", 500);
@@ -1344,124 +475,12 @@ export const getLiveCourseSchedule = async (req: Request, res: Response) => {
   logger.info("getLiveCourseSchedule invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id });
 
   try {
-    // ─── SQL branch ───
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(id);
-      if (cid == null) return failure(res, "Invalid live course id.", 422);
-      const r = await liveSql.getScheduleForClient(cid, liveSql.parseLiveId(String(req.user?.id ?? "")), req.query.upcoming === "true");
-      if (r === "not_found") return failure(res, "Live course not found.", 404);
-      logger.info("getLiveCourseSchedule success (sql)", { traceId, id, timetableCount: r.timetable.length, folderCount: r.scheduleFolders.length });
-      return success(res, r, "Schedule fetched.");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("getLiveCourseSchedule invalid id", { traceId, id });
-      return failure(res, "Invalid live course id.", 422);
-    }
-
-    const course = await LiveCourse.findOne({ _id: id, status: true })
-      .select("_id name scheduleFolders")
-      .lean();
-    if (!course) {
-      logger.warn("getLiveCourseSchedule course not found", { traceId, id });
-      return failure(res, "Live course not found.", 404);
-    }
-
-    // Only sessions that carry a scheduledAt belong on a timetable.
-    const upcoming = req.query.upcoming === "true";
-    const query: Record<string, any> = { liveCourseIds: id, scheduledAt: { $ne: null } };
-    if (upcoming) {
-      query.scheduledAt = { $ne: null, $gte: new Date() };
-    }
-
-    // upcoming=true → ascending scheduledAt puts the next-to-start class on top.
-    // Otherwise → future classes first (nearest at top), then past classes
-    // most-recent-first, so the timetable always opens on "what's next".
-    const now = new Date();
-    let sessions;
-    if (upcoming) {
-      sessions = await LiveSession.find(query)
-        .sort({ scheduledAt: 1 })
-        .select("title subject educatorId scheduledAt endAt status streamId")
-        .populate("educatorId", "name image")
-        .lean();
-    } else {
-      sessions = await LiveSession.aggregate([
-        { $match: query },
-        {
-          $addFields: {
-            _bucket: { $cond: [{ $gte: ["$scheduledAt", now] }, 0, 1] },
-            _proximity: { $abs: { $subtract: ["$scheduledAt", now] } },
-          },
-        },
-        { $sort: { _bucket: 1, _proximity: 1 } },
-        {
-          $project: {
-            title: 1, subject: 1, educatorId: 1,
-            scheduledAt: 1, endAt: 1, status: 1, streamId: 1,
-          },
-        },
-        {
-          $lookup: {
-            from: "ws_course_educators",
-            localField: "educatorId",
-            foreignField: "_id",
-            as: "educatorId",
-            pipeline: [{ $project: { name: 1, image: 1 } }],
-          },
-        },
-        { $addFields: { educatorId: { $ifNull: [{ $arrayElemAt: ["$educatorId", 0] }, null] } } },
-      ]);
-    }
-
-    const timetable = sessions.map((s) => ({
-      sessionId: String(s._id),
-      // `subject` falls back to the session title when not separately set.
-      subject: s.subject || s.title,
-      title: s.title,
-      educator: s.educatorId ?? null, // populated { _id, name, image } or null
-      date: s.scheduledAt ?? null,
-      startAt: s.scheduledAt ?? null,
-      startAtDisplay: formatScheduledAt(s.scheduledAt),
-      endAt: s.endAt ?? null,
-      status: s.status,
-      streamId: s.streamId ?? null,
-    }));
-
-    const scheduleFolders = ((course as any).scheduleFolders ?? [])
-      .slice()
-      .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
-      .map((f: any) => ({
-        _id: f._id,
-        title: f.title,
-        image: f.image ?? null,
-        order: f.order ?? 0,
-        status: f.status !== false,
-        entries: (f.entries ?? [])
-          .slice()
-          .sort(
-            (a: any, b: any) =>
-              ((a.order ?? 0) - (b.order ?? 0)) ||
-              (new Date(a.date).getTime() - new Date(b.date).getTime())
-          ),
-      }))
-      // Clients only see active folders.
-      .filter((f: any) => f.status);
-
-    const daysLeft = await getDaysLeftForLiveCourses(req.user?.id, [id]);
-
-    logger.info("getLiveCourseSchedule success", { traceId, id, timetableCount: timetable.length, folderCount: scheduleFolders.length });
-    return success(
-      res,
-      {
-        liveCourse: { _id: String(course._id), name: course.name },
-        timetable,
-        scheduleFolders,
-        total: timetable.length,
-        daysLeft,
-      },
-      "Schedule fetched."
-    );
+    const cid = liveSql.parseLiveId(id);
+    if (cid == null) return failure(res, "Invalid live course id.", 422);
+    const r = await liveSql.getScheduleForClient(cid, liveSql.parseLiveId(String(req.user?.id ?? "")), req.query.upcoming === "true");
+    if (r === "not_found") return failure(res, "Live course not found.", 404);
+    logger.info("getLiveCourseSchedule success (sql)", { traceId, id, timetableCount: r.timetable.length, folderCount: r.scheduleFolders.length });
+    return success(res, r, "Schedule fetched.");
   } catch (err) {
     logger.error("getLiveCourseSchedule failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch schedule.", 500);
@@ -1486,107 +505,11 @@ export const listMyScheduleByCategory = async (req: Request, res: Response) => {
       return failure(res, "Unauthorized.", 401);
     }
 
-    // ─── SQL branch ───
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(String(customerId));
-      if (cid == null) return success(res, { liveCourses: [], totalLiveCourses: 0 }, "Your schedule fetched.");
-      const r = await liveSql.listMyScheduleForClient(cid);
-      logger.info("listMyScheduleByCategory success (sql)", { traceId, customerId, totalLiveCourses: r.totalLiveCourses });
-      return success(res, r, "Your schedule fetched.");
-    }
-
-    const now = new Date();
-
-    const subs = await LiveCourseSubscription.find({
-      customerId,
-      paymentStatus: "verified",
-      status: true,
-      $or: [{ endAt: null }, { endAt: { $gte: now } }],
-    })
-      .sort({ createdAt: -1 })
-      .populate({
-        path: "liveCourseId",
-        select: "name image level status scheduleFolders",
-        match: { status: true },
-      })
-      .lean();
-
-    type PopulatedCourse = {
-      _id: any;
-      name: string;
-      image: string;
-      level: string;
-      scheduleFolders?: any[];
-    };
-
-    // For each course, pick the longest-lived sub's endAt — same lifetime-wins
-    // rule as getDaysLeftForLiveCourses (lifetime null beats any date).
-    const endAtByCourse = new Map<string, Date | null>();
-    let hasLifetimeByCourse = new Map<string, boolean>();
-    for (const s of subs as any[]) {
-      if (!s.liveCourseId) continue;
-      const key = String(s.liveCourseId._id ?? s.liveCourseId);
-      const endAt: Date | null = s.endAt ?? null;
-      if (endAt === null) {
-        hasLifetimeByCourse.set(key, true);
-        endAtByCourse.set(key, null);
-        continue;
-      }
-      if (hasLifetimeByCourse.get(key)) continue;
-      const prev = endAtByCourse.get(key);
-      if (!prev || endAt.getTime() > (prev as Date).getTime()) endAtByCourse.set(key, endAt);
-    }
-
-    const populated = (subs
-      .map((s) => s.liveCourseId)
-      .filter(Boolean) as unknown) as PopulatedCourse[];
-
-    // De-dup: extension subs can populate the same course twice.
-    const uniqueById = new Map<string, PopulatedCourse>();
-    for (const c of populated) {
-      const key = String(c._id);
-      if (!uniqueById.has(key)) uniqueById.set(key, c);
-    }
-
-    const liveCourses = Array.from(uniqueById.values()).map((c) => {
-      const folders = (c.scheduleFolders ?? [])
-        .filter((f: any) => f.status !== false)
-        .slice()
-        .sort((a: any, b: any) => (a.order ?? 0) - (b.order ?? 0))
-        .map((f: any) => ({
-          _id: String(f._id),
-          title: f.title,
-          image: f.image ?? null,
-          order: f.order ?? 0,
-          entryCount: Array.isArray(f.entries) ? f.entries.length : 0,
-        }));
-
-      const key = String(c._id);
-      const endAt = hasLifetimeByCourse.get(key) ? null : (endAtByCourse.get(key) ?? null);
-      return {
-        _id: String(c._id),
-        name: c.name,
-        image: c.image,
-        level: c.level,
-        scheduleFolders: folders,
-        daysLeft: hasLifetimeByCourse.get(key) ? null : computeDaysLeft(endAt, now),
-      };
-    });
-
-    logger.info("listMyScheduleByCategory success", {
-      traceId,
-      customerId,
-      totalLiveCourses: liveCourses.length,
-      totalFolders: liveCourses.reduce((n, c) => n + c.scheduleFolders.length, 0),
-    });
-    return success(
-      res,
-      {
-        liveCourses,
-        totalLiveCourses: liveCourses.length,
-      },
-      "Your schedule fetched."
-    );
+    const cid = liveSql.parseLiveId(String(customerId));
+    if (cid == null) return success(res, { liveCourses: [], totalLiveCourses: 0 }, "Your schedule fetched.");
+    const r = await liveSql.listMyScheduleForClient(cid);
+    logger.info("listMyScheduleByCategory success (sql)", { traceId, customerId, totalLiveCourses: r.totalLiveCourses });
+    return success(res, r, "Your schedule fetched.");
   } catch (err) {
     logger.error("listMyScheduleByCategory failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch your schedule.", 500);
@@ -1607,77 +530,15 @@ export const getMyScheduleFolder = async (req: Request, res: Response) => {
   try {
     if (!customerId) return failure(res, "Unauthorized.", 401);
 
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(id);
-      if (!cid) return failure(res, "Invalid live course id.", 422);
-      // folderId is a synthetic/backfilled string id — not validated as ObjectId.
-      const custId = liveSql.parseLiveId(String(customerId));
-      if (!custId || !(await liveSql.hasAccessToAnyLiveCourse(custId, [cid]))) return failure(res, "You don't have access to this live course.", 403);
-      const r = await liveSql.getScheduleFolderForClient(cid, folderId);
-      if (r === "not_found") return failure(res, "Live course not found.", 404);
-      if (r === "folder_not_found") return failure(res, "Folder not found.", 404);
-      return success(res, r, "Folder fetched.");
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) return failure(res, "Invalid live course id.", 422);
-    if (!mongoose.Types.ObjectId.isValid(folderId)) return failure(res, "Invalid folder id.", 422);
-
-    const now = new Date();
-    const owned = await LiveCourseSubscription.exists({
-      customerId,
-      liveCourseId: id,
-      paymentStatus: "verified",
-      status: true,
-      $or: [{ endAt: null }, { endAt: { $gte: now } }],
-    });
-    if (!owned) {
-      logger.warn("getMyScheduleFolder forbidden", { traceId, customerId, id });
-      return failure(res, "You don't have access to this live course.", 403);
-    }
-
-    const course = await LiveCourse.findOne({ _id: id, status: true })
-      .select("_id name scheduleFolders")
-      .lean();
-    if (!course) return failure(res, "Live course not found.", 404);
-
-    const folder = ((course as any).scheduleFolders ?? []).find(
-      (f: any) => String(f._id) === folderId && f.status !== false
-    );
-    if (!folder) return failure(res, "Schedule folder not found.", 404);
-
-    const entries = (folder.entries ?? [])
-      .slice()
-      .sort(
-        (a: any, b: any) =>
-          ((a.order ?? 0) - (b.order ?? 0)) ||
-          (new Date(a.date).getTime() - new Date(b.date).getTime())
-      )
-      .map((e: any) => ({
-        _id: String(e._id),
-        date: e.date,
-        subject: e.subject,
-        time: e.time,
-        order: e.order ?? 0,
-      }));
-
-    const daysLeft = await getDaysLeftForLiveCourses(customerId, [id]);
-
-    return success(
-      res,
-      {
-        liveCourse: { _id: String(course._id), name: course.name },
-        scheduleFolder: {
-          _id: String(folder._id),
-          title: folder.title,
-          image: folder.image ?? null,
-          order: folder.order ?? 0,
-        },
-        entries,
-        total: entries.length,
-        daysLeft,
-      },
-      "Schedule folder fetched."
-    );
+    const cid = liveSql.parseLiveId(id);
+    if (!cid) return failure(res, "Invalid live course id.", 422);
+    // folderId is a synthetic/backfilled string id — not validated as ObjectId.
+    const custId = liveSql.parseLiveId(String(customerId));
+    if (!custId || !(await liveSql.hasAccessToAnyLiveCourse(custId, [cid]))) return failure(res, "You don't have access to this live course.", 403);
+    const r = await liveSql.getScheduleFolderForClient(cid, folderId);
+    if (r === "not_found") return failure(res, "Live course not found.", 404);
+    if (r === "folder_not_found") return failure(res, "Folder not found.", 404);
+    return success(res, r, "Folder fetched.");
   } catch (err) {
     logger.error("getMyScheduleFolder failed", { traceId, customerId, id, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch schedule folder.", 500);

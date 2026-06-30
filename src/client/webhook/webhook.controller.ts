@@ -1,37 +1,10 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
-import { EbookOrder } from "../../models/ebook/EbookOrder.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
-import { EbookPrice } from "../../models/ebook/EbookPrice.model";
-import { BookOrder } from "../../models/book/BookOrder.model";
-import { nextTrackingId } from "../../models/book/Counter.model";
-import { COURIER } from "../../config/courier";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
-import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
-import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
-import {
-  PackageCourseEbookOrderStatus,
-  PackageCourseEbookPaymentType,
-  BookOrderStatus,
-} from "../../models/enums";
-import { computeEndAt, extendEndAt } from "../../utils/planDuration";
-import { creditReferrer } from "../referral/credit-referrer";
-import { applyWalletDebit } from "../referral/wallet-debit";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
-import {
-  isLiveCourseOrderMysql,
-  fulfillLiveCourseWebhookMysql,
-} from "../../modules/live-course-order/live-course-order.service";
-import {
-  isEbookOrderMysql,
-  fulfillEbookWebhookMysql,
-} from "../../modules/ebook-order/ebook-order.service";
-import {
-  isBookOrderMysql,
-  fulfillBookWebhookMysql,
-} from "../../modules/book-order/book-order.service";
+import { fulfillLiveCourseWebhookMysql } from "../../modules/live-course-order/live-course-order.service";
+import { fulfillEbookWebhookMysql } from "../../modules/ebook-order/ebook-order.service";
+import { fulfillBookWebhookMysql } from "../../modules/book-order/book-order.service";
 import * as tsOrderSql from "../../modules/test-series-order/test-series-order.service";
 
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || "";
@@ -78,204 +51,43 @@ export const paymentWebhook = async (req: Request, res: Response) => {
     const razorpayOrderId = payment.order_id as string;
     const razorpayPaymentId = payment.id as string;
 
-    // ── MySQL ebook webhook fulfillment (ebook-order, flag-gated) ────────────
+    // ── Ebook webhook fulfillment (ebook-order) ──────────────────────────────
     // Keyed by razorpayOrderId alone (no customer in the webhook payload). Same
-    // idempotent fold-or-fresh as /verify. Dual-read: miss → fall through to Mongo.
-    if (isEbookOrderMysql()) {
-      const fulfilled = await fulfillEbookWebhookMysql(razorpayOrderId, razorpayPaymentId);
-      if (fulfilled) {
-        logger.info("paymentWebhook ebook activated (mysql)", { traceId, razorpayOrderId, orderId: fulfilled._id });
-        return res.status(200).json({ success: true, message: "Ebook subscription activated." });
-      }
-      // miss → fall through to the Mongo path below (dual-read fallback).
+    // idempotent fold-or-fresh as /verify.
+    const ebookFulfilled = await fulfillEbookWebhookMysql(razorpayOrderId, razorpayPaymentId);
+    if (ebookFulfilled) {
+      logger.info("paymentWebhook ebook activated (mysql)", { traceId, razorpayOrderId, orderId: ebookFulfilled._id });
+      return res.status(200).json({ success: true, message: "Ebook subscription activated." });
     }
 
-    // Try ebook order first
-    const ebookOrder = await EbookOrder.findOne({ razorpayOrderId });
-    if (ebookOrder) {
-      if (ebookOrder.status !== PackageCourseEbookOrderStatus.COMPLETE) {
-        ebookOrder.status = PackageCourseEbookOrderStatus.COMPLETE;
-        ebookOrder.razorpayPaymentId = razorpayPaymentId;
-        await ebookOrder.save();
-
-        // Wallet debit — idempotent on orderId, so whichever path (this webhook
-        // or /payment/verify) fulfills first deducts; the other is a no-op.
-        if (ebookOrder.coinsUsed && ebookOrder.coinsUsed > 0) {
-          await applyWalletDebit({
-            customerId: ebookOrder.customerId,
-            orderId: ebookOrder._id as any,
-            coin: ebookOrder.coinsUsed,
-            source: "ebook",
-            traceId,
-          });
-        }
-
-        const plan = await EbookPrice.findById(ebookOrder.planId);
-        if (plan) {
-          // `duration` is stored as DAYS — shared helper applies setDate so
-          // day-precision is preserved (matches /payment/verify ebook branch).
-          const startAt = new Date();
-
-          // Extend-on-active: fold the purchased days onto an existing active
-          // subscription instead of creating a second overlapping row. Mirrors
-          // the /payment/verify ebook branch so whichever path fulfills the
-          // order first (verify or this webhook) produces the same result.
-          const existingActive = await EbookSubscription.findOne({
-            customerId: ebookOrder.customerId,
-            ebookId: ebookOrder.ebookId,
-            status: true,
-            endAt: { $gt: startAt },
-          }).sort({ endAt: -1 });
-
-          if (existingActive) {
-            existingActive.endAt = extendEndAt({
-              currentEndAt: existingActive.endAt,
-              durationMonths: plan.duration,
-              asDays: true,
-              now: startAt,
-            });
-            existingActive.price = (existingActive.price || 0) + (ebookOrder.orderPrice || 0);
-            existingActive.orderId = ebookOrder._id;
-            // Accumulate promoter commission (currency) across re-purchases —
-            // mirrors verify.controller.
-            existingActive.promoterCommission =
-              (existingActive.promoterCommission || 0) + (ebookOrder.promoterCommission || 0);
-            if (ebookOrder.promoterId) existingActive.promoterId = ebookOrder.promoterId;
-            if (ebookOrder.promoterPercentage != null) existingActive.promoterPercentage = ebookOrder.promoterPercentage;
-            await existingActive.save();
-          } else {
-            const endAt = computeEndAt({ startAt, durationMonths: plan.duration, asDays: true });
-            await EbookSubscription.create({
-              orderId: ebookOrder._id,
-              customerId: ebookOrder.customerId,
-              ebookId: ebookOrder.ebookId,
-              price: ebookOrder.orderPrice,
-              startAt,
-              endAt,
-              paymentType: PackageCourseEbookPaymentType.ONLINE,
-              status: true,
-              promocodeId: ebookOrder.promocodeId ?? null,
-              promoterId: ebookOrder.promoterId ?? null,
-              promoterPercentage: ebookOrder.promoterPercentage ?? null,
-              promoterCommission: ebookOrder.promoterCommission ?? null,
-            });
-          }
-        }
-      }
-      logger.info("paymentWebhook ebook activated", { traceId, razorpayOrderId, orderId: ebookOrder._id });
-      return res.status(200).json({ success: true, message: "Ebook order activated." });
-    }
-
-    // ── MySQL book webhook fulfillment (book-order, flag-gated) ──────────────
-    // AWB allocated SQL-side in verifyBookOrderMysql's txn (no Mongo Counter).
-    if (isBookOrderMysql()) {
-      const fulfilled = await fulfillBookWebhookMysql(razorpayOrderId, razorpayPaymentId);
-      if (fulfilled) {
-        logger.info("paymentWebhook book verified (mysql)", { traceId, razorpayOrderId, orderId: fulfilled._id });
-        return res.status(200).json({ success: true, message: "Book order verified." });
-      }
-      // miss → fall through to Mongo.
-    }
-
-    // ── MySQL test-series webhook fulfillment (test-series-order, flag-gated) ──
-    if (tsOrderSql.isTestSeriesOrderMysql()) {
-      const fulfilled = await tsOrderSql.fulfillWebhookMysql(razorpayOrderId, razorpayPaymentId);
-      if (fulfilled) {
-        logger.info("paymentWebhook test-series activated (mysql)", { traceId, razorpayOrderId, subscriptionId: fulfilled._id });
-        return res.status(200).json({ success: true, message: "Test series subscription activated." });
-      }
-      // miss → fall through to Mongo.
-    }
-
-    // Try book order
-    const bookOrder = await BookOrder.findOne({ razorpayOrderId });
-    if (bookOrder) {
-      if (bookOrder.status !== BookOrderStatus.VERIFIED) {
-        bookOrder.status = BookOrderStatus.VERIFIED;
-        bookOrder.razorpayPaymentId = razorpayPaymentId;
-        bookOrder.paidAt = new Date();
-        // Allocate the sequential courier tracking id if /payment/verify didn't
-        // beat us to it (see book-order-courier-tracking.md Point 1 & 2).
-        if (!bookOrder.tracking.trackingId) {
-          const allocated = await nextTrackingId(COURIER.TIRUPATI.INITIAL_Number);
-          bookOrder.tracking.trackingId = String(allocated);
-        }
-        await bookOrder.save();
-      }
-      logger.info("paymentWebhook book verified", { traceId, razorpayOrderId, orderId: bookOrder._id });
+    // ── Book webhook fulfillment (book-order) ────────────────────────────────
+    // AWB allocated SQL-side in verifyBookOrderMysql's txn.
+    const bookFulfilled = await fulfillBookWebhookMysql(razorpayOrderId, razorpayPaymentId);
+    if (bookFulfilled) {
+      logger.info("paymentWebhook book verified (mysql)", { traceId, razorpayOrderId, orderId: bookFulfilled._id });
       return res.status(200).json({ success: true, message: "Book order verified." });
     }
 
-    // ── MySQL live-course webhook fulfillment (live-course-order, flag-gated) ──
+    // ── Test-series webhook fulfillment (test-series-order) ───────────────────
+    const tsFulfilled = await tsOrderSql.fulfillWebhookMysql(razorpayOrderId, razorpayPaymentId);
+    if (tsFulfilled) {
+      logger.info("paymentWebhook test-series activated (mysql)", { traceId, razorpayOrderId, subscriptionId: tsFulfilled._id });
+      return res.status(200).json({ success: true, message: "Test series subscription activated." });
+    }
+
+    // ── Live-course webhook fulfillment (live-course-order) ───────────────────
     // Single-table SQL sub carries razorpayOrderId; fulfill (fold-or-fresh,
-    // idempotent) keyed by order id. Dual-read: miss → fall through to Mongo.
-    if (isLiveCourseOrderMysql()) {
-      const fulfilled = await fulfillLiveCourseWebhookMysql(razorpayOrderId, razorpayPaymentId);
-      if (fulfilled) {
-        logger.info("paymentWebhook live course activated (mysql)", { traceId, razorpayOrderId, subscriptionId: fulfilled._id });
-        return res.status(200).json({ success: true, message: "Live course subscription activated." });
-      }
-      // miss → fall through to the Mongo path below (dual-read fallback).
+    // idempotent) keyed by order id.
+    const liveFulfilled = await fulfillLiveCourseWebhookMysql(razorpayOrderId, razorpayPaymentId);
+    if (liveFulfilled) {
+      logger.info("paymentWebhook live course activated (mysql)", { traceId, razorpayOrderId, subscriptionId: liveFulfilled._id });
+      return res.status(200).json({ success: true, message: "Live course subscription activated." });
     }
 
-    // Live course subscription — unlike PackageCourseSubscription, this row
-    // DOES carry razorpayOrderId, so the webhook can fulfill it directly as a
-    // safety net for when the client never calls /payment/verify. Idempotent:
-    // skips if already verified. Mirrors the verify.controller live branch.
-    const liveCourseSub = await LiveCourseSubscription.findOne({ razorpayOrderId });
-    if (liveCourseSub) {
-      if (liveCourseSub.paymentStatus !== "verified") {
-        // `duration` is stored as DAYS (see LiveCoursePlan) — use setDate, not
-        // setMonth. Mirrors the verify.controller live-course branch.
-        const plan = await LiveCoursePlan.findById(liveCourseSub.planId)
-          .select("duration")
-          .lean();
-        const durationDays = plan?.duration ?? 0;
-
-        const now = new Date();
-        const endAt = computeEndAt({ startAt: now, durationMonths: durationDays, asDays: true });
-
-        liveCourseSub.paymentStatus = "verified";
-        liveCourseSub.razorpayPaymentId = razorpayPaymentId;
-        liveCourseSub.paidAt = now;
-        liveCourseSub.startAt = now;
-        liveCourseSub.endAt = endAt;
-        await liveCourseSub.save();
-
-        // Credit the referrer when this purchase redeemed a referral code.
-        // Idempotent on the subscription _id, so this is safe even when
-        // /payment/verify already credited for the same order.
-        if (liveCourseSub.referrerId) {
-          await creditReferrer({
-            referrerId: liveCourseSub.referrerId,
-            buyerId: liveCourseSub.customerId,
-            orderId: liveCourseSub._id as any,
-            paidAmount: liveCourseSub.paidAmount ?? 0,
-            source: "liveCourse",
-          });
-        }
-
-        // Wallet debit — idempotent, so safe even if /payment/verify already
-        // debited for the same order.
-        if (liveCourseSub.coinsUsed && liveCourseSub.coinsUsed > 0) {
-          await applyWalletDebit({
-            customerId: liveCourseSub.customerId,
-            orderId: liveCourseSub._id as any,
-            coin: liveCourseSub.coinsUsed,
-            source: "liveCourse",
-            traceId,
-          });
-        }
-      }
-      logger.info("paymentWebhook live course activated", { traceId, razorpayOrderId, subscriptionId: liveCourseSub._id });
-      return res
-        .status(200)
-        .json({ success: true, message: "Live course subscription activated." });
-    }
-
-    // Course/package subscription — matched by razorpayOrderId stored on payload
-    // Our PackageCourseSubscription doesn't carry razorpayOrderId; webhook relies on the client
-    // calling /orders/verify-payment with the razorpay ids after checkout. We accept here but no-op.
+    // Course/package subscription — matched by razorpayOrderId stored on payload.
+    // The course/package subscription row doesn't carry razorpayOrderId; the webhook
+    // relies on the client calling /orders/verify-payment with the razorpay ids after
+    // checkout. We accept here but no-op.
     logger.info("paymentWebhook no match", { traceId, razorpayOrderId });
     return res.status(200).json({ success: true, message: "No matching order — acknowledged." });
   } catch (e: any) {

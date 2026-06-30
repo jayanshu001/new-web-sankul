@@ -41,6 +41,7 @@ export const toEbookPlanDto = (p: PriceDto): EbookPlanDto => ({
   price: p.price,
   isDefault: p.isDefault,
   status: p.status,
+  isMostPopular: p.isMostPopular,
   createdAt: p.createdAt,
   updatedAt: p.updatedAt,
 });

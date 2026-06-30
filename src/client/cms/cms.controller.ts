@@ -3,18 +3,13 @@ import {
   listFaqs as listFaqsService,
   listFaqTypes as listFaqTypesService,
 } from "../../modules/faq/faq.service";
-import { LiveBannerSlider } from "../../models/system/LiveBannerSlider.model";
 import { listBanners as listBannersService } from "../../modules/banner-slider/banner-slider.service";
 import { listTestimonials as listTestimonialsService } from "../../modules/testimonial/testimonial.service";
 import { getClientTerms } from "../../modules/terms/terms.service";
 import { getActivePopup as getActivePopupService } from "../../modules/popup/popup.service";
 import { checkClientUpgrade } from "../../modules/cms/upgrade-check.service";
 import { getVersionSettings } from "../../modules/version/version.service";
-import { SocialLink } from "../../models/system/SocialLink.model";
-import { SocialLinkType } from "../../models/system/SocialLinkType.model";
-import { CurrentAffair } from "../../models/system/CurrentAffair.model";
 import {
-  isCmsExtraMysql,
   listClientSocialLinks as listClientSocialLinksSql,
   listSocialLinkTypes as listSocialLinkTypesSql,
   listClientCurrentAffairs as listClientCurrentAffairsSql,
@@ -94,12 +89,7 @@ export const listLiveBanners = async (_req: Request, res: Response) => {
   logger.info("listLiveBanners invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const data = isCmsExtraMysql()
-      ? await listLiveBannersSql()
-      : await LiveBannerSlider.find()
-          .sort({ orderBy: 1 })
-          .populate("liveCourseId")
-          .lean();
+    const data = await listLiveBannersSql();
     logger.info("listLiveBanners success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -129,12 +119,7 @@ export const listSocialLinks = async (_req: Request, res: Response) => {
   logger.info("listSocialLinks invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const data = isCmsExtraMysql()
-      ? await listClientSocialLinksSql()
-      : await SocialLink.find({ status: true })
-          .populate("typeId", "_id title")
-          .sort({ order: 1 })
-          .lean();
+    const data = await listClientSocialLinksSql();
     logger.info("listSocialLinks success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -149,9 +134,7 @@ export const listSocialLinkTypes = async (_req: Request, res: Response) => {
   logger.info("listSocialLinkTypes invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const data = isCmsExtraMysql()
-      ? await listSocialLinkTypesSql()
-      : await SocialLinkType.find().sort({ title: 1 }).lean();
+    const data = await listSocialLinkTypesSql();
     logger.info("listSocialLinkTypes success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
@@ -170,16 +153,7 @@ export const listCurrentAffairs = async (req: Request, res: Response) => {
 
   try {
     const limit = Math.max(parseInt(req.query.limit as string) || 0, 0);
-    let data;
-    if (isCmsExtraMysql()) {
-      data = await listClientCurrentAffairsSql(limit);
-    } else {
-      let q = CurrentAffair.find({ status: true })
-        .sort({ createdAt: -1 })
-        .select("title image youtubeLink");
-      if (limit > 0) q = q.limit(limit);
-      data = await q.lean();
-    }
+    const data = await listClientCurrentAffairsSql(limit);
     logger.info("listCurrentAffairs success", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {

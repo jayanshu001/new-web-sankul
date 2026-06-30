@@ -11,13 +11,12 @@
  * the backend and returns a uniform `{ ok, status, message?, data? }` envelope
  * so the controller's response shape is unchanged.
  */
-import { isMysqlModule } from "../../config/migration";
 import { customerAddressRepository as repo } from "./customer-address.repository";
 import { toAddressDto } from "./customer-address.transformer";
 import type { AddressCreateInput, AddressUpdateInput } from "./customer-address.types";
 
 export const ADDRESS_MODULE = "customer-address";
-export const isAddressMysql = (): boolean => isMysqlModule(ADDRESS_MODULE);
+export const isAddressMysql = (): boolean => true;
 
 /** Parse a string id (route param / customer id) to a positive int, else null. */
 export const parseAddressId = (id: string): number | null => {

@@ -1,58 +1,27 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { VideoCategory } from "../../models/course/VideoCategory.model";
-import { Video } from "../../models/course/Video.model";
-import { MaterialCategory } from "../../models/course/MaterialCategory.model";
-import { Material } from "../../models/course/Material.model";
-import { ExamCategory } from "../../models/exam/ExamCategory.model";
-import { collectCategoryTreeIds } from "../../utils/categoryTree";
-import { buildRegexCondition } from "../../utils/searchFilter";
-import { Exam } from "../../models/exam/Exam.model";
-import { ExamResult } from "../../models/exam/ExamResult.model";
-import { ExamCountdownCategory } from "../../models/examCountdown/ExamCountdownCategory.model";
-import { ExamCountdown } from "../../models/examCountdown/ExamCountdown.model";
-import { ExamStatus, ExamType } from "../../models/enums";
-import { Package } from "../../models/course/Package.model";
-import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
-import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
 import { BookOrderStatus } from "../../models/enums";
-import { purchasedPackageEndAtMap } from "../package/package.controller";
-import { getDaysLeftMapForLiveCourses } from "../live-course/entitlement";
-import { computeDaysLeft } from "../../utils/planDuration";
-import { Book } from "../../models/book/Book.model";
-import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
-import { LectureProgress } from "../../models/customer/LectureProgress.model";
-import { collapseProgressByVideo } from "../learning/collapseProgress";
-import { resolveVideoScope } from "../course/resolveVideoScope";
 import * as cvSql from "../../modules/client-category-video/client-category-video.service";
 import * as clientMatSql from "../../modules/client-material/client-material.service";
 import * as clientExamSql from "../../modules/client-exam/client-exam.service";
-import { isExamCountdownMysql, parseEcId } from "../../modules/exam-countdown/exam-countdown.service";
+import { parseEcId } from "../../modules/exam-countdown/exam-countdown.service";
 import * as ecClientSql from "../../modules/exam-countdown/exam-countdown.client";
-import { getPurchasedMaterialIds, shapeMaterialForClient, listDirectMaterialsForCategory } from "../material/entitlement";
-import { LiveSession } from "../../models/course/LiveSession.model";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
 import { resolveVideoSource } from "../../utils/videoResolver";
-import { defaultListingQualities, qualitiesFromSessionRecordings } from "../../utils/videoQualities";
+import { defaultListingQualities } from "../../utils/videoQualities";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import {
-  isMaterialMysql,
   getCategoryChildren as getMaterialCategoryChildren,
   parseMaterialCategoryId,
 } from "../../modules/catalog-material/catalog-material.service";
 import {
-  isExamMysql,
   getCategoryChildren as getExamCategoryChildren,
   parseExamCategoryId,
 } from "../../modules/catalog-exam/catalog-exam.service";
 import {
-  isVideoMysql,
   getVideoCategoryChildren,
   parseVideoCategoryId,
 } from "../../modules/catalog-video/catalog-video.service";
@@ -137,191 +106,46 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
   logger.info("listVideosByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // ─── SQL branch (int id-space) ───
-    if (cvSql.isCategoryVideoMysql()) {
-      const catId = cvSql.parseCvId(id);
-      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
-      const category = await cvSql.findCategory(catId);
-      if (!category) return res.status(404).json({ success: false, message: "Video category not found." });
-
-      const { pageNum, limitNum, skip, search } = parsePaging(req);
-      const typeQ = String(req.query.type ?? "").toLowerCase();
-      const priceType = typeQ === "free" || typeQ === "paid" ? (typeQ as "free" | "paid") : null;
-
-      const [{ rows, total }, scope] = await Promise.all([
-        cvSql.listVideos({ categoryId: catId, search: search || null, priceType, skip, limitNum }),
-        cvSql.scopeForCategory(catId),
-      ]);
-
-      const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
-      const progMap = uid != null ? await cvSql.progressByVideo(uid, rows.map((v) => v.id)) : new Map<number, any>();
-
-      const envByVideo = new Map<number, any>();
-      await Promise.all(rows.map(async (v) => {
-        try { const env = await encryptVideoEnvelope(v as any); envByVideo.set(v.id, env.request); }
-        catch (err: any) { logger.warn("listVideosByCategory (sql) envelope failed", { traceId, videoId: v.id, error: err?.message }); envByVideo.set(v.id, null); }
-      }));
-
-      const list = rows.map((v) => {
-        const isPaid = v.priceType === "paid";
-        const p = progMap.get(v.id);
-        return {
-          _id: String(v.id), title: v.title, topic: v.topic, platform: v.platform,
-          isPaid,
-          progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
-          recordings: [], // SQL videos carry no live-session back-link
-          qualities: defaultListingQualities(),
-          request: envByVideo.get(v.id) ?? null,
-        };
-      });
-
-      logger.info("listVideosByCategory success (sql)", { traceId, categoryId: id, total, returned: list.length, scopeKind: scope?.kind ?? null });
-      return res.status(200).json({
-        success: true,
-        data: { category: cvSql.categoryDto(category), scope, list },
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listVideosByCategory invalid id", { traceId, categoryId: id });
-      return res.status(400).json({ success: false, message: "Invalid category id." });
-    }
-
-    const category = await VideoCategory.findById(id).lean();
-    if (!category) {
-      logger.warn("listVideosByCategory category not found", { traceId, categoryId: id });
-      return res.status(404).json({ success: false, message: "Video category not found." });
-    }
+    const catId = cvSql.parseCvId(id);
+    if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
+    const category = await cvSql.findCategory(catId);
+    if (!category) return res.status(404).json({ success: false, message: "Video category not found." });
 
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-    const filter: any = { videoCategoryId: id, status: true };
-    { const c = buildRegexCondition(search); if (c) filter.title = c; }
-    // Optional price filter. `?type=free` → only free videos, `?type=paid` →
-    // only paid. Any other value is ignored (no filter). Maps to the Video
-    // model's `priceType` field.
     const typeQ = String(req.query.type ?? "").toLowerCase();
-    if (typeQ === "free" || typeQ === "paid") filter.priceType = typeQ;
+    const priceType = typeQ === "free" || typeQ === "paid" ? (typeQ as "free" | "paid") : null;
 
-    const [rawList, total, scope] = await Promise.all([
-      Video.find(filter).sort({ order: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
-      Video.countDocuments(filter),
-      // The owning container (course / package / live course) the FE must echo
-      // back into the progress heartbeat's `scope`. Resolved once per category
-      // since every video here shares the same category. `null` for an orphan
-      // category linked to no container.
-      resolveVideoScope(id),
+    const [{ rows, total }, scope] = await Promise.all([
+      cvSql.listVideos({ categoryId: catId, search: search || null, priceType, skip, limitNum }),
+      cvSql.scopeForCategory(catId),
     ]);
 
-    // Per-video resume state — lets the FE render the red progress sliver
-    // and "X% watched" / completed checkmark on each row. Null if the user
-    // has never started that video (or isn't logged in).
-    const userId = req.user?.id;
-    let progressByVideo = new Map<string, any>();
-    if (userId && rawList.length) {
-      const progressRows = await LectureProgress.find({
-        customerId: new mongoose.Types.ObjectId(userId),
-        videoId: { $in: rawList.map((v: any) => v._id) },
-      })
-        .select("videoId positionSec durationSec completed completedAt lastWatchedAt")
-        .lean();
-      progressByVideo = new Map(progressRows.map((r: any) => [String(r.videoId), r]));
-    }
+    const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
+    const progMap = uid != null ? await cvSql.progressByVideo(uid, rows.map((v) => v.id)) : new Map<number, any>();
 
-    // Multi-quality MP4/m3u8 recordings live on the source LiveSession (Streamos
-    // returns multiple tiers per stream). Videos promoted from a live recording
-    // carry a `liveSessionId` back-link; batch-fetch the sessions and surface
-    // the per-quality array on the row so the FE can offer a resolution
-    // switcher / download size estimate without hitting the detail endpoint.
-    // Manually-uploaded videos (no liveSessionId) get [] and use the synthetic
-    // standard ladder for `qualities` instead.
-    const liveSessionIds = rawList
-      .map((v: any) => v.liveSessionId)
-      .filter((id: any): id is mongoose.Types.ObjectId => !!id);
-    let recordingsBySession = new Map<string, Array<{ quality: string | null; file_size: number | null; path: string }>>();
-    if (liveSessionIds.length) {
-      const sessions = await LiveSession.find({ _id: { $in: liveSessionIds } })
-        .select("_id recordings")
-        .lean();
-      for (const s of sessions as any[]) {
-        const shaped = (s.recordings ?? [])
-          .filter((r: any) => typeof r?.path === "string" && r.path.length > 0)
-          .map((r: any) => ({
-            quality: typeof r.quality === "string" ? r.quality : null,
-            file_size: typeof r.file_size === "number" ? r.file_size : null,
-            path: sanitizeRecordingPath(r.path),
-          }));
-        recordingsBySession.set(String(s._id), shaped);
-      }
-    }
+    const envByVideo = new Map<number, any>();
+    await Promise.all(rows.map(async (v) => {
+      try { const env = await encryptVideoEnvelope(v as any); envByVideo.set(v.id, env.request); }
+      catch (err: any) { logger.warn("listVideosByCategory (sql) envelope failed", { traceId, videoId: v.id, error: err?.message }); envByVideo.set(v.id, null); }
+    }));
 
-    // Playable URL envelopes, one per row, built in parallel. Each video gets
-    // the SAME {request:{files:{token,hls,progressive}}} contract the detail
-    // endpoint (getVideoByCategory) returns, so the FE can download
-    // (hls/progressive) straight from the list without a per-row detail call.
-    // resolveVideoSource is Redis-cached (4h YouTube / 24h AWS), so warm pages
-    // are cheap; cold pages pay one upstream call per uncached video but run
-    // concurrently. Failures are isolated per video — a single unresolvable
-    // video yields request:null instead of failing the whole page.
-    const envelopeByVideo = new Map<string, any>();
-    await Promise.all(
-      rawList.map(async (v: any) => {
-        try {
-          const env = await encryptVideoEnvelope(v);
-          envelopeByVideo.set(String(v._id), env.request);
-        } catch (err: any) {
-          logger.warn("listVideosByCategory envelope resolve failed", {
-            traceId,
-            videoId: String(v._id),
-            platform: v.platform,
-            error: err?.message,
-          });
-          envelopeByVideo.set(String(v._id), null);
-        }
-      })
-    );
-
-    const list = rawList.map((v: any) => {
-      // Drop the raw string `priceType` from the row and expose a boolean
-      // `isPaid` instead (isPaid = priceType === "paid").
-      const { priceType, ...shapedDoc } = shapeVideoForList(v);
-      const shaped = shapedDoc;
-      const isPaid = priceType === "paid";
-      const p = progressByVideo.get(String(v._id));
-      const recordings = v.liveSessionId
-        ? recordingsBySession.get(String(v.liveSessionId)) ?? []
-        : [];
-      // Prefer qualities derived from the actual recordings ladder when we have
-      // it; otherwise fall back to the synthetic 4-tier ladder so the FE picker
-      // still renders something useful for manually-uploaded videos.
-      const qualities = recordings.length
-        ? qualitiesFromSessionRecordings(recordings)
-        : defaultListingQualities();
+    const list = rows.map((v) => {
+      const isPaid = v.priceType === "paid";
+      const p = progMap.get(v.id);
       return {
-        ...shaped,
+        _id: String(v.id), title: v.title, topic: v.topic, platform: v.platform,
         isPaid,
-        progress: p
-          ? {
-              positionSec: p.positionSec ?? 0,
-              durationSec: p.durationSec ?? 0,
-              completed: !!p.completed,
-              completedAt: p.completedAt ?? null,
-              lastWatchedAt: p.lastWatchedAt ?? null,
-            }
-          : null,
-        recordings,
-        qualities,
-        // Encrypted playback envelope: { files: { token, hls, progressive } },
-        // identical to the detail endpoint. null when the video's source
-        // couldn't be resolved (upstream error / missing id).
-        request: envelopeByVideo.get(String(v._id)) ?? null,
+        progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
+        recordings: [], // SQL videos carry no live-session back-link
+        qualities: defaultListingQualities(),
+        request: envByVideo.get(v.id) ?? null,
       };
     });
 
-    logger.info("listVideosByCategory success", { traceId, categoryId: id, total, returned: list.length, scopeKind: scope?.kind ?? null });
+    logger.info("listVideosByCategory success (sql)", { traceId, categoryId: id, total, returned: list.length, scopeKind: scope?.kind ?? null });
     return res.status(200).json({
       success: true,
-      data: { category, scope, list },
+      data: { category: cvSql.categoryDto(category), scope, list },
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
@@ -341,73 +165,21 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
   logger.info("getVideoByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, videoId, userId: req.user?.id });
 
   try {
-    // ─── SQL branch (int id-space) ───
-    if (cvSql.isCategoryVideoMysql()) {
-      const catId = cvSql.parseCvId(id);
-      const vidId = cvSql.parseCvId(videoId);
-      if (catId == null || vidId == null) return res.status(422).json({ success: false, message: "Invalid category or video id." });
-      const v = await cvSql.findVideoInCategory(catId, vidId);
-      if (!v) return res.status(404).json({ success: false, message: "Video not found in this category." });
-      let env, sc;
-      try {
-        [env, sc] = await Promise.all([encryptVideoEnvelope(v as any), cvSql.scopeForCategory(v.videoCategoryId ?? catId)]);
-      } catch (err: any) {
-        logger.error("getVideoByCategory (sql) resolve/encrypt failed", { traceId, videoId, error: err?.message });
-        return res.status(502).json({ success: false, message: "Failed to resolve playable URLs for this video." });
-      }
-      return res.status(200).json({
-        success: true,
-        data: { _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, scope: sc, ...env },
-        message: "Video fetched.",
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(videoId)) {
-      logger.warn("getVideoByCategory invalid ids", { traceId, categoryId: id, videoId });
-      return res.status(422).json({ success: false, message: "Invalid category or video id." });
-    }
-
-    const video = await Video.findOne({ _id: videoId, videoCategoryId: id, status: true }).lean();
-    if (!video) {
-      logger.warn("getVideoByCategory video not found", { traceId, categoryId: id, videoId });
-      return res.status(404).json({ success: false, message: "Video not found in this category." });
-    }
-
-    let envelope;
-    let scope;
+    const catId = cvSql.parseCvId(id);
+    const vidId = cvSql.parseCvId(videoId);
+    if (catId == null || vidId == null) return res.status(422).json({ success: false, message: "Invalid category or video id." });
+    const v = await cvSql.findVideoInCategory(catId, vidId);
+    if (!v) return res.status(404).json({ success: false, message: "Video not found in this category." });
+    let env, sc;
     try {
-      // Resolve the owning container alongside the playback envelope so the FE
-      // can echo `scope` straight into the progress heartbeat — no guessing.
-      [envelope, scope] = await Promise.all([
-        encryptVideoEnvelope(video),
-        resolveVideoScope(video.videoCategoryId),
-      ]);
+      [env, sc] = await Promise.all([encryptVideoEnvelope(v as any), cvSql.scopeForCategory(v.videoCategoryId ?? catId)]);
     } catch (err: any) {
-      logger.error("getVideoByCategory resolve/encrypt failed", {
-        traceId,
-        videoId,
-        platform: video.platform,
-        error: err?.message,
-        stack: err?.stack,
-      });
-      return res.status(502).json({
-        success: false,
-        message: "Failed to resolve playable URLs for this video.",
-      });
+      logger.error("getVideoByCategory (sql) resolve/encrypt failed", { traceId, videoId, error: err?.message });
+      return res.status(502).json({ success: false, message: "Failed to resolve playable URLs for this video." });
     }
-
-    logger.info("getVideoByCategory success", { traceId, categoryId: id, videoId, platform: video.platform, scopeKind: scope?.kind ?? null });
     return res.status(200).json({
       success: true,
-      data: {
-        _id: String(video._id),
-        title: video.title ?? "",
-        topic: video.topic ?? "",
-        platform: video.platform,
-        priceType: video.priceType,
-        scope,
-        ...envelope,
-      },
+      data: { _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, scope: sc, ...env },
       message: "Video fetched.",
     });
   } catch (error: any) {
@@ -423,58 +195,19 @@ export const listMaterialsByCategory = async (req: Request, res: Response) => {
   logger.info("listMaterialsByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // ─── SQL branch (int id-space) ───
-    if (clientMatSql.isClientMaterialMysql()) {
-      const catId = clientMatSql.parseMatId(id);
-      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
-      const { pageNum, limitNum, skip, search } = parsePaging(req);
-      const typeQ = String(req.query.type ?? "").toLowerCase();
-      const type = typeQ === "free" || typeQ === "paid" ? (typeQ as "free" | "paid") : null;
-      const userNum = clientMatSql.parseMatId(String(req.user?.id ?? ""));
-      const r = await clientMatSql.listMaterialsByCategoryPaged(catId, userNum, { skip, take: limitNum, search, type });
-      if (!r) return res.status(404).json({ success: false, message: "Material category not found." });
-      logger.info("listMaterialsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
-      return res.status(200).json({
-        success: true,
-        data: { category: r.category, list: r.list },
-        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listMaterialsByCategory invalid id", { traceId, categoryId: id });
-      return res.status(400).json({ success: false, message: "Invalid category id." });
-    }
-
-    const category = await MaterialCategory.findById(id).lean();
-    if (!category) {
-      logger.warn("listMaterialsByCategory category not found", { traceId, categoryId: id });
-      return res.status(404).json({ success: false, message: "Material category not found." });
-    }
-
+    const catId = clientMatSql.parseMatId(id);
+    if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-    const filter: any = { materialCategoryId: id, status: true };
-    { const c = buildRegexCondition(search); if (c) filter.title = c; }
-    // Optional price filter. `?type=free` → only free materials, `?type=paid` →
-    // only paid. Any other value is ignored (no filter). Maps to the Material
-    // model's `isPaid` flag. Mirrors listVideosByCategory's `type`/priceType.
     const typeQ = String(req.query.type ?? "").toLowerCase();
-    if (typeQ === "free") filter.isPaid = false;
-    else if (typeQ === "paid") filter.isPaid = true;
-
-    const [rawList, total] = await Promise.all([
-      Material.find(filter).sort({ order: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
-      Material.countDocuments(filter),
-    ]);
-    // Surface isPaid/isPurchased and gate file/directLink for locked paid items.
-    const ownedIds = await getPurchasedMaterialIds(req.user?.id, rawList as any);
-    const list = rawList.map((m) => shapeMaterialForClient(m, ownedIds));
-
-    logger.info("listMaterialsByCategory success", { traceId, categoryId: id, total, returned: list.length });
+    const type = typeQ === "free" || typeQ === "paid" ? (typeQ as "free" | "paid") : null;
+    const userNum = clientMatSql.parseMatId(String(req.user?.id ?? ""));
+    const r = await clientMatSql.listMaterialsByCategoryPaged(catId, userNum, { skip, take: limitNum, search, type });
+    if (!r) return res.status(404).json({ success: false, message: "Material category not found." });
+    logger.info("listMaterialsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
     return res.status(200).json({
       success: true,
-      data: { category, list },
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      data: { category: r.category, list: r.list },
+      pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
     });
   } catch (error: any) {
     logger.error("listMaterialsByCategory failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
@@ -489,74 +222,17 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
   logger.info("listExamsByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // ─── SQL branch (int id-space) ───
-    if (clientExamSql.isClientExamMysql()) {
-      const catId = clientExamSql.parseExamId(id);
-      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
-      const { pageNum, limitNum, skip, search } = parsePaging(req);
-      const userNum = clientExamSql.parseExamId(String(req.user?.id ?? ""));
-      const r = await clientExamSql.listExamsByCategoryPaged(catId, userNum, { skip, take: limitNum, search });
-      if (!r) return res.status(404).json({ success: false, message: "Exam category not found." });
-      logger.info("listExamsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
-      return res.status(200).json({
-        success: true,
-        data: { category: r.category, list: r.list },
-        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listExamsByCategory invalid id", { traceId, categoryId: id });
-      return res.status(400).json({ success: false, message: "Invalid category id." });
-    }
-
-    const category = await ExamCategory.findById(id).lean();
-    if (!category) {
-      logger.warn("listExamsByCategory category not found", { traceId, categoryId: id });
-      return res.status(404).json({ success: false, message: "Exam category not found." });
-    }
-
+    const catId = clientExamSql.parseExamId(id);
+    if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-    // Daily tests are surfaced through their own dedicated flow, not category listings.
-    const filter: any = { categoryId: id, status: ExamStatus.PUBLISHED, type: { $ne: ExamType.DAILY } };
-    { const c = buildRegexCondition(search); if (c) filter.title = c; }
-
-    const [list, total] = await Promise.all([
-      Exam.find(filter).sort({ orderBy: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
-      Exam.countDocuments(filter),
-    ]);
-
-    // Decorate each exam with the current user's latest attempt (mirrors the
-    // exam.controller listExamsByCategory contract: isCompleted + lastResult).
-    const customerId = req.user?.id;
-    const resultByExam = new Map<string, any>();
-    if (customerId && list.length) {
-      const examIds = list.map((e: any) => e._id);
-      const results = await ExamResult.find({
-        customerId,
-        examId: { $in: examIds },
-        status: true,
-      })
-        .select("examId score total success failed skip attempt timing updatedAt")
-        .sort({ updatedAt: -1, attemptNumber: -1 })
-        .lean();
-      for (const r of results) {
-        const key = String(r.examId);
-        if (!resultByExam.has(key)) resultByExam.set(key, r);
-      }
-    }
-
-    const decoratedList = list.map((e: any) => ({
-      ...e,
-      isCompleted: resultByExam.has(String(e._id)),
-      lastResult: resultByExam.get(String(e._id)) ?? null,
-    }));
-
-    logger.info("listExamsByCategory success", { traceId, categoryId: id, total, returned: decoratedList.length });
+    const userNum = clientExamSql.parseExamId(String(req.user?.id ?? ""));
+    const r = await clientExamSql.listExamsByCategoryPaged(catId, userNum, { skip, take: limitNum, search });
+    if (!r) return res.status(404).json({ success: false, message: "Exam category not found." });
+    logger.info("listExamsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
     return res.status(200).json({
       success: true,
-      data: { category, list: decoratedList },
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      data: { category: r.category, list: r.list },
+      pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
     });
   } catch (error: any) {
     logger.error("listExamsByCategory failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
@@ -577,64 +253,21 @@ export const listVideoCategoryChildren = async (req: Request, res: Response) => 
   logger.info("listVideoCategoryChildren invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // MySQL branch first — a MySQL category id is an int, so this precedes the
-    // ObjectId guard. Children resolve via the SQL `parent` self-FK (the Mongo
-    // `childCategoryIds[]` embed has no SQL column).
-    if (isVideoMysql()) {
-      const catId = parseVideoCategoryId(id);
-      if (catId == null) {
-        logger.warn("listVideoCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
-        return res.status(400).json({ success: false, message: "Invalid category id." });
-      }
-      const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-      const result = await getVideoCategoryChildren(catId, search || undefined);
-      if (!result) {
-        logger.warn("listVideoCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
-        return res.status(404).json({ success: false, message: "Video category not found." });
-      }
-      logger.info("listVideoCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
-      return res.status(200).json({ success: true, data: result });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listVideoCategoryChildren invalid id", { traceId, categoryId: id });
+    // A MySQL category id is an int. Children resolve via the SQL `parent`
+    // self-FK.
+    const catId = parseVideoCategoryId(id);
+    if (catId == null) {
+      logger.warn("listVideoCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
     }
-
-    const parent: any = await VideoCategory.findById(id).lean();
-    if (!parent) {
-      logger.warn("listVideoCategoryChildren parent not found", { traceId, categoryId: id });
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const result = await getVideoCategoryChildren(catId, search || undefined);
+    if (!result) {
+      logger.warn("listVideoCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
       return res.status(404).json({ success: false, message: "Video category not found." });
     }
-
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
-    const childFilter: any = { _id: { $in: childIds }, status: true };
-    { const c = buildRegexCondition(search); if (c) childFilter.title = c; }
-    const children = childIds.length
-      ? await VideoCategory.find(childFilter)
-          .sort({ order_by: 1 })
-          .lean()
-      : [];
-
-    const list = await Promise.all(
-      children.map(async (cat: any) => {
-        const count = await Video.countDocuments({
-          videoCategoryId: cat._id,
-          status: true,
-        });
-        return {
-          category: {
-            ...cat,
-            havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
-            count,
-          },
-        };
-      })
-    );
-
-    logger.info("listVideoCategoryChildren success", { traceId, categoryId: id, childCount: list.length });
-    return res.status(200).json({ success: true, data: { parent, list } });
+    logger.info("listVideoCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
+    return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     logger.error("listVideoCategoryChildren failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -648,75 +281,21 @@ export const listMaterialCategoryChildren = async (req: Request, res: Response) 
   logger.info("listMaterialCategoryChildren invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // MySQL branch first — a MySQL category id is an int, so this precedes the
-    // ObjectId guard. Children resolve via the SQL `parent` self-FK (the Mongo
-    // `childCategoryIds[]` embed has no SQL column).
-    if (isMaterialMysql()) {
-      const catId = parseMaterialCategoryId(id);
-      if (catId == null) {
-        logger.warn("listMaterialCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
-        return res.status(400).json({ success: false, message: "Invalid category id." });
-      }
-      const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-      const result = await getMaterialCategoryChildren(catId, search || undefined);
-      if (!result) {
-        logger.warn("listMaterialCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
-        return res.status(404).json({ success: false, message: "Material category not found." });
-      }
-      logger.info("listMaterialCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
-      return res.status(200).json({ success: true, data: result });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listMaterialCategoryChildren invalid id", { traceId, categoryId: id });
+    // A MySQL category id is an int. Children resolve via the SQL `parent`
+    // self-FK.
+    const catId = parseMaterialCategoryId(id);
+    if (catId == null) {
+      logger.warn("listMaterialCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
     }
-
-    const parent: any = await MaterialCategory.findById(id).lean();
-    if (!parent) {
-      logger.warn("listMaterialCategoryChildren parent not found", { traceId, categoryId: id });
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const result = await getMaterialCategoryChildren(catId, search || undefined);
+    if (!result) {
+      logger.warn("listMaterialCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
       return res.status(404).json({ success: false, message: "Material category not found." });
     }
-
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const userId = req.user?.id;
-    const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
-    const childFilter: any = { _id: { $in: childIds }, status: true };
-    { const c = buildRegexCondition(search); if (c) childFilter.title = c; }
-    const children = childIds.length
-      ? await MaterialCategory.find(childFilter)
-          .sort({ order: 1 })
-          .lean()
-      : [];
-
-    // Inline each child's OWN direct materials (not its subtree) alongside its
-    // count, so a child that has both sub-folders and its own materials surfaces
-    // them here. Same shape as the materials listing (isPaid/isPurchased gated).
-    const list = await Promise.all(
-      children.map(async (cat: any) => {
-        const [count, materials] = await Promise.all([
-          Material.countDocuments({ materialCategoryId: cat._id, status: true }),
-          // `search` filters the child CATEGORIES (above), not the inlined
-          // materials — return each surviving child's full direct material set.
-          listDirectMaterialsForCategory(cat._id, userId),
-        ]);
-        return {
-          category: {
-            ...cat,
-            havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
-            count,
-          },
-          materials,
-        };
-      })
-    );
-
-    // The queried parent can itself have directly-attached materials (it has
-    // children AND its own materials). Surface those too.
-    const parentMaterials = await listDirectMaterialsForCategory(parent._id, userId);
-
-    logger.info("listMaterialCategoryChildren success", { traceId, categoryId: id, childCount: list.length });
-    return res.status(200).json({ success: true, data: { parent, parentMaterials, list } });
+    logger.info("listMaterialCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
+    return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     logger.error("listMaterialCategoryChildren failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -730,68 +309,21 @@ export const listExamCategoryChildren = async (req: Request, res: Response) => {
   logger.info("listExamCategoryChildren invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // MySQL branch first — a MySQL category id is an int, so this precedes the
-    // ObjectId guard. Children resolve via the SQL `parent_id` self-FK.
-    if (isExamMysql()) {
-      const catId = parseExamCategoryId(id);
-      if (catId == null) {
-        logger.warn("listExamCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
-        return res.status(400).json({ success: false, message: "Invalid category id." });
-      }
-      const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-      const result = await getExamCategoryChildren(catId, search || undefined);
-      if (!result) {
-        logger.warn("listExamCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
-        return res.status(404).json({ success: false, message: "Exam category not found." });
-      }
-      logger.info("listExamCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
-      return res.status(200).json({ success: true, data: result });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listExamCategoryChildren invalid id", { traceId, categoryId: id });
+    // A MySQL category id is an int. Children resolve via the SQL `parent_id`
+    // self-FK.
+    const catId = parseExamCategoryId(id);
+    if (catId == null) {
+      logger.warn("listExamCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
     }
-
-    const parent: any = await ExamCategory.findById(id).lean();
-    if (!parent) {
-      logger.warn("listExamCategoryChildren parent not found", { traceId, categoryId: id });
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const result = await getExamCategoryChildren(catId, search || undefined);
+    if (!result) {
+      logger.warn("listExamCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
       return res.status(404).json({ success: false, message: "Exam category not found." });
     }
-
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const childIds = (parent.childCategoryIds || []) as mongoose.Types.ObjectId[];
-    // ExamCategory's display field is `name` (not `title`), so search matches `name`.
-    const childFilter: any = { _id: { $in: childIds }, status: true };
-    { const c = buildRegexCondition(search); if (c) childFilter.name = c; }
-    const children = childIds.length
-      ? await ExamCategory.find(childFilter)
-          .sort({ orderBy: 1 })
-          .lean()
-      : [];
-
-    const list = await Promise.all(
-      children.map(async (cat: any) => {
-        // Roll the count up through nested child folders and count only
-        // PUBLISHED exams, matching what the client can actually open.
-        const ids = await collectCategoryTreeIds(ExamCategory, cat);
-        const count = await Exam.countDocuments({
-          categoryId: { $in: ids },
-          status: ExamStatus.PUBLISHED,
-        });
-        return {
-          category: {
-            ...cat,
-            title: (cat as any).name,
-            havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
-            count,
-          },
-        };
-      })
-    );
-
-    logger.info("listExamCategoryChildren success", { traceId, categoryId: id, childCount: list.length });
-    return res.status(200).json({ success: true, data: { parent, list } });
+    logger.info("listExamCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
+    return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     logger.error("listExamCategoryChildren failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -805,68 +337,16 @@ export const listPackagesByExamCountdownCategory = async (req: Request, res: Res
   logger.info("listPackagesByExamCountdownCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // ─── SQL branch (int id-space) ───
-    if (isExamCountdownMysql()) {
-      const catId = parseEcId(id);
-      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
-      const { pageNum, limitNum, skip, search } = parsePaging(req);
-      const userNum = parseEcId(String(req.user?.id ?? ""));
-      const r = await ecClientSql.listPackagesByCountdownCategory(catId, userNum, { skip, take: limitNum, search });
-      if (!r) return res.status(404).json({ success: false, message: "Exam countdown category not found." });
-      return res.status(200).json({
-        success: true,
-        data: { category: r.category, list: r.list },
-        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listPackagesByExamCountdownCategory invalid id", { traceId, categoryId: id });
-      return res.status(400).json({ success: false, message: "Invalid category id." });
-    }
-
-    const category = await ExamCountdownCategory.findById(id).lean();
-    if (!category) {
-      logger.warn("listPackagesByExamCountdownCategory category not found", { traceId, categoryId: id });
-      return res.status(404).json({ success: false, message: "Exam countdown category not found." });
-    }
-
+    const catId = parseEcId(id);
+    if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-    const filter: any = { examCountdownCategoryIds: id, active: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-
-    const [packages, total] = await Promise.all([
-      Package.find(filter)
-        .populate("packageTypeId", "_id name")
-        .populate("goalId", "_id title")
-        .sort({ order: 1, createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      Package.countDocuments(filter),
-    ]);
-
-    const list = await Promise.all(
-      packages.map(async (p) => {
-        const [plans, subCount] = await Promise.all([
-          PackageCourseEbookPrice.find({ packageId: p._id, status: true }).sort({ duration: 1 }),
-          PackageCourseSubscription.countDocuments({ packageId: p._id, status: true }),
-        ]);
-        return {
-          ...p.toObject(),
-          plans: {
-            withMaterial: plans.filter((pl) => pl.withMaterial),
-            withoutMaterial: plans.filter((pl) => !pl.withMaterial),
-          },
-          subscriberCount: subCount,
-        };
-      })
-    );
-
-    logger.info("listPackagesByExamCountdownCategory success", { traceId, categoryId: id, total, returned: list.length });
+    const userNum = parseEcId(String(req.user?.id ?? ""));
+    const r = await ecClientSql.listPackagesByCountdownCategory(catId, userNum, { skip, take: limitNum, search });
+    if (!r) return res.status(404).json({ success: false, message: "Exam countdown category not found." });
     return res.status(200).json({
       success: true,
-      data: { category, list },
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      data: { category: r.category, list: r.list },
+      pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
     });
   } catch (error: any) {
     logger.error("listPackagesByExamCountdownCategory failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
@@ -888,147 +368,16 @@ export const listProductsByExamCountdown = async (req: Request, res: Response) =
   logger.info("listProductsByExamCountdown invoked", { traceId, path: req.originalUrl, examCountdownId: id, userId: req.user?.id });
 
   try {
-    // ─── SQL branch (int id-space) ───
-    if (isExamCountdownMysql()) {
-      const ecId = parseEcId(id);
-      if (ecId == null) return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
-      const { pageNum, limitNum, skip, search } = parsePaging(req);
-      const userNum = parseEcId(String(req.user?.id ?? ""));
-      const r = await ecClientSql.listProductsByCountdown(ecId, userNum, { skip, take: limitNum, search });
-      if (!r) return res.status(404).json({ success: false, message: "Exam countdown not found." });
-      return res.status(200).json({
-        success: true,
-        data: { examCountdown: r.examCountdown, list: r.list },
-        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listProductsByExamCountdown invalid id", { traceId, examCountdownId: id });
-      return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
-    }
-
-    const examCountdown = await ExamCountdown.findById(id).lean();
-    if (!examCountdown) {
-      logger.warn("listProductsByExamCountdown not found", { traceId, examCountdownId: id });
-      return res.status(404).json({ success: false, message: "Exam countdown not found." });
-    }
-
+    const ecId = parseEcId(id);
+    if (ecId == null) return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-
-    const packageFilter: any = { examCountdownIds: id, active: true };
-    { const c = buildRegexCondition(search); if (c) packageFilter.name = c; }
-    const liveFilter: any = { examCountdownIds: id, status: true };
-    { const c = buildRegexCondition(search); if (c) liveFilter.name = c; }
-
-    const [packages, liveCourses] = await Promise.all([
-      Package.find(packageFilter)
-        .populate("packageTypeId", "_id name")
-        .populate("goalId", "_id title")
-        .sort({ order: 1, createdAt: -1 })
-        .lean(),
-      LiveCourse.find(liveFilter)
-        .populate("courseEducatorId", "name image")
-        .populate("packageCategoryId", "title slug image")
-        .sort({ ordered: 1, createdAt: -1 })
-        .lean(),
-    ]);
-
-    const customerId = req.user?.id;
-    const now = new Date();
-    const packageIds = packages.map((p: any) => p._id);
-    const liveCourseIds = liveCourses.map((c: any) => c._id);
-
-    // Batch the pricing + subscriber + ownership queries across both product
-    // types, then group per row below. Ownership/daysLeft reuse the canonical
-    // helpers (purchasedPackageEndAtMap, getDaysLeftMapForLiveCourses) so the
-    // isPurchased/daysLeft contract matches /client/packages and /client/live-courses.
-    const [pkgPlans, pkgSubCounts, livePlans, liveSubCounts, ownedPkgMap, liveDaysLeftMap] = await Promise.all([
-      packageIds.length
-        ? PackageCourseEbookPrice.find({ packageId: { $in: packageIds }, status: true }).sort({ duration: 1 }).lean()
-        : Promise.resolve([] as any[]),
-      packageIds.length
-        ? PackageCourseSubscription.aggregate([
-            { $match: { packageId: { $in: packageIds }, status: true } },
-            { $group: { _id: "$packageId", count: { $sum: 1 } } },
-          ])
-        : Promise.resolve([] as any[]),
-      liveCourseIds.length
-        ? LiveCoursePlan.find({ liveCourseId: { $in: liveCourseIds }, status: true }).sort({ price: 1 }).lean()
-        : Promise.resolve([] as any[]),
-      liveCourseIds.length
-        ? LiveCourseSubscription.aggregate([
-            { $match: { liveCourseId: { $in: liveCourseIds }, status: true, paymentStatus: "verified" } },
-            { $group: { _id: "$liveCourseId", count: { $sum: 1 } } },
-          ])
-        : Promise.resolve([] as any[]),
-      purchasedPackageEndAtMap(customerId, packageIds),
-      getDaysLeftMapForLiveCourses(customerId, liveCourseIds),
-    ]);
-
-    const pkgPlansById: Record<string, any[]> = {};
-    for (const pl of pkgPlans as any[]) (pkgPlansById[String(pl.packageId)] ||= []).push(pl);
-    const pkgSubById = new Map<string, number>();
-    for (const r of pkgSubCounts as any[]) pkgSubById.set(String(r._id), r.count);
-
-    const livePlansById: Record<string, any[]> = {};
-    for (const pl of livePlans as any[]) {
-      const original =
-        typeof pl.originalPrice === "number" && pl.originalPrice > pl.price ? pl.originalPrice : null;
-      const discountPercent = original ? Math.round(((original - pl.price) / original) * 100) : 0;
-      (livePlansById[String(pl.liveCourseId)] ||= []).push({ ...pl, originalPrice: original, discountPercent });
-    }
-    const liveSubById = new Map<string, number>();
-    for (const r of liveSubCounts as any[]) liveSubById.set(String(r._id), r.count);
-
-    const packageRows = packages.map((p: any) => {
-      const pid = String(p._id);
-      const plans = pkgPlansById[pid] || [];
-      const isPurchased = ownedPkgMap.has(pid);
-      return {
-        ...p,
-        type: "package" as const,
-        plans: {
-          withMaterial: plans.filter((pl) => pl.withMaterial),
-          withoutMaterial: plans.filter((pl) => !pl.withMaterial),
-        },
-        subscriberCount: pkgSubById.get(pid) ?? 0,
-        // Package.isPaid is on the doc (spread above) but surface it explicitly
-        // so the row contract is uniform across both product types.
-        isPaid: p.isPaid !== false,
-        isPurchased,
-        daysLeft: isPurchased ? computeDaysLeft(ownedPkgMap.get(pid) ?? null, now) : null,
-      };
-    });
-
-    const liveRows = liveCourses.map((c: any) => {
-      const cid = String(c._id);
-      const isPurchased = liveDaysLeftMap.has(cid);
-      return {
-        ...c,
-        type: "live-course" as const,
-        plans: livePlansById[cid] || [],
-        subscriberCount: liveSubById.get(cid) ?? 0,
-        isPaid: c.isPaid !== false,
-        isPurchased,
-        // Map value is daysLeft (null = lifetime); absence = not owned → null.
-        daysLeft: isPurchased ? liveDaysLeftMap.get(cid) ?? null : null,
-      };
-    });
-
-    const merged = [...packageRows, ...liveRows].sort(
-      (a, b) =>
-        new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime()
-    );
-
-    const total = merged.length;
-    const list = merged.slice(skip, skip + limitNum);
-
-    logger.info("listProductsByExamCountdown success", { traceId, examCountdownId: id, total, returned: list.length });
+    const userNum = parseEcId(String(req.user?.id ?? ""));
+    const r = await ecClientSql.listProductsByCountdown(ecId, userNum, { skip, take: limitNum, search });
+    if (!r) return res.status(404).json({ success: false, message: "Exam countdown not found." });
     return res.status(200).json({
       success: true,
-      data: { examCountdown, list },
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      data: { examCountdown: r.examCountdown, list: r.list },
+      pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
     });
   } catch (error: any) {
     logger.error("listProductsByExamCountdown failed", { traceId, examCountdownId: id, error: getErrorMessage(error), stack: error.stack });
@@ -1140,54 +489,16 @@ export const listBooksAndEbooksByExamCountdownCategory = async (req: Request, re
   logger.info("listBooksAndEbooksByExamCountdownCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // ─── SQL branch (int id-space) ───
-    if (isExamCountdownMysql()) {
-      const catId = parseEcId(id);
-      if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
-      const { pageNum, limitNum, skip, search } = parsePaging(req);
-      const userNum = parseEcId(String(req.user?.id ?? ""));
-      const r = await ecClientSql.listBooksEbooksByCountdownCategory(catId, userNum, { skip, take: limitNum, search });
-      if (!r) return res.status(404).json({ success: false, message: "Exam countdown category not found." });
-      return res.status(200).json({
-        success: true,
-        data: { category: r.category, list: r.list },
-        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listBooksAndEbooksByExamCountdownCategory invalid id", { traceId, categoryId: id });
-      return res.status(400).json({ success: false, message: "Invalid category id." });
-    }
-
-    const category = await ExamCountdownCategory.findById(id).lean();
-    if (!category) {
-      logger.warn("listBooksAndEbooksByExamCountdownCategory category not found", { traceId, categoryId: id });
-      return res.status(404).json({ success: false, message: "Exam countdown category not found." });
-    }
-
+    const catId = parseEcId(id);
+    if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-    // Match on the multi-select examCountdownCategoryIds array (membership), not
-    // the legacy single examCountdownCategoryId. Mongo matches a scalar against
-    // an array field by element membership, so `{ examCountdownCategoryIds: id }`
-    // returns every book/ebook whose array contains this category.
-    const filter: any = { examCountdownCategoryIds: id, status: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-
-    const [books, ebooks] = await Promise.all([
-      Book.find(filter).lean(),
-      Ebook.find(filter).lean(),
-    ]);
-
-    const merged = await shapeBooksAndEbooks(books, ebooks, req.user?.id);
-    const total = merged.length;
-    const list = merged.slice(skip, skip + limitNum);
-
-    logger.info("listBooksAndEbooksByExamCountdownCategory success", { traceId, categoryId: id, total, returned: list.length });
+    const userNum = parseEcId(String(req.user?.id ?? ""));
+    const r = await ecClientSql.listBooksEbooksByCountdownCategory(catId, userNum, { skip, take: limitNum, search });
+    if (!r) return res.status(404).json({ success: false, message: "Exam countdown category not found." });
     return res.status(200).json({
       success: true,
-      data: { category, list },
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      data: { category: r.category, list: r.list },
+      pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
     });
   } catch (error: any) {
     logger.error("listBooksAndEbooksByExamCountdownCategory failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
@@ -1207,50 +518,16 @@ export const listBooksAndEbooksByExamCountdown = async (req: Request, res: Respo
   logger.info("listBooksAndEbooksByExamCountdown invoked", { traceId, path: req.originalUrl, examCountdownId: id, userId: req.user?.id });
 
   try {
-    // ─── SQL branch (int id-space) ───
-    if (isExamCountdownMysql()) {
-      const ecId = parseEcId(id);
-      if (ecId == null) return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
-      const { pageNum, limitNum, skip, search } = parsePaging(req);
-      const userNum = parseEcId(String(req.user?.id ?? ""));
-      const r = await ecClientSql.listBooksEbooksByCountdown(ecId, userNum, { skip, take: limitNum, search });
-      if (!r) return res.status(404).json({ success: false, message: "Exam countdown not found." });
-      return res.status(200).json({
-        success: true,
-        data: { examCountdown: r.examCountdown, list: r.list },
-        pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listBooksAndEbooksByExamCountdown invalid id", { traceId, examCountdownId: id });
-      return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
-    }
-
-    const examCountdown = await ExamCountdown.findById(id).lean();
-    if (!examCountdown) {
-      logger.warn("listBooksAndEbooksByExamCountdown not found", { traceId, examCountdownId: id });
-      return res.status(404).json({ success: false, message: "Exam countdown not found." });
-    }
-
+    const ecId = parseEcId(id);
+    if (ecId == null) return res.status(400).json({ success: false, message: "Invalid exam countdown id." });
     const { pageNum, limitNum, skip, search } = parsePaging(req);
-    const filter: any = { examCountdownIds: id, status: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-
-    const [books, ebooks] = await Promise.all([
-      Book.find(filter).lean(),
-      Ebook.find(filter).lean(),
-    ]);
-
-    const merged = await shapeBooksAndEbooks(books, ebooks, req.user?.id);
-    const total = merged.length;
-    const list = merged.slice(skip, skip + limitNum);
-
-    logger.info("listBooksAndEbooksByExamCountdown success", { traceId, examCountdownId: id, total, returned: list.length });
+    const userNum = parseEcId(String(req.user?.id ?? ""));
+    const r = await ecClientSql.listBooksEbooksByCountdown(ecId, userNum, { skip, take: limitNum, search });
+    if (!r) return res.status(404).json({ success: false, message: "Exam countdown not found." });
     return res.status(200).json({
       success: true,
-      data: { examCountdown, list },
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      data: { examCountdown: r.examCountdown, list: r.list },
+      pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
     });
   } catch (error: any) {
     logger.error("listBooksAndEbooksByExamCountdown failed", { traceId, examCountdownId: id, error: getErrorMessage(error), stack: error.stack });
@@ -1259,8 +536,6 @@ export const listBooksAndEbooksByExamCountdown = async (req: Request, res: Respo
 };
 
 // ─── Package Categories ──────────────────────────────────────────────────────
-import { PackageCategory } from "../../models/course/PackageCategory.model";
-import { LiveCourse } from "../../models/course/LiveCourse.model";
 import * as pkgCatSql from "../../modules/package-category/package-category.service";
 
 export const listPackageCategories = async (req: Request, res: Response) => {
@@ -1270,68 +545,11 @@ export const listPackageCategories = async (req: Request, res: Response) => {
   logger.info("listPackageCategories invoked", { traceId, path: req.originalUrl, liveOnly });
 
   try {
-    if (pkgCatSql.isPackageCategoryMysql()) {
-      const result = await pkgCatSql.listClientPackageCategories({
-        liveOnly, search: search || null, skip, limitNum, pageNum,
-      });
-      logger.info("listPackageCategories success (sql)", { traceId, total: result.pagination.total, returned: result.data.length, liveOnly });
-      return res.status(200).json({ success: true, ...result });
-    }
-
-    const filter: any = { status: true };
-    { const c = buildRegexCondition(search); if (c) filter.title = c; }
-
-    // Active recorded-package count per category, batched into a single
-    // aggregation keyed by packageCategoryId, then looked up per row. Mirrors
-    // the membership used by listPackagesByCategory (active packages).
-    const packageCountFor = async (catIds: mongoose.Types.ObjectId[]) => {
-      if (!catIds.length) return new Map<string, number>();
-      const rows = await Package.aggregate([
-        { $match: { active: true, packageCategoryId: { $in: catIds } } },
-        { $group: { _id: "$packageCategoryId", count: { $sum: 1 } } },
-      ]);
-      return new Map(rows.map((r: any) => [String(r._id), r.count]));
-    };
-
-    if (!liveOnly) {
-      const [rawList, total] = await Promise.all([
-        PackageCategory.find(filter).sort({ order: 1 }).skip(skip).limit(limitNum).lean(),
-        PackageCategory.countDocuments(filter),
-      ]);
-      const countMap = await packageCountFor(rawList.map((c: any) => c._id));
-      const list = rawList.map((c: any) => ({ ...c, packageCount: countMap.get(String(c._id)) ?? 0 }));
-      logger.info("listPackageCategories success", { traceId, total, returned: list.length, liveOnly });
-      return res.status(200).json({
-        success: true,
-        data: list,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    // ?live=true → keep only categories that have ≥1 active LiveCourse. The
-    // live-filter is computed across the full matching set first, then paged,
-    // so totalPages reflects the filtered count rather than the raw category
-    // count.
-    const categories = await PackageCategory.find(filter).sort({ order: 1 }).lean();
-    const categoryIds = categories.map((c: any) => c._id);
-    const liveCategoryIds = await LiveCourse.distinct("packageCategoryId", {
-      status: true,
-      packageCategoryId: { $in: categoryIds },
+    const result = await pkgCatSql.listClientPackageCategories({
+      liveOnly, search: search || null, skip, limitNum, pageNum,
     });
-    const liveSet = new Set(liveCategoryIds.map((x: any) => String(x)));
-    const filtered = categories.filter((c: any) => liveSet.has(String(c._id)));
-
-    const total = filtered.length;
-    const paged = filtered.slice(skip, skip + limitNum);
-    const countMap = await packageCountFor(paged.map((c: any) => c._id));
-    const list = paged.map((c: any) => ({ ...c, packageCount: countMap.get(String(c._id)) ?? 0 }));
-
-    logger.info("listPackageCategories success", { traceId, total, returned: list.length, liveOnly });
-    return res.status(200).json({
-      success: true,
-      data: list,
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-    });
+    logger.info("listPackageCategories success (sql)", { traceId, total: result.pagination.total, returned: result.data.length, liveOnly });
+    return res.status(200).json({ success: true, ...result });
   } catch (error: any) {
     logger.error("listPackageCategories failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -1344,76 +562,11 @@ export const listPackagesByCategory = async (req: Request, res: Response) => {
   logger.info("listPackagesByCategory invoked", { traceId, path: req.originalUrl, categoryId: id, userId: req.user?.id });
 
   try {
-    // ─── SQL branch (int id-space) ───
-    if (pkgCatSql.isPackageCategoryMysql()) {
-      const catId = pkgCatSql.parsePkgCatId(id);
-      if (catId == null) return res.status(400).json({ success: false, message: "Invalid package category id" });
-      const data = await pkgCatSql.listPackagesAndLiveByCategory(catId);
-      logger.info("listPackagesByCategory success (sql)", { traceId, categoryId: id, recordedCount: data.recorded.length, liveCount: data.live.length });
-      return res.status(200).json({ success: true, data });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("listPackagesByCategory invalid id", { traceId, categoryId: id });
-      return res.status(400).json({ success: false, message: "Invalid package category id" });
-    }
-
-    const [packages, liveCourses] = await Promise.all([
-      Package.find({ active: true, packageCategoryId: id })
-        .select(
-          "_id name description image shareableLink order isPaid isSmartCourse isPlannerCourse withMaterialText withoutMaterialText packageTypeId goalId educatorId"
-        )
-        .sort({ order: 1 })
-        .lean(),
-      LiveCourse.find({ status: true, packageCategoryId: id })
-        .select(
-          "_id name description image shareableLink ordered isPaid isPopular level classType withMaterial withoutMaterial courseEducatorId"
-        )
-        .sort({ ordered: 1 })
-        .lean(),
-    ]);
-
-    const packageIds = packages.map((p) => p._id);
-    const plans = packageIds.length
-      ? await PackageCourseEbookPrice.find({
-          packageId: { $in: packageIds },
-          status: true,
-        })
-          .select("_id packageId name duration price withMaterial materialPrice isDefault")
-          .lean()
-      : [];
-
-    const plansByPackage = new Map<string, typeof plans>();
-    for (const plan of plans) {
-      const key = String(plan.packageId);
-      if (!plansByPackage.has(key)) plansByPackage.set(key, []);
-      plansByPackage.get(key)!.push(plan);
-    }
-    for (const [, list] of plansByPackage) {
-      list.sort((a, b) => {
-        if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
-        return (a.duration ?? 0) - (b.duration ?? 0);
-      });
-    }
-
-    const recorded = packages.map((p) => {
-      const pkgPlans = plansByPackage.get(String(p._id)) ?? [];
-      const defaultPlan = pkgPlans.find((pl) => pl.isDefault) ?? pkgPlans[0] ?? null;
-      return {
-        ...p,
-        plans: pkgPlans,
-        defaultPlan,
-        startingPrice: defaultPlan ? defaultPlan.price : null,
-      };
-    });
-
-    logger.info("listPackagesByCategory success", {
-      traceId,
-      categoryId: id,
-      recordedCount: recorded.length,
-      liveCount: liveCourses.length,
-    });
-    return res.status(200).json({ success: true, data: { recorded, live: liveCourses } });
+    const catId = pkgCatSql.parsePkgCatId(id);
+    if (catId == null) return res.status(400).json({ success: false, message: "Invalid package category id" });
+    const data = await pkgCatSql.listPackagesAndLiveByCategory(catId);
+    logger.info("listPackagesByCategory success (sql)", { traceId, categoryId: id, recordedCount: data.recorded.length, liveCount: data.live.length });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("listPackagesByCategory failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

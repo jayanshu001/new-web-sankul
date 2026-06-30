@@ -18,13 +18,12 @@
  * Runtime ids ARE SQL ints (customer-auth + catalog-* make req ids SQL), so the
  * admin-supplied courseIds/userIds arrive as numeric strings on the SQL path.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { sendPush } from "../../utils/fcm";
 import logger from "../../utils/logger";
 
 export const ADMIN_NOTIFICATION_MODULE = "client-notification";
-export const isAdminNotificationMysql = (): boolean => isMysqlModule(ADMIN_NOTIFICATION_MODULE);
+export const isAdminNotificationMysql = (): boolean => true;
 
 /** Parse a numeric string id to a positive int, else null. */
 export const parseIntId = (v: string): number | null => {

@@ -1,10 +1,8 @@
 import { prisma } from "../../config/prisma";
-import { isMysqlModule } from "../../config/migration";
 
 export const PERMISSION_CATEGORY_MODULE = "permission-category";
 
-export const isPermissionCategoryMysql = (): boolean =>
-  isMysqlModule(PERMISSION_CATEGORY_MODULE);
+export const isPermissionCategoryMysql = (): boolean => true;
 
 export const parsePcatId = (id: string): number | null => {
   const n = Number(id);

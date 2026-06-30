@@ -1,9 +1,7 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { Book } from "../../models/book/Book.model";
-import { BookCart } from "../../models/book/BookCart.model";
 import { BookOrder } from "../../models/book/BookOrder.model";
-import { BookSetting } from "../../models/book/BookSetting.model";
 import { Ebook } from "../../models/ebook/Ebook.model";
 import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { BookOrderStatus } from "../../models/enums";
@@ -17,20 +15,17 @@ import { isNewItem } from "../../utils/isNew";
 import { buildRegexCondition } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
-  isBookMysql,
   listBooksData,
   getBookById,
 } from "../../modules/catalog-book/catalog-book.service";
 import {
   getActiveCartState,
   getPurchasedBookIdSet,
-  isBookOrderMysql,
   parseBookOrderId,
   getOrderTrackingMysql,
   getOrderTrackingLiveMysql,
 } from "../../modules/book-order/book-order.service";
 import {
-  isClientTrendingMysql,
   fetchTrendingBooksOnly as fetchTrendingBooksOnlySql,
   fetchTrendingEbooksOnly as fetchTrendingEbooksOnlySql,
 } from "../../modules/client-trending/client-trending.service";
@@ -57,90 +52,31 @@ export const listBooks = async (req: Request, res: Response) => {
       return res.status(422).json({ success: false, message: "Invalid or missing type. Use one of: magazine, combo, regular." });
     }
 
-    // ── MySQL book listing (catalog-book + book-order, flag-gated) ───────────
+    // ── MySQL book listing (catalog-book + book-order) ───────────
     // catalog-book supplies the data + computed fields; book-order supplies the
-    // per-customer cart `qty`/`cartId` + `isPurchased`. Response byte-identical.
-    if (isBookMysql()) {
-      const base = resolveBase(req);
-      const buildShareLink = (bid: string) => buildShareUrl("books", bid, base);
-      const { items: rows, total } = await listBooksData({ search, language, type, skip, take: limit }, buildShareLink);
-
-      let cartId: string | null = null;
-      let qtyByBookId = new Map<string, number>();
-      let purchasedSet = new Set<string>();
-      const customerIdInt = Number(customerId); // C3 seam
-      if (customerId && Number.isInteger(customerIdInt)) {
-        const cart = await getActiveCartState(customerIdInt);
-        cartId = cart.cartId;
-        qtyByBookId = cart.qtyByBookId;
-        purchasedSet = await getPurchasedBookIdSet(customerIdInt);
-      }
-
-      const decoratedMysql = rows.map((b) => ({
-        ...b,
-        qty: qtyByBookId.get(b._id) ?? 0,
-        isPurchased: purchasedSet.has(b._id),
-      }));
-      logger.info("listBooks success (mysql)", { traceId, customerId, type, count: decoratedMysql.length });
-      return res.status(200).json({ success: true, data: { cartId, books: decoratedMysql }, pagination: buildPagination(total, page, limit) });
-    }
-
-    const filter: any = { status: true };
-    {
-      const rx = buildRegexCondition(search);
-      if (rx) filter.$or = [{ name: rx }, { author: rx }];
-    }
-    if (language) filter.language = language;
-    // Same mutually-exclusive type buckets as the SQL branch.
-    if (type === "magazine") filter.isMagazine = true;
-    else if (type === "combo") filter.isCombo = true;
-    else { filter.isMagazine = { $ne: true }; filter.isCombo = { $ne: true }; }
-
-    const [books, total] = await Promise.all([
-      Book.find(filter).sort({ orderBy: 1, createdAt: -1 }).skip(skip).limit(limit),
-      Book.countDocuments(filter),
-    ]);
-
-    let cartMap = new Map<string, number>();
-    let cartId: string | null = null;
-    let purchasedSet = new Set<string>();
-    if (customerId) {
-      const cart = await BookCart.findOne({ customerId, status: true }).select("_id items");
-      if (cart) {
-        cartId = cart._id.toString();
-        cart.items.forEach((i) => cartMap.set(i.bookId.toString(), i.qty));
-      }
-      // Books are permanent once delivered — any successful past order counts
-      // as purchased. Matches the rule for /purchase-history/books.
-      const purchasedIds = await BookOrder.distinct("items.bookId", {
-        customerId,
-        status: {
-          $in: [BookOrderStatus.VERIFIED, BookOrderStatus.SHIPPED, BookOrderStatus.DELIVERED],
-        },
-      });
-      purchasedSet = new Set(purchasedIds.map((id: any) => String(id)));
-    }
-
+    // per-customer cart `qty`/`cartId` + `isPurchased`.
     const base = resolveBase(req);
-    const decorated = books.map((b) => {
-      const doc = b.toObject();
-      const idStr = b._id.toString();
-      return {
-        ...doc,
-        qty: cartMap.get(idStr) ?? 0,
-        key: b.isCombo ? "combo" : "individual",
-        // Books are paid when they cost > 0 (discountedPrice 0 = free).
-        isPaid: (doc.discountedPrice ?? 0) > 0,
-        isPurchased: purchasedSet.has(idStr),
-        isNew: isNewItem(doc.createdAt),
-        // One-time purchase with no expiry, so there's no countdown.
-        daysLeft: null,
-        shareableLink: buildShareUrl("books", idStr, base),
-      };
-    });
+    const buildShareLink = (bid: string) => buildShareUrl("books", bid, base);
+    const { items: rows, total } = await listBooksData({ search, language, type, skip, take: limit }, buildShareLink);
 
-    logger.info("listBooks success", { traceId, customerId, count: decorated.length });
-    return res.status(200).json({ success: true, data: { cartId, books: decorated }, pagination: buildPagination(total, page, limit) });
+    let cartId: string | null = null;
+    let qtyByBookId = new Map<string, number>();
+    let purchasedSet = new Set<string>();
+    const customerIdInt = Number(customerId); // C3 seam
+    if (customerId && Number.isInteger(customerIdInt)) {
+      const cart = await getActiveCartState(customerIdInt);
+      cartId = cart.cartId;
+      qtyByBookId = cart.qtyByBookId;
+      purchasedSet = await getPurchasedBookIdSet(customerIdInt);
+    }
+
+    const decoratedMysql = rows.map((b) => ({
+      ...b,
+      qty: qtyByBookId.get(b._id) ?? 0,
+      isPurchased: purchasedSet.has(b._id),
+    }));
+    logger.info("listBooks success (mysql)", { traceId, customerId, type, count: decoratedMysql.length });
+    return res.status(200).json({ success: true, data: { cartId, books: decoratedMysql }, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listBooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -279,123 +215,13 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
 
     // ── SQL branch (client-trending) ─────────────────────────────────────────
     // Combined trending: fetch books + ebooks from SQL, merge by createdAt desc,
-    // cap at limitNum, then attach the shareableLink. Byte-identical to Mongo.
-    if (isClientTrendingMysql()) {
-      const [bookRes, ebookRes] = await Promise.all([
-        fetchTrendingBooksOnlySql({ type, search, language, limit: 100 }),
-        fetchTrendingEbooksOnlySql({ type, search, language, limit: 100 }),
-      ]);
-      const base = resolveBase(req);
-      const merged = [...bookRes.items, ...ebookRes.items]
-        .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
-        .slice(0, limitNum)
-        .map((item) => ({
-          ...item,
-          shareableLink: buildShareUrl(
-            item.type === "ebook" ? "ebooks" : "books",
-            String(item._id),
-            base
-          ),
-        }));
-      const resType = wantFree ? "free" : "paid";
-      logger.info("listTrendingBooks success (mysql)", { traceId, type: resType, count: merged.length });
-      return res.status(200).json({
-        success: true,
-        data: { type: resType, items: merged, total: merged.length },
-      });
-    }
-
-    const bookFilter: any = { status: true, isTrending: true };
-    const ebookFilter: any = { status: true, isTrending: true };
-    if (language) {
-      bookFilter.language = language;
-      ebookFilter.language = language;
-    }
-    {
-      const rx = buildRegexCondition(search);
-      if (rx) {
-        bookFilter.$or = [{ name: rx }, { author: rx }];
-        ebookFilter.$or = [{ name: rx }, { author: rx }];
-      }
-    }
-    if (wantFree) {
-      bookFilter.discountedPrice = 0;
-    } else if (wantPaid) {
-      bookFilter.discountedPrice = { $gt: 0 };
-    }
-
-    const [books, ebooks] = await Promise.all([
-      Book.find(bookFilter).sort({ orderBy: 1, createdAt: -1 }).lean(),
-      Ebook.find(ebookFilter).sort({ order: 1, createdAt: -1 }).lean(),
+    // cap at limitNum, then attach the shareableLink.
+    const [bookRes, ebookRes] = await Promise.all([
+      fetchTrendingBooksOnlySql({ type, search, language, limit: 100 }),
+      fetchTrendingEbooksOnlySql({ type, search, language, limit: 100 }),
     ]);
-
-    // Resolve ebook pricing — an ebook is "free" if its lowest active plan price is 0 (or no plans).
-    const ebookIds = ebooks.map((e) => e._id);
-    const plans = ebookIds.length
-      ? await EbookPrice.find({ ebookId: { $in: ebookIds }, status: true })
-          .sort({ duration: 1 })
-          .lean()
-      : [];
-    const plansByEbook = new Map<string, any[]>();
-    plans.forEach((p) => {
-      const key = String(p.ebookId);
-      const arr = plansByEbook.get(key) || [];
-      arr.push(p);
-      plansByEbook.set(key, arr);
-    });
-
-    const ebookItems = ebooks
-      .map((e) => {
-        const ePlans = plansByEbook.get(String(e._id)) || [];
-        const minPrice = ePlans.length ? Math.min(...ePlans.map((p) => p.price ?? 0)) : 0;
-        const isFree = minPrice === 0;
-        if (wantFree && !isFree) return null;
-        if (wantPaid && isFree) return null;
-        return {
-          type: "ebook" as const,
-          _id: e._id,
-          name: e.name,
-          description: e.description,
-          author: e.author,
-          publisher: e.publisher,
-          language: e.language,
-          image: e.image,
-          thumbnail: e.thumbnail,
-          demoUrl: e.demoUrl,
-          isTrending: e.isTrending,
-          price: minPrice,
-          isFree,
-          isNew: isNewItem(e.createdAt),
-          plans: ePlans,
-          createdAt: e.createdAt,
-        };
-      })
-      .filter(Boolean) as any[];
-
-    const bookItems = books.map((b) => ({
-      type: "book" as const,
-      _id: b._id,
-      name: b.name,
-      description: b.description,
-      author: b.author,
-      language: b.language,
-      image: b.image,
-      thumbnail: b.thumbnail,
-      demoUrl: b.demoUrl,
-      isTrending: b.isTrending,
-      isCombo: b.isCombo,
-      isMagazine: b.isMagazine,
-      listPrice: b.listPrice,
-      discountedPrice: b.discountedPrice,
-      shippingPrice: b.shippingPrice,
-      price: b.discountedPrice,
-      isFree: b.discountedPrice === 0,
-      isNew: isNewItem(b.createdAt),
-      createdAt: b.createdAt,
-    }));
-
     const base = resolveBase(req);
-    const merged = [...bookItems, ...ebookItems]
+    const merged = [...bookRes.items, ...ebookRes.items]
       .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
       .slice(0, limitNum)
       .map((item) => ({
@@ -406,11 +232,11 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
           base
         ),
       }));
-
-    logger.info("listTrendingBooks success", { traceId, type: wantFree ? "free" : "paid", count: merged.length });
+    const resType = wantFree ? "free" : "paid";
+    logger.info("listTrendingBooks success (mysql)", { traceId, type: resType, count: merged.length });
     return res.status(200).json({
       success: true,
-      data: { type: wantFree ? "free" : "paid", items: merged, total: merged.length },
+      data: { type: resType, items: merged, total: merged.length },
     });
   } catch (error: any) {
     logger.error("listTrendingBooks failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -426,9 +252,7 @@ export const listTrendingBooksOnly = async (req: Request, res: Response) => {
   try {
     const { type, search, language, limit } = req.query as Record<string, string>;
     const limitNum = parseInt(limit, 10) || 20;
-    const result = isClientTrendingMysql()
-      ? await fetchTrendingBooksOnlySql({ type, search, language, limit: limitNum })
-      : await fetchTrendingBooksOnly({ type, search, language, limit: limitNum });
+    const result = await fetchTrendingBooksOnlySql({ type, search, language, limit: limitNum });
 
     const base = resolveBase(req);
     const items = result.items.map((item) => ({
@@ -455,9 +279,7 @@ export const listTrendingEbooksOnly = async (req: Request, res: Response) => {
   try {
     const { type, search, language, limit } = req.query as Record<string, string>;
     const limitNum = parseInt(limit, 10) || 20;
-    const result = isClientTrendingMysql()
-      ? await fetchTrendingEbooksOnlySql({ type, search, language, limit: limitNum })
-      : await fetchTrendingEbooksOnly({ type, search, language, limit: limitNum });
+    const result = await fetchTrendingEbooksOnlySql({ type, search, language, limit: limitNum });
 
     const base = resolveBase(req);
     const items = result.items.map((item) => ({
@@ -483,67 +305,27 @@ export const getBookDetail = async (req: Request, res: Response) => {
   logger.info("getBookDetail invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
-    // ── MySQL book detail (catalog-book + book-order, flag-gated) ────────────
-    // Branch before the ObjectId guard — a MySQL book id is an int.
-    if (isBookMysql()) {
-      const bookIdInt = Number(id);
-      if (!Number.isInteger(bookIdInt) || bookIdInt <= 0) {
-        logger.warn("getBookDetail invalid id (mysql)", { traceId, customerId, id });
-        return res.status(400).json({ success: false, message: "Invalid book id." });
-      }
-      const base = resolveBase(req);
-      const dto = await getBookById(bookIdInt, (bid) => buildShareUrl("books", bid, base));
-      if (!dto) {
-        logger.warn("getBookDetail not found (mysql)", { traceId, customerId, id });
-        return res.status(404).json({ success: false, message: "Book not found." });
-      }
-      let isPurchased = false;
-      const customerIdInt = Number(customerId); // C3 seam
-      if (customerId && Number.isInteger(customerIdInt)) {
-        const purchased = await getPurchasedBookIdSet(customerIdInt);
-        isPurchased = purchased.has(dto._id);
-      }
-      logger.info("getBookDetail success (mysql)", { traceId, customerId, id, isPurchased });
-      return res.status(200).json({ success: true, data: { ...dto, isPurchased } });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      logger.warn("getBookDetail invalid id", { traceId, customerId, id });
+    // ── MySQL book detail (catalog-book + book-order) ────────────
+    // A MySQL book id is an int.
+    const bookIdInt = Number(id);
+    if (!Number.isInteger(bookIdInt) || bookIdInt <= 0) {
+      logger.warn("getBookDetail invalid id (mysql)", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid book id." });
     }
-    const book = await Book.findOne({ _id: id, status: true }).lean();
-    if (!book) {
-      logger.warn("getBookDetail not found", { traceId, customerId, id });
+    const base = resolveBase(req);
+    const dto = await getBookById(bookIdInt, (bid) => buildShareUrl("books", bid, base));
+    if (!dto) {
+      logger.warn("getBookDetail not found (mysql)", { traceId, customerId, id });
       return res.status(404).json({ success: false, message: "Book not found." });
     }
-
     let isPurchased = false;
-    if (customerId) {
-      const owned = await BookOrder.exists({
-        customerId,
-        "items.bookId": book._id,
-        status: {
-          $in: [BookOrderStatus.VERIFIED, BookOrderStatus.SHIPPED, BookOrderStatus.DELIVERED],
-        },
-      });
-      isPurchased = !!owned;
+    const customerIdInt = Number(customerId); // C3 seam
+    if (customerId && Number.isInteger(customerIdInt)) {
+      const purchased = await getPurchasedBookIdSet(customerIdInt);
+      isPurchased = purchased.has(dto._id);
     }
-
-    logger.info("getBookDetail success", { traceId, customerId, id, isPurchased });
-    return res.status(200).json({
-      success: true,
-      data: {
-        ...book,
-        pages: book.pages ?? 0,
-        // Books are paid when they cost > 0 (discountedPrice 0 = free).
-        isPaid: (book.discountedPrice ?? 0) > 0,
-        isPurchased,
-        isNew: isNewItem(book.createdAt),
-        // One-time purchase with no expiry, so there's no countdown.
-        daysLeft: null,
-        shareableLink: buildShareUrl("books", id, resolveBase(req)),
-      },
-    });
+    logger.info("getBookDetail success (mysql)", { traceId, customerId, id, isPurchased });
+    return res.status(200).json({ success: true, data: { ...dto, isPurchased } });
   } catch (error: any) {
     logger.error("getBookDetail failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -691,65 +473,12 @@ export const getMyOrderTracking = async (req: Request, res: Response) => {
   try {
     if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
 
-    // ─── SQL branch ───
-    if (isBookOrderMysql()) {
-      const oid = parseBookOrderId(id);
-      const cid = parseBookOrderId(String(customerId));
-      if (oid == null || cid == null) return res.status(400).json({ success: false, message: "Invalid order id." });
-      const data = await getOrderTrackingMysql(oid, cid);
-      if (!data) return res.status(404).json({ success: false, message: "Order not found." });
-      return res.status(200).json({ success: true, data: { ...data, trackingUrl: buildTrackingUrl(data.awb ?? undefined) } });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid order id." });
-    }
-
-    const [order, settings] = await Promise.all([
-      BookOrder.findOne({ _id: id, customerId }).populate("shippingId").lean(),
-      BookSetting.findOne({ key: "default" }).lean(),
-    ]);
-    if (!order) return res.status(404).json({ success: false, message: "Order not found." });
-
-    const ship: any = order.shippingId || {};
-    const tracking = order.tracking || ({} as any);
-    const history = (tracking.history || [])
-      .slice()
-      .sort((a: any, b: any) => new Date(a.at).getTime() - new Date(b.at).getTime())
-      .map((h: any) => ({
-        status: h.status,
-        location: h.location || null,
-        note: h.note || null,
-        at: h.at,
-      }));
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        orderId: String(order._id),
-        receiptId: order.receiptId,
-        awb: tracking.trackingId || null,
-        courier: tracking.courier || null,
-        trackingUrl: buildTrackingUrl(tracking.trackingId),
-        from: {
-          city: settings?.originCity || null,
-          hub: settings?.originHub || null,
-        },
-        to: {
-          city: ship.city || null,
-          hub: ship.address || null,
-          pincode: ship.pincode || null,
-        },
-        consignee: ship.name || null,
-        consigneePhone: ship.phone || null,
-        bookedAt: order.paidAt || order.createdAt,
-        currentStatus: tracking.status || order.status,
-        orderStatus: order.status,
-        shippedAt: order.shippedAt || null,
-        deliveredAt: order.deliveredAt || null,
-        history,
-      },
-    });
+    const oid = parseBookOrderId(id);
+    const cid = parseBookOrderId(String(customerId));
+    if (oid == null || cid == null) return res.status(400).json({ success: false, message: "Invalid order id." });
+    const data = await getOrderTrackingMysql(oid, cid);
+    if (!data) return res.status(404).json({ success: false, message: "Order not found." });
+    return res.status(200).json({ success: true, data: { ...data, trackingUrl: buildTrackingUrl(data.awb ?? undefined) } });
   } catch (error: any) {
     logger.error("getMyOrderTracking failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -770,58 +499,23 @@ export const getMyOrderTrackingLive = async (req: Request, res: Response) => {
   try {
     if (!customerId) return res.status(401).json({ success: false, message: "Unauthorized." });
 
-    // ─── SQL branch ───
-    if (isBookOrderMysql()) {
-      const oid = parseBookOrderId(id);
-      const cid = parseBookOrderId(String(customerId));
-      if (oid == null || cid == null) return res.status(400).json({ success: false, message: "Invalid order id." });
-      const sqlOrder = await getOrderTrackingLiveMysql(oid, cid);
-      if (!sqlOrder) return res.status(404).json({ success: false, message: "Order not found." });
-      if (sqlOrder.status === BookOrderStatus.PENDING) return res.status(409).json({ success: false, message: "Order not yet verified." });
-      if (!sqlOrder.trackingId) return res.status(404).json({ success: false, message: "Tracking not available yet." });
-      const awb = sqlOrder.trackingId; // number (BigInt→number in the service)
-      if (awb < COURIER.TIRUPATI.INITIAL_Number) {
-        return res.status(422).json({
-          success: false,
-          message: "Live tracking is not available for this carrier. Use trackingUrl instead.",
-          data: { trackingUrl: buildTrackingUrl(awb) },
-        });
-      }
-      const awbData = await fetchLiveAWBData(awb);
-      logger.info("getMyOrderTrackingLive success (sql)", { traceId, customerId, orderId: id });
-      return res.status(200).json({ success: true, data: awbData });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid order id." });
-    }
-
-    const order = await BookOrder.findOne({ _id: id, customerId })
-      .select("status tracking.trackingId")
-      .lean();
-    if (!order) return res.status(404).json({ success: false, message: "Order not found." });
-
-    // Only verified+ orders carry an allocated trackingId.
-    if (order.status === BookOrderStatus.PENDING) {
-      return res.status(409).json({ success: false, message: "Order not yet verified." });
-    }
-
-    const trackingId = order.tracking?.trackingId;
-    if (!trackingId) {
-      return res.status(404).json({ success: false, message: "Tracking not available yet." });
-    }
-
-    // Mahavir range has no live API.
-    if (Number(trackingId) < COURIER.TIRUPATI.INITIAL_Number) {
+    const oid = parseBookOrderId(id);
+    const cid = parseBookOrderId(String(customerId));
+    if (oid == null || cid == null) return res.status(400).json({ success: false, message: "Invalid order id." });
+    const sqlOrder = await getOrderTrackingLiveMysql(oid, cid);
+    if (!sqlOrder) return res.status(404).json({ success: false, message: "Order not found." });
+    if (sqlOrder.status === BookOrderStatus.PENDING) return res.status(409).json({ success: false, message: "Order not yet verified." });
+    if (!sqlOrder.trackingId) return res.status(404).json({ success: false, message: "Tracking not available yet." });
+    const awb = sqlOrder.trackingId; // number (BigInt→number in the service)
+    if (awb < COURIER.TIRUPATI.INITIAL_Number) {
       return res.status(422).json({
         success: false,
         message: "Live tracking is not available for this carrier. Use trackingUrl instead.",
-        data: { trackingUrl: buildTrackingUrl(trackingId) },
+        data: { trackingUrl: buildTrackingUrl(awb) },
       });
     }
-
-    const awbData = await fetchLiveAWBData(trackingId);
-    logger.info("getMyOrderTrackingLive success", { traceId, customerId, orderId: id });
+    const awbData = await fetchLiveAWBData(awb);
+    logger.info("getMyOrderTrackingLive success (sql)", { traceId, customerId, orderId: id });
     return res.status(200).json({ success: true, data: awbData });
   } catch (error: any) {
     logger.error("getMyOrderTrackingLive failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });

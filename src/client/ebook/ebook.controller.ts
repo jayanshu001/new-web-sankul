@@ -1,13 +1,11 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { Ebook } from "../../models/ebook/Ebook.model";
-import { EbookPrice } from "../../models/ebook/EbookPrice.model";
 import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { generateEbookReceipt } from "../../libs/core/generate";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
-import { isNewItem } from "../../utils/isNew";
 import { buildSearchFilter } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
@@ -36,103 +34,20 @@ export const listEbooks = async (req: Request, res: Response) => {
     const { language } = req.query as Record<string, string>;
     const { search, page, limit, skip } = parseListQuery(req.query);
 
-    // MySQL branch (flag OFF until the ebook cluster flips). Composes
-    // catalog-ebook + commerce-price (plans) + commerce-ebook-sub (entitlement);
-    // same `{ ebooks: [...] }` contract as the Mongo path below.
-    if (isEbookMysql()) {
-      const base = resolveBase(req);
-      const custId = (req as any).user?.id != null ? parseEbookId(String((req as any).user.id)) : null;
-      const data = await listEbooksWithPlans(
-        {
-          search: search?.trim() || undefined,
-          language: (language as EBookLanguage) || undefined,
-          customerId: custId ?? undefined,
-        },
-        (id) => buildShareUrl("ebooks", id, base)
-      );
-      logger.info("listEbooks success", { traceId, customerId, count: data.length, source: "mysql" });
-      return res.status(200).json({ success: true, data: { ebooks: data } });
-    }
-
-    const filter: any = { status: true };
-    Object.assign(filter, buildSearchFilter(search, ["name", "author"]));
-    if (language) filter.language = language;
-
-    const [ebooks, total] = await Promise.all([
-      Ebook.find(filter).sort({ order: 1, createdAt: -1 }).skip(skip).limit(limit).lean(),
-      Ebook.countDocuments(filter),
-    ]);
-    const ebookIds = ebooks.map((e) => e._id);
-
-    const plans = await EbookPrice.find({
-      ebookId: { $in: ebookIds },
-      status: true,
-    })
-      .sort({ duration: 1 })
-      .lean();
-
-    const plansByEbook: Record<string, any[]> = {};
-    plans.forEach((p) => {
-      const key = String(p.ebookId);
-      (plansByEbook[key] ||= []).push(p);
-    });
-
-    // Ebook access is time-bound: only currently-active subscriptions count
-    // as "purchased". Endpoint also returns the soonest expiry so the catalog
-    // card can show "X days left" without a second call.
-    const now = new Date();
-    const activeByEbook = new Map<string, Date>();
-    if (customerId && ebookIds.length) {
-      const subs = await EbookSubscription.find({
-        customerId,
-        ebookId: { $in: ebookIds },
-        status: true,
-        endAt: { $gt: now },
-      })
-        .select("ebookId endAt")
-        .lean();
-      subs.forEach((s: any) => {
-        const key = String(s.ebookId);
-        const prev = activeByEbook.get(key);
-        // If a customer somehow has two overlapping subs for the same ebook,
-        // keep the LATEST endAt — that's the access window they actually have.
-        if (!prev || s.endAt.getTime() > prev.getTime()) {
-          activeByEbook.set(key, s.endAt);
-        }
-      });
-    }
-
+    // Composes catalog-ebook + commerce-price (plans) + commerce-ebook-sub
+    // (entitlement); returns the `{ ebooks: [...] }` contract.
     const base = resolveBase(req);
-    const data = ebooks.map((e) => {
-      const endAt = activeByEbook.get(String(e._id)) || null;
-      const ePlans = plansByEbook[String(e._id)] || [];
-      // `isPaid` is now an admin-controlled field on the Ebook (default true).
-      // It is the source of truth. Legacy rows that predate the field (absent
-      // after backfill is impossible, but defensive) fall back to the old
-      // price-derived rule: paid when ≥1 active plan costs > 0.
-      const isPaid =
-        typeof (e as any).isPaid === "boolean"
-          ? (e as any).isPaid
-          : ePlans.some((p: any) => (p.price ?? 0) > 0);
-      return {
-        ...e,
-        plans: ePlans,
-        details: [
-          { id: 1, mainText: "Language", subText: e.language },
-          { id: 2, mainText: "Author", subText: e.author },
-          { id: 3, mainText: "Publisher", subText: e.publisher },
-        ],
-        isPaid,
-        isPurchased: !!endAt,
-        isNew: isNewItem(e.createdAt, now),
-        subscriptionEndAt: endAt,
-        daysLeft: endAt ? daysBetween(now, endAt) : null,
-        shareableLink: buildShareUrl("ebooks", String(e._id), base),
-      };
-    });
-
-    logger.info("listEbooks success", { traceId, customerId, count: data.length });
-    return res.status(200).json({ success: true, data: { ebooks: data }, pagination: buildPagination(total, page, limit) });
+    const custId = (req as any).user?.id != null ? parseEbookId(String((req as any).user.id)) : null;
+    const data = await listEbooksWithPlans(
+      {
+        search: search?.trim() || undefined,
+        language: (language as EBookLanguage) || undefined,
+        customerId: custId ?? undefined,
+      },
+      (id) => buildShareUrl("ebooks", id, base)
+    );
+    logger.info("listEbooks success", { traceId, customerId, count: data.length, source: "mysql" });
+    return res.status(200).json({ success: true, data: { ebooks: data } });
   } catch (error: any) {
     logger.error("listEbooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -196,92 +111,27 @@ export const getEbookDetail = async (req: Request, res: Response) => {
   logger.info("getEbookDetail invoked", { traceId, path: req.originalUrl, customerId, ebookId: id });
 
   try {
-    // MySQL branch first — a MySQL ebook id is an int, so this precedes the
-    // ObjectId guard. Ebooks aren't in the promocode appliesTo model, so the
-    // availablePromoCode list is always empty (same as the Mongo path).
-    if (isEbookMysql()) {
-      const ebookId = parseEbookId(id);
-      if (ebookId == null) {
-        logger.warn("getEbookDetail invalid id (mysql)", { traceId, customerId, ebookId: id });
-        return res.status(400).json({ success: false, message: "Please select valid ebook." });
-      }
-      const custId = customerId != null ? parseEbookId(String(customerId)) : null;
-      const ebookData = await getEbookDetailWithPlans(
-        ebookId,
-        { customerId: custId ?? undefined },
-        (eid) => buildShareUrl("ebooks", eid, resolveBase(req))
-      );
-      if (!ebookData) {
-        logger.warn("getEbookDetail not found (mysql)", { traceId, customerId, ebookId: id });
-        return res.status(404).json({ success: false, message: "Ebook not found." });
-      }
-      logger.info("getEbookDetail success", { traceId, customerId, ebookId: id, isPurchased: ebookData.isPurchased, source: "mysql" });
-      return res.status(200).json({
-        success: true,
-        data: { ebook: ebookData, availablePromoCode: [] },
-      });
-    }
-
-    if (!isObjectId(id)) {
-      logger.warn("getEbookDetail invalid id", { traceId, customerId, ebookId: id });
+    // A MySQL ebook id is an int. Ebooks aren't in the promocode appliesTo
+    // model, so the availablePromoCode list is always empty.
+    const ebookId = parseEbookId(id);
+    if (ebookId == null) {
+      logger.warn("getEbookDetail invalid id (mysql)", { traceId, customerId, ebookId: id });
       return res.status(400).json({ success: false, message: "Please select valid ebook." });
     }
-
-    const ebook = await Ebook.findOne({ _id: id, status: true }).lean();
-    if (!ebook) {
-      logger.warn("getEbookDetail not found", { traceId, customerId, ebookId: id });
+    const custId = customerId != null ? parseEbookId(String(customerId)) : null;
+    const ebookData = await getEbookDetailWithPlans(
+      ebookId,
+      { customerId: custId ?? undefined },
+      (eid) => buildShareUrl("ebooks", eid, resolveBase(req))
+    );
+    if (!ebookData) {
+      logger.warn("getEbookDetail not found (mysql)", { traceId, customerId, ebookId: id });
       return res.status(404).json({ success: false, message: "Ebook not found." });
     }
-
-    const plans = await EbookPrice.find({ ebookId: id, status: true })
-      .sort({ duration: 1 })
-      .lean();
-
-    // Active subscription lookup — same rule as listEbooks: latest endAt wins.
-    const nowAccess = new Date();
-    let subscriptionEndAt: Date | null = null;
-    if (customerId) {
-      const sub = await EbookSubscription.findOne({
-        customerId,
-        ebookId: id,
-        status: true,
-        endAt: { $gt: nowAccess },
-      })
-        .select("endAt")
-        .sort({ endAt: -1 })
-        .lean();
-      if (sub) subscriptionEndAt = sub.endAt;
-    }
-
-    // Ebooks aren't in the new `appliesTo` enum, so no promocode can target an
-    // ebook directly. List stays empty until the enum is extended.
-    const availablePromoCode: Array<{
-      title: string;
-      promocode: string;
-      description: string;
-    }> = [];
-
-    logger.info("getEbookDetail success", { traceId, customerId, ebookId: id, isPurchased: !!subscriptionEndAt });
+    logger.info("getEbookDetail success", { traceId, customerId, ebookId: id, isPurchased: ebookData.isPurchased, source: "mysql" });
     return res.status(200).json({
       success: true,
-      data: {
-        ebook: {
-          ...ebook,
-          plans,
-          // Admin-controlled `isPaid` field is the source of truth (default
-          // true); fall back to the price-derived rule only if it's absent.
-          isPaid:
-            typeof (ebook as any).isPaid === "boolean"
-              ? (ebook as any).isPaid
-              : plans.some((p: any) => (p.price ?? 0) > 0),
-          isPurchased: !!subscriptionEndAt,
-          isNew: isNewItem(ebook.createdAt, nowAccess),
-          subscriptionEndAt,
-          daysLeft: subscriptionEndAt ? daysBetween(nowAccess, subscriptionEndAt) : null,
-          shareableLink: buildShareUrl("ebooks", id, resolveBase(req)),
-        },
-        availablePromoCode,
-      },
+      data: { ebook: ebookData, availablePromoCode: [] },
     });
   } catch (error: any) {
     logger.error("getEbookDetail failed", { traceId, customerId, ebookId: id, error: getErrorMessage(error), stack: error.stack });

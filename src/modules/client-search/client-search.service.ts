@@ -9,13 +9,12 @@
  * discounted_price>0; Ebook isPaid via price>0 fallback). Subscriptions:
  * ws_package_course_subscription has no payment_status col → status=true.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { isNewItem } from "../../utils/isNew";
 
 export const CLIENT_SEARCH_MODULE = "client-search";
-export const isClientSearchMysql = (): boolean => isMysqlModule(CLIENT_SEARCH_MODULE);
+export const isClientSearchMysql = (): boolean => true;
 
 export type SearchType = "courses" | "packages" | "liveCourses" | "books" | "ebooks";
 export const SEARCH_TYPES: SearchType[] = ["courses", "packages", "liveCourses", "books", "ebooks"];

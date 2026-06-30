@@ -8,7 +8,7 @@
 //   2. Stop accepting new HTTP connections (server.close()), but allow
 //      in-flight requests to finish for up to DRAIN_MS.
 //   3. Drain the notification scheduler worker.
-//   4. Close Mongo + Redis connections.
+//   4. Close MySQL (Prisma) + Redis connections.
 //   5. Exit 0.
 //
 // If anything hangs past HARD_TIMEOUT_MS, the watchdog force-exits with code
@@ -18,9 +18,7 @@
 // per process and a module-level state is the simplest correct shape.
 
 import type { Server } from "http";
-import mongoose from "mongoose";
 import { disconnectPrisma } from "../config/prisma";
-import { hasMysqlMigrationModules } from "../config/migration";
 import { redisClient } from "../config/redis";
 import { shutdownNotificationScheduler } from "../admin/notification/scheduler";
 import { shutdownPdfUploadScheduler } from "../admin/pdfUpload/pdfUpload.scheduler";
@@ -109,18 +107,11 @@ export const installGracefulShutdown = (hooks: ShutdownHooks): void => {
         });
       }
 
-      // Step 4: close the data stores. Mongo will flush any buffered writes;
-      // Redis QUIT waits for in-flight commands to finish.
+      // Step 4: close the data stores. Redis QUIT waits for in-flight commands
+      // to finish; Prisma disconnects its pool.
       try {
-        logger.info("Closing Mongo + Redis connections.");
-        const closes: Promise<unknown>[] = [
-          mongoose.connection.close(),
-          redisClient.quit(),
-        ];
-        if (hasMysqlMigrationModules()) {
-          closes.push(disconnectPrisma());
-        }
-        await Promise.allSettled(closes);
+        logger.info("Closing MySQL (Prisma) + Redis connections.");
+        await Promise.allSettled([redisClient.quit(), disconnectPrisma()]);
       } catch (err) {
         logger.warn("Connection close error", { err: (err as Error).message });
       }

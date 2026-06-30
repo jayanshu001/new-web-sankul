@@ -4,6 +4,200 @@
 
 ---
 
+## 2026-06-30 — Followup: `isMostPopular` on ebook + test-series CLIENT plan reads
+
+The Most-Popular flag was missing from two client catalog reads because they reshape
+plans through their own whitelist transformers (not the shared commerce-price one):
+- **Ebook:** `catalog-ebook.transformer.toEbookPlanDto` (used by ebook listing AND
+  detail) + `EbookPlanDto` type — added `isMostPopular`.
+- **Test Series:** `client-testseries.service` detail `prices.map` (getTestSeriesDetailMysql)
+  — added `isMostPopular`.
+Verified the flag flows (commerce-price repo returns full rows incl. the column; PriceDto
+already carries it). `yarn typecheck`: no new errors. No schema change.
+
+---
+
+## 2026-06-30 — Feature: "Most Popular" pricing-plan tag (5 commerce modules)
+
+Per-product, sales-driven badge with admin override, precomputed flag.
+
+**DDL** (`docs/migration/schema-changes/2026-06-30_most_popular_plan_flags.sql`) — 2 cols
+× 3 plan tables (course/package/ebook share `ws_package_course_ebook_price`):
+`is_most_popular` (effective flag the API reads) + `most_popular_pinned` (admin override),
+both `TINYINT(1) NOT NULL DEFAULT 0`, on `ws_package_course_ebook_price`,
+`ws_live_course_plan`, `ws_test_series_price`. Applied to staging; Prisma models gained
+`isMostPopular` + `mostPopularPinned`; `prisma:generate` re-run.
+
+**Compute** (`modules/plan-popularity/plan-popularity.service.ts`): winner per product =
+pinned plan if any, else most all-time PAID orders, tie→lowest price→lowest id, none→all
+false. Paid criteria differ per scope: course/package via PackageCourseOrder `status=complete`,
+ebook via EBookOrder `status=complete`, liveCourse via LiveCourseSubscription
+`paymentStatus=verified`, testSeries via TestSeriesOrder `status=complete`. `recomputeScope`
+(full sweep or single product, diff-writes only), `recomputeAllPopularity`, `setPinned`
+(sets pin + immediate per-product recompute).
+
+**Reads** (additive `isMostPopular` on plan DTOs): shared client builder
+`commerce-price.transformer.toPriceDto` (course/package/ebook), admin `toPlanDto` ×4
+(admin-course/package/ebook/live-course — also expose `mostPopularPinned`), client payment
+plan lists (live-course + test-series controllers), and `admin-live-course.service.toClientPlan`
+— the whitelist DTO behind the live-course **client listing + detail** `plans:{withMaterial,
+withoutMaterial}` buckets (listLiveCoursesForClient / getLiveCourseDetailForClient / owned /
+upcoming all route through it via plansGrouped). The flag is INSIDE each plan object.
+
+**Admin API:** `POST /admin/plan-popularity/pin` `{scope,planId,pinned}` (instant recompute),
+`POST /admin/plan-popularity/recompute` `{scope?}`. Routes:
+`src/admin/plan-popularity/*`, mounted in `admin.routes.ts`.
+
+**Job:** `modules/plan-popularity/plan-popularity.scheduler.ts` — lightweight setInterval,
+first sweep ~60s after boot then every `PLAN_POPULARITY_REFRESH_HOURS` (default 24h); wired
+in `index.ts`. **Backfill:** `scripts/backfill-most-popular-plans.ts` (ran: course 1,
+package 2, ebook 5, liveCourse 3, testSeries 0). Verified sales-driven (liveCourse 1 → ₹1999
+plan with 3 sales beats ₹999 with 0) + pin override + unpin fallback. `yarn typecheck`:
+no new errors (pre-existing `result.promo` ones unrelated).
+
+NOTE: Package's composed SQL client read isn't built yet (flag-gated, Phase B) — the flag is
+wired in the shared transformer so it lights up when that read lands. DEPLOY: apply the DDL,
+run the backfill; no flag changes.
+
+---
+
+## 2026-06-30 — Bugfix: live-course video reachability (lecture progress 400)
+
+`POST /client/courses/lectures/:videoId/progress` with `scope.kind=liveCourse` returned
+400 "Video is not part of the scoped live course." for legitimately-promoted recordings
+(e.g. video 33260 in folder 3161, liveCourseId=2). Root cause in
+`modules/catalog-category-tree/category-tree.service.ts` `reachableCategoryIds`: the
+`liveCourse` branch only seeded roots from `ws_live_course.video_category_id` (the
+root/DAG) — which is null for our live courses — and a stale comment claimed
+`ws_video_category` has no `live_course_id` column (it does). So the reachable set was
+empty and every live-course video failed the membership test.
+
+Fix: mirror the `course` branch — also seed roots from categories tagged via
+`ws_video_category.live_course_id = scopeId` (the column the recordings reader + admin
+folder ops already key on), then expand downward. Verified: liveCourse 2 now resolves
+{3158,3159,3160,3161,3169}; video 33260 (cat 3161) → ACCEPTED. Same root-cause class as
+the 2026-06-30 folder-model standardization (live courses have no root; use liveCourseId).
+No schema change. `yarn typecheck`: no new errors.
+
+---
+
+## 2026-06-30 — Feature: populate MP4 `file_size` via Content-Length
+
+StreamOS omits `file_size` on `mp4Links` (and on `recordings`), so it was null in the
+response. Added `enrichMp4Sizes()` to `admin/live/streamos.service.ts` — best-effort,
+concurrent HEAD requests reading `Content-Length`, sizing **MP4 only** (an m3u8's
+Content-Length is just the manifest text, not the video; HLS entries left null). Wired
+into every MP4 persist point: recording webhook, admin `getLiveSessionStatus` recovery,
+client `getLiveSessionForClient` recovery, and `scripts/backfill-live-recordings-from-streamos.ts`.
+Backfilled the 12 existing sessions (sizes match `encryptedLinks.size` where present).
+No schema change (stored in the existing `mp4_recordings` JSON). `yarn typecheck`: no new errors.
+
+---
+
+## 2026-06-30 — Contract: live recordings primary array = MP4, HLS moved to `hlsRecordings`
+
+Per product decision, the live-course recordings response now leads with MP4:
+- `recordings[]` → **MP4** (plain, un-DRM'd; primary playback).
+- `hlsRecordings[]` → **NEW**: the DRM-HLS m3u8 quality ladder (was `recordings`).
+- `qualities[]` → still derived from the HLS ladder (unchanged set).
+- `mp4Recordings[]` + `mp4Url` → kept as explicit aliases of the MP4 list.
+Applied to both surfaces:
+- Client `getRecordingsForClient` (`modules/admin-live-course/admin-live-course.service.ts`).
+- Admin `toPublicView` (`modules/admin-live/admin-live.service.ts`) — also gains `mp4Url`.
+
+Because the API `recordings` now means MP4, internal callers that tested *HLS*
+presence were repointed to a new `hlsRecordingsOf(row)` accessor (reads the
+`recordings` JSON column directly): recovery `hadRecordings` check, promote
+"no recordings yet" guard, and the recording-health `recordingsOnSession` count
+(`admin/live/live.controller.ts`).
+
+Note: MP4 is often single-quality (480p) while HLS carries 240/360/480 — StreamOS
+only exports multi-quality MP4 when its org is configured to; clients should fall
+back to `hlsRecordings` when `recordings` (MP4) is empty. No schema change.
+`yarn typecheck`: no new errors.
+
+---
+
+## 2026-06-30 — Schema + feature: live-session MP4 recordings (alongside DRM-HLS)
+
+**Why:** clients wanted a plain, browser-playable MP4 for recordings instead of the
+DRM-HLS `.m3u8`. No transcoding needed — StreamOS already returns an un-DRM'd MP4 per
+recording in `streamDetails.mp4Links`; we just capture and serve it.
+
+**DDL** (`docs/migration/schema-changes/2026-06-30_live_session_mp4_recordings.sql`):
+`ALTER TABLE ws_live_session ADD COLUMN mp4_recordings JSON NULL AFTER recordings;`
+Applied to staging. Prisma: added `mp4Recordings Json? @map("mp4_recordings")` to
+`LiveSession`; `prisma:generate` re-run.
+
+**Capture (ingestion):**
+- `admin/live/streamos.service.ts` `getStreamDetails` now also returns
+  `mp4Recordings` (normalized from `mp4Links`).
+- Recording webhook (`admin/live/live.controller.ts`) persists `mp4Links` from the
+  callback body when present (conditional — never clobbers with `[]`).
+- Recovery polls (admin `getLiveSessionStatus`, client `getLiveSessionForClient`)
+  persist `details.mp4Recordings` when recovering.
+- `modules/admin-live/admin-live.service.ts` `updateByStreamId` / `updateSession`
+  accept `mp4Recordings`.
+
+**Serve (client):** `modules/admin-live-course/admin-live-course.service.ts`
+`getRecordingsForClient` reads `ws_live_session.mp4_recordings` and adds per lecture:
+`mp4Recordings[]` (full per-quality list) + `mp4Url` (single highest-quality pick).
+DRM-HLS `recordings[]` is unchanged — MP4 is **additive** (Option A); lectures with no
+mp4 fall back to HLS.
+
+**Backfill:** `scripts/backfill-live-recordings-from-streamos.ts` now also stores
+mp4 on recovery; existing recovered sessions backfilled (12 sessions; some 4-quality,
+most 480p-only — mp4 availability varies per StreamOS). Verified mp4 URL serves
+`HTTP 206 video/mp4`, range-enabled, no DRM.
+
+`yarn typecheck`: no new errors.
+
+---
+
+## 2026-06-30 — Bugfix: admin live-course `createFolder` (SQL) 500 on insert
+
+`POST /admin/live-courses/:id/folders` returned 500 ("Failed to create folder.") on
+the MySQL path. `lcCreateFolder` (`modules/admin-live-course/admin-live-course.service.ts`)
+inserted `parent: null` and `educatorId: null`, but the real `ws_video_category`
+columns `parent` and `educator_id` are **NOT NULL (default 0)** — the introspected
+Prisma model types both as `Int?` (schema drift), so the nulls hit a P2011
+null-constraint violation. Also the SQL path **never set `liveCourseId`**, so even a
+folder that saved was invisible to `getRecordingsForClient` (which filters by
+`liveCourseId`) — unlike the Mongo path which sets it.
+
+Fix (SQL only; Mongo path already correct):
+- `parent: input.parentFolderId ?? 0` (0 = top-level, matches existing rows)
+- `educatorId: input.educatorId ?? 0` (0 = no educator)
+- add `liveCourseId` to the create payload
+
+No schema/DDL change. `yarn typecheck`: no new errors (pre-existing payment/referral
+errors unrelated). Note for future `db:pull`: `ws_video_category.parent` and
+`.educator_id` are NOT NULL default 0 in the DB despite introspecting as `Int?`.
+
+---
+
+## 2026-06-30 — Consistency: live-course folders keyed on `liveCourseId` (not root/DAG)
+
+The admin folder ops resolved a course's folders via the root/DAG
+(`ws_live_course.video_category_id` + `videoCategoryRelation` descendants), while the
+client recordings reader (`getRecordingsForClient`) resolved them via the flat
+`ws_video_category.live_course_id` column. Result: a folder created through the admin
+API showed in the client `/recordings` but **not** in the admin folder listing, because
+live courses have no root registered (`video_category_id` is null). Standardized the
+admin path on the `liveCourseId` column to match the client reader
+(`modules/admin-live-course/admin-live-course.service.ts`):
+- `lcFolderBelongsToCourse` → `videoCategory WHERE id = folderId AND live_course_id = courseId`
+  (was: membership in the root's descendant set). Affects all folder + video admin
+  endpoints that authorize a folder against a course (8 call sites).
+- `lcListFolders` → `videoCategory WHERE live_course_id = courseId` (+ relation rows
+  among those ids), was root-descendants.
+- `lcReachableFolderIds` is now unused (left in place); `lcRootFolderId` still backs
+  `lcDeleteFolder`'s is-root guard.
+
+No schema/DDL change. `yarn typecheck`: no new errors.
+
+---
+
 ## 2026-06-29 — Behavior: startAttempt "not started yet" gate now scheduled-only
 
 `startAttempt` previously rejected ANY exam with a future `startAt` ("Exam has not

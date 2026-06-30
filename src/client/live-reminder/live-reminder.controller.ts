@@ -149,70 +149,24 @@ export const listMyLiveSessionReminders = async (req: Request, res: Response) =>
 
     const upcomingOnly = req.query.upcoming === "true";
 
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(String(customerId));
-      if (!cid) return success(res, { reminders: [], total: 0, limit: null }, "Reminders fetched.");
-      let lim = upcomingOnly ? 50 : 0;
-      const raw = req.query.limit;
-      if (raw !== undefined && raw !== "") { const n = Number(raw); if (!Number.isFinite(n) || n < 1) return failure(res, "limit must be a positive number.", 422); lim = Math.min(Math.floor(n), 100); }
-      const dtos = await liveSql.listRemindersForCustomer(cid);
-      let reminders = dtos.map((r: any) => sqlReminderToPublic(r));
-      if (upcomingOnly) {
-        const now = Date.now();
-        reminders = reminders.filter((r) => r.status === "scheduled" && r.session?.scheduledAt && new Date(r.session.scheduledAt).getTime() > now)
-          .sort((a, b) => new Date(a.session!.scheduledAt as any).getTime() - new Date(b.session!.scheduledAt as any).getTime());
-      } else {
-        reminders.sort((a, b) => new Date(a.remindAt as any).getTime() - new Date(b.remindAt as any).getTime());
-      }
-      const total = reminders.length;
-      if (lim > 0) reminders = reminders.slice(0, lim);
-      return success(res, { reminders, total, limit: lim || null }, "Reminders fetched.");
-    }
-
-    let limit = upcomingOnly ? 50 : 0;
-    const rawLimit = req.query.limit;
-    if (rawLimit !== undefined && rawLimit !== "") {
-      const n = Number(rawLimit);
-      if (!Number.isFinite(n) || n < 1) {
-        logger.warn("listMyLiveSessionReminders invalid limit", { traceId, customerId, rawLimit });
-        return failure(res, "limit must be a positive number.", 422);
-      }
-      limit = Math.min(Math.floor(n), 100);
-    }
-
-    const rows = await LiveSessionReminder.find({ customerId: new Types.ObjectId(customerId) })
-      .populate("liveSessionId", SESSION_FIELDS)
-      .lean();
-
-    let reminders = rows.map(publicReminder);
-
+    const cid = liveSql.parseLiveId(String(customerId));
+    if (!cid) return success(res, { reminders: [], total: 0, limit: null }, "Reminders fetched.");
+    let lim = upcomingOnly ? 50 : 0;
+    const raw = req.query.limit;
+    if (raw !== undefined && raw !== "") { const n = Number(raw); if (!Number.isFinite(n) || n < 1) return failure(res, "limit must be a positive number.", 422); lim = Math.min(Math.floor(n), 100); }
+    const dtos = await liveSql.listRemindersForCustomer(cid);
+    let reminders = dtos.map((r: any) => sqlReminderToPublic(r));
     if (upcomingOnly) {
       const now = Date.now();
-      reminders = reminders.filter(
-        (r) =>
-          r.status === "scheduled" &&
-          r.session?.scheduledAt &&
-          new Date(r.session.scheduledAt).getTime() > now
-      );
-      // Earliest session start first — so the next class to begin is on top.
-      reminders.sort(
-        (a, b) =>
-          new Date(a.session!.scheduledAt as any).getTime() -
-          new Date(b.session!.scheduledAt as any).getTime()
-      );
+      reminders = reminders.filter((r) => r.status === "scheduled" && r.session?.scheduledAt && new Date(r.session.scheduledAt).getTime() > now)
+        .sort((a, b) => new Date(a.session!.scheduledAt as any).getTime() - new Date(b.session!.scheduledAt as any).getTime());
     } else {
-      // Fallback ordering for the unfiltered list: by reminder fire time.
-      reminders.sort(
-        (a, b) =>
-          new Date(a.remindAt as any).getTime() - new Date(b.remindAt as any).getTime()
-      );
+      reminders.sort((a, b) => new Date(a.remindAt as any).getTime() - new Date(b.remindAt as any).getTime());
     }
-
     const total = reminders.length;
-    if (limit > 0) reminders = reminders.slice(0, limit);
-
+    if (lim > 0) reminders = reminders.slice(0, lim);
     logger.info("listMyLiveSessionReminders success", { traceId, customerId, total, upcomingOnly });
-    return success(res, { reminders, total, limit: limit || null }, "Reminders fetched.");
+    return success(res, { reminders, total, limit: lim || null }, "Reminders fetched.");
   } catch (err) {
     logger.error("listMyLiveSessionReminders failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch reminders.", 500);
@@ -231,32 +185,11 @@ export const getMyReminderForSession = async (req: Request, res: Response) => {
   try {
     if (!customerId) { logger.warn("getMyReminderForSession unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(String(customerId));
-      const sid = liveSql.parseLiveId(liveSessionId);
-      if (!sid) return failure(res, "Invalid liveSessionId.", 422);
-      const dto = cid ? await liveSql.getReminderForSession(cid, sid) : null;
-      return success(res, { reminder: dto ? sqlReminderToPublic(dto) : null }, dto ? "Reminder fetched." : "No reminder set for this session.");
-    }
-
-    if (!Types.ObjectId.isValid(liveSessionId)) {
-      logger.warn("getMyReminderForSession invalid id", { traceId, customerId, liveSessionId });
-      return failure(res, "Invalid liveSessionId.", 422);
-    }
-
-    const reminder = await LiveSessionReminder.findOne({
-      customerId: new Types.ObjectId(customerId),
-      liveSessionId,
-    })
-      .populate("liveSessionId", SESSION_FIELDS)
-      .lean();
-
-    logger.info("getMyReminderForSession success", { traceId, customerId, liveSessionId, hasReminder: !!reminder });
-    return success(
-      res,
-      { reminder: reminder ? publicReminder(reminder) : null },
-      reminder ? "Reminder fetched." : "No reminder set for this session."
-    );
+    const cid = liveSql.parseLiveId(String(customerId));
+    const sid = liveSql.parseLiveId(liveSessionId);
+    if (!sid) return failure(res, "Invalid liveSessionId.", 422);
+    const dto = cid ? await liveSql.getReminderForSession(cid, sid) : null;
+    return success(res, { reminder: dto ? sqlReminderToPublic(dto) : null }, dto ? "Reminder fetched." : "No reminder set for this session.");
   } catch (err) {
     logger.error("getMyReminderForSession failed", { traceId, customerId, liveSessionId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch reminder.", 500);

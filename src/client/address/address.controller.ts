@@ -1,17 +1,10 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
-import { CustomerState } from "../../models/customer/CustomerState.model";
 // District module is deprecated in favour of OfflineCity-based "City" lookups below.
 // import { CustomerDistrict } from "../../models/customer/CustomerDistrict.model";
-import { OfflineCity } from "../../models/offline/OfflineCity.model";
 import { OfflineCenter } from "../../models/offline/OfflineCenter.model";
 import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
-import { CustomerEducation } from "../../models/customer/CustomerEducation.model";
-import { Goal } from "../../models/Goal.model";
 import {
-  createAddressSchema,
-  updateAddressSchema,
   createAddressSchemaMysql,
   updateAddressSchemaMysql,
 } from "./address.validation";
@@ -19,13 +12,11 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildRegexCondition } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
-import { isMysqlModule } from "../../config/migration";
 import {
   listStates as lookupListStates,
   listEducations as lookupListEducations,
 } from "../../modules/customer-lookups/customer-lookups.service";
 import {
-  isAddressMysql,
   parseAddressId,
   listAddresses as svcListAddresses,
   getAddress as svcGetAddress,
@@ -39,15 +30,11 @@ import type {
   AddressUpdateInput,
 } from "../../modules/customer-address/customer-address.types";
 import {
-  isOfflineCityMysql,
   listActiveCities as svcListActiveCities,
 } from "../../modules/offline-city/offline-city.service";
 import {
-  isGoalMysql,
   listActiveGoalsSql,
 } from "../../modules/goal/goal.service";
-
-const LOOKUPS_MODULE = "customer-lookups";
 
 /**
  * Map the validated zod body → the MySQL service's normalized input.
@@ -78,29 +65,11 @@ export const getMyAddresses = async (req: Request, res: Response) => {
   logger.info("getMyAddresses invoked", { traceId, path: req.originalUrl, customerId });
 
   try {
-    if (isAddressMysql()) {
-      const cid = parseAddressId(String(customerId));
-      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
-      const addresses = await svcListAddresses(cid);
-      logger.info("getMyAddresses success", { traceId, customerId, count: addresses.length, source: "mysql" });
-      return res.status(200).json({ success: true, data: addresses });
-    }
-
-    const { search, page, limit, skip } = parseListQuery(req.query);
-    const filter: any = { customerId, status: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-
-    const [addresses, total] = await Promise.all([
-      CustomerAddress.find(filter)
-        .populate("stateId")
-        .populate("cityId")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit),
-      CustomerAddress.countDocuments(filter),
-    ]);
-    logger.info("getMyAddresses success", { traceId, customerId, count: addresses.length });
-    return res.status(200).json({ success: true, data: addresses, pagination: buildPagination(total, page, limit) });
+    const cid = parseAddressId(String(customerId));
+    if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const addresses = await svcListAddresses(cid);
+    logger.info("getMyAddresses success", { traceId, customerId, count: addresses.length, source: "mysql" });
+    return res.status(200).json({ success: true, data: addresses });
   } catch (error: any) {
     logger.error("getMyAddresses failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -114,37 +83,19 @@ export const getAddressById = async (req: Request, res: Response) => {
   logger.info("getAddressById invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
-    if (isAddressMysql()) {
-      const cid = parseAddressId(String(customerId));
-      const aid = parseAddressId(id);
-      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
-      if (!aid) {
-        logger.warn("getAddressById invalid id", { traceId, customerId, id });
-        return res.status(400).json({ success: false, message: "Invalid Address ID" });
-      }
-      const address = await svcGetAddress(aid, cid);
-      if (!address) {
-        logger.warn("getAddressById not found", { traceId, customerId, id });
-        return res.status(404).json({ success: false, message: "Address not found" });
-      }
-      logger.info("getAddressById success", { traceId, customerId, id, source: "mysql" });
-      return res.status(200).json({ success: true, data: address });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    const cid = parseAddressId(String(customerId));
+    const aid = parseAddressId(id);
+    if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!aid) {
       logger.warn("getAddressById invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
     }
-
-    const address = await CustomerAddress.findOne({ _id: id, customerId })
-      .populate("stateId", "_id name stateCode")
-      .populate("cityId", "_id name");
-
+    const address = await svcGetAddress(aid, cid);
     if (!address) {
       logger.warn("getAddressById not found", { traceId, customerId, id });
       return res.status(404).json({ success: false, message: "Address not found" });
     }
-    logger.info("getAddressById success", { traceId, customerId, id });
+    logger.info("getAddressById success", { traceId, customerId, id, source: "mysql" });
     return res.status(200).json({ success: true, data: address });
   } catch (error: any) {
     logger.error("getAddressById failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
@@ -158,21 +109,13 @@ export const createAddress = async (req: Request, res: Response) => {
   logger.info("createAddress invoked", { traceId, path: req.originalUrl, customerId });
 
   try {
-    if (isAddressMysql()) {
-      const cid = parseAddressId(String(customerId));
-      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
-      // MySQL ids are integers, not ObjectIds — validate with the int-id schema.
-      const data = createAddressSchemaMysql.parse(req.body);
-      const input: AddressCreateInput = toAddressCreateInput(data, cid);
-      const address = await svcCreateAddress(input);
-      logger.info("createAddress success", { traceId, customerId, addressId: address._id, source: "mysql" });
-      return res.status(201).json({ success: true, data: address });
-    }
-
-    const data = createAddressSchema.parse(req.body);
-    const address = new CustomerAddress({ ...data, customerId });
-    await address.save();
-    logger.info("createAddress success", { traceId, customerId, addressId: address._id });
+    const cid = parseAddressId(String(customerId));
+    if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    // MySQL ids are integers, not ObjectIds — validate with the int-id schema.
+    const data = createAddressSchemaMysql.parse(req.body);
+    const input: AddressCreateInput = toAddressCreateInput(data, cid);
+    const address = await svcCreateAddress(input);
+    logger.info("createAddress success", { traceId, customerId, addressId: address._id, source: "mysql" });
     return res.status(201).json({ success: true, data: address });
   } catch (error: any) {
     if (error.issues) {
@@ -191,60 +134,39 @@ export const updateAddress = async (req: Request, res: Response) => {
   logger.info("updateAddress invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
-    if (isAddressMysql()) {
-      const cid = parseAddressId(String(customerId));
-      const aid = parseAddressId(id);
-      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
-      if (!aid) {
-        logger.warn("updateAddress invalid id", { traceId, customerId, id });
-        return res.status(400).json({ success: false, message: "Invalid Address ID" });
-      }
-      const data = updateAddressSchemaMysql.parse(req.body);
-      const input: AddressUpdateInput = {
-        ...(data.name !== undefined ? { name: data.name } : {}),
-        ...(data.phone !== undefined ? { phone: data.phone } : {}),
-        ...(data.alternatePhone !== undefined ? { alternatePhone: data.alternatePhone } : {}),
-        ...(data.email !== undefined ? { email: data.email } : {}),
-        ...(data.address !== undefined ? { address: data.address } : {}),
-        ...(data.address2 !== undefined ? { address2: data.address2 } : {}),
-        ...(data.city !== undefined ? { city: data.city } : {}),
-        ...(data.stateId !== undefined
-          ? { stateId: data.stateId != null ? Number(data.stateId) : null }
-          : {}),
-        ...(data.cityId !== undefined
-          ? { cityId: data.cityId != null ? Number(data.cityId) : null }
-          : {}),
-        ...(data.pincode !== undefined ? { pincode: data.pincode } : {}),
-        ...(data.label !== undefined ? { label: data.label } : {}),
-        ...(data.status !== undefined ? { status: data.status } : {}),
-      };
-      const result = await svcUpdateAddress(aid, cid, input);
-      if (!result.ok) {
-        logger.warn("updateAddress not found", { traceId, customerId, id });
-        return res.status(result.status).json({ success: false, message: result.message });
-      }
-      logger.info("updateAddress success", { traceId, customerId, id, source: "mysql" });
-      return res.status(result.status).json({ success: true, data: result.data });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    const cid = parseAddressId(String(customerId));
+    const aid = parseAddressId(id);
+    if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!aid) {
       logger.warn("updateAddress invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
     }
-
-    const data = updateAddressSchema.parse(req.body);
-    const address = await CustomerAddress.findOneAndUpdate(
-      { _id: id, customerId },
-      { $set: data },
-      { new: true }
-    ).populate("stateId", "_id name stateCode");
-
-    if (!address) {
+    const data = updateAddressSchemaMysql.parse(req.body);
+    const input: AddressUpdateInput = {
+      ...(data.name !== undefined ? { name: data.name } : {}),
+      ...(data.phone !== undefined ? { phone: data.phone } : {}),
+      ...(data.alternatePhone !== undefined ? { alternatePhone: data.alternatePhone } : {}),
+      ...(data.email !== undefined ? { email: data.email } : {}),
+      ...(data.address !== undefined ? { address: data.address } : {}),
+      ...(data.address2 !== undefined ? { address2: data.address2 } : {}),
+      ...(data.city !== undefined ? { city: data.city } : {}),
+      ...(data.stateId !== undefined
+        ? { stateId: data.stateId != null ? Number(data.stateId) : null }
+        : {}),
+      ...(data.cityId !== undefined
+        ? { cityId: data.cityId != null ? Number(data.cityId) : null }
+        : {}),
+      ...(data.pincode !== undefined ? { pincode: data.pincode } : {}),
+      ...(data.label !== undefined ? { label: data.label } : {}),
+      ...(data.status !== undefined ? { status: data.status } : {}),
+    };
+    const result = await svcUpdateAddress(aid, cid, input);
+    if (!result.ok) {
       logger.warn("updateAddress not found", { traceId, customerId, id });
-      return res.status(404).json({ success: false, message: "Address not found" });
+      return res.status(result.status).json({ success: false, message: result.message });
     }
-    logger.info("updateAddress success", { traceId, customerId, id });
-    return res.status(200).json({ success: true, data: address });
+    logger.info("updateAddress success", { traceId, customerId, id, source: "mysql" });
+    return res.status(result.status).json({ success: true, data: result.data });
   } catch (error: any) {
     if (error.issues) {
       logger.warn("updateAddress validation failed", { traceId, customerId, id, issues: error.issues });
@@ -263,46 +185,20 @@ export const setDefaultAddress = async (req: Request, res: Response) => {
   logger.info("setDefaultAddress invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
-    if (isAddressMysql()) {
-      const cid = parseAddressId(String(customerId));
-      const aid = parseAddressId(id);
-      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
-      if (!aid) {
-        logger.warn("setDefaultAddress invalid id", { traceId, customerId, id });
-        return res.status(400).json({ success: false, message: "Invalid Address ID" });
-      }
-      const result = await svcSetDefaultAddress(aid, cid);
-      if (!result.ok) {
-        logger.warn("setDefaultAddress not found", { traceId, customerId, id });
-        return res.status(result.status).json({ success: false, message: result.message });
-      }
-      logger.info("setDefaultAddress success", { traceId, customerId, id, source: "mysql" });
-      return res.status(200).json({ success: true, message: "Default address updated." });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    const cid = parseAddressId(String(customerId));
+    const aid = parseAddressId(id);
+    if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!aid) {
       logger.warn("setDefaultAddress invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
     }
-
-    const target = await CustomerAddress.findOne({ _id: id, customerId, status: true });
-    if (!target) {
+    const result = await svcSetDefaultAddress(aid, cid);
+    if (!result.ok) {
       logger.warn("setDefaultAddress not found", { traceId, customerId, id });
-      return res.status(404).json({ success: false, message: "Address not found" });
+      return res.status(result.status).json({ success: false, message: result.message });
     }
-
-    await CustomerAddress.updateMany(
-      { customerId, _id: { $ne: id } },
-      { $set: { isDefault: false } }
-    );
-    target.isDefault = true;
-    await target.save();
-
-    logger.info("setDefaultAddress success", { traceId, customerId, id });
-    return res.status(200).json({
-      success: true,
-      message: "Default address updated.",
-    });
+    logger.info("setDefaultAddress success", { traceId, customerId, id, source: "mysql" });
+    return res.status(200).json({ success: true, message: "Default address updated." });
   } catch (error: any) {
     logger.error("setDefaultAddress failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -316,38 +212,19 @@ export const deleteAddress = async (req: Request, res: Response) => {
   logger.info("deleteAddress invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
-    if (isAddressMysql()) {
-      const cid = parseAddressId(String(customerId));
-      const aid = parseAddressId(id);
-      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
-      if (!aid) {
-        logger.warn("deleteAddress invalid id", { traceId, customerId, id });
-        return res.status(400).json({ success: false, message: "Invalid Address ID" });
-      }
-      const result = await svcDeleteAddress(aid, cid);
-      if (!result.ok) {
-        logger.warn("deleteAddress not found", { traceId, customerId, id });
-        return res.status(result.status).json({ success: false, message: result.message });
-      }
-      logger.info("deleteAddress success", { traceId, customerId, id, source: "mysql" });
-      return res.status(200).json({ success: true, message: "Address removed successfully" });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    const cid = parseAddressId(String(customerId));
+    const aid = parseAddressId(id);
+    if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    if (!aid) {
       logger.warn("deleteAddress invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
     }
-
-    const address = await CustomerAddress.findOneAndUpdate(
-      { _id: id, customerId },
-      { $set: { status: false } },
-      { new: true }
-    );
-    if (!address) {
+    const result = await svcDeleteAddress(aid, cid);
+    if (!result.ok) {
       logger.warn("deleteAddress not found", { traceId, customerId, id });
-      return res.status(404).json({ success: false, message: "Address not found" });
+      return res.status(result.status).json({ success: false, message: result.message });
     }
-    logger.info("deleteAddress success", { traceId, customerId, id });
+    logger.info("deleteAddress success", { traceId, customerId, id, source: "mysql" });
     return res.status(200).json({ success: true, message: "Address removed successfully" });
   } catch (error: any) {
     logger.error("deleteAddress failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
@@ -362,25 +239,14 @@ export const getStates = async (req: Request, res: Response) => {
   logger.info("getStates invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { search } = parseListQuery(req.query);
     const term = search;
 
-    if (isMysqlModule(LOOKUPS_MODULE)) {
-      const rows = await lookupListStates({ activeOnly: true, search: term });
-      // Project to the exact Mongo contract: { _id, name, stateCode }
-      const states = rows.map((s) => ({ _id: s._id, name: s.name, stateCode: s.stateCode }));
-      logger.info("getStates success", { traceId, count: states.length, source: "mysql" });
-      return res.status(200).json({ success: true, data: states });
-    }
-
-    const filter: any = { active: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-    const [states, total] = await Promise.all([
-      CustomerState.find(filter).select("_id name stateCode").sort({ name: 1 }).skip(skip).limit(limit),
-      CustomerState.countDocuments(filter),
-    ]);
-    logger.info("getStates success", { traceId, count: states.length });
-    return res.status(200).json({ success: true, data: states, pagination: buildPagination(total, page, limit) });
+    const rows = await lookupListStates({ activeOnly: true, search: term });
+    // Project to the exact Mongo contract: { _id, name, stateCode }
+    const states = rows.map((s) => ({ _id: s._id, name: s.name, stateCode: s.stateCode }));
+    logger.info("getStates success", { traceId, count: states.length, source: "mysql" });
+    return res.status(200).json({ success: true, data: states });
   } catch (error: any) {
     logger.error("getStates failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -410,45 +276,20 @@ export const listCities = async (req: Request, res: Response) => {
 
   try {
     const { stateId } = req.query as Record<string, string>;
-    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { search } = parseListQuery(req.query);
 
-    if (isOfflineCityMysql()) {
-      // Optional state scope. Invalid stateId → 400 (mirrors the Mongo branch).
-      let stateNum: number | undefined;
-      if (stateId) {
-        const n = Number(stateId);
-        if (!Number.isInteger(n) || n <= 0) {
-          return res.status(400).json({ success: false, message: "Invalid stateId." });
-        }
-        stateNum = n;
-      }
-      const data = await svcListActiveCities(search, stateNum);
-      logger.info("listCities success", { traceId, count: data.length, source: "mysql", stateId: stateNum ?? null });
-      return res.status(200).json({ success: true, data });
-    }
-
-    const filter: any = { status: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-    // Optional: scope to a single state. Invalid/absent stateId → all cities
-    // (backward-compatible). Combines with `search`.
+    // Optional state scope. Invalid stateId → 400.
+    let stateNum: number | undefined;
     if (stateId) {
-      if (!mongoose.Types.ObjectId.isValid(stateId)) {
-        logger.warn("listCities invalid stateId", { traceId, stateId });
+      const n = Number(stateId);
+      if (!Number.isInteger(n) || n <= 0) {
         return res.status(400).json({ success: false, message: "Invalid stateId." });
       }
-      filter.stateId = stateId;
+      stateNum = n;
     }
-    const [data, total] = await Promise.all([
-      OfflineCity.find(filter)
-        .populate({ path: "stateId", model: CustomerState, select: "_id name stateCode" })
-        .sort({ order: 1, name: 1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      OfflineCity.countDocuments(filter),
-    ]);
-    logger.info("listCities success", { traceId, count: data.length, stateId: stateId ?? null });
-    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
+    const data = await svcListActiveCities(search, stateNum);
+    logger.info("listCities success", { traceId, count: data.length, source: "mysql", stateId: stateNum ?? null });
+    return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("listCities failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -502,23 +343,11 @@ export const getEducations = async (req: Request, res: Response) => {
   logger.info("getEducations invoked", { traceId, path: req.originalUrl });
 
   try {
-    if (isMysqlModule(LOOKUPS_MODULE)) {
-      const rows = await lookupListEducations({ activeOnly: true });
-      // Project to the exact Mongo contract: { _id, name }
-      const educations = rows.map((e) => ({ _id: e._id, name: e.name }));
-      logger.info("getEducations success", { traceId, count: educations.length, source: "mysql" });
-      return res.status(200).json({ success: true, data: educations });
-    }
-
-    const { search, page, limit, skip } = parseListQuery(req.query);
-    const filter: any = { status: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-    const [educations, total] = await Promise.all([
-      CustomerEducation.find(filter).select("_id name").sort({ name: 1 }).skip(skip).limit(limit),
-      CustomerEducation.countDocuments(filter),
-    ]);
-    logger.info("getEducations success", { traceId, count: educations.length });
-    return res.status(200).json({ success: true, data: educations, pagination: buildPagination(total, page, limit) });
+    const rows = await lookupListEducations({ activeOnly: true });
+    // Project to the exact Mongo contract: { _id, name }
+    const educations = rows.map((e) => ({ _id: e._id, name: e.name }));
+    logger.info("getEducations success", { traceId, count: educations.length, source: "mysql" });
+    return res.status(200).json({ success: true, data: educations });
   } catch (error: any) {
     logger.error("getEducations failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -534,18 +363,11 @@ export const getCharacteristic = async (_req: Request, res: Response) => {
   logger.info("getCharacteristic invoked", { traceId, path: _req.originalUrl });
 
   try {
-    // Educations honor the customer-lookups MySQL flag; goals (rich onboarding
-    // Goal collection, not ws_customer_target_goal) stay on Mongo for now.
-    const educationsPromise = isMysqlModule(LOOKUPS_MODULE)
-      ? lookupListEducations({ activeOnly: true }).then((rows) =>
-          rows.map((e) => ({ _id: e._id, name: e.name }))
-        )
-      : CustomerEducation.find({ status: true }).select("_id name").sort({ name: 1 });
+    const educationsPromise = lookupListEducations({ activeOnly: true }).then((rows) =>
+      rows.map((e) => ({ _id: e._id, name: e.name }))
+    );
 
-    // Goals: SQL when the goal module is flagged on, else legacy Mongo.
-    const goalsPromise = isGoalMysql()
-      ? listActiveGoalsSql()
-      : Goal.find({ isActive: true }).select("title image labels").sort({ createdAt: 1 });
+    const goalsPromise = listActiveGoalsSql();
 
     const [educations, goals] = await Promise.all([
       educationsPromise,

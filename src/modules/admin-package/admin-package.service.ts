@@ -1,11 +1,10 @@
-import { isMysqlModule } from "../../config/migration";
 import { HttpError } from "../../middlewares/errorHandler";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminPackageRepository as repo } from "./admin-package.repository";
 import type { Package, PackageType } from "@prisma/client";
 
 export const ADMIN_PACKAGE_MODULE = "admin-package";
-export const isAdminPackageMysql = (): boolean => isMysqlModule(ADMIN_PACKAGE_MODULE);
+export const isAdminPackageMysql = (): boolean => true;
 
 export const parsePackageId = (id: string): number | null => {
   const n = Number(id);
@@ -123,6 +122,8 @@ const toPlanDto = (p: any) => ({
   materialPrice: p.materialPrice ?? 0,
   isDefault: p.isDefault,
   status: p.status,
+  isMostPopular: p.isMostPopular ?? false,
+  mostPopularPinned: p.mostPopularPinned ?? false,
   createdAt: p.created_at ?? null,
   updatedAt: p.updated_at ?? null,
 });

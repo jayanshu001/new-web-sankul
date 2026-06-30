@@ -1,4 +1,3 @@
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 
@@ -19,7 +18,7 @@ import { computeEndAt, extendEndAt } from "../../utils/planDuration";
  * address chosen at checkout (validated for ownership in the controller).
  */
 export const LIVE_COURSE_ORDER_MODULE = "live-course-order";
-export const isLiveCourseOrderMysql = (): boolean => isMysqlModule(LIVE_COURSE_ORDER_MODULE);
+export const isLiveCourseOrderMysql = (): boolean => true;
 
 export type LiveCourseVerifyDto = {
   _id: string;

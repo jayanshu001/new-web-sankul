@@ -1,4 +1,3 @@
-import { isMysqlModule } from "../../config/migration";
 import { computeEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminEbookRepository as repo } from "./admin-ebook.repository";
@@ -6,7 +5,7 @@ import { populateExamCountdowns, parseIdArray } from "../exam-countdown/exam-cou
 import type { EBook, PackageCourseEbookPrice } from "@prisma/client";
 
 export const ADMIN_EBOOK_MODULE = "admin-ebook";
-export const isAdminEbookMysql = (): boolean => isMysqlModule(ADMIN_EBOOK_MODULE);
+export const isAdminEbookMysql = (): boolean => true;
 
 export const parseEbookId = (id: string): number | null => {
   const n = Number(id);
@@ -68,6 +67,8 @@ const toPlanDto = (p: PackageCourseEbookPrice & { EBook?: { id: number; name: st
   price: p.price,
   isDefault: p.isDefault,
   status: p.status,
+  isMostPopular: (p as any).isMostPopular ?? false,
+  mostPopularPinned: (p as any).mostPopularPinned ?? false,
   createdAt: p.created_at ?? null,
   updatedAt: p.updated_at ?? null,
 });

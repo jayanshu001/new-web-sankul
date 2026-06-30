@@ -34,6 +34,8 @@ export const toPriceDto = (row: PackageCourseEbookPrice): PriceDto => ({
   materialPrice: row.materialPrice ?? 0,
   isDefault: row.isDefault,
   status: row.status,
+  // "Most Popular" tag — effective flag (computed from sales / admin pin).
+  isMostPopular: (row as any).isMostPopular ?? false,
   createdAt: row.created_at ?? null,
   updatedAt: row.updated_at ?? null,
 });

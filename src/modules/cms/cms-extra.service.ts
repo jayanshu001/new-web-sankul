@@ -8,11 +8,10 @@
  * liveCourseId as a string — full populate of the live course is NOT reproduced
  * here, the FE only needs the id for these admin lists).
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const CMS_EXTRA_MODULE = "cms-extra";
-export const isCmsExtraMysql = (): boolean => isMysqlModule(CMS_EXTRA_MODULE);
+export const isCmsExtraMysql = (): boolean => true;
 
 export const parseCmsId = (id: string): number | null => {
   const n = Number(id);

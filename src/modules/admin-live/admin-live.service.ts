@@ -25,13 +25,12 @@
  *    subject folder, so that course is skipped (best-effort, mirrors Mongo's
  *    silent per-course failure). See report.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
 import type { LiveSession as SqlLiveSession } from "@prisma/client";
 
 export const ADMIN_LIVE_MODULE = "admin-live";
-export const isAdminLiveMysql = (): boolean => isMysqlModule(ADMIN_LIVE_MODULE);
+export const isAdminLiveMysql = (): boolean => true;
 
 /** Parse a numeric SQL id from a string, else null (rejects 24-hex ObjectIds). */
 export const parseAlId = (id: string): number | null => {
@@ -60,10 +59,30 @@ export interface PublicSessionView {
   rtmpUrl: string | null;
   hlsUrl: string | null;
   hlsUrls: any;
-  recordings: any[];
+  // `recordings` is the PRIMARY playback array = plain MP4 (un-DRM'd). The DRM-HLS
+  // m3u8 ladder lives in `hlsRecordings`. `mp4Recordings`/`mp4Url` are kept as
+  // explicit aliases. Lectures with no MP4 have empty `recordings` — fall back to
+  // `hlsRecordings` (which always carries the full quality ladder).
+  recordings: any[];        // mp4 (primary)
+  hlsRecordings: any[];     // m3u8 (DRM-HLS ladder)
+  mp4Recordings: any[];     // alias of `recordings`
+  mp4Url: string | null;
   createdAt: Date | null;
   updatedAt: Date | null;
 }
+
+// Highest-resolution MP4 url from a per-quality list (for the convenience mp4Url),
+// or null when none. Quality strings like "480p" → parse the leading number.
+const pickBestMp4 = (recs: any[]): string | null => {
+  if (!Array.isArray(recs) || !recs.length) return null;
+  const h = (q: any) => Number(String(q ?? "").match(/(\d+)/)?.[1] ?? 0);
+  return [...recs].sort((a, b) => h(b?.quality) - h(a?.quality))[0]?.path ?? recs[0]?.path ?? null;
+};
+
+// The DRM-HLS recordings stored on the row (the `recordings` JSON column). Internal
+// callers use this to test "does this session have recordings yet?" — kept separate
+// from the API view, where `recordings` now means MP4.
+export const hlsRecordingsOf = (row: SqlLiveSession): any[] => jArr(row.recordings);
 
 /**
  * Build the Mongo-shaped publicView from a SQL row + its linked course ids.
@@ -91,7 +110,11 @@ export const toPublicView = (
     rtmpUrl: row.rtmpUrl ?? null,
     hlsUrl: row.hlsUrl ?? null,
     hlsUrls: row.hlsUrls ?? null,
-    recordings: jArr(row.recordings),
+    // PRIMARY array = MP4; the DRM-HLS ladder moves to `hlsRecordings`.
+    recordings: jArr(row.mp4Recordings),
+    hlsRecordings: jArr(row.recordings),
+    mp4Recordings: jArr(row.mp4Recordings),
+    mp4Url: pickBestMp4(jArr(row.mp4Recordings)),
     createdAt: row.createdAt ?? null,
     updatedAt: row.updatedAt ?? null,
   };
@@ -259,6 +282,7 @@ export const updateSession = async (
     hlsUrl?: string | null;
     hlsUrls?: any;
     recordings?: any;
+    mp4Recordings?: any;
   }
 ): Promise<SqlLiveSession> =>
   prisma.liveSession.update({
@@ -269,7 +293,7 @@ export const updateSession = async (
 /** Update a session selected by streamId; null when none matched. */
 export const updateByStreamId = async (
   streamId: string,
-  data: { status?: string; recordings?: any }
+  data: { status?: string; recordings?: any; mp4Recordings?: any }
 ): Promise<SqlLiveSession | null> => {
   const found = await prisma.liveSession.findFirst({ where: { streamId }, select: { id: true } });
   if (!found) return null;

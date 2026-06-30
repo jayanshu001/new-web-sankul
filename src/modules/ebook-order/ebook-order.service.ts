@@ -14,7 +14,6 @@
  *
  * Flag OFF until go-live sign-off.
  */
-import { isMysqlModule } from "../../config/migration";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { ebookOrderRepository as repo } from "./ebook-order.repository";
 import { toEbookOrderRow, toEbookOrderDto } from "./ebook-order.transformer";
@@ -26,7 +25,7 @@ import type {
 
 export const EBOOK_ORDER_MODULE = "ebook-order";
 
-export const isEbookOrderMysql = (): boolean => isMysqlModule(EBOOK_ORDER_MODULE);
+export const isEbookOrderMysql = (): boolean => true;
 
 export const parseEbookOrderId = (id: string): number | null => {
   const n = Number(id);

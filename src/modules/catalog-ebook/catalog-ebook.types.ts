@@ -60,6 +60,8 @@ export interface EbookPlanDto {
   price: number;
   isDefault: boolean;
   status: boolean;
+  /** "Most Popular" tag — effective flag (computed from sales / admin pin). */
+  isMostPopular: boolean;
   createdAt: Date | null;
   updatedAt: Date | null;
 }

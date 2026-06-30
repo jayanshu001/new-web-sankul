@@ -1,5 +1,4 @@
 import { prisma } from "../../config/prisma";
-import { isMysqlModule } from "../../config/migration";
 
 /**
  * SQL home for the permissions CATALOG read path (catalog.controller).
@@ -12,8 +11,7 @@ import { isMysqlModule } from "../../config/migration";
  */
 export const PERMISSION_CATALOG_MODULE = "permission-catalog";
 
-export const isPermissionCatalogMysql = (): boolean =>
-  isMysqlModule(PERMISSION_CATALOG_MODULE);
+export const isPermissionCatalogMysql = (): boolean => true;
 
 /** Distinct permission names currently stored in ws_permissions. */
 export const getStoredPermissionNames = async (): Promise<string[]> => {

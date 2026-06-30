@@ -10,7 +10,6 @@
  * (Mongo) and join the still-Mongo course/educator consumers. Flips with catalog
  * + the rest of 3a in one consistent int id-space. Verify via live-DB tsx.
  */
-import { isMysqlModule } from "../../config/migration";
 import { commerceEducatorRepository as repo } from "./commerce-educator.repository";
 import { toEducatorDto, toEducatorRefDto } from "./commerce-educator.transformer";
 import type { EducatorDto, EducatorRefDto } from "./commerce-educator.types";
@@ -18,7 +17,7 @@ import type { EducatorDto, EducatorRefDto } from "./commerce-educator.types";
 export const EDUCATOR_MODULE = "commerce-educator";
 
 /** Whether the educator read-path is served from MySQL. */
-export const isEducatorMysql = (): boolean => isMysqlModule(EDUCATOR_MODULE);
+export const isEducatorMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseEducatorId = (id: string): number | null => {

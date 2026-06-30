@@ -1,10 +1,5 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { Video } from "../../models/course/Video.model";
-import { VideoCategory } from "../../models/course/VideoCategory.model";
-import { createVideoSchema, updateVideoSchema } from "../master/master.validation";
 import {
-  isAdminCourseVideoMysql,
   parseAcvId,
   categoryExists as acvCategoryExists,
   listVideos as acvListVideos,
@@ -67,53 +62,20 @@ export const getVideos = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
-    if (isAdminCourseVideoMysql()) {
-      let catId: number | undefined;
-      if (videoCategoryId) {
-        const parsed = parseAcvId(videoCategoryId);
-        if (parsed === null) {
-          return res.status(400).json({ success: false, message: "Invalid videoCategoryId" });
-        }
-        catId = parsed;
-      }
-      const { data, total } = await acvListVideos({
-        videoCategoryId: catId,
-        status: status === "active" ? true : status === "inactive" ? false : undefined,
-        skip,
-        take: limitNum,
-      });
-      return res.status(200).json({
-        success: true,
-        data,
-        pagination: {
-          total,
-          page: pageNum,
-          limit: limitNum,
-          totalPages: Math.ceil(total / limitNum),
-        },
-      });
-    }
-
-    const filters: any = {};
+    let catId: number | undefined;
     if (videoCategoryId) {
-      if (!mongoose.Types.ObjectId.isValid(videoCategoryId)) {
+      const parsed = parseAcvId(videoCategoryId);
+      if (parsed === null) {
         return res.status(400).json({ success: false, message: "Invalid videoCategoryId" });
       }
-      filters.videoCategoryId = videoCategoryId;
+      catId = parsed;
     }
-    if (status === "active" || status === "inactive") {
-      filters.status = status === "active";
-    }
-
-    const [data, total] = await Promise.all([
-      Video.find(filters)
-        .populate("videoCategoryId", "_id title slug")
-        .sort({ order: 1, createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      Video.countDocuments(filters),
-    ]);
-
+    const { data, total } = await acvListVideos({
+      videoCategoryId: catId,
+      status: status === "active" ? true : status === "inactive" ? false : undefined,
+      skip,
+      take: limitNum,
+    });
     return res.status(200).json({
       success: true,
       data,
@@ -133,24 +95,13 @@ export const getVideoById = async (req: Request, res: Response) => {
   try {
     const videoId = req.params.videoId as string;
 
-    if (isAdminCourseVideoMysql()) {
-      const numId = parseAcvId(videoId);
-      if (numId === null) {
-        return res.status(400).json({ success: false, message: "Invalid Video ID" });
-      }
-      const found = await acvGetVideoById(numId);
-      if (!found) return res.status(404).json({ success: false, message: "Video not found" });
-      return res.status(200).json({ success: true, data: found });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(videoId)) {
+    const numId = parseAcvId(videoId);
+    if (numId === null) {
       return res.status(400).json({ success: false, message: "Invalid Video ID" });
     }
-
-    const video = await Video.findById(videoId).populate("videoCategoryId", "_id title slug");
-    if (!video) return res.status(404).json({ success: false, message: "Video not found" });
-
-    return res.status(200).json({ success: true, data: video });
+    const found = await acvGetVideoById(numId);
+    if (!found) return res.status(404).json({ success: false, message: "Video not found" });
+    return res.status(200).json({ success: true, data: found });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -158,32 +109,15 @@ export const getVideoById = async (req: Request, res: Response) => {
 
 export const createVideo = async (req: Request, res: Response) => {
   try {
-    if (isAdminCourseVideoMysql()) {
-      const parsed = acvParseBody(req.body, false);
-      if ("error" in parsed) {
-        return res.status(400).json({ success: false, message: parsed.error });
-      }
-      if (!(await acvCategoryExists(parsed.data.videoCategoryId))) {
-        return res.status(404).json({ success: false, message: "Video category not found" });
-      }
-      const created = await acvCreateVideo(parsed.data);
-      return res.status(201).json({ success: true, data: created });
+    const parsed = acvParseBody(req.body, false);
+    if ("error" in parsed) {
+      return res.status(400).json({ success: false, message: parsed.error });
     }
-
-    const validatedData = createVideoSchema.parse(req.body);
-
-    if (!mongoose.Types.ObjectId.isValid(validatedData.videoCategoryId)) {
-      return res.status(400).json({ success: false, message: "Invalid videoCategoryId" });
-    }
-
-    const categoryExists = await VideoCategory.exists({ _id: validatedData.videoCategoryId });
-    if (!categoryExists) {
+    if (!(await acvCategoryExists(parsed.data.videoCategoryId))) {
       return res.status(404).json({ success: false, message: "Video category not found" });
     }
-
-    const video = new Video(validatedData);
-    await video.save();
-    return res.status(201).json({ success: true, data: video });
+    const created = await acvCreateVideo(parsed.data);
+    return res.status(201).json({ success: true, data: created });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
@@ -194,40 +128,20 @@ export const updateVideo = async (req: Request, res: Response) => {
   try {
     const videoId = req.params.videoId as string;
 
-    if (isAdminCourseVideoMysql()) {
-      const numId = parseAcvId(videoId);
-      if (numId === null) {
-        return res.status(400).json({ success: false, message: "Invalid Video ID" });
-      }
-      const parsed = acvParseBody(req.body, true);
-      if ("error" in parsed) {
-        return res.status(400).json({ success: false, message: parsed.error });
-      }
-      if (parsed.data.videoCategoryId !== undefined && !(await acvCategoryExists(parsed.data.videoCategoryId))) {
-        return res.status(404).json({ success: false, message: "Video category not found" });
-      }
-      const result = await acvUpdateVideo(numId, parsed.data);
-      if (result === "not_found") return res.status(404).json({ success: false, message: "Video not found" });
-      return res.status(200).json({ success: true, data: result });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(videoId)) {
+    const numId = parseAcvId(videoId);
+    if (numId === null) {
       return res.status(400).json({ success: false, message: "Invalid Video ID" });
     }
-
-    const validatedData = updateVideoSchema.parse(req.body);
-
-    if (validatedData.videoCategoryId) {
-      const categoryExists = await VideoCategory.exists({ _id: validatedData.videoCategoryId });
-      if (!categoryExists) {
-        return res.status(404).json({ success: false, message: "Video category not found" });
-      }
+    const parsed = acvParseBody(req.body, true);
+    if ("error" in parsed) {
+      return res.status(400).json({ success: false, message: parsed.error });
     }
-
-    const video = await Video.findByIdAndUpdate(videoId, validatedData, { new: true });
-    if (!video) return res.status(404).json({ success: false, message: "Video not found" });
-
-    return res.status(200).json({ success: true, data: video });
+    if (parsed.data.videoCategoryId !== undefined && !(await acvCategoryExists(parsed.data.videoCategoryId))) {
+      return res.status(404).json({ success: false, message: "Video category not found" });
+    }
+    const result = await acvUpdateVideo(numId, parsed.data);
+    if (result === "not_found") return res.status(404).json({ success: false, message: "Video not found" });
+    return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
@@ -238,23 +152,12 @@ export const deleteVideo = async (req: Request, res: Response) => {
   try {
     const videoId = req.params.videoId as string;
 
-    if (isAdminCourseVideoMysql()) {
-      const numId = parseAcvId(videoId);
-      if (numId === null) {
-        return res.status(400).json({ success: false, message: "Invalid Video ID" });
-      }
-      const ok = await acvDeleteVideo(numId);
-      if (!ok) return res.status(404).json({ success: false, message: "Video not found" });
-      return res.status(200).json({ success: true, message: "Video deleted successfully" });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(videoId)) {
+    const numId = parseAcvId(videoId);
+    if (numId === null) {
       return res.status(400).json({ success: false, message: "Invalid Video ID" });
     }
-
-    const video = await Video.findByIdAndDelete(videoId);
-    if (!video) return res.status(404).json({ success: false, message: "Video not found" });
-
+    const ok = await acvDeleteVideo(numId);
+    if (!ok) return res.status(404).json({ success: false, message: "Video not found" });
     return res.status(200).json({ success: true, message: "Video deleted successfully" });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
@@ -269,26 +172,12 @@ export const reorderVideos = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "orders array is required" });
     }
 
-    if (isAdminCourseVideoMysql()) {
-      for (const item of orders) {
-        if (parseAcvId(item.id) === null) {
-          return res.status(400).json({ success: false, message: `Invalid video ID: ${item.id}` });
-        }
-      }
-      await acvReorderVideos(orders);
-      return res.status(200).json({ success: true, message: "Videos reordered successfully" });
-    }
-
     for (const item of orders) {
-      if (!mongoose.Types.ObjectId.isValid(item.id)) {
+      if (parseAcvId(item.id) === null) {
         return res.status(400).json({ success: false, message: `Invalid video ID: ${item.id}` });
       }
     }
-
-    await Promise.all(
-      orders.map(({ id, order }) => Video.findByIdAndUpdate(id, { order }))
-    );
-
+    await acvReorderVideos(orders);
     return res.status(200).json({ success: true, message: "Videos reordered successfully" });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

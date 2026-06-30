@@ -15,12 +15,11 @@
  * `toSubscriptionDto`. `_id` is the SQL int stringified (matches every other
  * migrated module). Drift notes inline.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 
 export const CLIENT_TESTSERIES_MODULE = "client-testseries";
-export const isClientTestSeriesMysql = (): boolean => isMysqlModule(CLIENT_TESTSERIES_MODULE);
+export const isClientTestSeriesMysql = (): boolean => true;
 
 export const parseCtsId = (id: string): number | null => {
   const n = Number(id);
@@ -258,6 +257,7 @@ export const getTestSeriesDetailMysql = async (opts: DetailOpts) => {
       originalPrice: p.originalPrice != null ? num(p.originalPrice) : null,
       isDefault: p.isDefault,
       status: p.status,
+      isMostPopular: (p as any).isMostPopular ?? false,
     })),
     isPaid,
     isPurchased: !!activeSubscription,

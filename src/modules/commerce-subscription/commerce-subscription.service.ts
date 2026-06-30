@@ -18,7 +18,6 @@
  * C3 seam: `customerId` is an INT here (SQL `customer_id` is int). Callers
  * resolve any ObjectId string → int customer at this boundary.
  */
-import { isMysqlModule } from "../../config/migration";
 import { commerceSubscriptionRepository as repo } from "./commerce-subscription.repository";
 import { toSubscriptionDto } from "./commerce-subscription.transformer";
 import type { SubscriptionDto } from "./commerce-subscription.types";
@@ -26,7 +25,7 @@ import type { SubscriptionDto } from "./commerce-subscription.types";
 export const SUBSCRIPTION_MODULE = "commerce-subscription";
 
 /** Whether the subscription read-path is served from MySQL. */
-export const isSubscriptionMysql = (): boolean => isMysqlModule(SUBSCRIPTION_MODULE);
+export const isSubscriptionMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseSubscriptionId = (id: string): number | null => {

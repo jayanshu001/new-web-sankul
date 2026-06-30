@@ -13,11 +13,10 @@
  * SQL branch therefore validates the body itself (same field set / coercions)
  * before the Zod parse runs, so numeric category ids are accepted.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const ADMIN_COURSE_VIDEO_MODULE = "admin-course-video";
-export const isAdminCourseVideoMysql = (): boolean => isMysqlModule(ADMIN_COURSE_VIDEO_MODULE);
+export const isAdminCourseVideoMysql = (): boolean => true;
 
 export const parseAcvId = (id: string): number | null => {
   const n = Number(id);

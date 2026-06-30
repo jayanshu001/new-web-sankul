@@ -9,8 +9,6 @@ import { z } from "zod";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success, failure } from "../../utils/httpResponse";
 import {
-  createLiveCourseSchema,
-  updateLiveCourseSchema,
   createLiveCourseSqlSchema,
   updateLiveCourseSqlSchema,
 } from "./live-course.validation";
@@ -58,8 +56,7 @@ export const createLiveCourse = asyncHandler(async (req: Request, res: Response)
 
   let validated: any;
   try {
-    const schema = liveCourseService.isLiveCourseMysql() ? createLiveCourseSqlSchema : createLiveCourseSchema;
-    validated = schema.parse(coerceBody(req.body));
+    validated = createLiveCourseSqlSchema.parse(coerceBody(req.body));
   } catch (err) {
     if (err instanceof z.ZodError) return zodIssueResponse(res, err);
     throw err;
@@ -87,8 +84,7 @@ export const updateLiveCourse = asyncHandler(async (req: Request, res: Response)
 
   let validated: any;
   try {
-    const schema = liveCourseService.isLiveCourseMysql() ? updateLiveCourseSqlSchema : updateLiveCourseSchema;
-    validated = schema.parse(coerceBody(req.body));
+    validated = updateLiveCourseSqlSchema.parse(coerceBody(req.body));
   } catch (err) {
     if (err instanceof z.ZodError) return zodIssueResponse(res, err);
     throw err;

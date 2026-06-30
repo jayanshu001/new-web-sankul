@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
 import mongoose, { Model } from "mongoose";
 import { FaqType } from "../../models/system/FaqType.model";
-import { isMysqlModule } from "../../config/migration";
 import {
   listFaqsPaged as listFaqsPagedService,
   getFaqById,
@@ -10,7 +9,6 @@ import {
   deleteFaq as deleteFaqService,
   listFaqTypes as listFaqTypesService,
   parseFaqId,
-  isFaqTypeInUse,
 } from "../../modules/faq/faq.service";
 import {
   faqCreateSchemaMysql,
@@ -61,17 +59,7 @@ import {
   getAppUpdateSettings,
   upsertAppUpdateSettings,
 } from "../../modules/app-update/app-update.service";
-import { LiveBannerSlider } from "../../models/system/LiveBannerSlider.model";
-import { Testimonial } from "../../models/system/Testimonial.model";
-import { TermsAndConditions } from "../../models/system/TermsAndConditions.model";
-import { Version } from "../../models/system/Version.model";
-import { AppUpdate } from "../../models/system/AppUpdate.model";
-import { SocialLink } from "../../models/system/SocialLink.model";
-import { SocialLinkType } from "../../models/system/SocialLinkType.model";
-import { CurrentAffair } from "../../models/system/CurrentAffair.model";
 import {
-  faqCreateSchema,
-  faqUpdateSchema,
   faqTypeCreateSchema,
   faqTypeUpdateSchema,
   popupCreateSchema,
@@ -99,7 +87,6 @@ import { getErrorMessage } from "../../utils/httpResponse";
 import { z } from "zod";
 import * as cmsx from "../../modules/cms/cms-extra.service";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
-import { buildSearchFilter } from "../../utils/searchFilter";
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
@@ -279,11 +266,7 @@ export const getFaq = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
   try {
-    if (isMysqlModule("faq")) {
-      if (!parseFaqId(id)) {
-        return res.status(400).json({ success: false, message: "Invalid id." });
-      }
-    } else if (!isObjectId(id)) {
+    if (!parseFaqId(id)) {
       return res.status(400).json({ success: false, message: "Invalid id." });
     }
     const doc = await getFaqById(id);
@@ -298,12 +281,7 @@ export const getFaq = async (req: Request, res: Response) => {
 export const createFaq = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   try {
-    if (isMysqlModule("faq")) {
-      const data = faqCreateSchemaMysql.parse(req.body);
-      const doc = await createFaqService(data);
-      return res.status(201).json({ success: true, data: doc });
-    }
-    const data = faqCreateSchema.parse(req.body);
+    const data = faqCreateSchemaMysql.parse(req.body);
     const doc = await createFaqService(data);
     return res.status(201).json({ success: true, data: doc });
   } catch (e: any) {
@@ -316,19 +294,10 @@ export const updateFaq = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
   try {
-    if (isMysqlModule("faq")) {
-      if (!parseFaqId(id)) {
-        return res.status(400).json({ success: false, message: "Invalid id." });
-      }
-      const data = faqUpdateSchemaMysql.parse(req.body);
-      const doc = await updateFaqService(id, data);
-      if (!doc) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data: doc });
-    }
-    if (!isObjectId(id)) {
+    if (!parseFaqId(id)) {
       return res.status(400).json({ success: false, message: "Invalid id." });
     }
-    const data = faqUpdateSchema.parse(req.body);
+    const data = faqUpdateSchemaMysql.parse(req.body);
     const doc = await updateFaqService(id, data);
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });
     return res.status(200).json({ success: true, data: doc });
@@ -342,11 +311,7 @@ export const deleteFaq = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
   try {
-    if (isMysqlModule("faq")) {
-      if (!parseFaqId(id)) {
-        return res.status(400).json({ success: false, message: "Invalid id." });
-      }
-    } else if (!isObjectId(id)) {
+    if (!parseFaqId(id)) {
       return res.status(400).json({ success: false, message: "Invalid id." });
     }
     const ok = await deleteFaqService(id);
@@ -378,26 +343,13 @@ export const deleteFaqType = async (req: Request, res: Response) => {
   logger.info("deleteFaqType invoked", { traceId, path: req.originalUrl, id });
 
   try {
-    if (isMysqlModule("faq")) {
-      return res.status(400).json({
-        success: false,
-        message:
-          "FAQ categories are fixed (general, referral) on the legacy MySQL schema and cannot be deleted.",
-      });
-    }
-    if (!isObjectId(id)) { logger.warn("deleteFaqType invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
-    const inUse = await isFaqTypeInUse(id);
-    if (inUse) {
-      logger.warn("deleteFaqType in use", { traceId, id });
-      return res.status(409).json({
-        success: false,
-        message: "FAQ Type is in use by one or more FAQs and cannot be deleted.",
-      });
-    }
-    const doc = await FaqType.findByIdAndDelete(id);
-    if (!doc) { logger.warn("deleteFaqType not found", { traceId, id }); return res.status(404).json({ success: false, message: "Not found." }); }
-    logger.info("deleteFaqType success", { traceId, id });
-    return res.status(200).json({ success: true, message: "Deleted." });
+    // FAQ categories are fixed (general, referral) on the legacy MySQL schema
+    // and cannot be deleted.
+    return res.status(400).json({
+      success: false,
+      message:
+        "FAQ categories are fixed (general, referral) on the legacy MySQL schema and cannot be deleted.",
+    });
   } catch (e: any) {
     logger.error("deleteFaqType failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -408,8 +360,7 @@ export const deleteFaqType = async (req: Request, res: Response) => {
 // Delegated to popup service (MySQL/Prisma when listed in
 // MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
 // `promoExpireAt` is coerced to a Date inside the service/transformer.
-const popupIdInvalid = (id: string) =>
-  isMysqlModule("popup") ? !parsePopupId(id) : !isObjectId(id);
+const popupIdInvalid = (id: string) => !parsePopupId(id);
 
 export const listPopups = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -479,8 +430,7 @@ export const deletePopup = async (req: Request, res: Response) => {
 // ─── Banner ──
 // Data access delegated to banner-slider service (MySQL/Prisma when listed in
 // MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
-const bannerIdInvalid = (id: string) =>
-  isMysqlModule("banner-slider") ? !parseBannerId(id) : !isObjectId(id);
+const bannerIdInvalid = (id: string) => !parseBannerId(id);
 
 export const listBanners = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -588,20 +538,9 @@ export const listLiveBanners = async (req: Request, res: Response) => {
   try {
     const q = parseAdminList(req.query as Record<string, any>);
 
-    if (cmsxOn()) {
-      const { items, total } = await cmsx.listLiveBannersPaged({ search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
-      return listResponse(res, items, total, q);
-    }
-
-    const filter = buildSearchFilter(q.search, ["image"]);
-    const sortField = q.sortBy === "createdAt" ? "createdAt" : "orderBy";
-    const sortNum = q.sortDir === "desc" ? -1 : 1;
-    let query = LiveBannerSlider.find(filter).sort({ [sortField]: sortNum }).populate("liveCourseId");
-    if (q.skip != null) query = query.skip(q.skip);
-    if (q.take != null) query = query.limit(q.take);
-    const [data, total] = await Promise.all([query.lean(), LiveBannerSlider.countDocuments(filter)]);
-    logger.info("listLiveBanners success", { traceId, count: data.length, total });
-    return listResponse(res, data, total, q);
+    const { items, total } = await cmsx.listLiveBannersPaged({ search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
+    logger.info("listLiveBanners success", { traceId, count: items.length, total });
+    return listResponse(res, items, total, q);
   } catch (e: any) {
     logger.error("listLiveBanners failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -613,18 +552,11 @@ export const getLiveBanner = async (req: Request, res: Response) => {
   logger.info("getLiveBanner invoked", { traceId, path: req.originalUrl, id });
 
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const d = await cmsx.getLiveBanner(nid);
-      if (!d) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data: d });
-    }
-    if (!isObjectId(id)) { logger.warn("getLiveBanner invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
-    const doc = await LiveBannerSlider.findById(id).populate("liveCourseId").lean();
-    if (!doc) { logger.warn("getLiveBanner not found", { traceId, id }); return res.status(404).json({ success: false, message: "Not found." }); }
-    logger.info("getLiveBanner success", { traceId, id });
-    return res.status(200).json({ success: true, data: doc });
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const d = await cmsx.getLiveBanner(nid);
+    if (!d) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: d });
   } catch (e: any) {
     logger.error("getLiveBanner failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -632,38 +564,29 @@ export const getLiveBanner = async (req: Request, res: Response) => {
 };
 export const createLiveBanner = async (req: Request, res: Response) => {
   try {
-    if (cmsxOn()) {
-      const data = liveBannerCreateSqlSchema.parse(req.body);
-      return res.status(201).json({ success: true, data: await cmsx.createLiveBanner(data) });
-    }
-    return genericCreate(LiveBannerSlider, liveBannerCreateSchema)(req, res);
+    const data = liveBannerCreateSqlSchema.parse(req.body);
+    return res.status(201).json({ success: true, data: await cmsx.createLiveBanner(data) });
   } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
 };
 export const updateLiveBanner = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const data = liveBannerUpdateSqlSchema.parse(req.body);
-      const d = await cmsx.updateLiveBanner(nid, data);
-      if (!d) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data: d });
-    }
-    return genericUpdate(LiveBannerSlider, liveBannerUpdateSchema)(req, res);
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const data = liveBannerUpdateSqlSchema.parse(req.body);
+    const d = await cmsx.updateLiveBanner(nid, data);
+    if (!d) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: d });
   } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
 };
 export const deleteLiveBanner = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const ok = await cmsx.deleteLiveBanner(nid);
-      if (!ok) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, message: "Deleted." });
-    }
-    return genericDelete(LiveBannerSlider)(req, res);
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const ok = await cmsx.deleteLiveBanner(nid);
+    if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, message: "Deleted." });
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 
@@ -673,19 +596,9 @@ export const reorderLiveBanners = async (req: Request, res: Response) => {
 
   try {
     const { orders } = reorderSchema.parse(req.body);
-    if (cmsxOn()) {
-      const count = await cmsx.reorderLiveBanners(orders);
-      if (!count) return res.status(400).json({ success: false, message: "No valid ids." });
-      return res.status(200).json({ success: true, message: "Live banner order updated." });
-    }
-    const ops = orders
-      .filter((o) => isObjectId(o.id))
-      .map((o) => ({
-        updateOne: { filter: { _id: o.id }, update: { $set: { orderBy: o.orderBy } } },
-      }));
-    if (!ops.length) { logger.warn("reorderLiveBanners no valid ids", { traceId }); return res.status(400).json({ success: false, message: "No valid ids." }); }
-    await LiveBannerSlider.bulkWrite(ops);
-    logger.info("reorderLiveBanners success", { traceId, count: ops.length });
+    const count = await cmsx.reorderLiveBanners(orders);
+    if (!count) return res.status(400).json({ success: false, message: "No valid ids." });
+    logger.info("reorderLiveBanners success", { traceId, count });
     return res.status(200).json({ success: true, message: "Live banner order updated." });
   } catch (e: any) {
     if (e.issues) { logger.warn("reorderLiveBanners validation failed", { traceId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
@@ -697,8 +610,7 @@ export const reorderLiveBanners = async (req: Request, res: Response) => {
 // ─── Testimonial ──
 // Delegated to testimonial service (MySQL/Prisma when listed in
 // MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
-const testimonialIdInvalid = (id: string) =>
-  isMysqlModule("testimonial") ? !parseTestimonialId(id) : !isObjectId(id);
+const testimonialIdInvalid = (id: string) => !parseTestimonialId(id);
 
 export const listTestimonials = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -766,64 +678,46 @@ export const deleteTestimonial = async (req: Request, res: Response) => {
 };
 
 // ─── Social Link Type ── (dual-path: cms-extra SQL flag)
-export const listSocialLinkTypes = async (req: Request, res: Response) => {
+export const listSocialLinkTypes = async (_req: Request, res: Response) => {
   try {
-    if (cmsxOn()) return res.status(200).json({ success: true, data: await cmsx.listSocialLinkTypes() });
-    return genericList(SocialLinkType, { title: 1 })(req, res);
+    return res.status(200).json({ success: true, data: await cmsx.listSocialLinkTypes() });
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 export const getSocialLinkType = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const d = await cmsx.getSocialLinkType(nid);
-      if (!d) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data: d });
-    }
-    return genericGet(SocialLinkType)(req, res);
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const d = await cmsx.getSocialLinkType(nid);
+    if (!d) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: d });
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 export const createSocialLinkType = async (req: Request, res: Response) => {
   try {
-    if (cmsxOn()) {
-      const data = socialLinkTypeCreateSchema.parse(req.body);
-      return res.status(201).json({ success: true, data: await cmsx.createSocialLinkType(data) });
-    }
-    return genericCreate(SocialLinkType, socialLinkTypeCreateSchema)(req, res);
+    const data = socialLinkTypeCreateSchema.parse(req.body);
+    return res.status(201).json({ success: true, data: await cmsx.createSocialLinkType(data) });
   } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
 };
 export const updateSocialLinkType = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const data = socialLinkTypeUpdateSchema.parse(req.body);
-      const d = await cmsx.updateSocialLinkType(nid, data);
-      if (!d) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data: d });
-    }
-    return genericUpdate(SocialLinkType, socialLinkTypeUpdateSchema)(req, res);
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const data = socialLinkTypeUpdateSchema.parse(req.body);
+    const d = await cmsx.updateSocialLinkType(nid, data);
+    if (!d) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: d });
   } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
 };
 export const deleteSocialLinkType = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const r = await cmsx.deleteSocialLinkType(nid);
-      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-      return res.status(200).json({ success: true, message: "Deleted." });
-    }
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    const inUse = await SocialLink.exists({ typeId: id });
-    if (inUse) return res.status(409).json({ success: false, message: "Social Link Type is in use by one or more links and cannot be deleted." });
-    const doc = await SocialLinkType.findByIdAndDelete(id);
-    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const r = await cmsx.deleteSocialLinkType(nid);
+    if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
     return res.status(200).json({ success: true, message: "Deleted." });
   } catch (e: any) {
     logger.error("deleteSocialLinkType failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
@@ -832,12 +726,10 @@ export const deleteSocialLinkType = async (req: Request, res: Response) => {
 };
 
 // ─── Social Link ── (dual-path)
-export const listSocialLinks = async (req: Request, res: Response) => {
-  const traceId = req.traceId;
+export const listSocialLinks = async (_req: Request, res: Response) => {
+  const traceId = _req.traceId;
   try {
-    if (cmsxOn()) return res.status(200).json({ success: true, data: await cmsx.listSocialLinks() });
-    const data = await SocialLink.find().populate("typeId", "_id title").sort({ order: 1 }).lean();
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data: await cmsx.listSocialLinks() });
   } catch (e: any) {
     logger.error("listSocialLinks failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -846,50 +738,38 @@ export const listSocialLinks = async (req: Request, res: Response) => {
 export const getSocialLink = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const d = await cmsx.getSocialLink(nid);
-      if (!d) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data: d });
-    }
-    return genericGet(SocialLink)(req, res);
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const d = await cmsx.getSocialLink(nid);
+    if (!d) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: d });
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 export const createSocialLink = async (req: Request, res: Response) => {
   try {
-    if (cmsxOn()) {
-      const data = socialLinkCreateSqlSchema.parse(req.body);
-      return res.status(201).json({ success: true, data: await cmsx.createSocialLink(data) });
-    }
-    return genericCreate(SocialLink, socialLinkCreateSchema)(req, res);
+    const data = socialLinkCreateSqlSchema.parse(req.body);
+    return res.status(201).json({ success: true, data: await cmsx.createSocialLink(data) });
   } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
 };
 export const updateSocialLink = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const data = socialLinkUpdateSqlSchema.parse(req.body);
-      const d = await cmsx.updateSocialLink(nid, data);
-      if (!d) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data: d });
-    }
-    return genericUpdate(SocialLink, socialLinkUpdateSchema)(req, res);
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const data = socialLinkUpdateSqlSchema.parse(req.body);
+    const d = await cmsx.updateSocialLink(nid, data);
+    if (!d) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: d });
   } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
 };
 export const deleteSocialLink = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const ok = await cmsx.deleteSocialLink(nid);
-      if (!ok) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, message: "Deleted." });
-    }
-    return genericDelete(SocialLink)(req, res);
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const ok = await cmsx.deleteSocialLink(nid);
+    if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, message: "Deleted." });
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 
@@ -898,76 +778,52 @@ export const listCurrentAffairs = async (req: Request, res: Response) => {
   try {
     const q = parseAdminList(req.query as Record<string, any>);
 
-    if (cmsxOn()) {
-      const { items, total } = await cmsx.listCurrentAffairsPaged({ search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
-      return listResponse(res, items, total, q);
-    }
-
-    const filter = buildSearchFilter(q.search, ["title", "youtubeLink", "image"]);
-    const sortField = q.sortBy === "title" ? "title" : q.sortBy === "status" ? "status" : "createdAt";
-    const sortNum = q.sortDir === "asc" ? 1 : -1;
-    let query = CurrentAffair.find(filter).sort({ [sortField]: sortNum });
-    if (q.skip != null) query = query.skip(q.skip);
-    if (q.take != null) query = query.limit(q.take);
-    const [data, total] = await Promise.all([query.lean(), CurrentAffair.countDocuments(filter)]);
-    return listResponse(res, data, total, q);
+    const { items, total } = await cmsx.listCurrentAffairsPaged({ search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take });
+    return listResponse(res, items, total, q);
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 export const getCurrentAffair = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const d = await cmsx.getCurrentAffair(nid);
-      if (!d) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data: d });
-    }
-    return genericGet(CurrentAffair)(req, res);
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const d = await cmsx.getCurrentAffair(nid);
+    if (!d) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: d });
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 export const createCurrentAffair = async (req: Request, res: Response) => {
   try {
-    if (cmsxOn()) {
-      const data = currentAffairCreateSchema.parse(req.body);
-      return res.status(201).json({ success: true, data: await cmsx.createCurrentAffair(data) });
-    }
-    return genericCreate(CurrentAffair, currentAffairCreateSchema)(req, res);
+    const data = currentAffairCreateSchema.parse(req.body);
+    return res.status(201).json({ success: true, data: await cmsx.createCurrentAffair(data) });
   } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
 };
 export const updateCurrentAffair = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const data = currentAffairUpdateSchema.parse(req.body);
-      const d = await cmsx.updateCurrentAffair(nid, data);
-      if (!d) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data: d });
-    }
-    return genericUpdate(CurrentAffair, currentAffairUpdateSchema)(req, res);
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const data = currentAffairUpdateSchema.parse(req.body);
+    const d = await cmsx.updateCurrentAffair(nid, data);
+    if (!d) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: d });
   } catch (e: any) { if (e.issues) return res.status(400).json({ success: false, errors: e.issues }); return res.status(500).json({ success: false, message: e.message }); }
 };
 export const deleteCurrentAffair = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
-    if (cmsxOn()) {
-      const nid = cmsx.parseCmsId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const ok = await cmsx.deleteCurrentAffair(nid);
-      if (!ok) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, message: "Deleted." });
-    }
-    return genericDelete(CurrentAffair)(req, res);
+    const nid = cmsx.parseCmsId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const ok = await cmsx.deleteCurrentAffair(nid);
+    if (!ok) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, message: "Deleted." });
   } catch (e: any) { return res.status(500).json({ success: false, message: e.message }); }
 };
 
 // ─── Terms ──
 // Delegated to terms service (MySQL/Prisma when listed in
 // MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
-const termsIdInvalid = (id: string) =>
-  isMysqlModule("terms") ? !parseTermsId(id) : !isObjectId(id);
+const termsIdInvalid = (id: string) => !parseTermsId(id);
 
 export const listTerms = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;
@@ -995,10 +851,8 @@ export const getTerms = async (req: Request, res: Response) => {
 export const createTerms = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   try {
-    // MySQL `module` is a fixed enum; use the stricter schema when on MySQL.
-    const data = isMysqlModule("terms")
-      ? termsCreateSchemaMysql.parse(req.body)
-      : termsCreateSchema.parse(req.body);
+    // MySQL `module` is a fixed enum; use the stricter schema.
+    const data = termsCreateSchemaMysql.parse(req.body);
     const doc = await createTermsService(data);
     return res.status(201).json({ success: true, data: doc });
   } catch (e: any) {
@@ -1012,9 +866,7 @@ export const updateTerms = async (req: Request, res: Response) => {
   const id = req.params.id as string;
   try {
     if (termsIdInvalid(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    const data = isMysqlModule("terms")
-      ? termsUpdateSchemaMysql.parse(req.body)
-      : termsUpdateSchema.parse(req.body);
+    const data = termsUpdateSchemaMysql.parse(req.body);
     const doc = await updateTermsService(id, data);
     if (!doc) return res.status(404).json({ success: false, message: "Not found." });
     return res.status(200).json({ success: true, data: doc });

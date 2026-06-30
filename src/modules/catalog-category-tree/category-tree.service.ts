@@ -90,10 +90,18 @@ export const reachableCategoryIds = async (
     if (course?.videoCategoryId) rootIds.add(course.videoCategoryId);
     for (const c of tagged) rootIds.add(c.id);
   } else if (kind === "liveCourse") {
-    const lc = await prisma.liveCourse.findFirst({ where: { id: scopeId, status: true }, select: { videoCategoryId: true } });
+    // Two linkage forms, mirroring the `course` branch: (a) the course's downward
+    // root pointer (ws_live_course.video_category_id), and (b) categories tagged
+    // directly with this course via ws_video_category.live_course_id — which IS
+    // how live-course folders are keyed (the recordings reader + admin folder ops
+    // both resolve by this column). Live courses generally have no root set, so
+    // omitting (b) made every live-course video unreachable (false "not part of").
+    const [lc, tagged] = await Promise.all([
+      prisma.liveCourse.findFirst({ where: { id: scopeId, status: true }, select: { videoCategoryId: true } }),
+      prisma.videoCategory.findMany({ where: { liveCourseId: scopeId }, select: { id: true } }),
+    ]);
     if (lc?.videoCategoryId) rootIds.add(lc.videoCategoryId);
-    // Tagged-by-liveCourse categories: ws_video_category has no live_course_id
-    // column on SQL (Mongo-only tag) — only the downward pointer applies here.
+    for (const c of tagged) rootIds.add(c.id);
   } else {
     // package: (a) PackageSpecificSubject.subjectId roots, (b) the relation pairs
     // (both parent + child of each linked VideoCategoryRelation) count as roots.

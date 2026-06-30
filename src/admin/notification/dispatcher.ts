@@ -1,11 +1,8 @@
 import mongoose from "mongoose";
 import { Notification, INotification } from "../../models/system/Notification.model";
-import { Customer } from "../../models/customer/Customer.model";
-import { sendPush } from "../../utils/fcm";
-import { resolveAudience, AudienceFilter } from "./audience";
+import { AudienceFilter } from "./audience";
 import logger from "../../utils/logger";
 import {
-  isAdminNotificationMysql,
   dispatchAudience as sqlDispatchAudience,
   dispatchScheduledById as sqlDispatchScheduledById,
 } from "../../modules/admin-notification/admin-notification.service";
@@ -39,80 +36,7 @@ export async function dispatchAudience(
   audienceFilter: AudienceFilter,
   parentId?: mongoose.Types.ObjectId
 ): Promise<DispatchResult> {
-  if (isAdminNotificationMysql()) {
-    return sqlDispatchAudience(payload, audienceFilter);
-  }
-  const resolved = await resolveAudience(audienceFilter);
-  const isBroadcast = resolved.isAll;
-
-  const tokenQuery: any = {
-    "firebaseTokens.0": { $exists: true },
-    isAccountDeleted: false,
-    status: true,
-  };
-  if (!isBroadcast) tokenQuery._id = { $in: resolved.customerIds };
-
-  const recipients = await Customer.find(tokenQuery).select("firebaseTokens").lean();
-  const tokens = recipients.flatMap((r: any) =>
-    Array.isArray(r.firebaseTokens) ? r.firebaseTokens.map((t: any) => t.token).filter(Boolean) : []
-  );
-
-  const sendResult = await sendPush(tokens, {
-    title: payload.title,
-    body: payload.body,
-    image: payload.image,
-    deepLink: payload.deepLink,
-    data: payload.data,
-  });
-
-  const status: "sent" | "failed" =
-    sendResult.skipped || sendResult.successCount > 0 ? "sent" : "failed";
-  const failureReason =
-    status === "failed"
-      ? sendResult.skipped
-        ? "FCM not configured."
-        : sendResult.attempted === 0
-          ? "No registered devices for the selected audience."
-          : "All sends failed."
-      : null;
-
-  // For targeted sends, fan out per-recipient feed rows so each user sees it
-  // in their notification list. Skip for broadcast (single row already serves all).
-  if (!isBroadcast && resolved.customerIds.length && status === "sent") {
-    try {
-      await Notification.insertMany(
-        resolved.customerIds.map((id) => ({
-          customerId: id,
-          broadcast: false,
-          title: payload.title,
-          body: payload.body,
-          image: payload.image ?? null,
-          type: payload.type ?? "general",
-          deepLink: payload.deepLink ?? null,
-          data: payload.data ?? {},
-          status: "sent",
-          sentAt: new Date(),
-          recipientCount: 1,
-          audience: { all: false, userIds: [id] },
-        }))
-      );
-    } catch (err) {
-      logger.error("Failed to fan out per-recipient notification rows", {
-        parentId: parentId?.toString(),
-        error: (err as Error).message,
-      });
-    }
-  }
-
-  return {
-    status,
-    recipientCount: sendResult.successCount,
-    failureCount: sendResult.failureCount,
-    invalidTokensPruned: sendResult.invalidTokens.length,
-    failureReason,
-    isBroadcast,
-    targetCustomerIds: resolved.customerIds,
-  };
+  return sqlDispatchAudience(payload, audienceFilter);
 }
 
 /**
@@ -128,64 +52,14 @@ export async function dispatchScheduledById(
   notificationId: string,
   now: Date = new Date()
 ): Promise<DispatchResult | null> {
-  // Dual-read cutover: when the flag is on, an int id that resolves to a SQL row
-  // dispatches via SQL. Non-numeric ids (legacy Mongo _id hex) and ids with no
-  // SQL row fall through to the Mongo path below — so in-flight Mongo-keyed
-  // BullMQ jobs queued before the flip still fire correctly. The fallback
-  // self-retires once Redis drains those pre-cutover jobs.
-  if (isAdminNotificationMysql()) {
-    const id = Number(notificationId);
-    if (Number.isInteger(id) && id > 0) {
-      return sqlDispatchScheduledById(notificationId, now);
-    }
+  // Admin-supplied scheduled ids are numeric (SQL row ids). A non-numeric id has
+  // no SQL row, so there is nothing to dispatch — treat it as a no-op (null),
+  // matching the "already claimed/cancelled" contract.
+  const id = Number(notificationId);
+  if (Number.isInteger(id) && id > 0) {
+    return sqlDispatchScheduledById(notificationId, now);
   }
-  const claimed = (await Notification.findOneAndUpdate(
-    { _id: notificationId, status: "scheduled" },
-    { $set: { status: "sent", sentAt: now } },
-    { new: true }
-  )) as INotification | null;
-
-  if (!claimed) return null;
-
-  try {
-    const result = await dispatchAudience(
-      {
-        title: claimed.title,
-        body: claimed.body,
-        image: claimed.image,
-        type: claimed.type,
-        deepLink: claimed.deepLink,
-        data: claimed.data,
-      },
-      {
-        platforms: claimed.audience?.platforms,
-        courseIds: claimed.audience?.courseIds?.map((id) => id.toString()),
-        userIds: claimed.audience?.userIds?.map((id) => id.toString()),
-      },
-      claimed._id as mongoose.Types.ObjectId
-    );
-
-    await Notification.updateOne(
-      { _id: claimed._id },
-      {
-        $set: {
-          status: result.status,
-          failureReason: result.failureReason,
-          recipientCount: result.recipientCount,
-          sentAt: now,
-        },
-      }
-    );
-    return result;
-  } catch (err) {
-    // Roll the row back so BullMQ retries can re-claim it. Final-failure
-    // bookkeeping happens in the worker's "failed" listener.
-    await Notification.updateOne(
-      { _id: claimed._id },
-      { $set: { status: "scheduled", sentAt: null } }
-    );
-    throw err;
-  }
+  return null;
 }
 
 /**

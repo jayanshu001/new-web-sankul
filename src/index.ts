@@ -19,9 +19,7 @@ validateEnvOrExit();
 
 import { createServer } from "http";
 import app from "./app";
-import connectDB from "./config/db";
 import { connectPrisma } from "./config/prisma";
-import { hasMysqlMigrationModules, isMongoFallbackEnabled } from "./config/migration";
 import logger from "./utils/logger";
 import { sendEmail } from "./utils/emailService";
 import getLocalIpAddress from "./utils/getLocalIp";
@@ -32,6 +30,7 @@ import { initLiveChatSocket } from "./socket/livechat.socket";
 import { initCameraIngest } from "./socket/camera-ingest";
 import { initPdfProgressSocket } from "./socket/pdf-progress.socket";
 import { initPdfUploadScheduler } from "./admin/pdfUpload/pdfUpload.scheduler";
+import { initPlanPopularityScheduler } from "./modules/plan-popularity/plan-popularity.scheduler";
 import { installGracefulShutdown } from "./utils/gracefulShutdown";
 
 const PORT = process.env.PORT || 5000;
@@ -56,18 +55,8 @@ const allowedOrigins = (
 
 const startServer = async () => {
   try {
-    if (hasMysqlMigrationModules()) {
-      await connectPrisma();
-      logger.info("[migration] MySQL-only mode: all modules served from MySQL (Prisma).");
-    }
-    // Mongo is now an opt-in fallback (migration complete → MySQL-only). Only
-    // connect when explicitly re-enabled via MONGO_FALLBACK_ENABLED=true.
-    if (isMongoFallbackEnabled()) {
-      await connectDB();
-      logger.info("[migration] MongoDB fallback connection ENABLED.");
-    } else {
-      logger.info("[migration] MongoDB fallback DISABLED — running MySQL-only (no Mongo connection).");
-    }
+    await connectPrisma();
+    logger.info("[db] MySQL-only: all modules served from MySQL (Prisma).");
     try {
       await syncPermissionCatalog();
     } catch (err) {
@@ -77,6 +66,8 @@ const startServer = async () => {
     // BullMQ pipeline that uploads admin-supplied PDFs to Spaces and attaches
     // each to its ebook, strictly one-at-a-time, with live Socket.io progress.
     await initPdfUploadScheduler();
+    // Periodic recompute of the "Most Popular" pricing-plan flags (sales-driven).
+    initPlanPopularityScheduler();
 
     const httpServer = createServer(app);
     httpServer.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;

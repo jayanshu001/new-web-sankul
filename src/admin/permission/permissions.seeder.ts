@@ -1,8 +1,5 @@
 import logger from "../../utils/logger";
-import { Permission } from "../../models/admin/Permission.model";
-import { PermissionCategory } from "../../models/admin/PermissionCategory.model";
 import { PERMISSION_CATALOG, ALL_CATALOG_KEYS } from "./permissions.catalog";
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 const DEFAULT_GUARD = "api";
@@ -65,49 +62,5 @@ const slugify = (s: string) =>
  *   admins can clean up role assignments before hard-deletion.
  */
 export async function syncPermissionCatalog(): Promise<void> {
-  // SQL RBAC is the source of truth when admin-rbac is on — sync ws_* instead of Mongo.
-  if (isMysqlModule("admin-rbac")) {
-    await syncPermissionCatalogSql();
-    return;
-  }
-
-  // 1) Ensure a PermissionCategory exists for every group used in the catalog.
-  const groups = Array.from(new Set(PERMISSION_CATALOG.map((m) => m.group)));
-  const categoryIdByGroup = new Map<string, any>();
-
-  for (let i = 0; i < groups.length; i++) {
-    const title = groups[i];
-    const slug = slugify(title);
-    const cat = await PermissionCategory.findOneAndUpdate(
-      { slug },
-      { $setOnInsert: { title, slug, order: i, status: true } },
-      { new: true, upsert: true }
-    ).lean();
-    categoryIdByGroup.set(title, cat!._id);
-  }
-
-  // 2) Upsert one Permission row per catalog key (name = key).
-  let inserted = 0;
-  for (const m of PERMISSION_CATALOG) {
-    const categoryId = categoryIdByGroup.get(m.group);
-    for (const p of m.permissions) {
-      const result = await Permission.updateOne(
-        { name: p.key, guardName: DEFAULT_GUARD },
-        { $setOnInsert: { name: p.key, guardName: DEFAULT_GUARD, categoryId } },
-        { upsert: true }
-      );
-      if ((result as any).upsertedCount > 0) inserted++;
-    }
-  }
-
-  // 3) Report DB keys that are no longer in the catalog (deprecated).
-  const dbKeys = await Permission.find({ guardName: DEFAULT_GUARD }, { name: 1 }).lean();
-  const deprecated = dbKeys.map((r) => r.name).filter((k) => !ALL_CATALOG_KEYS.has(k));
-
-  logger.info(
-    `[permissions] catalog sync complete — inserted: ${inserted}, total catalog keys: ${ALL_CATALOG_KEYS.size}, deprecated rows: ${deprecated.length}`
-  );
-  if (deprecated.length > 0) {
-    logger.warn(`[permissions] deprecated keys still in DB: ${deprecated.join(", ")}`);
-  }
+  await syncPermissionCatalogSql();
 }

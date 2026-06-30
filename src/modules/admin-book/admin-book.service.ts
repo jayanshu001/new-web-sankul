@@ -1,4 +1,3 @@
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminBookRepository as repo } from "./admin-book.repository";
@@ -6,7 +5,7 @@ import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-cou
 import type { Book } from "@prisma/client";
 
 export const ADMIN_BOOK_MODULE = "admin-book";
-export const isAdminBookMysql = (): boolean => isMysqlModule(ADMIN_BOOK_MODULE);
+export const isAdminBookMysql = (): boolean => true;
 
 export const parseBookId = (id: string): number | null => {
   const n = Number(id);

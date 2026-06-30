@@ -7,21 +7,12 @@ import { GenerateCRMLead } from "../../utils/crm";
 import { buildCourseReceiptHtml, renderPdfFromHtml } from "../../libs/core/generate";
 import { shippingBodySchema } from "./course.validation";
 import {
-  buildCourseDetails,
   upsertCourseOrderShipping,
   getOrderDetailsForUser,
 } from "./course.service";
-import { Course } from "../../models/course/Course.model";
-import { CourseSubjectCategory } from "../../models/course/CourseSubjectCategory.model";
-import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { buildCourseDetailsSql } from "../../modules/catalog-course/course-detail.sql";
-import { computeDaysLeft } from "../../utils/planDuration";
-import { buildSearchFilter, buildRegexCondition } from "../../utils/searchFilter";
-import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
-  isCourseMysql,
   listCourseCategoriesWithCounts,
   listCoursesWithPlans,
   parseCourseId,
@@ -53,143 +44,18 @@ function toMysqlCourseOptions(
   };
 }
 
-async function paginateCoursesWithPlans(
-  baseFilters: any,
-  query: Record<string, string>,
-  userId?: string
-) {
-  const {
-    search = "",
-    isPopular,
-    page = "1",
-    limit = "10",
-    sortBy = "createdAt",
-    sortOrder = "desc",
-  } = query;
-
-  const filters: any = { ...baseFilters };
-  if (isPopular === "true" || isPopular === "false") {
-    filters.isPopular = isPopular === "true";
-  }
-  Object.assign(filters, buildSearchFilter(search, ["name", "description"]));
-
-  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-  const limitNum = Math.max(parseInt(limit, 10) || 10, 1);
-  const skip = (pageNum - 1) * limitNum;
-  const sortDirection = sortOrder === "asc" ? 1 : -1;
-
-  const [courses, total] = await Promise.all([
-    Course.find(filters)
-      .populate("courseEducatorId", "_id name")
-      .populate("courseSubjectCategoryId", "_id title")
-      .populate("videoCategoryId", "_id title")
-      .sort({ [sortBy]: sortDirection })
-      .skip(skip)
-      .limit(limitNum)
-      .lean(),
-    Course.countDocuments(filters),
-  ]);
-
-  const courseIds = courses.map((c: any) => c._id);
-  const allPlans = courseIds.length
-    ? await PackageCourseEbookPrice.find({
-        courseId: { $in: courseIds },
-        status: true,
-      })
-        .sort({ duration: 1 })
-        .lean()
-    : [];
-
-  const plansByCourse = new Map<string, { withMaterial: any[]; withoutMaterial: any[] }>();
-  for (const p of allPlans as any[]) {
-    const key = String(p.courseId);
-    let bucket = plansByCourse.get(key);
-    if (!bucket) {
-      bucket = { withMaterial: [], withoutMaterial: [] };
-      plansByCourse.set(key, bucket);
-    }
-    (p.withMaterial ? bucket.withMaterial : bucket.withoutMaterial).push(p);
-  }
-
-  // Per-course `daysLeft`: pick the longest-lived active sub for that course.
-  // Lifetime (null endAt) beats any dated sub.
-  const endAtByCourse = new Map<string, Date | null>();
-  const lifetimeByCourse = new Set<string>();
-  const now = new Date();
-  if (userId && courseIds.length) {
-    const planIds = (allPlans as any[]).map((p) => p._id);
-    const subs = await PackageCourseSubscription.find({
-      customerId: userId,
-      paymentStatus: "verified",
-      status: true,
-      $and: [
-        { $or: [{ endAt: null }, { endAt: { $gt: now } }] },
-        { $or: [{ courseId: { $in: courseIds } }, { packageId: { $in: planIds } }] },
-      ],
-    })
-      .select("courseId packageId endAt")
-      .lean();
-    const planToCourse = new Map<string, string>(
-      (allPlans as any[]).map((p) => [String(p._id), String(p.courseId)])
-    );
-    const upsert = (cid: string, endAt: Date | null) => {
-      if (endAt === null) { lifetimeByCourse.add(cid); endAtByCourse.set(cid, null); return; }
-      if (lifetimeByCourse.has(cid)) return;
-      const prev = endAtByCourse.get(cid);
-      if (!prev || endAt.getTime() > (prev as Date).getTime()) endAtByCourse.set(cid, endAt);
-    };
-    subs.forEach((s: any) => {
-      const endAt: Date | null = s.endAt ?? null;
-      if (s.courseId) upsert(String(s.courseId), endAt);
-      const viaPlan = planToCourse.get(String(s.packageId));
-      if (viaPlan) upsert(viaPlan, endAt);
-    });
-  }
-
-  const data = courses.map((c: any) => {
-    const cid = String(c._id);
-    const isPurchased = endAtByCourse.has(cid);
-    const endAt = lifetimeByCourse.has(cid) ? null : (endAtByCourse.get(cid) ?? null);
-    const { examCountdownCategoryId: _drop, ...rest } = c;
-    return {
-      ...rest,
-      isPaid: c.isPaid ?? true,
-      isPurchased,
-      daysLeft: isPurchased ? computeDaysLeft(endAt, now) : null,
-      plans: plansByCourse.get(cid) ?? { withMaterial: [], withoutMaterial: [] },
-    };
-  });
-
-  return {
-    data,
-    pagination: {
-      total,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum),
-    },
-  };
-}
-
 export const listCoursesHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;
   logger.info("listCoursesHandler invoked", { traceId, path: req.originalUrl, userId });
 
   try {
-    // MySQL branch (flag OFF until catalog-course flips with the commerce wave).
-    // Composes catalog-course + commerce-price + commerce-subscription; same
-    // {data, pagination} contract as the Mongo path below.
-    if (isCourseMysql()) {
-      const result = await listCoursesWithPlans(
-        toMysqlCourseOptions(req.query as Record<string, string>, userId)
-      );
-      logger.info("listCoursesHandler success", { traceId, userId, total: result.pagination.total, source: "mysql" });
-      return res.status(200).json({ success: true, ...result });
-    }
-
-    const result = await paginateCoursesWithPlans({ status: true }, req.query as Record<string, string>, userId);
-    logger.info("listCoursesHandler success", { traceId, userId, total: result.pagination.total });
+    // Composes catalog-course + commerce-price + commerce-subscription; returns
+    // the { data, pagination } contract.
+    const result = await listCoursesWithPlans(
+      toMysqlCourseOptions(req.query as Record<string, string>, userId)
+    );
+    logger.info("listCoursesHandler success", { traceId, userId, total: result.pagination.total, source: "mysql" });
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     logger.error("listCoursesHandler failed", {
@@ -209,39 +75,9 @@ export const listCourseCategoriesHandler = async (req: Request, res: Response) =
   logger.info("listCourseCategoriesHandler invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    // NOTE: `catalog-course` is currently flag OFF (id-space coupling with
-    // still-Mongo course/category consumers + commerce joins on the listing
-    // endpoints). The branch is wired so the eventual flip — together with the
-    // commerce/dashboard wave — is a one-line env change.
-    if (isCourseMysql()) {
-      const data = await listCourseCategoriesWithCounts();
-      logger.info("listCourseCategoriesHandler success", { traceId, count: data.length, source: "mysql" });
-      return res.status(200).json({ success: true, data });
-    }
-
-    const { page, limit } = parseListQuery(req.query);
-
-    const categories = await CourseSubjectCategory.find({ status: true })
-      .sort({ order: 1, title: 1 })
-      .lean();
-
-    const ids = categories.map((c: any) => c._id);
-    const counts = ids.length
-      ? await Course.aggregate([
-          { $match: { status: true, courseSubjectCategoryId: { $in: ids } } },
-          { $group: { _id: "$courseSubjectCategoryId", count: { $sum: 1 } } },
-        ])
-      : [];
-    const countByCategory = new Map<string, number>();
-    for (const row of counts) countByCategory.set(String(row._id), row.count);
-
-    const data = categories.map((c: any) => ({
-      ...c,
-      courseCount: countByCategory.get(String(c._id)) ?? 0,
-    }));
-
-    logger.info("listCourseCategoriesHandler success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data, pagination: buildPagination(data.length, page, limit) });
+    const data = await listCourseCategoriesWithCounts();
+    logger.info("listCourseCategoriesHandler success", { traceId, count: data.length, source: "mysql" });
+    return res.status(200).json({ success: true, data });
   } catch (err) {
     logger.error("listCourseCategoriesHandler failed", {
       traceId,
@@ -261,31 +97,15 @@ export const listCoursesByCategoryHandler = async (req: Request, res: Response) 
   logger.info("listCoursesByCategoryHandler invoked", { traceId, path: req.originalUrl, userId, categoryId });
 
   try {
-    // MySQL branch first — when catalog-course is ON the categoryId is an int,
-    // so this must precede the ObjectId guard below.
-    if (isCourseMysql()) {
-      const catId = parseCourseId(categoryId);
-      if (catId == null) {
-        logger.warn("listCoursesByCategoryHandler invalid id (mysql)", { traceId, categoryId });
-        return failure(res, "Invalid categoryId.", 400);
-      }
-      const result = await listCoursesWithPlans(
-        toMysqlCourseOptions(req.query as Record<string, string>, userId, catId)
-      );
-      logger.info("listCoursesByCategoryHandler success", { traceId, userId, categoryId, total: result.pagination.total, source: "mysql" });
-      return res.status(200).json({ success: true, ...result });
-    }
-
-    if (!Types.ObjectId.isValid(categoryId)) {
-      logger.warn("listCoursesByCategoryHandler invalid id", { traceId, categoryId });
+    const catId = parseCourseId(categoryId);
+    if (catId == null) {
+      logger.warn("listCoursesByCategoryHandler invalid id (mysql)", { traceId, categoryId });
       return failure(res, "Invalid categoryId.", 400);
     }
-    const result = await paginateCoursesWithPlans(
-      { status: true, courseSubjectCategoryId: new Types.ObjectId(categoryId) },
-      req.query as Record<string, string>,
-      userId
+    const result = await listCoursesWithPlans(
+      toMysqlCourseOptions(req.query as Record<string, string>, userId, catId)
     );
-    logger.info("listCoursesByCategoryHandler success", { traceId, userId, categoryId, total: result.pagination.total });
+    logger.info("listCoursesByCategoryHandler success", { traceId, userId, categoryId, total: result.pagination.total, source: "mysql" });
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
     logger.error("listCoursesByCategoryHandler failed", {
@@ -313,52 +133,21 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
   try {
     if (!userId) return failure(res, "Unauthorized request.", 401);
 
-    // ─── SQL branch (int id-space) — before the Mongo ObjectId guard ───
-    if (isCourseMysql()) {
-      const cidNum = parseCourseId(courseId);
-      const userNum = parseCourseId(String(userId));
-      if (cidNum == null) return failure(res, "Please select valid package", 400);
-      const sqlResponse = await buildCourseDetailsSql(cidNum, userNum ?? undefined);
-      if (!sqlResponse) return failure(res, "Please select valid package", 400);
-      const requestBase = process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
-      (sqlResponse as any).shareableLink = buildShareUrl("courses", courseId, requestBase);
-      setImmediate(() => {
-        void GenerateCRMLead({ params: { userId, courseId }, leadType: CRM_LEAD_TYPE.VIEW_COURSE }).catch((err) => {
-          logger.warn("GenerateCRMLead (fire-and-forget) failed", { traceId, userId, courseId, error: getErrorMessage(err) });
-        });
-      });
-      logger.info("getCourseByIdHandler success (sql)", { traceId, userId, courseId });
-      return success(res, sqlResponse, "Course details fetched successfully.", 200);
-    }
-
-    if (!Types.ObjectId.isValid(courseId)) {
-      return failure(res, "Please select valid package", 400);
-    }
-
-    const response = await buildCourseDetails(courseId, userId, traceId);
-    if (!response) {
-      return failure(res, "Please select valid package", 400);
-    }
-
+    // ─── SQL branch (int id-space) ───
+    const cidNum = parseCourseId(courseId);
+    const userNum = parseCourseId(String(userId));
+    if (cidNum == null) return failure(res, "Please select valid package", 400);
+    const sqlResponse = await buildCourseDetailsSql(cidNum, userNum ?? undefined);
+    if (!sqlResponse) return failure(res, "Please select valid package", 400);
     const requestBase = process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
-    (response as any).shareableLink = buildShareUrl("courses", courseId, requestBase);
-
+    (sqlResponse as any).shareableLink = buildShareUrl("courses", courseId, requestBase);
     setImmediate(() => {
-      void GenerateCRMLead({
-        params: { userId, courseId },
-        leadType: CRM_LEAD_TYPE.VIEW_COURSE,
-      }).catch((err) => {
-        logger.warn("GenerateCRMLead (fire-and-forget) failed", {
-          traceId,
-          userId,
-          courseId,
-          error: getErrorMessage(err),
-        });
+      void GenerateCRMLead({ params: { userId, courseId }, leadType: CRM_LEAD_TYPE.VIEW_COURSE }).catch((err) => {
+        logger.warn("GenerateCRMLead (fire-and-forget) failed", { traceId, userId, courseId, error: getErrorMessage(err) });
       });
     });
-
-    logger.info("getCourseByIdHandler success", { traceId, userId, courseId });
-    return success(res, response, "Course details fetched successfully.", 200);
+    logger.info("getCourseByIdHandler success (sql)", { traceId, userId, courseId });
+    return success(res, sqlResponse, "Course details fetched successfully.", 200);
   } catch (err) {
     logger.error("getCourseByIdHandler failed", {
       traceId,

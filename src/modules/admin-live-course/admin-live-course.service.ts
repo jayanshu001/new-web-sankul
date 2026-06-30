@@ -1,11 +1,10 @@
-import { isMysqlModule } from "../../config/migration";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminLiveCourseRepository as repo } from "./admin-live-course.repository";
 import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession } from "@prisma/client";
 
 export const LIVE_COURSE_MODULE = "live-course";
-export const isLiveCourseMysql = (): boolean => isMysqlModule(LIVE_COURSE_MODULE);
+export const isLiveCourseMysql = (): boolean => true;
 
 export const parseLiveId = (id: string): number | null => {
   const n = Number(id);
@@ -63,6 +62,8 @@ const toPlanDto = (p: LiveCoursePlan) => ({
   materialPrice: p.materialPrice ?? null,
   isDefault: p.isDefault,
   status: p.status,
+  isMostPopular: (p as any).isMostPopular ?? false,
+  mostPopularPinned: (p as any).mostPopularPinned ?? false,
   createdAt: p.createdAt ?? null,
   updatedAt: p.updatedAt ?? null,
 });
@@ -639,6 +640,14 @@ import { formatScheduledAt } from "../../utils/displayTime";
 const sanitizeRecPath = <T extends string | null | undefined>(p: T): T =>
   (typeof p === "string" ? (p.replace(/(?:"|%22|%2522)+$/i, "") as T) : p);
 
+// Pick the single best (highest-resolution) MP4 url from a per-quality list, for
+// the convenience `mp4Url` field. Falls back to the first entry, or null when none.
+const pickBestMp4 = (recs: Array<{ quality: string | null; path: string }>): string | null => {
+  if (!recs.length) return null;
+  const heightOf = (q: string | null) => Number(String(q ?? "").match(/(\d+)/)?.[1] ?? 0);
+  return [...recs].sort((a, b) => heightOf(b.quality) - heightOf(a.quality))[0]?.path ?? recs[0].path ?? null;
+};
+
 // ── entitlement (ported from src/client/live-course/entitlement.ts; SQL) ──────
 export const hasAccessToAnyLiveCourse = async (customerId: number | null, liveCourseIds: number[]): Promise<boolean> => {
   if (!customerId || !liveCourseIds.length) return false;
@@ -682,6 +691,7 @@ const toClientPlan = (p: LiveCoursePlan) => {
     price: p.price, originalPrice: original, discountPercent: original ? Math.round(((original - p.price) / original) * 100) : 0,
     withMaterial: p.withMaterial ?? false, materialPrice: p.materialPrice ?? null,
     isDefault: p.isDefault, status: p.status,
+    isMostPopular: (p as any).isMostPopular ?? false,
   };
 };
 
@@ -830,16 +840,22 @@ export const getRecordingsForClient = async (
 
   // per-quality recordings from the source live session
   const sessionIds = [...new Set(videos.map((v) => v.liveSessionId).filter((n): n is number => n != null))];
-  const recBySession = new Map<number, Array<{ quality: string | null; file_size: number | null; path: string }>>();
-  if (sessionIds.length) {
-    const sessions = await prisma.liveSession.findMany({ where: { id: { in: sessionIds } }, select: { id: true, recordings: true } });
-    for (const s of sessions) {
-      const arr = Array.isArray(s.recordings) ? (s.recordings as any[]) : [];
-      recBySession.set(s.id, arr.filter((r) => typeof r?.path === "string" && r.path.length > 0).map((r) => ({
+  type RecEntry = { quality: string | null; file_size: number | null; path: string };
+  const recBySession = new Map<number, RecEntry[]>();
+  const mp4BySession = new Map<number, RecEntry[]>();
+  const shapeRecs = (raw: unknown): RecEntry[] =>
+    (Array.isArray(raw) ? raw : [])
+      .filter((r: any) => typeof r?.path === "string" && r.path.length > 0)
+      .map((r: any) => ({
         quality: typeof r.quality === "string" ? r.quality : null,
         file_size: typeof r.file_size === "number" ? r.file_size : null,
         path: sanitizeRecPath(r.path),
-      })));
+      }));
+  if (sessionIds.length) {
+    const sessions = await prisma.liveSession.findMany({ where: { id: { in: sessionIds } }, select: { id: true, recordings: true, mp4Recordings: true } });
+    for (const s of sessions) {
+      recBySession.set(s.id, shapeRecs(s.recordings));
+      mp4BySession.set(s.id, shapeRecs(s.mp4Recordings));
     }
   }
 
@@ -859,11 +875,21 @@ export const getRecordingsForClient = async (
   const shapeLecture = (v: (typeof videos)[number]) => {
     const canPlay = subscribed || v.priceType === "free";
     const p = progByVideo.get(v.id);
-    const recordings = v.liveSessionId ? recBySession.get(v.liveSessionId) ?? [] : [];
+    const hlsList = v.liveSessionId ? recBySession.get(v.liveSessionId) ?? [] : [];
+    const mp4List = v.liveSessionId ? mp4BySession.get(v.liveSessionId) ?? [] : [];
+    const mp4Url = pickBestMp4(mp4List);
+    // `recordings` is the PRIMARY playback array = plain MP4 (un-DRM'd, simple
+    // <video>/MP4). The DRM-HLS m3u8 ladder lives in `hlsRecordings`. `qualities`
+    // is still derived from the HLS ladder (the true per-quality set). When a
+    // session has no MP4, `recordings` is empty — the client falls back to
+    // `hlsRecordings`. `mp4Recordings`/`mp4Url` are kept as explicit aliases.
     return {
       _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, order: v.order,
       locked: !canPlay, youtube_id: v.youtube_id ?? null, aws_id: sanitizeRecPath(v.aws_id ?? null), vimeo_id: v.vimeo_id ?? null,
-      recordings, qualities: qualitiesFromSessionRecordings(recordings),
+      recordings: mp4List,
+      hlsRecordings: hlsList,
+      qualities: qualitiesFromSessionRecordings(hlsList),
+      mp4Recordings: mp4List, mp4Url,
       progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
     };
   };
@@ -1241,7 +1267,7 @@ import { prisma } from "../../config/prisma";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
 
 export const ADMIN_LIVE_COURSE_MODULE = "admin-live-course";
-export const isAdminLiveCourseMysql = (): boolean => isMysqlModule(ADMIN_LIVE_COURSE_MODULE);
+export const isAdminLiveCourseMysql = (): boolean => true;
 
 function lcSlugify(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
@@ -1308,19 +1334,26 @@ const lcReachableFolderIds = async (liveCourseId: number): Promise<number[]> => 
   return descendantsOf([root]);
 };
 
-/** Folder belongs to course iff it is the root or a descendant of the root. */
+/**
+ * Folder belongs to course iff its `live_course_id` column matches. We key on the
+ * flat column (not the root/DAG) so that admin folder ops and the client recordings
+ * reader (getRecordingsForClient, which also filters by liveCourseId) agree — a
+ * folder created via the API is consistently visible to both. lcCreateFolder stamps
+ * liveCourseId on every folder it creates.
+ */
 export const lcFolderBelongsToCourse = async (folderId: number, liveCourseId: number): Promise<boolean> =>
-  (await lcReachableFolderIds(liveCourseId)).includes(folderId);
+  !!(await prisma.videoCategory.findFirst({ where: { id: folderId, liveCourseId }, select: { id: true } }));
 
 // ── folder handlers ───────────────────────────────────────────────────────────
-/** listFolders: flat folder list (root + descendants) + their relation rows. */
+/** listFolders: every folder owned by the course (by liveCourseId) + relation rows. */
 export const lcListFolders = async (liveCourseId: number): Promise<{ folders: any[]; relations: any[] }> => {
-  const ids = await lcReachableFolderIds(liveCourseId);
-  if (!ids.length) return { folders: [], relations: [] };
-  const [folders, relations] = await Promise.all([
-    prisma.videoCategory.findMany({ where: { id: { in: ids } }, orderBy: [{ order_by: "asc" }, { created_at: "asc" }] }),
-    prisma.videoCategoryRelation.findMany({ where: { OR: [{ parent: { in: ids } }, { child: { in: ids } }] } }),
-  ]);
+  const folders = await prisma.videoCategory.findMany({
+    where: { liveCourseId },
+    orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
+  });
+  if (!folders.length) return { folders: [], relations: [] };
+  const ids = folders.map((f) => f.id);
+  const relations = await prisma.videoCategoryRelation.findMany({ where: { OR: [{ parent: { in: ids } }, { child: { in: ids } }] } });
   return { folders: folders.map(folderDto), relations: relations.map(relationDto) };
 };
 
@@ -1338,8 +1371,16 @@ export const lcCreateFolder = async (
       title: input.title,
       slug: `${lcSlugify(input.title)}-${Date.now().toString(36)}`,
       image: input.image ?? fallbackImage,
-      parent: input.parentFolderId ?? null,
-      educatorId: input.educatorId ?? null,
+      // `ws_video_category.parent` is NOT NULL in the DB (0 = top-level), even
+      // though the introspected model types it `Int?`. Default to 0 so a folder
+      // with no parent saves instead of throwing a null-constraint error.
+      parent: input.parentFolderId ?? 0,
+      // Stamp the owning live course so the folder is reachable by the recordings
+      // reader (getRecordingsForClient filters by liveCourseId). Mirrors the Mongo path.
+      liveCourseId,
+      // `educator_id` is also NOT NULL (default 0) in the DB despite the model
+      // typing it `Int?`. Default to 0 ("no educator") rather than null.
+      educatorId: input.educatorId ?? 0,
       order_by: input.order_by ?? 0,
       status: input.status ?? true,
       created_at: now,

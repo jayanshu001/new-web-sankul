@@ -1,16 +1,15 @@
 /**
  * Goal admin CRUD — MySQL (Prisma) branch. Wave 8. Net-new `ws_goal`.
  *
- * Gated behind `isMysqlModule("goal")`. The legacy `src/admin/goal/goal.admin.service.ts`
- * branches each function here (keeping its shared Redis cache + S3 cleanup). DTO
+ * The legacy `src/admin/goal/goal.admin.service.ts` delegates each function here
+ * (keeping its shared Redis cache + S3 cleanup). DTO
  * mirrors the Mongo doc shape (`_id` string; labels as [{ name }]). The Mongo
  * label `_id`s are dropped — SQL stores labels as a JSON [{ name }] array.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const GOAL_MODULE = "goal";
-export const isGoalMysql = (): boolean => isMysqlModule(GOAL_MODULE);
+export const isGoalMysql = (): boolean => true;
 
 export const parseGoalId = (id: string): number | null => {
   const n = Number(id);

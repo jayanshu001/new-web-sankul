@@ -1,12 +1,8 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
 import { z } from "zod";
-import { Notification } from "../../models/system/Notification.model";
-import { ImageNotification } from "../../models/system/ImageNotification.model";
 import { dispatchAudience } from "./dispatcher";
 import { scheduleNotificationJob, cancelNotificationJob } from "./scheduler";
 import {
-  isAdminNotificationMysql,
   parseIntId,
   createScheduled as sqlCreateScheduled,
   createImmediateLog as sqlCreateImmediateLog,
@@ -20,9 +16,8 @@ import {
   deleteImageNotification as sqlDeleteImage,
 } from "../../modules/admin-notification/admin-notification.service";
 
-const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
-// On the SQL path admin-supplied ids are numeric strings; on Mongo they're hex.
-const isValidId = (v: string) => (isAdminNotificationMysql() ? parseIntId(v) != null : isObjectId(v));
+// Admin-supplied ids are numeric strings on the SQL path.
+const isValidId = (v: string) => parseIntId(v) != null;
 
 // ─── Broadcast / send push ──────────────────────────────────────────────────
 
@@ -48,10 +43,8 @@ export const broadcastNotification = async (req: Request, res: Response) => {
     if (file?.location) req.body.image = file.location;
     const data = broadcastSchema.parse(req.body);
 
-    // Audience ids are numeric strings on the SQL path, hex ObjectIds on Mongo.
-    const idValid = isAdminNotificationMysql()
-      ? (v: string) => parseIntId(v) != null
-      : isObjectId;
+    // Audience ids are numeric strings on the SQL path.
+    const idValid = (v: string) => parseIntId(v) != null;
 
     const userIdsCombined = [
       ...(data.userIds ?? []),
@@ -86,36 +79,18 @@ export const broadcastNotification = async (req: Request, res: Response) => {
           message: "scheduledAt must be in the future.",
         });
       }
-      let scheduledId: string;
-      if (isAdminNotificationMysql()) {
-        const row = await sqlCreateScheduled({
-          broadcast: isAll,
-          title: data.title,
-          body: data.body,
-          image: data.image ?? null,
-          type: data.type,
-          deepLink: data.deepLink ?? null,
-          data: data.data,
-          scheduledAt: data.scheduledAt,
-          audience: audienceSnapshot,
-        });
-        scheduledId = String(row.id);
-      } else {
-        const doc = await Notification.create({
-          customerId: null,
-          broadcast: isAll,
-          title: data.title,
-          body: data.body,
-          image: data.image ?? null,
-          type: data.type,
-          deepLink: data.deepLink ?? null,
-          data: data.data ?? {},
-          status: "scheduled",
-          scheduledAt: data.scheduledAt,
-          audience: audienceSnapshot,
-        });
-        scheduledId = String(doc._id);
-      }
+      const row = await sqlCreateScheduled({
+        broadcast: isAll,
+        title: data.title,
+        body: data.body,
+        image: data.image ?? null,
+        type: data.type,
+        deepLink: data.deepLink ?? null,
+        data: data.data,
+        scheduledAt: data.scheduledAt,
+        audience: audienceSnapshot,
+      });
+      const scheduledId = String(row.id);
       await scheduleNotificationJob(scheduledId, data.scheduledAt);
       return res.status(200).json({
         success: true,
@@ -144,37 +119,19 @@ export const broadcastNotification = async (req: Request, res: Response) => {
 
     // For broadcast, persist a single row; for targeted, the dispatcher
     // already fanned out per-recipient rows — store an admin-log parent row.
-    if (isAdminNotificationMysql()) {
-      await sqlCreateImmediateLog({
-        broadcast: result.isBroadcast,
-        title: data.title,
-        body: data.body,
-        image: data.image ?? null,
-        type: data.type,
-        deepLink: data.deepLink ?? null,
-        data: data.data,
-        status: result.status,
-        failureReason: result.failureReason,
-        recipientCount: result.recipientCount,
-        audience: audienceSnapshot,
-      });
-    } else {
-      await Notification.create({
-        customerId: null,
-        broadcast: result.isBroadcast,
-        title: data.title,
-        body: data.body,
-        image: data.image ?? null,
-        type: data.type,
-        deepLink: data.deepLink ?? null,
-        data: data.data ?? {},
-        status: result.status,
-        sentAt: new Date(),
-        failureReason: result.failureReason,
-        recipientCount: result.recipientCount,
-        audience: audienceSnapshot,
-      });
-    }
+    await sqlCreateImmediateLog({
+      broadcast: result.isBroadcast,
+      title: data.title,
+      body: data.body,
+      image: data.image ?? null,
+      type: data.type,
+      deepLink: data.deepLink ?? null,
+      data: data.data,
+      status: result.status,
+      failureReason: result.failureReason,
+      recipientCount: result.recipientCount,
+      audience: audienceSnapshot,
+    });
 
     return res.status(200).json({
       success: true,
@@ -199,16 +156,7 @@ export const cancelScheduledNotification = async (req: Request, res: Response) =
   try {
     const id = req.params.id as string;
     if (!isValidId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    let doc: unknown;
-    if (isAdminNotificationMysql()) {
-      doc = await sqlCancelScheduled(parseIntId(id)!);
-    } else {
-      doc = await Notification.findOneAndUpdate(
-        { _id: id, status: "scheduled" },
-        { $set: { status: "cancelled" } },
-        { new: true }
-      );
-    }
+    const doc = await sqlCancelScheduled(parseIntId(id)!);
     if (!doc)
       return res.status(404).json({
         success: false,
@@ -238,55 +186,14 @@ export const listNotifications = async (req: Request, res: Response) => {
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
     const skip = (pageNum - 1) * limitNum;
 
-    if (isAdminNotificationMysql()) {
-      const { data, total } = await sqlListAdminLog({
-        q,
-        status,
-        sortBy,
-        sortOrder: sortOrder === "asc" ? "asc" : "desc",
-        skip,
-        take: limitNum,
-      });
-      return res.status(200).json({
-        success: true,
-        data,
-        pagination: {
-          total,
-          page: pageNum,
-          limit: limitNum,
-          totalPages: Math.ceil(total / limitNum),
-        },
-      });
-    }
-
-    // Admin log shows the parent rows only (customerId: null), not per-recipient fan-out.
-    const filter: Record<string, unknown> = { customerId: null };
-
-    if (q && q.trim()) {
-      const safe = q.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      filter.$or = [
-        { title: { $regex: safe, $options: "i" } },
-        { body: { $regex: safe, $options: "i" } },
-      ];
-    }
-
-    if (status && ["sent", "scheduled", "failed", "cancelled"].includes(status)) {
-      filter.status = status;
-    }
-
-    const allowedSort = new Set(["createdAt", "scheduledAt", "sentAt", "status", "title"]);
-    const sortField = allowedSort.has(sortBy) ? sortBy : "createdAt";
-    const sortDir: 1 | -1 = sortOrder === "asc" ? 1 : -1;
-
-    const [data, total] = await Promise.all([
-      Notification.find(filter)
-        .sort({ [sortField]: sortDir })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      Notification.countDocuments(filter),
-    ]);
-
+    const { data, total } = await sqlListAdminLog({
+      q,
+      status,
+      sortBy,
+      sortOrder: sortOrder === "asc" ? "asc" : "desc",
+      skip,
+      take: limitNum,
+    });
     return res.status(200).json({
       success: true,
       data,
@@ -314,23 +221,9 @@ export const bulkDeleteNotifications = async (req: Request, res: Response) => {
     if (ids.length === 0) {
       return res.status(400).json({ success: false, message: "No valid ids provided." });
     }
-    let deletedCount: number;
-    if (isAdminNotificationMysql()) {
-      const r = await sqlBulkDelete(ids.map((v) => parseIntId(v)!));
-      deletedCount = r.deletedCount;
-      await Promise.all(r.scheduledIds.map((sid) => cancelNotificationJob(sid)));
-    } else {
-      // Pull any still-scheduled rows so we can also remove their BullMQ jobs.
-      const scheduledRows = await Notification.find({
-        _id: { $in: ids },
-        status: "scheduled",
-      })
-        .select("_id")
-        .lean();
-      const result = await Notification.deleteMany({ _id: { $in: ids } });
-      await Promise.all(scheduledRows.map((r) => cancelNotificationJob(String(r._id))));
-      deletedCount = result.deletedCount;
-    }
+    const r = await sqlBulkDelete(ids.map((v) => parseIntId(v)!));
+    const deletedCount = r.deletedCount;
+    await Promise.all(r.scheduledIds.map((sid) => cancelNotificationJob(sid)));
     return res.status(200).json({
       success: true,
       message: "Notifications deleted.",
@@ -346,15 +239,9 @@ export const deleteNotification = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
     if (!isValidId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    if (isAdminNotificationMysql()) {
-      const r = await sqlDeleteOne(parseIntId(id)!);
-      if (!r.existed) return res.status(404).json({ success: false, message: "Not found." });
-      if (r.wasScheduled) await cancelNotificationJob(id);
-      return res.status(200).json({ success: true, message: "Notification deleted." });
-    }
-    const doc = await Notification.findByIdAndDelete(id);
-    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
-    if (doc.status === "scheduled") await cancelNotificationJob(id);
+    const r = await sqlDeleteOne(parseIntId(id)!);
+    if (!r.existed) return res.status(404).json({ success: false, message: "Not found." });
+    if (r.wasScheduled) await cancelNotificationJob(id);
     return res.status(200).json({ success: true, message: "Notification deleted." });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
@@ -371,11 +258,7 @@ const imageUpdateSchema = imageCreateSchema.partial();
 
 export const listImageNotifications = async (_req: Request, res: Response) => {
   try {
-    if (isAdminNotificationMysql()) {
-      return res.status(200).json({ success: true, data: await sqlListImages() });
-    }
-    const data = await ImageNotification.find().sort({ createdAt: -1 }).lean();
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data: await sqlListImages() });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }
@@ -387,11 +270,7 @@ export const createImageNotification = async (req: Request, res: Response) => {
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
     const data = imageCreateSchema.parse(req.body);
-    if (isAdminNotificationMysql()) {
-      return res.status(201).json({ success: true, data: await sqlCreateImage(data) });
-    }
-    const doc = await ImageNotification.create(data);
-    return res.status(201).json({ success: true, data: doc });
+    return res.status(201).json({ success: true, data: await sqlCreateImage(data) });
   } catch (e: any) {
     if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
     return res.status(500).json({ success: false, message: e.message });
@@ -405,17 +284,11 @@ export const updateImageNotification = async (req: Request, res: Response) => {
     if (file?.location) req.body.image = file.location;
     if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
     const data = imageUpdateSchema.parse(req.body);
-    if (isAdminNotificationMysql()) {
-      const nid = parseIntId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const updated = await sqlUpdateImage(nid, data);
-      if (!updated) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data: updated });
-    }
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    const doc = await ImageNotification.findByIdAndUpdate(id, { $set: data }, { new: true });
-    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
-    return res.status(200).json({ success: true, data: doc });
+    const nid = parseIntId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const updated = await sqlUpdateImage(nid, data);
+    if (!updated) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data: updated });
   } catch (e: any) {
     if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
     return res.status(500).json({ success: false, message: e.message });
@@ -425,16 +298,10 @@ export const updateImageNotification = async (req: Request, res: Response) => {
 export const deleteImageNotification = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (isAdminNotificationMysql()) {
-      const nid = parseIntId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const ok = await sqlDeleteImage(nid);
-      if (!ok) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, message: "Deleted." });
-    }
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    const doc = await ImageNotification.findByIdAndDelete(id);
-    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    const nid = parseIntId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const ok = await sqlDeleteImage(nid);
+    if (!ok) return res.status(404).json({ success: false, message: "Not found." });
     return res.status(200).json({ success: true, message: "Deleted." });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });

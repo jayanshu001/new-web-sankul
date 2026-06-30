@@ -1,33 +1,19 @@
 import { Request, Response } from "express";
-import mongoose, { Types } from "mongoose";
-import { MONTH_LABELS, weekOfMonth, weekRange } from "../../utils/dateBuckets";
+import { Types } from "mongoose";
 import { Package } from "../../models/course/Package.model";
 import { Course } from "../../models/course/Course.model";
 import { PackageVideoCategoryRelation } from "../../models/course/PackageVideoCategoryRelation.model";
 import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { Exam } from "../../models/exam/Exam.model";
-import { ExamResult } from "../../models/exam/ExamResult.model";
-import { ExamStatus, ExamType } from "../../models/enums";
-import { Material } from "../../models/course/Material.model";
-import { MaterialCategory } from "../../models/course/MaterialCategory.model";
-import { getPurchasedMaterialIds, shapeMaterialForClient } from "../material/entitlement";
 import { LiveCourse } from "../../models/course/LiveCourse.model";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { collectCategoryTreeIds } from "../../utils/categoryTree";
-import { Video } from "../../models/course/Video.model";
-import { Ebook } from "../../models/ebook/Ebook.model";
-import { EbookPrice } from "../../models/ebook/EbookPrice.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
-import { isNewItem } from "../../utils/isNew";
-import { buildRegexCondition, buildSearchFilter, buildSearchRegExp } from "../../utils/searchFilter";
 import {
-  isClientFreeMysql,
   freeTests as freeTestsSql,
   freeMaterials as freeMaterialsSql,
   freeVideos as freeVideosSql,
@@ -232,177 +218,19 @@ export const listFreeTests = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "`week` requires `year` and `month`." });
     }
 
-    // ── SQL (MySQL) branch ──
-    if (isClientFreeMysql()) {
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const { pageNum, limitNum, skip } = paginate(req);
-      const result = await freeTestsSql({
-        customerId: Number.isInteger(cid) ? cid : null,
-        search: search || null,
-        year: yearQ, month: monthQ, week: weekQ,
-        page: pageNum, limit: limitNum, skip,
-      });
-      const { pagination, ...data } = result as any;
-      logger.info("listFreeTests success (sql)", { traceId, level: (result as any).level });
-      const payload: any = { success: true, data };
-      if (pagination) payload.pagination = pagination;
-      return res.status(200).json(payload);
-    }
-
-    const { examCategoryIds } = await resolveAssignedCategoryIds();
-
-    const now = new Date();
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    // Two gates: (1) ASSIGNMENT — the exam's category must be assigned to some
-    // course/package/live-course (paid or free); orphan/unassigned exams never
-    // show. (2) FREE — the exam itself must be free (isPaid:false). A paid exam
-    // inside an assigned category is hidden.
-    const baseMatch: any = {
-      status: ExamStatus.PUBLISHED,
-      isPaid: false,
-      // Only subject tests belong here; daily/mock/weekly are surfaced elsewhere.
-      type: ExamType.SUBJECT,
-      categoryId: { $in: examCategoryIds },
-      // Bucket on the scheduled date. This gate also excludes tests with a null
-      // `startAt` (and any scheduled in the future), matching quizzes/daily.
-      startAt: { $lte: endOfDay },
-    };
-    { const c = buildRegexCondition(search); if (c) baseMatch.title = c; }
-
-    // ── Level 1: years ──
-    if (yearQ === undefined) {
-      const rows = await Exam.aggregate([
-        { $match: baseMatch },
-        { $group: { _id: { $year: "$startAt" }, testsCount: { $sum: 1 } } },
-        { $sort: { _id: -1 } },
-        { $project: { _id: 0, year: "$_id", testsCount: 1 } },
-      ]);
-      logger.info("listFreeTests success", { traceId, level: "years", count: rows.length });
-      return res.status(200).json({ success: true, data: { level: "years", items: rows } });
-    }
-
-    // ── Level 2: months in a year ──
-    if (monthQ === undefined) {
-      const yearStart = new Date(yearQ, 0, 1, 0, 0, 0, 0);
-      const yearEnd = new Date(yearQ, 11, 31, 23, 59, 59, 999);
-      const upper = yearEnd < endOfDay ? yearEnd : endOfDay;
-      const rows = await Exam.aggregate([
-        { $match: { ...baseMatch, startAt: { $gte: yearStart, $lte: upper } } },
-        { $group: { _id: { $month: "$startAt" }, testsCount: { $sum: 1 } } },
-        { $sort: { _id: 1 } },
-        { $project: { _id: 0, month: "$_id", testsCount: 1 } },
-      ]);
-      const items = rows.map((r: any) => ({
-        year: yearQ,
-        month: r.month,
-        label: MONTH_LABELS[r.month - 1],
-        testsCount: r.testsCount,
-      }));
-      logger.info("listFreeTests success", { traceId, level: "months", year: yearQ, count: items.length });
-      return res.status(200).json({ success: true, data: { level: "months", year: yearQ, items } });
-    }
-
-    // ── Level 3: weeks in a month ──
-    if (weekQ === undefined) {
-      const monthStart = new Date(yearQ, monthQ - 1, 1, 0, 0, 0, 0);
-      const monthEnd = new Date(yearQ, monthQ, 0, 23, 59, 59, 999);
-      const upper = monthEnd < endOfDay ? monthEnd : endOfDay;
-      const exams = await Exam.find({
-        ...baseMatch,
-        startAt: { $gte: monthStart, $lte: upper },
-      }).select("startAt");
-
-      const counts = new Map<number, number>();
-      for (const e of exams) {
-        if (!e.startAt) continue;
-        const w = weekOfMonth(new Date(e.startAt as Date).getDate());
-        counts.set(w, (counts.get(w) ?? 0) + 1);
-      }
-      const items = Array.from(counts.entries())
-        .sort((a, b) => a[0] - b[0])
-        .map(([week, testsCount]) => {
-          const { start, end } = weekRange(yearQ, monthQ, week);
-          return { week, label: `Week ${week}`, startDate: start, endDate: end, testsCount };
-        });
-      logger.info("listFreeTests success", { traceId, level: "weeks", year: yearQ, month: monthQ, count: items.length });
-      return res.status(200).json({
-        success: true,
-        data: { level: "weeks", year: yearQ, month: monthQ, items },
-      });
-    }
-
-    // ── Level 4: tests in a week (paginated, original item shape) ──
-    const { start: weekStart, end: weekEnd } = weekRange(yearQ, monthQ, weekQ);
-    const upper = weekEnd < endOfDay ? weekEnd : endOfDay;
+    const cid = req.user?.id ? Number(req.user.id) : null;
     const { pageNum, limitNum, skip } = paginate(req);
-
-    const filter = { ...baseMatch, startAt: { $gte: weekStart, $lte: upper } };
-
-    const [items, total] = await Promise.all([
-      Exam.find(filter)
-        .populate("categoryId", "_id title image")
-        .sort({ orderBy: 1, startAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      Exam.countDocuments(filter),
-    ]);
-
-    // Per-customer attempt stats, scoped to the page of exams just fetched.
-    // Mirrors the contract on GET /client/quizzes/daily (level "tests"):
-    // attemptsCount / bestScore / isAttempted / lastResult, sourced from
-    // ExamResult (status:true = valid, non-invalidated results only).
-    const customerId = req.user?.id;
-    const statsByExam = new Map<string, { attemptsCount: number; bestScore: number; lastResult: any }>();
-    if (customerId && items.length) {
-      const cid = new mongoose.Types.ObjectId(customerId);
-      const examIds = items.map((e: any) => e._id);
-      const agg = await ExamResult.aggregate([
-        { $match: { customerId: cid, examId: { $in: examIds }, status: true } },
-        { $sort: { submittedAt: -1, attemptNumber: -1 } },
-        {
-          $group: {
-            _id: "$examId",
-            attemptsCount: { $sum: 1 },
-            bestScore: { $max: "$score" },
-            last: { $first: "$$ROOT" },
-          },
-        },
-      ]);
-      for (const row of agg) {
-        statsByExam.set(String(row._id), {
-          attemptsCount: row.attemptsCount,
-          bestScore: row.bestScore,
-          lastResult: {
-            _id: row.last._id,
-            attemptNumber: row.last.attemptNumber,
-            score: row.last.score,
-            timing: row.last.timing,
-            submittedAt: row.last.submittedAt,
-          },
-        });
-      }
-    }
-
-    const decoratedItems = items.map((e: any) => {
-      const s = statsByExam.get(String(e._id));
-      return {
-        ...e,
-        attemptsCount: s?.attemptsCount ?? 0,
-        bestScore: s?.bestScore ?? 0,
-        isAttempted: (s?.attemptsCount ?? 0) > 0,
-        lastResult: s?.lastResult ?? null,
-      };
+    const result = await freeTestsSql({
+      customerId: Number.isInteger(cid) ? cid : null,
+      search: search || null,
+      year: yearQ, month: monthQ, week: weekQ,
+      page: pageNum, limit: limitNum, skip,
     });
-
-    logger.info("listFreeTests success", { traceId, level: "tests", year: yearQ, month: monthQ, week: weekQ, total });
-    return res.status(200).json({
-      success: true,
-      data: { level: "tests", year: yearQ, month: monthQ, week: weekQ, items: decoratedItems },
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-    });
+    const { pagination, ...data } = result as any;
+    logger.info("listFreeTests success (sql)", { traceId, level: (result as any).level });
+    const payload: any = { success: true, data };
+    if (pagination) payload.pagination = pagination;
+    return res.status(200).json(payload);
   } catch (e: any) {
     logger.error("listFreeTests failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -439,151 +267,14 @@ export const listFreeMaterials = async (req: Request, res: Response) => {
     const { search } = req.query as Record<string, string>;
     const { pageNum, limitNum, skip } = paginate(req);
 
-    // ── SQL (MySQL) branch ──
-    if (isClientFreeMysql()) {
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const { data, total } = await freeMaterialsSql({
-        customerId: Number.isInteger(cid) ? cid : null,
-        search: search || null, page: pageNum, limit: limitNum, skip,
-      });
-      logger.info("listFreeMaterials success (sql)", { traceId, total, returned: data.length });
-      return res.status(200).json({
-        success: true, data,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    // 1) Each product → the material-category roots it assigns. BOTH free and
-    //    PAID products qualify — free materials sitting inside a paid product
-    //    must still surface here. The product being paid never hides its free
-    //    content; the per-material `isPaid:false` gate in step 3 is what decides
-    //    inclusion. Only inactive products (active/status:false) are excluded.
-    const [allPackages, allCourses, allLiveCourses] = await Promise.all([
-      Package.find({ active: true }).select("_id name image materialCategories").lean(),
-      Course.find({ status: true }).select("_id name image materialCategories").lean(),
-      LiveCourse.find({ status: true }).select("_id name image materialCategories").lean(),
-    ]);
-
-    type ProductType = "course" | "package" | "live-course";
-    const products: { _id: any; name: string; image: any; type: ProductType; rootIds: string[] }[] = [];
-    const collectRoots = (refs: any[] | undefined): string[] => {
-      const out: string[] = [];
-      for (const ref of refs ?? []) {
-        if (ref?.status !== false && ref?.category) out.push(String(ref.category));
-      }
-      return out;
-    };
-    for (const p of allPackages as any[]) products.push({ _id: p._id, name: p.name, image: p.image ?? null, type: "package", rootIds: collectRoots(p.materialCategories) });
-    for (const c of allCourses as any[]) products.push({ _id: c._id, name: c.name, image: c.image ?? null, type: "course", rootIds: collectRoots(c.materialCategories) });
-    for (const lc of allLiveCourses as any[]) products.push({ _id: lc._id, name: lc.name, image: lc.image ?? null, type: "live-course", rootIds: collectRoots(lc.materialCategories) });
-
-    const allRootIds = [...new Set(products.flatMap((p) => p.rootIds))];
-    if (!allRootIds.length) {
-      return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
-    }
-
-    // 2) Expand every assigned root to its full subtree (active categories only),
-    //    walking parent → childCategoryIds breadth-first. Build:
-    //    - catById:  id → {_id,title,image}
-    //    - childrenOf: parentId → ordered child ids
-    const catById = new Map<string, any>();
-    const childrenOf = new Map<string, string[]>();
-
-    let frontier = allRootIds.map((id) => new Types.ObjectId(id));
-    const seen = new Set<string>(allRootIds);
-    // Load the roots themselves first, then descend.
-    let toLoad: Types.ObjectId[] = frontier;
-    while (toLoad.length) {
-      const batch = await MaterialCategory.find({ _id: { $in: toLoad }, status: true })
-        .select("_id title image parent childCategoryIds order")
-        .sort({ order: 1, title: 1 })
-        .lean();
-      const nextIds: Types.ObjectId[] = [];
-      for (const cat of batch as any[]) {
-        catById.set(String(cat._id), { _id: cat._id, title: cat.title, image: cat.image });
-        const kids: string[] = (cat.childCategoryIds ?? []).map((k: any) => String(k));
-        if (kids.length) childrenOf.set(String(cat._id), kids);
-        for (const k of kids) {
-          if (!seen.has(k)) { seen.add(k); nextIds.push(new Types.ObjectId(k)); }
-        }
-      }
-      toLoad = nextIds;
-    }
-
-    // 3) Free-material counts + shaped materials per category, across the whole
-    //    expanded set. free-materials is free-only, so every PDF is un-gated.
-    const allCatIds = [...catById.keys()].map((id) => new Types.ObjectId(id));
-    const materialsRaw = await Material.find({
-      materialCategoryId: { $in: allCatIds },
-      status: true,
-      isPaid: false,
-    })
-      .select("_id title description thumbnail file directLink fileSize language isPreview isPaid materialCategoryId order createdAt")
-      .sort({ order: 1, createdAt: -1 })
-      .lean();
-    const ownedIds = await getPurchasedMaterialIds(req.user?.id, materialsRaw as any);
-    const materialsByCat = new Map<string, any[]>();
-    for (const m of materialsRaw as any[]) {
-      const key = String(m.materialCategoryId);
-      if (!materialsByCat.has(key)) materialsByCat.set(key, []);
-      materialsByCat.get(key)!.push(shapeMaterialForClient(m, ownedIds));
-    }
-
-    // 4) Recursively build a node. A node is kept only if it (or any descendant)
-    //    holds ≥1 free material — empty branches are pruned. `materialCount` is
-    //    the rolled-up total for the subtree (handy for the FE badge).
-    const buildNode = (catId: string): any | null => {
-      const cat = catById.get(catId);
-      if (!cat) return null;
-      const ownMaterials = materialsByCat.get(catId) ?? [];
-      const children = (childrenOf.get(catId) ?? [])
-        .map((childId) => buildNode(childId))
-        .filter(Boolean) as any[];
-      if (!ownMaterials.length && !children.length) return null;
-      const materialCount = ownMaterials.length + children.reduce((n, c) => n + c.materialCount, 0);
-      return {
-        _id: cat._id,
-        title: cat.title,
-        image: cat.image,
-        materialCount,
-        materials: ownMaterials,
-        children,
-      };
-    };
-
-    // 5) Top level = products. Each product's `categories` = its assigned roots
-    //    built into trees. Products that resolve to zero non-empty roots (no free
-    //    material anywhere in their subtree) are dropped. A root assigned to more
-    //    than one product appears under each — intentional.
-    let groups = products
-      .map((p) => {
-        const categories = p.rootIds
-          .map((rid) => buildNode(rid))
-          .filter(Boolean) as any[];
-        if (!categories.length) return null;
-        return {
-          _id: p._id,
-          title: p.name,
-          image: p.image,
-          type: p.type,
-          materialCount: categories.reduce((n, c) => n + c.materialCount, 0),
-          categories,
-        };
-      })
-      .filter(Boolean) as any[];
-
-    const re = buildSearchRegExp(search);
-    if (re) {
-      groups = groups.filter((g) => re.test(g.title));
-    }
-
-    const total = groups.length;
-    const data = groups.slice(skip, skip + limitNum);
-
-    logger.info("listFreeMaterials success", { traceId, total, returned: data.length });
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const { data, total } = await freeMaterialsSql({
+      customerId: Number.isInteger(cid) ? cid : null,
+      search: search || null, page: pageNum, limit: limitNum, skip,
+    });
+    logger.info("listFreeMaterials success (sql)", { traceId, total, returned: data.length });
     return res.status(200).json({
-      success: true,
-      data,
+      success: true, data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {
@@ -622,148 +313,10 @@ export const listFreeVideos = async (req: Request, res: Response) => {
     const { search } = req.query as Record<string, string>;
     const { pageNum, limitNum, skip } = paginate(req);
 
-    // ── SQL (MySQL) branch ──
-    if (isClientFreeMysql()) {
-      const { data, total } = await freeVideosSql({ search: search || null, page: pageNum, limit: limitNum, skip });
-      logger.info("listFreeVideos success (sql)", { traceId, total, returned: data.length });
-      return res.status(200).json({
-        success: true, data,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    // 1) Each product → the video-category roots it owns. BOTH free and PAID
-    //    products qualify — free videos inside a paid product must still surface.
-    //    The per-video `priceType:"free"` gate in step 3 decides inclusion; only
-    //    inactive products (active/status:false) are excluded.
-    const [allPackages, allCourses, allLiveCourses] = await Promise.all([
-      Package.find({ active: true }).select("_id name image").lean(),
-      Course.find({ status: true }).select("_id name image videoCategoryId").lean(),
-      LiveCourse.find({ status: true }).select("_id name image videoCategoryId").lean(),
-    ]);
-
-    type ProductType = "course" | "package" | "live-course";
-    const products: { _id: any; name: string; image: any; type: ProductType; rootIds: string[] }[] = [];
-
-    for (const c of allCourses as any[]) {
-      products.push({ _id: c._id, name: c.name, image: c.image ?? null, type: "course", rootIds: c.videoCategoryId ? [String(c.videoCategoryId)] : [] });
-    }
-    for (const lc of allLiveCourses as any[]) {
-      products.push({ _id: lc._id, name: lc.name, image: lc.image ?? null, type: "live-course", rootIds: lc.videoCategoryId ? [String(lc.videoCategoryId)] : [] });
-    }
-
-    // Packages reach video roots through their active video-category relations.
-    const allPkgIds = (allPackages as any[]).map((p) => p._id);
-    const rootIdsByPkg = new Map<string, Set<string>>();
-    if (allPkgIds.length) {
-      const pkgRels = await PackageVideoCategoryRelation.find({ packageId: { $in: allPkgIds }, active: true })
-        .select("packageId videoCategoryRelationId")
-        .lean();
-      const relIds = [...new Set((pkgRels as any[]).map((r) => String(r.videoCategoryRelationId)))].map((id) => new Types.ObjectId(id));
-      const relById = new Map<string, any>();
-      if (relIds.length) {
-        const rels = await VideoCategoryRelation.find({ _id: { $in: relIds } }).select("parent child").lean();
-        for (const r of rels as any[]) relById.set(String(r._id), r);
-      }
-      for (const pr of pkgRels as any[]) {
-        const rel = relById.get(String(pr.videoCategoryRelationId));
-        if (!rel) continue;
-        const set = rootIdsByPkg.get(String(pr.packageId)) ?? new Set<string>();
-        if (rel.parent) set.add(String(rel.parent));
-        if (rel.child) set.add(String(rel.child));
-        rootIdsByPkg.set(String(pr.packageId), set);
-      }
-    }
-    for (const p of allPackages as any[]) {
-      products.push({ _id: p._id, name: p.name, image: p.image ?? null, type: "package", rootIds: [...(rootIdsByPkg.get(String(p._id)) ?? [])] });
-    }
-
-    const allRootIds = [...new Set(products.flatMap((p) => p.rootIds))];
-    if (!allRootIds.length) {
-      return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
-    }
-
-    // 2) Expand every root to its full subtree (active folders only), walking
-    //    childCategoryIds breadth-first. Note VideoCategory uses `order_by`.
-    const catById = new Map<string, any>();
-    const childrenOf = new Map<string, string[]>();
-    const seen = new Set<string>(allRootIds);
-    let toLoad: Types.ObjectId[] = allRootIds.map((id) => new Types.ObjectId(id));
-    while (toLoad.length) {
-      const batch = await VideoCategory.find({ _id: { $in: toLoad }, status: true })
-        .select("_id title image childCategoryIds order_by")
-        .sort({ order_by: 1, title: 1 })
-        .lean();
-      const nextIds: Types.ObjectId[] = [];
-      for (const cat of batch as any[]) {
-        catById.set(String(cat._id), { _id: cat._id, title: cat.title, image: cat.image });
-        const kids: string[] = (cat.childCategoryIds ?? []).map((k: any) => String(k));
-        if (kids.length) childrenOf.set(String(cat._id), kids);
-        for (const k of kids) {
-          if (!seen.has(k)) { seen.add(k); nextIds.push(new Types.ObjectId(k)); }
-        }
-      }
-      toLoad = nextIds;
-    }
-
-    // 3) Free videos across the whole expanded set, grouped by category. Listing
-    //    metadata only (raw doc, same fields the old endpoint returned).
-    const allCatIds = [...catById.keys()].map((id) => new Types.ObjectId(id));
-    const videosRaw = await Video.find({
-      videoCategoryId: { $in: allCatIds },
-      status: true,
-      priceType: "free",
-    })
-      .sort({ order: 1, createdAt: -1 })
-      .lean();
-    const videosByCat = new Map<string, any[]>();
-    for (const v of videosRaw as any[]) {
-      const key = String(v.videoCategoryId);
-      if (!videosByCat.has(key)) videosByCat.set(key, []);
-      videosByCat.get(key)!.push(v);
-    }
-
-    // 4) Recursively build a node; prune branches with no free video anywhere.
-    const buildNode = (catId: string): any | null => {
-      const cat = catById.get(catId);
-      if (!cat) return null;
-      const ownVideos = videosByCat.get(catId) ?? [];
-      const children = (childrenOf.get(catId) ?? [])
-        .map((childId) => buildNode(childId))
-        .filter(Boolean) as any[];
-      if (!ownVideos.length && !children.length) return null;
-      const videoCount = ownVideos.length + children.reduce((n, c) => n + c.videoCount, 0);
-      return { _id: cat._id, title: cat.title, image: cat.image, videoCount, videos: ownVideos, children };
-    };
-
-    // 5) Top level = products; categories = built roots; drop empty products.
-    let groups = products
-      .map((p) => {
-        const categories = p.rootIds.map((rid) => buildNode(rid)).filter(Boolean) as any[];
-        if (!categories.length) return null;
-        return {
-          _id: p._id,
-          title: p.name,
-          image: p.image,
-          type: p.type,
-          videoCount: categories.reduce((n, c) => n + c.videoCount, 0),
-          categories,
-        };
-      })
-      .filter(Boolean) as any[];
-
-    const re = buildSearchRegExp(search);
-    if (re) {
-      groups = groups.filter((g) => re.test(g.title));
-    }
-
-    const total = groups.length;
-    const data = groups.slice(skip, skip + limitNum);
-
-    logger.info("listFreeVideos success", { traceId, total, returned: data.length });
+    const { data, total } = await freeVideosSql({ search: search || null, page: pageNum, limit: limitNum, skip });
+    logger.info("listFreeVideos success (sql)", { traceId, total, returned: data.length });
     return res.status(200).json({
-      success: true,
-      data,
+      success: true, data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {
@@ -790,88 +343,15 @@ export const listFreeEbooks = async (req: Request, res: Response) => {
     const { search, language } = req.query as Record<string, string>;
     const { pageNum, limitNum, skip } = paginate(req);
 
-    // ── SQL (MySQL) branch ──
-    if (isClientFreeMysql()) {
-      const cid = customerId ? Number(customerId) : null;
-      const { data, total } = await freeEbooksSql({
-        customerId: Number.isInteger(cid) ? cid : null,
-        search: search || null, language: language || null,
-        page: pageNum, limit: limitNum, skip, shareBase: resolveBase(req),
-      });
-      logger.info("listFreeEbooks success (sql)", { traceId, userId: customerId, total, returned: data.length });
-      return res.status(200).json({
-        success: true, data,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    const filter: any = { status: true, isPaid: false };
-    Object.assign(filter, buildSearchFilter(search, ["name", "author"]));
-    if (language) filter.language = language;
-
-    const [ebooks, total] = await Promise.all([
-      Ebook.find(filter).sort({ order: 1, createdAt: -1 }).skip(skip).limit(limitNum).lean(),
-      Ebook.countDocuments(filter),
-    ]);
-
-    const ebookIds = ebooks.map((e: any) => e._id);
-
-    // Active price plans (a free ebook can still have a ₹0 plan) and the
-    // user's currently-active subscriptions — same access rules as listEbooks.
-    const now = new Date();
-    const [plans, subs] = await Promise.all([
-      ebookIds.length
-        ? EbookPrice.find({ ebookId: { $in: ebookIds }, status: true }).sort({ duration: 1 }).lean()
-        : Promise.resolve([] as any[]),
-      customerId && ebookIds.length
-        ? EbookSubscription.find({
-            customerId,
-            ebookId: { $in: ebookIds },
-            status: true,
-            endAt: { $gt: now },
-          })
-            .select("ebookId endAt")
-            .lean()
-        : Promise.resolve([] as any[]),
-    ]);
-
-    const plansByEbook: Record<string, any[]> = {};
-    for (const p of plans as any[]) {
-      (plansByEbook[String(p.ebookId)] ||= []).push(p);
-    }
-
-    // Latest active endAt wins, mirroring listEbooks.
-    const activeByEbook = new Map<string, Date>();
-    for (const s of subs as any[]) {
-      const key = String(s.ebookId);
-      const prev = activeByEbook.get(key);
-      if (!prev || s.endAt.getTime() > prev.getTime()) activeByEbook.set(key, s.endAt);
-    }
-
-    const base = resolveBase(req);
-    const data = ebooks.map((e: any) => {
-      const endAt = activeByEbook.get(String(e._id)) || null;
-      return {
-        ...e,
-        plans: plansByEbook[String(e._id)] || [],
-        details: [
-          { id: 1, mainText: "Language", subText: e.language },
-          { id: 2, mainText: "Author", subText: e.author },
-          { id: 3, mainText: "Publisher", subText: e.publisher },
-        ],
-        isPaid: false,
-        isPurchased: !!endAt,
-        isNew: isNewItem(e.createdAt, now),
-        subscriptionEndAt: endAt,
-        daysLeft: endAt ? daysBetween(now, endAt) : null,
-        shareableLink: buildShareUrl("ebooks", String(e._id), base),
-      };
+    const cid = customerId ? Number(customerId) : null;
+    const { data, total } = await freeEbooksSql({
+      customerId: Number.isInteger(cid) ? cid : null,
+      search: search || null, language: language || null,
+      page: pageNum, limit: limitNum, skip, shareBase: resolveBase(req),
     });
-
-    logger.info("listFreeEbooks success", { traceId, userId: customerId, total, returned: data.length });
+    logger.info("listFreeEbooks success (sql)", { traceId, userId: customerId, total, returned: data.length });
     return res.status(200).json({
-      success: true,
-      data,
+      success: true, data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {
@@ -1032,69 +512,15 @@ export const listFreeCourses = async (req: Request, res: Response) => {
     const { pageNum, limitNum, skip } = paginate(req);
     const baseUrl = resolveBase(req);
 
-    // ── SQL (MySQL) branch ──
-    if (isClientFreeMysql()) {
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const { data, total } = await freeCoursesSql({
-        customerId: Number.isInteger(cid) ? cid : null,
-        search: search || null, wantPaid,
-        page: pageNum, limit: limitNum, skip, shareBase: baseUrl,
-      });
-      logger.info("listFreeCourses success (sql)", { traceId, type: wantPaid ? "paid" : "free", total, returned: data.length });
-      return res.status(200).json({
-        success: true, data,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    const nameRegex = buildRegexCondition(search) ?? undefined;
-
-    const courseFilter: any = { status: true, isPaid: isPaidValue };
-    const packageFilter: any = { active: true, isPaid: isPaidValue };
-    if (nameRegex) { courseFilter.name = nameRegex; packageFilter.name = nameRegex; }
-
-    // Fetch both matching sets, then merge → sort → paginate over the union so
-    // `total`/`totalPages` reflect the combined count. Mirrors the merge-then-
-    // slice approach used by listBooksAndEbooksByExamCountdownCategory.
-    const [courses, packages] = await Promise.all([
-      Course.find(courseFilter)
-        .populate("courseEducatorId", "_id name")
-        .populate("courseSubjectCategoryId", "_id title")
-        .populate("videoCategoryId", "_id title")
-        .sort({ ordered: 1, createdAt: -1 })
-        .lean(),
-      Package.find(packageFilter)
-        .populate("packageTypeId", "_id name")
-        .populate("goalId", "_id title")
-        .sort({ order: 1, createdAt: -1 })
-        .lean(),
-    ]);
-
-    const [enrichedCourses, enrichedPackages] = await Promise.all([
-      enrichCoursesForList(courses, req.user?.id, baseUrl),
-      enrichPackagesForList(packages, req.user?.id, baseUrl),
-    ]);
-
-    // Newest-first across both kinds for a stable merged order.
-    const merged = [...enrichedCourses, ...enrichedPackages].sort(
-      (a: any, b: any) =>
-        new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime()
-    );
-
-    const total = merged.length;
-    const list = merged.slice(skip, skip + limitNum);
-
-    logger.info("listFreeCourses success", {
-      traceId,
-      type: wantPaid ? "paid" : "free",
-      courses: enrichedCourses.length,
-      packages: enrichedPackages.length,
-      total,
-      returned: list.length,
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const { data, total } = await freeCoursesSql({
+      customerId: Number.isInteger(cid) ? cid : null,
+      search: search || null, wantPaid,
+      page: pageNum, limit: limitNum, skip, shareBase: baseUrl,
     });
+    logger.info("listFreeCourses success (sql)", { traceId, type: wantPaid ? "paid" : "free", total, returned: data.length });
     return res.status(200).json({
-      success: true,
-      data: list,
+      success: true, data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {

@@ -30,11 +30,10 @@
  * Admin auth stays on Mongo, so `uploadedBy` may not be an int — when it can't
  * be parsed we store null (the column is nullable) rather than fail the upload.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const PDF_UPLOAD_MODULE = "pdf-upload";
-export const isPdfUploadMysql = (): boolean => isMysqlModule(PDF_UPLOAD_MODULE);
+export const isPdfUploadMysql = (): boolean => true;
 
 export const parsePdfId = (id: string | number | null | undefined): number | null => {
   const n = Number(id);

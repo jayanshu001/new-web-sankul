@@ -16,7 +16,6 @@
  *
  * Flag stays OFF until a separate go-live sign-off.
  */
-import { isMysqlModule } from "../../config/migration";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { commerceOrderRepository as repo } from "./commerce-order.repository";
 import type { MaterialFulfillment } from "./commerce-order.repository";
@@ -35,12 +34,10 @@ export const COMMERCE_ORDER_MODULE = "commerce-order";
 export const PACKAGE_ORDER_MODULE = "package-order";
 
 /** Whether the course write-path is served from MySQL. */
-export const isCommerceOrderMysql = (): boolean =>
-  isMysqlModule(COMMERCE_ORDER_MODULE);
+export const isCommerceOrderMysql = (): boolean => true;
 
 /** Whether the package write-path is served from MySQL. */
-export const isPackageOrderMysql = (): boolean =>
-  isMysqlModule(PACKAGE_ORDER_MODULE);
+export const isPackageOrderMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseCommerceOrderId = (id: string): number | null => {

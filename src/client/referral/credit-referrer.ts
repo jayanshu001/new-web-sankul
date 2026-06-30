@@ -1,9 +1,5 @@
-import mongoose, { Types } from "mongoose";
-import { Customer } from "../../models/customer/Customer.model";
-import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
-import { ReferralTransaction } from "../../models/referral/ReferralTransaction.model";
-import { RefferalTransactionType, RefferalTransactionStatus } from "../../models/enums";
-import { isReferralMysql, creditReferrerMysql } from "../../modules/referral/referral.service";
+import { Types } from "mongoose";
+import { creditReferrerMysql } from "../../modules/referral/referral.service";
 
 interface CreditOpts {
   referrerId: Types.ObjectId | string;
@@ -21,68 +17,16 @@ export async function creditReferrer(opts: CreditOpts): Promise<void> {
   if (!referrerId || !orderId || paidAmount <= 0) return;
   if (String(referrerId) === String(buyerId)) return;
 
-  // ─── SQL branch (int id-space) — gated on `referral` (flag ON). The SQL
-  // payment-verify path passes int ids; never reaches the Mongo logic below. ───
-  if (isReferralMysql()) {
-    const rid = Number(referrerId);
-    const oid = Number(orderId);
-    const bid = Number(buyerId);
-    if (!Number.isInteger(rid) || rid <= 0 || !Number.isInteger(oid) || oid <= 0) return;
-    return creditReferrerMysql({
-      referrerId: rid,
-      buyerId: Number.isInteger(bid) ? bid : 0,
-      orderId: oid,
-      paidAmount,
-      source,
-    });
-  }
-
-  const program = await ReferralProgram.findOne({ name: "student", status: true })
-    .select("referralReward")
-    .lean();
-  const pct = program?.referralReward ?? 0;
-  if (pct <= 0) return;
-
-  const coin = Math.round((paidAmount * pct) / 100);
-  if (coin <= 0) return;
-
-  const existing = await ReferralTransaction.exists({
-    orderId,
-    customerId: referrerId,
-    type: RefferalTransactionType.CREDIT,
+  // SQL int id-space: the payment-verify path passes int ids.
+  const rid = Number(referrerId);
+  const oid = Number(orderId);
+  const bid = Number(buyerId);
+  if (!Number.isInteger(rid) || rid <= 0 || !Number.isInteger(oid) || oid <= 0) return;
+  return creditReferrerMysql({
+    referrerId: rid,
+    buyerId: Number.isInteger(bid) ? bid : 0,
+    orderId: oid,
+    paidAmount,
+    source,
   });
-  if (existing) return;
-
-  const session = await mongoose.startSession();
-  try {
-    await session.withTransaction(async () => {
-      const dup = await ReferralTransaction.exists({
-        orderId,
-        customerId: referrerId,
-        type: RefferalTransactionType.CREDIT,
-      }).session(session);
-      if (dup) return;
-
-      await Customer.updateOne(
-        { _id: referrerId },
-        { $inc: { rewardPoints: coin } },
-        { session }
-      );
-      await ReferralTransaction.create(
-        [
-          {
-            orderId,
-            customerId: referrerId,
-            description: `Referral reward (${pct}%) — ${source} purchase`,
-            coin,
-            type: RefferalTransactionType.CREDIT,
-            status: RefferalTransactionStatus.SUCCESSFUL,
-          },
-        ],
-        { session }
-      );
-    });
-  } finally {
-    session.endSession();
-  }
 }

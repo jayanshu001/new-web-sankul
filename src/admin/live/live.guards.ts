@@ -1,5 +1,4 @@
-import { LiveSession } from "../../models/course/LiveSession.model";
-import { isAdminLiveMysql, resolveLiveClassIdSql } from "../../modules/admin-live/admin-live.service";
+import { resolveLiveClassIdSql } from "../../modules/admin-live/admin-live.service";
 
 /**
  * `liveClassId` is the Streamos `streamId` string of a LiveSession.
@@ -12,11 +11,5 @@ export async function resolveLiveClassId(liveClassId: unknown): Promise<string |
   if (typeof liveClassId !== "string" || !liveClassId.trim()) return null;
   const streamId = liveClassId.trim();
 
-  if (isAdminLiveMysql()) {
-    return resolveLiveClassIdSql(streamId);
-  }
-
-  const session = await LiveSession.findOne({ streamId }).select("status").lean();
-  if (!session || session.status !== "CREATED") return null;
-  return streamId;
+  return resolveLiveClassIdSql(streamId);
 }

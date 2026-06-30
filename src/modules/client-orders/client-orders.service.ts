@@ -1,8 +1,7 @@
-import { isMysqlModule } from "../../config/migration";
 import { clientOrdersRepository as repo } from "./client-orders.repository";
 
 export const CLIENT_ORDERS_MODULE = "client-orders";
-export const isClientOrdersMysql = (): boolean => isMysqlModule(CLIENT_ORDERS_MODULE);
+export const isClientOrdersMysql = (): boolean => true;
 
 export const parseOrdersCustomerId = (id: string | number): number | null => {
   const n = Number(id);

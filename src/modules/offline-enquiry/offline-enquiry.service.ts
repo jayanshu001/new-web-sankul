@@ -5,15 +5,13 @@
  * for the drift block (bigint mobile, customer_id 0-sentinel for anonymous, no
  * remarks column). Flag OFF until go-live.
  */
-import { isMysqlModule } from "../../config/migration";
 import { offlineEnquiryRepository as repo } from "./offline-enquiry.repository";
 import { toEnquiryDto } from "./offline-enquiry.transformer";
 import type { EnquiryDto, EnquiryInput } from "./offline-enquiry.types";
 
 export const OFFLINE_ENQUIRY_MODULE = "offline-enquiry";
 
-export const isOfflineEnquiryMysql = (): boolean =>
-  isMysqlModule(OFFLINE_ENQUIRY_MODULE);
+export const isOfflineEnquiryMysql = (): boolean => true;
 
 export const parseOfflineEnquiryId = (id: string): number | null => {
   const n = Number(id);

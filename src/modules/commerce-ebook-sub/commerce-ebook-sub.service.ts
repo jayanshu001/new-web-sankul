@@ -14,7 +14,6 @@
  * C3 seam: `customerId` is an INT here (SQL `customer_id` is int) — same as the
  * package subscription module.
  */
-import { isMysqlModule } from "../../config/migration";
 import { commerceEbookSubRepository as repo } from "./commerce-ebook-sub.repository";
 import { toEbookSubscriptionDto } from "./commerce-ebook-sub.transformer";
 import type { EbookSubscriptionDto } from "./commerce-ebook-sub.types";
@@ -22,7 +21,7 @@ import type { EbookSubscriptionDto } from "./commerce-ebook-sub.types";
 export const EBOOK_SUB_MODULE = "commerce-ebook-sub";
 
 /** Whether the ebook-subscription read-path is served from MySQL. */
-export const isEbookSubMysql = (): boolean => isMysqlModule(EBOOK_SUB_MODULE);
+export const isEbookSubMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseEbookSubId = (id: string): number | null => {

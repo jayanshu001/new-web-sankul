@@ -1,10 +1,8 @@
 import logger from "../../utils/logger";
 import bcrypt from "bcryptjs";
 import { AdminUser } from "../../models/admin/AdminUser.model";
-import { AdminAccessToken } from "../../models/admin/AdminAccessToken.model";
 import { redisClient } from "../../config/redis";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
-import { isMysqlModule } from "../../config/migration";
 import { adminAuthRepository } from "../../modules/admin-auth/admin-auth.repository";
 import { toAdminDto } from "../../modules/admin-auth/admin-auth.transformer";
 import {
@@ -18,7 +16,6 @@ import {
 const JWT_ACCESS_TTL_DAYS = 1;
 const JWT_REFRESH_TTL_DAYS = 30;
 const SALT_ROUNDS = 10;
-const MODULE = "admin-auth";
 
 function addDays(days: number): Date {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
@@ -53,122 +50,41 @@ export async function adminLogin(
 ): Promise<{ ok: boolean; message: string; token?: string; refreshToken?: string; admin?: Record<string, unknown> }> {
   logger.info("adminLogin service invoked", { traceId, email, ip });
 
-  // ─── MySQL branch (ws_users) ────────────────────────────────────────────
-  if (isMysqlModule(MODULE)) {
-    const row = await adminAuthRepository.findActiveByEmail(email);
-    if (!row) {
-      logger.warn("adminLogin service invalid credentials (sql)", { traceId, email });
-      return { ok: false, message: "Invalid email or password." };
-    }
-
-    const isMatch = await bcrypt.compare(password, row.password);
-    if (!isMatch) {
-      logger.warn("adminLogin service invalid credentials (sql)", { traceId, email });
-      return { ok: false, message: "Invalid email or password." };
-    }
-
-    await adminAuthRepository.touchLogin(row.id, ip);
-
-    const dto = await buildSqlAdminDto(row);
-    const tokenPayload = { id: dto.id, email: dto.email, role: dto.role, type: "admin" };
-    const token = signAccessToken(tokenPayload, { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` });
-    const refreshToken = signRefreshToken(tokenPayload, { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` });
-
-    await adminAuthRepository.createToken({
-      adminUserId: row.id,
-      token,
-      refreshToken,
-      expiresAt: addDays(JWT_REFRESH_TTL_DAYS),
-    });
-
-    await redisClient.set(
-      `admin_session:${dto.id}`,
-      token,
-      "EX",
-      JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
-    );
-
-    logger.info("adminLogin service success (sql)", { traceId, adminId: dto.id });
-    return { ok: true, message: "Login successful.", token, refreshToken, admin: dto as unknown as Record<string, unknown> };
-  }
-
-  const admin = await AdminUser.findOne({
-    email: email.toLowerCase().trim(),
-    status: true,
-    deleted: false,
-  }).select("+password");
-
-  if (!admin) {
-    logger.warn("adminLogin service invalid credentials", { traceId, email });
+  const row = await adminAuthRepository.findActiveByEmail(email);
+  if (!row) {
+    logger.warn("adminLogin service invalid credentials (sql)", { traceId, email });
     return { ok: false, message: "Invalid email or password." };
   }
 
-  const isMatch = await bcrypt.compare(password, admin.password);
+  const isMatch = await bcrypt.compare(password, row.password);
   if (!isMatch) {
-    logger.warn("adminLogin service invalid credentials", { traceId, email });
+    logger.warn("adminLogin service invalid credentials (sql)", { traceId, email });
     return { ok: false, message: "Invalid email or password." };
   }
 
-  // Invalidate old tokens (Optional strict 1-device admin rule)
-  // Disabled: allow the same admin to remain logged in on multiple devices simultaneously.
-  // await AdminAccessToken.updateMany(
-  //   { adminUserId: admin._id },
-  //   { active: false, deleted: true }
-  // );
+  await adminAuthRepository.touchLogin(row.id, ip);
 
-  // Track login stats
-  admin.lastLoginIp = ip || admin.lastLoginIp;
-  admin.lastLoginDate = new Date();
-  await admin.save();
+  const dto = await buildSqlAdminDto(row);
+  const tokenPayload = { id: dto.id, email: dto.email, role: dto.role, type: "admin" };
+  const token = signAccessToken(tokenPayload, { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` });
+  const refreshToken = signRefreshToken(tokenPayload, { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` });
 
-  const tokenPayload = {
-    id: admin._id.toString(),
-    email: admin.email,
-    role: admin.role,
-    type: "admin",
-  };
-  const token = signAccessToken(tokenPayload, {
-    expiresIn: `${JWT_ACCESS_TTL_DAYS}d`,
-  });
-  const refreshToken = signRefreshToken(tokenPayload, {
-    expiresIn: `${JWT_REFRESH_TTL_DAYS}d`,
-  });
-
-  const expiresAt = addDays(JWT_REFRESH_TTL_DAYS);
-  await AdminAccessToken.create({
-    adminUserId: admin._id,
+  await adminAuthRepository.createToken({
+    adminUserId: row.id,
     token,
     refreshToken,
-    active: true,
-    deleted: false,
-    expiresAt,
+    expiresAt: addDays(JWT_REFRESH_TTL_DAYS),
   });
 
   await redisClient.set(
-    `admin_session:${admin._id.toString()}`,
+    `admin_session:${dto.id}`,
     token,
     "EX",
     JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
   );
 
-  logger.info("adminLogin service success", { traceId, adminId: admin._id });
-  return {
-    ok: true,
-    message: "Login successful.",
-    token,
-    refreshToken,
-    admin: {
-      id: admin._id,
-      firstName: admin.firstName,
-      lastName: admin.lastName ?? "",
-      email: admin.email,
-      role: admin.role,
-      roles: admin.roles ?? [],
-      permissions: admin.permissions ?? [],
-      image: admin.image ?? "",
-      isDark: admin.isDark,
-    },
-  };
+  logger.info("adminLogin service success (sql)", { traceId, adminId: dto.id });
+  return { ok: true, message: "Login successful.", token, refreshToken, admin: dto as unknown as Record<string, unknown> };
 }
 
 // ─── Register (internal / seeder use) ────────────────────────────────────────
@@ -209,41 +125,20 @@ export async function changeAdminPassword(
 ): Promise<{ ok: boolean; message: string }> {
   logger.info("changeAdminPassword service invoked", { traceId, adminId });
 
-  // ─── MySQL branch (ws_users) ────────────────────────────────────────────
-  if (isMysqlModule(MODULE)) {
-    const id = parseAdminId(adminId);
-    if (!id) return { ok: false, message: "Admin not found." };
-    const row = await adminAuthRepository.findById(id);
-    if (!row) {
-      logger.warn("changeAdminPassword service admin not found (sql)", { traceId, adminId });
-      return { ok: false, message: "Admin not found." };
-    }
-    const isMatch = await bcrypt.compare(currentPassword, row.password);
-    if (!isMatch) {
-      logger.warn("changeAdminPassword service wrong current password (sql)", { traceId, adminId });
-      return { ok: false, message: "Current password is incorrect." };
-    }
-    await adminAuthRepository.updatePassword(id, await bcrypt.hash(newPassword, SALT_ROUNDS));
-    logger.info("changeAdminPassword service success (sql)", { traceId, adminId });
-    return { ok: true, message: "Password updated successfully." };
-  }
-
-  const admin = await AdminUser.findById(adminId).select("+password");
-  if (!admin) {
-    logger.warn("changeAdminPassword service admin not found", { traceId, adminId });
+  const id = parseAdminId(adminId);
+  if (!id) return { ok: false, message: "Admin not found." };
+  const row = await adminAuthRepository.findById(id);
+  if (!row) {
+    logger.warn("changeAdminPassword service admin not found (sql)", { traceId, adminId });
     return { ok: false, message: "Admin not found." };
   }
-
-  const isMatch = await bcrypt.compare(currentPassword, admin.password);
+  const isMatch = await bcrypt.compare(currentPassword, row.password);
   if (!isMatch) {
-    logger.warn("changeAdminPassword service wrong current password", { traceId, adminId });
+    logger.warn("changeAdminPassword service wrong current password (sql)", { traceId, adminId });
     return { ok: false, message: "Current password is incorrect." };
   }
-
-  admin.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
-  await admin.save();
-
-  logger.info("changeAdminPassword service success", { traceId, adminId });
+  await adminAuthRepository.updatePassword(id, await bcrypt.hash(newPassword, SALT_ROUNDS));
+  logger.info("changeAdminPassword service success (sql)", { traceId, adminId });
   return { ok: true, message: "Password updated successfully." };
 }
 
@@ -256,128 +151,48 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
     return { ok: false, message: "Refresh token is required." };
   }
 
-  // ─── MySQL branch (ws_users) ──────────────────────────────────────────────
-  if (isMysqlModule(MODULE)) {
-    try {
-      const decoded = verifyRefreshToken<any>(refreshToken);
-      const id = parseAdminId(String(decoded.id));
-      if (!id) return { ok: false, message: "Invalid or revoked refresh token." };
-
-      const dbToken = await adminAuthRepository.findActiveTokenByRefresh(refreshToken, id);
-      if (!dbToken) {
-        logger.warn("refreshAdminToken invalid token (sql)", { traceId });
-        return { ok: false, message: "Invalid or revoked refresh token." };
-      }
-
-      const row = await adminAuthRepository.findActiveById(id);
-      if (!row) {
-        logger.warn("refreshAdminToken admin missing or disabled (sql)", { traceId, adminUserId: String(id) });
-        return { ok: false, message: "Admin not found or disabled." };
-      }
-
-      await adminAuthRepository.deactivateToken(dbToken.id);
-
-      const dto = await buildSqlAdminDto(row);
-      const refreshPayload = { id: dto.id, email: dto.email, role: dto.role, type: "admin" };
-      const newToken = signAccessToken(refreshPayload, { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` });
-      const newRefreshToken = signRefreshToken(refreshPayload, { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` });
-
-      await adminAuthRepository.createToken({
-        adminUserId: row.id,
-        token: newToken,
-        refreshToken: newRefreshToken,
-        expiresAt: addDays(JWT_REFRESH_TTL_DAYS),
-      });
-
-      await redisClient.set(
-        `admin_session:${dto.id}`,
-        newToken,
-        "EX",
-        JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
-      );
-
-      logger.info("refreshAdminToken service success (sql)", { traceId, adminUserId: dto.id });
-      return { ok: true, message: "Token refreshed successfully.", token: newToken, refreshToken: newRefreshToken, admin: dto };
-    } catch (err) {
-      logger.error("refreshAdminToken service error (sql)", { traceId, error: (err as Error).message });
-      return { ok: false, message: "Invalid or expired refresh token." };
-    }
-  }
-
   try {
     const decoded = verifyRefreshToken<any>(refreshToken);
-    const adminUserId = decoded.id;
+    const id = parseAdminId(String(decoded.id));
+    if (!id) return { ok: false, message: "Invalid or revoked refresh token." };
 
-    const dbToken = await AdminAccessToken.findOne({
-      refreshToken,
-      adminUserId,
-      active: true,
-      deleted: false,
-    });
-
+    const dbToken = await adminAuthRepository.findActiveTokenByRefresh(refreshToken, id);
     if (!dbToken) {
-      logger.warn("refreshAdminToken invalid token", { traceId, refreshToken });
+      logger.warn("refreshAdminToken invalid token (sql)", { traceId });
       return { ok: false, message: "Invalid or revoked refresh token." };
     }
 
-    const admin = await AdminUser.findOne({ _id: adminUserId, status: true, deleted: false });
-    if (!admin) {
-      logger.warn("refreshAdminToken admin missing or disabled", { traceId, adminUserId });
+    const row = await adminAuthRepository.findActiveById(id);
+    if (!row) {
+      logger.warn("refreshAdminToken admin missing or disabled (sql)", { traceId, adminUserId: String(id) });
       return { ok: false, message: "Admin not found or disabled." };
     }
 
-    await AdminAccessToken.updateOne({ _id: dbToken._id }, { active: false, deleted: true });
+    await adminAuthRepository.deactivateToken(dbToken.id);
 
-    const refreshPayload = {
-      id: admin._id.toString(),
-      email: admin.email,
-      role: admin.role,
-      type: "admin",
-    };
-    const newToken = signAccessToken(refreshPayload, {
-      expiresIn: `${JWT_ACCESS_TTL_DAYS}d`,
-    });
-    const newRefreshToken = signRefreshToken(refreshPayload, {
-      expiresIn: `${JWT_REFRESH_TTL_DAYS}d`,
-    });
+    const dto = await buildSqlAdminDto(row);
+    const refreshPayload = { id: dto.id, email: dto.email, role: dto.role, type: "admin" };
+    const newToken = signAccessToken(refreshPayload, { expiresIn: `${JWT_ACCESS_TTL_DAYS}d` });
+    const newRefreshToken = signRefreshToken(refreshPayload, { expiresIn: `${JWT_REFRESH_TTL_DAYS}d` });
 
-    const expiresAt = addDays(JWT_REFRESH_TTL_DAYS);
-    await AdminAccessToken.create({
-      adminUserId: admin._id,
+    await adminAuthRepository.createToken({
+      adminUserId: row.id,
       token: newToken,
       refreshToken: newRefreshToken,
-      active: true,
-      deleted: false,
-      expiresAt,
+      expiresAt: addDays(JWT_REFRESH_TTL_DAYS),
     });
 
     await redisClient.set(
-      `admin_session:${admin._id.toString()}`,
+      `admin_session:${dto.id}`,
       newToken,
       "EX",
       JWT_ACCESS_TTL_DAYS * 24 * 60 * 60
     );
 
-    logger.info("refreshAdminToken service success", { traceId, adminUserId });
-    return { 
-      ok: true, 
-      message: "Token refreshed successfully.", 
-      token: newToken, 
-      refreshToken: newRefreshToken, 
-      admin: {
-        id: admin._id,
-        firstName: admin.firstName,
-        lastName: admin.lastName ?? "",
-        email: admin.email,
-        role: admin.role,
-        roles: admin.roles ?? [],
-        permissions: admin.permissions ?? [],
-        image: admin.image ?? "",
-        isDark: admin.isDark,
-      } 
-    };
+    logger.info("refreshAdminToken service success (sql)", { traceId, adminUserId: dto.id });
+    return { ok: true, message: "Token refreshed successfully.", token: newToken, refreshToken: newRefreshToken, admin: dto };
   } catch (err) {
-    logger.error("refreshAdminToken service error", { traceId, error: (err as Error).message, stack: (err as Error).stack });
+    logger.error("refreshAdminToken service error (sql)", { traceId, error: (err as Error).message });
     return { ok: false, message: "Invalid or expired refresh token." };
   }
 }
@@ -385,31 +200,14 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
 export async function logoutAdmin(adminId: string, traceId?: string) {
   logger.info("logoutAdmin service invoked", { traceId, adminId });
 
-  // ─── MySQL branch (ws_users) ────────────────────────────────────────────
-  if (isMysqlModule(MODULE)) {
-    try {
-      const id = parseAdminId(adminId);
-      if (id) await adminAuthRepository.deactivateAllTokens(id);
-      await redisClient.del(`admin_session:${adminId}`);
-      logger.info("logoutAdmin service success (sql)", { traceId, adminId });
-      return { ok: true, message: "Successfully logged out." };
-    } catch (error) {
-      logger.error("logoutAdmin service error (sql)", { traceId, adminId, error: (error as Error).message });
-      return { ok: false, message: "Failed to logout securely." };
-    }
-  }
-
   try {
-    await AdminAccessToken.updateMany(
-      { adminUserId: adminId },
-      { active: false, deleted: true }
-    );
+    const id = parseAdminId(adminId);
+    if (id) await adminAuthRepository.deactivateAllTokens(id);
     await redisClient.del(`admin_session:${adminId}`);
-
-    logger.info("logoutAdmin service success", { traceId, adminId });
+    logger.info("logoutAdmin service success (sql)", { traceId, adminId });
     return { ok: true, message: "Successfully logged out." };
   } catch (error) {
-    logger.error("logoutAdmin service error", { traceId, adminId, error: (error as Error).message, stack: (error as Error).stack });
+    logger.error("logoutAdmin service error (sql)", { traceId, adminId, error: (error as Error).message });
     return { ok: false, message: "Failed to logout securely." };
   }
 }
@@ -422,65 +220,24 @@ export async function updateAdminProfile(
 ): Promise<{ ok: boolean; message: string; admin?: Record<string, unknown> }> {
   logger.info("updateAdminProfile service invoked", { traceId, adminId, data });
 
-  // ─── MySQL branch (ws_users) ────────────────────────────────────────────
-  if (isMysqlModule(MODULE)) {
-    const id = parseAdminId(adminId);
-    if (!id) return { ok: false, message: "Admin not found." };
-    const existing = await adminAuthRepository.findById(id);
-    if (!existing) {
-      logger.warn("updateAdminProfile service admin not found (sql)", { traceId, adminId });
-      return { ok: false, message: "Admin not found." };
-    }
-    // Replace the old S3 image when a new one is supplied (best-effort cleanup).
-    if (data.image !== undefined && existing.image && existing.image !== data.image) {
-      deleteFromS3FileUrl(existing.image).catch((err) =>
-        console.error("Non-fatal: Failed to delete old admin profile image from S3:", err)
-      );
-    }
-    const updated = await adminAuthRepository.updateProfile(id, data);
-    logger.info("updateAdminProfile service success (sql)", { traceId, adminId });
-    return {
-      ok: true,
-      message: "Admin profile updated successfully.",
-      admin: (await buildSqlAdminDto(updated)) as unknown as Record<string, unknown>,
-    };
-  }
-
-  const admin = await AdminUser.findById(adminId);
-  if (!admin) {
-    logger.warn("updateAdminProfile service admin not found", { traceId, adminId });
+  const id = parseAdminId(adminId);
+  if (!id) return { ok: false, message: "Admin not found." };
+  const existing = await adminAuthRepository.findById(id);
+  if (!existing) {
+    logger.warn("updateAdminProfile service admin not found (sql)", { traceId, adminId });
     return { ok: false, message: "Admin not found." };
   }
-
-  if (data.firstName !== undefined) admin.firstName = data.firstName;
-  if (data.lastName !== undefined) admin.lastName = data.lastName;
-  
-  if (data.image !== undefined) {
-    // If the admin already has an image, and it's being replaced, delete the old one from S3 securely.
-    if (admin.image && admin.image !== data.image) {
-      deleteFromS3FileUrl(admin.image).catch((err) =>
-        console.error("Non-fatal: Failed to delete old admin profile image from S3:", err)
-      );
-    }
-    admin.image = data.image;
+  // Replace the old S3 image when a new one is supplied (best-effort cleanup).
+  if (data.image !== undefined && existing.image && existing.image !== data.image) {
+    deleteFromS3FileUrl(existing.image).catch((err) =>
+      console.error("Non-fatal: Failed to delete old admin profile image from S3:", err)
+    );
   }
-
-  await admin.save();
-
-  logger.info("updateAdminProfile service success", { traceId, adminId });
+  const updated = await adminAuthRepository.updateProfile(id, data);
+  logger.info("updateAdminProfile service success (sql)", { traceId, adminId });
   return {
     ok: true,
     message: "Admin profile updated successfully.",
-    admin: {
-      id: admin._id,
-      firstName: admin.firstName,
-      lastName: admin.lastName ?? "",
-      email: admin.email,
-      role: admin.role,
-      roles: admin.roles ?? [],
-      permissions: admin.permissions ?? [],
-      image: admin.image ?? "",
-      isDark: admin.isDark,
-    },
+    admin: (await buildSqlAdminDto(updated)) as unknown as Record<string, unknown>,
   };
 }

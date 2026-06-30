@@ -1,13 +1,7 @@
 import { Request, Response } from "express";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
-import { Customer } from "../../models/customer/Customer.model";
-import { Course } from "../../models/course/Course.model";
-import { Ebook } from "../../models/ebook/Ebook.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import {
-  isPromoterDataMysql,
   parsePromoterId,
   listPromoterSubscriptions,
 } from "../../modules/promoter-data/promoter-data.service";
@@ -28,71 +22,19 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (isPromoterDataMysql()) {
-      const pid = parsePromoterId(promoterId);
-      if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
-      const { items, total } = await listPromoterSubscriptions(pid, {
-        type: type === "ebook" ? "ebook" : "course",
-        from: fromDate ? new Date(fromDate) : undefined,
-        to: toDate ? new Date(toDate) : undefined,
-        page: pageNum,
-        limit: limitNum,
-      });
-      logger.info("listMySubscriptions success (sql)", { traceId, promoterId, type, total });
-      return res.status(200).json({
-        success: true,
-        data: items,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    const skip = (pageNum - 1) * limitNum;
-
-    const dateFilter: any = {};
-    if (fromDate || toDate) {
-      dateFilter.createdAt = {};
-      if (fromDate) dateFilter.createdAt.$gte = new Date(fromDate);
-      if (toDate) dateFilter.createdAt.$lte = new Date(toDate);
-    }
-
-    if (type === "ebook") {
-      const filter = { promoterId, ...dateFilter };
-      const [data, total] = await Promise.all([
-        EbookSubscription.find(filter)
-          .populate({ path: "customerId", model: Customer, select: "firstName lastName phoneNumber" })
-          .populate({ path: "ebookId", model: Ebook, select: "name author" })
-          .sort({ createdAt: -1 })
-          .skip(skip)
-          .limit(limitNum)
-          .lean(),
-        EbookSubscription.countDocuments(filter),
-      ]);
-      logger.info("listMySubscriptions success (ebook)", { traceId, promoterId, total });
-      return res.status(200).json({
-        success: true,
-        data,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    const filter = { promoterId, ...dateFilter };
-    const [data, total] = await Promise.all([
-      PackageCourseSubscription.find(filter)
-        .populate({ path: "customerId", model: Customer, select: "firstName lastName phoneNumber" })
-        .populate({ path: "courseId", model: Course, select: "name" })
-        .populate({ path: "packageId", model: "PackageCourseEbookPrice" })
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      PackageCourseSubscription.countDocuments(filter),
-    ]);
-
-    logger.info("listMySubscriptions success (course)", { traceId, promoterId, total });
+    const pid = parsePromoterId(promoterId);
+    if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const { items, total } = await listPromoterSubscriptions(pid, {
+      type: type === "ebook" ? "ebook" : "course",
+      from: fromDate ? new Date(fromDate) : undefined,
+      to: toDate ? new Date(toDate) : undefined,
+      page: pageNum,
+      limit: limitNum,
+    });
+    logger.info("listMySubscriptions success (sql)", { traceId, promoterId, type, total });
     return res.status(200).json({
       success: true,
-      data,
+      data: items,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {
@@ -110,87 +52,24 @@ export const subscriptionReport = async (req: Request, res: Response) => {
   try {
     if (!promoterId) { logger.warn("subscriptionReport unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (isPromoterDataMysql()) {
-      const pid = parsePromoterId(promoterId);
-      if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
-      const [byCourseRows, byMonthRows] = await Promise.all([
-        promoterDataRepository.reportByCourse(pid),
-        promoterDataRepository.reportByMonth(pid),
-      ]);
-      const byCourse = byCourseRows.map((r: any) => ({
-        _id: r.courseId ? String(r.courseId) : null,
-        course: r.courseId ? { _id: String(r.courseId), name: r.courseName ?? "" } : null,
-        count: Number(r.count) || 0,
-        revenue: Number(r.revenue) || 0,
-        commission: Math.round(Number(r.commission) || 0),
-      }));
-      const byMonth = byMonthRows.map((r: any) => {
-        const [year, month] = String(r.ym).split("-").map(Number);
-        return { _id: { year, month }, count: Number(r.count) || 0, revenue: Number(r.revenue) || 0, commission: Math.round(Number(r.commission) || 0) };
-      });
-      logger.info("subscriptionReport success (sql)", { traceId, promoterId, courseCount: byCourse.length, monthCount: byMonth.length });
-      return res.status(200).json({ success: true, data: { byCourse, byMonth } });
-    }
-
-    const mongoose = await import("mongoose");
-    const oid = mongoose.default.Types.ObjectId.createFromHexString(promoterId);
-
-    const [byCourse, byMonth] = await Promise.all([
-      PackageCourseSubscription.aggregate([
-        { $match: { promoterId: oid } },
-        {
-          $group: {
-            _id: "$courseId",
-            count: { $sum: 1 },
-            revenue: { $sum: "$paidAmount" },
-            commission: {
-              $sum: {
-                $multiply: [
-                  { $ifNull: ["$paidAmount", 0] },
-                  { $divide: [{ $ifNull: ["$promoterPercentage", 0] }, 100] },
-                ],
-              },
-            },
-          },
-        },
-        {
-          $lookup: {
-            from: "ws_courses",
-            localField: "_id",
-            foreignField: "_id",
-            as: "course",
-          },
-        },
-        { $unwind: { path: "$course", preserveNullAndEmptyArrays: true } },
-        { $sort: { count: -1 } },
-      ]),
-      PackageCourseSubscription.aggregate([
-        { $match: { promoterId: oid } },
-        {
-          $group: {
-            _id: {
-              year: { $year: "$createdAt" },
-              month: { $month: "$createdAt" },
-            },
-            count: { $sum: 1 },
-            revenue: { $sum: "$paidAmount" },
-            commission: {
-              $sum: {
-                $multiply: [
-                  { $ifNull: ["$paidAmount", 0] },
-                  { $divide: [{ $ifNull: ["$promoterPercentage", 0] }, 100] },
-                ],
-              },
-            },
-          },
-        },
-        { $sort: { "_id.year": -1, "_id.month": -1 } },
-        { $limit: 12 },
-      ]),
+    const pid = parsePromoterId(promoterId);
+    if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const [byCourseRows, byMonthRows] = await Promise.all([
+      promoterDataRepository.reportByCourse(pid),
+      promoterDataRepository.reportByMonth(pid),
     ]);
-
-    logger.info("subscriptionReport success", { traceId, promoterId, courseCount: byCourse.length, monthCount: byMonth.length });
+    const byCourse = byCourseRows.map((r: any) => ({
+      _id: r.courseId ? String(r.courseId) : null,
+      course: r.courseId ? { _id: String(r.courseId), name: r.courseName ?? "" } : null,
+      count: Number(r.count) || 0,
+      revenue: Number(r.revenue) || 0,
+      commission: Math.round(Number(r.commission) || 0),
+    }));
+    const byMonth = byMonthRows.map((r: any) => {
+      const [year, month] = String(r.ym).split("-").map(Number);
+      return { _id: { year, month }, count: Number(r.count) || 0, revenue: Number(r.revenue) || 0, commission: Math.round(Number(r.commission) || 0) };
+    });
+    logger.info("subscriptionReport success (sql)", { traceId, promoterId, courseCount: byCourse.length, monthCount: byMonth.length });
     return res.status(200).json({ success: true, data: { byCourse, byMonth } });
   } catch (e: any) {
     logger.error("subscriptionReport failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });

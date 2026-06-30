@@ -5,7 +5,6 @@
  * Read = the subscription-gated client listing; write = the admin post/delete.
  * Flag OFF until go-live.
  */
-import { isMysqlModule } from "../../config/migration";
 import { packageChatRepository as repo } from "./package-chat.repository";
 import { toPackageChatDto } from "./package-chat.transformer";
 import type {
@@ -16,8 +15,7 @@ import type {
 
 export const PACKAGE_CHAT_MODULE = "package-chat";
 
-export const isPackageChatMysql = (): boolean =>
-  isMysqlModule(PACKAGE_CHAT_MODULE);
+export const isPackageChatMysql = (): boolean => true;
 
 export const parsePackageChatId = (id: string): number | null => {
   const n = Number(id);

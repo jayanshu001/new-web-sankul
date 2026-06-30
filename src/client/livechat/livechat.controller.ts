@@ -1,6 +1,4 @@
 import { Request, Response } from "express";
-import { LiveChatMessage } from "../../models/course/LiveChatMessage.model";
-import { LiveChatBan } from "../../models/course/LiveChatBan.model";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
@@ -18,22 +16,8 @@ export const getChatHistory = async (req: Request, res: Response) => {
     if (!userId) { logger.warn("getChatHistory unauthorized", { traceId }); return failure(res, "Unauthorized", 401); }
     if (!liveClassId) { logger.warn("getChatHistory missing liveClassId", { traceId, userId }); return failure(res, "liveClassId is required", 400); }
 
-    if (liveSql.isLiveCourseMysql()) {
-      const messages = await liveSql.getChatHistory(String(liveClassId), limit, before ? new Date(before) : undefined);
-      return success(res, { messages }, "Chat history fetched", 200);
-    }
-
-    const filter: Record<string, any> = { liveClassId, deletedAt: null };
-    if (before) filter.createdAt = { $lt: new Date(before) };
-
-    const messages = await LiveChatMessage.find(filter)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .select("customerId userName message createdAt")
-      .lean();
-
-    logger.info("getChatHistory success", { traceId, userId, liveClassId, count: messages.length });
-    return success(res, { messages: messages.reverse() }, "Chat history fetched", 200);
+    const messages = await liveSql.getChatHistory(String(liveClassId), limit, before ? new Date(before) : undefined);
+    return success(res, { messages }, "Chat history fetched", 200);
   } catch (err) {
     logger.error("getChatHistory failed", { traceId, liveClassId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
@@ -48,21 +32,8 @@ export const getChatBanStatus = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("getChatBanStatus unauthorized", { traceId }); return failure(res, "Unauthorized", 401); }
 
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(String(userId));
-      const payload = cid ? await liveSql.getChatBanStatus(cid) : { isBanned: false, reason: null, bannedAt: null };
-      return success(res, payload, "Chat ban status fetched", 200);
-    }
-
-    const ban = await LiveChatBan.findOne({ customerId: userId })
-      .select("reason createdAt")
-      .lean();
-
-    const payload = ban
-      ? { isBanned: true, reason: ban.reason ?? null, bannedAt: ban.createdAt }
-      : { isBanned: false, reason: null, bannedAt: null };
-
-    logger.info("getChatBanStatus success", { traceId, userId, isBanned: payload.isBanned });
+    const cid = liveSql.parseLiveId(String(userId));
+    const payload = cid ? await liveSql.getChatBanStatus(cid) : { isBanned: false, reason: null, bannedAt: null };
     return success(res, payload, "Chat ban status fetched", 200);
   } catch (err) {
     logger.error("getChatBanStatus failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });

@@ -9,11 +9,10 @@
  * (SQL catalog rows are snake_case and differ from the Mongo lean docs the old
  * handler spread wholesale). All ids are SQL ints stringified.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const CLIENT_WISHLIST_MODULE = "client-wishlist";
-export const isClientWishlistMysql = (): boolean => isMysqlModule(CLIENT_WISHLIST_MODULE);
+export const isClientWishlistMysql = (): boolean => true;
 
 export const parseWlId = (id: string): number | null => {
   const n = Number(id);

@@ -12,11 +12,10 @@
  * ws_material was extended 2026-06-19 (+description/thumbnail/file_size/file_mime/
  * language/is_preview/is_paid/download_count) so the client shape has parity.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const CLIENT_MATERIAL_MODULE = "client-material";
-export const isClientMaterialMysql = (): boolean => isMysqlModule(CLIENT_MATERIAL_MODULE);
+export const isClientMaterialMysql = (): boolean => true;
 
 export const parseMatId = (id: string): number | null => {
   const n = Number(id);

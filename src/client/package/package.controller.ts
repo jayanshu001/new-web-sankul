@@ -1,28 +1,10 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { Package } from "../../models/course/Package.model";
-import { PackageType } from "../../models/course/PackageType.model";
 import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { PackageChat } from "../../models/course/PackageChat.model";
-import { Video } from "../../models/course/Video.model";
-import { VideoCategory } from "../../models/course/VideoCategory.model";
-import { Material } from "../../models/course/Material.model";
-import { MaterialCategory } from "../../models/course/MaterialCategory.model";
-import { Exam } from "../../models/exam/Exam.model";
-import { ExamCategory } from "../../models/exam/ExamCategory.model";
-import { PromoCode } from "../../models/course/PromoCode.model";
-import { Goal } from "../../models/Goal.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
-import { buildShareUrl } from "../../deeplinking/shareRedirect";
-import { collectCategoryTreeIds } from "../../utils/categoryTree";
-import { buildRegexCondition } from "../../utils/searchFilter";
-import { ExamStatus, ExamType } from "../../models/enums";
 import {
-  isPackageTypeMysql,
-  isPackageMysql,
   parsePackageId,
   listPackageTypes as listPackageTypesMysql,
 } from "../../modules/catalog-package/catalog-package.service";
@@ -35,185 +17,11 @@ import {
 } from "../../modules/catalog-package/catalog-package.detail.sql";
 import { listActiveSubscriptionsByCustomer } from "../../modules/commerce-subscription/commerce-subscription.service";
 import { prisma as prismaPkg } from "../../config/prisma";
-import {
-  isPackageChatMysql,
-  listChatMessagesMysql,
-} from "../../modules/package-chat/package-chat.service";
+import { listChatMessagesMysql } from "../../modules/package-chat/package-chat.service";
 import { hasActivePackageSubscription } from "../../modules/commerce-subscription/commerce-subscription.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-async function buildVideoCategoryGroup(cat: any) {
-  if (!cat) return null;
-  const categoryIds = await collectCategoryTreeIds(VideoCategory, cat);
-  const count = await Video.countDocuments({
-    videoCategoryId: { $in: categoryIds },
-    status: true,
-  });
-  return {
-    category: {
-      ...cat,
-      title: cat.title,
-      havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
-      count,
-    },
-  };
-}
-
-async function buildMaterialCategoryGroup(cat: any) {
-  if (!cat) return null;
-  const categoryIds = await collectCategoryTreeIds(MaterialCategory, cat);
-  const count = await Material.countDocuments({
-    materialCategoryId: { $in: categoryIds },
-    status: true,
-  });
-  return {
-    category: {
-      ...cat,
-      title: cat.title,
-      havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
-      count,
-    },
-  };
-}
-
-async function buildExamCategoryEntry(cat: any) {
-  if (!cat) return null;
-  const categoryIds = await collectCategoryTreeIds(ExamCategory, cat);
-  // Only PUBLISHED exams are client-visible, so drafts must not inflate the count.
-  // Also drop scheduled exams whose attempt window has ENDED (a past `endAt`);
-  // `subject` exams are always-available and always count. Mirrors the catalog
-  // `/tests` badge + the drill-in listing in exam.controller.
-  const now = new Date();
-  const count = await Exam.countDocuments({
-    categoryId: { $in: categoryIds },
-    status: ExamStatus.PUBLISHED,
-    $or: [
-      { type: ExamType.SUBJECT },
-      { endAt: { $exists: false } },
-      { endAt: null },
-      { endAt: { $gte: now } },
-    ],
-  });
-  return {
-    category: {
-      ...cat,
-      title: cat.name,
-      havingChildDirectory: (cat.childCategoryIds?.length ?? 0) > 0,
-      count,
-    },
-  };
-}
-
-async function buildPackageDetail(packageId: string, customerId?: string, baseUrl?: string) {
-  const pkg = await Package.findOne({ _id: packageId, active: true })
-    .populate("packageTypeId", "_id name")
-    .populate("goalId", "_id title")
-    .populate({ path: "specificSubjects.category", model: "VideoCategory" })
-    .populate({ path: "materialCategories.category", model: "MaterialCategory" })
-    .populate({ path: "examCategories.category", model: "ExamCategory" })
-    .lean();
-  if (!pkg) return null;
-
-  const videoRefs = (pkg.specificSubjects ?? [])
-    .filter((r: any) => r.status !== false)
-    .sort((a: any, b: any) => a.order - b.order);
-  const materialRefs = (pkg.materialCategories ?? [])
-    .filter((r: any) => r.status !== false)
-    .sort((a: any, b: any) => a.order - b.order);
-  const examRefs = (pkg.examCategories ?? [])
-    .filter((r: any) => r.status !== false)
-    .sort((a: any, b: any) => a.order - b.order);
-
-  const [videos, materials, tests] = await Promise.all([
-    Promise.all(videoRefs.map((r: any) => buildVideoCategoryGroup(r.category))),
-    Promise.all(materialRefs.map((r: any) => buildMaterialCategoryGroup(r.category))),
-    Promise.all(examRefs.map((r: any) => buildExamCategoryEntry(r.category))),
-  ]);
-
-  const plans = await PackageCourseEbookPrice.find({ packageId, status: true }).sort({ duration: 1 });
-  const splitPlans = {
-    withMaterial: plans.filter((p) => p.withMaterial),
-    withoutMaterial: plans.filter((p) => !p.withMaterial),
-  };
-
-  // Available public promo codes that target this package directly.
-  const now = new Date();
-  const codes = await PromoCode.find({
-    type: "public",
-    status: true,
-    promo_start_at: { $lte: now },
-    promo_expire_at: { $gte: now },
-    "appliesTo.type": "package",
-    "appliesTo.ids": pkg._id,
-  })
-    .select("promocode title description")
-    .lean();
-  const availablePromoCode: any[] = codes.map((c: any) => ({
-    title: c.title ?? "",
-    promocode: c.promocode,
-    description: c.description ?? "",
-  }));
-
-  const activeSub = customerId
-    ? await getActiveSubscription(customerId, String(pkg._id))
-    : null;
-  const isPurchased = !!activeSub;
-  const daysLeft = isPurchased ? computeDaysLeft(activeSub?.endAt ?? null) : null;
-
-  return {
-    // The container scope the FE echoes into the progress heartbeat for any
-    // video played from this package screen — always the package itself.
-    scope: { kind: "package", id: String(pkg._id) },
-    package: {
-      _id: pkg._id,
-      name: pkg.name,
-      subtitle: (pkg as any).subtitle ?? "",
-      description: pkg.description,
-      image: pkg.image,
-      shareableLink: buildShareUrl("packages", String(pkg._id), baseUrl),
-      withMaterialText: pkg.withMaterialText,
-      withoutMaterialText: pkg.withoutMaterialText,
-      packageType: pkg.packageTypeId,
-      goal: pkg.goalId,
-      isPaid: pkg.isPaid,
-      isPurchased,
-      daysLeft,
-      examCountdownCategoryIds: (pkg as any).examCountdownCategoryIds ?? [],
-      examCountdownIds: (pkg as any).examCountdownIds ?? [],
-    },
-    videos: videos.filter(Boolean),
-    materials: materials.filter(Boolean),
-    tests: tests.filter(Boolean),
-    plans: splitPlans,
-    availablePromoCode,
-  };
-}
-
-async function getActiveSubscription(customerId: string, packageId: string): Promise<{ endAt: Date | null } | null> {
-  const now = new Date();
-  // Subscriptions can reference the Package directly via `targetPackageId`
-  // (admin-created flow) or transitively via the plan row stored in `packageId`
-  // whose own `packageId` points to the Package.
-  const planIds = await PackageCourseEbookPrice.find({ packageId }).distinct("_id");
-  const sub = await PackageCourseSubscription.findOne({
-    customerId,
-    status: true,
-    paymentStatus: "verified",
-    $and: [
-      { $or: [{ endAt: null }, { endAt: { $gt: now } }] },
-      { $or: [{ targetPackageId: packageId }, { packageId: { $in: planIds } }] },
-    ],
-  }).select("endAt").lean();
-  return sub ? { endAt: (sub as any).endAt ?? null } : null;
-}
-
-async function hasActiveSubscription(customerId: string, packageId: string): Promise<boolean> {
-  return !!(await getActiveSubscription(customerId, packageId));
-}
 
 // ─── Endpoints ────────────────────────────────────────────────────────────────
 
@@ -223,24 +31,14 @@ export const getPackageDetail = async (req: Request, res: Response) => {
   logger.info("getPackageDetail invoked", { traceId, path: req.originalUrl, userId: req.user?.id, packageId: id });
 
   try {
-    // ── MySQL branch (ws_package + category links + plans/promo/sub) ──────────
-    if (isPackageMysql()) {
-      const pid = parsePackageId(id);
-      if (!pid) { logger.warn("getPackageDetail invalid id (mysql)", { traceId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const detailSql = await buildPackageDetailSql(pid, Number.isInteger(cid) ? cid : null, resolveBase(req));
-      if (!detailSql) { logger.warn("getPackageDetail not found (mysql)", { traceId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found." }); }
-      logger.info("getPackageDetail success (mysql)", { traceId, packageId: id });
-      return res.status(200).json({ success: true, data: detailSql });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("getPackageDetail invalid id", { traceId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
-
-    const detail = await buildPackageDetail(id, req.user?.id, resolveBase(req));
-    if (!detail) { logger.warn("getPackageDetail not found", { traceId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found." }); }
-
-    logger.info("getPackageDetail success", { traceId, packageId: id });
-    return res.status(200).json({ success: true, data: detail });
+    // ── MySQL (ws_package + category links + plans/promo/sub) ──────────────────
+    const pid = parsePackageId(id);
+    if (!pid) { logger.warn("getPackageDetail invalid id (mysql)", { traceId, packageId: id }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const detailSql = await buildPackageDetailSql(pid, Number.isInteger(cid) ? cid : null, resolveBase(req));
+    if (!detailSql) { logger.warn("getPackageDetail not found (mysql)", { traceId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found." }); }
+    logger.info("getPackageDetail success (mysql)", { traceId, packageId: id });
+    return res.status(200).json({ success: true, data: detailSql });
   } catch (error: any) {
     logger.error("getPackageDetail failed", { traceId, packageId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -265,67 +63,27 @@ export const listPackages = async (req: Request, res: Response) => {
       limit = "20",
     } = req.query as Record<string, string>;
 
-    const filter: any = { active: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-    // type=paid -> only paid; type=free -> only free; omitted -> all.
-    if (type === "paid") filter.isPaid = true;
-    else if (type === "free") filter.isPaid = false;
-    if (packageTypeId && mongoose.Types.ObjectId.isValid(packageTypeId))
-      filter.packageTypeId = packageTypeId;
-    if (goalId && mongoose.Types.ObjectId.isValid(goalId)) filter.goalId = goalId;
-    if (isSmartCourse === "true" || isSmartCourse === "false")
-      filter.isSmartCourse = isSmartCourse === "true";
-    if (isPlannerCourse === "true" || isPlannerCourse === "false")
-      filter.isPlannerCourse = isPlannerCourse === "true";
-
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
-    // ── MySQL branch ──────────────────────────────────────────────────────────
-    if (isPackageMysql()) {
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const { rows, total: totalSql } = await listPackagesPaginatedSql({
-        search: search?.trim() || undefined,
-        isPaid: type === "paid" ? true : type === "free" ? false : undefined,
-        packageTypeId: packageTypeId && /^\d+$/.test(packageTypeId) ? Number(packageTypeId) : undefined,
-        goalId: goalId && /^\d+$/.test(goalId) ? Number(goalId) : undefined,
-        isSmartCourse: isSmartCourse === "true" ? true : isSmartCourse === "false" ? false : undefined,
-        isPlannerCourse: isPlannerCourse === "true" ? true : isPlannerCourse === "false" ? false : undefined,
-        skip,
-        take: limitNum,
-      });
-      const dataSql = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
-      logger.info("listPackages success (mysql)", { traceId, total: totalSql, returned: dataSql.length });
-      return res.status(200).json({
-        success: true,
-        data: dataSql,
-        pagination: { total: totalSql, page: pageNum, limit: limitNum, totalPages: Math.ceil(totalSql / limitNum) },
-      });
-    }
-
-    const [packages, total] = await Promise.all([
-      Package.find(filter)
-        .populate("packageTypeId", "_id name")
-        .populate("goalId", "_id title")
-        .sort({ order: 1, createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      Package.countDocuments(filter),
-    ]);
-
-    const data = await enrichPackages(packages, req.user?.id, resolveBase(req));
-
-    logger.info("listPackages success", { traceId, total, returned: data.length });
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const { rows, total: totalSql } = await listPackagesPaginatedSql({
+      search: search?.trim() || undefined,
+      isPaid: type === "paid" ? true : type === "free" ? false : undefined,
+      packageTypeId: packageTypeId && /^\d+$/.test(packageTypeId) ? Number(packageTypeId) : undefined,
+      goalId: goalId && /^\d+$/.test(goalId) ? Number(goalId) : undefined,
+      isSmartCourse: isSmartCourse === "true" ? true : isSmartCourse === "false" ? false : undefined,
+      isPlannerCourse: isPlannerCourse === "true" ? true : isPlannerCourse === "false" ? false : undefined,
+      skip,
+      take: limitNum,
+    });
+    const dataSql = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
+    logger.info("listPackages success (mysql)", { traceId, total: totalSql, returned: dataSql.length });
     return res.status(200).json({
       success: true,
-      data,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
-      },
+      data: dataSql,
+      pagination: { total: totalSql, page: pageNum, limit: limitNum, totalPages: Math.ceil(totalSql / limitNum) },
     });
   } catch (error: any) {
     logger.error("listPackages failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -339,28 +97,13 @@ export const listPackagesByType = async (req: Request, res: Response) => {
   logger.info("listPackagesByType invoked", { traceId, path: req.originalUrl, userId: req.user?.id, typeId });
 
   try {
-    // ── MySQL branch ──────────────────────────────────────────────────────────
-    if (isPackageMysql()) {
-      const tid = parsePackageId(typeId);
-      if (!tid) { logger.warn("listPackagesByType invalid id (mysql)", { traceId, typeId }); return res.status(400).json({ success: false, message: "Invalid type id." }); }
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const rows = await listPackagesByTypeSql(tid);
-      const enrichedSql = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
-      logger.info("listPackagesByType success (mysql)", { traceId, typeId, count: enrichedSql.length });
-      return res.status(200).json({ success: true, data: enrichedSql });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(typeId)) { logger.warn("listPackagesByType invalid id", { traceId, typeId }); return res.status(400).json({ success: false, message: "Invalid type id." }); }
-
-    const packages = await Package.find({ packageTypeId: typeId, active: true })
-      .populate("packageTypeId", "_id name")
-      .populate("goalId", "_id title")
-      .sort({ order: 1, createdAt: -1 });
-
-    const enriched = await enrichPackages(packages, req.user?.id, resolveBase(req));
-
-    logger.info("listPackagesByType success", { traceId, typeId, count: enriched.length });
-    return res.status(200).json({ success: true, data: enriched });
+    const tid = parsePackageId(typeId);
+    if (!tid) { logger.warn("listPackagesByType invalid id (mysql)", { traceId, typeId }); return res.status(400).json({ success: false, message: "Invalid type id." }); }
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const rows = await listPackagesByTypeSql(tid);
+    const enrichedSql = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
+    logger.info("listPackagesByType success (mysql)", { traceId, typeId, count: enrichedSql.length });
+    return res.status(200).json({ success: true, data: enrichedSql });
   } catch (error: any) {
     logger.error("listPackagesByType failed", { traceId, typeId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -412,32 +155,6 @@ export async function purchasedPackageEndAtMap(customerId: string | undefined, p
   return owned;
 }
 
-async function enrichPackages(packages: any[], customerId?: string, baseUrl?: string) {
-  const ownedMap = await purchasedPackageEndAtMap(customerId, packages.map((p) => p._id));
-  const now = new Date();
-  return Promise.all(
-    packages.map(async (p) => {
-      const [plans, subCount] = await Promise.all([
-        PackageCourseEbookPrice.find({ packageId: p._id, status: true }).sort({ duration: 1 }),
-        PackageCourseSubscription.countDocuments({ packageId: p._id, status: true }),
-      ]);
-      const pid = String(p._id);
-      const isPurchased = ownedMap.has(pid);
-      return {
-        ...p.toObject(),
-        plans: {
-          withMaterial: plans.filter((pl) => pl.withMaterial),
-          withoutMaterial: plans.filter((pl) => !pl.withMaterial),
-        },
-        subscriberCount: subCount,
-        isPurchased,
-        daysLeft: isPurchased ? computeDaysLeft(ownedMap.get(pid) ?? null, now) : null,
-        shareableLink: buildShareUrl("packages", pid, baseUrl),
-      };
-    })
-  );
-}
-
 // GET /api/v1/client/packages/goal?labelIds=id1,id2,id3
 // Returns one entry per requested goal-label, with that label's packages
 // nested inside the `label` object. Driven by labels from /client/goals/my-goals.
@@ -461,77 +178,28 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
     }
 
     // ── MySQL branch (label ids are the goal module's synthetic ints) ─────────
-    if (isPackageMysql()) {
-      const intIds = ids.filter((s) => /^\d+$/.test(s)).map(Number);
-      if (!intIds.length) { logger.warn("listPackagesByGoal no valid labelIds (mysql)", { traceId, ids }); return res.status(400).json({ success: false, message: "No valid label ids supplied." }); }
-      const cid = req.user?.id ? Number(req.user.id) : null;
-      const goals = await prismaPkg.goal.findMany({ select: { id: true, title: true, labels: true } });
-      const metaById = new Map<number, { name: string; goalId: string; goalTitle: string }>();
-      for (const g of goals) {
-        const labels = Array.isArray(g.labels) ? (g.labels as any[]) : [];
-        for (const l of labels) {
-          const lid = Number(l?.id);
-          if (Number.isInteger(lid) && intIds.includes(lid)) metaById.set(lid, { name: String(l?.name ?? ""), goalId: String(g.id), goalTitle: g.title });
-        }
-      }
-      const resultSql = await Promise.all(
-        intIds.map(async (lid) => {
-          const rows = await listPackagesByGoalLabelSql(lid);
-          const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
-          const meta = metaById.get(lid);
-          return { label: { _id: String(lid), name: meta?.name ?? null, goalId: meta?.goalId ?? null, goalTitle: meta?.goalTitle ?? null, packages: enriched } };
-        })
-      );
-      logger.info("listPackagesByGoal success (mysql)", { traceId, labelCount: resultSql.length });
-      return res.status(200).json({ success: true, data: resultSql });
-    }
-
-    const validIds = ids.filter((id) => mongoose.Types.ObjectId.isValid(id));
-    if (!validIds.length) {
-      logger.warn("listPackagesByGoal no valid labelIds", { traceId, ids });
-      return res.status(400).json({ success: false, message: "No valid label ids supplied." });
-    }
-
-    // Resolve label metadata (name + parent goal) for each requested label.
-    const goals = await Goal.find({ "labels._id": { $in: validIds } })
-      .select("title labels")
-      .lean();
-
-    const labelMeta = new Map<string, { name: string; goalId: any; goalTitle: string }>();
-    for (const g of goals as any[]) {
-      for (const l of g.labels || []) {
-        const lid = l._id?.toString();
-        if (lid && validIds.includes(lid)) {
-          labelMeta.set(lid, { name: l.name, goalId: g._id, goalTitle: g.title });
-        }
+    const intIds = ids.filter((s) => /^\d+$/.test(s)).map(Number);
+    if (!intIds.length) { logger.warn("listPackagesByGoal no valid labelIds (mysql)", { traceId, ids }); return res.status(400).json({ success: false, message: "No valid label ids supplied." }); }
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const goals = await prismaPkg.goal.findMany({ select: { id: true, title: true, labels: true } });
+    const metaById = new Map<number, { name: string; goalId: string; goalTitle: string }>();
+    for (const g of goals) {
+      const labels = Array.isArray(g.labels) ? (g.labels as any[]) : [];
+      for (const l of labels) {
+        const lid = Number(l?.id);
+        if (Number.isInteger(lid) && intIds.includes(lid)) metaById.set(lid, { name: String(l?.name ?? ""), goalId: String(g.id), goalTitle: g.title });
       }
     }
-
-    // One entry per requested label, preserving input order.
-    const result = await Promise.all(
-      validIds.map(async (labelId) => {
-        const packages = await Package.find({ goalLabelId: labelId, active: true })
-          .populate("packageTypeId", "_id name")
-          .populate("goalId", "_id title")
-          .sort({ order: 1, createdAt: -1 });
-
-        const enriched = await enrichPackages(packages, req.user?.id, resolveBase(req));
-        const meta = labelMeta.get(labelId);
-
-        return {
-          label: {
-            _id: labelId,
-            name: meta?.name ?? null,
-            goalId: meta?.goalId ?? null,
-            goalTitle: meta?.goalTitle ?? null,
-            packages: enriched,
-          },
-        };
+    const resultSql = await Promise.all(
+      intIds.map(async (lid) => {
+        const rows = await listPackagesByGoalLabelSql(lid);
+        const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
+        const meta = metaById.get(lid);
+        return { label: { _id: String(lid), name: meta?.name ?? null, goalId: meta?.goalId ?? null, goalTitle: meta?.goalTitle ?? null, packages: enriched } };
       })
     );
-
-    logger.info("listPackagesByGoal success", { traceId, labelCount: result.length });
-    return res.status(200).json({ success: true, data: result });
+    logger.info("listPackagesByGoal success (mysql)", { traceId, labelCount: resultSql.length });
+    return res.status(200).json({ success: true, data: resultSql });
   } catch (error: any) {
     logger.error("listPackagesByGoal failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -543,16 +211,10 @@ export const listPackageTypes = async (_req: Request, res: Response) => {
   logger.info("listPackageTypes invoked", { traceId, path: _req.originalUrl });
 
   try {
-    if (isPackageTypeMysql()) {
-      // ws_package_type has no `order`/`active` cols; the service synthesizes
-      // `order:0` + `active:true` so the response JSON stays shape-compatible.
-      const types = await listPackageTypesMysql();
-      logger.info("listPackageTypes success", { traceId, count: types.length, source: "mysql" });
-      return res.status(200).json({ success: true, data: types });
-    }
-
-    const types = await PackageType.find({ active: true }).sort({ order: 1, name: 1 });
-    logger.info("listPackageTypes success", { traceId, count: types.length });
+    // ws_package_type has no `order`/`active` cols; the service synthesizes
+    // `order:0` + `active:true` so the response JSON stays shape-compatible.
+    const types = await listPackageTypesMysql();
+    logger.info("listPackageTypes success", { traceId, count: types.length, source: "mysql" });
     return res.status(200).json({ success: true, data: types });
   } catch (error: any) {
     logger.error("listPackageTypes failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -570,48 +232,20 @@ export const listMyPackages = async (req: Request, res: Response) => {
     const now = new Date();
 
     // ── MySQL branch ──────────────────────────────────────────────────────────
-    if (isPackageMysql()) {
-      const cid = Number(customerId);
-      if (!Number.isInteger(cid)) { logger.warn("listMyPackages invalid customer (mysql)", { traceId, customerId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
-      const activeSubs = (await listActiveSubscriptionsByCustomer(cid)).filter((s) => s.targetPackageId);
-      const pkgIds = [...new Set(activeSubs.map((s) => Number(s.targetPackageId)).filter(Number.isInteger))];
-      const pkgs = pkgIds.length ? await prismaPkg.package.findMany({ where: { id: { in: pkgIds } } }) : [];
-      const enriched = await enrichPackagesSql(pkgs, cid, resolveBase(req));
-      const byId = new Map(enriched.map((p) => [p._id, p]));
-      const dataSql = activeSubs.map((s) => ({
-        ...s,
-        packageId: byId.get(String(s.targetPackageId)) ?? null,
-        daysLeft: computeDaysLeft(s.endAt ?? null, now),
-      }));
-      logger.info("listMyPackages success (mysql)", { traceId, customerId, count: dataSql.length });
-      return res.status(200).json({ success: true, data: dataSql });
-    }
-
-    const subs = await PackageCourseSubscription.find({
-      customerId,
-      packageId: { $ne: null },
-      status: true,
-      $or: [{ endAt: null }, { endAt: { $gt: now } }],
-    })
-      .populate({ path: "packageId", populate: { path: "packageTypeId goalId" } })
-      .sort({ createdAt: -1 })
-      .lean();
-
-    const base = resolveBase(req);
-    const data = subs.map((s: any) => {
-      const pkg = s.packageId;
-      const pkgWithShare = pkg && pkg._id
-        ? { ...pkg, shareableLink: buildShareUrl("packages", String(pkg._id), base) }
-        : pkg;
-      return {
-        ...s,
-        packageId: pkgWithShare,
-        daysLeft: computeDaysLeft(s.endAt ?? null, now),
-      };
-    });
-
-    logger.info("listMyPackages success", { traceId, customerId, count: subs.length });
-    return res.status(200).json({ success: true, data });
+    const cid = Number(customerId);
+    if (!Number.isInteger(cid)) { logger.warn("listMyPackages invalid customer (mysql)", { traceId, customerId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    const activeSubs = (await listActiveSubscriptionsByCustomer(cid)).filter((s) => s.targetPackageId);
+    const pkgIds = [...new Set(activeSubs.map((s) => Number(s.targetPackageId)).filter(Number.isInteger))];
+    const pkgs = pkgIds.length ? await prismaPkg.package.findMany({ where: { id: { in: pkgIds } } }) : [];
+    const enriched = await enrichPackagesSql(pkgs, cid, resolveBase(req));
+    const byId = new Map(enriched.map((p) => [p._id, p]));
+    const dataSql = activeSubs.map((s) => ({
+      ...s,
+      packageId: byId.get(String(s.targetPackageId)) ?? null,
+      daysLeft: computeDaysLeft(s.endAt ?? null, now),
+    }));
+    logger.info("listMyPackages success (mysql)", { traceId, customerId, count: dataSql.length });
+    return res.status(200).json({ success: true, data: dataSql });
   } catch (error: any) {
     logger.error("listMyPackages failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -629,58 +263,28 @@ export const getChatMessages = async (req: Request, res: Response) => {
   try {
     if (!customerId) { logger.warn("getChatMessages unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // ── MySQL package-chat read (flag-gated) ─────────────────────────────────
-    // Branch before the ObjectId guard — a MySQL package id is an int. The
-    // subscription gate uses the MySQL commerce-subscription module (int ids).
-    if (isPackageChatMysql()) {
-      const packageIdInt = Number(packageId);
-      const customerIdInt = Number(customerId); // C3 seam
-      if (!Number.isInteger(packageIdInt) || packageIdInt <= 0) {
-        logger.warn("getChatMessages invalid id (mysql)", { traceId, customerId, packageId });
-        return res.status(400).json({ success: false, message: "Invalid package id." });
-      }
-      const activeMysql = await hasActivePackageSubscription(customerIdInt, packageIdInt);
-      if (!activeMysql) {
-        logger.warn("getChatMessages no active subscription (mysql)", { traceId, customerId, packageId });
-        return res.status(403).json({
-          success: false,
-          message: "You must have an active subscription to view package chat.",
-        });
-      }
-      const { page = "1", limit = "20" } = req.query as Record<string, string>;
-      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-      const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
-      const { data, total } = await listChatMessagesMysql(packageIdInt, pageNum, limitNum);
-      logger.info("getChatMessages success (mysql)", { traceId, customerId, packageId, total });
-      return res.status(200).json({
-        success: true,
-        data,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
+    // ── MySQL package-chat read ──────────────────────────────────────────────
+    // A MySQL package id is an int. The subscription gate uses the MySQL
+    // commerce-subscription module (int ids).
+    const packageIdInt = Number(packageId);
+    const customerIdInt = Number(customerId); // C3 seam
+    if (!Number.isInteger(packageIdInt) || packageIdInt <= 0) {
+      logger.warn("getChatMessages invalid id (mysql)", { traceId, customerId, packageId });
+      return res.status(400).json({ success: false, message: "Invalid package id." });
     }
-
-    if (!mongoose.Types.ObjectId.isValid(packageId)) { logger.warn("getChatMessages invalid id", { traceId, customerId, packageId }); return res.status(400).json({ success: false, message: "Invalid package id." }); }
-
-    const active = await hasActiveSubscription(customerId, packageId);
-    if (!active) {
-      logger.warn("getChatMessages no active subscription", { traceId, customerId, packageId });
+    const activeMysql = await hasActivePackageSubscription(customerIdInt, packageIdInt);
+    if (!activeMysql) {
+      logger.warn("getChatMessages no active subscription (mysql)", { traceId, customerId, packageId });
       return res.status(403).json({
         success: false,
         message: "You must have an active subscription to view package chat.",
       });
     }
-
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
-    const skip = (pageNum - 1) * limitNum;
-
-    const [data, total] = await Promise.all([
-      PackageChat.find({ packageId }).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
-      PackageChat.countDocuments({ packageId }),
-    ]);
-
-    logger.info("getChatMessages success", { traceId, customerId, packageId, total });
+    const { data, total } = await listChatMessagesMysql(packageIdInt, pageNum, limitNum);
+    logger.info("getChatMessages success (mysql)", { traceId, customerId, packageId, total });
     return res.status(200).json({
       success: true,
       data,

@@ -1,10 +1,9 @@
-import { isMysqlModule } from "../../config/migration";
 import { adminCourseRepository as repo } from "./admin-course.repository";
 import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
 import type { Course } from "@prisma/client";
 
 export const ADMIN_COURSE_MODULE = "admin-course";
-export const isAdminCourseMysql = (): boolean => isMysqlModule(ADMIN_COURSE_MODULE);
+export const isAdminCourseMysql = (): boolean => true;
 
 export const parseCourseId = (id: string): number | null => {
   const n = Number(id);
@@ -77,6 +76,8 @@ const toPlanDto = (p: any) => ({
   materialPrice: p.materialPrice ?? 0,
   isDefault: p.isDefault,
   status: p.status,
+  isMostPopular: p.isMostPopular ?? false,
+  mostPopularPinned: p.mostPopularPinned ?? false,
   courseId: idStrOrNull(p.courseId),
   createdAt: p.created_at ?? null,
   updatedAt: p.updated_at ?? null,

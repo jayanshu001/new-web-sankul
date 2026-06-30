@@ -8,7 +8,6 @@
  * The bank-account table has no cross-module dependency (unlike address→OfflineCity),
  * so this module can be enabled independently once verified.
  */
-import { isMysqlModule } from "../../config/migration";
 import { customerBankAccountRepository as repo } from "./customer-bank-account.repository";
 import { toBankAccountDto } from "./customer-bank-account.transformer";
 import type {
@@ -17,7 +16,7 @@ import type {
 } from "./customer-bank-account.types";
 
 export const BANK_ACCOUNT_MODULE = "customer-bank-account";
-export const isBankAccountMysql = (): boolean => isMysqlModule(BANK_ACCOUNT_MODULE);
+export const isBankAccountMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseBankAccountId = (id: string): number | null => {

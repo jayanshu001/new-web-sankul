@@ -1,26 +1,17 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import { Exam } from "../../models/exam/Exam.model";
-import { ExamCategory } from "../../models/exam/ExamCategory.model";
-import { ExamQuestion } from "../../models/exam/ExamQuestion.model";
-import { ExamQuestionOption } from "../../models/exam/ExamQuestionOption.model";
 import { ExamResult } from "../../models/exam/ExamResult.model";
-import { ExamResultDetail } from "../../models/exam/ExamResultDetail.model";
 import { ExamResultDetailAnalytics } from "../../models/exam/ExamResultDetailAnalytics.model";
-import { ExamStatus, ExamResultType, ExamType } from "../../models/enums";
+import { ExamType } from "../../models/enums";
 import { generateExamSolutionPdf } from "../../libs/core/generate";
 import {
-  saveAnswersSchema,
   rateResultSchema,
-  saveSingleAnswerSchema,
   submitAttemptSchema,
 } from "./exam.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
-import { buildRegexCondition } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
-  isClientExamMysql,
   parseExamId,
   listExamsByCategory as svcListExamsByCategory,
   getExamQuestions as svcGetExamQuestions,
@@ -53,28 +44,10 @@ export const listCategories = async (req: Request, res: Response) => {
     const { parentId } = req.query as Record<string, string>;
     const { search, page, limit, skip } = parseListQuery(req.query);
 
-    // ─── MySQL branch (ws_exam_category) ──────────────────────────────────
-    if (catalogExam.isExamMysql()) {
-      const [categories, total] = await Promise.all([
-        catalogExam.listClientCategories({ parentId, search, skip, take: limit }),
-        catalogExam.countClientCategories({ parentId, search }),
-      ]);
-      logger.info("listCategories success", { traceId, count: categories.length });
-      return res.status(200).json({ success: true, data: categories, pagination: buildPagination(total, page, limit) });
-    }
-
-    const filter: any = { status: true };
-    if (!parentId || parentId === "root") filter.parentId = null;
-    else if (isObjectId(parentId)) filter.parentId = parentId;
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-
+    // ─── ws_exam_category ──────────────────────────────────
     const [categories, total] = await Promise.all([
-      ExamCategory.find(filter)
-        .select("_id name image parentId orderBy")
-        .sort({ orderBy: 1, name: 1 })
-        .skip(skip)
-        .limit(limit),
-      ExamCategory.countDocuments(filter),
+      catalogExam.listClientCategories({ parentId, search, skip, take: limit }),
+      catalogExam.countClientCategories({ parentId, search }),
     ]);
     logger.info("listCategories success", { traceId, count: categories.length });
     return res.status(200).json({ success: true, data: categories, pagination: buildPagination(total, page, limit) });
@@ -92,74 +65,13 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
   logger.info("listExamsByCategory invoked", { traceId, path: req.originalUrl, customerId, categoryId });
 
   try {
-    // ─── MySQL branch (ws_exam + ws_exam_category) ────────────────────────
-    if (isClientExamMysql()) {
-      const catId = parseExamId(categoryId);
-      if (!catId) return res.status(400).json({ success: false, message: "Invalid category id." });
-      const cid = customerId ? parseExamId(customerId) : null;
-      const data = await svcListExamsByCategory(catId, cid);
-      logger.info("listExamsByCategory success (sql)", { traceId, customerId, categoryId, examCount: data.exams.length });
-      return res.status(200).json({ success: true, data });
-    }
-
-    if (!isObjectId(categoryId)) {
-      logger.warn("listExamsByCategory invalid id", { traceId, categoryId });
-      return res.status(400).json({ success: false, message: "Invalid category id." });
-    }
-
-    const subjects = await ExamCategory.find({ parentId: categoryId, status: true })
-      .select("_id name image orderBy")
-      .sort({ orderBy: 1, name: 1 });
-
-    // Hide scheduled exams whose attempt window has already ENDED so the list
-    // matches the catalog `/tests` badge: a `daily`/scheduled exam with an
-    // `endAt` in the past is over. `subject` exams are always-available (no
-    // window) and always show regardless of any stray date fields.
-    const now = new Date();
-    const exams = await Exam.find({
-      categoryId,
-      status: ExamStatus.PUBLISHED,
-      $or: [
-        { type: ExamType.SUBJECT },
-        { endAt: { $exists: false } },
-        { endAt: null },
-        { endAt: { $gte: now } },
-      ],
-    })
-      .select("_id title type isPaid durationMinutes questionCount positiveMarks negativeMarks startAt language difficulty orderBy")
-      .sort({ orderBy: 1, createdAt: -1 });
-
-    let resultByExam = new Map<string, any>();
-    if (customerId && exams.length) {
-      const examIds = exams.map((e) => e._id);
-      const results = await ExamResult.find({
-        customerId,
-        examId: { $in: examIds },
-        status: true,
-      })
-        .select("examId score total success failed skip attempt timing updatedAt")
-        .sort({ updatedAt: -1, attemptNumber: -1 })
-        .lean();
-      for (const r of results) {
-        const key = String(r.examId);
-        if (!resultByExam.has(key)) resultByExam.set(key, r);
-      }
-    }
-
-    const decorated = exams.map((e: any) => ({
-      ...e.toObject(),
-      isCompleted: resultByExam.has(String(e._id)),
-      lastResult: resultByExam.get(String(e._id)) ?? null,
-    }));
-    const completedTests = decorated.filter(
-      (exam: any) => exam.type === ExamType.SUBJECT && exam.isCompleted
-    );
-
-    logger.info("listExamsByCategory success", { traceId, customerId, categoryId, examCount: decorated.length });
-    return res.status(200).json({
-      success: true,
-      data: { subjects, exams: decorated, completedTests },
-    });
+    // ─── ws_exam + ws_exam_category ────────────────────────
+    const catId = parseExamId(categoryId);
+    if (!catId) return res.status(400).json({ success: false, message: "Invalid category id." });
+    const cid = customerId ? parseExamId(customerId) : null;
+    const data = await svcListExamsByCategory(catId, cid);
+    logger.info("listExamsByCategory success (sql)", { traceId, customerId, categoryId, examCount: data.exams.length });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("listExamsByCategory failed", { traceId, customerId, categoryId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -217,149 +129,11 @@ export const getDailyExams = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "`week` requires `year` and `month`." });
     }
 
-    // ─── MySQL branch (daily-exam drill-down) ─────────────────────────────
-    if (isClientExamMysql()) {
-      const cid = customerId ? parseExamId(customerId) : null;
-      const r = await svcGetDailyExams({ year: yearQ, month: monthQ, week: weekQ, customerId: cid });
-      logger.info("getDailyExams success (sql)", { traceId, customerId, level: r.level });
-      return res.status(200).json({ success: true, data: { level: r.level, items: r.data } });
-    }
-
-    const baseMatch: any = {
-      type: ExamType.DAILY,
-      status: ExamStatus.PUBLISHED,
-      startAt: { $lte: endOfDay },
-    };
-
-    // Level 1: years
-    if (yearQ === undefined) {
-      const rows = await Exam.aggregate([
-        { $match: baseMatch },
-        { $group: { _id: { $year: "$startAt" }, testsCount: { $sum: 1 } } },
-        { $sort: { _id: -1 } },
-        { $project: { _id: 0, year: "$_id", testsCount: 1 } },
-      ]);
-      return res.status(200).json({ success: true, data: { level: "years", items: rows } });
-    }
-
-    // Level 2: months in a year
-    if (monthQ === undefined) {
-      const yearStart = new Date(yearQ, 0, 1, 0, 0, 0, 0);
-      const yearEnd = new Date(yearQ, 11, 31, 23, 59, 59, 999);
-      const upper = yearEnd < endOfDay ? yearEnd : endOfDay;
-      const rows = await Exam.aggregate([
-        { $match: { ...baseMatch, startAt: { $gte: yearStart, $lte: upper } } },
-        { $group: { _id: { $month: "$startAt" }, testsCount: { $sum: 1 } } },
-        { $sort: { _id: 1 } },
-        { $project: { _id: 0, month: "$_id", testsCount: 1 } },
-      ]);
-      const items = rows.map((r: any) => ({
-        year: yearQ,
-        month: r.month,
-        label: MONTH_LABELS[r.month - 1],
-        testsCount: r.testsCount,
-      }));
-      return res.status(200).json({ success: true, data: { level: "months", year: yearQ, items } });
-    }
-
-    // Level 3: weeks in a month
-    if (weekQ === undefined) {
-      const monthStart = new Date(yearQ, monthQ - 1, 1, 0, 0, 0, 0);
-      const monthEnd = new Date(yearQ, monthQ, 0, 23, 59, 59, 999);
-      const upper = monthEnd < endOfDay ? monthEnd : endOfDay;
-      const exams = await Exam.find({
-        ...baseMatch,
-        startAt: { $gte: monthStart, $lte: upper },
-      }).select("startAt");
-
-      const counts = new Map<number, number>();
-      for (const e of exams) {
-        if (!e.startAt) continue;
-        const w = weekOfMonth(new Date(e.startAt as Date).getDate());
-        counts.set(w, (counts.get(w) ?? 0) + 1);
-      }
-      const items = Array.from(counts.entries())
-        .sort((a, b) => a[0] - b[0])
-        .map(([week, testsCount]) => {
-          const { start, end } = weekRange(yearQ, monthQ, week);
-          return {
-            week,
-            label: `Week ${week}`,
-            startDate: start,
-            endDate: end,
-            testsCount,
-          };
-        });
-      return res.status(200).json({
-        success: true,
-        data: { level: "weeks", year: yearQ, month: monthQ, items },
-      });
-    }
-
-    // Level 4: tests in a week (original shape, with per-customer stats)
-    const { start: weekStart, end: weekEnd } = weekRange(yearQ, monthQ, weekQ);
-    const upper = weekEnd < endOfDay ? weekEnd : endOfDay;
-
-    const exams = await Exam.find({
-      ...baseMatch,
-      startAt: { $gte: weekStart, $lte: upper },
-    })
-      .select("_id title durationMinutes questionCount positiveMarks negativeMarks startAt orderBy language")
-      .sort({ startAt: 1 });
-
-    const statsByExam = new Map<string, { attemptsCount: number; bestScore: number; lastResult: any }>();
-    if (customerId && exams.length) {
-      const cid = new mongoose.Types.ObjectId(customerId);
-      const examIds = exams.map((e) => e._id);
-      const agg = await ExamResult.aggregate([
-        { $match: { customerId: cid, examId: { $in: examIds }, status: true } },
-        { $sort: { submittedAt: -1, attemptNumber: -1 } },
-        {
-          $group: {
-            _id: "$examId",
-            attemptsCount: { $sum: 1 },
-            bestScore: { $max: "$score" },
-            last: { $first: "$$ROOT" },
-          },
-        },
-      ]);
-      for (const row of agg) {
-        statsByExam.set(String(row._id), {
-          attemptsCount: row.attemptsCount,
-          bestScore: row.bestScore,
-          lastResult: {
-            _id: row.last._id,
-            attemptNumber: row.last.attemptNumber,
-            score: row.last.score,
-            timing: row.last.timing,
-            submittedAt: row.last.submittedAt,
-          },
-        });
-      }
-    }
-
-    const decorated = exams.map((e: any) => {
-      const s = statsByExam.get(String(e._id));
-      return {
-        ...e.toObject(),
-        attemptsCount: s?.attemptsCount ?? 0,
-        bestScore: s?.bestScore ?? 0,
-        isAttempted: (s?.attemptsCount ?? 0) > 0,
-        lastResult: s?.lastResult ?? null,
-      };
-    });
-
-    logger.info("getDailyExams success", { traceId, customerId, level: "tests", count: decorated.length });
-    return res.status(200).json({
-      success: true,
-      data: {
-        level: "tests",
-        year: yearQ,
-        month: monthQ,
-        week: weekQ,
-        items: decorated,
-      },
-    });
+    // ─── daily-exam drill-down ─────────────────────────────
+    const cid = customerId ? parseExamId(customerId) : null;
+    const r = await svcGetDailyExams({ year: yearQ, month: monthQ, week: weekQ, customerId: cid });
+    logger.info("getDailyExams success (sql)", { traceId, customerId, level: r.level });
+    return res.status(200).json({ success: true, data: { level: r.level, items: r.data } });
   } catch (error: any) {
     logger.error("getDailyExams failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -375,53 +149,12 @@ export const getExamQuestions = async (req: Request, res: Response) => {
   logger.info("getExamQuestions invoked", { traceId, path: req.originalUrl, examId: id, userId: req.user?.id });
 
   try {
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (isClientExamMysql()) {
-      const numId = parseExamId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-      const data = await svcGetExamQuestions(numId);
-      if (!data) return res.status(404).json({ success: false, message: "Exam not found or not published." });
-      logger.info("getExamQuestions success (sql)", { traceId, examId: id, questionCount: data.questions.length });
-      return res.status(200).json({ success: true, data });
-    }
-
-    if (!isObjectId(id)) {
-      logger.warn("getExamQuestions invalid id", { traceId, examId: id });
-      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-    }
-
-    const exam = await Exam.findOne({ _id: id, status: ExamStatus.PUBLISHED });
-    if (!exam) {
-      logger.warn("getExamQuestions not found", { traceId, examId: id });
-      return res.status(404).json({ success: false, message: "Exam not found or not published." });
-    }
-
-    const questions = await ExamQuestion.find({ examId: id, status: true })
-      .sort({ orderBy: 1, createdAt: 1 })
-      .select("_id title image orderBy")
-      .lean();
-
-    const qIds = questions.map((q: any) => q._id);
-    const options = await ExamQuestionOption.find({ questionId: { $in: qIds } })
-      .sort({ orderBy: 1, createdAt: 1 })
-      .lean();
-    const optsByQ: Record<string, any[]> = {};
-    options.forEach((o: any) => {
-      (optsByQ[String(o.questionId)] ||= []).push({
-        _id: o._id,
-        name: o.name,
-        image: o.image ?? null,
-        isSelect: false,
-      });
-    });
-
-    const decorated = questions.map((q: any) => ({
-      ...q,
-      answers: optsByQ[String(q._id)] || [],
-    }));
-
-    logger.info("getExamQuestions success", { traceId, examId: id, questionCount: decorated.length });
-    return res.status(200).json({ success: true, data: { exam, questions: decorated } });
+    const numId = parseExamId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    const data = await svcGetExamQuestions(numId);
+    if (!data) return res.status(404).json({ success: false, message: "Exam not found or not published." });
+    logger.info("getExamQuestions success (sql)", { traceId, examId: id, questionCount: data.questions.length });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getExamQuestions failed", { traceId, examId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -481,179 +214,26 @@ export const saveAnswers = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    // ─── MySQL branch (ws_exam_result + _detail; scoring write) ───────────
-    if (isClientExamMysql()) {
-      const cid = parseExamId(customerId);
-      const body = req.body ?? {};
-      const examId = parseExamId(String(body.examId ?? ""));
-      const timing = typeof body.timing === "string" ? body.timing : "";
-      const test = Array.isArray(body.test) ? body.test : null;
-      if (!cid || !examId || !test || !/^\d{1,3}:\d{2}(:\d{2})?$/.test(timing)) {
-        return res.status(400).json({ success: false, message: "Invalid submission payload." });
-      }
-      const parsedTest = test.map((t: any) => ({ questionId: parseExamId(String(t?.questionId ?? "")), answerId: parseExamId(String(t?.answerId ?? "")) }));
-      if (parsedTest.some((t: { questionId: number | null; answerId: number | null }) => !t.questionId || !t.answerId)) {
-        return res.status(400).json({ success: false, message: "Invalid question/answer id in submission." });
-      }
-      const result = await svcSaveAnswers(cid, {
-        examId, timing, ratting: body.ratting ?? null,
-        test: parsedTest as Array<{ questionId: number; answerId: number }>,
-      });
-      if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
-      logger.info("saveAnswers success (sql)", { traceId, customerId, examId, rank: result.rank });
-      return res.status(200).json({ success: true, data: { examResult: result.examResult, rank: result.rank } });
+    // ─── ws_exam_result + _detail; scoring write ───────────
+    const cid = parseExamId(customerId);
+    const body = req.body ?? {};
+    const examId = parseExamId(String(body.examId ?? ""));
+    const timing = typeof body.timing === "string" ? body.timing : "";
+    const test = Array.isArray(body.test) ? body.test : null;
+    if (!cid || !examId || !test || !/^\d{1,3}:\d{2}(:\d{2})?$/.test(timing)) {
+      return res.status(400).json({ success: false, message: "Invalid submission payload." });
     }
-
-    const data = saveAnswersSchema.parse(req.body);
-
-    const exam = await Exam.findById(data.examId);
-    if (!exam) {
-      logger.warn("saveAnswers exam not found", { traceId, customerId, examId: data.examId });
-      return res.status(404).json({ success: false, message: "Exam is not found." });
+    const parsedTest = test.map((t: any) => ({ questionId: parseExamId(String(t?.questionId ?? "")), answerId: parseExamId(String(t?.answerId ?? "")) }));
+    if (parsedTest.some((t: { questionId: number | null; answerId: number | null }) => !t.questionId || !t.answerId)) {
+      return res.status(400).json({ success: false, message: "Invalid question/answer id in submission." });
     }
-
-    if (exam.questionCount !== data.test.length) {
-      logger.warn("saveAnswers question count mismatch", { traceId, customerId, examId: data.examId, expected: exam.questionCount, got: data.test.length });
-      return res.status(400).json({
-        success: false,
-        message: `Exam's total questions are not match with your total answers.`,
-      });
-    }
-
-    const details: Array<{
-      questionId: string;
-      answerId: string;
-      result: ExamResultType;
-      point: number;
-    }> = [];
-
-    for (const item of data.test) {
-      const question = await ExamQuestion.findOne({
-        _id: item.questionId,
-        examId: data.examId,
-      });
-      if (!question) {
-        return res.status(400).json({
-          success: false,
-          message: "Sorry, Question are not match with their exam.",
-        });
-      }
-      const option = await ExamQuestionOption.findOne({
-        _id: item.answerId,
-        questionId: item.questionId,
-      });
-      if (!option) {
-        return res.status(400).json({
-          success: false,
-          message: "Sorry, Answer is not match with their exam and question.",
-        });
-      }
-
-      let result: ExamResultType;
-      if (norm(option.name) === "skip") result = ExamResultType.SKIP;
-      else if (norm(option.name) === norm(question.answer)) result = ExamResultType.TRUE;
-      else result = ExamResultType.FALSE;
-
-      const point =
-        result === ExamResultType.SKIP
-          ? 0
-          : result === ExamResultType.TRUE
-          ? exam.positiveMarks
-          : -Math.abs(exam.negativeMarks);
-
-      details.push({
-        questionId: item.questionId,
-        answerId: item.answerId,
-        result,
-        point,
-      });
-    }
-
-    let total = details.length;
-    let skip = 0, success = 0, failed = 0, score = 0;
-    for (const d of details) {
-      if (d.result === ExamResultType.SKIP) skip += 1;
-      else if (d.result === ExamResultType.TRUE) success += 1;
-      else failed += 1;
-      score += d.point;
-    }
-    const attempt = total - skip;
-
-    let examResult: any;
-    const session = await mongoose.startSession();
-    try {
-      await session.withTransaction(async () => {
-        const last = await ExamResult.findOne({ customerId, examId: data.examId })
-          .sort({ attemptNumber: -1 })
-          .select("attemptNumber")
-          .session(session);
-        const nextNumber = (last?.attemptNumber ?? 0) + 1;
-        const now = new Date();
-        const created = await ExamResult.create(
-          [
-            {
-              customerId,
-              examId: data.examId,
-              attemptNumber: nextNumber,
-              total,
-              attempt,
-              skip,
-              success,
-              failed,
-              score: Math.round(score * 100) / 100,
-              timing: data.timing,
-              ratting: data.ratting ?? null,
-              status: true,
-              inProgress: false,
-              startedAt: now,
-              submittedAt: now,
-            },
-          ],
-          { session }
-        );
-        examResult = created[0];
-
-        for (const d of details) {
-          await ExamResultDetail.updateOne(
-            { examResultId: examResult._id, questionId: d.questionId },
-            {
-              $set: {
-                examResultId: examResult._id,
-                customerId,
-                examId: data.examId,
-                questionId: d.questionId,
-                answerId: d.answerId,
-                result: d.result,
-                point: d.point,
-              },
-            },
-            { upsert: true, session }
-          );
-        }
-      });
-    } finally {
-      session.endSession();
-    }
-
-    await recomputeAnalytics(customerId);
-
-    const bestPerUser = await ExamResult.aggregate([
-      { $match: { examId: new mongoose.Types.ObjectId(data.examId), status: true } },
-      { $group: { _id: "$customerId", best: { $max: "$score" } } },
-    ]);
-    const myBest = bestPerUser.find((u: any) => String(u._id) === String(customerId))?.best ?? examResult.score;
-    const higher = bestPerUser.filter((u: any) => u.best > myBest).length;
-    const totalCandidates = bestPerUser.length;
-    const rank = higher + 1;
-
-    logger.info("saveAnswers success", { traceId, customerId, examId: data.examId, score, rank });
-    return res.status(200).json({
-      success: true,
-      data: {
-        examResult,
-        rank: `${rank}/${totalCandidates}`,
-      },
+    const result = await svcSaveAnswers(cid, {
+      examId, timing, ratting: body.ratting ?? null,
+      test: parsedTest as Array<{ questionId: number; answerId: number }>,
     });
+    if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
+    logger.info("saveAnswers success (sql)", { traceId, customerId, examId, rank: result.rank });
+    return res.status(200).json({ success: true, data: { examResult: result.examResult, rank: result.rank } });
   } catch (error: any) {
     if (error.issues) {
       logger.warn("saveAnswers validation failed", { traceId, customerId, issues: error.issues });
@@ -679,72 +259,14 @@ export const getSolutionByExam = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (isClientExamMysql()) {
-      const cid = parseExamId(customerId);
-      const eid = parseExamId(examId);
-      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-      const attemptId = req.query.attemptId ? parseExamId(String(req.query.attemptId)) ?? undefined : undefined;
-      const data = await svcGetSolution(cid, eid, attemptId);
-      if (!data) return res.status(404).json({ success: false, message: "No submitted attempt found." });
-      logger.info("getSolutionByExam success (sql)", { traceId, customerId, examId, questionCount: data.length });
-      return res.status(200).json({ success: true, data });
-    }
-
-    if (!isObjectId(examId)) {
-      logger.warn("getSolutionByExam invalid id", { traceId, examId });
-      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-    }
-
-    // Resolve which attempt to show: ?attemptId=<id> if provided, else latest submitted.
-    const reqAttemptId = (req.query.attemptId as string | undefined) ?? undefined;
-    let target;
-    if (reqAttemptId) {
-      if (!isObjectId(reqAttemptId)) {
-        logger.warn("getSolutionByExam invalid attemptId", { traceId, attemptId: reqAttemptId });
-        return res.status(400).json({ success: false, message: "Invalid attemptId." });
-      }
-      target = await ExamResult.findOne({ _id: reqAttemptId, customerId, examId, status: true });
-    } else {
-      target = await ExamResult.findOne({ customerId, examId, status: true })
-        .sort({ submittedAt: -1, attemptNumber: -1 });
-    }
-    if (!target) {
-      logger.warn("getSolutionByExam no attempt", { traceId, customerId, examId });
-      return res.status(404).json({ success: false, message: "No submitted attempt found." });
-    }
-
-    const details = await ExamResultDetail.find({ examResultId: target._id })
-      .populate({ path: "questionId", model: ExamQuestion })
-      .lean();
-
-    const qIds = details
-      .map((d: any) => d.questionId?._id)
-      .filter(Boolean);
-    const options = await ExamQuestionOption.find({ questionId: { $in: qIds } })
-      .sort({ orderBy: 1, createdAt: 1 })
-      .lean();
-    const optsByQ: Record<string, any[]> = {};
-    options.forEach((o: any) => {
-      (optsByQ[String(o.questionId)] ||= []).push(o);
-    });
-
-    const questionList = details
-      .filter((d: any) => d.questionId)
-      .map((d: any) => {
-        const q = d.questionId;
-        const questionOptions = (optsByQ[String(q._id)] || []).map((o: any) => ({
-          _id: o._id,
-          name: o.name,
-          image: o.image ?? null,
-          isSelect: String(d.answerId) === String(o._id),
-          isCorrect: norm(q.answer) === norm(o.name),
-        }));
-        return { ...q, answers: questionOptions, result: d.result, point: d.point };
-      });
-
-    logger.info("getSolutionByExam success", { traceId, customerId, examId, questionCount: questionList.length });
-    return res.status(200).json({ success: true, data: questionList });
+    const cid = parseExamId(customerId);
+    const eid = parseExamId(examId);
+    if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    const attemptId = req.query.attemptId ? parseExamId(String(req.query.attemptId)) ?? undefined : undefined;
+    const data = await svcGetSolution(cid, eid, attemptId);
+    if (!data) return res.status(404).json({ success: false, message: "No submitted attempt found." });
+    logger.info("getSolutionByExam success (sql)", { traceId, customerId, examId, questionCount: data.length });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getSolutionByExam failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -764,57 +286,13 @@ export const getSolutionAnalyticsByExam = async (req: Request, res: Response) =>
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (isClientExamMysql()) {
-      const cid = parseExamId(customerId);
-      const eid = parseExamId(examId);
-      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-      const attemptId = req.query.attemptId ? parseExamId(String(req.query.attemptId)) ?? undefined : undefined;
-      const data = await svcGetSolutionAnalytics(cid, eid, attemptId);
-      if (!data) return res.status(404).json({ success: false, message: "No submitted attempt found." });
-      return res.status(200).json({ success: true, data });
-    }
-
-    if (!isObjectId(examId)) {
-      logger.warn("getSolutionAnalyticsByExam invalid id", { traceId, examId });
-      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-    }
-
-    const reqAttemptId = (req.query.attemptId as string | undefined) ?? undefined;
-    let examResult: any;
-    if (reqAttemptId) {
-      if (!isObjectId(reqAttemptId)) {
-        logger.warn("getSolutionAnalyticsByExam invalid attemptId", { traceId, attemptId: reqAttemptId });
-        return res.status(400).json({ success: false, message: "Invalid attemptId." });
-      }
-      examResult = await ExamResult.findOne({ _id: reqAttemptId, customerId, examId, status: true }).lean();
-    } else {
-      examResult = await ExamResult.findOne({ customerId, examId, status: true })
-        .sort({ submittedAt: -1, attemptNumber: -1 })
-        .lean();
-    }
-    if (!examResult) {
-      logger.warn("getSolutionAnalyticsByExam no attempt", { traceId, customerId, examId });
-      return res.status(404).json({ success: false, message: "No submitted attempt found." });
-    }
-
-    const accuracy =
-      examResult.total > 0 ? (examResult.success * 100) / examResult.total : 0;
-
-    // Rank = customer's best score across attempts.
-    const bestPerUser = await ExamResult.aggregate([
-      { $match: { examId: new mongoose.Types.ObjectId(examId), status: true } },
-      { $group: { _id: "$customerId", best: { $max: "$score" } } },
-    ]);
-    const myBest = bestPerUser.find((u: any) => String(u._id) === String(customerId))?.best ?? examResult.score;
-    const higher = bestPerUser.filter((u: any) => u.best > myBest).length;
-    const totalCandidates = bestPerUser.length;
-
-    examResult.accuracy = Math.round(accuracy * 100) / 100;
-    examResult.rank = `${higher + 1}/${totalCandidates}`;
-
-    logger.info("getSolutionAnalyticsByExam success", { traceId, customerId, examId });
-    return res.status(200).json({ success: true, data: { examResult } });
+    const cid = parseExamId(customerId);
+    const eid = parseExamId(examId);
+    if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    const attemptId = req.query.attemptId ? parseExamId(String(req.query.attemptId)) ?? undefined : undefined;
+    const data = await svcGetSolutionAnalytics(cid, eid, attemptId);
+    if (!data) return res.status(404).json({ success: false, message: "No submitted attempt found." });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getSolutionAnalyticsByExam failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -878,37 +356,14 @@ export const listMyResults = async (req: Request, res: Response) => {
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
 
-    // ─── MySQL branch (ws_exam_result) ────────────────────────────────────
-    if (isClientExamMysql()) {
-      const cid = parseExamId(customerId);
-      if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
-      const { items, total } = await svcListMyResults(cid, pageNum, limitNum);
-      logger.info("listMyResults success (sql)", { traceId, customerId, total });
-      return res.status(200).json({
-        success: true,
-        data: items,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    const skip = (pageNum - 1) * limitNum;
-
-    const filter: any = { customerId, status: true };
-    if (examId && isObjectId(examId)) filter.examId = examId;
-
-    const [data, total] = await Promise.all([
-      ExamResult.find(filter)
-        .populate("examId", "_id title type durationMinutes positiveMarks negativeMarks")
-        .sort({ updatedAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      ExamResult.countDocuments(filter),
-    ]);
-
-    logger.info("listMyResults success", { traceId, customerId, total });
+    // ─── ws_exam_result ────────────────────────────────────
+    const cid = parseExamId(customerId);
+    if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const { items, total } = await svcListMyResults(cid, pageNum, limitNum);
+    logger.info("listMyResults success (sql)", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
-      data,
+      data: items,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
@@ -1072,27 +527,12 @@ export const getExamDetail = async (req: Request, res: Response) => {
   logger.info("getExamDetail invoked", { traceId, path: req.originalUrl, examId: id, userId: req.user?.id });
 
   try {
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (isClientExamMysql()) {
-      const numId = parseExamId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-      const data = await svcGetExamDetail(numId);
-      if (!data) return res.status(404).json({ success: false, message: "Exam not found or not published." });
-      logger.info("getExamDetail success (sql)", { traceId, examId: id });
-      return res.status(200).json({ success: true, data });
-    }
-
-    if (!isObjectId(id)) {
-      logger.warn("getExamDetail invalid id", { traceId, examId: id });
-      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-    }
-    const exam = await Exam.findOne({ _id: id, status: ExamStatus.PUBLISHED });
-    if (!exam) {
-      logger.warn("getExamDetail not found", { traceId, examId: id });
-      return res.status(404).json({ success: false, message: "Exam not found or not published." });
-    }
-    logger.info("getExamDetail success", { traceId, examId: id });
-    return res.status(200).json({ success: true, data: exam });
+    const numId = parseExamId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    const data = await svcGetExamDetail(numId);
+    if (!data) return res.status(404).json({ success: false, message: "Exam not found or not published." });
+    logger.info("getExamDetail success (sql)", { traceId, examId: id });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getExamDetail failed", { traceId, examId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -1120,75 +560,13 @@ export const startAttempt = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    if (isClientExamMysql()) {
-      const cid = parseExamId(customerId);
-      const eid = parseExamId(examId);
-      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-      const r = await svcStartAttempt(cid, eid);
-      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-      logger.info("startAttempt success (sql)", { traceId, customerId, examId });
-      return res.status(200).json({ success: true, data: r.data });
-    }
-
-    if (!isObjectId(examId)) {
-      logger.warn("startAttempt invalid id", { traceId, examId });
-      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-    }
-
-    const exam = await Exam.findOne({ _id: examId, status: ExamStatus.PUBLISHED });
-    if (!exam) {
-      logger.warn("startAttempt exam not found", { traceId, examId });
-      return res.status(404).json({ success: false, message: "Exam not found or not published." });
-    }
-
-    const now = new Date();
-    // Only scheduled exams have a real start window; `subject` exams are
-    // always-available elsewhere, so the gate must not apply to them.
-    if ((exam as any).type !== ExamType.SUBJECT && exam.startAt && now < new Date(exam.startAt)) {
-      logger.warn("startAttempt not yet started", { traceId, customerId, examId, startAt: exam.startAt });
-      return res.status(400).json({ success: false, message: "Exam has not started yet." });
-    }
-
-    // Resume any in-progress attempt instead of creating a new row.
-    const inProgress = await ExamResult.findOne({ customerId, examId, status: false });
-    let attempt;
-    if (inProgress) {
-      attempt = inProgress;
-    } else {
-      const last = await ExamResult.findOne({ customerId, examId })
-        .sort({ attemptNumber: -1 })
-        .select("attemptNumber");
-      const nextNumber = (last?.attemptNumber ?? 0) + 1;
-      attempt = await ExamResult.create({
-        customerId,
-        examId,
-        attemptNumber: nextNumber,
-        startedAt: now,
-        submittedAt: null,
-        inProgress: true,
-        status: false,
-        total: 0,
-        attempt: 0,
-        skip: 0,
-        success: 0,
-        failed: 0,
-        score: 0,
-        timing: "00:00",
-      });
-    }
-
-    logger.info("startAttempt success", { traceId, customerId, examId, attemptId: attempt._id, resumed: !!inProgress });
-    return res.status(200).json({
-      success: true,
-      data: {
-        attemptId: attempt._id,
-        attemptNumber: attempt.attemptNumber,
-        startedAt: attempt.startedAt,
-        serverNow: now,
-        durationMinutes: exam.durationMinutes,
-        questionCount: exam.questionCount,
-      },
-    });
+    const cid = parseExamId(customerId);
+    const eid = parseExamId(examId);
+    if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    const r = await svcStartAttempt(cid, eid);
+    if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+    logger.info("startAttempt success (sql)", { traceId, customerId, examId });
+    return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
     logger.error("startAttempt failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -1209,97 +587,19 @@ export const saveSingleAnswer = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    if (isClientExamMysql()) {
-      const cid = parseExamId(customerId);
-      const eid = parseExamId(examId);
-      const aid = parseExamId(attemptId);
-      if (!cid || !eid || !aid) return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
-      const qid = parseExamId(String(req.body?.questionId ?? ""));
-      if (!qid) return res.status(400).json({ success: false, message: "Invalid question id." });
-      const rawAns = req.body?.answerId;
-      const ansId = rawAns == null || rawAns === "" ? null : parseExamId(String(rawAns));
-      if (rawAns != null && rawAns !== "" && !ansId) return res.status(400).json({ success: false, message: "Invalid answer id." });
-      const r = await svcSaveSingleAnswer(cid, eid, aid, { questionId: qid, answerId: ansId });
-      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-      logger.info("saveSingleAnswer success (sql)", { traceId, customerId, examId, attemptId, questionId: qid });
-      return res.status(200).json({ success: true, data: r.data });
-    }
-
-    if (!isObjectId(examId) || !isObjectId(attemptId)) {
-      logger.warn("saveSingleAnswer invalid ids", { traceId, examId, attemptId });
-      return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
-    }
-
-    const data = saveSingleAnswerSchema.parse(req.body);
-
-    const attempt = await ExamResult.findOne({ _id: attemptId, customerId, examId });
-    if (!attempt) {
-      logger.warn("saveSingleAnswer attempt not found", { traceId, customerId, attemptId });
-      return res.status(404).json({ success: false, message: "Attempt not found." });
-    }
-    if (attempt.status === true) {
-      logger.warn("saveSingleAnswer already submitted", { traceId, customerId, attemptId });
-      return res.status(400).json({ success: false, message: "Attempt already submitted." });
-    }
-
-    const exam = await Exam.findById(examId);
-    if (!exam) {
-      logger.warn("saveSingleAnswer exam not found", { traceId, examId });
-      return res.status(404).json({ success: false, message: "Exam not found." });
-    }
-    if (isAttemptExpired(attempt, exam.durationMinutes)) {
-      logger.warn("saveSingleAnswer expired", { traceId, customerId, attemptId });
-      return res.status(400).json({ success: false, message: "Attempt has expired. Please submit." });
-    }
-
-    const question = await ExamQuestion.findOne({ _id: data.questionId, examId });
-    if (!question) {
-      logger.warn("saveSingleAnswer question mismatch", { traceId, customerId, examId, questionId: data.questionId });
-      return res.status(400).json({ success: false, message: "Question does not belong to exam." });
-    }
-
-    let result: ExamResultType;
-    let point = 0;
-    let answerId: string | null = null;
-
-    if (!data.answerId) {
-      result = ExamResultType.SKIP;
-    } else {
-      const option = await ExamQuestionOption.findOne({ _id: data.answerId, questionId: data.questionId });
-      if (!option) {
-        logger.warn("saveSingleAnswer answer mismatch", { traceId, customerId, questionId: data.questionId, answerId: data.answerId });
-        return res.status(400).json({ success: false, message: "Answer does not belong to question." });
-      }
-      answerId = String(option._id);
-      if (norm(option.name) === "skip") {
-        result = ExamResultType.SKIP;
-      } else if (norm(option.name) === norm(question.answer)) {
-        result = ExamResultType.TRUE;
-        point = exam.positiveMarks;
-      } else {
-        result = ExamResultType.FALSE;
-        point = -Math.abs(exam.negativeMarks);
-      }
-    }
-
-    await ExamResultDetail.updateOne(
-      { examResultId: attempt._id, questionId: data.questionId },
-      {
-        $set: {
-          examResultId: attempt._id,
-          customerId,
-          examId,
-          questionId: data.questionId,
-          answerId,
-          result,
-          point,
-        },
-      },
-      { upsert: true }
-    );
-
-    logger.info("saveSingleAnswer success", { traceId, customerId, examId, attemptId, questionId: data.questionId, result });
-    return res.status(200).json({ success: true, data: { saved: true } });
+    const cid = parseExamId(customerId);
+    const eid = parseExamId(examId);
+    const aid = parseExamId(attemptId);
+    if (!cid || !eid || !aid) return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
+    const qid = parseExamId(String(req.body?.questionId ?? ""));
+    if (!qid) return res.status(400).json({ success: false, message: "Invalid question id." });
+    const rawAns = req.body?.answerId;
+    const ansId = rawAns == null || rawAns === "" ? null : parseExamId(String(rawAns));
+    if (rawAns != null && rawAns !== "" && !ansId) return res.status(400).json({ success: false, message: "Invalid answer id." });
+    const r = await svcSaveSingleAnswer(cid, eid, aid, { questionId: qid, answerId: ansId });
+    if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+    logger.info("saveSingleAnswer success (sql)", { traceId, customerId, examId, attemptId, questionId: qid });
+    return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
     if (error.issues) {
       logger.warn("saveSingleAnswer validation failed", { traceId, customerId, issues: error.issues });
@@ -1324,137 +624,15 @@ export const submitAttempt = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    if (isClientExamMysql()) {
-      const cid = parseExamId(customerId);
-      const eid = parseExamId(examId);
-      const aid = parseExamId(attemptId);
-      if (!cid || !eid || !aid) return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
-      const data = submitAttemptSchema.parse(req.body ?? {});
-      const r = await svcSubmitAttempt(cid, eid, aid, { timing: data.timing, ratting: data.ratting ?? null });
-      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-      logger.info("submitAttempt success (sql)", { traceId, customerId, examId, attemptId });
-      return res.status(200).json({ success: true, data: r.data });
-    }
-
-    if (!isObjectId(examId) || !isObjectId(attemptId)) {
-      logger.warn("submitAttempt invalid ids", { traceId, examId, attemptId });
-      return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
-    }
-
+    const cid = parseExamId(customerId);
+    const eid = parseExamId(examId);
+    const aid = parseExamId(attemptId);
+    if (!cid || !eid || !aid) return res.status(400).json({ success: false, message: "Invalid exam or attempt id." });
     const data = submitAttemptSchema.parse(req.body ?? {});
-
-    const attempt = await ExamResult.findOne({ _id: attemptId, customerId, examId });
-    if (!attempt) {
-      logger.warn("submitAttempt attempt not found", { traceId, customerId, attemptId });
-      return res.status(404).json({ success: false, message: "Attempt not found." });
-    }
-    if (attempt.status === true) {
-      logger.warn("submitAttempt already submitted", { traceId, customerId, attemptId });
-      return res.status(400).json({ success: false, message: "Attempt already submitted." });
-    }
-
-    const exam = await Exam.findById(examId);
-    if (!exam) {
-      logger.warn("submitAttempt exam not found", { traceId, examId });
-      return res.status(404).json({ success: false, message: "Exam not found." });
-    }
-
-    const questions = await ExamQuestion.find({ examId, status: true }).select("_id");
-    const allQIds = questions.map((q) => String(q._id));
-    const total = allQIds.length;
-
-    const saved = await ExamResultDetail.find({ examResultId: attempt._id });
-    const savedByQ = new Map<string, any>();
-    for (const d of saved) savedByQ.set(String(d.questionId), d);
-
-    let skip = 0, success = 0, failed = 0, score = 0;
-    const session = await mongoose.startSession();
-    try {
-      await session.withTransaction(async () => {
-        for (const qid of allQIds) {
-          const existing = savedByQ.get(qid);
-          if (!existing) {
-            await ExamResultDetail.updateOne(
-              { examResultId: attempt._id, questionId: qid },
-              {
-                $set: {
-                  examResultId: attempt._id,
-                  customerId,
-                  examId,
-                  questionId: qid,
-                  answerId: null,
-                  result: ExamResultType.SKIP,
-                  point: 0,
-                },
-              },
-              { upsert: true, session }
-            );
-            skip += 1;
-          } else {
-            if (existing.result === ExamResultType.SKIP) skip += 1;
-            else if (existing.result === ExamResultType.TRUE) success += 1;
-            else failed += 1;
-            score += existing.point ?? 0;
-          }
-        }
-
-        const submittedAt = new Date();
-        const computedTiming =
-          data.timing ??
-          (() => {
-            const ms = submittedAt.getTime() - new Date(attempt.startedAt as any).getTime();
-            const totalSec = Math.max(0, Math.floor(ms / 1000));
-            const m = String(Math.floor(totalSec / 60)).padStart(2, "0");
-            const s = String(totalSec % 60).padStart(2, "0");
-            return `${m}:${s}`;
-          })();
-
-        await ExamResult.updateOne(
-          { _id: attempt._id },
-          {
-            $set: {
-              total,
-              attempt: total - skip,
-              skip,
-              success,
-              failed,
-              score: Math.round(score * 100) / 100,
-              timing: computedTiming,
-              ratting: data.ratting ?? attempt.ratting ?? null,
-              status: true,
-              inProgress: false,
-              submittedAt,
-            },
-          },
-          { session }
-        );
-      });
-    } finally {
-      session.endSession();
-    }
-
-    await recomputeAnalytics(customerId);
-
-    const finalResult = await ExamResult.findById(attempt._id);
-
-    // Rank by each customer's best score for this exam.
-    const bestPerUser = await ExamResult.aggregate([
-      { $match: { examId: new mongoose.Types.ObjectId(examId), status: true } },
-      { $group: { _id: "$customerId", best: { $max: "$score" } } },
-    ]);
-    const myBest = Math.max(
-      finalResult!.score,
-      ...bestPerUser.filter((u: any) => String(u._id) === String(customerId)).map((u: any) => u.best)
-    );
-    const higher = bestPerUser.filter((u: any) => u.best > myBest).length;
-    const totalCandidates = bestPerUser.length;
-    const rank = higher + 1;
-
-    logger.info("submitAttempt success", { traceId, customerId, examId, attemptId, score: finalResult?.score, rank });
-    return res.status(200).json({
-      success: true,
-      data: { examResult: finalResult, rank: `${rank}/${totalCandidates}` },
-    });
+    const r = await svcSubmitAttempt(cid, eid, aid, { timing: data.timing, ratting: data.ratting ?? null });
+    if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+    logger.info("submitAttempt success (sql)", { traceId, customerId, examId, attemptId });
+    return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
     if (error.issues) {
       logger.warn("submitAttempt validation failed", { traceId, customerId, issues: error.issues });
@@ -1479,40 +657,13 @@ export const listAttempts = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    if (isClientExamMysql()) {
-      const cid = parseExamId(customerId);
-      const eid = parseExamId(examId);
-      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-      const r = await svcListAttempts(cid, eid);
-      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-      logger.info("listAttempts success (sql)", { traceId, customerId, examId });
-      return res.status(200).json({ success: true, data: r.data });
-    }
-
-    if (!isObjectId(examId)) {
-      logger.warn("listAttempts invalid id", { traceId, examId });
-      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-    }
-
-    const exam = await Exam.findById(examId).select("title type durationMinutes");
-    if (!exam) {
-      logger.warn("listAttempts exam not found", { traceId, examId });
-      return res.status(404).json({ success: false, message: "Exam not found." });
-    }
-
-    const attempts = await ExamResult.find({ customerId, examId })
-      .sort({ attemptNumber: -1 })
-      .select("_id attemptNumber total attempt skip success failed score timing status inProgress startedAt submittedAt createdAt")
-      .lean();
-
-    logger.info("listAttempts success", { traceId, customerId, examId, count: attempts.length });
-    return res.status(200).json({
-      success: true,
-      data: {
-        exam: { _id: exam._id, title: exam.title, type: (exam as any).type, durationMinutes: exam.durationMinutes },
-        attempts,
-      },
-    });
+    const cid = parseExamId(customerId);
+    const eid = parseExamId(examId);
+    if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    const r = await svcListAttempts(cid, eid);
+    if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+    logger.info("listAttempts success (sql)", { traceId, customerId, examId });
+    return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
     logger.error("listAttempts failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -1534,108 +685,13 @@ export const getAttemptsAggregate = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    if (isClientExamMysql()) {
-      const cid = parseExamId(customerId);
-      const eid = parseExamId(examId);
-      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-      const r = await svcGetAttemptsAggregate(cid, eid);
-      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-      logger.info("getAttemptsAggregate success (sql)", { traceId, customerId, examId });
-      return res.status(200).json({ success: true, data: r.data });
-    }
-
-    if (!isObjectId(examId)) {
-      logger.warn("getAttemptsAggregate invalid id", { traceId, examId });
-      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-    }
-
-    const exam = await Exam.findById(examId).select("title questionCount durationMinutes");
-    if (!exam) {
-      logger.warn("getAttemptsAggregate exam not found", { traceId, examId });
-      return res.status(404).json({ success: false, message: "Exam not found." });
-    }
-
-    const cid = new mongoose.Types.ObjectId(customerId);
-    const eid = new mongoose.Types.ObjectId(examId);
-
-    const [agg] = await ExamResult.aggregate([
-      { $match: { customerId: cid, examId: eid, status: true } },
-      {
-        $group: {
-          _id: null,
-          attemptsCount: { $sum: 1 },
-          total: { $sum: "$total" },
-          attempt: { $sum: "$attempt" },
-          skip: { $sum: "$skip" },
-          success: { $sum: "$success" },
-          failed: { $sum: "$failed" },
-          scoreSum: { $sum: "$score" },
-          bestScore: { $max: "$score" },
-          lastSubmittedAt: { $max: "$submittedAt" },
-        },
-      },
-      {
-        $project: {
-          _id: 0,
-          attemptsCount: 1,
-          total: 1,
-          attempt: 1,
-          skip: 1,
-          success: 1,
-          failed: 1,
-          scoreSum: { $round: ["$scoreSum", 2] },
-          bestScore: { $round: ["$bestScore", 2] },
-          avgScore: {
-            $cond: [
-              { $gt: ["$attemptsCount", 0] },
-              { $round: [{ $divide: ["$scoreSum", "$attemptsCount"] }, 2] },
-              0,
-            ],
-          },
-          accuracy: {
-            $cond: [
-              { $gt: ["$total", 0] },
-              { $round: [{ $multiply: [{ $divide: ["$success", "$total"] }, 100] }, 2] },
-              0,
-            ],
-          },
-          lastSubmittedAt: 1,
-        },
-      },
-    ]);
-
-    const summary = agg ?? {
-      attemptsCount: 0,
-      total: 0,
-      attempt: 0,
-      skip: 0,
-      success: 0,
-      failed: 0,
-      scoreSum: 0,
-      bestScore: 0,
-      avgScore: 0,
-      accuracy: 0,
-      lastSubmittedAt: null,
-    };
-
-    // Rank by best score across users.
-    const bestPerUser = await ExamResult.aggregate([
-      { $match: { examId: eid, status: true } },
-      { $group: { _id: "$customerId", best: { $max: "$score" } } },
-    ]);
-    const myBest = bestPerUser.find((u: any) => String(u._id) === String(customerId))?.best ?? 0;
-    const higher = bestPerUser.filter((u: any) => u.best > myBest).length;
-    const totalCandidates = bestPerUser.length;
-
-    logger.info("getAttemptsAggregate success", { traceId, customerId, examId, attemptsCount: summary.attemptsCount });
-    return res.status(200).json({
-      success: true,
-      data: {
-        exam: { _id: exam._id, title: exam.title, questionCount: exam.questionCount },
-        summary,
-        rank: totalCandidates > 0 ? `${higher + 1}/${totalCandidates}` : "-",
-      },
-    });
+    const cid = parseExamId(customerId);
+    const eid = parseExamId(examId);
+    if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    const r = await svcGetAttemptsAggregate(cid, eid);
+    if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+    logger.info("getAttemptsAggregate success (sql)", { traceId, customerId, examId });
+    return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
     logger.error("getAttemptsAggregate failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -1655,56 +711,13 @@ export const getActiveAttempt = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    if (isClientExamMysql()) {
-      const cid = parseExamId(customerId);
-      const eid = parseExamId(examId);
-      if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-      const r = await svcGetActiveAttempt(cid, eid);
-      if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
-      logger.info("getActiveAttempt success (sql)", { traceId, customerId, examId });
-      return res.status(200).json({ success: true, data: r.data });
-    }
-
-    if (!isObjectId(examId)) {
-      logger.warn("getActiveAttempt invalid id", { traceId, examId });
-      return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-    }
-
-    const attempt = await ExamResult.findOne({ customerId, examId, status: false });
-    if (!attempt) {
-      logger.info("getActiveAttempt no active", { traceId, customerId, examId });
-      return res.status(200).json({ success: true, data: null });
-    }
-
-    const exam = await Exam.findById(examId);
-    if (!exam) {
-      logger.warn("getActiveAttempt exam not found", { traceId, examId });
-      return res.status(404).json({ success: false, message: "Exam not found." });
-    }
-
-    const details = await ExamResultDetail.find({ examResultId: attempt._id })
-      .select("questionId answerId result")
-      .lean();
-
-    const now = new Date();
-    const expired = isAttemptExpired(attempt, exam.durationMinutes);
-
-    logger.info("getActiveAttempt success", { traceId, customerId, examId, attemptId: attempt._id, expired });
-    return res.status(200).json({
-      success: true,
-      data: {
-        attemptId: attempt._id,
-        attemptNumber: attempt.attemptNumber,
-        startedAt: attempt.startedAt,
-        serverNow: now,
-        durationMinutes: exam.durationMinutes,
-        expired,
-        savedAnswers: details.map((d: any) => ({
-          questionId: d.questionId,
-          answerId: d.answerId,
-        })),
-      },
-    });
+    const cid = parseExamId(customerId);
+    const eid = parseExamId(examId);
+    if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
+    const r = await svcGetActiveAttempt(cid, eid);
+    if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
+    logger.info("getActiveAttempt success (sql)", { traceId, customerId, examId });
+    return res.status(200).json({ success: true, data: r.data });
   } catch (error: any) {
     logger.error("getActiveAttempt failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

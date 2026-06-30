@@ -1,8 +1,6 @@
 import admin from "firebase-admin";
 import logger from "./logger";
-import { Customer } from "../models/customer/Customer.model";
 import { callOutbound } from "../libs/outbound";
-import { isMysqlModule } from "../config/migration";
 import { customerProfileRepository } from "../modules/customer-profile/customer-profile.repository";
 
 const FCM_BATCH_SIZE = 500;
@@ -142,16 +140,8 @@ export async function sendPush(
 
   if (invalidTokens.length) {
     try {
-      // When device tokens live in SQL (customer-profile on), prune the
-      // ws_customer_device_token rows; otherwise $pull from the Mongo array.
-      if (isMysqlModule("customer-profile")) {
-        await customerProfileRepository.pruneDeviceTokens(invalidTokens);
-      } else {
-        await Customer.updateMany(
-          { "firebaseTokens.token": { $in: invalidTokens } },
-          { $pull: { firebaseTokens: { token: { $in: invalidTokens } } } }
-        );
-      }
+      // Prune the ws_customer_device_token rows for the invalid tokens.
+      await customerProfileRepository.pruneDeviceTokens(invalidTokens);
     } catch (err) {
       logger.error("Failed to prune invalid FCM tokens", {
         error: (err as Error).message,

@@ -2,16 +2,15 @@
  * Inquiry — MySQL (Prisma) branch. Wave 8. ws_website_inquiry ALTERed to add
  * customer_id / description / message / source (DDL 2026-06-18_create_wave8_misc_tables.sql).
  *
- * Gated behind `isMysqlModule("inquiry")`. Admin list/get/delete + client submit.
+ * Admin list/get/delete + client submit.
  * customer populate hydrates from ws_customer (full_name split → first/last,
  * phoneNumber, emailAddress) to mirror the Mongo .populate("customerId",
  * "_id firstName lastName phoneNumber email").
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const INQUIRY_MODULE = "inquiry";
-export const isInquiryMysql = (): boolean => isMysqlModule(INQUIRY_MODULE);
+export const isInquiryMysql = (): boolean => true;
 
 export const parseInquiryId = (id: string): number | null => {
   const n = Number(id);

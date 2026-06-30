@@ -1,40 +1,11 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { PromoCode } from "../../models/course/PromoCode.model";
-import { Package } from "../../models/course/Package.model";
-import { Course } from "../../models/course/Course.model";
-import { LiveCourse } from "../../models/course/LiveCourse.model";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
-import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
-import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import {
-  isPromoterDataMysql,
   parsePromoterId,
   listPromoterPromocodes,
   getPromoterPromocode,
 } from "../../modules/promoter-data/promoter-data.service";
-
-const APPLIES_TO_MODEL = {
-  package: Package,
-  course: Course,
-  liveCourse: LiveCourse,
-} as const;
-
-async function populateAppliesTo(promo: any) {
-  const at = promo?.appliesTo;
-  if (!at?.ids?.length) return promo;
-  const Model = APPLIES_TO_MODEL[at.type as keyof typeof APPLIES_TO_MODEL] as any;
-  if (!Model) return promo;
-  const records = await Model.find({ _id: { $in: at.ids } })
-    .select("_id name image")
-    .lean();
-  return { ...promo, appliesTo: { type: at.type, ids: records } };
-}
-
-const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
 // GET /api/v1/promoter/promocodes
 export const listMyPromocodes = async (req: Request, res: Response) => {
@@ -45,55 +16,12 @@ export const listMyPromocodes = async (req: Request, res: Response) => {
   try {
     if (!promoterId) { logger.warn("listMyPromocodes unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // ─── MySQL branch (SQL-faithful: no appliesTo) ────────────────────────
-    if (isPromoterDataMysql()) {
-      const pid = parsePromoterId(promoterId);
-      if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
-      const data = await listPromoterPromocodes(pid);
-      logger.info("listMyPromocodes success (sql)", { traceId, promoterId, count: data.length });
-      return res.status(200).json({ success: true, data });
-    }
-
-    const data = await PromoCode.find({ promoterId }).sort({ createdAt: -1 }).lean();
-
-    const ids = data.map((p) => p._id);
-    // Usage now spans all 4 subscription collections (course/package, ebook,
-    // test-series, live-course), so a code used on any product is reflected.
-    const [courseUsage, ebookUsage, testSeriesUsage, liveCourseUsage] = await Promise.all([
-      PackageCourseSubscription.aggregate([
-        { $match: { promocodeId: { $in: ids } } },
-        { $group: { _id: "$promocodeId", count: { $sum: 1 }, revenue: { $sum: "$paidAmount" } } },
-      ]),
-      EbookSubscription.aggregate([
-        { $match: { promocodeId: { $in: ids } } },
-        { $group: { _id: "$promocodeId", count: { $sum: 1 }, revenue: { $sum: "$price" } } },
-      ]),
-      TestSeriesSubscription.aggregate([
-        { $match: { promocodeId: { $in: ids } } },
-        { $group: { _id: "$promocodeId", count: { $sum: 1 }, revenue: { $sum: "$price" } } },
-      ]),
-      LiveCourseSubscription.aggregate([
-        { $match: { promocodeId: { $in: ids } } },
-        { $group: { _id: "$promocodeId", count: { $sum: 1 }, revenue: { $sum: "$paidAmount" } } },
-      ]),
-    ]);
-
-    const usageMap: Record<string, { count: number; revenue: number }> = {};
-    [...courseUsage, ...ebookUsage, ...testSeriesUsage, ...liveCourseUsage].forEach((row: any) => {
-      const k = String(row._id);
-      usageMap[k] ||= { count: 0, revenue: 0 };
-      usageMap[k].count += row.count;
-      usageMap[k].revenue += row.revenue || 0;
-    });
-
-    const enriched = data.map((p: any) => ({
-      ...p,
-      usageCount: usageMap[String(p._id)]?.count || 0,
-      revenue: usageMap[String(p._id)]?.revenue || 0,
-    }));
-
-    logger.info("listMyPromocodes success", { traceId, promoterId, count: enriched.length });
-    return res.status(200).json({ success: true, data: enriched });
+    // SQL-faithful: no appliesTo.
+    const pid = parsePromoterId(promoterId);
+    if (!pid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const data = await listPromoterPromocodes(pid);
+    logger.info("listMyPromocodes success (sql)", { traceId, promoterId, count: data.length });
+    return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("listMyPromocodes failed", { traceId, promoterId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -110,25 +38,13 @@ export const getMyPromocode = async (req: Request, res: Response) => {
   try {
     if (!promoterId) { logger.warn("getMyPromocode unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (isPromoterDataMysql()) {
-      const pid = parsePromoterId(promoterId);
-      const cid = Number(id);
-      if (!pid || !Number.isInteger(cid) || cid <= 0) return res.status(400).json({ success: false, message: "Invalid id." });
-      const promocode = await getPromoterPromocode(pid, cid);
-      if (!promocode) { logger.warn("getMyPromocode not found (sql)", { traceId, promoterId, promocodeId: id }); return res.status(404).json({ success: false, message: "Promocode not found." }); }
-      logger.info("getMyPromocode success (sql)", { traceId, promoterId, promocodeId: id });
-      return res.status(200).json({ success: true, data: { promocode } });
-    }
-
-    if (!isObjectId(id)) { logger.warn("getMyPromocode invalid id", { traceId, promoterId, promocodeId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
-
-    const promocode = await PromoCode.findOne({ _id: id, promoterId }).lean();
-    if (!promocode) { logger.warn("getMyPromocode not found", { traceId, promoterId, promocodeId: id }); return res.status(404).json({ success: false, message: "Promocode not found." }); }
-
-    const populated = await populateAppliesTo(promocode);
-    logger.info("getMyPromocode success", { traceId, promoterId, promocodeId: id });
-    return res.status(200).json({ success: true, data: { promocode: populated } });
+    const pid = parsePromoterId(promoterId);
+    const cid = Number(id);
+    if (!pid || !Number.isInteger(cid) || cid <= 0) return res.status(400).json({ success: false, message: "Invalid id." });
+    const promocode = await getPromoterPromocode(pid, cid);
+    if (!promocode) { logger.warn("getMyPromocode not found (sql)", { traceId, promoterId, promocodeId: id }); return res.status(404).json({ success: false, message: "Promocode not found." }); }
+    logger.info("getMyPromocode success (sql)", { traceId, promoterId, promocodeId: id });
+    return res.status(200).json({ success: true, data: { promocode } });
   } catch (e: any) {
     logger.error("getMyPromocode failed", { traceId, promoterId, promocodeId: id, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

@@ -1,8 +1,7 @@
-import { isMysqlModule } from "../../config/migration";
 import { adminMasterRepository as repo } from "./admin-master.repository";
 
 export const ADMIN_MASTER_MODULE = "admin-master";
-export const isAdminMasterMysql = (): boolean => isMysqlModule(ADMIN_MASTER_MODULE);
+export const isAdminMasterMysql = (): boolean => true;
 
 export const parseMasterId = (id: string): number | null => {
   const n = Number(id);

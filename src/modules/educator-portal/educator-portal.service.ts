@@ -8,10 +8,9 @@
  * ws_package_course_subscription by courseId / packageId (packageId IS the
  * package on SQL). Customer is single `fullName` + `phoneNumber`.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
-export const isEducatorPortalMysql = (): boolean => isMysqlModule("educator-portal");
+export const isEducatorPortalMysql = (): boolean => true;
 
 export const parseEpId = (id: string): number | null => {
   const n = Number(id);

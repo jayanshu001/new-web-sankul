@@ -11,11 +11,10 @@
  * All ids are SQL ints at runtime; DTOs restringify to the Mongo doc shape so
  * the admin/client response contracts are unchanged.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const EXAM_COUNTDOWN_MODULE = "exam-countdown";
-export const isExamCountdownMysql = (): boolean => isMysqlModule(EXAM_COUNTDOWN_MODULE);
+export const isExamCountdownMysql = (): boolean => true;
 
 export const parseEcId = (id: string): number | null => {
   const n = Number(id);

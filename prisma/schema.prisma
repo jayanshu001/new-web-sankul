@@ -1316,6 +1316,8 @@ model PackageCourseEbookPrice {
   materialPrice              Int?                         @map("material_price")
   isDefault                  Boolean                      @map("is_default")
   status                     Boolean
+  isMostPopular              Boolean                      @default(false) @map("is_most_popular")
+  mostPopularPinned          Boolean                      @default(false) @map("most_popular_pinned")
   created_at                 DateTime?
   updated_at                 DateTime?
   packageCourseOrder         PackageCourseOrder[]
@@ -1821,6 +1823,8 @@ model LiveCoursePlan {
   materialPrice Int?      @map("material_price")
   isDefault     Boolean   @default(false) @map("is_default")
   status        Boolean   @default(true)
+  isMostPopular     Boolean @default(false) @map("is_most_popular")
+  mostPopularPinned Boolean @default(false) @map("most_popular_pinned")
   createdAt     DateTime? @map("created_at")
   updatedAt     DateTime? @map("updated_at")
 
@@ -1867,6 +1871,7 @@ model LiveSession {
   hlsUrl                   String?   @map("hls_url")
   hlsUrls                  Json?     @map("hls_urls")
   recordings               Json?
+  mp4Recordings            Json?     @map("mp4_recordings")
   recordingTargetFolderId  Int?      @map("recording_target_folder_id")
   createdAt                DateTime? @map("created_at")
   updatedAt                DateTime? @map("updated_at")
@@ -2277,6 +2282,8 @@ model TestSeriesPrice {
   originalPrice Decimal?  @map("original_price") @db.Decimal(10, 2)
   isDefault     Boolean   @default(false) @map("is_default")
   status        Boolean   @default(true)
+  isMostPopular     Boolean @default(false) @map("is_most_popular")
+  mostPopularPinned Boolean @default(false) @map("most_popular_pinned")
   createdAt     DateTime? @map("created_at")
   updatedAt     DateTime? @map("updated_at")
 

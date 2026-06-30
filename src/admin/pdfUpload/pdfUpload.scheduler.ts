@@ -10,11 +10,7 @@ import {
   deleteFromS3FileUrl,
   isOwnBucketUrl,
 } from "../../middlewares/upload";
-import { PdfUploadJob } from "../../models/system/PdfUploadJob.model";
-import { Ebook } from "../../models/ebook/Ebook.model";
-import { setEbookUploadStatus } from "../ebook/ebook.service";
 import {
-  isPdfUploadMysql,
   getJobByIdSql,
   updateJobSql,
   batchCountsSql,
@@ -126,16 +122,7 @@ function toUpdate(row: any): PdfJobUpdate {
 // After a job reaches a terminal state, check whether its batch is fully done
 // and, if so, emit the batch summary.
 async function maybeEmitBatchDone(batchId: string): Promise<void> {
-  const { total, completed, failed } = isPdfUploadMysql()
-    ? await batchCountsSql(batchId)
-    : await (async () => {
-        const [total, completed, failed] = await Promise.all([
-          PdfUploadJob.countDocuments({ batchId }),
-          PdfUploadJob.countDocuments({ batchId, status: "completed" }),
-          PdfUploadJob.countDocuments({ batchId, status: "failed" }),
-        ]);
-        return { total, completed, failed };
-      })();
+  const { total, completed, failed } = await batchCountsSql(batchId);
   if (completed + failed >= total) {
     emitPdfBatchDone({ batchId, total, completed, failed });
   }
@@ -148,11 +135,8 @@ async function maybeEmitBatchDone(batchId: string): Promise<void> {
  */
 async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
   const { jobRecordId } = job.data;
-  const sql = isPdfUploadMysql();
-  // SQL: a plain row object (Mongo-shaped via toJobRow). Mongo: a Mongoose doc.
-  const row: any = sql
-    ? await getJobByIdSql(jobRecordId)
-    : await PdfUploadJob.findById(jobRecordId);
+  // SQL: a plain row object (Mongo-shaped via toJobRow).
+  const row: any = await getJobByIdSql(jobRecordId);
   if (!row) {
     logger.warn("PDF upload: job row missing, dropping", { jobRecordId });
     return; // nothing to do — row was deleted
@@ -174,34 +158,24 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
   ) => {
     row.status = status;
     row.progress = progress;
-    if (sql) {
-      // Persist all currently-set lifecycle fields in one update; row was already
-      // mutated (startedAt/fileUrl/finishedAt) by the caller before setProgress.
-      await updateJobSql(jobRecordId, {
-        status,
-        progress,
-        startedAt: row.startedAt ?? undefined,
-        finishedAt: row.finishedAt ?? undefined,
-        fileUrl: row.fileUrl ?? undefined,
-      });
-    } else {
-      await row.save();
-    }
+    // Persist all currently-set lifecycle fields in one update; row was already
+    // mutated (startedAt/fileUrl/finishedAt) by the caller before setProgress.
+    await updateJobSql(jobRecordId, {
+      status,
+      progress,
+      startedAt: row.startedAt ?? undefined,
+      finishedAt: row.finishedAt ?? undefined,
+      fileUrl: row.fileUrl ?? undefined,
+    });
     await job.updateProgress(progress);
     emitPdfJobUpdate(toUpdate(row));
 
     const ebookStatus = status === "in_progress" ? "processing" : status;
-    const persistEbook = sql
-      ? setEbookUploadStatusSql(String(row.ebookId), target, {
-          status: ebookStatus,
-          progress,
-          set,
-        })
-      : setEbookUploadStatus(String(row.ebookId), target, {
-          status: ebookStatus,
-          progress,
-          set,
-        });
+    const persistEbook = setEbookUploadStatusSql(String(row.ebookId), target, {
+      status: ebookStatus,
+      progress,
+      set,
+    });
     await persistEbook.catch((err) =>
       // Persisting status must not fail the upload — the socket already carried
       // the live value; the DB mirror is best-effort.
@@ -245,25 +219,17 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
   // without this the previous PDF is orphaned in storage forever). If the
   // ebook vanished, fail the job so it's visible rather than silently dropping
   // the upload.
-  // C7: the ebook-side write is now SQL too — ws_ebook gained the upload-status
-  // / file-name columns. On SQL we read the old url via getEbookUrlSql (keyed by
-  // the int ebookId) and attach below via setEbookUploadStatusSql.
+  // The ebook-side write is SQL — ws_ebook has the upload-status / file-name
+  // columns. We read the old url via getEbookUrlSql (keyed by the int ebookId)
+  // and attach below via setEbookUploadStatusSql.
   const nameField = target === "demoUrl" ? "demoFileName" : "bookFileName";
   let oldUrl: string | null = null;
-  if (sql) {
-    // getEbookUrlSql returns null both when the slot is empty AND when the row
-    // is gone; re-check existence so a missing ebook fails loudly like Mongo.
-    if (!(await ebookExistsSql(String(row.ebookId)))) {
-      throw new Error(`Ebook ${row.ebookId} not found — cannot attach PDF.`);
-    }
-    oldUrl = await getEbookUrlSql(String(row.ebookId), target);
-  } else {
-    const ebook: any = await Ebook.findById(row.ebookId).select(target).lean();
-    if (!ebook) {
-      throw new Error(`Ebook ${row.ebookId} not found — cannot attach PDF.`);
-    }
-    oldUrl = ebook[target] || null;
+  // getEbookUrlSql returns null both when the slot is empty AND when the row
+  // is gone; re-check existence so a missing ebook fails loudly.
+  if (!(await ebookExistsSql(String(row.ebookId)))) {
+    throw new Error(`Ebook ${row.ebookId} not found — cannot attach PDF.`);
   }
+  oldUrl = await getEbookUrlSql(String(row.ebookId), target);
 
   // The completed write sets status="completed" + the url/filename in one update
   // (via setProgress's `set`), so the ebook never reads completed without its
@@ -304,44 +270,16 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
  * queued first; the deterministic jobId keeps this idempotent.
  */
 async function rehydratePendingJobs(): Promise<number> {
-  if (isPdfUploadMysql()) {
-    // SQL: the service resets in_progress→queued and returns the ids to enqueue.
-    const ids = await rehydrateRowsSql();
-    let count = 0;
-    for (const id of ids) {
-      try {
-        await enqueuePdfUploadJob(id);
-        count++;
-      } catch (err) {
-        logger.error("PDF upload rehydrate: failed to enqueue", {
-          id,
-          error: (err as Error).message,
-        });
-      }
-    }
-    return count;
-  }
-
-  const rows = await PdfUploadJob.find({
-    status: { $in: ["queued", "in_progress"] },
-  })
-    .select("_id status")
-    .lean();
-
+  // The service resets in_progress→queued and returns the ids to enqueue.
+  const ids = await rehydrateRowsSql();
   let count = 0;
-  for (const row of rows) {
+  for (const id of ids) {
     try {
-      if (row.status === "in_progress") {
-        await PdfUploadJob.updateOne(
-          { _id: row._id },
-          { $set: { status: "queued", progress: 0 } }
-        );
-      }
-      await enqueuePdfUploadJob(String(row._id));
+      await enqueuePdfUploadJob(id);
       count++;
     } catch (err) {
       logger.error("PDF upload rehydrate: failed to enqueue", {
-        id: String(row._id),
+        id,
         error: (err as Error).message,
       });
     }
@@ -383,27 +321,18 @@ export async function initPdfUploadScheduler(): Promise<void> {
     // attempts keep it visible as in_progress.
     if (job.attemptsMade >= (job.opts.attempts ?? 1)) {
       try {
-        const row: any = isPdfUploadMysql()
-          ? await updateJobSql(job.data.jobRecordId, {
-              status: "failed",
-              failureReason: err.message,
-              finishedAt: new Date(),
-            })
-          : await PdfUploadJob.findByIdAndUpdate(
-              job.data.jobRecordId,
-              { $set: { status: "failed", failureReason: err.message, finishedAt: new Date() } },
-              { new: true }
-            );
+        const row: any = await updateJobSql(job.data.jobRecordId, {
+          status: "failed",
+          failureReason: err.message,
+          finishedAt: new Date(),
+        });
         if (row) {
           emitPdfJobUpdate(toUpdate(row));
           // Persist "failed" onto the ebook slot too (note: bookUrl/demoUrl is
           // left as-is — a failed re-upload keeps the previous file).
           const target: "bookUrl" | "demoUrl" =
             row.targetField === "demoUrl" ? "demoUrl" : "bookUrl";
-          const persistFailed = isPdfUploadMysql()
-            ? setEbookUploadStatusSql(String(row.ebookId), target, { status: "failed" })
-            : setEbookUploadStatus(String(row.ebookId), target, { status: "failed" });
-          await persistFailed.catch(() => {});
+          await setEbookUploadStatusSql(String(row.ebookId), target, { status: "failed" }).catch(() => {});
           await maybeEmitBatchDone(row.batchId);
         }
       } catch (updateErr) {

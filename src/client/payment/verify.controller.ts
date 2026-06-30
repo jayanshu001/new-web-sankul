@@ -1,50 +1,23 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
 import { z } from "zod";
-import { BookOrder } from "../../models/book/BookOrder.model";
-import { BookCart } from "../../models/book/BookCart.model";
-import { nextTrackingId } from "../../models/book/Counter.model";
-import { COURIER } from "../../config/courier";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
-import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
-import { LiveCoursePlan } from "../../models/course/LiveCoursePlan.model";
-import { EbookOrder } from "../../models/ebook/EbookOrder.model";
-import { EbookPrice } from "../../models/ebook/EbookPrice.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
-import { TestSeriesOrder } from "../../models/testSeries/TestSeriesOrder.model";
-import { TestSeriesPrice } from "../../models/testSeries/TestSeriesPrice.model";
-import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
-import {
-  BookOrderStatus,
-  PackageCourseEbookOrderStatus,
-  PackageCourseEbookPaymentType,
-} from "../../models/enums";
-import { computeEndAt, extendEndAt } from "../../utils/planDuration";
-import { creditReferrer } from "../referral/credit-referrer";
-import { applyWalletDebit } from "../referral/wallet-debit";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import {
-  isCommerceOrderMysql,
   findCourseOrderForVerify,
   verifyCourseOrderMysql,
-  isPackageOrderMysql,
   findPackageOrderForVerify,
   verifyPackageOrderMysql,
 } from "../../modules/commerce-order/commerce-order.service";
 import {
-  isEbookOrderMysql,
   findEbookOrderForVerify,
   verifyEbookOrderMysql,
 } from "../../modules/ebook-order/ebook-order.service";
 import {
-  isBookOrderMysql,
   findBookOrderForVerify,
   verifyBookOrderMysql,
 } from "../../modules/book-order/book-order.service";
 import {
-  isLiveCourseOrderMysql,
   findLiveCourseOrderForVerify,
   verifyLiveCourseOrderMysql,
 } from "../../modules/live-course-order/live-course-order.service";
@@ -99,13 +72,10 @@ export const verifyPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // ── MySQL course write path (commerce-order, flag-gated) ─────────────────
-    // DUAL-READ FALLBACK (WRITE_PATH_SCOPE §3.2): when the flag is ON, look for a
-    // MySQL course order owning this razorpay id FIRST. If found, fulfill in
-    // MySQL. If NOT found, fall through to the Mongo fan-out below — this is the
-    // rollback safety net: an order created in Mongo before the flip (or a
-    // non-course order) still verifies correctly. The fallback is read-only.
-    if (isCommerceOrderMysql()) {
+    // ── MySQL course write path (commerce-order) ─────────────────────────────
+    // Look for a MySQL course order owning this razorpay id; if found, fulfill.
+    // If not, fall through to the next order-type check below.
+    {
       // C3 seam: req.user.id is the int customer id in the migrated id-space;
       // coerce the string-typed token subject to int at this boundary.
       const customerIdInt = Number(userId);
@@ -136,13 +106,13 @@ export const verifyPayment = async (req: Request, res: Response) => {
           data: { kind: "course", subscription },
         });
       }
-      // miss → fall through to the Mongo fan-out (dual-read fallback).
+      // miss → fall through to the next order-type check.
     }
 
-    // ── MySQL package write path (commerce-order tables, `package-order` flag) ──
+    // ── MySQL package write path (commerce-order tables) ─────────────────────
     // Twin of the course branch; findPackageOrderForVerify only matches PACKAGE
-    // orders (plan has packageId, no courseId). Dual-read fallback on miss.
-    if (isPackageOrderMysql()) {
+    // orders (plan has packageId, no courseId).
+    {
       const customerIdInt = Number(userId);
       const mysqlPackageOrder = Number.isInteger(customerIdInt)
         ? await findPackageOrderForVerify(razorpay_order_id, customerIdInt)
@@ -155,14 +125,13 @@ export const verifyPayment = async (req: Request, res: Response) => {
         logger.info("verifyPayment: package subscription activated (mysql)", { orderId: mysqlPackageOrder.id, subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
         return res.status(200).json({ success: true, data: { kind: "package", subscription } });
       }
-      // miss → fall through to the Mongo fan-out (dual-read fallback).
+      // miss → fall through to the next order-type check.
     }
 
-    // ── MySQL ebook write path (ebook-order, flag-gated) ─────────────────────
-    // Same dual-read fallback as course: check MySQL first, fall through to Mongo
-    // on miss. Returns the Mongo-shaped EbookOrder as data.order (the ebook
-    // branch returns the ORDER, not the subscription).
-    if (isEbookOrderMysql()) {
+    // ── MySQL ebook write path (ebook-order) ─────────────────────────────────
+    // Returns the EbookOrder DTO as data.order (the ebook branch returns the
+    // ORDER, not the subscription).
+    {
       const customerIdInt = Number(userId);
       const mysqlEbookOrder = Number.isInteger(customerIdInt)
         ? await findEbookOrderForVerify(razorpay_order_id, customerIdInt)
@@ -187,12 +156,12 @@ export const verifyPayment = async (req: Request, res: Response) => {
           data: { kind: "ebook", order },
         });
       }
-      // miss → fall through to the Mongo fan-out (dual-read fallback).
+      // miss → fall through to the next order-type check.
     }
 
-    // ── MySQL book write path (book-order, flag-gated) ───────────────────────
-    // Same dual-read fallback. Returns the Mongo-shaped BookOrder as data.order.
-    if (isBookOrderMysql()) {
+    // ── MySQL book write path (book-order) ───────────────────────────────────
+    // Returns the BookOrder DTO as data.order.
+    {
       const customerIdInt = Number(userId);
       const mysqlBookOrder = Number.isInteger(customerIdInt)
         ? await findBookOrderForVerify(razorpay_order_id, customerIdInt)
@@ -217,13 +186,12 @@ export const verifyPayment = async (req: Request, res: Response) => {
           data: { kind: "book", order },
         });
       }
-      // miss → fall through to the Mongo fan-out (dual-read fallback).
+      // miss → fall through to the next order-type check.
     }
 
-    // ── MySQL live-course write path (live-course-order, flag-gated) ─────────
+    // ── MySQL live-course write path (live-course-order) ─────────────────────
     // Single-table: the pending ws_live_course_subscription owns the razorpay id.
-    // Same dual-read fallback — check MySQL first, fall through to Mongo on miss.
-    if (isLiveCourseOrderMysql()) {
+    {
       const customerIdInt = Number(userId);
       const mysqlLiveSub = Number.isInteger(customerIdInt)
         ? await findLiveCourseOrderForVerify(razorpay_order_id, customerIdInt)
@@ -236,12 +204,12 @@ export const verifyPayment = async (req: Request, res: Response) => {
         logger.info("verifyPayment: live-course subscription activated (mysql)", { subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
         return res.status(200).json({ success: true, data: { kind: "live-course", subscription } });
       }
-      // miss → fall through to the Mongo fan-out (dual-read fallback).
+      // miss → fall through to the next order-type check.
     }
 
-    // ── MySQL test-series write path (test-series-order flag) ────────────────
+    // ── MySQL test-series write path (test-series-order) ─────────────────────
     // Single order table; verify folds-or-fresh into ws_test_series_subscription.
-    if (tsOrderSql.isTestSeriesOrderMysql()) {
+    {
       const customerIdInt = Number(userId);
       const mysqlTsOrder = Number.isInteger(customerIdInt)
         ? await tsOrderSql.findOrderForVerify(razorpay_order_id, customerIdInt)
@@ -254,612 +222,14 @@ export const verifyPayment = async (req: Request, res: Response) => {
         logger.info("verifyPayment: test-series subscription activated (mysql)", { orderId: mysqlTsOrder.id, subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
         return res.status(200).json({ success: true, data: { kind: "test-series", subscription } });
       }
-      // miss → fall through to the Mongo fan-out (dual-read fallback).
+      // miss → no MySQL order owns this razorpay id → not found.
     }
 
-    // Find which local entity owns this Razorpay order. It's exactly one of
-    // these — neither, multiple, or duplicates would be a bug worth surfacing.
-    const [bookOrder, courseSub, ebookOrder, liveCourseSub, testSeriesOrder] = await Promise.all([
-      BookOrder.findOne({ razorpayOrderId: razorpay_order_id, customerId: userId }),
-      PackageCourseSubscription.findOne({
-        razorpayOrderId: razorpay_order_id,
-        customerId: userId,
-      }),
-      EbookOrder.findOne({ razorpayOrderId: razorpay_order_id, customerId: userId }),
-      LiveCourseSubscription.findOne({
-        razorpayOrderId: razorpay_order_id,
-        customerId: userId,
-      }),
-      TestSeriesOrder.findOne({ razorpayOrderId: razorpay_order_id, customerId: userId }),
-    ]);
-
-    if (!bookOrder && !courseSub && !ebookOrder && !liveCourseSub && !testSeriesOrder) {
-      logger.warn("verifyPayment no local order", { traceId, customerId: userId, razorpayOrderId: razorpay_order_id });
-      return res.status(404).json({
-        success: false,
-        message: "No local order found for this Razorpay order id.",
-      });
-    }
-
-    if (bookOrder) {
-      // Idempotency: already verified means the webhook (or a previous call)
-      // beat us to it. Return success without re-running side effects.
-      if (bookOrder.status !== BookOrderStatus.PENDING) {
-        logger.info("verifyPayment: book order already verified (idempotent)", {
-          orderId: String(bookOrder._id),
-          razorpay_order_id,
-        });
-        return res.status(200).json({
-          success: true,
-          data: { kind: "book", order: bookOrder },
-          message: "Already verified.",
-        });
-      }
-
-      bookOrder.status = BookOrderStatus.VERIFIED;
-      bookOrder.razorpayPaymentId = razorpay_payment_id;
-      bookOrder.paidAt = new Date();
-      // Allocate the sequential courier tracking id (Point 1 & 2 of
-      // book-order-courier-tracking.md): on verification the DB hands out the
-      // next integer, which doubles as the courier AWB / docno. Stored as a
-      // string to fit the schema; buildTrackingUrl() coerces it back to a
-      // number for threshold routing. Only allocate once (idempotency above
-      // guards re-entry, but guard here too in case of partial prior writes).
-      if (!bookOrder.tracking.trackingId) {
-        const allocated = await nextTrackingId(COURIER.TIRUPATI.INITIAL_Number);
-        bookOrder.tracking.trackingId = String(allocated);
-      }
-      bookOrder.tracking.status = "Order Placed";
-      bookOrder.tracking.history.push({
-        status: "Order Placed",
-        note: "Payment received",
-        at: bookOrder.paidAt,
-      } as any);
-      await bookOrder.save();
-
-      // Deactivate whichever cart pointed at this order's shipping. We match
-      // on shippingId — the cart that was used to place this order. Other
-      // active carts (rare, but possible if the user opened a new session) stay.
-      const cartResult = await BookCart.updateOne(
-        { customerId: userId, status: true, shippingId: bookOrder.shippingId },
-        { $set: { status: false } }
-      );
-      logger.info("verifyPayment: book order verified", {
-        orderId: String(bookOrder._id),
-        razorpay_order_id,
-        razorpay_payment_id,
-        cartsDeactivated: cartResult.modifiedCount,
-      });
-
-      return res.status(200).json({
-        success: true,
-        data: { kind: "book", order: bookOrder },
-      });
-    }
-
-    // courseSub branch
-    if (courseSub) {
-      if (courseSub.paymentStatus !== "pending") {
-        logger.info("verifyPayment: course subscription already verified (idempotent)", {
-          subscriptionId: String(courseSub._id),
-          razorpay_order_id,
-        });
-        return res.status(200).json({
-          success: true,
-          data: { kind: "course", subscription: courseSub },
-          message: "Already verified.",
-        });
-      }
-
-      // Wallet debit: deduct the coins applied at create-order from the buyer's
-      // rewardPoints + write a debit ledger row. Idempotent on (orderId, debit),
-      // deduct-what's-available. Keyed on this pending row's _id, which is stable
-      // across the merge-extend below. Course/package referral isn't handled here.
-      if (courseSub.coinsUsed && courseSub.coinsUsed > 0) {
-        await applyWalletDebit({
-          customerId: courseSub.customerId,
-          orderId: courseSub._id as any,
-          coin: courseSub.coinsUsed,
-          source: courseSub.courseId ? "course" : "package",
-          traceId,
-        });
-      }
-
-      // Look up the plan to compute access window. `duration` is stored as
-      // DAYS (matches the webhook fulfillment path and the ebook/test-series
-      // branches). The shared helper applies setDate via `asDays:true` so a
-      // 89-day plan bought today expires in 89 days, not 89 months — this
-      // keeps verify / webhook / admin grant producing identical endAt values.
-      const plan = await PackageCourseEbookPrice.findById(courseSub.packageId)
-        .select("duration")
-        .lean();
-      const durationDays = plan?.duration ?? 0;
-      if (!plan) {
-        logger.warn("verifyPayment: course plan lookup returned null", {
-          subscriptionId: String(courseSub._id),
-          planId: String(courseSub.packageId),
-        });
-      }
-
-      const now = new Date();
-
-      // Upsert-extend: this pending row was created at order time. If the
-      // customer ALREADY has an active verified subscription for the same
-      // course/package target, fold the purchased window onto it and retire
-      // this row — otherwise we'd surface two "My Subscription" cards for the
-      // one course with different availability dates.
-      const targetFilter: Record<string, any> = {
-        _id: { $ne: courseSub._id },
-        customerId: courseSub.customerId,
-        status: true,
-        paymentStatus: "verified",
-      };
-      if (courseSub.courseId) targetFilter.courseId = courseSub.courseId;
-      else if (courseSub.targetPackageId) {
-        targetFilter.courseId = null;
-        targetFilter.targetPackageId = courseSub.targetPackageId;
-      }
-      const existingActive =
-        courseSub.courseId || courseSub.targetPackageId
-          ? await PackageCourseSubscription.findOne(targetFilter).sort({ endAt: -1 })
-          : null;
-
-      if (existingActive) {
-        existingActive.endAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
-        existingActive.paidAmount = (existingActive.paidAmount || 0) + (courseSub.paidAmount || 0);
-        // Accumulate promoter commission (currency) across re-purchases — sum the
-        // amount, not the %, so a merged row with mixed promoter %s stays correct.
-        existingActive.promoterCommission =
-          (existingActive.promoterCommission || 0) + (courseSub.promoterCommission || 0);
-        if (courseSub.promoterId) existingActive.promoterId = courseSub.promoterId;
-        if (courseSub.promoterPercentage != null) existingActive.promoterPercentage = courseSub.promoterPercentage;
-        await existingActive.save();
-
-        // Retire the just-paid pending row: record the payment + a pointer to
-        // the row it extended, but keep status:false so it never lists.
-        courseSub.paymentStatus = "verified";
-        courseSub.razorpayPaymentId = razorpay_payment_id;
-        courseSub.paidAt = now;
-        courseSub.status = false;
-        await courseSub.save();
-
-        logger.info("verifyPayment: course subscription extended existing", {
-          subscriptionId: String(existingActive._id),
-          supersededId: String(courseSub._id),
-          customerId: String(courseSub.customerId),
-          razorpay_order_id,
-          razorpay_payment_id,
-          endAt: existingActive.endAt?.toISOString?.(),
-        });
-
-        return res.status(200).json({
-          success: true,
-          data: { kind: "course", subscription: existingActive },
-        });
-      }
-
-      const endAt = computeEndAt({ startAt: now, durationMonths: durationDays, asDays: true });
-
-      courseSub.paymentStatus = "verified";
-      courseSub.razorpayPaymentId = razorpay_payment_id;
-      courseSub.paidAt = now;
-      courseSub.startAt = now;
-      courseSub.endAt = endAt;
-      await courseSub.save();
-
-      logger.info("verifyPayment: course subscription activated", {
-        subscriptionId: String(courseSub._id),
-        planId: String(courseSub.packageId),
-        customerId: String(courseSub.customerId),
-        razorpay_order_id,
-        razorpay_payment_id,
-        durationDays,
-        endAt: endAt.toISOString(),
-      });
-
-      return res.status(200).json({
-        success: true,
-        data: { kind: "course", subscription: courseSub },
-      });
-    }
-
-    if (liveCourseSub) {
-      if (liveCourseSub.paymentStatus !== "pending") {
-        logger.info("verifyPayment: live-course subscription already verified (idempotent)", {
-          subscriptionId: String(liveCourseSub._id),
-          razorpay_order_id,
-        });
-        return res.status(200).json({
-          success: true,
-          data: { kind: "live-course", subscription: liveCourseSub },
-          message: "Already verified.",
-        });
-      }
-
-      // Wallet debit (see course branch). Idempotent, deduct-what's-available.
-      if (liveCourseSub.coinsUsed && liveCourseSub.coinsUsed > 0) {
-        await applyWalletDebit({
-          customerId: liveCourseSub.customerId,
-          orderId: liveCourseSub._id as any,
-          coin: liveCourseSub.coinsUsed,
-          source: "liveCourse",
-          traceId,
-        });
-      }
-
-      const plan = await LiveCoursePlan.findById(liveCourseSub.planId).select("duration").lean();
-      // `duration` is stored as DAYS (see LiveCoursePlan) — use setDate, not setMonth.
-      const durationDays = plan?.duration ?? 0;
-      if (!plan) {
-        logger.warn("verifyPayment: live-course plan lookup returned null", {
-          subscriptionId: String(liveCourseSub._id),
-          planId: String(liveCourseSub.planId),
-        });
-      }
-
-      const now = new Date();
-
-      // Upsert-extend (same rationale as the course branch): fold onto an
-      // existing active subscription for this live course rather than listing a
-      // second card.
-      const existingActive = await LiveCourseSubscription.findOne({
-        _id: { $ne: liveCourseSub._id },
-        customerId: liveCourseSub.customerId,
-        liveCourseId: liveCourseSub.liveCourseId,
-        status: true,
-        paymentStatus: "verified",
-        $or: [{ endAt: null }, { endAt: { $gte: now } }],
-      }).sort({ endAt: -1 });
-
-      if (existingActive) {
-        existingActive.endAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
-        existingActive.paidAmount = (existingActive.paidAmount || 0) + (liveCourseSub.paidAmount || 0);
-        await existingActive.save();
-
-        liveCourseSub.paymentStatus = "verified";
-        liveCourseSub.razorpayPaymentId = razorpay_payment_id;
-        liveCourseSub.paidAt = now;
-        liveCourseSub.status = false;
-        await liveCourseSub.save();
-
-        // Credit the referrer (if this purchase used a referral code). Idempotent
-        // on the order id (the superseded sub row), so a webhook/verify retry
-        // won't double-credit.
-        if (liveCourseSub.referrerId) {
-          await creditReferrer({
-            referrerId: liveCourseSub.referrerId,
-            buyerId: liveCourseSub.customerId,
-            orderId: liveCourseSub._id as any,
-            paidAmount: liveCourseSub.paidAmount ?? 0,
-            source: "liveCourse",
-          });
-        }
-
-        logger.info("verifyPayment: live-course subscription extended existing", {
-          subscriptionId: String(existingActive._id),
-          supersededId: String(liveCourseSub._id),
-          customerId: String(liveCourseSub.customerId),
-          liveCourseId: String(liveCourseSub.liveCourseId),
-          razorpay_order_id,
-          razorpay_payment_id,
-          endAt: existingActive.endAt?.toISOString?.(),
-        });
-
-        return res.status(200).json({
-          success: true,
-          data: { kind: "live-course", subscription: existingActive },
-        });
-      }
-
-      const endAt = computeEndAt({ startAt: now, durationMonths: durationDays, asDays: true });
-
-      liveCourseSub.paymentStatus = "verified";
-      liveCourseSub.razorpayPaymentId = razorpay_payment_id;
-      liveCourseSub.paidAt = now;
-      liveCourseSub.startAt = now;
-      liveCourseSub.endAt = endAt;
-      await liveCourseSub.save();
-
-      if (liveCourseSub.referrerId) {
-        await creditReferrer({
-          referrerId: liveCourseSub.referrerId,
-          buyerId: liveCourseSub.customerId,
-          orderId: liveCourseSub._id as any,
-          paidAmount: liveCourseSub.paidAmount ?? 0,
-          source: "liveCourse",
-        });
-      }
-
-      logger.info("verifyPayment: live-course subscription activated", {
-        subscriptionId: String(liveCourseSub._id),
-        planId: String(liveCourseSub.planId),
-        customerId: String(liveCourseSub.customerId),
-        liveCourseId: String(liveCourseSub.liveCourseId),
-        razorpay_order_id,
-        razorpay_payment_id,
-        durationDays,
-        endAt: endAt.toISOString(),
-      });
-
-      return res.status(200).json({
-        success: true,
-        data: { kind: "live-course", subscription: liveCourseSub },
-      });
-    }
-
-    if (ebookOrder) {
-      if (ebookOrder.status !== PackageCourseEbookOrderStatus.PENDING) {
-        logger.info("verifyPayment: ebook order already verified (idempotent)", {
-          orderId: String(ebookOrder._id),
-          razorpay_order_id,
-        });
-        return res.status(200).json({
-          success: true,
-          data: { kind: "ebook", order: ebookOrder },
-          message: "Already verified.",
-        });
-      }
-
-      // Wallet debit (see course branch). Idempotent, deduct-what's-available.
-      if (ebookOrder.coinsUsed && ebookOrder.coinsUsed > 0) {
-        await applyWalletDebit({
-          customerId: ebookOrder.customerId,
-          orderId: ebookOrder._id as any,
-          coin: ebookOrder.coinsUsed,
-          source: "ebook",
-          traceId,
-        });
-      }
-
-      // `duration` is stored as DAYS — matches the webhook fulfillment path.
-      const plan = await EbookPrice.findById(ebookOrder.planId).select("duration").lean();
-      const durationDays = plan?.duration ?? 0;
-      if (!plan) {
-        logger.warn("verifyPayment: ebook plan lookup returned null", {
-          orderId: String(ebookOrder._id),
-          planId: String(ebookOrder.planId),
-        });
-      }
-
-      ebookOrder.status = PackageCourseEbookOrderStatus.COMPLETE;
-      ebookOrder.razorpayPaymentId = razorpay_payment_id;
-      await ebookOrder.save();
-
-      const startAt = new Date();
-
-      // Extend-on-active: if the customer already has an active subscription to
-      // this ebook, stack the purchased days onto its endAt instead of creating
-      // a second row — otherwise /client/ebooks would list two overlapping
-      // entitlements with conflicting daysLeft. Mirrors the course/package
-      // upsert-extend behavior; `asDays:true` because ebook `duration` is DAYS.
-      const existingActive = await EbookSubscription.findOne({
-        customerId: ebookOrder.customerId,
-        ebookId: ebookOrder.ebookId,
-        status: true,
-        endAt: { $gt: startAt },
-      }).sort({ endAt: -1 });
-
-      if (existingActive) {
-        existingActive.endAt = extendEndAt({
-          currentEndAt: existingActive.endAt,
-          durationMonths: durationDays,
-          asDays: true,
-          now: startAt,
-        });
-        existingActive.price = (existingActive.price || 0) + (ebookOrder.orderPrice || 0);
-        // Accumulate promoter commission across re-purchases. We sum the
-        // currency amount (locked in per order), NOT the percentage, so a
-        // merged row with mixed promoter %s stays correct. promoterId of the
-        // latest paid order wins for attribution.
-        existingActive.promoterCommission =
-          (existingActive.promoterCommission || 0) + (ebookOrder.promoterCommission || 0);
-        if (ebookOrder.promoterId) existingActive.promoterId = ebookOrder.promoterId;
-        if (ebookOrder.promoterPercentage != null) existingActive.promoterPercentage = ebookOrder.promoterPercentage;
-        // Point the row at the most recent paid order so the invoice/receipt
-        // chain follows the latest payment.
-        existingActive.orderId = ebookOrder._id;
-        await existingActive.save();
-
-        logger.info("verifyPayment: ebook subscription extended existing", {
-          orderId: String(ebookOrder._id),
-          subscriptionId: String(existingActive._id),
-          ebookId: String(ebookOrder.ebookId),
-          customerId: String(ebookOrder.customerId),
-          razorpay_order_id,
-          razorpay_payment_id,
-          durationDays,
-          endAt: existingActive.endAt?.toISOString?.(),
-        });
-
-        return res.status(200).json({
-          success: true,
-          data: { kind: "ebook", order: ebookOrder },
-        });
-      }
-
-      const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
-      // Order is COMPLETE on disk; if subscription.create fails next, we'd
-      // be left with a paid order and no entitlement row. The thrown error
-      // surfaces to the global handler, which logs it — but we add a trace
-      // BEFORE the subscription write so the log file shows both sides.
-      const subscription = await EbookSubscription.create({
-        orderId: ebookOrder._id,
-        customerId: ebookOrder.customerId,
-        ebookId: ebookOrder.ebookId,
-        price: ebookOrder.orderPrice,
-        startAt,
-        endAt,
-        paymentType: PackageCourseEbookPaymentType.ONLINE,
-        status: true,
-        promocodeId: ebookOrder.promocodeId ?? null,
-        promoterId: ebookOrder.promoterId ?? null,
-        promoterPercentage: ebookOrder.promoterPercentage ?? null,
-        promoterCommission: ebookOrder.promoterCommission ?? null,
-      });
-
-      logger.info("verifyPayment: ebook order activated", {
-        orderId: String(ebookOrder._id),
-        subscriptionId: String(subscription._id),
-        ebookId: String(ebookOrder.ebookId),
-        customerId: String(ebookOrder.customerId),
-        razorpay_order_id,
-        razorpay_payment_id,
-        durationDays,
-        endAt: endAt.toISOString(),
-      });
-
-      return res.status(200).json({
-        success: true,
-        data: { kind: "ebook", order: ebookOrder },
-      });
-    }
-
-    if (testSeriesOrder) {
-      if (testSeriesOrder.status !== PackageCourseEbookOrderStatus.PENDING) {
-        logger.info("verifyPayment: test-series order already verified (idempotent)", {
-          orderId: String(testSeriesOrder._id),
-          razorpay_order_id,
-        });
-        return res.status(200).json({
-          success: true,
-          data: { kind: "test-series", order: testSeriesOrder },
-          message: "Already verified.",
-        });
-      }
-
-      // Wallet debit (see course branch). Idempotent, deduct-what's-available.
-      if (testSeriesOrder.coinsUsed && testSeriesOrder.coinsUsed > 0) {
-        await applyWalletDebit({
-          customerId: testSeriesOrder.customerId,
-          orderId: testSeriesOrder._id as any,
-          coin: testSeriesOrder.coinsUsed,
-          source: "testSeries",
-          traceId,
-        });
-      }
-
-      // `durationDays` — TestSeries plans are validity in days (mockup shows
-      // "10 days" / "Valid until Sep 17, 2026"), so use setDate, not setMonth.
-      const plan = await TestSeriesPrice.findById(testSeriesOrder.planId)
-        .select("durationDays")
-        .lean();
-      const durationDays = plan?.durationDays ?? 0;
-      if (!plan) {
-        logger.warn("verifyPayment: test-series plan lookup returned null", {
-          orderId: String(testSeriesOrder._id),
-          planId: String(testSeriesOrder.planId),
-        });
-      }
-
-      testSeriesOrder.status = PackageCourseEbookOrderStatus.COMPLETE;
-      testSeriesOrder.razorpayPaymentId = razorpay_payment_id;
-      await testSeriesOrder.save();
-
-      const startAt = new Date();
-
-      // Extend-on-active: stack the purchased days onto an existing active
-      // subscription rather than creating a second overlapping row (mirrors the
-      // ebook/course branches). `durationDays` → setDate via extendEndAt asDays.
-      const existingActive = await TestSeriesSubscription.findOne({
-        customerId: testSeriesOrder.customerId,
-        testSeriesId: testSeriesOrder.testSeriesId,
-        status: true,
-        endAt: { $gt: startAt },
-      }).sort({ endAt: -1 });
-
-      if (existingActive) {
-        existingActive.endAt = extendEndAt({
-          currentEndAt: existingActive.endAt,
-          durationMonths: durationDays,
-          asDays: true,
-          now: startAt,
-        });
-        existingActive.price = (existingActive.price || 0) + (testSeriesOrder.orderPrice || 0);
-        existingActive.orderId = testSeriesOrder._id;
-        if (testSeriesOrder.promocodeId) existingActive.promocodeId = testSeriesOrder.promocodeId;
-        // Accumulate promoter commission (currency) across re-purchases. See the
-        // ebook branch for the rationale (sum amount, not %).
-        existingActive.promoterCommission =
-          (existingActive.promoterCommission || 0) + (testSeriesOrder.promoterCommission || 0);
-        if (testSeriesOrder.promoterId) existingActive.promoterId = testSeriesOrder.promoterId;
-        if (testSeriesOrder.promoterPercentage != null) existingActive.promoterPercentage = testSeriesOrder.promoterPercentage;
-        await existingActive.save();
-
-        if (testSeriesOrder.referrerId) {
-          await creditReferrer({
-            referrerId: testSeriesOrder.referrerId,
-            buyerId: testSeriesOrder.customerId,
-            orderId: testSeriesOrder._id as any,
-            paidAmount: testSeriesOrder.orderPrice ?? 0,
-            source: "testSeries",
-          });
-        }
-
-        logger.info("verifyPayment: test-series subscription extended existing", {
-          orderId: String(testSeriesOrder._id),
-          subscriptionId: String(existingActive._id),
-          testSeriesId: String(testSeriesOrder.testSeriesId),
-          customerId: String(testSeriesOrder.customerId),
-          razorpay_order_id,
-          razorpay_payment_id,
-          durationDays,
-          endAt: existingActive.endAt?.toISOString?.(),
-        });
-
-        return res.status(200).json({
-          success: true,
-          data: { kind: "test-series", order: testSeriesOrder, subscription: existingActive },
-        });
-      }
-
-      const endAt = new Date(startAt);
-      endAt.setDate(endAt.getDate() + durationDays);
-      const subscription = await TestSeriesSubscription.create({
-        orderId: testSeriesOrder._id,
-        customerId: testSeriesOrder.customerId,
-        testSeriesId: testSeriesOrder.testSeriesId,
-        planId: testSeriesOrder.planId ?? null,
-        price: testSeriesOrder.orderPrice,
-        startAt,
-        endAt,
-        paymentType: PackageCourseEbookPaymentType.ONLINE,
-        promocodeId: testSeriesOrder.promocodeId ?? null,
-        promoterId: testSeriesOrder.promoterId ?? null,
-        promoterPercentage: testSeriesOrder.promoterPercentage ?? null,
-        promoterCommission: testSeriesOrder.promoterCommission ?? null,
-        status: true,
-      });
-
-      if (testSeriesOrder.referrerId) {
-        await creditReferrer({
-          referrerId: testSeriesOrder.referrerId,
-          buyerId: testSeriesOrder.customerId,
-          orderId: testSeriesOrder._id as any,
-          paidAmount: testSeriesOrder.orderPrice ?? 0,
-          source: "testSeries",
-        });
-      }
-
-      logger.info("verifyPayment: test-series order activated", {
-        orderId: String(testSeriesOrder._id),
-        subscriptionId: String(subscription._id),
-        testSeriesId: String(testSeriesOrder.testSeriesId),
-        customerId: String(testSeriesOrder.customerId),
-        razorpay_order_id,
-        razorpay_payment_id,
-        durationDays,
-        endAt: endAt.toISOString(),
-      });
-
-      return res.status(200).json({
-        success: true,
-        data: { kind: "test-series", order: testSeriesOrder, subscription },
-      });
-    }
-
-    // Unreachable — TypeScript exhaustiveness only.
-    logger.error("verifyPayment unhandled kind", { traceId, customerId: userId, razorpayOrderId: req.body?.razorpay_order_id });
-    return res.status(500).json({ success: false, message: "Unhandled order kind." });
+    logger.warn("verifyPayment no local order", { traceId, customerId: userId, razorpayOrderId: razorpay_order_id });
+    return res.status(404).json({
+      success: false,
+      message: "No local order found for this Razorpay order id.",
+    });
   } catch (e: any) {
     if (e.issues) { logger.warn("verifyPayment validation failed", { traceId, customerId: userId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
     logger.error("verifyPayment failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e?.stack });

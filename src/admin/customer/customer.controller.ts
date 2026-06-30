@@ -1,26 +1,10 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import { Customer } from "../../models/customer/Customer.model";
-import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
-import { CustomerState } from "../../models/customer/CustomerState.model";
-import { CustomerDistrict } from "../../models/customer/CustomerDistrict.model";
-import { CustomerEducation } from "../../models/customer/CustomerEducation.model";
 import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
-import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
-import { BookOrder } from "../../models/book/BookOrder.model";
 import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSchema } from "./customer.validation";
 import { invalidateCustomerGate } from "../../middlewares/authenticate";
-import { ensureDefaultFolders } from "../../client/folder/folder.controller";
-import { buildSearchFilter } from "../../utils/searchFilter";
-import { isMysqlModule } from "../../config/migration";
 import * as customerSql from "../../modules/admin-customer/admin-customer.service";
 import { getCustomerPurchaseDetails } from "../../modules/admin-customer/admin-customer-details.service";
-
-// Admin customer CRUD shares the customer-auth migration flag — when ws_customer
-// is the source of truth for auth, it is for admin management too.
-const MODULE = "customer-auth";
 
 const parseStatusFilter = (status?: string): boolean | undefined => {
   if (status === "true" || status === "active") return true;
@@ -46,54 +30,19 @@ export const getCustomers = async (req: Request, res: Response) => {
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
 
-    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
-    if (isMysqlModule(MODULE)) {
-      const { items, total } = await customerSql.listCustomers({
-        search,
-        status: parseStatusFilter(status),
-        stateId,
-        districtId,
-        fromDate,
-        toDate,
-        page: pageNum,
-        limit: limitNum,
-      });
-      return res.status(200).json({
-        success: true,
-        data: items,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    const filters: any = { isAccountDeleted: false };
-
-    Object.assign(filters, buildSearchFilter(search, ["firstName", "lastName", "phoneNumber", "emailAddress"]));
-    if (status === "true" || status === "false") filters.status = status === "true";
-    if (districtId && mongoose.Types.ObjectId.isValid(districtId)) filters.districtId = districtId;
-    if (stateId && mongoose.Types.ObjectId.isValid(stateId)) filters.stateId = stateId;
-    if (fromDate || toDate) {
-      filters.createdAt = {};
-      if (fromDate) filters.createdAt.$gte = new Date(fromDate);
-      if (toDate) filters.createdAt.$lte = new Date(toDate);
-    }
-
-    const skip = (pageNum - 1) * limitNum;
-
-    const [data, total] = await Promise.all([
-      Customer.find(filters)
-        .select("-password -otp")
-        .populate("stateId", "_id name")
-        .populate("districtId", "_id name")
-        .populate("educationId", "_id name")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      Customer.countDocuments(filters),
-    ]);
-
+    const { items, total } = await customerSql.listCustomers({
+      search,
+      status: parseStatusFilter(status),
+      stateId,
+      districtId,
+      fromDate,
+      toDate,
+      page: pageNum,
+      limit: limitNum,
+    });
     return res.status(200).json({
       success: true,
-      data,
+      data: items,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
@@ -105,39 +54,14 @@ export const getCustomerById = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
-    if (isMysqlModule(MODULE)) {
-      const numId = customerSql.parseCustomerId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-      const dto = await customerSql.getCustomer(numId);
-      if (!dto) return res.status(404).json({ success: false, message: "Customer not found" });
-      // Subscription/ebook models are not yet on SQL; counts default to 0.
-      return res.status(200).json({
-        success: true,
-        data: { ...dto, courseSubCount: 0, ebookSubCount: 0 },
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-    }
-
-    const customer = await Customer.findOne({ _id: id, isAccountDeleted: false })
-      .select("-password -otp")
-      .populate("stateId", "_id name")
-      .populate("districtId", "_id name")
-      .populate("educationId", "_id name");
-
-    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
-
-    const [courseSubCount, ebookSubCount] = await Promise.all([
-      PackageCourseSubscription.countDocuments({ customerId: id }),
-      EbookSubscription.countDocuments({ customerId: id }),
-    ]);
-
+    const numId = customerSql.parseCustomerId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+    const dto = await customerSql.getCustomer(numId);
+    if (!dto) return res.status(404).json({ success: false, message: "Customer not found" });
+    // Subscription/ebook models are not yet on SQL; counts default to 0.
     return res.status(200).json({
       success: true,
-      data: { ...customer.toObject(), courseSubCount, ebookSubCount },
+      data: { ...dto, courseSubCount: 0, ebookSubCount: 0 },
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
@@ -148,17 +72,8 @@ export const getCustomerById = async (req: Request, res: Response) => {
 
 export const getCustomerPreRequisites = async (_req: Request, res: Response) => {
   try {
-    // ─── MySQL branch (ws_customer_state / _education) ────────────────────
-    if (isMysqlModule(MODULE)) {
-      const data = await customerSql.getPreRequisites();
-      return res.status(200).json({ success: true, data });
-    }
-
-    const [states, educations] = await Promise.all([
-      CustomerState.find({ active: true }).select("_id name stateCode").sort({ name: 1 }),
-      CustomerEducation.find({ status: true }).select("_id name").sort({ name: 1 }),
-    ]);
-    return res.status(200).json({ success: true, data: { states, educations } });
+    const data = await customerSql.getPreRequisites();
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -168,21 +83,10 @@ export const getDistrictsByState = async (req: Request, res: Response) => {
   try {
     const stateId = req.params.stateId as string;
 
-    // ─── MySQL branch (ws_customer_distict) ───────────────────────────────
-    if (isMysqlModule(MODULE)) {
-      const numId = customerSql.parseCustomerId(stateId);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid stateId" });
-      const data = await customerSql.getDistrictsByState(numId);
-      return res.status(200).json({ success: true, data });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(stateId)) {
-      return res.status(400).json({ success: false, message: "Invalid stateId" });
-    }
-    const districts = await CustomerDistrict.find({ stateId, active: true })
-      .select("_id name")
-      .sort({ name: 1 });
-    return res.status(200).json({ success: true, data: districts });
+    const numId = customerSql.parseCustomerId(stateId);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid stateId" });
+    const data = await customerSql.getDistrictsByState(numId);
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -196,45 +100,14 @@ export const createCustomer = async (req: Request, res: Response) => {
     if (file?.location) req.body.profilePicture = file.location;
     const validatedData = createCustomerSchema.parse(req.body);
 
-    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
-    if (isMysqlModule(MODULE)) {
-      if (await customerSql.phoneInUse(validatedData.phoneNumber)) {
-        return res.status(409).json({ success: false, message: "Phone number already registered" });
-      }
-      if (validatedData.emailAddress && (await customerSql.emailInUse(validatedData.emailAddress))) {
-        return res.status(409).json({ success: false, message: "Email address already registered" });
-      }
-      const created = await customerSql.createCustomer(validatedData);
-      return res.status(201).json({ success: true, data: created });
-    }
-
-    const phoneExists = await Customer.exists({ phoneNumber: validatedData.phoneNumber, isAccountDeleted: false });
-    if (phoneExists) {
+    if (await customerSql.phoneInUse(validatedData.phoneNumber)) {
       return res.status(409).json({ success: false, message: "Phone number already registered" });
     }
-
-    if (validatedData.emailAddress) {
-      const emailExists = await Customer.exists({ emailAddress: validatedData.emailAddress, isAccountDeleted: false });
-      if (emailExists) {
-        return res.status(409).json({ success: false, message: "Email address already registered" });
-      }
+    if (validatedData.emailAddress && (await customerSql.emailInUse(validatedData.emailAddress))) {
+      return res.status(409).json({ success: false, message: "Email address already registered" });
     }
-
-    const customer = new Customer({ ...validatedData, verified: false, isPhoneVerified: false });
-    await customer.save();
-    try {
-      await ensureDefaultFolders(customer._id);
-    } catch {
-      // non-fatal
-    }
-
-    const result = await Customer.findById(customer._id)
-      .select("-password -otp")
-      .populate("stateId", "_id name")
-      .populate("districtId", "_id name")
-      .populate("educationId", "_id name");
-
-    return res.status(201).json({ success: true, data: result });
+    const created = await customerSql.createCustomer(validatedData);
+    return res.status(201).json({ success: true, data: created });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     if (error.code === 11000) return res.status(409).json({ success: false, message: "Phone number already registered" });
@@ -250,73 +123,23 @@ export const updateCustomer = async (req: Request, res: Response) => {
     if (file?.location) req.body.profilePicture = file.location;
     const validatedData = updateCustomerSchema.parse(req.body);
 
-    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
-    if (isMysqlModule(MODULE)) {
-      const numId = customerSql.parseCustomerId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+    const numId = customerSql.parseCustomerId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
 
-      const existing = await customerSql.getCustomer(numId);
-      if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
+    const existing = await customerSql.getCustomer(numId);
+    if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
 
-      if (validatedData.emailAddress && (await customerSql.emailInUse(validatedData.emailAddress, numId))) {
-        return res.status(409).json({ success: false, message: "Email address already in use" });
-      }
-      if (validatedData.phoneNumber && (await customerSql.phoneInUse(validatedData.phoneNumber, numId))) {
-        return res.status(409).json({ success: false, message: "Phone number already registered" });
-      }
-
-      const updated = await customerSql.updateCustomer(numId, validatedData);
-      // Status/deletion may have changed → drop the cached auth gate so it bites now.
-      await invalidateCustomerGate(numId);
-      return res.status(200).json({ success: true, data: updated });
+    if (validatedData.emailAddress && (await customerSql.emailInUse(validatedData.emailAddress, numId))) {
+      return res.status(409).json({ success: false, message: "Email address already in use" });
+    }
+    if (validatedData.phoneNumber && (await customerSql.phoneInUse(validatedData.phoneNumber, numId))) {
+      return res.status(409).json({ success: false, message: "Phone number already registered" });
     }
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-    }
-
-    if (validatedData.emailAddress) {
-      const emailExists = await Customer.exists({
-        emailAddress: validatedData.emailAddress,
-        _id: { $ne: id },
-        isAccountDeleted: false,
-      });
-      if (emailExists) {
-        return res.status(409).json({ success: false, message: "Email address already in use" });
-      }
-    }
-
-    if (validatedData.phoneNumber) {
-      const phoneExists = await Customer.exists({
-        phoneNumber: validatedData.phoneNumber,
-        _id: { $ne: id },
-        isAccountDeleted: false,
-      });
-      if (phoneExists) {
-        return res.status(409).json({ success: false, message: "Phone number already registered" });
-      }
-    }
-
-    const updatePayload: any = { ...validatedData };
-    if (validatedData.dob) updatePayload.dob = new Date(validatedData.dob);
-    if (validatedData.phoneNumber) updatePayload.isPhoneVerified = false;
-
-    const customer = await Customer.findOneAndUpdate(
-      { _id: id, isAccountDeleted: false },
-      { $set: updatePayload },
-      { new: true }
-    )
-      .select("-password -otp")
-      .populate("stateId", "_id name")
-      .populate("districtId", "_id name")
-      .populate("educationId", "_id name");
-
-    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
-
+    const updated = await customerSql.updateCustomer(numId, validatedData);
     // Status/deletion may have changed → drop the cached auth gate so it bites now.
-    await invalidateCustomerGate(id);
-
-    return res.status(200).json({ success: true, data: customer });
+    await invalidateCustomerGate(numId);
+    return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
@@ -327,27 +150,11 @@ export const deleteCustomer = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
-    if (isMysqlModule(MODULE)) {
-      const numId = customerSql.parseCustomerId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-      const existing = await customerSql.getCustomer(numId);
-      if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
-      await customerSql.softDeleteCustomer(numId);
-      return res.status(200).json({ success: true, message: "Customer deleted successfully" });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-    }
-
-    const customer = await Customer.findOneAndUpdate(
-      { _id: id, isAccountDeleted: false },
-      { $set: { isAccountDeleted: true, status: false } },
-      { new: true }
-    );
-    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
-
+    const numId = customerSql.parseCustomerId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+    const existing = await customerSql.getCustomer(numId);
+    if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
+    await customerSql.softDeleteCustomer(numId);
     return res.status(200).json({ success: true, message: "Customer deleted successfully" });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
@@ -358,28 +165,13 @@ export const toggleCustomerStatus = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
-    if (isMysqlModule(MODULE)) {
-      const numId = customerSql.parseCustomerId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-      const existing = await customerSql.getCustomer(numId);
-      if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
-      const newStatus = !existing.status;
-      await customerSql.setCustomerStatus(numId, newStatus);
-      return res.status(200).json({ success: true, data: { status: newStatus } });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-    }
-
-    const customer = await Customer.findOne({ _id: id, isAccountDeleted: false }).select("status");
-    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
-
-    customer.status = !customer.status;
-    await customer.save();
-
-    return res.status(200).json({ success: true, data: { status: customer.status } });
+    const numId = customerSql.parseCustomerId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+    const existing = await customerSql.getCustomer(numId);
+    if (!existing) return res.status(404).json({ success: false, message: "Customer not found" });
+    const newStatus = !existing.status;
+    await customerSql.setCustomerStatus(numId, newStatus);
+    return res.status(200).json({ success: true, data: { status: newStatus } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -400,30 +192,10 @@ export const getCustomerCourseSubscriptions = async (req: Request, res: Response
 
     // Subscription models are not yet on SQL — return an empty page on the
     // ws_customer branch so the admin detail view degrades gracefully.
-    if (isMysqlModule(MODULE)) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
-      });
-    }
-
-    const skip = (pageNum - 1) * limitNum;
-
-    const [data, total] = await Promise.all([
-      PackageCourseSubscription.find({ customerId: id })
-        .populate("courseId", "_id name image level")
-        .populate("packageId", "_id name duration price withMaterial")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      PackageCourseSubscription.countDocuments({ customerId: id }),
-    ]);
-
     return res.status(200).json({
       success: true,
-      data,
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      data: [],
+      pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
@@ -442,57 +214,20 @@ export const getCustomerEbookSubscriptions = async (req: Request, res: Response)
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
 
     // Ebook-subscription model not yet on SQL — empty page on ws_customer branch.
-    if (isMysqlModule(MODULE)) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
-      });
-    }
-
-    const skip = (pageNum - 1) * limitNum;
-
-    const now = new Date();
-    const [data, total] = await Promise.all([
-      EbookSubscription.find({ customerId: id })
-        .populate("ebookId", "_id name author publisher")
-        .populate("orderId", "_id paymentMethod orderPrice status")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      EbookSubscription.countDocuments({ customerId: id }),
-    ]);
-
-    const enriched = data.map((sub) => ({
-      ...sub.toObject(),
-      isActive: sub.status && sub.endAt > now,
-    }));
-
     return res.status(200).json({
       success: true,
-      data: enriched,
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      data: [],
+      pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-export const getCustomerAddresses = async (req: Request, res: Response) => {
+export const getCustomerAddresses = async (_req: Request, res: Response) => {
   try {
-    const id = req.params.id as string;
-
     // Address admin view not yet on SQL — empty list on ws_customer branch.
-    if (isMysqlModule(MODULE)) {
-      return res.status(200).json({ success: true, data: [] });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-    const addresses = await CustomerAddress.find({ customerId: id })
-      .populate("stateId", "_id name stateCode")
-      .sort({ createdAt: -1 });
-    return res.status(200).json({ success: true, data: addresses });
+    return res.status(200).json({ success: true, data: [] });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -504,127 +239,16 @@ export const getCustomerDetails = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch (ws_customer) ───────────────────────────────────────
     // Profile + purchase aggregates (subscriptions/orders/addresses) all from SQL.
     // The aggregate is built to match the Mongo handler's DTO shape exactly.
-    if (isMysqlModule(MODULE)) {
-      const numId = customerSql.parseCustomerId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-      const profile = await customerSql.getCustomer(numId);
-      if (!profile) return res.status(404).json({ success: false, message: "Customer not found" });
-      const { addresses, purchases, summary } = await getCustomerPurchaseDetails(numId, new Date());
-      return res.status(200).json({
-        success: true,
-        data: { profile, addresses, purchases, summary },
-      });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-    }
-
-    const customer = await Customer.findOne({ _id: id, isAccountDeleted: false })
-      .select("-password -otp")
-      .populate("stateId", "_id name stateCode")
-      .populate("districtId", "_id name")
-      .populate("educationId", "_id name");
-
-    if (!customer) return res.status(404).json({ success: false, message: "Customer not found" });
-
-    const now = new Date();
-
-    const [
-      addresses,
-      coursePackageSubs,
-      liveCourseSubs,
-      testSeriesSubs,
-      ebookSubs,
-      bookOrders,
-    ] = await Promise.all([
-      CustomerAddress.find({ customerId: id })
-        .populate("stateId", "_id name stateCode")
-        .sort({ createdAt: -1 }),
-      PackageCourseSubscription.find({ customerId: id })
-        .populate("courseId", "_id name image level")
-        .populate("targetPackageId", "_id name image")
-        .populate("packageId", "_id name duration price withMaterial")
-        .sort({ createdAt: -1 }),
-      LiveCourseSubscription.find({ customerId: id })
-        .populate("liveCourseId", "_id name image level")
-        .populate("planId", "_id name duration price")
-        .sort({ createdAt: -1 }),
-      TestSeriesSubscription.find({ customerId: id })
-        .populate("testSeriesId", "_id name image")
-        .populate("planId", "_id name duration price")
-        .sort({ createdAt: -1 }),
-      EbookSubscription.find({ customerId: id })
-        .populate("ebookId", "_id name author publisher")
-        .populate("orderId", "_id paymentMethod orderPrice status createdAt")
-        .sort({ createdAt: -1 }),
-      BookOrder.find({ customerId: id })
-        .populate("items.bookId", "_id name image")
-        .sort({ createdAt: -1 }),
-    ]);
-
-    // Split combined model into courses vs packages
-    const courses = coursePackageSubs
-      .filter((s: any) => s.courseId)
-      .map((s: any) => ({ ...s.toObject(), isActive: !!(s.status && s.endAt && s.endAt > now) }));
-    const packages = coursePackageSubs
-      .filter((s: any) => s.targetPackageId)
-      .map((s: any) => ({ ...s.toObject(), isActive: !!(s.status && s.endAt && s.endAt > now) }));
-
-    const liveCourses = liveCourseSubs.map((s: any) => ({
-      ...s.toObject(),
-      isActive: !!(s.status && s.endAt && s.endAt > now),
-    }));
-    const testSeries = testSeriesSubs.map((s: any) => ({
-      ...s.toObject(),
-      isActive: !!(s.status && s.endAt && s.endAt > now),
-    }));
-    const ebooks = ebookSubs.map((s: any) => ({
-      ...s.toObject(),
-      isActive: !!(s.status && s.endAt && s.endAt > now),
-    }));
-    const physicalBooks = bookOrders.map((o: any) => o.toObject());
-
-    const sumPaid = (arr: any[], field: string) =>
-      arr.reduce((acc, x) => acc + (Number(x[field]) || 0), 0);
-
-    const summary = {
-      totals: {
-        courses: courses.length,
-        packages: packages.length,
-        liveCourses: liveCourses.length,
-        testSeries: testSeries.length,
-        ebooks: ebooks.length,
-        physicalBooks: physicalBooks.length,
-        addresses: addresses.length,
-      },
-      active: {
-        courses: courses.filter((x) => x.isActive).length,
-        packages: packages.filter((x) => x.isActive).length,
-        liveCourses: liveCourses.filter((x) => x.isActive).length,
-        testSeries: testSeries.filter((x) => x.isActive).length,
-        ebooks: ebooks.filter((x) => x.isActive).length,
-      },
-      lifetimeSpend:
-        sumPaid(courses, "paidAmount") +
-        sumPaid(packages, "paidAmount") +
-        sumPaid(liveCourses, "paidAmount") +
-        sumPaid(testSeries, "price") +
-        sumPaid(ebooks, "price") +
-        sumPaid(physicalBooks, "amount"),
-    };
-
+    const numId = customerSql.parseCustomerId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+    const profile = await customerSql.getCustomer(numId);
+    if (!profile) return res.status(404).json({ success: false, message: "Customer not found" });
+    const { addresses, purchases, summary } = await getCustomerPurchaseDetails(numId, new Date());
     return res.status(200).json({
       success: true,
-      data: {
-        profile: customer.toObject(),
-        addresses,
-        purchases: { courses, packages, liveCourses, testSeries, ebooks, physicalBooks },
-        summary,
-      },
+      data: { profile, addresses, purchases, summary },
     });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

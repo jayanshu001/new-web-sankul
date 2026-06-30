@@ -10,9 +10,7 @@ import { PromoCode } from "../../models/course/PromoCode.model";
 import { promoCovers, loadPlanDiscountMap, resolvePlanDiscount, countPlanLinks, PlanLinkPercentages } from "../promocode/applies-to";
 import { Customer } from "../../models/customer/Customer.model";
 import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
-import { Course } from "../../models/course/Course.model";
 import { Package } from "../../models/course/Package.model";
-import { Ebook } from "../../models/ebook/Ebook.model";
 import {
   PackageCourseEbookOrderStatus,
   PackageCourseEbookPaymentType,
@@ -458,40 +456,13 @@ export const listMyOrders = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("listMyOrders unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // SQL branch — read aggregation over migrated tables (course/package + ebook
-    // subs + book orders). The order WRITES below stay Mongo (payment wave).
-    if (ordersSql.isClientOrdersMysql()) {
-      const cid = ordersSql.parseOrdersCustomerId(userId);
-      if (!cid) { logger.warn("listMyOrders invalid customer id (mysql)", { traceId, customerId: userId }); return res.status(400).json({ success: false, message: "Invalid customer." }); }
-      const data = await ordersSql.listMyOrders(cid);
-      logger.info("listMyOrders success (sql)", { traceId, customerId: userId, courseSubs: data.courseSubscriptions.length, ebookSubs: data.ebookSubscriptions.length, bookOrders: data.bookOrders.length });
-      return res.status(200).json({ success: true, data });
-    }
-
-    const [courseSubs, ebookSubs, bookOrders] = await Promise.all([
-      PackageCourseSubscription.find({ customerId: userId })
-        .populate({ path: "courseId", model: Course, select: "name thumbnail" })
-        .populate({ path: "packageId", model: PackageCourseEbookPrice })
-        .sort({ createdAt: -1 })
-        .lean(),
-      EbookSubscription.find({ customerId: userId })
-        .populate({ path: "ebookId", model: Ebook, select: "name thumbnail author" })
-        .sort({ createdAt: -1 })
-        .lean(),
-      BookOrder.find({ customerId: userId })
-        .sort({ createdAt: -1 })
-        .lean(),
-    ]);
-
-    logger.info("listMyOrders success", { traceId, customerId: userId, courseSubs: courseSubs.length, ebookSubs: ebookSubs.length, bookOrders: bookOrders.length });
-    return res.status(200).json({
-      success: true,
-      data: {
-        courseSubscriptions: courseSubs,
-        ebookSubscriptions: ebookSubs,
-        bookOrders,
-      },
-    });
+    // SQL read aggregation over migrated tables (course/package + ebook subs +
+    // book orders). The order WRITES above stay Mongo (payment wave).
+    const cid = ordersSql.parseOrdersCustomerId(userId);
+    if (!cid) { logger.warn("listMyOrders invalid customer id (mysql)", { traceId, customerId: userId }); return res.status(400).json({ success: false, message: "Invalid customer." }); }
+    const data = await ordersSql.listMyOrders(cid);
+    logger.info("listMyOrders success (sql)", { traceId, customerId: userId, courseSubs: data.courseSubscriptions.length, ebookSubs: data.ebookSubscriptions.length, bookOrders: data.bookOrders.length });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("listMyOrders failed", { traceId, customerId: userId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

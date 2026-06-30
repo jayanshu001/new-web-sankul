@@ -1,7 +1,6 @@
 /**
  * PackageCategory — dual-path SQL/Mongo. Net-new SQL table ws_package_category
- * (2026-06-19), backfilled from Mongo ws_package_categories. Gated behind
- * `isMysqlModule("package-category")`.
+ * (2026-06-19), backfilled from Mongo ws_package_categories.
  *
  * Scope: admin CRUD (list/create/update/delete) + the client category LISTING
  * (`listPackageCategories`, with per-category active-package count + the
@@ -11,11 +10,10 @@
  * ws_live_course carries package_category_id, so packages + live courses for a
  * category resolve entirely on MySQL.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const PACKAGE_CATEGORY_MODULE = "package-category";
-export const isPackageCategoryMysql = (): boolean => isMysqlModule(PACKAGE_CATEGORY_MODULE);
+export const isPackageCategoryMysql = (): boolean => true;
 
 export const parsePkgCatId = (id: string): number | null => {
   const n = Number(id);

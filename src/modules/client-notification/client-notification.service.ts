@@ -1,4 +1,3 @@
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 /**
@@ -16,7 +15,7 @@ import { prisma } from "../../config/prisma";
  * read-state writes (markRead/markAll) here are correct + verifiable in isolation.
  */
 export const NOTIFICATION_MODULE = "client-notification";
-export const isNotificationMysql = (): boolean => isMysqlModule(NOTIFICATION_MODULE);
+export const isNotificationMysql = (): boolean => true;
 
 export const parseNotifId = (id: string): number | null => {
   const n = Number(id);

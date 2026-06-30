@@ -129,6 +129,30 @@ function normalizeRecordings(raw: unknown): StreamosRecording[] {
     }));
 }
 
+// Populate `file_size` (bytes) on MP4 entries by reading Content-Length via a HEAD
+// request. Best-effort + concurrent; never throws — an entry keeps its existing
+// file_size (or null) on any failure. Only MP4 is sized: an m3u8's Content-Length
+// is just the manifest text, not the video, so HLS entries are skipped. Generic so
+// it works on both StreamosRecording and the controller's ILiveSessionRecording.
+export async function enrichMp4Sizes<T extends { path?: string; file_size?: number | null }>(
+  recs: T[]
+): Promise<T[]> {
+  if (!Array.isArray(recs) || recs.length === 0) return recs ?? [];
+  return Promise.all(
+    recs.map(async (r) => {
+      if (typeof r.file_size === "number" && r.file_size > 0) return r;
+      if (!r.path || !/\.mp4(\?|$)/i.test(r.path)) return r;
+      try {
+        const res = await axios.head(r.path, { timeout: 10_000, validateStatus: () => true });
+        const len = Number(res.headers["content-length"]);
+        return Number.isFinite(len) && len > 0 ? { ...r, file_size: len } : r;
+      } catch {
+        return r;
+      }
+    })
+  );
+}
+
 // Picks per-quality HLS URLs out of a createStream payload — Streamos returns
 // them as `hls{240,360,480,720}pURL` fields. Returns an object keyed by the
 // numeric resolution (matches the shape of streamDetails.hlsUrls).
@@ -217,6 +241,10 @@ export interface StreamDetailsResult {
   hlsUrl?: string;
   hlsUrls?: QualityHlsUrls;
   recordings: StreamosRecording[];
+  // Plain (un-DRM'd) MP4 variants StreamOS produces per recording — served to
+  // the client alongside the DRM-HLS `recordings`. Same {quality,file_size,path}
+  // shape; `path` is a .mp4. Empty when StreamOS produced no mp4.
+  mp4Recordings: StreamosRecording[];
   raw: any;
 }
 
@@ -238,6 +266,7 @@ export async function getStreamDetails(streamId: string): Promise<StreamDetailsR
     hlsUrl:    payload.hlsURL  ?? payload.hlsUrl,
     hlsUrls:   normalizeQualityHlsUrls(payload.hlsURLs ?? payload.hlsUrls),
     recordings: normalizeRecordings(payload.recordings),
+    mp4Recordings: normalizeRecordings(payload.mp4Links ?? payload.mp4links),
     raw: body,
   };
 }

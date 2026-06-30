@@ -20,6 +20,7 @@ import adminMaterialRoutes from "./material/material.routes";
 import adminPackageRoutes from "./package/package.routes";
 import adminPcMaterialRoutes from "./pc-material/pc-material.routes";
 import adminPlanRoutes from "./plan/plan.routes";
+import adminPlanPopularityRoutes from "./plan-popularity/plan-popularity.routes";
 import adminPromocodeRoutes from "./promocode/promocode.routes";
 import adminSubscriptionRoutes from "./subscription/subscription.routes";
 import adminCmsRoutes from "./cms/cms.routes";
@@ -91,6 +92,7 @@ router.use("/materials", adminMaterialRoutes);
 router.use("/packages", adminPackageRoutes);
 router.use("/pc-materials", adminPcMaterialRoutes); // -> /api/v1/admin/pc-materials/*
 router.use("/plans", adminPlanRoutes);
+router.use("/plan-popularity", adminPlanPopularityRoutes);
 router.use("/promocodes", adminPromocodeRoutes);
 router.use("/subscriptions", adminSubscriptionRoutes);
 router.use("/cms", adminCmsRoutes);

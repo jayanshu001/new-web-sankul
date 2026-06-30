@@ -1,10 +1,7 @@
 import { Request, Response } from "express";
-import { ReferralTerm } from "../../models/referral/ReferralTerm.model";
-import { ReferralFaq } from "../../models/referral/ReferralFaq.model";
-import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
-import { isReferralMysql, getReferralStatus as svcReferralStatus } from "../../modules/referral/referral.service";
+import { getReferralStatus as svcReferralStatus } from "../../modules/referral/referral.service";
 import * as rcService from "../../modules/referral-content/referral-content.service";
 
 // GET /api/v1/client/referral/status
@@ -15,26 +12,9 @@ export const getReferralStatus = async (_req: Request, res: Response) => {
   logger.info("getReferralStatus invoked", { traceId, path: _req.originalUrl });
 
   try {
-    // ─── MySQL branch (ws_refferal_program) ───────────────────────────────
-    if (isReferralMysql()) {
-      const data = await svcReferralStatus();
-      logger.info("getReferralStatus success (sql)", { traceId, enabled: data.enabled });
-      return res.status(200).json({ success: true, data });
-    }
-
-    const program = await ReferralProgram.findOne({ name: "student", status: true })
-      .select("_id referralDiscount referralReward minimumPrice")
-      .lean();
-    logger.info("getReferralStatus success", { traceId, enabled: !!program });
-    return res.status(200).json({
-      success: true,
-      data: {
-        enabled: Boolean(program),
-        referralDiscount: program?.referralDiscount ?? 0,
-        referralReward: program?.referralReward ?? 0,
-        minimumPrice: program?.minimumPrice ?? 0,
-      },
-    });
+    const data = await svcReferralStatus();
+    logger.info("getReferralStatus success (sql)", { traceId, enabled: data.enabled });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getReferralStatus failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -48,18 +28,8 @@ export const getTerms = async (_req: Request, res: Response) => {
   logger.info("getTerms invoked", { traceId, path: _req.originalUrl });
 
   try {
-    // ─── MySQL branch (ws_refferal_term) ──────────────────────────────────
-    if (rcService.isReferralContentMysql()) {
-      const data = await rcService.listActiveTermsForClient();
-      logger.info("getTerms success (sql)", { traceId, count: data.length });
-      return res.status(200).json({ success: true, data });
-    }
-
-    const data = await ReferralTerm.find({ status: true })
-      .sort({ order: 1, createdAt: 1 })
-      .select("_id text order")
-      .lean();
-    logger.info("getTerms success", { traceId, count: data.length });
+    const data = await rcService.listActiveTermsForClient();
+    logger.info("getTerms success (sql)", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getTerms failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -74,18 +44,8 @@ export const getFaqs = async (_req: Request, res: Response) => {
   logger.info("getFaqs invoked", { traceId, path: _req.originalUrl });
 
   try {
-    // ─── MySQL branch (ws_refferal_faq) ───────────────────────────────────
-    if (rcService.isReferralContentMysql()) {
-      const data = await rcService.listActiveFaqsForClient();
-      logger.info("getFaqs success (sql)", { traceId, count: data.length });
-      return res.status(200).json({ success: true, data });
-    }
-
-    const data = await ReferralFaq.find({ status: true })
-      .sort({ order: 1, createdAt: 1 })
-      .select("_id question answer order")
-      .lean();
-    logger.info("getFaqs success", { traceId, count: data.length });
+    const data = await rcService.listActiveFaqsForClient();
+    logger.info("getFaqs success (sql)", { traceId, count: data.length });
     return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getFaqs failed", { traceId, error: getErrorMessage(error), stack: error.stack });

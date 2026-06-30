@@ -11,11 +11,10 @@
  * isPaid col → no free packages on SQL (free-package branch yields none); Course
  * free = purchase='0'. (Documented catalog drift.)
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { isNewItem } from "../../utils/isNew";
 
-export const isClientTrendingMysql = (): boolean => isMysqlModule("client-trending");
+export const isClientTrendingMysql = (): boolean => true;
 
 type TrendingOpts = { type?: string; search?: string; language?: string; limit?: number };
 const flags = (o: TrendingOpts) => ({

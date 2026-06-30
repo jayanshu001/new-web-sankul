@@ -1,4 +1,3 @@
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 /**
@@ -18,7 +17,7 @@ import { prisma } from "../../config/prisma";
  * OFF until the heartbeat + reads flip together.
  */
 export const LECTURE_PROGRESS_MODULE = "client-lecture-progress";
-export const isLectureProgressMysql = (): boolean => isMysqlModule(LECTURE_PROGRESS_MODULE);
+export const isLectureProgressMysql = (): boolean => true;
 
 /**
  * Dedicated sub-flag for the CONTAINER (course/package/liveCourse) progress path
@@ -28,7 +27,7 @@ export const isLectureProgressMysql = (): boolean => isMysqlModule(LECTURE_PROGR
  * SQL/Mongo). Flip `lecture-progress-container` only when the whole hub is ready.
  */
 export const LECTURE_PROGRESS_CONTAINER_MODULE = "lecture-progress-container";
-export const isLectureProgressContainerMysql = (): boolean => isMysqlModule(LECTURE_PROGRESS_CONTAINER_MODULE);
+export const isLectureProgressContainerMysql = (): boolean => true;
 
 export const parseLpId = (id: string): number | null => {
   const n = Number(id);

@@ -12,11 +12,10 @@
  *  - live: session must have ≥1 live course (ws_live_session_course) AND the
  *    customer holds an active verified LiveCourseSubscription to one of them.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const LECTURE_NOTE_MODULE = "client-lecture-note";
-export const isLectureNoteMysql = (): boolean => isMysqlModule(LECTURE_NOTE_MODULE);
+export const isLectureNoteMysql = (): boolean => true;
 
 export const parseLnId = (id: string): number | null => {
   const n = Number(id);

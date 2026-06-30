@@ -1,4 +1,3 @@
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 /**
@@ -15,7 +14,7 @@ import { prisma } from "../../config/prisma";
  * affected the BACKFILL (which stored refId 0), not the live path.
  */
 export const FOLDER_MODULE = "client-folder";
-export const isFolderMysql = (): boolean => isMysqlModule(FOLDER_MODULE);
+export const isFolderMysql = (): boolean => true;
 
 export const parseFolderId = (id: string): number | null => {
   const n = Number(id);

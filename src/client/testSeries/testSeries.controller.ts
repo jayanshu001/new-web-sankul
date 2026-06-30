@@ -1,26 +1,11 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
 import { z } from "zod";
-import { TestSeries } from "../../models/testSeries/TestSeries.model";
-import { TestSeriesContentCategory } from "../../models/testSeries/TestSeriesContentCategory.model";
-import { TestSeriesExam } from "../../models/testSeries/TestSeriesExam.model";
 import { TestSeriesPrice } from "../../models/testSeries/TestSeriesPrice.model";
-import { TestSeriesOrder } from "../../models/testSeries/TestSeriesOrder.model";
-import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
-import { ExamResult } from "../../models/exam/ExamResult.model";
 import { resolveLivePromo } from "../live-course/promo";
-import {
-  PackageCourseEbookOrderStatus,
-  PackageCourseEbookOrderType,
-  PaymentMethod,
-} from "../../models/enums";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
-import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
-import { buildRegexCondition } from "../../utils/searchFilter";
 import {
-  isClientTestSeriesMysql,
   parseCtsId,
   listTestSeriesMysql,
   listMySubscriptionsMysql,
@@ -32,7 +17,6 @@ const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
 const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
-const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
 // Test series is charged at the raw plan price (minus any promo discount),
 // matching the eBook flow — NO GST, NO handling fee. The gstAmount/handlingFee
@@ -78,101 +62,20 @@ export const listTestSeries = async (req: Request, res: Response) => {
     const { search, page = "1", limit = "20" } = req.query as Record<string, string>;
 
     // ─── SQL branch (int id-space) — gated on `client-testseries` ───
-    if (isClientTestSeriesMysql()) {
-      const p = Math.max(1, parseInt(page, 10) || 1);
-      const l = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
-      const cidNum = customerId ? parseCtsId(String(customerId)) : null;
-      const { data, total } = await listTestSeriesMysql({
-        search: search?.trim() || null,
-        page: p,
-        limit: l,
-        customerId: cidNum,
-        now: new Date(),
-        base: resolveBase(req),
-        buildShareUrl,
-      });
-      logger.info("listTestSeries success (sql)", { traceId, customerId, total });
-      return success(res, { data, total, page: p, limit: l }, "Fetched.");
-    }
-
-    const filter: any = { status: true };
-    { const c = buildRegexCondition(search); if (c) filter.title = c; }
-
     const p = Math.max(1, parseInt(page, 10) || 1);
     const l = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
-
-    const [rows, total] = await Promise.all([
-      TestSeries.find(filter)
-        .select("_id title description thumbnail examCategoryIds language paperCount isFree orderBy")
-        .populate({ path: "examCategoryIds", model: "ExamCategory", select: "_id name" })
-        .sort({ orderBy: 1, createdAt: -1 })
-        .skip((p - 1) * l)
-        .limit(l)
-        .lean(),
-      TestSeries.countDocuments(filter),
-    ]);
-
-    // Default-price preview for the listing card.
-    const seriesIds = rows.map((r) => r._id);
-    const defaults = await TestSeriesPrice.find({
-      testSeriesId: { $in: seriesIds },
-      status: true,
-    })
-      .sort({ isDefault: -1, price: 1 })
-      .lean();
-    const defaultByid = new Map<string, any>();
-    for (const p of defaults) {
-      const k = String(p.testSeriesId);
-      if (!defaultByid.has(k)) defaultByid.set(k, p);
-    }
-
-    // Latest-expiring active sub per series → daysLeft.
-    const now = new Date();
-    const latestEndAtByid = new Map<string, Date>();
-    if (customerId && seriesIds.length) {
-      const subs = await TestSeriesSubscription.find({
-        customerId,
-        testSeriesId: { $in: seriesIds },
-        status: true,
-        endAt: { $gt: now },
-      })
-        .select("testSeriesId endAt")
-        .lean();
-      for (const s of subs as any[]) {
-        const k = String(s.testSeriesId);
-        const prev = latestEndAtByid.get(k);
-        if (!prev || (s.endAt as Date).getTime() > prev.getTime()) latestEndAtByid.set(k, s.endAt as Date);
-      }
-    }
-
-    const base = resolveBase(req);
-    const decorated = rows.map((r: any) => {
-      const def = defaultByid.get(String(r._id));
-      const discountPct =
-        def?.originalPrice && def.originalPrice > def.price
-          ? Math.round(((def.originalPrice - def.price) / def.originalPrice) * 100)
-          : 0;
-      const endAt = latestEndAtByid.get(String(r._id)) ?? null;
-      return {
-        ...r,
-        isPaid: !r.isFree,
-        defaultPlan: def
-          ? {
-              _id: def._id,
-              durationDays: def.durationDays,
-              price: def.price,
-              originalPrice: def.originalPrice ?? null,
-              discountPct,
-            }
-          : null,
-        isPurchased: !!endAt,
-        daysLeft: endAt ? computeDaysLeft(endAt, now) : null,
-        shareableLink: buildShareUrl("test-series", String(r._id), base),
-      };
+    const cidNum = customerId ? parseCtsId(String(customerId)) : null;
+    const { data, total } = await listTestSeriesMysql({
+      search: search?.trim() || null,
+      page: p,
+      limit: l,
+      customerId: cidNum,
+      now: new Date(),
+      base: resolveBase(req),
+      buildShareUrl,
     });
-
-    logger.info("listTestSeries success", { traceId, customerId, total });
-    return success(res, { data: decorated, total, page: p, limit: l }, "Fetched.");
+    logger.info("listTestSeries success (sql)", { traceId, customerId, total });
+    return success(res, { data, total, page: p, limit: l }, "Fetched.");
   } catch (e: any) {
     logger.error("listTestSeries failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed to fetch test series.", 500);
@@ -187,62 +90,14 @@ export const getTestSeriesDetail = async (req: Request, res: Response) => {
   logger.info("getTestSeriesDetail invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
-    // ─── SQL branch (int id-space) — runs BEFORE the ObjectId guard ───
-    if (isClientTestSeriesMysql()) {
-      const tsId = parseCtsId(id);
-      if (tsId == null) { logger.warn("getTestSeriesDetail invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
-      const cidNum = customerId ? parseCtsId(String(customerId)) : null;
-      const out = await getTestSeriesDetailMysql({ id: tsId, customerId: cidNum, now: new Date(), base: resolveBase(req), buildShareUrl });
-      if (!out) { logger.warn("getTestSeriesDetail not found (sql)", { traceId, id }); return failure(res, "Test series not found.", 404); }
-      logger.info("getTestSeriesDetail success (sql)", { traceId, customerId, id, isPurchased: out.isPurchased });
-      return success(res, out, "Fetched.");
-    }
-
-    if (!isObjectId(id)) { logger.warn("getTestSeriesDetail invalid id", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
-
-    const series = await TestSeries.findOne({ _id: id, status: true })
-      .populate({ path: "examCategoryIds", model: "ExamCategory", select: "_id name" })
-      .lean();
-    if (!series) { logger.warn("getTestSeriesDetail not found", { traceId, id }); return failure(res, "Test series not found.", 404); }
-
-    const [contentCategories, prices] = await Promise.all([
-      TestSeriesContentCategory.find({ testSeriesId: id, status: true })
-        .sort({ orderBy: 1, name: 1 })
-        .lean(),
-      TestSeriesPrice.find({ testSeriesId: id, status: true })
-        .sort({ isDefault: -1, price: 1 })
-        .lean(),
-    ]);
-
-    let isPurchased = false;
-    let activeSubscription: any = null;
-    if (customerId) {
-      activeSubscription = await TestSeriesSubscription.findOne({
-        customerId,
-        testSeriesId: id,
-        status: true,
-        endAt: { $gt: new Date() },
-      })
-        .sort({ endAt: -1 })
-        .lean();
-      isPurchased = !!activeSubscription;
-    }
-
-    const daysLeft = activeSubscription
-      ? computeDaysLeft(activeSubscription.endAt ?? null)
-      : null;
-
-    logger.info("getTestSeriesDetail success", { traceId, customerId, id, isPurchased });
-    const shareableLink = buildShareUrl("test-series", id, resolveBase(req));
-    // Drop the deprecated single `examCategoryId` from the response — clients
-    // read the populated `examCategoryIds` array. The field is still kept in the
-    // DB / written on update during the migration window; we only hide it here.
-    const { examCategoryId: _deprecatedExamCategoryId, ...seriesOut } = series as any;
-    return success(
-      res,
-      { series: { ...seriesOut, isPaid: !series.isFree, shareableLink }, contentCategories, prices, isPaid: !series.isFree, isPurchased, activeSubscription, daysLeft, shareableLink },
-      "Fetched."
-    );
+    // ─── SQL branch (int id-space) ───
+    const tsId = parseCtsId(id);
+    if (tsId == null) { logger.warn("getTestSeriesDetail invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
+    const cidNum = customerId ? parseCtsId(String(customerId)) : null;
+    const out = await getTestSeriesDetailMysql({ id: tsId, customerId: cidNum, now: new Date(), base: resolveBase(req), buildShareUrl });
+    if (!out) { logger.warn("getTestSeriesDetail not found (sql)", { traceId, id }); return failure(res, "Test series not found.", 404); }
+    logger.info("getTestSeriesDetail success (sql)", { traceId, customerId, id, isPurchased: out.isPurchased });
+    return success(res, out, "Fetched.");
   } catch (e: any) {
     logger.error("getTestSeriesDetail failed", { traceId, customerId, id, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed.", 500);
@@ -259,102 +114,14 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
   logger.info("listSeriesPapers invoked", { traceId, path: req.originalUrl, customerId, id });
 
   try {
-    // ─── SQL branch (int id-space) — runs BEFORE the ObjectId guard ───
-    if (isClientTestSeriesMysql()) {
-      const tsId = parseCtsId(id);
-      if (tsId == null) { logger.warn("listSeriesPapers invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
-      const cidNum = req.user?.id ? parseCtsId(String(req.user.id)) : null;
-      const out = await listSeriesPapersMysql({ id: tsId, customerId: cidNum, now: new Date() });
-      if (!out) { logger.warn("listSeriesPapers not found (sql)", { traceId, id }); return failure(res, "Test series not found.", 404); }
-      logger.info("listSeriesPapers success (sql)", { traceId, customerId, id, isPaid: out.isPaid, hasAccess: out.hasAccess, categoryCount: out.categories.length });
-      return success(res, { isPaid: out.isPaid, hasAccess: out.hasAccess, categories: out.categories }, "Fetched.");
-    }
-
-    if (!isObjectId(id)) { logger.warn("listSeriesPapers invalid id", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
-
-    if (!(await TestSeries.exists({ _id: id, status: true }))) { logger.warn("listSeriesPapers not found", { traceId, id }); return failure(res, "Test series not found.", 404); }
-
-    // Check access — series-level subscription gates the "Start" buttons.
-    let hasAccess = false;
-    const series = await TestSeries.findById(id).select("isFree").lean();
-    // Series is paid when it is not free. Per-paper `isPaid` (below) comes from
-    // the Exam itself; this top-level flag reflects the series subscription gate.
-    const isPaid = !series?.isFree;
-    if (series?.isFree) {
-      hasAccess = true;
-    } else if (customerId) {
-      const sub = await TestSeriesSubscription.exists({
-        customerId,
-        testSeriesId: id,
-        status: true,
-        endAt: { $gt: new Date() },
-      });
-      hasAccess = !!sub;
-    }
-
-    const links = await TestSeriesExam.find({ testSeriesId: id, status: true })
-      .sort({ orderBy: 1, createdAt: 1 })
-      .populate(
-        "examId",
-        "_id title isPaid durationMinutes questionCount positiveMarks negativeMarks language difficulty status"
-      )
-      .lean();
-
-    // Customer's most-recent attempt per exam.
-    let resultByExam = new Map<string, any>();
-    if (customerId && links.length) {
-      const examIds = links.map((l) => l.examId && (l.examId as any)._id).filter(Boolean);
-      const results = await ExamResult.find({
-        customerId,
-        examId: { $in: examIds },
-        status: true,
-      })
-        .select("examId score total success failed skip attempt attemptNumber timing updatedAt")
-        .sort({ updatedAt: -1, attemptNumber: -1 })
-        .lean();
-      for (const r of results) {
-        const k = String(r.examId);
-        if (!resultByExam.has(k)) resultByExam.set(k, r);
-      }
-    }
-
-    const categories = await TestSeriesContentCategory.find({
-      testSeriesId: id,
-      status: true,
-    })
-      .sort({ orderBy: 1, name: 1 })
-      .lean();
-
-    const grouped = categories.map((cat) => {
-      const items = links
-        .filter((l) => String(l.contentCategoryId) === String(cat._id))
-        .map((l: any) => {
-          const exam = l.examId;
-          const prev = exam ? resultByExam.get(String(exam._id)) : null;
-          // Per-paper paid flag comes from the Exam itself. A paper is locked
-          // when it is paid and the customer has no active series access.
-          const paperIsPaid = !!exam?.isPaid;
-          return {
-            linkId: l._id,
-            exam,
-            orderBy: l.orderBy,
-            isPaid: paperIsPaid,
-            isLocked: paperIsPaid && !hasAccess,
-            attemptState: prev ? "retake" : "start",
-            lastResult: prev ?? null,
-          };
-        });
-      return {
-        _id: cat._id,
-        name: cat.name,
-        icon: cat.icon,
-        orderBy: cat.orderBy,
-        papers: items,
-      };
-    });
-
-    logger.info("listSeriesPapers success", { traceId, customerId, id, isPaid, hasAccess, categoryCount: grouped.length });
-    return success(res, { isPaid, hasAccess, categories: grouped }, "Fetched.");
+    // ─── SQL branch (int id-space) ───
+    const tsId = parseCtsId(id);
+    if (tsId == null) { logger.warn("listSeriesPapers invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
+    const cidNum = req.user?.id ? parseCtsId(String(req.user.id)) : null;
+    const out = await listSeriesPapersMysql({ id: tsId, customerId: cidNum, now: new Date() });
+    if (!out) { logger.warn("listSeriesPapers not found (sql)", { traceId, id }); return failure(res, "Test series not found.", 404); }
+    logger.info("listSeriesPapers success (sql)", { traceId, customerId, id, isPaid: out.isPaid, hasAccess: out.hasAccess, categoryCount: out.categories.length });
+    return success(res, { isPaid: out.isPaid, hasAccess: out.hasAccess, categories: out.categories }, "Fetched.");
   } catch (e: any) {
     logger.error("listSeriesPapers failed", { traceId, customerId, id, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed.", 500);
@@ -450,41 +217,16 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
     if (!customerId) { logger.warn("listMySubscriptions unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
     // ─── SQL branch (int id-space) — gated on `client-testseries` ───
-    if (isClientTestSeriesMysql()) {
-      const cidNum = parseCtsId(String(customerId));
-      if (cidNum == null) return success(res, { data: [], total: 0 }, "Fetched.");
-      const { data, total } = await listMySubscriptionsMysql({
-        customerId: cidNum,
-        now: new Date(),
-        base: resolveBase(req),
-        buildShareUrl,
-      });
-      logger.info("listMySubscriptions success (sql)", { traceId, customerId, count: total });
-      return success(res, { data, total }, "Fetched.");
-    }
-
-    const subs = await TestSeriesSubscription.find({ customerId, status: true })
-      .sort({ endAt: -1 })
-      .populate("testSeriesId", "title thumbnail paperCount")
-      .lean();
-    const now = new Date();
-    const base = resolveBase(req);
-    const data = subs.map((s: any) => {
-      const endAt = s.endAt ? new Date(s.endAt) : null;
-      const isActive = !!(endAt && endAt > now);
-      const ts = s.testSeriesId;
-      const tsWithShare = ts && ts._id
-        ? { ...ts, shareableLink: buildShareUrl("test-series", String(ts._id), base) }
-        : ts;
-      return {
-        ...s,
-        testSeriesId: tsWithShare,
-        isActive,
-        daysLeft: isActive ? computeDaysLeft(endAt, now) : 0,
-      };
+    const cidNum = parseCtsId(String(customerId));
+    if (cidNum == null) return success(res, { data: [], total: 0 }, "Fetched.");
+    const { data, total } = await listMySubscriptionsMysql({
+      customerId: cidNum,
+      now: new Date(),
+      base: resolveBase(req),
+      buildShareUrl,
     });
-    logger.info("listMySubscriptions success", { traceId, customerId, count: data.length });
-    return success(res, { data, total: data.length }, "Fetched.");
+    logger.info("listMySubscriptions success (sql)", { traceId, customerId, count: total });
+    return success(res, { data, total }, "Fetched.");
   } catch (e: any) {
     logger.error("listMySubscriptions failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed.", 500);

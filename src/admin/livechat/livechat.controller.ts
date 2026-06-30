@@ -1,8 +1,4 @@
 import { Request, Response } from "express";
-import mongoose, { Types } from "mongoose";
-import { LiveChatMessage } from "../../models/course/LiveChatMessage.model";
-import { LiveChatBan } from "../../models/course/LiveChatBan.model";
-import { Customer } from "../../models/customer/Customer.model";
 import { io, roomKey, disconnectChatSocketsForCustomer, emitChatUnbannedForCustomer } from "../../socket/livechat.socket";
 import { resolveLiveClassId } from "../live/live.guards";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
@@ -29,28 +25,8 @@ export const sendAdminMessage = async (req: Request, res: Response) => {
     const admin = req.user as any;
     const adminName = [admin?.firstName, admin?.lastName].filter(Boolean).join(" ") || admin?.email || "Admin";
 
-    let payload: any;
-    if (liveSql.isLiveCourseMysql()) {
-      const saved = await liveSql.sendAdminChatMessage({ liveClassId, adminId: liveSql.parseLiveId(String(admin.id)), userName: adminName, message: text });
-      payload = { _id: saved._id, liveClassId, adminId: admin.id, isAdmin: true, userName: adminName, message: text, createdAt: saved.createdAt };
-    } else {
-      const saved = await LiveChatMessage.create({
-        liveClassId,
-        adminId: new Types.ObjectId(admin.id),
-        isAdmin: true,
-        userName: adminName,
-        message: text,
-      });
-      payload = {
-        _id: saved._id,
-        liveClassId,
-        adminId: admin.id,
-        isAdmin: true,
-        userName: adminName,
-        message: text,
-        createdAt: saved.createdAt,
-      };
-    }
+    const saved = await liveSql.sendAdminChatMessage({ liveClassId, adminId: liveSql.parseLiveId(String(admin.id)), userName: adminName, message: text });
+    const payload = { _id: saved._id, liveClassId, adminId: admin.id, isAdmin: true, userName: adminName, message: text, createdAt: saved.createdAt };
 
     io?.to(roomKey(liveClassId)).emit("new_message", payload);
 
@@ -72,25 +48,9 @@ export const getChatHistory = async (req: Request, res: Response) => {
     const limit  = Math.min(100, parseInt(req.query.limit as string) || 50);
     const before = req.query.before ? new Date(req.query.before as string) : undefined;
 
-    if (liveSql.isLiveCourseMysql()) {
-      // NOTE: includeDeleted not supported on SQL (history excludes soft-deleted).
-      const messages = await liveSql.getChatHistory(String(liveClassId), limit, before && !isNaN(before.getTime()) ? before : undefined);
-      return success(res, { messages, total: messages.length }, "Chat history fetched.");
-    }
-
-    const includeDeleted = req.query.includeDeleted === "true";
-    const query: any = { liveClassId };
-    if (!includeDeleted) query.deletedAt = null;
-    if (before && !isNaN(before.getTime())) query.createdAt = { $lt: before };
-
-    const messages = await LiveChatMessage.find(query)
-      .sort({ createdAt: -1 })
-      .limit(limit)
-      .select("customerId adminId isAdmin userName message createdAt deletedAt deletedBy")
-      .lean();
-
-    logger.info("getChatHistory success", { traceId, liveClassId, count: messages.length });
-    return success(res, { messages: messages.reverse(), total: messages.length }, "Chat history fetched.");
+    // NOTE: includeDeleted not supported on SQL (history excludes soft-deleted).
+    const messages = await liveSql.getChatHistory(String(liveClassId), limit, before && !isNaN(before.getTime()) ? before : undefined);
+    return success(res, { messages, total: messages.length }, "Chat history fetched.");
   } catch (err) {
     logger.error("getChatHistory failed", { traceId, liveClassId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch chat history.", 500);
@@ -107,37 +67,13 @@ export const deleteChatMessage = async (req: Request, res: Response) => {
 
   try {
     const admin = req.user as any;
-    if (liveSql.isLiveCourseMysql()) {
-      const mid = liveSql.parseLiveId(messageId);
-      if (!mid) return failure(res, "Invalid messageId.", 422);
-      const r = await liveSql.deleteChatMessage(mid, liveSql.parseLiveId(String(admin.id)));
-      if (r === "not_found") return failure(res, "Message not found.", 404);
-      if (r === "already") return success(res, { messageId, alreadyDeleted: true }, "Message already deleted.");
-      io?.to(roomKey(r.liveClassId)).emit("message_deleted", { messageId, liveClassId: r.liveClassId, deletedAt: r.deletedAt });
-      return success(res, { messageId, liveClassId: r.liveClassId, deletedAt: r.deletedAt }, "Message deleted.");
-    }
-    if (!mongoose.Types.ObjectId.isValid(messageId)) {
-      return failure(res, "Invalid messageId.", 422);
-    }
-
-    const msg = await LiveChatMessage.findById(messageId);
-    if (!msg) return failure(res, "Message not found.", 404);
-    if (msg.deletedAt) {
-      return success(res, { messageId, alreadyDeleted: true }, "Message already deleted.");
-    }
-
-    msg.deletedAt = new Date();
-    msg.deletedBy = new Types.ObjectId(admin.id);
-    await msg.save();
-
-    io?.to(roomKey(msg.liveClassId)).emit("message_deleted", {
-      messageId: String(msg._id),
-      liveClassId: msg.liveClassId,
-      deletedAt: msg.deletedAt,
-    });
-
-    logger.info("deleteChatMessage success", { traceId, messageId, liveClassId: msg.liveClassId });
-    return success(res, { messageId, liveClassId: msg.liveClassId, deletedAt: msg.deletedAt }, "Message deleted.");
+    const mid = liveSql.parseLiveId(messageId);
+    if (!mid) return failure(res, "Invalid messageId.", 422);
+    const r = await liveSql.deleteChatMessage(mid, liveSql.parseLiveId(String(admin.id)));
+    if (r === "not_found") return failure(res, "Message not found.", 404);
+    if (r === "already") return success(res, { messageId, alreadyDeleted: true }, "Message already deleted.");
+    io?.to(roomKey(r.liveClassId)).emit("message_deleted", { messageId, liveClassId: r.liveClassId, deletedAt: r.deletedAt });
+    return success(res, { messageId, liveClassId: r.liveClassId, deletedAt: r.deletedAt }, "Message deleted.");
   } catch (err) {
     logger.error("deleteChatMessage failed", { traceId, messageId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to delete message.", 500);
@@ -161,42 +97,13 @@ export const banCustomerFromChat = async (req: Request, res: Response) => {
         : null;
 
     const admin = req.user as any;
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(customerId);
-      if (!cid) return failure(res, "Invalid customerId.", 422);
-      // Global ban (no liveClassId scope on the admin path) → "" sentinel.
-      const r = await liveSql.banCustomerFromChat("", cid, liveSql.parseLiveId(String(admin.id)), reason);
-      const ban = r === "already" ? { _id: null, customerId, reason, createdAt: null } : r;
-      disconnectChatSocketsForCustomer(customerId, { reason: reason ?? undefined });
-      return success(res, { ban }, "Customer banned from live chat.");
-    }
-    if (!mongoose.Types.ObjectId.isValid(customerId)) {
-      return failure(res, "Invalid customerId.", 422);
-    }
-    const customer = await Customer.findById(customerId).select("_id firstName lastName phoneNumber").lean();
-    if (!customer) return failure(res, "Customer not found.", 404);
-
-    const ban = await LiveChatBan.findOneAndUpdate(
-      { customerId },
-      {
-        $setOnInsert: {
-          customerId: new Types.ObjectId(customerId),
-          bannedBy: new Types.ObjectId(admin.id),
-          reason,
-        },
-      },
-      { new: true, upsert: true }
-    );
-
-    // Real-time enforcement: drop the user's chat sockets, tell their client.
+    const cid = liveSql.parseLiveId(customerId);
+    if (!cid) return failure(res, "Invalid customerId.", 422);
+    // Global ban (no liveClassId scope on the admin path) → "" sentinel.
+    const r = await liveSql.banCustomerFromChat("", cid, liveSql.parseLiveId(String(admin.id)), reason);
+    const ban = r === "already" ? { _id: null, customerId, reason, createdAt: null } : r;
     disconnectChatSocketsForCustomer(customerId, { reason: reason ?? undefined });
-
-    logger.info("banCustomerFromChat success", { traceId, customerId, banId: String(ban._id) });
-    return success(
-      res,
-      { ban: { _id: ban._id, customerId, reason: ban.reason, createdAt: ban.createdAt } },
-      "Customer banned from live chat."
-    );
+    return success(res, { ban }, "Customer banned from live chat.");
   } catch (err) {
     logger.error("banCustomerFromChat failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to ban customer.", 500);
@@ -210,27 +117,11 @@ export const unbanCustomerFromChat = async (req: Request, res: Response) => {
   logger.info("unbanCustomerFromChat invoked", { traceId, customerId, userId: req.user?.id });
 
   try {
-    if (liveSql.isLiveCourseMysql()) {
-      const cid = liveSql.parseLiveId(customerId);
-      if (!cid) return failure(res, "Invalid customerId.", 422);
-      const removed = await liveSql.unbanCustomerFromChat(cid);
-      if (!removed) return success(res, { customerId, alreadyUnbanned: true }, "Customer was not banned.");
-      await emitChatUnbannedForCustomer(customerId);
-      return success(res, { customerId }, "Customer unbanned.");
-    }
-    if (!mongoose.Types.ObjectId.isValid(customerId)) {
-      return failure(res, "Invalid customerId.", 422);
-    }
-    const result = await LiveChatBan.deleteOne({ customerId });
-    if (result.deletedCount === 0) {
-      return success(res, { customerId, alreadyUnbanned: true }, "Customer was not banned.");
-    }
-
-    // Real-time: tell any live sockets this customer has so their UI re-enables
-    // chat input without a refresh.
+    const cid = liveSql.parseLiveId(customerId);
+    if (!cid) return failure(res, "Invalid customerId.", 422);
+    const removed = await liveSql.unbanCustomerFromChat(cid);
+    if (!removed) return success(res, { customerId, alreadyUnbanned: true }, "Customer was not banned.");
     await emitChatUnbannedForCustomer(customerId);
-
-    logger.info("unbanCustomerFromChat success", { traceId, customerId });
     return success(res, { customerId }, "Customer unbanned.");
   } catch (err) {
     logger.error("unbanCustomerFromChat failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -247,31 +138,10 @@ export const listChatBans = async (req: Request, res: Response) => {
     const page = Math.max(1, parseInt((req.query.page as string) || "1", 10) || 1);
     const limit = Math.min(100, parseInt((req.query.limit as string) || "20", 10) || 20);
 
-    if (liveSql.isLiveCourseMysql()) {
-      const all = await liveSql.listChatBans();
-      const total = all.length;
-      const items = all.slice((page - 1) * limit, (page - 1) * limit + limit);
-      return success(res, { items, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } }, "Chat bans fetched.");
-    }
-
-    const [rows, total] = await Promise.all([
-      LiveChatBan.find({})
-        .populate({ path: "customerId", select: "_id firstName lastName phoneNumber" })
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .lean(),
-      LiveChatBan.countDocuments({}),
-    ]);
-
-    return success(
-      res,
-      {
-        items: rows,
-        pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
-      },
-      "Chat bans fetched."
-    );
+    const all = await liveSql.listChatBans();
+    const total = all.length;
+    const items = all.slice((page - 1) * limit, (page - 1) * limit + limit);
+    return success(res, { items, pagination: { page, limit, total, totalPages: Math.ceil(total / limit) } }, "Chat bans fetched.");
   } catch (err) {
     logger.error("listChatBans failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch chat bans.", 500);

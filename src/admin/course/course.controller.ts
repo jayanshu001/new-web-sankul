@@ -14,7 +14,6 @@ import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";
 import {
-  createCourseSchema,
   createCourseSqlSchema,
   createCoursePlanSchema,
   updateCoursePlanSchema,
@@ -33,35 +32,8 @@ import * as courseService from "./course.service";
 // handing the payload to Zod.
 // ──────────────────────────────────────────────────────────────────────────────
 
-const coerceCourseBody = (req: Request) => {
-  const file = req.file as any;
-  if (file?.location) req.body.image = file.location;
-  if (typeof req.body.ordered === "string") req.body.ordered = Number(req.body.ordered);
-  if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
-  if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
-  if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
-  delete req.body.examCountdownCategoryId;
-  const materialCategories = courseService.parseCategoryRefs(req.body.materialCategories);
-  const examCategories = courseService.parseCategoryRefs(req.body.examCategories);
-  // Zod accepts ObjectId strings; pass the string form for schema validation
-  // but keep the typed form for the service.
-  if (materialCategories !== undefined) {
-    req.body.materialCategories = materialCategories.map((r) => ({
-      category: r.category.toString(),
-      order: r.order,
-    }));
-  }
-  if (examCategories !== undefined) {
-    req.body.examCategories = examCategories.map((r) => ({
-      category: r.category.toString(),
-      order: r.order,
-    }));
-  }
-  return { materialCategories, examCategories };
-};
-
-// SQL branch: coerce the multipart body without the ObjectId-validating helpers
-// (refs are numeric ids). Returns the parsed numeric category-ref arrays.
+// Coerce the multipart body (refs are numeric ids). Returns the parsed numeric
+// category-ref arrays.
 const coerceCourseBodySql = (req: Request) => {
   const file = req.file as any;
   if (file?.location) req.body.image = file.location;
@@ -187,40 +159,16 @@ export const deleteCourseVideoCategory = asyncHandler(
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const createCourse = asyncHandler(async (req: Request, res: Response) => {
-  if (courseService.isAdminCourseMysql()) {
-    coerceCourseBodySql(req);
-    const v = createCourseSqlSchema.parse(req.body);
-    const data = await courseService.createCourseSql(v);
-    // The Mongo "default folder" automation is N/A on SQL (no course_id col).
-    return res.status(201).json({ success: true, message: "Course created successfully", data });
-  }
-  const { materialCategories, examCategories } = coerceCourseBody(req);
-  const validated = createCourseSchema.parse(req.body);
-  const data = await courseService.createCourse({
-    validated,
-    materialCategories,
-    examCategories,
-  });
-  return res
-    .status(201)
-    .json({ success: true, message: "Course created successfully with default folder", data });
+  coerceCourseBodySql(req);
+  const v = createCourseSqlSchema.parse(req.body);
+  const data = await courseService.createCourseSql(v);
+  return res.status(201).json({ success: true, message: "Course created successfully", data });
 });
 
 export const updateCourse = asyncHandler(async (req: Request, res: Response) => {
-  if (courseService.isAdminCourseMysql()) {
-    coerceCourseBodySql(req);
-    const v = createCourseSqlSchema.partial().parse(req.body);
-    const data = await courseService.updateCourseSql(req.params.id as string, v);
-    return success(res, data as any);
-  }
-  const { materialCategories, examCategories } = coerceCourseBody(req);
-  const validated = createCourseSchema.partial().parse(req.body);
-  const data = await courseService.updateCourse({
-    id: req.params.id as string,
-    validated,
-    materialCategories,
-    examCategories,
-  });
+  coerceCourseBodySql(req);
+  const v = createCourseSqlSchema.partial().parse(req.body);
+  const data = await courseService.updateCourseSql(req.params.id as string, v);
   return success(res, data as any);
 });
 

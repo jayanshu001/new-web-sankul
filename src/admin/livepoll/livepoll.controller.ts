@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
 import { Types } from "mongoose";
 import { LivePoll } from "../../models/course/LivePoll.model";
-import { LivePollVote } from "../../models/course/LivePollVote.model";
 import { io, roomKey } from "../../socket/livechat.socket";
 import { resolveLiveClassId } from "../live/live.guards";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
@@ -39,47 +38,10 @@ export const createPoll = async (req: Request, res: Response) => {
       ? [(req.user as any).firstName, (req.user as any).lastName].filter(Boolean).join(" ")
       : (req.user as any)?.email || "Admin";
 
-    if (liveSql.isLiveCourseMysql()) {
-      const { poll: created, closedPollId } = await liveSql.createPoll({ liveClassId, question: question.trim(), options: optionTexts, createdBy: liveSql.parseLiveId(String(req.user!.id)), createdByName: adminName });
-      if (closedPollId) io?.to(roomKey(liveClassId)).emit("poll_closed", { pollId: closedPollId });
-      const pollData = { _id: created._id, liveClassId: created.liveClassId, question: created.question, options: created.options, totalVotes: created.totalVotes, createdByName: created.createdByName, createdAt: created.createdAt };
-      io?.to(roomKey(liveClassId)).emit("poll_created", { poll: pollData });
-      return success(res, { poll: pollData }, "Poll created and sent to live class.", 201);
-    }
-
-    // Close any currently active poll for this class
-    const existing = await LivePoll.findOne({ liveClassId, isActive: true });
-    if (existing) {
-      existing.isActive = false;
-      existing.closedAt = new Date();
-      await existing.save();
-      io?.to(roomKey(liveClassId)).emit("poll_closed", { pollId: existing._id.toString() });
-    }
-
-    const poll = await LivePoll.create({
-      liveClassId,
-      question: question.trim(),
-      options: optionTexts.map((text) => ({ text, votes: 0 })),
-      totalVotes: 0,
-      isActive: true,
-      createdBy: new Types.ObjectId(req.user!.id),
-      createdByName: adminName,
-    });
-
-    const pollData = {
-      _id: poll._id,
-      liveClassId: poll.liveClassId,
-      question: poll.question,
-      options: poll.options,
-      totalVotes: poll.totalVotes,
-      createdByName: poll.createdByName,
-      createdAt: poll.createdAt,
-    };
-
-    // Broadcast to all students in the live class room
+    const { poll: created, closedPollId } = await liveSql.createPoll({ liveClassId, question: question.trim(), options: optionTexts, createdBy: liveSql.parseLiveId(String(req.user!.id)), createdByName: adminName });
+    if (closedPollId) io?.to(roomKey(liveClassId)).emit("poll_closed", { pollId: closedPollId });
+    const pollData = { _id: created._id, liveClassId: created.liveClassId, question: created.question, options: created.options, totalVotes: created.totalVotes, createdByName: created.createdByName, createdAt: created.createdAt };
     io?.to(roomKey(liveClassId)).emit("poll_created", { poll: pollData });
-
-    logger.info("createPoll success", { traceId, pollId: poll._id, liveClassId, adminId: req.user!.id });
     return success(res, { poll: pollData }, "Poll created and sent to live class.", 201);
   } catch (err) {
     logger.error("createPoll failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -94,30 +56,11 @@ export const closePoll = async (req: Request, res: Response) => {
   logger.info("closePoll invoked", { traceId, path: req.originalUrl, pollId, userId: req.user?.id });
 
   try {
-    if (liveSql.isLiveCourseMysql()) {
-      const pid = liveSql.parseLiveId(pollId);
-      if (!pid) return failure(res, "Invalid pollId.", 422);
-      const r = await liveSql.closePoll(pid);
-      if (r === "not_found") return failure(res, "Poll not found.", 404);
-      io?.to(roomKey(r.liveClassId)).emit("poll_closed", { pollId });
-      return success(res, {}, "Poll closed.");
-    }
-    if (!Types.ObjectId.isValid(pollId)) {
-      logger.warn("closePoll invalid id", { traceId, pollId });
-      return failure(res, "Invalid pollId.", 422);
-    }
-
-    const poll = await LivePoll.findById(pollId);
-    if (!poll) { logger.warn("closePoll not found", { traceId, pollId }); return failure(res, "Poll not found.", 404); }
-    if (!poll.isActive) { logger.warn("closePoll already closed", { traceId, pollId }); return failure(res, "Poll is already closed.", 400); }
-
-    poll.isActive = false;
-    poll.closedAt = new Date();
-    await poll.save();
-
-    io?.to(roomKey(poll.liveClassId)).emit("poll_closed", { pollId });
-
-    logger.info("closePoll success", { traceId, pollId, adminId: req.user!.id });
+    const pid = liveSql.parseLiveId(pollId);
+    if (!pid) return failure(res, "Invalid pollId.", 422);
+    const r = await liveSql.closePoll(pid);
+    if (r === "not_found") return failure(res, "Poll not found.", 404);
+    io?.to(roomKey(r.liveClassId)).emit("poll_closed", { pollId });
     return success(res, {}, "Poll closed.");
   } catch (err) {
     logger.error("closePoll failed", { traceId, pollId, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -135,24 +78,9 @@ export const getPollsByClass = async (req: Request, res: Response) => {
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(50, parseInt(req.query.limit as string) || 20);
 
-    if (liveSql.isLiveCourseMysql()) {
-      const all = await liveSql.getPollsByClass(String(liveClassId));
-      const total = all.length;
-      const polls = all.slice((page - 1) * limit, (page - 1) * limit + limit);
-      return success(res, { polls, total, page, limit }, "Polls fetched.");
-    }
-
-    const [polls, total] = await Promise.all([
-      LivePoll.find({ liveClassId })
-        .sort({ createdAt: -1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .select("question options totalVotes isActive createdByName createdAt closedAt")
-        .lean(),
-      LivePoll.countDocuments({ liveClassId }),
-    ]);
-
-    logger.info("getPollsByClass success", { traceId, liveClassId, total });
+    const all = await liveSql.getPollsByClass(String(liveClassId));
+    const total = all.length;
+    const polls = all.slice((page - 1) * limit, (page - 1) * limit + limit);
     return success(res, { polls, total, page, limit }, "Polls fetched.");
   } catch (err) {
     logger.error("getPollsByClass failed", { traceId, liveClassId, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -238,35 +166,12 @@ export const deletePoll = async (req: Request, res: Response) => {
   logger.info("deletePoll invoked", { traceId, path: req.originalUrl, pollId, userId: req.user?.id });
 
   try {
-    if (liveSql.isLiveCourseMysql()) {
-      const pid = liveSql.parseLiveId(pollId);
-      if (!pid) return failure(res, "Invalid pollId.", 422);
-      const poll = await liveSql.getPollResults(pid);
-      if (poll === "not_found") return failure(res, "Poll not found.", 404);
-      await liveSql.deletePoll(pid);
-      io?.to(roomKey(poll.liveClassId)).emit("poll_deleted", { pollId });
-      return success(res, {}, "Poll deleted.");
-    }
-    if (!Types.ObjectId.isValid(pollId)) {
-      logger.warn("deletePoll invalid id", { traceId, pollId });
-      return failure(res, "Invalid pollId.", 422);
-    }
-
-    const poll = await LivePoll.findById(pollId);
-    if (!poll) { logger.warn("deletePoll not found", { traceId, pollId }); return failure(res, "Poll not found.", 404); }
-
-    const { liveClassId } = poll;
-
-    // Delete poll and all its votes together
-    await Promise.all([
-      LivePoll.deleteOne({ _id: poll._id }),
-      LivePollVote.deleteMany({ pollId: poll._id }),
-    ]);
-
-    // Tell students to dismiss the poll card
-    io?.to(roomKey(liveClassId)).emit("poll_deleted", { pollId });
-
-    logger.info("deletePoll success", { traceId, pollId, liveClassId, adminId: req.user!.id });
+    const pid = liveSql.parseLiveId(pollId);
+    if (!pid) return failure(res, "Invalid pollId.", 422);
+    const poll = await liveSql.getPollResults(pid);
+    if (poll === "not_found") return failure(res, "Poll not found.", 404);
+    await liveSql.deletePoll(pid);
+    io?.to(roomKey(poll.liveClassId)).emit("poll_deleted", { pollId });
     return success(res, {}, "Poll deleted.");
   } catch (err) {
     logger.error("deletePoll failed", { traceId, pollId, error: getErrorMessage(err), stack: (err as Error).stack });
@@ -281,28 +186,12 @@ export const getPollResults = async (req: Request, res: Response) => {
   logger.info("getPollResults invoked", { traceId, path: req.originalUrl, pollId, userId: req.user?.id });
 
   try {
-    if (liveSql.isLiveCourseMysql()) {
-      const pid = liveSql.parseLiveId(pollId);
-      if (!pid) return failure(res, "Invalid pollId.", 422);
-      const poll = await liveSql.getPollResults(pid);
-      if (poll === "not_found") return failure(res, "Poll not found.", 404);
-      // voterCount = sum of option votes (votes table may be sparse on staging).
-      const voterCount = poll.options.reduce((s: number, o: any) => s + (o.votes || 0), 0);
-      return success(res, { poll, voterCount }, "Poll results fetched.");
-    }
-    if (!Types.ObjectId.isValid(pollId)) {
-      logger.warn("getPollResults invalid id", { traceId, pollId });
-      return failure(res, "Invalid pollId.", 422);
-    }
-
-    const poll = await LivePoll.findById(pollId)
-      .select("question options totalVotes isActive createdByName createdAt closedAt liveClassId")
-      .lean();
-    if (!poll) { logger.warn("getPollResults not found", { traceId, pollId }); return failure(res, "Poll not found.", 404); }
-
-    const voterCount = await LivePollVote.countDocuments({ pollId: new Types.ObjectId(pollId) });
-
-    logger.info("getPollResults success", { traceId, pollId, voterCount });
+    const pid = liveSql.parseLiveId(pollId);
+    if (!pid) return failure(res, "Invalid pollId.", 422);
+    const poll = await liveSql.getPollResults(pid);
+    if (poll === "not_found") return failure(res, "Poll not found.", 404);
+    // voterCount = sum of option votes (votes table may be sparse on staging).
+    const voterCount = poll.options.reduce((s: number, o: any) => s + (o.votes || 0), 0);
     return success(res, { poll, voterCount }, "Poll results fetched.");
   } catch (err) {
     logger.error("getPollResults failed", { traceId, pollId, error: getErrorMessage(err), stack: (err as Error).stack });

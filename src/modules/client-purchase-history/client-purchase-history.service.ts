@@ -1,8 +1,7 @@
-import { isMysqlModule } from "../../config/migration";
 import { clientPurchaseHistoryRepository as repo } from "./client-purchase-history.repository";
 
 export const PURCHASE_HISTORY_MODULE = "client-purchase-history";
-export const isPurchaseHistoryMysql = (): boolean => isMysqlModule(PURCHASE_HISTORY_MODULE);
+export const isPurchaseHistoryMysql = (): boolean => true;
 
 export const parsePhId = (id: string): number | null => {
   const n = Number(id);

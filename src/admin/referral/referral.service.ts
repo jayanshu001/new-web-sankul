@@ -2,28 +2,12 @@
 //
 // Domain logic for admin referral endpoints. Withdrawals + reward adjustments
 // are financial mutations — the controller layer enforces `Idempotency-Key`
-// (see referral.routes.ts); this layer keeps the multi-doc writes inside
-// `session.withTransaction()` so retries can't half-apply.
+// (see referral.routes.ts).
 
-import mongoose from "mongoose";
-import { ReferralProgram } from "../../models/referral/ReferralProgram.model";
-import { ReferralTransaction } from "../../models/referral/ReferralTransaction.model";
-import { Customer } from "../../models/customer/Customer.model";
-import {
-  RefferalTransactionType,
-  RefferalTransactionStatus,
-} from "../../models/enums";
 import { HttpError } from "../../middlewares/errorHandler";
-import { buildRegexCondition } from "../../utils/searchFilter";
 import * as refSql from "../../modules/referral/referral.service";
 
-const { isReferralMysql, parseId } = refSql;
-
-const assertObjectId = (id: string, label: string): void => {
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    throw new HttpError(400, `Invalid ${label} id.`);
-  }
-};
+const { parseId } = refSql;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Programs (small master)
@@ -47,94 +31,45 @@ export const listPrograms = async (query: ListProgramsQuery = {}) => {
   const limitNum = Math.max(parseInt(query.limit ?? "20", 10) || 20, 1);
   const sortDir: "asc" | "desc" = query.sortOrder === "desc" ? "desc" : "asc";
 
-  if (isReferralMysql()) {
-    const { data, total } = await refSql.adminListPrograms({
-      search: query.search, sortBy: query.sortBy, sortDir,
-      ...(paginate ? { skip: (pageNum - 1) * limitNum, take: limitNum } : {}),
-    });
-    return paginate
-      ? { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } }
-      : { data };
-  }
-
-  const filter: any = {};
-  { const c = buildRegexCondition(query.search); if (c) filter.$or = [{ name: c }, { title: c }]; }
-  const col = query.sortBy === "name" ? "name" : query.sortBy === "title" ? "title" : "createdAt";
-  const sortSpec: Record<string, 1 | -1> = { [col]: sortDir === "desc" ? -1 : 1, _id: -1 };
-  if (!paginate) {
-    const data = await ReferralProgram.find(filter).sort(sortSpec).lean();
-    return { data };
-  }
-  const [data, total] = await Promise.all([
-    ReferralProgram.find(filter).sort(sortSpec).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
-    ReferralProgram.countDocuments(filter),
-  ]);
-  return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
+  const { data, total } = await refSql.adminListPrograms({
+    search: query.search, sortBy: query.sortBy, sortDir,
+    ...(paginate ? { skip: (pageNum - 1) * limitNum, take: limitNum } : {}),
+  });
+  return paginate
+    ? { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } }
+    : { data };
 };
 
 export const getProgramById = async (id: string) => {
-  if (isReferralMysql()) {
-    const numId = parseId(id);
-    if (!numId) throw new HttpError(400, "Invalid program id.");
-    const program = await refSql.adminGetProgram(numId);
-    if (!program) throw new HttpError(404, "Program not found.");
-    return program;
-  }
-  assertObjectId(id, "program");
-  const program = await ReferralProgram.findById(id).lean();
+  const numId = parseId(id);
+  if (!numId) throw new HttpError(400, "Invalid program id.");
+  const program = await refSql.adminGetProgram(numId);
   if (!program) throw new HttpError(404, "Program not found.");
   return program;
 };
 
 export const createProgram = async (validated: any) => {
-  if (isReferralMysql()) {
-    if (validated.name && (await refSql.adminProgramNameExists(validated.name))) {
-      throw new HttpError(409, "Program name already exists.");
-    }
-    return refSql.adminCreateProgram(validated);
+  if (validated.name && (await refSql.adminProgramNameExists(validated.name))) {
+    throw new HttpError(409, "Program name already exists.");
   }
-  try {
-    const program = await ReferralProgram.create(validated);
-    return program.toObject();
-  } catch (error: any) {
-    if (error?.code === 11000) {
-      throw new HttpError(409, "Program name already exists.");
-    }
-    throw error;
-  }
+  return refSql.adminCreateProgram(validated);
 };
 
 export const updateProgram = async (id: string, validated: any) => {
-  if (isReferralMysql()) {
-    const numId = parseId(id);
-    if (!numId) throw new HttpError(400, "Invalid program id.");
-    if (!(await refSql.adminGetProgram(numId))) throw new HttpError(404, "Program not found.");
-    if (validated.name && (await refSql.adminProgramNameExists(validated.name, numId))) {
-      throw new HttpError(409, "Program name already exists.");
-    }
-    return refSql.adminUpdateProgram(numId, validated);
+  const numId = parseId(id);
+  if (!numId) throw new HttpError(400, "Invalid program id.");
+  if (!(await refSql.adminGetProgram(numId))) throw new HttpError(404, "Program not found.");
+  if (validated.name && (await refSql.adminProgramNameExists(validated.name, numId))) {
+    throw new HttpError(409, "Program name already exists.");
   }
-  assertObjectId(id, "program");
-  const program = await ReferralProgram.findByIdAndUpdate(
-    id,
-    { $set: validated },
-    { new: true }
-  ).lean();
-  if (!program) throw new HttpError(404, "Program not found.");
-  return program;
+  return refSql.adminUpdateProgram(numId, validated);
 };
 
 export const deleteProgram = async (id: string) => {
-  if (isReferralMysql()) {
-    const numId = parseId(id);
-    if (!numId) throw new HttpError(400, "Invalid program id.");
-    if (!(await refSql.adminGetProgram(numId))) throw new HttpError(404, "Program not found.");
-    await refSql.adminDeleteProgram(numId);
-    return;
-  }
-  assertObjectId(id, "program");
-  const program = await ReferralProgram.findByIdAndDelete(id).lean();
-  if (!program) throw new HttpError(404, "Program not found.");
+  const numId = parseId(id);
+  if (!numId) throw new HttpError(400, "Invalid program id.");
+  if (!(await refSql.adminGetProgram(numId))) throw new HttpError(404, "Program not found.");
+  await refSql.adminDeleteProgram(numId);
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -154,137 +89,37 @@ export interface ListTransactionsQuery {
 export const listTransactions = async (query: ListTransactionsQuery) => {
   const { customerId, type, status, fromDate, toDate, page = "1", limit = "20" } = query;
 
-  if (isReferralMysql()) {
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
-    const { data, total } = await refSql.adminListTransactions({ customerId, type, status, fromDate, toDate, page: pageNum, limit: limitNum });
-    return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
-  }
-
-  const filter: any = {};
-  if (customerId && mongoose.Types.ObjectId.isValid(customerId)) filter.customerId = customerId;
-  if (type === RefferalTransactionType.CREDIT || type === RefferalTransactionType.DEBIT)
-    filter.type = type;
-  if (
-    status === RefferalTransactionStatus.PENDING ||
-    status === RefferalTransactionStatus.SUCCESSFUL ||
-    status === RefferalTransactionStatus.FAILED
-  )
-    filter.status = status;
-  if (fromDate || toDate) {
-    filter.createdAt = {};
-    if (fromDate) filter.createdAt.$gte = new Date(fromDate);
-    if (toDate) filter.createdAt.$lte = new Date(toDate);
-  }
-
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
-  const skip = (pageNum - 1) * limitNum;
-
-  const [data, total] = await Promise.all([
-    ReferralTransaction.find(filter)
-      .populate("customerId", "_id firstName lastName phoneNumber emailAddress referralCode")
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum)
-      .lean(),
-    ReferralTransaction.countDocuments(filter),
-  ]);
-
-  return {
-    data,
-    pagination: {
-      total,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum),
-    },
-  };
+  const { data, total } = await refSql.adminListTransactions({ customerId, type, status, fromDate, toDate, page: pageNum, limit: limitNum });
+  return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
 
 export const updateWithdrawalStatus = async (
   id: string,
   validated: { status: string; description?: string }
 ) => {
-  if (isReferralMysql()) {
-    const numId = parseId(id);
-    if (!numId) throw new HttpError(400, "Invalid transaction id.");
-    const r = await refSql.adminUpdateWithdrawalStatus(numId, validated.status, validated.description);
-    if (!r.ok) {
-      if (r.reason === "not_found") throw new HttpError(404, "Transaction not found.");
-      if (r.reason === "not_debit") throw new HttpError(400, "Only debit withdrawal transactions can have status updated.");
-      throw new HttpError(400, "Invalid status.");
-    }
-    return r.data;
+  const numId = parseId(id);
+  if (!numId) throw new HttpError(400, "Invalid transaction id.");
+  const r = await refSql.adminUpdateWithdrawalStatus(numId, validated.status, validated.description);
+  if (!r.ok) {
+    if (r.reason === "not_found") throw new HttpError(404, "Transaction not found.");
+    if (r.reason === "not_debit") throw new HttpError(400, "Only debit withdrawal transactions can have status updated.");
+    throw new HttpError(400, "Invalid status.");
   }
-  assertObjectId(id, "transaction");
-
-  const txn = await ReferralTransaction.findById(id);
-  if (!txn) throw new HttpError(404, "Transaction not found.");
-  if (txn.type !== RefferalTransactionType.DEBIT) {
-    throw new HttpError(
-      400,
-      "Only debit withdrawal transactions can have status updated."
-    );
-  }
-
-  const session = await mongoose.startSession();
-  try {
-    let updated: any;
-    await session.withTransaction(async () => {
-      updated = await ReferralTransaction.findByIdAndUpdate(
-        id,
-        {
-          $set: {
-            status: validated.status,
-            ...(validated.description ? { description: validated.description } : {}),
-          },
-        },
-        { new: true, session }
-      );
-    });
-    return updated;
-  } finally {
-    session.endSession();
-  }
+  return r.data;
 };
 
 export const rejectWithdrawal = async (id: string) => {
-  if (isReferralMysql()) {
-    const numId = parseId(id);
-    if (!numId) throw new HttpError(400, "Invalid transaction id.");
-    const r = await refSql.adminRejectWithdrawal(numId);
-    if (!r.ok) {
-      if (r.reason === "not_found") throw new HttpError(404, "Transaction not found.");
-      if (r.reason === "not_debit") throw new HttpError(400, "Only withdrawal debits can be rejected.");
-      throw new HttpError(400, "Only pending withdrawals can be rejected.");
-    }
-    return;
-  }
-  assertObjectId(id, "transaction");
-
-  const txn = await ReferralTransaction.findById(id);
-  if (!txn) throw new HttpError(404, "Transaction not found.");
-  if (txn.type !== RefferalTransactionType.DEBIT) {
-    throw new HttpError(400, "Only withdrawal debits can be rejected.");
-  }
-  if (txn.status !== RefferalTransactionStatus.PENDING) {
+  const numId = parseId(id);
+  if (!numId) throw new HttpError(400, "Invalid transaction id.");
+  const r = await refSql.adminRejectWithdrawal(numId);
+  if (!r.ok) {
+    if (r.reason === "not_found") throw new HttpError(404, "Transaction not found.");
+    if (r.reason === "not_debit") throw new HttpError(400, "Only withdrawal debits can be rejected.");
     throw new HttpError(400, "Only pending withdrawals can be rejected.");
   }
-
-  const session = await mongoose.startSession();
-  try {
-    await session.withTransaction(async () => {
-      await Customer.updateOne(
-        { _id: txn.customerId },
-        { $inc: { rewardPoints: txn.coin } },
-        { session }
-      );
-      await ReferralTransaction.deleteOne({ _id: txn._id }, { session });
-    });
-  } finally {
-    session.endSession();
-  }
+  return;
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -303,121 +138,10 @@ export interface WithdrawalsReportQuery {
 export const getWithdrawalsReport = async (query: WithdrawalsReportQuery) => {
   const { fromDate, toDate, status, search, page = "1", limit = "10" } = query;
 
-  if (isReferralMysql()) {
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 200);
-    const { data, total } = await refSql.adminWithdrawalsReport({ status, fromDate, toDate, search, page: pageNum, limit: limitNum });
-    return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
-  }
-
-  const filter: any = { type: RefferalTransactionType.DEBIT, bankAccount: { $ne: null } };
-  if (
-    status === RefferalTransactionStatus.PENDING ||
-    status === RefferalTransactionStatus.SUCCESSFUL ||
-    status === RefferalTransactionStatus.FAILED
-  )
-    filter.status = status;
-  if (fromDate || toDate) {
-    filter.createdAt = {};
-    if (fromDate) filter.createdAt.$gte = new Date(fromDate);
-    if (toDate) {
-      const end = new Date(toDate);
-      end.setHours(23, 59, 59, 999);
-      filter.createdAt.$lte = end;
-    }
-  }
-
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 200);
-  const skip = (pageNum - 1) * limitNum;
-
-  const searchTrimmed = (search ?? "").trim();
-  const searchRx = searchTrimmed
-    ? new RegExp(searchTrimmed.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i")
-    : null;
-
-  const pipeline: any[] = [
-    { $match: filter },
-    {
-      $lookup: {
-        from: "ws_customers",
-        localField: "customerId",
-        foreignField: "_id",
-        as: "customer",
-      },
-    },
-    { $unwind: { path: "$customer", preserveNullAndEmptyArrays: true } },
-    ...(searchRx
-      ? [
-          {
-            $match: {
-              $or: [
-                { "bankAccount.accountHolderName": searchRx },
-                { "bankAccount.accountNumber": searchRx },
-                { "bankAccount.ifscCode": searchRx },
-                { "customer.firstName": searchRx },
-                { "customer.lastName": searchRx },
-                { "customer.phoneNumber": searchRx },
-                { "customer.referralCode": searchRx },
-              ],
-            },
-          },
-        ]
-      : []),
-    {
-      $facet: {
-        data: [
-          { $sort: { createdAt: -1 } },
-          { $skip: skip },
-          { $limit: limitNum },
-          {
-            $project: {
-              _id: 1,
-              date: "$createdAt",
-              accountHolderName: "$bankAccount.accountHolderName",
-              ifscCode: "$bankAccount.ifscCode",
-              accountNumber: "$bankAccount.accountNumber",
-              bankName: "$bankAccount.bankName",
-              branchName: "$bankAccount.branchName",
-              coin: 1,
-              status: 1,
-              providerRef: 1,
-              failureReason: 1,
-              referralCode: "$customer.referralCode",
-              customerId: "$customer._id",
-              customerName: {
-                $trim: {
-                  input: {
-                    $concat: [
-                      { $ifNull: ["$customer.firstName", ""] },
-                      " ",
-                      { $ifNull: ["$customer.lastName", ""] },
-                    ],
-                  },
-                },
-              },
-              customerPhone: "$customer.phoneNumber",
-            },
-          },
-        ],
-        totalArr: [{ $count: "total" }],
-      },
-    },
-  ];
-
-  const [result] = await ReferralTransaction.aggregate(pipeline);
-  const data = result?.data ?? [];
-  const total = result?.totalArr?.[0]?.total ?? 0;
-
-  return {
-    data,
-    pagination: {
-      total,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum),
-    },
-  };
+  const { data, total } = await refSql.adminWithdrawalsReport({ status, fromDate, toDate, search, page: pageNum, limit: limitNum });
+  return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -432,50 +156,7 @@ export interface WithdrawalsCsvQuery {
 
 export const buildWithdrawalsCsv = async (query: WithdrawalsCsvQuery): Promise<string> => {
   const { fromDate, toDate, status } = query;
-  if (isReferralMysql()) return refSql.adminWithdrawalsCsv({ status, fromDate, toDate });
-  const filter: any = { type: RefferalTransactionType.DEBIT, bankAccount: { $ne: null } };
-  if (
-    status === RefferalTransactionStatus.PENDING ||
-    status === RefferalTransactionStatus.SUCCESSFUL ||
-    status === RefferalTransactionStatus.FAILED
-  )
-    filter.status = status;
-  if (fromDate || toDate) {
-    filter.createdAt = {};
-    if (fromDate) filter.createdAt.$gte = new Date(fromDate);
-    if (toDate) filter.createdAt.$lte = new Date(toDate);
-  }
-
-  const rows = await ReferralTransaction.find(filter).sort({ createdAt: -1 }).lean();
-
-  const csvEscape = (v: any) => {
-    const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-
-  const header = [
-    "Bank Account Holder Name",
-    "Bank Account Number",
-    "IFSC Code",
-    "Amount",
-    "Status",
-    "Date",
-  ];
-  const lines = [header.join(",")];
-  for (const r of rows) {
-    const ba: any = r.bankAccount || {};
-    lines.push(
-      [
-        csvEscape(ba.accountHolderName),
-        csvEscape(ba.accountNumber),
-        csvEscape(ba.ifscCode),
-        csvEscape(r.coin),
-        csvEscape(r.status),
-        csvEscape(r.createdAt?.toISOString()),
-      ].join(",")
-    );
-  }
-  return lines.join("\n");
+  return refSql.adminWithdrawalsCsv({ status, fromDate, toDate });
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -488,60 +169,14 @@ export const adjustCustomerRewards = async (
 ) => {
   const { amount, type, description } = input;
 
-  if (isReferralMysql()) {
-    const numId = parseId(customerId);
-    if (!numId) throw new HttpError(400, "Invalid customer id.");
-    const r = await refSql.adminAdjustRewards(numId, { amount, type, description });
-    if (!r.ok) {
-      if (r.reason === "not_found") throw new HttpError(404, "Customer not found.");
-      throw new HttpError(400, "Debit amount exceeds customer's reward points.");
-    }
-    return r.data;
-  }
-
-  assertObjectId(customerId, "customer");
-  const signedDelta = type === "credit" ? amount : -amount;
-
-  const customer = await Customer.findOne({
-    _id: customerId,
-    isAccountDeleted: false,
-  });
-  if (!customer) throw new HttpError(404, "Customer not found.");
-
-  if (type === "debit" && amount > (customer.rewardPoints ?? 0)) {
+  const numId = parseId(customerId);
+  if (!numId) throw new HttpError(400, "Invalid customer id.");
+  const r = await refSql.adminAdjustRewards(numId, { amount, type, description });
+  if (!r.ok) {
+    if (r.reason === "not_found") throw new HttpError(404, "Customer not found.");
     throw new HttpError(400, "Debit amount exceeds customer's reward points.");
   }
-
-  const session = await mongoose.startSession();
-  try {
-    let txn: any;
-    await session.withTransaction(async () => {
-      await Customer.updateOne(
-        { _id: customerId },
-        { $inc: { rewardPoints: signedDelta } },
-        { session }
-      );
-      const [created] = await ReferralTransaction.create(
-        [
-          {
-            customerId,
-            description,
-            coin: amount,
-            type:
-              type === "credit"
-                ? RefferalTransactionType.CREDIT
-                : RefferalTransactionType.DEBIT,
-            status: RefferalTransactionStatus.SUCCESSFUL,
-          },
-        ],
-        { session }
-      );
-      txn = created;
-    });
-    return txn;
-  } finally {
-    session.endSession();
-  }
+  return r.data;
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -569,224 +204,7 @@ export const listReferrers = async (query: ReferrersQuery) => {
 
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
-  const skip = (pageNum - 1) * limitNum;
 
-  if (isReferralMysql()) {
-    const { data } = await refSql.adminListReferrers({ search, sort, hasWithdrawn, minEarned, page: pageNum, limit: limitNum });
-    return { data, pagination: { total: data.length, page: pageNum, limit: limitNum, totalPages: data.length < limitNum ? pageNum : pageNum + 1 } };
-  }
-
-  const match: Record<string, unknown> = {
-    referralCode: { $exists: true, $ne: null },
-    isAccountDeleted: false,
-  };
-  if (search) {
-    const rx = new RegExp(search.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-    match.$or = [
-      { referralCode: rx },
-      { firstName: rx },
-      { lastName: rx },
-      { phoneNumber: rx },
-      { emailAddress: rx },
-    ];
-  }
-
-  const sortStage: Record<string, 1 | -1> = ((): Record<string, 1 | -1> => {
-    switch (sort) {
-      case "withdrawn":
-        return { "stats.totalWithdrawn": -1 };
-      case "balance":
-        return { rewardPoints: -1 };
-      case "createdAt":
-        return { createdAt: -1 };
-      case "earned":
-      default:
-        return { "stats.totalEarned": -1 };
-    }
-  })();
-
-  const postLookupMatch: Record<string, unknown> = {};
-  if (hasWithdrawn === "true") postLookupMatch["stats.totalWithdrawn"] = { $gt: 0 };
-  if (hasWithdrawn === "false") postLookupMatch["stats.totalWithdrawn"] = { $eq: 0 };
-  const minEarnedNum = minEarned ? parseInt(minEarned, 10) : NaN;
-  if (!Number.isNaN(minEarnedNum))
-    postLookupMatch["stats.totalEarned"] = { $gte: minEarnedNum };
-
-  const pipeline: any[] = [
-    { $match: match },
-    {
-      $lookup: {
-        from: "ws_referral_transactions",
-        let: { cid: "$_id" },
-        pipeline: [
-          { $match: { $expr: { $eq: ["$customerId", "$$cid"] } } },
-          {
-            $group: {
-              _id: { type: "$type", status: "$status" },
-              amount: { $sum: "$coin" },
-              count: { $sum: 1 },
-              lastAt: { $max: "$createdAt" },
-            },
-          },
-        ],
-        as: "_txnAgg",
-      },
-    },
-    {
-      $addFields: {
-        stats: {
-          totalEarned: {
-            $sum: {
-              $map: {
-                input: {
-                  $filter: {
-                    input: "$_txnAgg",
-                    as: "t",
-                    cond: { $eq: ["$$t._id.type", RefferalTransactionType.CREDIT] },
-                  },
-                },
-                as: "t",
-                in: "$$t.amount",
-              },
-            },
-          },
-          totalWithdrawn: {
-            $sum: {
-              $map: {
-                input: {
-                  $filter: {
-                    input: "$_txnAgg",
-                    as: "t",
-                    cond: {
-                      $and: [
-                        { $eq: ["$$t._id.type", RefferalTransactionType.DEBIT] },
-                        { $eq: ["$$t._id.status", RefferalTransactionStatus.SUCCESSFUL] },
-                      ],
-                    },
-                  },
-                },
-                as: "t",
-                in: "$$t.amount",
-              },
-            },
-          },
-          pendingWithdrawals: {
-            $sum: {
-              $map: {
-                input: {
-                  $filter: {
-                    input: "$_txnAgg",
-                    as: "t",
-                    cond: {
-                      $and: [
-                        { $eq: ["$$t._id.type", RefferalTransactionType.DEBIT] },
-                        { $eq: ["$$t._id.status", RefferalTransactionStatus.PENDING] },
-                      ],
-                    },
-                  },
-                },
-                as: "t",
-                in: "$$t.count",
-              },
-            },
-          },
-          failedWithdrawals: {
-            $sum: {
-              $map: {
-                input: {
-                  $filter: {
-                    input: "$_txnAgg",
-                    as: "t",
-                    cond: {
-                      $and: [
-                        { $eq: ["$$t._id.type", RefferalTransactionType.DEBIT] },
-                        { $eq: ["$$t._id.status", RefferalTransactionStatus.FAILED] },
-                      ],
-                    },
-                  },
-                },
-                as: "t",
-                in: "$$t.count",
-              },
-            },
-          },
-          successfulWithdrawals: {
-            $sum: {
-              $map: {
-                input: {
-                  $filter: {
-                    input: "$_txnAgg",
-                    as: "t",
-                    cond: {
-                      $and: [
-                        { $eq: ["$$t._id.type", RefferalTransactionType.DEBIT] },
-                        { $eq: ["$$t._id.status", RefferalTransactionStatus.SUCCESSFUL] },
-                      ],
-                    },
-                  },
-                },
-                as: "t",
-                in: "$$t.count",
-              },
-            },
-          },
-          lastWithdrawalAt: {
-            $max: {
-              $map: {
-                input: {
-                  $filter: {
-                    input: "$_txnAgg",
-                    as: "t",
-                    cond: { $eq: ["$$t._id.type", RefferalTransactionType.DEBIT] },
-                  },
-                },
-                as: "t",
-                in: "$$t.lastAt",
-              },
-            },
-          },
-        },
-      },
-    },
-    { $project: { _txnAgg: 0 } },
-    ...(Object.keys(postLookupMatch).length ? [{ $match: postLookupMatch }] : []),
-    {
-      $facet: {
-        data: [
-          { $sort: sortStage },
-          { $skip: skip },
-          { $limit: limitNum },
-          {
-            $project: {
-              _id: 0,
-              customerId: "$_id",
-              firstName: 1,
-              lastName: 1,
-              phoneNumber: 1,
-              emailAddress: 1,
-              referralCode: 1,
-              referralCodeCreatedAt: "$createdAt",
-              rewardPoints: { $ifNull: ["$rewardPoints", 0] },
-              stats: 1,
-            },
-          },
-        ],
-        totalArr: [{ $count: "total" }],
-      },
-    },
-  ];
-
-  const [result] = await Customer.aggregate(pipeline);
-  const data = result?.data ?? [];
-  const total = result?.totalArr?.[0]?.total ?? 0;
-
-  return {
-    data,
-    pagination: {
-      total,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: Math.ceil(total / limitNum),
-    },
-  };
+  const { data } = await refSql.adminListReferrers({ search, sort, hasWithdrawn, minEarned, page: pageNum, limit: limitNum });
+  return { data, pagination: { total: data.length, page: pageNum, limit: limitNum, totalPages: data.length < limitNum ? pageNum : pageNum + 1 } };
 };

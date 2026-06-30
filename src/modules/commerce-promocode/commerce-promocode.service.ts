@@ -13,7 +13,6 @@
  *
  * Flips with catalog + the rest of 3a (int id-space). Verify via live-DB tsx.
  */
-import { isMysqlModule } from "../../config/migration";
 import { commercePromocodeRepository as repo } from "./commerce-promocode.repository";
 import { toPromocodeDto, toPromotedPlanDto } from "./commerce-promocode.transformer";
 import type { PromocodeDto, PromotedPlanDto } from "./commerce-promocode.types";
@@ -21,7 +20,7 @@ import type { PromocodeDto, PromotedPlanDto } from "./commerce-promocode.types";
 export const PROMOCODE_MODULE = "commerce-promocode";
 
 /** Whether the promocode read-path is served from MySQL. */
-export const isPromocodeMysql = (): boolean => isMysqlModule(PROMOCODE_MODULE);
+export const isPromocodeMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parsePromocodeId = (id: string): number | null => {

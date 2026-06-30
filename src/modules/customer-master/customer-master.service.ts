@@ -12,11 +12,10 @@
  * `stateCode`), district FK is `stateId`→`state` col, education uses `status`
  * (others `active`), target-goal has a required `image` (defaulted to "").
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const CUSTOMER_MASTER_MODULE = "customer-master";
-export const isCustomerMasterMysql = (): boolean => isMysqlModule(CUSTOMER_MASTER_MODULE);
+export const isCustomerMasterMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseId = (id: string): number | null => {

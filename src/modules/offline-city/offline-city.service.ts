@@ -1,20 +1,19 @@
 /**
  * Offline city service — dual-path (MySQL/Prisma ↔ Mongo/Mongoose).
  *
- * Gated behind `isMysqlModule("offline-city")`. Scope: cities only — enough to
+ * Scope: cities only — enough to
  * unblock `customer-address` (its `cityId` references OfflineCity, and cart
  * checkout resolves `cityId` → city name). Flip `offline-city` + `customer-address`
  * ON together so the int-id space is consistent across address ↔ city ↔ cart.
  *
  * Centers/batches/enquiry/admin stay on Mongo for a later offline pass.
  */
-import { isMysqlModule } from "../../config/migration";
 import { offlineCityRepository as repo } from "./offline-city.repository";
 import { toCityDto, toCityNameDto } from "./offline-city.transformer";
 import type { CityDto, CityNameDto } from "./offline-city.types";
 
 export const OFFLINE_CITY_MODULE = "offline-city";
-export const isOfflineCityMysql = (): boolean => isMysqlModule(OFFLINE_CITY_MODULE);
+export const isOfflineCityMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseCityId = (id: string): number | null => {

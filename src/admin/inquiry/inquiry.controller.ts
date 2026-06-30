@@ -1,11 +1,7 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
 import { z } from "zod";
-import { Inquiry } from "../../models/system/Inquiry.model";
-import { isMysqlModule } from "../../config/migration";
-import { buildSearchFilter } from "../../utils/searchFilter";
 import {
-  isInquiryMysql, parseInquiryId,
+  parseInquiryId,
   listInquiries as sqlListInquiries, getInquiry as sqlGetInquiry, deleteInquiry as sqlDeleteInquiry,
 } from "../../modules/inquiry/inquiry.service";
 import {
@@ -16,54 +12,21 @@ import {
   parseDepartmentId,
 } from "../../modules/department/department.service";
 
-const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
-
 // GET /api/v1/admin/inquiries
 export const listInquiries = async (req: Request, res: Response) => {
   try {
     const { search, course, mode, fromDate, toDate, page = "1", limit = "20" } =
       req.query as Record<string, string>;
 
-    if (isInquiryMysql()) {
-      const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-      const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
-      const { data, total } = await sqlListInquiries({
-        search: search || undefined, course: course || undefined, mode: mode || undefined,
-        from: fromDate ? new Date(fromDate) : undefined, to: toDate ? new Date(toDate) : undefined,
-        page: pageNum, limit: limitNum,
-      });
-      return res.status(200).json({
-        success: true, data,
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
-      });
-    }
-
-    const filter: any = {};
-    if (course) filter.course = course;
-    if (mode) filter.mode = mode;
-    Object.assign(filter, buildSearchFilter(search, ["description", "name", "mobile", "email"]));
-    if (fromDate || toDate) {
-      filter.createdAt = {};
-      if (fromDate) filter.createdAt.$gte = new Date(fromDate);
-      if (toDate) filter.createdAt.$lte = new Date(toDate);
-    }
-
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
-    const skip = (pageNum - 1) * limitNum;
-
-    const [data, total] = await Promise.all([
-      Inquiry.find(filter)
-        .populate("customerId", "_id firstName lastName phoneNumber email")
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum),
-      Inquiry.countDocuments(filter),
-    ]);
-
+    const { data, total } = await sqlListInquiries({
+      search: search || undefined, course: course || undefined, mode: mode || undefined,
+      from: fromDate ? new Date(fromDate) : undefined, to: toDate ? new Date(toDate) : undefined,
+      page: pageNum, limit: limitNum,
+    });
     return res.status(200).json({
-      success: true,
-      data,
+      success: true, data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {
@@ -75,19 +38,11 @@ export const listInquiries = async (req: Request, res: Response) => {
 export const getInquiry = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (isInquiryMysql()) {
-      const nid = parseInquiryId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const data = await sqlGetInquiry(nid);
-      if (!data) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, data });
-    }
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    const doc = await Inquiry.findById(id)
-      .populate("customerId", "_id firstName lastName phoneNumber email")
-      .lean();
-    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
-    return res.status(200).json({ success: true, data: doc });
+    const nid = parseInquiryId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const data = await sqlGetInquiry(nid);
+    if (!data) return res.status(404).json({ success: false, message: "Not found." });
+    return res.status(200).json({ success: true, data });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }
@@ -97,16 +52,10 @@ export const getInquiry = async (req: Request, res: Response) => {
 export const deleteInquiry = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (isInquiryMysql()) {
-      const nid = parseInquiryId(id);
-      if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
-      const ok = await sqlDeleteInquiry(nid);
-      if (!ok) return res.status(404).json({ success: false, message: "Not found." });
-      return res.status(200).json({ success: true, message: "Inquiry deleted." });
-    }
-    if (!isObjectId(id)) return res.status(400).json({ success: false, message: "Invalid id." });
-    const doc = await Inquiry.findByIdAndDelete(id);
-    if (!doc) return res.status(404).json({ success: false, message: "Not found." });
+    const nid = parseInquiryId(id);
+    if (nid == null) return res.status(400).json({ success: false, message: "Invalid id." });
+    const ok = await sqlDeleteInquiry(nid);
+    if (!ok) return res.status(404).json({ success: false, message: "Not found." });
     return res.status(200).json({ success: true, message: "Inquiry deleted." });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
@@ -132,10 +81,8 @@ const departmentCreateSchema = z.object({
 });
 const departmentUpdateSchema = departmentCreateSchema.partial();
 
-// Data access delegated to department service (MySQL/Prisma when listed in
-// MIGRATION_MYSQL_MODULES, Mongo otherwise). API JSON shape preserved.
-const departmentIdInvalid = (id: string) =>
-  isMysqlModule("department") ? !parseDepartmentId(id) : !isObjectId(id);
+// Data access delegated to department service (MySQL/Prisma). API JSON shape preserved.
+const departmentIdInvalid = (id: string) => !parseDepartmentId(id);
 
 export const listDepartments = async (req: Request, res: Response) => {
   try {

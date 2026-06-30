@@ -8,10 +8,9 @@
  * completed attempt) → pastExams = result rows (status=true) joined to DAILY exams.
  * ws_package_course_subscription has no payment_status col → status=true gate.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
-export const isProfileMysql = (): boolean => isMysqlModule("customer-profile");
+export const isProfileMysql = (): boolean => true;
 
 /** Active saved addresses for a customer. */
 export const savedAddressCount = (customerId: number) =>

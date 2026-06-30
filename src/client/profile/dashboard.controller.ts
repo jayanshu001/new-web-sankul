@@ -1,13 +1,4 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
-import { TestSeriesSubscription } from "../../models/testSeries/TestSeriesSubscription.model";
-import { FolderItem } from "../../models/customer/FolderItem.model";
-import { Notification } from "../../models/system/Notification.model";
-import { ExamResult } from "../../models/exam/ExamResult.model";
-import { ExamType } from "../../models/enums";
 import { countActiveEbookDownloads } from "../ebook/ebook-downloads.controller";
 import * as folderSql from "../../modules/client-folder/client-folder.service";
 import * as notifSql from "../../modules/client-notification/client-notification.service";
@@ -15,81 +6,13 @@ import * as profileSql from "../../modules/customer-profile/profile-dashboard.sq
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
-// Flag-aware saved-item counts: use the SQL folder module when on, else the Mongo
-// FolderItem aggregate. countActiveEbookDownloads already dispatches internally.
-const savedCount = (uid: string, cid: mongoose.Types.ObjectId, kind: "material" | "video", lookupFrom: string) =>
-  folderSql.isFolderMysql()
-    ? folderSql.countSavedItems(folderSql.parseFolderId(uid) ?? 0, kind)
-    : FolderItem.aggregate([
-        { $match: { customerId: cid, kind } },
-        { $lookup: { from: lookupFrom, localField: "refId", foreignField: "_id", as: "ref" } },
-        { $unwind: "$ref" },
-        { $count: "n" },
-      ]).then((r: any) => r[0]?.n ?? 0);
+// Saved-item counts via the SQL folder module. countActiveEbookDownloads already
+// dispatches internally.
+const savedCount = (uid: string, kind: "material" | "video") =>
+  folderSql.countSavedItems(folderSql.parseFolderId(uid) ?? 0, kind);
 
 const unreadNotifCount = (uid: string) =>
-  notifSql.isNotificationMysql()
-    ? notifSql.unreadCount(notifSql.parseNotifId(uid) ?? 0)
-    : Notification.countDocuments({ $or: [{ customerId: uid }, { broadcast: true }], isRead: false });
-
-// Active-subscription counts that MATCH the My Subscriptions screen exactly
-// (GET /client/my-subscriptions). The badge must equal what the user sees when
-// they open the screen, so we apply the SAME rules: active-only (status:true +
-// endAt > now; course/package additionally require verified payment) AND the
-// same per-target dedup (a customer can hold more than one active row per target
-// from legacy data or a validity-extend that landed as a new row).
-//   - course = combined course + package tab  (deduped by courseId / targetPackageId)
-//   - test_series                             (deduped by testSeriesId)
-//   - ebook                                   (deduped by ebookId)
-// Returns { total, course, test_series, ebook }. Keep this in lockstep with
-// my-subscriptions.controller.ts.
-async function countActiveSubscriptions(cid: mongoose.Types.ObjectId, now: Date) {
-  const [cpRows, tsRows, ebRows] = await Promise.all([
-    PackageCourseSubscription.find({
-      customerId: cid,
-      paymentStatus: "verified",
-      status: true,
-      endAt: { $gt: now },
-    })
-      .select("courseId targetPackageId")
-      .lean(),
-    TestSeriesSubscription.find({
-      customerId: cid,
-      status: true,
-      endAt: { $gt: now },
-    })
-      .select("testSeriesId")
-      .lean(),
-    EbookSubscription.find({
-      customerId: cid,
-      status: true,
-      endAt: { $gt: now },
-    })
-      .select("ebookId")
-      .lean(),
-  ]);
-
-  const dedupCount = (rows: any[], keyOf: (r: any) => string) => {
-    const seen = new Set<string>();
-    for (const r of rows) seen.add(keyOf(r));
-    return seen.size;
-  };
-
-  // Course + package collapse into one "course" bucket, keyed the same way the
-  // listing dedups: course subs by courseId, package subs by targetPackageId,
-  // falling back to the row id so an untargeted row is never dropped.
-  const course = dedupCount(cpRows, (s) =>
-    s.courseId
-      ? `c:${String(s.courseId)}`
-      : s.targetPackageId
-      ? `p:${String(s.targetPackageId)}`
-      : `s:${String(s._id)}`
-  );
-  const test_series = dedupCount(tsRows, (s) => `t:${String(s.testSeriesId)}`);
-  const ebook = dedupCount(ebRows, (s) => `e:${String(s.ebookId)}`);
-
-  return { total: course + test_series + ebook, course, test_series, ebook };
-}
+  notifSql.unreadCount(notifSql.parseNotifId(uid) ?? 0);
 
 // GET /api/v1/client/profile/dashboard
 // Aggregator for the My Profile screen — returns just the badge counts the UI needs.
@@ -103,40 +26,20 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
   try {
     if (!userId) { logger.warn("getProfileDashboardCounts unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // Under customer-auth (SQL), userId is a numeric id — guard the ObjectId
-    // construction so the SQL-branched counts (folder/ebook/notification) don't
-    // crash. The still-Mongo counts (subscriptions/pastExams) receive a null-ish
-    // cid and need their own flip — see the per-count notes.
-    const cid = mongoose.Types.ObjectId.isValid(userId)
-      ? new mongoose.Types.ObjectId(userId)
-      : (null as any);
-
     const now = new Date();
-    const useSql = profileSql.isProfileMysql();
     const uidNum = Number(userId);
     const sqlUid = Number.isInteger(uidNum) ? uidNum : null;
 
-    // The 3 previously-Mongo counts (saved addresses, subscriptions, pastExams)
-    // flip with the customer-profile flag; folder/ebook/notification were already
-    // flag-branched via the helpers.
+    // userId is the numeric customer id (SQL). If it is not an integer we cannot
+    // key the SQL counts, so fall back to empty/zero counts.
     const savedAddressesP =
-      useSql && sqlUid != null
-        ? profileSql.savedAddressCount(sqlUid)
-        : CustomerAddress.countDocuments({ customerId: userId, status: true });
+      sqlUid != null ? profileSql.savedAddressCount(sqlUid) : Promise.resolve(0);
     const subscriptionsP =
-      useSql && sqlUid != null
+      sqlUid != null
         ? profileSql.countActiveSubscriptions(sqlUid, now)
-        : countActiveSubscriptions(cid, now);
+        : Promise.resolve({ total: 0, course: 0, test_series: 0, ebook: 0 });
     const pastExamsP =
-      useSql && sqlUid != null
-        ? profileSql.pastDailyExamsCount(sqlUid)
-        : ExamResult.aggregate([
-            { $match: { customerId: cid, status: true, inProgress: false, submittedAt: { $ne: null } } },
-            { $lookup: { from: "ws_exam", localField: "examId", foreignField: "_id", as: "exam" } },
-            { $unwind: "$exam" },
-            { $match: { "exam.type": ExamType.DAILY } },
-            { $count: "n" },
-          ]).then((rows: any) => rows[0]?.n ?? 0);
+      sqlUid != null ? profileSql.pastDailyExamsCount(sqlUid) : Promise.resolve(0);
 
     const [
       savedAddresses,
@@ -149,8 +52,8 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
     ] = await Promise.all([
       savedAddressesP,
       subscriptionsP,
-      savedCount(String(userId), cid, "material", "ws_materials"),
-      savedCount(String(userId), cid, "video", "ws_videos"),
+      savedCount(String(userId), "material"),
+      savedCount(String(userId), "video"),
       countActiveEbookDownloads(userId),
       unreadNotifCount(String(userId)),
       pastExamsP,

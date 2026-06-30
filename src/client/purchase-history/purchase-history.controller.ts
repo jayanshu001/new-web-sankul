@@ -1,14 +1,4 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
-import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
-import { Package } from "../../models/course/Package.model";
-import { PackageType } from "../../models/course/PackageType.model";
-import { Course } from "../../models/course/Course.model";
-import { BookOrder } from "../../models/book/BookOrder.model";
-import { EbookOrder } from "../../models/ebook/EbookOrder.model";
-import { Ebook } from "../../models/ebook/Ebook.model";
-import { Book } from "../../models/book/Book.model";
 import {
   BookOrderStatus,
   PackageCourseEbookOrderStatus,
@@ -40,112 +30,11 @@ export const listSubscriptionsHistory = async (req: Request, res: Response) => {
 
     const { pageNum, limitNum, skip } = parsePagination(req.query as Record<string, string>);
 
-    if (phSql.isPurchaseHistoryMysql()) {
-      const cid = phSql.parsePhId(String(userId));
-      if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
-      // ⚠ SQL has no payment_status — "verified" maps to status=true (active sub).
-      const { data, pagination } = await phSql.listSubscriptions(cid, skip, limitNum, pageNum, limitNum);
-      return res.status(200).json({ success: true, data, pagination });
-    }
-
-    const filter = {
-      customerId: new mongoose.Types.ObjectId(userId),
-      paymentStatus: "verified",
-    };
-
-    const [subs, total] = await Promise.all([
-      PackageCourseSubscription.find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      PackageCourseSubscription.countDocuments(filter),
-    ]);
-
-    if (subs.length === 0) {
-      return res.status(200).json({
-        success: true,
-        data: [],
-        pagination: { total, page: pageNum, limit: limitNum, totalPages: 0 },
-      });
-    }
-
-    // Resolve the title + badge in three small parallel reads. The chain is
-    // sub.packageId → PackageCourseEbookPrice → Package.packageTypeId → PackageType.
-    // (Yes, the field on the subscription is misleadingly named `packageId` but
-    // refs PackageCourseEbookPrice — that's the existing schema, not changing it here.)
-    const courseIds = [...new Set(subs.map((s: any) => s.courseId && String(s.courseId)).filter(Boolean) as string[])];
-    const priceIds = [...new Set(subs.map((s: any) => s.packageId && String(s.packageId)).filter(Boolean) as string[])];
-    const directPackageIds = [
-      ...new Set(subs.map((s: any) => s.targetPackageId && String(s.targetPackageId)).filter(Boolean)),
-    ] as string[];
-
-    const [courses, prices] = await Promise.all([
-      Course.find({ _id: { $in: courseIds } }).select("_id name author thumbnail image").lean(),
-      PackageCourseEbookPrice.find({ _id: { $in: priceIds } }).select("_id packageId").lean(),
-    ]);
-
-    const planPackageIds = prices.map((p) => p.packageId && String(p.packageId)).filter(Boolean) as string[];
-    const packageIds = [...new Set([...planPackageIds, ...directPackageIds])];
-    const packages = packageIds.length
-      ? await Package.find({ _id: { $in: packageIds } }).select("_id name image packageTypeId").lean()
-      : [];
-
-    const typeIds = [
-      ...new Set(packages.map((p) => p.packageTypeId && String(p.packageTypeId)).filter(Boolean)),
-    ] as string[];
-    const types = typeIds.length
-      ? await PackageType.find({ _id: { $in: typeIds } }).select("_id name").lean()
-      : [];
-
-    const courseById = new Map(courses.map((c: any) => [String(c._id), c]));
-    const priceById = new Map(prices.map((p: any) => [String(p._id), p]));
-    const packageById = new Map(packages.map((p: any) => [String(p._id), p]));
-    const typeById = new Map(types.map((t: any) => [String(t._id), t]));
-
-    const data = subs.map((s: any) => {
-      const price: any = priceById.get(String(s.packageId));
-      const targetPkgId = s.targetPackageId
-        ? String(s.targetPackageId)
-        : price?.packageId
-        ? String(price.packageId)
-        : null;
-      const pkg: any = targetPkgId ? packageById.get(targetPkgId) : null;
-      const type: any = pkg?.packageTypeId ? typeById.get(String(pkg.packageTypeId)) : null;
-      const course: any = s.courseId ? courseById.get(String(s.courseId)) : null;
-      return {
-        _id: s._id,
-        kind: s.courseId ? "course" : "package",
-        title: course?.name || pkg?.name || "Subscription",
-        author: course?.author || null,
-        thumbnail: course?.thumbnail || course?.image || pkg?.image || null,
-        badge: type?.name || null, // "Live" / "Recorded" / "Test Series"
-        amount: s.paidAmount ?? null,
-        purchasedAt: s.createdAt,
-        startAt: s.startAt,
-        endAt: s.endAt,
-        receiptUrl: `/api/v1/client/purchase-history/subscriptions/${s._id}/receipt`,
-        meta: {
-          courseId: s.courseId ?? null,
-          targetPackageId: s.targetPackageId ?? null,
-          planId: s.packageId, // PackageCourseEbookPrice id
-          razorpayOrderId: s.razorpayOrderId ?? null,
-          razorpayPaymentId: s.razorpayPaymentId ?? null,
-        },
-      };
-    });
-
-    logger.info("listSubscriptionsHistory success", { traceId, customerId: userId, total, returned: data.length });
-    return res.status(200).json({
-      success: true,
-      data,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
-      },
-    });
+    const cid = phSql.parsePhId(String(userId));
+    if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
+    // ⚠ SQL has no payment_status — "verified" maps to status=true (active sub).
+    const { data, pagination } = await phSql.listSubscriptions(cid, skip, limitNum, pageNum, limitNum);
+    return res.status(200).json({ success: true, data, pagination });
   } catch (e: any) {
     logger.error("listSubscriptionsHistory failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -172,89 +61,10 @@ export const listBooksHistory = async (req: Request, res: Response) => {
 
     const { pageNum, limitNum, skip } = parsePagination(req.query as Record<string, string>);
 
-    if (phSql.isPurchaseHistoryMysql()) {
-      const cid = phSql.parsePhId(String(userId));
-      if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
-      const { data, pagination } = await phSql.listBooks(cid, BOOK_SUCCESS_STATUSES as string[], skip, limitNum, pageNum, limitNum);
-      return res.status(200).json({ success: true, data, pagination });
-    }
-
-    const filter = {
-      customerId: new mongoose.Types.ObjectId(userId),
-      status: { $in: BOOK_SUCCESS_STATUSES },
-    };
-
-    const [orders, total] = await Promise.all([
-      BookOrder.find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      BookOrder.countDocuments(filter),
-    ]);
-
-    // Resolve thumbnails from Book for the first line item of each order.
-    // BookOrder.items[] doesn't carry a thumbnail, so we look it up here to
-    // keep parity with the ebook tab.
-    const firstBookIds = [
-      ...new Set(
-        orders
-          .map((o: any) => o.items?.[0]?.bookId && String(o.items[0].bookId))
-          .filter(Boolean) as string[]
-      ),
-    ];
-    const books = firstBookIds.length
-      ? await Book.find({ _id: { $in: firstBookIds } }).select("_id thumbnail image").lean()
-      : [];
-    const thumbById = new Map<string, string | null>(
-      books.map((b: any) => [String(b._id), b.thumbnail || b.image || null])
-    );
-
-    const data = orders.map((o: any) => {
-      // Title shows the first item ("Book: Vartaman Vishesh March 2026").
-      // If it's a multi-line order, suffix with "+N more".
-      const first = o.items?.[0];
-      const more = (o.items?.length ?? 0) - 1;
-      const title = first
-        ? more > 0
-          ? `${first.name} +${more} more`
-          : first.name
-        : "Books order";
-      return {
-        _id: o._id,
-        title,
-        thumbnail: first?.bookId ? thumbById.get(String(first.bookId)) ?? null : null,
-        amount: o.amount,
-        purchasedAt: o.createdAt,
-        status: o.status,
-        receiptUrl: `/api/v1/client/purchase-history/books/${o._id}/receipt`,
-        // Drives the "Track Order" button on the Books tab. Only present once
-        // admin has bound a courier/AWB; mirrors the shape under tracking.* in
-        // GET /client/books/orders/:id/tracking so the FE can read tracking.trackingId.
-        tracking: {
-          trackingId: o.tracking?.trackingId ?? null,
-          courier: o.tracking?.courier ?? null,
-        },
-        meta: {
-          receiptId: o.receiptId,
-          itemsCount: o.items?.length ?? 0,
-          razorpayOrderId: o.razorpayOrderId ?? null,
-          razorpayPaymentId: o.razorpayPaymentId ?? null,
-        },
-      };
-    });
-
-    logger.info("listBooksHistory success", { traceId, customerId: userId, total, returned: data.length });
-    return res.status(200).json({
-      success: true,
-      data,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
-      },
-    });
+    const cid = phSql.parsePhId(String(userId));
+    if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
+    const { data, pagination } = await phSql.listBooks(cid, BOOK_SUCCESS_STATUSES as string[], skip, limitNum, pageNum, limitNum);
+    return res.status(200).json({ success: true, data, pagination });
   } catch (e: any) {
     logger.error("listBooksHistory failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -273,64 +83,10 @@ export const listEbooksHistory = async (req: Request, res: Response) => {
 
     const { pageNum, limitNum, skip } = parsePagination(req.query as Record<string, string>);
 
-    if (phSql.isPurchaseHistoryMysql()) {
-      const cid = phSql.parsePhId(String(userId));
-      if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
-      const { data, pagination } = await phSql.listEbooks(cid, PackageCourseEbookOrderStatus.COMPLETE, skip, limitNum, pageNum, limitNum);
-      return res.status(200).json({ success: true, data, pagination });
-    }
-
-    const filter = {
-      customerId: new mongoose.Types.ObjectId(userId),
-      status: PackageCourseEbookOrderStatus.COMPLETE,
-    };
-
-    const [orders, total] = await Promise.all([
-      EbookOrder.find(filter)
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limitNum)
-        .lean(),
-      EbookOrder.countDocuments(filter),
-    ]);
-
-    const ebookIds = [...new Set(orders.map((o: any) => String(o.ebookId)).filter(Boolean))];
-    const ebooks = ebookIds.length
-      ? await Ebook.find({ _id: { $in: ebookIds } }).select("_id name thumbnail author").lean()
-      : [];
-    const ebookById = new Map(ebooks.map((e: any) => [String(e._id), e]));
-
-    const data = orders.map((o: any) => {
-      const ebook: any = ebookById.get(String(o.ebookId));
-      return {
-        _id: o._id,
-        title: ebook?.name ? `E-Book: ${ebook.name}` : "E-Book purchase",
-        author: ebook?.author || null,
-        thumbnail: ebook?.thumbnail || null,
-        amount: o.orderPrice,
-        purchasedAt: o.createdAt,
-        status: o.status,
-        receiptUrl: `/api/v1/client/purchase-history/ebooks/${o._id}/receipt`,
-        meta: {
-          ebookId: o.ebookId,
-          razorpayOrderId: o.razorpayOrderId ?? null,
-          razorpayPaymentId: o.razorpayPaymentId ?? null,
-          transactionId: o.transactionId ?? null,
-        },
-      };
-    });
-
-    logger.info("listEbooksHistory success", { traceId, customerId: userId, total, returned: data.length });
-    return res.status(200).json({
-      success: true,
-      data,
-      pagination: {
-        total,
-        page: pageNum,
-        limit: limitNum,
-        totalPages: Math.ceil(total / limitNum),
-      },
-    });
+    const cid = phSql.parsePhId(String(userId));
+    if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
+    const { data, pagination } = await phSql.listEbooks(cid, PackageCourseEbookOrderStatus.COMPLETE, skip, limitNum, pageNum, limitNum);
+    return res.status(200).json({ success: true, data, pagination });
   } catch (e: any) {
     logger.error("listEbooksHistory failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

@@ -10,7 +10,6 @@
  * catalog + the rest of 3a in one consistent int id-space. Verify via live-DB
  * tsx, not HTTP, while OFF.
  */
-import { isMysqlModule } from "../../config/migration";
 import { commercePromoterRepository as repo } from "./commerce-promoter.repository";
 import { toPromoterDto } from "./commerce-promoter.transformer";
 import type { PromoterDto } from "./commerce-promoter.types";
@@ -18,7 +17,7 @@ import type { PromoterDto } from "./commerce-promoter.types";
 export const PROMOTER_MODULE = "commerce-promoter";
 
 /** Whether the promoter read-path is served from MySQL. */
-export const isPromoterMysql = (): boolean => isMysqlModule(PROMOTER_MODULE);
+export const isPromoterMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parsePromoterId = (id: string): number | null => {

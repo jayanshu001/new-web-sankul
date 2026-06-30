@@ -10,10 +10,9 @@
  * items in order_items JSON. Customer is single `fullName` + `phoneNumber`.
  * Time-series buckets via raw SQL HOUR()/DAYOFMONTH() in IST (CONVERT_TZ).
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
-export const isAdminDashboardMysql = (): boolean => isMysqlModule("admin-dashboard");
+export const isAdminDashboardMysql = (): boolean => true;
 
 type Win = { start: Date; end: Date };
 const num = (v: any) => (v == null ? 0 : Number(v));

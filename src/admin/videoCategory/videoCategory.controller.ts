@@ -2,17 +2,12 @@ import { Request, Response } from "express";
 import mongoose from "mongoose";
 import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { Video } from "../../models/course/Video.model";
-import { Course } from "../../models/course/Course.model";
-import { CourseEducator } from "../../models/course/CourseEducator.model";
-import { deleteFromS3FileUrl } from "../../middlewares/upload";
-import { buildRegexCondition, buildSearchFilter } from "../../utils/searchFilter";
 import {
   createVideoCategorySchema,
   updateVideoCategorySchema,
   listQuerySchema,
   categoryCoursesQuerySchema,
   categoryVideosQuerySchema,
-  sortFieldMap,
 } from "./videoCategory.validation";
 import * as vcat from "../../modules/admin-master/admin-master.service";
 
@@ -29,35 +24,6 @@ const buildMeta = (page: number, per_page: number, total: number) => ({
   totalPages: Math.ceil(total / per_page),
 });
 
-const toItem = (c: any) => ({
-  id: c._id,
-  name: c.title,
-  slug: c.slug,
-  order: c.order_by,
-  image: c.image,
-  child_categories: Array.isArray(c.childCategoryIds)
-    ? c.childCategoryIds.map((cc: any) =>
-        cc && typeof cc === "object" && cc._id
-          ? {
-              id: cc._id,
-              name: cc.title,
-              slug: cc.slug ?? null,
-              status: cc.status,
-              order: cc.order_by ?? 0,
-            }
-          : { id: cc, name: null, slug: null, status: null, order: null }
-      )
-    : [],
-  educator: c.educatorId
-    ? typeof c.educatorId === "object"
-      ? { id: c.educatorId._id, name: c.educatorId.name }
-      : c.educatorId
-    : null,
-  status: c.status,
-  created_at: c.createdAt,
-  updated_at: c.updatedAt,
-});
-
 // GET /
 export const listVideoCategories = async (req: Request, res: Response) => {
   try {
@@ -69,39 +35,10 @@ export const listVideoCategories = async (req: Request, res: Response) => {
         errors: formatZodErrors(parsed.error.issues),
       });
     }
-    const { search, status, educatorId, childCategoryId, page, per_page, sort_by, sort_dir } =
-      parsed.data;
+    const { search, status, educatorId, page, per_page, sort_by, sort_dir } = parsed.data;
 
-    // ─── MySQL branch (ws_video_category; childCategoryId filter not supported) ──
-    if (vcat.isAdminMasterMysql()) {
-      const { items, total } = await vcat.fullVcList({ search, status, educatorId, page, per_page, sort_by, sort_dir });
-      return res.status(200).json({ success: true, data: { items, pagination: { page, per_page, total } } });
-    }
-
-    const filter: any = {};
-    Object.assign(filter, buildSearchFilter(search, ["title", "slug"]));
-    if (status === "active" || status === "inactive") filter.status = status === "active";
-    if (educatorId) filter.educatorId = educatorId;
-    if (childCategoryId) filter.childCategoryIds = childCategoryId;
-
-    const sort: any = { [sortFieldMap[sort_by]]: sort_dir === "asc" ? 1 : -1 };
-    const skip = (page - 1) * per_page;
-
-    const [items, total] = await Promise.all([
-      VideoCategory.find(filter)
-        .populate("childCategoryIds", "_id title slug status order_by")
-        .populate("educatorId", "_id name")
-        .sort(sort)
-        .skip(skip)
-        .limit(per_page)
-        .lean(),
-      VideoCategory.countDocuments(filter),
-    ]);
-
-    return res.status(200).json({
-      success: true,
-      data: { items: items.map(toItem), pagination: { page, per_page, total } },
-    });
+    const { items, total } = await vcat.fullVcList({ search, status, educatorId, page, per_page, sort_by, sort_dir });
+    return res.status(200).json({ success: true, data: { items, pagination: { page, per_page, total } } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -110,20 +47,7 @@ export const listVideoCategories = async (req: Request, res: Response) => {
 // GET /pre-requisites
 export const getVideoCategoryPreRequisites = async (_req: Request, res: Response) => {
   try {
-    if (vcat.isAdminMasterMysql()) {
-      return res.status(200).json({ success: true, data: await vcat.fullVcPreRequisites() });
-    }
-    const [categories, educators] = await Promise.all([
-      VideoCategory.find().select("_id title").sort({ title: 1 }).lean(),
-      CourseEducator.find({ status: true }).select("_id name").sort({ name: 1 }).lean(),
-    ]);
-    return res.status(200).json({
-      success: true,
-      data: {
-        categories: categories.map((c: any) => ({ id: c._id, name: c.title })),
-        educators: educators.map((e: any) => ({ id: e._id, name: e.name })),
-      },
-    });
+    return res.status(200).json({ success: true, data: await vcat.fullVcPreRequisites() });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -134,24 +58,11 @@ export const getVideoCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (vcat.isAdminMasterMysql()) {
-      const numId = vcat.parseMasterId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-      const data = await vcat.fullVcGet(numId);
-      if (!data) return res.status(404).json({ success: false, message: "Video Category not found" });
-      return res.status(200).json({ success: true, data });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    }
-    const cat = await VideoCategory.findById(id)
-      .populate("childCategoryIds", "_id title slug status order_by")
-      .populate("educatorId", "_id name")
-      .lean();
-    if (!cat) return res.status(404).json({ success: false, message: "Video Category not found" });
-    return res.status(200).json({ success: true, data: toItem(cat) });
+    const numId = vcat.parseMasterId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    const data = await vcat.fullVcGet(numId);
+    if (!data) return res.status(404).json({ success: false, message: "Video Category not found" });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -162,65 +73,14 @@ export const listVideoCategoryCourses = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (vcat.isAdminMasterMysql()) {
-      const numId = vcat.parseMasterId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-      if (!(await vcat.fullVcCategoryExists(numId))) return res.status(404).json({ success: false, message: "Video Category not found" });
-      const parsed = categoryCoursesQuerySchema.safeParse(req.query);
-      if (!parsed.success) return res.status(422).json({ success: false, message: "Validation failed", errors: formatZodErrors(parsed.error.issues) });
-      const { search, status, page, per_page } = parsed.data;
-      const { items, total } = await vcat.listCategoryCourses(numId, { search, status, page, per_page });
-      return res.status(200).json({ success: true, data: { items, meta: buildMeta(page, per_page, total) } });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    }
-    const exists = await VideoCategory.exists({ _id: id });
-    if (!exists) {
-      return res.status(404).json({ success: false, message: "Video Category not found" });
-    }
-
+    const numId = vcat.parseMasterId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    if (!(await vcat.fullVcCategoryExists(numId))) return res.status(404).json({ success: false, message: "Video Category not found" });
     const parsed = categoryCoursesQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      return res.status(422).json({
-        success: false,
-        message: "Validation failed",
-        errors: formatZodErrors(parsed.error.issues),
-      });
-    }
+    if (!parsed.success) return res.status(422).json({ success: false, message: "Validation failed", errors: formatZodErrors(parsed.error.issues) });
     const { search, status, page, per_page } = parsed.data;
-
-    const filter: any = { videoCategoryId: id };
-    {
-      const c = buildRegexCondition(search);
-      if (c) filter.name = c;
-    }
-    if (status === "active" || status === "inactive") filter.status = status === "active";
-
-    const skip = (page - 1) * per_page;
-    const [docs, total] = await Promise.all([
-      Course.find(filter)
-        .select("_id name status ordered")
-        .sort({ ordered: 1 })
-        .skip(skip)
-        .limit(per_page)
-        .lean(),
-      Course.countDocuments(filter),
-    ]);
-
-    const items = docs.map((c: any) => ({
-      id: c._id,
-      name: c.name,
-      status: c.status,
-      orderBy: c.ordered ?? 0,
-    }));
-
-    return res.status(200).json({
-      success: true,
-      data: { items, meta: buildMeta(page, per_page, total) },
-    });
+    const { items, total } = await vcat.listCategoryCourses(numId, { search, status, page, per_page });
+    return res.status(200).json({ success: true, data: { items, meta: buildMeta(page, per_page, total) } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -231,65 +91,14 @@ export const listVideoCategoryVideos = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (vcat.isAdminMasterMysql()) {
-      const numId = vcat.parseMasterId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-      if (!(await vcat.fullVcCategoryExists(numId))) return res.status(404).json({ success: false, message: "Video Category not found" });
-      const parsed = categoryVideosQuerySchema.safeParse(req.query);
-      if (!parsed.success) return res.status(422).json({ success: false, message: "Validation failed", errors: formatZodErrors(parsed.error.issues) });
-      const { search, status, platform, page, per_page } = parsed.data;
-      const { items, total } = await vcat.listCategoryVideos(numId, { search, status, platform, page, per_page });
-      return res.status(200).json({ success: true, data: { items, meta: buildMeta(page, per_page, total) } });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    }
-    const exists = await VideoCategory.exists({ _id: id });
-    if (!exists) {
-      return res.status(404).json({ success: false, message: "Video Category not found" });
-    }
-
+    const numId = vcat.parseMasterId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    if (!(await vcat.fullVcCategoryExists(numId))) return res.status(404).json({ success: false, message: "Video Category not found" });
     const parsed = categoryVideosQuerySchema.safeParse(req.query);
-    if (!parsed.success) {
-      return res.status(422).json({
-        success: false,
-        message: "Validation failed",
-        errors: formatZodErrors(parsed.error.issues),
-      });
-    }
+    if (!parsed.success) return res.status(422).json({ success: false, message: "Validation failed", errors: formatZodErrors(parsed.error.issues) });
     const { search, status, platform, page, per_page } = parsed.data;
-
-    const filter: any = { videoCategoryId: id };
-    Object.assign(filter, buildSearchFilter(search, ["title", "slug", "topic"]));
-    if (status === "active" || status === "inactive") filter.status = status === "active";
-    if (platform) filter.platform = platform;
-
-    const skip = (page - 1) * per_page;
-    const [docs, total] = await Promise.all([
-      Video.find(filter)
-        .select("_id title slug status order platform")
-        .sort({ order: 1 })
-        .skip(skip)
-        .limit(per_page)
-        .lean(),
-      Video.countDocuments(filter),
-    ]);
-
-    const items = docs.map((v: any) => ({
-      id: v._id,
-      name: v.title ?? null,
-      slug: v.slug ?? null,
-      status: v.status,
-      orderBy: v.order ?? 0,
-      platform: v.platform ?? null,
-    }));
-
-    return res.status(200).json({
-      success: true,
-      data: { items, meta: buildMeta(page, per_page, total) },
-    });
+    const { items, total } = await vcat.listCategoryVideos(numId, { search, status, platform, page, per_page });
+    return res.status(200).json({ success: true, data: { items, meta: buildMeta(page, per_page, total) } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -319,56 +128,13 @@ export const createVideoCategory = async (req: Request, res: Response) => {
       });
     }
 
-    // ─── MySQL branch (childCategoryIds bind via each child's parent FK) ──────
-    if (vcat.isAdminMasterMysql()) {
-      const r = await vcat.fullVcCreate(data);
-      if (!r.ok) {
-        if (r.reason === "slug") return res.status(409).json({ success: false, message: "Slug already exists" });
-        if (r.reason === "child") return res.status(422).json({ success: false, message: "One or more childCategoryIds are invalid" });
-        return res.status(422).json({ success: false, message: "Invalid educatorId" });
-      }
-      return res.status(201).json({ success: true, message: "Video Category created successfully", data: r.data });
+    const r = await vcat.fullVcCreate(data);
+    if (!r.ok) {
+      if (r.reason === "slug") return res.status(409).json({ success: false, message: "Slug already exists" });
+      if (r.reason === "child") return res.status(422).json({ success: false, message: "One or more childCategoryIds are invalid" });
+      return res.status(422).json({ success: false, message: "Invalid educatorId" });
     }
-
-    const slugDupe = await VideoCategory.exists({ slug: data.slug });
-    if (slugDupe) {
-      return res.status(409).json({ success: false, message: "Slug already exists" });
-    }
-
-    if (data.educatorId) {
-      const ok = await CourseEducator.exists({ _id: data.educatorId });
-      if (!ok) return res.status(422).json({ success: false, message: "Invalid educatorId" });
-    }
-    const uniqueChildIds = Array.from(new Set((data.childCategoryIds ?? []).map(String)));
-    if (uniqueChildIds.length) {
-      const count = await VideoCategory.countDocuments({ _id: { $in: uniqueChildIds } });
-      if (count !== uniqueChildIds.length) {
-        return res
-          .status(422)
-          .json({ success: false, message: "One or more childCategoryIds are invalid" });
-      }
-    }
-
-    const created = await VideoCategory.create({
-      title: data.name,
-      slug: data.slug,
-      image: data.image,
-      order_by: data.order,
-      status: data.status,
-      childCategoryIds: uniqueChildIds,
-      educatorId: data.educatorId ?? null,
-    });
-
-    const populated = await VideoCategory.findById(created._id)
-      .populate("childCategoryIds", "_id title slug status order_by")
-      .populate("educatorId", "_id name")
-      .lean();
-
-    return res.status(201).json({
-      success: true,
-      message: "Video Category created successfully",
-      data: toItem(populated),
-    });
+    return res.status(201).json({ success: true, message: "Video Category created successfully", data: r.data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -392,75 +158,14 @@ export const updateVideoCategory = async (req: Request, res: Response) => {
     }
     const data = parsed.data;
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (vcat.isAdminMasterMysql()) {
-      const numId = vcat.parseMasterId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-      const r = await vcat.fullVcUpdate(numId, data);
-      if (r === "not_found") return res.status(404).json({ success: false, message: "Video Category not found" });
-      if (r === "slug") return res.status(409).json({ success: false, message: "Slug already exists" });
-      if (r === "educator") return res.status(422).json({ success: false, message: "Invalid educatorId" });
-      if (r === "child") return res.status(422).json({ success: false, message: "One or more childCategoryIds are invalid" });
-      return res.status(200).json({ success: true, message: "Video Category updated successfully", data: r });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    }
-    const cat = await VideoCategory.findById(id);
-    if (!cat) return res.status(404).json({ success: false, message: "Video Category not found" });
-
-    if (data.slug && data.slug !== cat.slug) {
-      const dupe = await VideoCategory.exists({ slug: data.slug, _id: { $ne: id } });
-      if (dupe) return res.status(409).json({ success: false, message: "Slug already exists" });
-    }
-    let nextChildIds: string[] | undefined;
-    if (data.childCategoryIds !== undefined) {
-      nextChildIds = Array.from(new Set(data.childCategoryIds.map(String)));
-      if (nextChildIds.includes(String(id))) {
-        return res
-          .status(422)
-          .json({ success: false, message: "childCategoryIds cannot include the category itself" });
-      }
-      if (nextChildIds.length) {
-        const count = await VideoCategory.countDocuments({ _id: { $in: nextChildIds } });
-        if (count !== nextChildIds.length) {
-          return res
-            .status(422)
-            .json({ success: false, message: "One or more childCategoryIds are invalid" });
-        }
-      }
-    }
-    if (data.educatorId) {
-      const ok = await CourseEducator.exists({ _id: data.educatorId });
-      if (!ok) return res.status(422).json({ success: false, message: "Invalid educatorId" });
-    }
-
-    if (data.name !== undefined) cat.title = data.name;
-    if (data.slug !== undefined) cat.slug = data.slug;
-    if (data.order !== undefined) cat.order_by = data.order;
-    if (data.status !== undefined) cat.status = data.status;
-    if (nextChildIds !== undefined) cat.childCategoryIds = nextChildIds as any;
-    if (data.educatorId !== undefined) cat.educatorId = (data.educatorId ?? null) as any;
-    if (data.image !== undefined && data.image) {
-      if (cat.image && cat.image !== data.image) {
-        deleteFromS3FileUrl(cat.image).catch(() => {});
-      }
-      cat.image = data.image;
-    }
-
-    await cat.save();
-
-    const populated = await VideoCategory.findById(cat._id)
-      .populate("childCategoryIds", "_id title slug status order_by")
-      .populate("educatorId", "_id name")
-      .lean();
-
-    return res.status(200).json({
-      success: true,
-      message: "Video Category updated successfully",
-      data: toItem(populated),
-    });
+    const numId = vcat.parseMasterId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    const r = await vcat.fullVcUpdate(numId, data);
+    if (r === "not_found") return res.status(404).json({ success: false, message: "Video Category not found" });
+    if (r === "slug") return res.status(409).json({ success: false, message: "Slug already exists" });
+    if (r === "educator") return res.status(422).json({ success: false, message: "Invalid educatorId" });
+    if (r === "child") return res.status(422).json({ success: false, message: "One or more childCategoryIds are invalid" });
+    return res.status(200).json({ success: true, message: "Video Category updated successfully", data: r });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -471,40 +176,12 @@ export const deleteVideoCategory = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (vcat.isAdminMasterMysql()) {
-      const numId = vcat.parseMasterId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-      const r = await vcat.fullVcDelete(numId);
-      if (r === "not_found") return res.status(404).json({ success: false, message: "Video Category not found" });
-      if (r === "in_use") return res.status(409).json({ success: false, message: "Video Category is in use by videos or other categories and cannot be deleted" });
-      return res.status(200).json({ success: true, message: "Video Category deleted successfully", data: {} });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    }
-
-    const [videoInUse, parentInUse] = await Promise.all([
-      Video.exists({ videoCategoryId: id }),
-      VideoCategory.exists({ childCategoryIds: id }),
-    ]);
-    if (videoInUse || parentInUse) {
-      return res.status(409).json({
-        success: false,
-        message:
-          "Video Category is in use by videos or other categories and cannot be deleted",
-      });
-    }
-
-    const cat = await VideoCategory.findByIdAndDelete(id);
-    if (!cat) return res.status(404).json({ success: false, message: "Video Category not found" });
-
-    if (cat.image) deleteFromS3FileUrl(cat.image).catch(() => {});
-
-    return res
-      .status(200)
-      .json({ success: true, message: "Video Category deleted successfully", data: {} });
+    const numId = vcat.parseMasterId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    const r = await vcat.fullVcDelete(numId);
+    if (r === "not_found") return res.status(404).json({ success: false, message: "Video Category not found" });
+    if (r === "in_use") return res.status(409).json({ success: false, message: "Video Category is in use by videos or other categories and cannot be deleted" });
+    return res.status(200).json({ success: true, message: "Video Category deleted successfully", data: {} });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -673,23 +350,11 @@ export const toggleVideoCategoryStatus = async (req: Request, res: Response) => 
   try {
     const id = req.params.id as string;
 
-    // ─── MySQL branch ─────────────────────────────────────────────────────
-    if (vcat.isAdminMasterMysql()) {
-      const numId = vcat.parseMasterId(id);
-      if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-      const s = await vcat.fullVcToggle(numId);
-      if (s === null) return res.status(404).json({ success: false, message: "Video Category not found" });
-      return res.status(200).json({ success: true, data: { status: s } });
-    }
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    }
-    const cat = await VideoCategory.findById(id).select("status");
-    if (!cat) return res.status(404).json({ success: false, message: "Video Category not found" });
-    cat.status = !cat.status;
-    await cat.save();
-    return res.status(200).json({ success: true, data: { status: cat.status } });
+    const numId = vcat.parseMasterId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    const s = await vcat.fullVcToggle(numId);
+    if (s === null) return res.status(404).json({ success: false, message: "Video Category not found" });
+    return res.status(200).json({ success: true, data: { status: s } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

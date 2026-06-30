@@ -32,14 +32,13 @@
  *  - Exam category-image populate: Mongo populated categoryId{_id,title,image};
  *    SQL ExamCategory has `name` (not title) + image → mapped to {_id,title,image}.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { isNewItem } from "../../utils/isNew";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
 
 export const CLIENT_FREE_MODULE = "client-free";
-export const isClientFreeMysql = (): boolean => isMysqlModule(CLIENT_FREE_MODULE);
+export const isClientFreeMysql = (): boolean => true;
 
 export const parseFreeId = (id: string): number | null => {
   const n = Number(id);

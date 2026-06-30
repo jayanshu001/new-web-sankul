@@ -1,11 +1,3 @@
-import mongoose, { Types } from "mongoose";
-import { LectureProgress } from "../../models/customer/LectureProgress.model";
-import { Video } from "../../models/course/Video.model";
-import { VideoCategory } from "../../models/course/VideoCategory.model";
-import { LiveSession } from "../../models/course/LiveSession.model";
-import { resolveVideoCourseId } from "../course/resolveVideoCourse";
-import { collapseProgressRows } from "./collapseProgress";
-
 // Builds the "lecture" reference object the notes / audio-notes lists return
 // so the FE can render the lecture header card (title, lesson, video time) and
 // wire the "Go to Video" button straight to the right player at the right
@@ -46,90 +38,15 @@ export interface LectureRef {
 }
 
 export async function buildLectureRef(input: Input): Promise<LectureRef | null> {
-  // SQL branch (int id-space) — gated with the lecture-note / container hub.
   const lpSql = await import("../../modules/client-lecture-progress/client-lecture-progress.service");
-  const lnSql = await import("../../modules/client-lecture-note/client-lecture-note.service");
-  if (lpSql.isLectureProgressContainerMysql() || lnSql.isLectureNoteMysql()) {
-    const cidNum = lpSql.parseLpId(String(input.userId));
-    if (cidNum == null) return null;
-    if (input.lectureType === "recorded") {
-      const vid = lpSql.parseLpId(String(input.videoId));
-      if (vid == null) return null;
-      return lpSql.buildLectureRefSql({ lectureType: "recorded", customerId: cidNum, videoId: vid }) as Promise<LectureRef | null>;
-    }
-    const lsid = lpSql.parseLpId(String(input.liveSessionId));
-    if (lsid == null) return null;
-    return lpSql.buildLectureRefSql({ lectureType: "live", customerId: cidNum, liveSessionId: lsid }) as Promise<LectureRef | null>;
-  }
-
-  const cid = new mongoose.Types.ObjectId(input.userId);
-
+  const cidNum = lpSql.parseLpId(String(input.userId));
+  if (cidNum == null) return null;
   if (input.lectureType === "recorded") {
-    const video = await Video.findById(input.videoId)
-      .select("title topic videoCategoryId")
-      .lean<any>();
-    if (!video) return null;
-
-    const [chapter, courseId, progress] = await Promise.all([
-      video.videoCategoryId
-        ? VideoCategory.findById(video.videoCategoryId).select("title").lean<any>()
-        : Promise.resolve(null),
-      resolveVideoCourseId(video.videoCategoryId),
-      // The note's video may have a progress row per container it was watched
-      // from; this header just shows "where I am in this video", so collapse to
-      // the furthest progress across containers.
-      LectureProgress.find({ customerId: cid, videoId: new Types.ObjectId(input.videoId) })
-        .select("positionSec durationSec completed completedAt lastWatchedAt")
-        .lean<any>()
-        .then((rows) => collapseProgressRows(rows)),
-    ]);
-
-    return {
-      kind: "recorded",
-      videoId: String(video._id),
-      liveSessionId: null,
-      title: video.title ?? null,
-      topic: video.topic ?? null,
-      lessonTitle: chapter?.title ?? null,
-      videoCategoryId: video.videoCategoryId ? String(video.videoCategoryId) : null,
-      courseId: courseId ? String(courseId) : null,
-      resume: {
-        positionSec: progress?.positionSec ?? 0,
-        durationSec: progress?.durationSec ?? 0,
-        completed: !!progress?.completed,
-        lastWatchedAt: progress?.lastWatchedAt ?? null,
-      },
-    };
+    const vid = lpSql.parseLpId(String(input.videoId));
+    if (vid == null) return null;
+    return lpSql.buildLectureRefSql({ lectureType: "recorded", customerId: cidNum, videoId: vid }) as Promise<LectureRef | null>;
   }
-
-  // live
-  const session = await LiveSession.findById(input.liveSessionId)
-    .select("title subject liveCourseIds")
-    .lean<any>();
-  if (!session) return null;
-
-  const sessionRows = await LectureProgress.find({
-    customerId: cid,
-    liveSessionId: new Types.ObjectId(input.liveSessionId),
-  })
-    .select("positionSec durationSec completed completedAt lastWatchedAt")
-    .lean<any>();
-  const progress = collapseProgressRows(sessionRows);
-
-  return {
-    kind: "live",
-    videoId: null,
-    liveSessionId: String(session._id),
-    title: session.title ?? null,
-    topic: session.subject ?? null,
-    lessonTitle: null,
-    videoCategoryId: null,
-    courseId: null,
-    resume: {
-      positionSec: progress?.positionSec ?? 0,
-      durationSec: progress?.durationSec ?? 0,
-      completed: !!progress?.completed,
-      lastWatchedAt: progress?.lastWatchedAt ?? null,
-    },
-  };
+  const lsid = lpSql.parseLpId(String(input.liveSessionId));
+  if (lsid == null) return null;
+  return lpSql.buildLectureRefSql({ lectureType: "live", customerId: cidNum, liveSessionId: lsid }) as Promise<LectureRef | null>;
 }

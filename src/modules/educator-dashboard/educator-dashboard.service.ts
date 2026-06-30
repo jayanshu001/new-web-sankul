@@ -8,10 +8,9 @@
  * educator's package ids — no plan-id hop needed. Course relation is `educatorId`
  * (Course.courseEducatorId) and Package.educator_id.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
-export const isEducatorDashboardMysql = (): boolean => isMysqlModule("educator-dashboard");
+export const isEducatorDashboardMysql = (): boolean => true;
 
 export const parseEduId = (id: string): number | null => {
   const n = Number(id);
