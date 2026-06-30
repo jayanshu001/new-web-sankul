@@ -192,4 +192,4 @@ CREATE TABLE IF NOT EXISTS `ws_test_series_subscription` (
 -- ── 10. ws_book_order alter — paid_at column for the webhook book branch ───────
 -- (webhook.controller writes bookOrder.paidAt on fulfillment; the migrated
 -- ws_book_order had no such column.)
-ALTER TABLE `ws_book_order` ADD COLUMN IF NOT EXISTS `paid_at` DATETIME NULL AFTER `status`;
+ALTER TABLE `ws_book_order` ADD COLUMN `paid_at` DATETIME NULL AFTER `status`;
