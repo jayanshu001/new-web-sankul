@@ -147,7 +147,7 @@ _(2 calls captured for this endpoint; first shown.)_
       },
       "courseEducatorId": {
         "_id": "20",
-        "name": "Priyanka Sonis"
+        "name": "Priyanka Soni"
       },
       "videoCategoryId": {
         "_id": "15",
@@ -171,6 +171,7 @@ _(2 calls captured for this endpoint; first shown.)_
             "materialPrice": 0,
             "isDefault": true,
             "status": true,
+            "isMostPopular": false,
             "createdAt": "2023-03-06T15:29:57.000Z",
             "updatedAt": "2023-10-12T14:19:24.000Z"
           },
@@ -186,6 +187,7 @@ _(2 calls captured for this endpoint; first shown.)_
             "materialPrice": 0,
             "isDefault": false,
             "status": true,
+            "isMostPopular": false,
             "createdAt": "2025-08-01T12:04:44.000Z",
             "updatedAt": "2025-08-01T12:05:27.000Z"
           },
@@ -201,6 +203,7 @@ _(2 calls captured for this endpoint; first shown.)_
             "materialPrice": 0,
             "isDefault": false,
             "status": true,
+            "isMostPopular": false,
             "createdAt": "2023-03-06T15:30:21.000Z",
             "updatedAt": "2023-10-12T14:19:30.000Z"
           },
@@ -216,6 +219,7 @@ _(2 calls captured for this endpoint; first shown.)_
             "materialPrice": 0,
             "isDefault": false,
             "status": true,
+            "isMostPopular": false,
             "createdAt": "2023-03-06T15:30:28.000Z",
             "updatedAt": "2023-10-12T14:19:35.000Z"
           },
@@ -231,6 +235,7 @@ _(2 calls captured for this endpoint; first shown.)_
             "materialPrice": 0,
             "isDefault": false,
             "status": true,
+            "isMostPopular": false,
             "createdAt": "2023-03-06T15:30:40.000Z",
             "updatedAt": "2023-10-12T14:19:40.000Z"
           }

@@ -28,6 +28,7 @@
       "image": "https://planetgujarat.com/wp-content/uploads/Banner-Bhavnagar-1.jpg",
       "status": true,
       "order": 0,
+      "stateId": null,
       "createdAt": "2023-03-06T11:02:26.000Z",
       "updatedAt": "2023-03-06T11:02:26.000Z"
     },
@@ -37,6 +38,7 @@
       "image": "https://gpsconline.com/uploads/popup_notification/E5sw4bUUcAYYLve.jpeg",
       "status": true,
       "order": 0,
+      "stateId": null,
       "createdAt": "2023-03-06T11:02:26.000Z",
       "updatedAt": "2023-03-06T11:02:26.000Z"
     }

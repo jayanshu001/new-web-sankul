@@ -50,6 +50,7 @@
             "price": 3000,
             "isDefault": false,
             "status": true,
+            "isMostPopular": false,
             "createdAt": "2025-08-01T12:43:49.000Z",
             "updatedAt": "2025-08-01T12:43:54.000Z"
           },
@@ -61,6 +62,7 @@
             "price": 70,
             "isDefault": true,
             "status": true,
+            "isMostPopular": false,
             "createdAt": "2023-02-23T10:44:29.000Z",
             "updatedAt": "2023-02-23T10:44:50.000Z"
           },
@@ -72,6 +74,7 @@
             "price": 100,
             "isDefault": false,
             "status": true,
+            "isMostPopular": true,
             "createdAt": "2023-02-23T10:44:41.000Z",
             "updatedAt": "2023-02-23T10:44:50.000Z"
           }
@@ -127,6 +130,7 @@
             "price": 70,
             "isDefault": false,
             "status": true,
+            "isMostPopular": false,
             "createdAt": null,
             "updatedAt": null
           },
@@ -138,6 +142,7 @@
             "price": 120,
             "isDefault": false,
             "status": true,
+            "isMostPopular": false,
             "createdAt": null,
             "updatedAt": null
           }

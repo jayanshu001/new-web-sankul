@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-DUMP="${ROOT}/../websankul-staging/database/websankul_staging.sql"
+DUMP="${ROOT}/old_db/websankul_staging.sql"
 PASSWORD="${MYSQL_ROOT_PASSWORD:-websankul_dev}"
 
 if [[ ! -f "$DUMP" ]]; then

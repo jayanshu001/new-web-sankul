@@ -95,7 +95,7 @@ _(3 calls captured for this endpoint; first shown.)_
 ### Request body
 ```json
 {
-  "image": "migration-api-test-1781876236947.jpg",
+  "image": "migration-api-test-1782835532317.jpg",
   "key": "Packages",
   "orderBy": 99
 }
@@ -106,14 +106,14 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "86",
-    "image": "migration-api-test-1781876236947.jpg",
+    "_id": "60",
+    "image": "migration-api-test-1782835532317.jpg",
     "key": "Packages",
     "keyRef": "Package",
     "keyId": null,
     "orderBy": 99,
-    "createdAt": "2026-06-19T13:37:17.000Z",
-    "updatedAt": "2026-06-19T13:37:17.000Z"
+    "createdAt": "2026-06-30T16:05:32.000Z",
+    "updatedAt": "2026-06-30T16:05:32.000Z"
   }
 }
 ```
@@ -144,14 +144,14 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "86",
-    "image": "migration-api-test-1781876236947.jpg",
+    "_id": "60",
+    "image": "migration-api-test-1782835532317.jpg",
     "key": "Courses",
     "keyRef": "Course",
     "keyId": null,
     "orderBy": 98,
-    "createdAt": "2026-06-19T13:37:17.000Z",
-    "updatedAt": "2026-06-19T13:37:17.000Z"
+    "createdAt": "2026-06-30T16:05:32.000Z",
+    "updatedAt": "2026-06-30T16:05:32.000Z"
   }
 }
 ```
@@ -174,7 +174,7 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "orders": [
     {
-      "id": "86",
+      "id": "60",
       "orderBy": 50
     }
   ]

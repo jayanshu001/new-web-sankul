@@ -53,13 +53,14 @@ export async function runTermsClientApiTests(): Promise<boolean> {
       skip: config.skipWrite,
       fn: async () => {
         // Create an INACTIVE terms row via admin, confirm it is absent from the client list.
-        // `module` is a fixed enum; use a real value and isolate the row by its unique `terms` marker.
+        // `module` is a fixed enum (book | referral code — pendrive retired); use a
+        // real value and isolate the row by its unique `terms` marker.
         const adminToken = await getAdminToken();
         const custToken = await getCustomerToken();
         const termsMarker = `migration-inactive-${Date.now()}`;
         const created = await requestOk("POST", "/api/v1/admin/cms/terms", {
           token: adminToken,
-          body: { module: "pendrive", terms: termsMarker, freeShippingMinimumOrderAmount: 0, status: false },
+          body: { module: "book", terms: termsMarker, freeShippingMinimumOrderAmount: 0, status: false },
         });
         const id = (created.data as Terms)._id!;
         try {

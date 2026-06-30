@@ -92,8 +92,8 @@ _(5 calls captured for this endpoint; first shown.)_
       "isNewUser": false,
       "isProfileCompleted": true
     },
-    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjExODI0OSwiZXhwIjoxNzgyNzIzMDQ5fQ.0EbLBRA_E7RTMmVsyf7dmWK7OKn2zbec1CIScjoDxHY",
-    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjExODI0OSwiZXhwIjoxNzg3MzAyMjQ5fQ.AHDL4Nee03Fh2ndn6HoZ9oM6svIafd8jd4aQSqFGyjI",
+    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjgzNTUzMywiZXhwIjoxNzgzNDQwMzMzfQ.60Wgl8vyup2EdzVpbbV72_y593KMA5qw46h_3RysvMw",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjgzNTUzMywiZXhwIjoxNzg4MDE5NTMzfQ.W0_3bXRQ3SfZQiszv6LlZAf7AYtqf5Xu7zUhTqmKqeE",
     "isNewUser": false
   },
   "message": "Login successful.",
@@ -191,71 +191,6 @@ _(4 calls captured for this endpoint; first shown.)_
       "isExpand": false,
       "createdAt": "2023-02-10T17:35:43.000Z",
       "updatedAt": "2023-02-10T17:35:43.000Z"
-    },
-    {
-      "_id": "38",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "કોર્સ ખરીદ્યા પછી તેની વેલિડિટી કેટલા સમય સુધી રહેશે?",
-      "answer": "દરેક કોર્સની વેલિડિટી તેના પ્લાન મુજબ અલગ-અલગ હોય છે. કોર્સ ખરીદતી વખતે પ્લાનની વિગતમાં વેલિડિટી (દિવસોમાં) દર્શાવેલ હોય છે. વેલિડિટી પૂરી થયા પછી કોર્સ ફરી ખરીદવો પડશે.",
-      "isExpand": false,
-      "createdAt": "2026-06-06T10:40:31.000Z",
-      "updatedAt": "2026-06-06T10:40:31.000Z"
-    },
-    {
-      "_id": "39",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "શું હું એક જ એકાઉન્ટ બે ડિવાઇસમાં વાપરી શકું?",
-      "answer": "સુરક્ષાના કારણોસર એક એકાઉન્ટ એક સમયે એક જ ડિવાઇસમાં લોગિન રહી શકે છે. નવા ડિવાઇસમાં લોગિન કરતાં જૂના ડિવાઇસમાંથી આપોઆપ લોગઆઉટ થઈ જશે.",
-      "isExpand": false,
-      "createdAt": "2026-06-06T10:40:31.000Z",
-      "updatedAt": "2026-06-06T10:40:31.000Z"
-    },
-    {
-      "_id": "40",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "વિડિયો લેક્ચર ડાઉનલોડ કરીને ઓફલાઇન જોઈ શકાય?",
-      "answer": "હા, એપ્લિકેશનમાં ઉપલબ્ધ વિડિયો લેક્ચર ડાઉનલોડ કરીને ઓફલાઇન જોઈ શકાય છે. ડાઉનલોડ કરેલા વિડિયો ફક્ત એપ્લિકેશનની અંદર જ ચાલશે.",
-      "isExpand": false,
-      "createdAt": "2026-06-06T10:40:31.000Z",
-      "updatedAt": "2026-06-06T10:40:31.000Z"
-    },
-    {
-      "_id": "41",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "પેમેન્ટ થઈ ગયું પણ કોર્સ એક્ટિવ ન થયો તો શું કરવું?",
-      "answer": "જો પેમેન્ટ કપાઈ ગયું હોય અને કોર્સ એક્ટિવ ન થયો હોય તો થોડી વાર રાહ જુઓ. 24 કલાકમાં રકમ આપમેળે પાછી ન આવે અથવા કોર્સ એક્ટિવ ન થાય તો અમારી સપોર્ટ ટીમનો સંપર્ક કરો.",
-      "isExpand": false,
-      "createdAt": "2026-06-06T10:40:31.000Z",
-      "updatedAt": "2026-06-06T10:40:31.000Z"
-    },
-    {
-      "_id": "42",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "સ્ટડી મટિરિયલ અને નોટ્સ ક્યાંથી મળશે?",
-      "answer": "ખરીદેલા કોર્સ સાથે જોડાયેલ સ્ટડી મટિરિયલ અને નોટ્સ કોર્સની અંદર 'મટિરિયલ' વિભાગમાં ઉપલબ્ધ રહેશે, જે તમે જોઈ અને ડાઉનલોડ કરી શકશો.",
-      "isExpand": false,
-      "createdAt": "2026-06-06T10:40:31.000Z",
-      "updatedAt": "2026-06-06T10:40:31.000Z"
     }
   ]
 }
@@ -278,7 +213,7 @@ _(2 calls captured for this endpoint; first shown.)_
 ### Request body
 ```json
 {
-  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjExODI0OSwiZXhwIjoxNzg3MzAyMjQ5fQ.AHDL4Nee03Fh2ndn6HoZ9oM6svIafd8jd4aQSqFGyjI"
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjgzNTUzMywiZXhwIjoxNzg4MDE5NTMzfQ.W0_3bXRQ3SfZQiszv6LlZAf7AYtqf5Xu7zUhTqmKqeE"
 }
 ```
 
@@ -314,8 +249,8 @@ _(2 calls captured for this endpoint; first shown.)_
       "isNewUser": false,
       "isProfileCompleted": true
     },
-    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjExODI0OSwiZXhwIjoxNzgyNzIzMDQ5fQ.0EbLBRA_E7RTMmVsyf7dmWK7OKn2zbec1CIScjoDxHY",
-    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjExODI0OSwiZXhwIjoxNzg3MzAyMjQ5fQ.AHDL4Nee03Fh2ndn6HoZ9oM6svIafd8jd4aQSqFGyjI",
+    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjgzNTUzMywiZXhwIjoxNzgzNDQwMzMzfQ.60Wgl8vyup2EdzVpbbV72_y593KMA5qw46h_3RysvMw",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjgzNTUzMywiZXhwIjoxNzg4MDE5NTMzfQ.W0_3bXRQ3SfZQiszv6LlZAf7AYtqf5Xu7zUhTqmKqeE",
     "isNewUser": false
   },
   "message": "Token refreshed successfully.",

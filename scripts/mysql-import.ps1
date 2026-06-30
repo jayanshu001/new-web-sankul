@@ -4,7 +4,7 @@
 $ErrorActionPreference = "Stop"
 
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$Dump = Join-Path $Root "..\websankul-staging\database\websankul_staging.sql"
+$Dump = Join-Path $Root "old_db\websankul_staging.sql"
 $Password = if ($env:MYSQL_ROOT_PASSWORD) { $env:MYSQL_ROOT_PASSWORD } else { "websankul_dev" }
 
 if (-not (Test-Path $Dump)) {

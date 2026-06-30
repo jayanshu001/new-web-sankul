@@ -72,19 +72,6 @@
   "success": true,
   "data": [
     {
-      "_id": "2",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "શું તમે Login Details Change કરી શકશો ?",
-      "answer": "જેટલા સમય માટે તમે App Buy કરો છો તેટલા સમય સુધી તમે Login Details Change કરી શકશો નહિ.",
-      "isExpand": false,
-      "createdAt": "2023-02-10T17:35:43.000Z",
-      "updatedAt": "2023-02-10T17:35:43.000Z"
-    },
-    {
       "_id": "15",
       "type": "referral",
       "typeId": {
@@ -96,9 +83,22 @@
       "isExpand": false,
       "createdAt": "2023-02-10T17:35:43.000Z",
       "updatedAt": "2023-02-10T17:35:43.000Z"
+    },
+    {
+      "_id": "14",
+      "type": "referral",
+      "typeId": {
+        "_id": "referral",
+        "title": "Referral"
+      },
+      "question": "What If I entered the wrong bank details?",
+      "answer": "You will not get any rewards in your bank and Websankul will be not responsible for any issue.",
+      "isExpand": false,
+      "createdAt": "2023-02-10T17:35:43.000Z",
+      "updatedAt": "2023-02-10T17:35:43.000Z"
     }
   ],
-  "_note": "array truncated for docs — 18 items total; first 2 shown"
+  "_note": "array truncated for docs — 13 items total; first 2 shown"
 }
 ```
 
@@ -121,14 +121,14 @@ _(2 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "2",
-    "type": "general",
+    "_id": "15",
+    "type": "referral",
     "typeId": {
-      "_id": "general",
-      "title": "General"
+      "_id": "referral",
+      "title": "Referral"
     },
-    "question": "શું તમે Login Details Change કરી શકશો ?",
-    "answer": "જેટલા સમય માટે તમે App Buy કરો છો તેટલા સમય સુધી તમે Login Details Change કરી શકશો નહિ.",
+    "question": "Can I use rewards money in app?",
+    "answer": "Yes, you can use rewards to purchase package and course. But you can not use reward to buy e-books, books and pendrive course",
     "isExpand": false,
     "createdAt": "2023-02-10T17:35:43.000Z",
     "updatedAt": "2023-02-10T17:35:43.000Z"
@@ -155,7 +155,7 @@ _(2 calls captured for this endpoint; first shown.)_
 ```json
 {
   "type": "general",
-  "question": "migration-api-test-1781876109464",
+  "question": "migration-api-test-1782835532168",
   "answer": "test answer",
   "isExpand": false
 }
@@ -166,17 +166,17 @@ _(2 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "87",
+    "_id": "24",
     "type": "general",
     "typeId": {
       "_id": "general",
       "title": "General"
     },
-    "question": "migration-api-test-1781876109464",
+    "question": "migration-api-test-1782835532168",
     "answer": "test answer",
     "isExpand": false,
-    "createdAt": "2026-06-19T13:35:09.000Z",
-    "updatedAt": "2026-06-19T13:35:09.000Z"
+    "createdAt": "2026-06-30T16:05:32.000Z",
+    "updatedAt": "2026-06-30T16:05:32.000Z"
   }
 }
 ```
@@ -231,17 +231,17 @@ _(2 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "88",
+    "_id": "25",
     "type": "referral",
     "typeId": {
       "_id": "referral",
       "title": "Referral"
     },
-    "question": "migration-put-1781876109499",
+    "question": "migration-put-1782835532199",
     "answer": "after",
     "isExpand": false,
-    "createdAt": "2026-06-19T13:35:10.000Z",
-    "updatedAt": "2026-06-19T13:35:10.000Z"
+    "createdAt": "2026-06-30T16:05:32.000Z",
+    "updatedAt": "2026-06-30T16:05:32.000Z"
   }
 }
 ```
@@ -363,71 +363,6 @@ _(2 calls captured for this endpoint; first shown.)_
       "isExpand": false,
       "createdAt": "2023-02-10T17:35:43.000Z",
       "updatedAt": "2023-02-10T17:35:43.000Z"
-    },
-    {
-      "_id": "38",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "કોર્સ ખરીદ્યા પછી તેની વેલિડિટી કેટલા સમય સુધી રહેશે?",
-      "answer": "દરેક કોર્સની વેલિડિટી તેના પ્લાન મુજબ અલગ-અલગ હોય છે. કોર્સ ખરીદતી વખતે પ્લાનની વિગતમાં વેલિડિટી (દિવસોમાં) દર્શાવેલ હોય છે. વેલિડિટી પૂરી થયા પછી કોર્સ ફરી ખરીદવો પડશે.",
-      "isExpand": false,
-      "createdAt": "2026-06-06T10:40:31.000Z",
-      "updatedAt": "2026-06-06T10:40:31.000Z"
-    },
-    {
-      "_id": "39",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "શું હું એક જ એકાઉન્ટ બે ડિવાઇસમાં વાપરી શકું?",
-      "answer": "સુરક્ષાના કારણોસર એક એકાઉન્ટ એક સમયે એક જ ડિવાઇસમાં લોગિન રહી શકે છે. નવા ડિવાઇસમાં લોગિન કરતાં જૂના ડિવાઇસમાંથી આપોઆપ લોગઆઉટ થઈ જશે.",
-      "isExpand": false,
-      "createdAt": "2026-06-06T10:40:31.000Z",
-      "updatedAt": "2026-06-06T10:40:31.000Z"
-    },
-    {
-      "_id": "40",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "વિડિયો લેક્ચર ડાઉનલોડ કરીને ઓફલાઇન જોઈ શકાય?",
-      "answer": "હા, એપ્લિકેશનમાં ઉપલબ્ધ વિડિયો લેક્ચર ડાઉનલોડ કરીને ઓફલાઇન જોઈ શકાય છે. ડાઉનલોડ કરેલા વિડિયો ફક્ત એપ્લિકેશનની અંદર જ ચાલશે.",
-      "isExpand": false,
-      "createdAt": "2026-06-06T10:40:31.000Z",
-      "updatedAt": "2026-06-06T10:40:31.000Z"
-    },
-    {
-      "_id": "41",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "પેમેન્ટ થઈ ગયું પણ કોર્સ એક્ટિવ ન થયો તો શું કરવું?",
-      "answer": "જો પેમેન્ટ કપાઈ ગયું હોય અને કોર્સ એક્ટિવ ન થયો હોય તો થોડી વાર રાહ જુઓ. 24 કલાકમાં રકમ આપમેળે પાછી ન આવે અથવા કોર્સ એક્ટિવ ન થાય તો અમારી સપોર્ટ ટીમનો સંપર્ક કરો.",
-      "isExpand": false,
-      "createdAt": "2026-06-06T10:40:31.000Z",
-      "updatedAt": "2026-06-06T10:40:31.000Z"
-    },
-    {
-      "_id": "42",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "સ્ટડી મટિરિયલ અને નોટ્સ ક્યાંથી મળશે?",
-      "answer": "ખરીદેલા કોર્સ સાથે જોડાયેલ સ્ટડી મટિરિયલ અને નોટ્સ કોર્સની અંદર 'મટિરિયલ' વિભાગમાં ઉપલબ્ધ રહેશે, જે તમે જોઈ અને ડાઉનલોડ કરી શકશો.",
-      "isExpand": false,
-      "createdAt": "2026-06-06T10:40:31.000Z",
-      "updatedAt": "2026-06-06T10:40:31.000Z"
     }
   ]
 }
