@@ -4,6 +4,125 @@
 
 ---
 
+## 2026-06-30 — DDL: create `ws_admin_access_tokens` (was dump-only, no DDL)
+
+The admin session-token table shipped only inside the legacy MySQL dump and never
+had its own migration. Databases imported from a partial/older dump lack it, so admin
+login fails at `adminAccessToken.create()` with **P2021 "table does not exist"** (login
+authenticates, then the token write throws → 500). Added an idempotent
+`CREATE TABLE IF NOT EXISTS` so any environment can create it.
+
+- **DDL:** `docs/migration/schema-changes/2026-06-30_create_ws_admin_access_tokens.sql`
+  — mirrors the Prisma model `AdminAccessToken` and the sibling
+  `ws_promoter_access_tokens` (PK `id`, `admin_user_id` BIGINT UNSIGNED FK→`ws_users(id)`
+  ON DELETE CASCADE, `token`/`refresh_token` TEXT, `active`/`deleted` flags,
+  `created_at`/`expires_at`, indexes `idx_admin_user_id` + `idx_active_deleted`).
+- **No schema.prisma / code change** — the model already existed; this only backfills
+  the missing table in databases that need it. Apply via `yarn db:migrate`.
+
+---
+
+## 2026-06-30 — CP3.5 Batch 2 (ebook writers + subscription update/delete)
+
+Ported the last Mongo-only ebook write helpers and the course/package subscription
+update/delete handlers to Prisma. **No DDL** — `ws_ebook` already carries the
+trending/upload columns and `ws_package_course_subscription` has the touched columns.
+Response shapes preserved.
+
+- **`admin/ebook/ebook.service.ts toggleEbookTrending`** (PATCH `/ebooks/:id/trending`)
+  → SQL over `ws_ebook.is_trending`. Replaced the `mongoose.ObjectId` guard with
+  `parseEbookId` (same 400) and the `Ebook.findById/save` flip with new
+  `admin-ebook.service.ts toggleTrending` (read `isTrending` via `repo.findById`, write
+  the negation via existing `repo.update`). Returns `{ isTrending }` unchanged; cache
+  invalidation kept in the wrapper.
+- **`admin/ebook/ebook.service.ts setEbookUploadStatus`** (BullMQ PDF-upload writer)
+  → delegates to the existing SQL twin `modules/pdf-upload setEbookUploadStatusSql`
+  (writes `book/demo_upload_status|progress` + translated `book_url/demo_url/
+  book_file_name/demo_file_name`), then invalidates the ebook caches. Signature/return
+  (`Promise<void>`) unchanged. Dropped the Mongoose `Ebook.updateOne`. (Live pipeline
+  already called the Sql twin directly; this removes the orphaned Mongo path.)
+- Removed `mongoose` + `Ebook` model imports from `ebook.service.ts` (now `import type
+  { EbookUploadStatus }` only); deleted the unused `assertObjectId` helper.
+
+- **`admin/subscription/subscription.controller.ts updateCourseSubscription /
+  deleteCourseSubscription`** (PUT/DELETE `/subscriptions/:id`) → SQL over
+  `ws_package_course_subscription`. Replaced the `isObjectId` path guard with
+  `subSql.parseSubId` (same 400). New `admin-subscription.service.ts`
+  `updateCourseSubscription` (maps startAt/endAt/status/shippingId/trackingId/remarks —
+  Mongo-only fields with no column are ignored; returns the `getCourseSubscriptionById`
+  DTO) and `deleteCourseSubscription`; new repo `updateSub`/`deleteSub`. Dropped the
+  `mongoose` + `PackageCourseSubscription` model imports and the `isObjectId` helper.
+
+---
+
+## 2026-06-30 — CP3.5 Batch 2 (recursive subtree clones: material + video category)
+
+Ported the two hard recursive "duplicate" clones from Mongoose to Prisma. **No DDL** — the
+Mongo materialized-path/DAG structures (`ancestors[]`, `childCategoryIds[]`) are rebuilt from
+the existing SQL parent adjacency at clone time. Each clone runs in a single Prisma
+`$transaction` so a partial failure rolls back. Response shapes preserved byte-for-byte
+(ObjectId → `String(id)`, parent 0 → null).
+
+- **`admin/material/material.controller.ts duplicateCategory`** (POST `/categories/:id/duplicate`)
+  → SQL over `ws_material_category` + `ws_material`. BFS the subtree via the single `parent`
+  self-FK; deep-copy root (keeps source's parent) + every descendant with `parent` remapped to
+  the new clone; copy-name via new `nextCopyTitle` (mirrors Mongo `nextAvailableCopyTitle`,
+  sibling scan under same parent). Clones all materials under the mapped categories (all SQL
+  columns: description/thumbnail/fileSize/fileMime/language/isPreview/isPaid copied; downloadCount
+  resets to 0, matching the legacy clone). `ancestors[]` dropped (not in SQL, not needed).
+  Replaced `mongoose.Types.ObjectId.isValid` guard with `parseMaterialId` (same 400). Dropped
+  `mongoose` + `Material`/`MaterialCategory` model imports and the in-controller slug helpers.
+  - New twin pieces: `admin-material.service.ts` `duplicateCategory`;
+    `admin-material.repository.ts` `duplicateCategoryTree` ($transaction BFS clone + `createMany`
+    materials) + private `slugify`/`nextCopyTitle`.
+- **`admin/videoCategory/videoCategory.controller.ts duplicateVideoCategory`** (POST
+  `/:id/duplicate`) → SQL over `ws_video_category` + `ws_video_category_relation` + `ws_video`.
+  The Mongo `childCategoryIds[]` DAG is rebuilt from BOTH SQL adjacencies the way
+  `modules/catalog-category-tree` reads the tree: BFS over the union of the `parent` self-FK
+  children AND `ws_video_category_relation` (parent→child) edges. Pass 1 creates every clone
+  (unique slug via new `uniqueSlug`); Pass 2a replicates the parent-FK adjacency among clones;
+  Pass 2b recreates every relation edge whose both endpoints are inside the clone set; then
+  clones all videos under the mapped categories. New root is an unassigned top-level category
+  (parent 0, liveCourseId null) — matching the legacy clone. Copy-name via new
+  `nextAvailableUnassignedTitle` (liveCourseId-null scope; SQL has no `courseId` column).
+  Replaced `mongoose.Types.ObjectId.isValid` guard with `parseMasterId` (same 400). Dropped
+  `mongoose` + `VideoCategory`/`Video` model imports and the in-controller helpers.
+  - New twin pieces: `admin-master.service.ts` `fullVcDuplicate`; `admin-master.repository.ts`
+    `duplicateVideoCategoryTree` ($transaction dual-adjacency BFS + edge replication + `createMany`
+    videos) + private `slugify`/`uniqueSlug`/`nextAvailableUnassignedTitle`.
+
+---
+
+## 2026-06-30 — CP3.5 Batch 2 (poll edit, live-reminder fix, exam solution download)
+
+Ported the last 3 Mongo-only handlers in this batch to Prisma. All SCHEMA-OK (no DDL).
+Response shapes preserved against the existing SQL-canonical contracts.
+
+- **`admin/livepoll/livepoll.controller.ts updatePoll`** → SQL over `ws_live_poll` +
+  `ws_live_poll_option`. Dropped `mongoose`/`LivePoll` model imports. The `Types.ObjectId.isValid`
+  guard → `liveSql.parseLiveId` (same 422). State guards (not_found 404 / closed 400 / has-votes
+  400) now come from new `pollEditPrecheck`; the write (question + full option replacement, votes
+  reset to 0) from new `editPoll`. Response `pollData` shape unchanged and matches the already-SQL
+  `createPoll` emit (`_id` as string, `options:[{text,votes}]`).
+  - New twin pieces: `admin-live-course.service.ts` `pollEditPrecheck` + `editPoll`;
+    `admin-live-course.repository.ts` `editPoll` ($transaction: update poll, deleteMany +
+    createMany options).
+- **`client/live-reminder/live-reminder.controller.ts`** (inconsistency #1 fix):
+  `setLiveSessionReminder` no longer re-reads via Mongo `LiveSessionReminder.findById(...).populate`
+  (which returned null on a SQL int `_id`, dropping the nested `session`). It now re-reads the
+  just-written row through the SQL read path (`liveSql.getReminderForSession`) and reshapes via
+  `sqlReminderToPublic` — byte-identical to `listMyLiveSessionReminders`. `removeLiveSessionReminder`
+  ObjectId guard → `liveSql.parseLiveId` (same 422). Dropped `mongoose`/`LiveSessionReminder`
+  imports + unused `SESSION_FIELDS`. BullMQ/notification provisioning stays in the SQL service
+  (transport, not data).
+- **`client/exam/exam.controller.ts getSolutionDownloadByExam`**: the data read was already SQL
+  inside `generateExamSolutionPdf` (`loadExamSolutionFromMysql` over `ws_exam_result` /
+  `ws_exam` / `ws_exam_result_detail` / `ws_customer`). Replaced the `mongoose` `isObjectId(examId)`
+  guard with `parseExamId(customerId)`/`parseExamId(examId)` (same 400 "Please select valid exam!!").
+  Removed the now-unused `mongoose` import + `isObjectId` helper. PDF generation/output unchanged.
+
+---
+
 ## 2026-06-30 — Deploy tooling + type fix (no DDL, no query change)
 
 Cross-developer deploy support after the migration branch was pulled on a second

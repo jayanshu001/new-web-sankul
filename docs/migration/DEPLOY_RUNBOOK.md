@@ -15,6 +15,7 @@ yarn db:up               # local only (docker ws-mysql :3307 + Redis)
 yarn db:migrate          # apply all pending schema DDL — one command, idempotent
 yarn prisma:generate
 # run the relevant scripts/backfill-*.ts (see step 5)
+yarn seed:superadmin     # fresh DB only — create an admin login (see step 5b)
 yarn typecheck && yarn migration:api
 yarn dev                 # or: yarn build && yarn start (prod)
 ```
@@ -62,6 +63,47 @@ yarn prisma:generate
 
 DDL adds columns/tables; existing rows need populating. Run the `tsx scripts/backfill-*.ts` matching the DDL you applied (full set on a fresh dump; only the new ones on an already-migrated DB). They're re-runnable, but **review on production** first. Several read from a Mongo source — skip those on a server that never had Mongo.
 
+**Full set (run the ones matching the DDL you applied):**
+
+```bash
+tsx scripts/backfill-customer-device-tokens.ts
+tsx scripts/backfill-live-course-to-sql.ts
+tsx scripts/backfill-wave7-blocked-to-sql.ts
+tsx scripts/backfill-mongo-only-tail.ts
+tsx scripts/backfill-c4-wishlist.ts
+tsx scripts/backfill-c4-testseries.ts
+tsx scripts/backfill-c4-goal-label-ids.ts
+tsx scripts/backfill-c6-examcountdown-cols.ts
+tsx scripts/backfill-c8-referral-content.ts
+tsx scripts/backfill-c8-permission-category.ts
+tsx scripts/backfill-promo-code.ts
+tsx scripts/backfill-lecture-notes.ts
+tsx scripts/backfill-lecture-progress-scope.ts
+tsx scripts/backfill-is-trending.ts
+tsx scripts/backfill-catalog-package-fields.ts
+tsx scripts/backfill-package-category-link.ts
+tsx scripts/backfill-package-goal-id.ts
+tsx scripts/backfill-package-examcountdown-cols.ts
+tsx scripts/backfill-book-ebook-exam-countdown-arrays.ts
+tsx scripts/backfill-video-category-subject-key.ts
+tsx scripts/backfill-most-popular-plans.ts
+tsx scripts/backfill-live-recordings.ts
+tsx scripts/backfill-live-recordings-from-streamos.ts
+tsx scripts/backfill-live-reminder-customer-id.ts
+tsx scripts/backfill-stranded-ready-sessions.ts
+tsx scripts/backfill-strip-recording-trailing-quote.ts
+```
+
+## 5b. Seed a super-admin (fresh DB only)
+
+A freshly imported DB may have no usable admin login. Create one (writes to MySQL `ws_users` + the `super_admin` spatie role/pivot):
+
+```bash
+SEED_ADMIN_EMAIL=you@websankul.com SEED_ADMIN_PASSWORD='ChangeThis1' yarn seed:superadmin
+```
+
+Idempotent; change the password after first login. Login: `POST /api/v1/admin/auth/login`.
+
 ## 6. Verify
 
 ```bash
@@ -80,3 +122,4 @@ Sanity: boots with no Mongo connection, Prisma connected, schedulers up, `/ready
 ## 8. Rollback
 
 DDL/backfills are additive — no revert needed. Re-enabling Mongo is a one-line change in `src/config/migration.ts` (`isMongoFallbackEnabled`). **Snapshot MySQL before step 4** on production.
+7
