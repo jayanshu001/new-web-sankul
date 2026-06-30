@@ -124,7 +124,7 @@ if (isProd && (!allowedOriginsRaw || allowedOriginsRaw.trim() === "")) {
 }
 
 const allowedOrigins = (
-  allowedOriginsRaw ?? "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://143.110.187.121:5173,http://143.110.187.121:5173/"
+  allowedOriginsRaw ?? "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://143.110.187.121:5173,http://143.110.187.121:5173/,https://websankul-admin.4tysixapplabs.com/,https://websankul-admin.4tysixapplabs.com"
 )
   .split(",")
   .map((o) => o.trim())
