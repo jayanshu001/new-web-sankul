@@ -148,24 +148,14 @@
           "isWhatsAppAvailable": true
         }
       ]
-    },
-    {
-      "_id": "5",
-      "name": "migration-api-test-1780734666526",
-      "description": "desc before",
-      "order": 99,
-      "active": true,
-      "contacts": [
-        {
-          "mobile": "+910000000001",
-          "order": 1,
-          "active": true,
-          "isCallAvailable": true,
-          "isWhatsAppAvailable": true
-        }
-      ]
     }
-  ]
+  ],
+  "pagination": {
+    "total": 4,
+    "page": 1,
+    "limit": 10,
+    "totalPages": 1
+  }
 }
 ```
 
@@ -187,7 +177,7 @@ _(3 calls captured for this endpoint; first shown.)_
 ### Request body
 ```json
 {
-  "name": "migration-api-test-1781877212451",
+  "name": "migration-api-test-1782835532588",
   "description": "desc before",
   "order": 99,
   "active": true,
@@ -208,8 +198,8 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "33",
-    "name": "migration-api-test-1781877212451",
+    "_id": "9",
+    "name": "migration-api-test-1782835532588",
     "description": "desc before",
     "order": 99,
     "active": true,
@@ -267,8 +257,8 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "33",
-    "name": "migration-api-test-1781877212451",
+    "_id": "9",
+    "name": "migration-api-test-1782835532588",
     "description": "desc after",
     "order": 99,
     "active": true,
@@ -444,22 +434,6 @@ _(3 calls captured for this endpoint; first shown.)_
           {
             "mobile": "+91 90 54 52 27 79",
             "order": 2,
-            "active": true,
-            "isCallAvailable": true,
-            "isWhatsAppAvailable": true
-          }
-        ]
-      },
-      {
-        "_id": "5",
-        "name": "migration-api-test-1780734666526",
-        "description": "desc before",
-        "order": 99,
-        "active": true,
-        "contacts": [
-          {
-            "mobile": "+910000000001",
-            "order": 1,
             "active": true,
             "isCallAvailable": true,
             "isWhatsAppAvailable": true

@@ -102,12 +102,12 @@ _(2 calls captured for this endpoint; first shown.)_
 ### Request body
 ```json
 {
-  "title": "migration-api-test-1781877213901",
+  "title": "migration-api-test-1782835532998",
   "description": "desc",
   "image": "test-popup.jpg",
   "discount": "10%",
   "promocode": "TESTCODE",
-  "promoExpireAt": "2026-07-19",
+  "promoExpireAt": "2026-07-30",
   "status": true
 }
 ```
@@ -117,16 +117,16 @@ _(2 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "135",
-    "title": "migration-api-test-1781877213901",
+    "_id": "71",
+    "title": "migration-api-test-1782835532998",
     "description": "desc",
     "image": "test-popup.jpg",
     "discount": "10%",
     "promocode": "TESTCODE",
-    "promoExpireAt": "2026-07-19T00:00:00.000Z",
+    "promoExpireAt": "2026-07-30T00:00:00.000Z",
     "status": true,
-    "createdAt": "2026-06-19T13:53:34.000Z",
-    "updatedAt": "2026-06-19T13:53:34.000Z"
+    "createdAt": "2026-06-30T16:05:33.000Z",
+    "updatedAt": "2026-06-30T16:05:33.000Z"
   }
 }
 ```
@@ -151,7 +151,7 @@ _(4 calls captured for this endpoint; first shown.)_
 {
   "discount": "25%",
   "status": false,
-  "promoExpireAt": "2026-08-18"
+  "promoExpireAt": "2026-08-29"
 }
 ```
 
@@ -160,16 +160,16 @@ _(4 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "135",
-    "title": "migration-api-test-1781877213901",
+    "_id": "71",
+    "title": "migration-api-test-1782835532998",
     "description": "desc",
     "image": "test-popup.jpg",
     "discount": "25%",
     "promocode": "TESTCODE",
-    "promoExpireAt": "2026-08-18T00:00:00.000Z",
+    "promoExpireAt": "2026-08-29T00:00:00.000Z",
     "status": false,
-    "createdAt": "2026-06-19T13:53:34.000Z",
-    "updatedAt": "2026-06-19T13:53:34.000Z"
+    "createdAt": "2026-06-30T16:05:33.000Z",
+    "updatedAt": "2026-06-30T16:05:33.000Z"
   }
 }
 ```
