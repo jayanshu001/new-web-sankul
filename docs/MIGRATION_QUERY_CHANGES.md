@@ -4,6 +4,27 @@
 
 ---
 
+## 2026-06-30 — DDL: relocate `ws_offline_city.state` into schema-changes (was un-applied)
+
+The `state` column on `ws_offline_city` (State→City dependent dropdown) had its DDL at
+`prisma/sql/2026_add_offline_city_state.sql` — **outside** the `docs/migration/schema-changes/`
+folder that `yarn db:migrate` (apply-ddl.ts) scans. So runbook-built databases never got
+the column, and Prisma's `OfflineCity` model selects it → city queries 500 with
+**"Unknown column 'state'"**. Confirmed missing on the fresh `websankul_staging_1`.
+
+- **New DDL:** `docs/migration/schema-changes/2026-06-30_offline_city_state.sql` — adds
+  `state INT NULL` + FK `fk_ws_offline_city_state` → `ws_customer_state(id)`
+  (ON DELETE SET NULL). Made **idempotent** via information_schema guards (PREPARE/EXECUTE),
+  so it is safe on DBs that already ran the old file. Dropped the original file's
+  `AFTER \`order\`` clause — `ws_offline_city` has no `order` column (id/name/image/
+  created_at/updated_at), which made the old DDL fail outright.
+- **Removed** the stray `prisma/sql/2026_add_offline_city_state.sql` (no references).
+- Verified: applies clean + idempotent on `websankul_staging_1` (column + FK present
+  after run #1 and again after run #2). Apply via `yarn db:migrate`. Backfill each city's
+  state via the admin City form / UPDATEs; NULL state = hidden from `?stateId=` filters.
+
+---
+
 ## 2026-06-30 — DDL: create `ws_admin_access_tokens` (was dump-only, no DDL)
 
 The admin session-token table shipped only inside the legacy MySQL dump and never
