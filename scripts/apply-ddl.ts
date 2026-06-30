@@ -57,10 +57,13 @@ function applyFile(file: string): void {
   const full = path.join(DDL_DIR, file);
   // prisma db execute reads the datasource (DATABASE_URL) from the schema and
   // runs the whole file as one script — multi-statement + comments supported.
+  // `shell: true` so Windows resolves the `npx.cmd` shim (execFileSync alone
+  // only finds bare executables → ENOENT on Windows). Args are quoted because
+  // shell mode re-parses the command string.
   execFileSync(
     "npx",
-    ["prisma", "db", "execute", "--file", full, "--schema", SCHEMA],
-    { stdio: "inherit" }
+    ["prisma", "db", "execute", "--file", `"${full}"`, "--schema", `"${SCHEMA}"`],
+    { stdio: "inherit", shell: true }
   );
 }
 
