@@ -1,9 +1,9 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSchema } from "./customer.validation";
 import { invalidateCustomerGate } from "../../middlewares/authenticate";
 import * as customerSql from "../../modules/admin-customer/admin-customer.service";
+import { parseSubscriptionId, updateSubscriptionEndAt } from "../../modules/commerce-subscription/commerce-subscription.service";
 import { getCustomerPurchaseDetails } from "../../modules/admin-customer/admin-customer-details.service";
 
 const parseStatusFilter = (status?: string): boolean | undefined => {
@@ -258,17 +258,14 @@ export const getCustomerDetails = async (req: Request, res: Response) => {
 export const updateCourseSubscriptionDates = async (req: Request, res: Response) => {
   try {
     const subscriptionId = req.params.subscriptionId as string;
-    if (!mongoose.Types.ObjectId.isValid(subscriptionId)) {
+    const subId = parseSubscriptionId(subscriptionId);
+    if (subId == null) {
       return res.status(400).json({ success: false, message: "Invalid subscription ID" });
     }
 
-    const { endAt, remarks } = updateSubscriptionDatesSchema.parse(req.body);
+    const { endAt } = updateSubscriptionDatesSchema.parse(req.body);
 
-    const sub = await PackageCourseSubscription.findByIdAndUpdate(
-      subscriptionId,
-      { $set: { endAt: new Date(endAt) } },
-      { new: true }
-    );
+    const sub = await updateSubscriptionEndAt(subId, new Date(endAt));
     if (!sub) return res.status(404).json({ success: false, message: "Subscription not found" });
 
     return res.status(200).json({ success: true, data: sub });

@@ -118,6 +118,21 @@ export const listActiveForCoursesOrPlans = async (
   return repo.listActiveForCoursesOrPlans(customerId, courseIds, planIds, now);
 };
 
+/**
+ * Admin date-edit: set a subscription's expiry (`endAt`) and return the updated
+ * row as a DTO. Returns null when the id doesn't exist (→ 404 at the controller).
+ * Mirrors `findByIdAndUpdate(id, {$set:{endAt}}, {new:true})`.
+ */
+export const updateSubscriptionEndAt = async (
+  id: number,
+  endAt: Date
+): Promise<SubscriptionDto | null> => {
+  const existing = await repo.findById(id);
+  if (!existing) return null;
+  const row = await repo.updateEndAt(id, endAt);
+  return toSubscriptionDto(row);
+};
+
 // ── active-owner counts ──────────────────────────────────────────────────────
 
 /** Count active owners of a package (SQL `package_id` — the actual package). */

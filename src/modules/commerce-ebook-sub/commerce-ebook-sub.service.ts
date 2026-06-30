@@ -15,8 +15,14 @@
  * package subscription module.
  */
 import { commerceEbookSubRepository as repo } from "./commerce-ebook-sub.repository";
+import { catalogEbookRepository } from "../catalog-ebook/catalog-ebook.repository";
 import { toEbookSubscriptionDto } from "./commerce-ebook-sub.transformer";
+import { toEbookDto } from "../catalog-ebook/catalog-ebook.transformer";
 import type { EbookSubscriptionDto } from "./commerce-ebook-sub.types";
+
+/** Whole-day difference (ceil), matching the controller's `daysBetween`. */
+const daysBetween = (from: Date, to: Date): number =>
+  Math.max(0, Math.ceil((to.getTime() - from.getTime()) / 86_400_000));
 
 export const EBOOK_SUB_MODULE = "commerce-ebook-sub";
 
@@ -99,6 +105,51 @@ export const listActiveByCustomerForEbooks = async (
 ): Promise<Array<{ ebookId: number | null; endAt: Date | null }>> => {
   if (!ebookIds.length) return [];
   return repo.listActiveByCustomerForEbooks(customerId, ebookIds, now);
+};
+
+/**
+ * The "my subscriptions" listing: a customer's ACTIVE ebook subscriptions
+ * (endAt soonest-first), each spread into its ebook DTO + the subscription's
+ * access window. Mirrors the Mongo handler output:
+ *   `{ ...ebook, startAt, endAt, daysLeft, shareableLink }`.
+ *
+ * `search` scopes by ebook name/author (resolved to matching ebook ids first,
+ * since the searchable text lives on the ebook, not the subscription row).
+ * `buildShareLink(ebookId)` supplies the per-request deep link (HTTP concern).
+ */
+export const listMyEbookSubscriptions = async (
+  customerId: number,
+  opts: { search?: string; skip: number; take: number },
+  buildShareLink: (ebookId: string) => string = (id) => id,
+  now: Date = new Date()
+): Promise<{ subscriptions: any[]; total: number }> => {
+  // Search scoping: resolve matching ebook ids up front; empty match → no rows.
+  let ebookIds: number[] | undefined;
+  if (opts.search) {
+    const matched = await catalogEbookRepository.listActive({ search: opts.search });
+    ebookIds = matched.map((e) => e.id);
+    if (ebookIds.length === 0) return { subscriptions: [], total: 0 };
+  }
+
+  const [rows, total] = await Promise.all([
+    repo.listActiveWithEbookByCustomer(customerId, { ebookIds, skip: opts.skip, take: opts.take }, now),
+    repo.countActiveWithEbookByCustomer(customerId, { ebookIds }, now),
+  ]);
+
+  const subscriptions = rows
+    .filter((s) => s.eBook)
+    .map((s) => {
+      const dto = toEbookDto(s.eBook!);
+      return {
+        ...dto,
+        startAt: s.startAt ?? null,
+        endAt: s.endAt ?? null,
+        daysLeft: s.endAt ? daysBetween(now, s.endAt) : 0,
+        shareableLink: buildShareLink(dto._id),
+      };
+    });
+
+  return { subscriptions, total };
 };
 
 // ── active-owner count ───────────────────────────────────────────────────────

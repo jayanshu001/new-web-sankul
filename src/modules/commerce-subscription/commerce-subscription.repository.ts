@@ -101,6 +101,11 @@ export const commerceSubscriptionRepository = {
       select: { courseId: true, planId: true, endAt: true },
     }),
 
+  /** Admin date-edit: set a subscription's expiry. Mirrors the Mongo
+   *  `findByIdAndUpdate(id, {$set:{endAt}}, {new:true})`. Throws P2025 if absent. */
+  updateEndAt: (id: number, endAt: Date) =>
+    prisma.packageCourseSubscription.update({ where: { id }, data: { endAt } }),
+
   /** Count active owners of a package (`package_id`, the actual package). */
   countActiveByPackage: (packageId: number, now: Date) =>
     prisma.packageCourseSubscription.count({

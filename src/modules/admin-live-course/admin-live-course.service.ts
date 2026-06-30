@@ -949,7 +949,10 @@ export const listSessionRecordingsForClient = async (
 };
 
 // ── live-session preview/trial (ported from entitlement.resolveLivePreviewState; SQL) ──
-const LIVE_PREVIEW_SECONDS = 180; // mirrors entitlement.PREVIEW_SECONDS
+// Live-session preview/trial window length, in seconds. Relocated here from the
+// retired Mongo client/live-course/entitlement.ts (was `PREVIEW_SECONDS`).
+export const PREVIEW_SECONDS = 180;
+const LIVE_PREVIEW_SECONDS = PREVIEW_SECONDS;
 export type LivePreviewStateSql = { accessLevel: "full" | "preview" | "preview_ended"; previewExpiresAt: Date | null; previewSecondsRemaining: number };
 export const resolveLivePreviewStateSql = async (
   customerId: number | null,

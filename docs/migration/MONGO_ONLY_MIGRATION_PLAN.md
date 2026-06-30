@@ -20,7 +20,17 @@
 
 ---
 
-## ▶️ RESUME POINTER (update this every time) — ✅ DONE (superseded; see banner) · nothing left to resume, running MySQL-only
+## ▶️ RESUME POINTER (update this every time) — 🔄 REOPENED 2026-06-30: full Mongo *removal* in progress
+
+> **2026-06-30 — CORRECTION to the "MIGRATION COMPLETE" banner:** runtime was MySQL-only, but the code
+> still carried `isMysqlModule()` fallback branches AND ~29 genuinely Mongo-only endpoints (no SQL branch).
+> User directive: convert EVERYTHING to MySQL, delete `models/` + `mongoose`. Active trackers:
+> **`MONGO_REMOVAL_STATUS.md`** (checkpoints) + **`CP3_5_PORT_PLAN.md`** (per-function port plan).
+> Progress: CP1+CP2+CP3 DONE (all fallback branches removed, build green). CP3.5 IN PROGRESS.
+> **NEXT ACTION:** CP3.5 **Batch 1 (reads/listings)** — see CP3_5_PORT_PLAN.md "Recommended batch order".
+> Batch 0 (delete dead code) ✅ done. Then CP4 (delete models/ + drop mongoose) + CP5 (env).
+
+> *(historical)* ✅ DONE (superseded; see banner) · nothing left to resume, running MySQL-only
 
 > **🎯 ZERO-MONGO PUSH (2026-06-19) — user wants EVERYTHING on MySQL. Canonical roadmap:
 > [`MODULE_STATUS_ROADMAP.md`](./MODULE_STATUS_ROADMAP.md) + work plan [`ZERO_MONGO_PLAN.md`](./ZERO_MONGO_PLAN.md).**

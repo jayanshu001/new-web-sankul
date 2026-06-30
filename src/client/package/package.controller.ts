@@ -1,6 +1,4 @@
 import { Request, Response } from "express";
-import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
@@ -116,26 +114,49 @@ export const listPackagesByType = async (req: Request, res: Response) => {
 // categories.controller) can compute isPurchased/daysLeft with the same contract.
 export async function purchasedPackageEndAtMap(customerId: string | undefined, packageIds: any[]): Promise<Map<string, Date | null>> {
   if (!customerId || packageIds.length === 0) return new Map();
+  const custId = Number(customerId);
+  if (!Number.isInteger(custId) || custId <= 0) return new Map();
+  const pkgIds = packageIds
+    .map((p) => Number(p))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (pkgIds.length === 0) return new Map();
   const now = new Date();
-  const planIds = await PackageCourseEbookPrice.find({ packageId: { $in: packageIds } }).distinct("_id");
-  const subs = await PackageCourseSubscription.find({
-    customerId,
-    status: true,
-    paymentStatus: "verified",
-    $and: [
-      { $or: [{ endAt: null }, { endAt: { $gt: now } }] },
-      { $or: [{ targetPackageId: { $in: packageIds } }, { packageId: { $in: planIds } }] },
-    ],
-  })
-    .select("targetPackageId packageId endAt")
-    .lean();
+
+  // SQL field mapping (see commerce-subscription): Mongo `targetPackageId` =
+  // SQL `package_id` (the actual package); Mongo `packageId` (plan) = SQL
+  // `pcb_id` (planId). `paymentStatus:"verified"` collapses into `status:true`
+  // (no payment_status column on ws_package_course_subscription).
+  const plans = await prismaPkg.packageCourseEbookPrice.findMany({
+    where: { packageId: { in: pkgIds } },
+    select: { id: true },
+  });
+  const planIds = plans.map((p) => p.id);
+
+  const subs = await prismaPkg.packageCourseSubscription.findMany({
+    where: {
+      customerId: custId,
+      status: true,
+      OR: [{ endAt: null }, { endAt: { gt: now } }],
+      AND: [
+        {
+          OR: [
+            ...(pkgIds.length ? [{ packageId: { in: pkgIds } }] : []),
+            ...(planIds.length ? [{ planId: { in: planIds } }] : []),
+          ],
+        },
+      ],
+    },
+    select: { packageId: true, planId: true, endAt: true },
+  });
 
   const planToPackage = new Map<string, string>();
-  if (subs.some((s: any) => s.packageId)) {
-    const plans = await PackageCourseEbookPrice.find({ _id: { $in: subs.map((s: any) => s.packageId) } })
-      .select("_id packageId")
-      .lean();
-    plans.forEach((pl: any) => planToPackage.set(String(pl._id), String(pl.packageId)));
+  const subPlanIds = subs.map((s) => s.planId).filter((n): n is number => n != null);
+  if (subPlanIds.length) {
+    const planRows = await prismaPkg.packageCourseEbookPrice.findMany({
+      where: { id: { in: subPlanIds } },
+      select: { id: true, packageId: true },
+    });
+    planRows.forEach((pl) => { if (pl.packageId != null) planToPackage.set(String(pl.id), String(pl.packageId)); });
   }
 
   // Pick the longest-lived active sub per package. `null` (lifetime) beats any date.
@@ -146,10 +167,10 @@ export async function purchasedPackageEndAtMap(customerId: string | undefined, p
     if (prev === null || endAt === null) { owned.set(pid, null); return; }
     if (endAt.getTime() > (prev as Date).getTime()) owned.set(pid, endAt);
   };
-  subs.forEach((s: any) => {
+  subs.forEach((s) => {
     const endAt: Date | null = s.endAt ?? null;
-    if (s.targetPackageId) upsert(String(s.targetPackageId), endAt);
-    const viaPlan = planToPackage.get(String(s.packageId));
+    if (s.packageId != null) upsert(String(s.packageId), endAt); // SQL package_id = targetPackageId
+    const viaPlan = s.planId != null ? planToPackage.get(String(s.planId)) : undefined;
     if (viaPlan) upsert(viaPlan, endAt);
   });
   return owned;

@@ -19,6 +19,7 @@
     "db:import": "powershell -ExecutionPolicy Bypass -File ./scripts/mysql-import.ps1",
     "db:import:sh": "bash ./scripts/mysql-import.sh",
     "db:verify": "tsx scripts/verify-mysql.ts",
+    "db:migrate": "tsx scripts/apply-ddl.ts",
     "db:test-cms-pilot": "tsx scripts/test-mysql-cms-pilot.ts",
     "db:test-faq": "tsx scripts/test-mysql-faq.ts",
     "docs:schema-comparison": "tsx scripts/generate-schema-comparison.ts",

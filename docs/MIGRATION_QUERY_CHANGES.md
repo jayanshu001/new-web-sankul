@@ -4,6 +4,158 @@
 
 ---
 
+## 2026-06-30 — CP3.5 Batch 1 (subscriptions/listings): Mongo→Prisma ports
+
+Ported 4 Mongo-only handlers to Prisma. All SCHEMA-OK (no DDL). Response shapes preserved
+against the SQL-canonical contract; SQL field mapping per commerce-subscription
+(Mongo `targetPackageId`=SQL `package_id`; Mongo `packageId`=plan=SQL `pcb_id`/`planId`).
+
+- `src/client/ebook/ebook.controller.ts` `listMySubscriptions` — now reads
+  `ws_ebook_subscription` (active, `endAt` ASC, paginated) joined to `ws_ebook`. New service
+  `listMyEbookSubscriptions` in `modules/commerce-ebook-sub` + repo methods
+  `listActiveWithEbookByCustomer` / `countActiveWithEbookByCustomer` (include `eBook`).
+  Search by ebook name/author resolved via `catalogEbookRepository.listActive` → ebookId scope.
+  Card = `toEbookDto(eBook)` spread + `{startAt,endAt,daysLeft,shareableLink}`. `status:{not:false}`
+  (module convention: NULL=active) vs Mongo strict `status:true` — minor, noted. Dropped
+  `Ebook`/`EbookSubscription`/`buildSearchFilter`/`daysBetween` Mongo deps.
+- `src/admin/customer/customer.controller.ts` `updateCourseSubscriptionDates` — Prisma update of
+  `ws_package_course_subscription.end_at` via new `updateSubscriptionEndAt` in
+  `modules/commerce-subscription` (+ repo `updateEndAt`). ObjectId guard → `parseSubscriptionId`
+  (SQL int, 400 on bad id), 404 when missing. Response `data` = `toSubscriptionDto`. Dropped
+  `PackageCourseSubscription` model import (mongoose kept — used by 2 sibling handlers).
+- `src/client/package/package.controller.ts` `purchasedPackageEndAtMap` — reimplemented over
+  `ws_package_course_subscription` + `ws_package_course_ebook_price` with `prismaPkg` (existing
+  in-file pattern). Same package→endAt Map (lifetime null wins; plan→package resolution).
+  `paymentStatus:"verified"` collapses to `status:true` (no payment_status column). Dropped both
+  Mongo model imports (only consumer in this file). Consumed unchanged by categories.controller.
+- `src/client/live-course/live-course.controller.ts` `listMyUpcomingSessions` — repointed to SQL
+  twin `liveSql.listMyUpcomingSessions` (owned active courses → cross-course session feed),
+  matching the sibling SQL handlers' (`listAllUpcomingSessions`/`listLiveNowSessions`) `toSessionDto`
+  card shape. SHAPE NOTE: this replaces the old Mongo card (`sessionId`/`educator`/`liveCourses`/
+  `scheduledAtDisplay`/`canJoin`) with the SQL session-feed card (`_id`/`hlsUrl`/`recordings`/…) —
+  intentional, for parity with the already-SQL live feeds. Dropped `LiveSession`/
+  `LiveCourseSubscription`/`formatScheduledAt` imports (only used here).
+
+## 2026-06-30 — CP3.5 Batch 1: retire flip-to-twin Mongo helpers (no query change)
+
+Deleted orphaned Mongo-only helpers whose live SQL twins are already wired. No new
+queries; no response shapes changed. Verified each had zero live importers (all callers
+already use the SQL twin).
+
+- `src/client/live-course/entitlement.ts` — DELETED (file). Exports `hasAccessToAnyLiveCourse`,
+  `buildPurchaseOptions`, `resolveLivePreviewState`, `getOrCreatePreview` were only
+  self-referenced; live paths use `modules/admin-live-course/admin-live-course.service`
+  (`*Sql` twins + `hasAccessToAnyLiveCourse`). **Relocated `PREVIEW_SECONDS` (=180)** into
+  `admin-live-course.service.ts` (now exported, reused by `LIVE_PREVIEW_SECONDS`); repointed
+  `src/client/live/live.controller.ts` to `liveSql.PREVIEW_SECONDS` before deleting.
+- `src/client/material/entitlement.ts` — DELETED (file). `getPurchasedMaterialIds`,
+  `shapeMaterialForClient`, `listDirectMaterialsForCategory`, `isMaterialPurchased` orphaned;
+  twin is `modules/client-material/client-material.service.ts`.
+- `src/client/course/course.service.ts` — removed `buildCourseDetails` + its DTO interfaces
+  (`PromoCodeDTO`/`CategoryGroupDTO`/`VideoCategoryGroupDTO`/`CourseDetailsResponse`) and the
+  now-unused Mongo model imports. Caller already uses `buildCourseDetailsSql`
+  (`modules/catalog-course/course-detail.sql.ts`). **Kept** order/invoice fns
+  (`upsertCourseOrderShipping`/`getOrderDetailsForUser`/`getOrderForInvoice`/`normalizeShipping`)
+  — Batch 3.
+- `src/client/course/resolveVideoCourse.ts`, `resolveVideoScope.ts`,
+  `scopeReachableCategories.ts` — DELETED (files). Fully orphaned; resolvers live in
+  `modules/catalog-category-tree/category-tree.service.ts`.
+
+---
+
+## 2026-06-30 — CP3.5 Batch 1: port offline reads + book thumbnails to Prisma
+
+Replaced Mongo-only reads with existing SQL twins. Envelopes, auth, status codes unchanged.
+
+- `src/client/offline/offline.controller.ts`
+  - `listCities` → `listActiveCities` (offline-city, `ws_offline_city`): active only,
+    ordered by `order` then `name` (mirrors Mongo `{status:true}` sort `{order:1}` + name
+    search). Pagination (`buildPagination`) applied in-memory over the small active set;
+    `total` = full active count, same `{ success, data, pagination }` shape.
+  - `listCentersByCity` → `getCentersWithBatchesByCities([cityId])` (offline-batch,
+    `ws_offline_center` + `ws_offline_batch`). Replaced the `mongoose.Types.ObjectId.isValid`
+    guard with `parseOfflineId` (SQL int ids) returning the same **400 "Invalid city id."**;
+    `{ success, data }` shape preserved (centers each with nested `batches`).
+  - Removed now-unused imports: `mongoose`, `isObjectId` const, `OfflineCity`,
+    `OfflineCenter`, `buildRegexCondition`. Kept `OfflineBatch` + `OfflineBatchEnquiry` +
+    `OFFLINE_BATCH_QUALIFICATIONS` — still used by the Mongo-only `submitBatchEnquiry`
+    (NEEDS-DDL, out of scope).
+- `src/client/purchase-history/receipts.controller.ts`
+  - `lookupBookThumbnails` → `prisma.book.findMany` (`ws_book`), select `id/thumbnail/image`.
+    SQL ids parsed to ints; returns the same `Map<string, string|null>` keyed by string id
+    with value `thumbnail || image || null`. Removed unused `Book` model import; added `prisma`.
+
+NEEDS-DDL (not ported): `admin/offline/offline.controller.ts` `listBatchEnquiries` /
+`deleteBatchEnquiry` read the Mongo `OfflineBatchEnquiry` collection `ws_offline_batch_enquiry`
+(qualification enum + `otherQualification` + customer populate). There is **no Prisma model /
+SQL table** for it — `ws_offline_enquiry` is a different dataset (already served by
+`listEnquiries`/`deleteEnquiry`) and lacks `other_qualification`. Needs a dedicated
+`ws_offline_batch_enquiry` table + model (matches plan NEEDS-DDL #6). Left on Mongo.
+
+## 2026-06-30 — CP3.5 Batch 1: port exam reads (client/exam) to Prisma
+
+Replaced the last three Mongo-only handlers in `src/client/exam/exam.controller.ts` with
+the `client-exam` MySQL branch. Response envelopes, auth, and status codes unchanged.
+
+- `getMyOverallAnalytics` → reads `ws_exam_result_detail_analytics` via
+  `repo.overallAnalytics` + new `svcGetOverallAnalytics`. DTO mirrors the Mongo doc keys
+  (`_id`/`customerId` as strings, `score` numeric). No `createdAt`/`updatedAt` columns on
+  the SQL table, so those Mongo-only fields are not emitted. Returns `null` when absent
+  (matches Mongo `findOne(...).lean()`).
+- `rateExamResult` → writes `ws_exam_result` via `repo.findResultByExam` +
+  `repo.rateResult` + new `svcRateResult`. Dropped the `Types.ObjectId.isValid` guard
+  (rejected SQL int ids); now uses `parseExamId` on both customer + exam ids, returning
+  the same **400 "Invalid exam id."**; 404 "No result found to rate." preserved. DTO is
+  the full result doc (`toFullResultDto`); no `updatedAt` column → not emitted.
+- `listMyPastDailyResults` → reads `ws_exam_result ⋈ ws_exam` (DAILY, `status=1`,
+  `inProgress=0`, `submittedAt != null`) via `repo.pastDailyResults`/`countPastDailyResults`
+  + new `svcListPastDailyResults`. Sort `submittedAt desc, attemptNumber desc`; same
+  pagination + projected keys incl. `exam` sub-object. `updatedAt` was in the Mongo
+  projection but has no SQL column → not emitted.
+
+New repo accessors (Prisma only): `overallAnalytics`, `findResultByExam`, `rateResult`,
+`pastDailyResults`, `countPastDailyResults`. New service fns: `getOverallAnalytics`,
+`rateResult`, `listPastDailyResults` (+`toFullResultDto` transformer).
+Removed now-unused imports from the controller: `ExamResult`, `ExamResultDetailAnalytics`
+models and `ExamType` enum. `mongoose`/`isObjectId` kept — still used by the
+Mongo-only `getSolutionDownloadByExam` (out of this batch's scope).
+
+## 2026-06-30 — CP3.5 Batch 0: delete dead/superseded Mongo code (admin/promoter)
+
+Removed Mongo functions whose live callers already use wired SQL twins. No route or
+response shape changed; all deletions verified orphaned by grepping `src/`.
+
+- `src/admin/notification/audience.ts` — deleted `resolveAudience` (SQL twin:
+  `modules/admin-notification.service.resolveAudience`). File now exports only the
+  `AudienceFilter` type (still imported by `dispatcher.ts`). Dropped `mongoose`,
+  `Customer`, `PackageCourseSubscription` model imports + `ResolvedAudience`/`toObjectId`.
+- `src/admin/notification/dispatcher.ts` — deleted legacy cron `processDueNotifications`
+  (zero callers; scheduler uses `dispatchScheduledById` → `sqlDispatchScheduledById`).
+  Dropped now-unused `Notification`/`INotification` model + `logger` imports.
+- `src/admin/live/recording.promote.ts` — DELETED whole file (no importers anywhere).
+  Superseded by `liveSql.maybeAutoPromoteRecordingSql` (admin-live-course / admin-live),
+  already wired in admin + client live controllers.
+- `src/admin/course/course.service.ts` — deleted Mongo `createCourse`/`updateCourse`
+  (+ `CreateCourseInput`/`UpdateCourseInput`, dead `assertObjectId`). Controller already
+  uses `createCourseSql`/`updateCourseSql` → `modules/admin-course`. Dropped `Course`,
+  `VideoCategory` model imports (`mongoose`/`Types` retained for `parseCategoryRefs`).
+- `src/promoter/dashboard/overview.service.ts` — deleted orphaned `buildPromoterOverview`
+  (SQL twin: `modules/promoter-data.buildPromoterOverview`, used by dashboard.controller).
+  LEFT + FLAGGED `buildAllPromotersOverview` (no SQL twin, no live caller — needs product
+  confirmation); its dependency `buildOverview` therefore retained.
+
+CP3.5 Batch 0 — client dead code (all grep-verified zero live callers; SQL reimplementations live):
+- `src/client/exam/exam.controller.ts` — deleted `recomputeAnalytics` (SQL `repo.recomputeAnalytics`
+  runs inside `svcSaveAnswers`/`svcSubmitAttempt`). Model imports retained (still used by other handlers).
+- `src/client/free/freeProgress.controller.ts` — deleted `freeProductScope` + `FreeScope` interface
+  (`listFreeVideoResume` uses `sqlListFreeResume`). Dropped `mongoose`,`VideoCategory`,`Course`,
+  `LiveCourse`,`Package`,`PackageVideoCategoryRelation`,`VideoCategoryRelation` imports.
+- `src/client/free/free.controller.ts` — deleted `resolveFreeCategoryIds`,`resolveAssignedCategoryIds`,
+  `enrichCoursesForList`,`enrichPackagesForList`,`daysBetween` (reimplemented in `modules/client-free`
+  & `modules/client-trending`). Dropped ~12 now-unused model/util imports.
+
+`yarn typecheck`: 1 error (pre-existing `credit-referrer` union baseline), 0 introduced.
+
 ## 2026-06-30 — Followup: `isMostPopular` on ebook + test-series CLIENT plan reads
 
 The Most-Popular flag was missing from two client catalog reads because they reshape

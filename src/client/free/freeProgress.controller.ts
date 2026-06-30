@@ -1,12 +1,5 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
 import { z } from "zod";
-import { VideoCategory } from "../../models/course/VideoCategory.model";
-import { Course } from "../../models/course/Course.model";
-import { LiveCourse } from "../../models/course/LiveCourse.model";
-import { Package } from "../../models/course/Package.model";
-import { PackageVideoCategoryRelation } from "../../models/course/PackageVideoCategoryRelation.model";
-import { VideoCategoryRelation } from "../../models/course/VideoCategoryRelation.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import {
@@ -89,74 +82,6 @@ export const reportFreeVideoProgress = async (req: Request, res: Response) => {
 // is the full list. Mirrors the shape of /learning/progress/my so the FE can
 // reuse the same resume card.
 // ---------------------------------------------------------------------------
-interface FreeScope {
-  // VideoCategory ids under any free product's tree — a video is "free-parented"
-  // iff its videoCategoryId is in here.
-  categoryIds: Set<string>;
-  // Free product ids, used to match container LectureProgress rows (which carry
-  // courseId / packageId / liveCourseId pointers, not source:"free").
-  courseIds: Set<string>;
-  packageIds: Set<string>;
-  liveCourseIds: Set<string>;
-}
-
-// Build the set of VideoCategory ids that belong to a FREE product
-// (Course/LiveCourse/Package with isPaid:false), PLUS the free product ids
-// themselves. Walks each free product's root category tree down childCategoryIds,
-// exactly like the free-videos listing — but restricted to free parents.
-// Mirrors free.controller.ts steps 1–2.
-async function freeProductScope(): Promise<FreeScope> {
-  const [freePackages, freeCourses, freeLiveCourses] = await Promise.all([
-    Package.find({ active: true, isPaid: false }).select("_id").lean(),
-    Course.find({ status: true, isPaid: false }).select("_id videoCategoryId").lean(),
-    LiveCourse.find({ status: true, isPaid: false }).select("_id videoCategoryId").lean(),
-  ]);
-
-  const courseIds = new Set<string>((freeCourses as any[]).map((c) => String(c._id)));
-  const packageIds = new Set<string>((freePackages as any[]).map((p) => String(p._id)));
-  const liveCourseIds = new Set<string>((freeLiveCourses as any[]).map((lc) => String(lc._id)));
-
-  const rootIds = new Set<string>();
-  for (const c of freeCourses as any[]) if (c.videoCategoryId) rootIds.add(String(c.videoCategoryId));
-  for (const lc of freeLiveCourses as any[]) if (lc.videoCategoryId) rootIds.add(String(lc.videoCategoryId));
-
-  // Packages reach roots through their active video-category relations.
-  const freePkgIds = (freePackages as any[]).map((p) => p._id);
-  if (freePkgIds.length) {
-    const pkgRels = await PackageVideoCategoryRelation.find({ packageId: { $in: freePkgIds }, active: true })
-      .select("videoCategoryRelationId")
-      .lean();
-    const relIds = [...new Set((pkgRels as any[]).map((r) => String(r.videoCategoryRelationId)))].map(
-      (id) => new mongoose.Types.ObjectId(id)
-    );
-    if (relIds.length) {
-      const rels = await VideoCategoryRelation.find({ _id: { $in: relIds } }).select("parent child").lean();
-      for (const r of rels as any[]) {
-        if (r.parent) rootIds.add(String(r.parent));
-        if (r.child) rootIds.add(String(r.child));
-      }
-    }
-  }
-
-  const categoryIds = new Set<string>(rootIds);
-  // Expand each root to its full active subtree (BFS down childCategoryIds).
-  let toLoad = [...rootIds].map((id) => new mongoose.Types.ObjectId(id));
-  while (toLoad.length) {
-    const batch = await VideoCategory.find({ _id: { $in: toLoad }, status: true })
-      .select("_id childCategoryIds")
-      .lean();
-    const next: mongoose.Types.ObjectId[] = [];
-    for (const cat of batch as any[]) {
-      for (const k of (cat.childCategoryIds ?? []) as any[]) {
-        const ks = String(k);
-        if (!categoryIds.has(ks)) { categoryIds.add(ks); next.push(new mongoose.Types.ObjectId(ks)); }
-      }
-    }
-    toLoad = next;
-  }
-  return { categoryIds, courseIds, packageIds, liveCourseIds };
-}
-
 export const listFreeVideoResume = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

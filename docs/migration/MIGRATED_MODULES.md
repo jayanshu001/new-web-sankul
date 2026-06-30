@@ -1,6 +1,6 @@
 # Migrated modules (MySQL / Prisma)
 
-> **Generated:** 2026-06-23 — re-run `yarn docs:migrated-modules` when you add a module  
+> **Generated:** 2026-06-30 — re-run `yarn docs:migrated-modules` when you add a module  
 > **Scope:** Only modules with **repository → service → transformer** on **legacy MySQL** tables  
 > **Enable in runtime:** `MIGRATION_MYSQL_MODULES` in `.env`
 

@@ -220,24 +220,12 @@ async function buildOverview(promoterId: string | undefined, opts: OverviewOptio
   };
 }
 
-// Per-promoter dashboard. Backwards-compatible positional signature; pass the
-// custom-range query params via `opts` when range=custom.
-export async function buildPromoterOverview(
-  promoterId: string,
-  rangeRaw: string | undefined,
-  traceId?: string,
-  opts?: { startDate?: string; endDate?: string; promocodeId?: string }
-) {
-  return buildOverview(promoterId, {
-    rangeRaw,
-    traceId,
-    startDate: opts?.startDate,
-    endDate: opts?.endDate,
-    promocodeId: opts?.promocodeId,
-  });
-}
-
-// Aggregate dashboard across ALL promoters — same response shape, unscoped match.
+// FLAG (CP3.5): no consumer in src/. The per-promoter Mongo `buildPromoterOverview`
+// was removed (superseded by the SQL twin `modules/promoter-data` →
+// `buildPromoterOverview`, used by promoter/dashboard/dashboard.controller.ts).
+// `buildAllPromotersOverview` has NO SQL twin and NO live caller — left in place
+// pending product confirmation that an all-promoters dashboard is still wanted.
+// It still depends on the Mongo `buildOverview` below, which is therefore retained.
 export async function buildAllPromotersOverview(opts: OverviewOptions) {
   return buildOverview(undefined, opts);
 }

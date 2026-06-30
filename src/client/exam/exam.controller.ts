@@ -1,8 +1,5 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import { ExamResult } from "../../models/exam/ExamResult.model";
-import { ExamResultDetailAnalytics } from "../../models/exam/ExamResultDetailAnalytics.model";
-import { ExamType } from "../../models/enums";
 import { generateExamSolutionPdf } from "../../libs/core/generate";
 import {
   rateResultSchema,
@@ -27,6 +24,9 @@ import {
   submitAttempt as svcSubmitAttempt,
   listAttempts as svcListAttempts,
   getAttemptsAggregate as svcGetAttemptsAggregate,
+  getOverallAnalytics as svcGetOverallAnalytics,
+  rateResult as svcRateResult,
+  listPastDailyResults as svcListPastDailyResults,
 } from "../../modules/client-exam/client-exam.service";
 import * as catalogExam from "../../modules/catalog-exam/catalog-exam.service";
 
@@ -162,44 +162,6 @@ export const getExamQuestions = async (req: Request, res: Response) => {
 };
 
 // ─── Submission ───────────────────────────────────────────────────────────────
-
-async function recomputeAnalytics(customerId: string) {
-  const oid = new mongoose.Types.ObjectId(customerId);
-  const [agg] = await ExamResult.aggregate([
-    { $match: { customerId: oid, status: true } },
-    {
-      $group: {
-        _id: null,
-        exams: { $addToSet: "$examId" },
-        questions: { $sum: "$total" },
-        attempt: { $sum: "$attempt" },
-        skip: { $sum: "$skip" },
-        success: { $sum: "$success" },
-        failed: { $sum: "$failed" },
-        score: { $sum: "$score" },
-      },
-    },
-    {
-      $project: {
-        _id: 0,
-        exams: { $size: "$exams" },
-        questions: 1,
-        attempt: 1,
-        skip: 1,
-        success: 1,
-        failed: 1,
-        score: { $round: ["$score", 2] },
-      },
-    },
-  ]);
-
-  const payload = agg ?? { exams: 0, questions: 0, attempt: 0, skip: 0, success: 0, failed: 0, score: 0 };
-  await ExamResultDetailAnalytics.updateOne(
-    { customerId: oid },
-    { $set: { customerId: oid, ...payload } },
-    { upsert: true }
-  );
-}
 
 // POST /api/v1/client/save/answers  (also mounted at /exams/:id/submit)
 // Body: { examId, timing, test: [{questionId, answerId}, ...], ratting? }
@@ -389,67 +351,12 @@ export const listMyPastDailyResults = async (req: Request, res: Response) => {
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
-    const skip = (pageNum - 1) * limitNum;
 
-    const cid = new mongoose.Types.ObjectId(customerId);
-    const matchResult = {
-      customerId: cid,
-      status: true,
-      inProgress: false,
-      submittedAt: { $ne: null },
-    };
-
-    const pipeline: any[] = [
-      { $match: matchResult },
-      {
-        $lookup: {
-          from: "ws_exam",
-          localField: "examId",
-          foreignField: "_id",
-          as: "exam",
-        },
-      },
-      { $unwind: "$exam" },
-      { $match: { "exam.type": ExamType.DAILY } },
-      { $sort: { submittedAt: -1, attemptNumber: -1 } },
-    ];
-
-    const [data, totalRows] = await Promise.all([
-      ExamResult.aggregate([
-        ...pipeline,
-        { $skip: skip },
-        { $limit: limitNum },
-        {
-          $project: {
-            _id: 1,
-            attemptNumber: 1,
-            total: 1,
-            attempt: 1,
-            skip: 1,
-            success: 1,
-            failed: 1,
-            score: 1,
-            timing: 1,
-            submittedAt: 1,
-            createdAt: 1,
-            updatedAt: 1,
-            exam: {
-              _id: "$exam._id",
-              title: "$exam.title",
-              type: "$exam.type",
-              durationMinutes: "$exam.durationMinutes",
-              positiveMarks: "$exam.positiveMarks",
-              negativeMarks: "$exam.negativeMarks",
-              startAt: "$exam.startAt",
-            },
-          },
-        },
-      ]),
-      ExamResult.aggregate([...pipeline, { $count: "n" }]),
-    ]);
-
-    const total = totalRows[0]?.n ?? 0;
-    logger.info("listMyPastDailyResults success", { traceId, customerId, total });
+    // ─── ws_exam_result ⋈ ws_exam (DAILY, submitted) ───────
+    const cid = parseExamId(customerId);
+    if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const { items: data, total } = await svcListPastDailyResults(cid, pageNum, limitNum);
+    logger.info("listMyPastDailyResults success (sql)", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
       data,
@@ -472,8 +379,11 @@ export const getMyOverallAnalytics = async (req: Request, res: Response) => {
       logger.warn("getMyOverallAnalytics unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
-    const analytics = await ExamResultDetailAnalytics.findOne({ customerId }).lean();
-    logger.info("getMyOverallAnalytics success", { traceId, customerId });
+    // ─── ws_exam_result_detail_analytics ──────────────────
+    const cid = parseExamId(customerId);
+    if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
+    const analytics = await svcGetOverallAnalytics(cid);
+    logger.info("getMyOverallAnalytics success (sql)", { traceId, customerId });
     return res.status(200).json({ success: true, data: analytics });
   } catch (error: any) {
     logger.error("getMyOverallAnalytics failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
@@ -493,17 +403,16 @@ export const rateExamResult = async (req: Request, res: Response) => {
       logger.warn("rateExamResult unauthorized", { traceId });
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
-    if (!isObjectId(examId)) {
+    const cid = parseExamId(customerId);
+    const eid = parseExamId(examId);
+    if (!cid || !eid) {
       logger.warn("rateExamResult invalid id", { traceId, examId });
       return res.status(400).json({ success: false, message: "Invalid exam id." });
     }
 
+    // ─── ws_exam_result (rating write) ─────────────────────
     const { ratting } = rateResultSchema.parse(req.body);
-    const result = await ExamResult.findOneAndUpdate(
-      { customerId, examId },
-      { $set: { ratting } },
-      { new: true }
-    );
+    const result = await svcRateResult(cid, eid, ratting);
     if (!result) {
       logger.warn("rateExamResult result not found", { traceId, customerId, examId });
       return res.status(404).json({ success: false, message: "No result found to rate." });

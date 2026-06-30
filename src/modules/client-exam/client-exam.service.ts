@@ -151,6 +151,86 @@ export const listMyResults = async (customerId: number, page: number, limit: num
   return { items, total };
 };
 
+// Full ExamResult → Mongo-document-shaped DTO (mirrors models/exam/ExamResult.model).
+const toFullResultDto = (r: any) => ({
+  _id: String(r.id),
+  customerId: r.customerId != null ? String(r.customerId) : null,
+  examId: r.examId != null ? String(r.examId) : null,
+  attemptNumber: r.attemptNumber ?? null,
+  total: r.total,
+  attempt: r.attempt,
+  skip: r.skip,
+  success: r.success,
+  failed: r.failed,
+  score: num(r.score),
+  timing: r.timing,
+  ratting: r.ratting ?? null,
+  solution: r.solution ?? null,
+  status: r.status ?? null,
+  inProgress: r.inProgress ?? null,
+  startedAt: r.startedAt ?? null,
+  submittedAt: r.submittedAt ?? null,
+  createdAt: r.created_at ?? null,
+});
+
+// ─── getMyOverallAnalytics ────────────────────────────────────────────────────
+export const getOverallAnalytics = async (customerId: number) => {
+  const row = await repo.overallAnalytics(customerId);
+  if (!row) return null;
+  return {
+    _id: String(row.id),
+    customerId: row.customerId != null ? String(row.customerId) : null,
+    exams: row.exams,
+    questions: row.questions,
+    attempt: row.attempt,
+    skip: row.skip,
+    success: row.success,
+    failed: row.failed,
+    score: num(row.score),
+  };
+};
+
+// ─── rateExamResult ───────────────────────────────────────────────────────────
+export const rateResult = async (customerId: number, examId: number, ratting: string) => {
+  const existing = await repo.findResultByExam(customerId, examId);
+  if (!existing) return null;
+  const updated = await repo.rateResult(existing.id, ratting);
+  return toFullResultDto(updated);
+};
+
+// ─── listMyPastDailyResults ───────────────────────────────────────────────────
+export const listPastDailyResults = async (customerId: number, page: number, limit: number) => {
+  const [rows, total] = await Promise.all([
+    repo.pastDailyResults(customerId, (page - 1) * limit, limit),
+    repo.countPastDailyResults(customerId),
+  ]);
+  const items = rows.map((r: any) => ({
+    _id: String(r.id),
+    attemptNumber: r.attemptNumber ?? null,
+    total: r.total,
+    attempt: r.attempt,
+    skip: r.skip,
+    success: r.success,
+    failed: r.failed,
+    score: num(r.score),
+    timing: r.timing,
+    submittedAt: r.submittedAt ?? null,
+    createdAt: r.created_at ?? null,
+    exam: r.Exam
+      ? {
+          _id: String(r.Exam.id),
+          title: r.Exam.name,
+          type: r.Exam.type,
+          durationMinutes: r.Exam.time,
+          positiveMarks: num(r.Exam.positiveMarks),
+          negativeMarks: num(r.Exam.negativeMarks),
+          startAt: r.Exam.startAt ?? null,
+        }
+      : null,
+  }));
+  return { items, total };
+};
+
 // ─── solutions (the exam's solution PDF + per-exam result) ───────────────────
 export const getExamForSolution = async (examId: number) => {
   const exam = await repo.findPublishedExam(examId);

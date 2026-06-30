@@ -1,7 +1,5 @@
 import mongoose from "mongoose";
-import { Notification, INotification } from "../../models/system/Notification.model";
 import { AudienceFilter } from "./audience";
-import logger from "../../utils/logger";
 import {
   dispatchAudience as sqlDispatchAudience,
   dispatchScheduledById as sqlDispatchScheduledById,
@@ -60,70 +58,4 @@ export async function dispatchScheduledById(
     return sqlDispatchScheduledById(notificationId, now);
   }
   return null;
-}
-
-/**
- * Legacy cron entrypoint: atomically claim due scheduled notifications and dispatch them.
- * Kept as a safety-net sweep — the BullMQ scheduler is the primary path.
- */
-export async function processDueNotifications(now: Date = new Date()): Promise<number> {
-  let processed = 0;
-
-  while (true) {
-    const claimed = (await Notification.findOneAndUpdate(
-      { status: "scheduled", scheduledAt: { $lte: now } },
-      { $set: { status: "sent", sentAt: now } },
-      { new: true, sort: { scheduledAt: 1 } }
-    )) as INotification | null;
-
-    if (!claimed) break;
-
-    try {
-      const result = await dispatchAudience(
-        {
-          title: claimed.title,
-          body: claimed.body,
-          image: claimed.image,
-          type: claimed.type,
-          deepLink: claimed.deepLink,
-          data: claimed.data,
-        },
-        {
-          platforms: claimed.audience?.platforms,
-          courseIds: claimed.audience?.courseIds?.map((id) => id.toString()),
-          userIds: claimed.audience?.userIds?.map((id) => id.toString()),
-        },
-        claimed._id as mongoose.Types.ObjectId
-      );
-
-      await Notification.updateOne(
-        { _id: claimed._id },
-        {
-          $set: {
-            status: result.status,
-            failureReason: result.failureReason,
-            recipientCount: result.recipientCount,
-            sentAt: now,
-          },
-        }
-      );
-      processed++;
-    } catch (err) {
-      logger.error("Scheduled notification dispatch failed", {
-        id: (claimed._id as mongoose.Types.ObjectId).toString(),
-        error: (err as Error).message,
-      });
-      await Notification.updateOne(
-        { _id: claimed._id },
-        {
-          $set: {
-            status: "failed",
-            failureReason: (err as Error).message,
-          },
-        }
-      );
-    }
-  }
-
-  return processed;
 }

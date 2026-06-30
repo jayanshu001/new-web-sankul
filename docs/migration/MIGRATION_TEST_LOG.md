@@ -23,6 +23,9 @@ The remaining `src/models/**` + `mongoose` dependency is now **dormant dead code
 
 | Phase / module | Status | Last tested | Tester |
 |----------------|--------|-------------|--------|
+| CP3.5 Batch 1 — port reads/listings + flip-to-twin (exam/ebook/offline/live/course) | ✅ | 2026-06-30 | `yarn typecheck` (1 pre-existing error, 0 introduced); `listBatchEnquiries` deferred NEEDS-DDL |
+| CP3.5 Batch 0 — delete dead/superseded Mongo code (client + admin/promoter) | ✅ | 2026-06-30 | `yarn typecheck` (1 pre-existing error, 0 introduced) |
+| CP3 — remove all `isMysqlModule()` fallback branches (159 files) | ✅ | 2026-06-30 | `yarn typecheck` (1 pre-existing error, 0 introduced) |
 | admin-video + administrator validation (numeric id accept; role required) | ✅ | 2026-06-23 | `yarn typecheck` (validation-only fix) |
 | Phase 1 — MySQL + dump | ✅ | 2026-06-04 | Agent (automated) |
 | Phase 2 — `app-update` | 🔄 | 2026-06-04 | Agent (automated only) |

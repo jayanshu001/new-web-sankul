@@ -1,12 +1,9 @@
 import { Request, Response } from "express";
-import { LiveSession } from "../../models/course/LiveSession.model";
-import { LiveCourseSubscription } from "../../models/customer/LiveCourseSubscription.model";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
 import { resolveVideoSource } from "../../utils/videoResolver";
 import logger from "../../utils/logger";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
-import { formatScheduledAt } from "../../utils/displayTime";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
 const resolveBase = (req: Request) =>
@@ -341,67 +338,18 @@ export const listMyUpcomingSessions = async (req: Request, res: Response) => {
 
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
-    const now = new Date();
 
     // Only currently-active subscriptions feed the "my upcoming" view —
-    // expired ones shouldn't surface their courses' future sessions.
-    const subs = await LiveCourseSubscription.find({
-      customerId,
-      paymentStatus: "verified",
-      status: true,
-      $or: [{ endAt: null }, { endAt: { $gte: now } }],
-    })
-      .select("liveCourseId")
-      .lean();
+    // the SQL twin filters to owned (active, unexpired) courses and returns the
+    // same cross-course session-feed card shape as the sibling SQL handlers
+    // (listAllUpcomingSessions / listLiveNowSessions).
+    const cid = liveSql.parseLiveId(String(customerId));
+    const r = await liveSql.listMyUpcomingSessions(cid, { page, limit });
 
-    if (subs.length === 0) {
-      return success(
-        res,
-        { sessions: [], total: 0, page, limit },
-        "Your upcoming sessions fetched."
-      );
-    }
-
-    const courseIds = subs.map((s) => s.liveCourseId);
-
-    const query = {
-      liveCourseIds: { $in: courseIds },
-      status: "SCHEDULED",
-      scheduledAt: { $ne: null, $gte: now },
-    };
-
-    const [rows, total] = await Promise.all([
-      LiveSession.find(query)
-        .sort({ scheduledAt: 1 })
-        .skip((page - 1) * limit)
-        .limit(limit)
-        .select("title subject educatorId scheduledAt endAt status streamId liveCourseIds")
-        .populate("educatorId", "name image")
-        .populate("liveCourseIds", "name image")
-        .lean(),
-      LiveSession.countDocuments(query),
-    ]);
-
-    const sessions = rows.map((s: any) => ({
-      sessionId: String(s._id),
-      title: s.title,
-      subject: s.subject || s.title,
-      educator: s.educatorId ?? null,
-      // A session can belong to multiple courses; surface them all so the UI
-      // can show "Course A / Course B" when overlapping.
-      liveCourses: Array.isArray(s.liveCourseIds) ? s.liveCourseIds : [],
-      scheduledAt: s.scheduledAt ?? null,
-      scheduledAtDisplay: formatScheduledAt(s.scheduledAt),
-      endAt: s.endAt ?? null,
-      status: s.status,
-      streamId: s.streamId ?? null,
-      canJoin: s.status === "CREATED",
-    }));
-
-    logger.info("listMyUpcomingSessions success", { traceId, customerId, total, returned: sessions.length });
+    logger.info("listMyUpcomingSessions success", { traceId, customerId, total: r.total, returned: r.sessions.length });
     return success(
       res,
-      { sessions, total, page, limit },
+      { sessions: r.sessions, total: r.total, page: r.page, limit: r.limit },
       "Your upcoming sessions fetched."
     );
   } catch (err) {

@@ -1,8 +1,5 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
 import { z } from "zod";
-import { OfflineCity } from "../../models/offline/OfflineCity.model";
-import { OfflineCenter } from "../../models/offline/OfflineCenter.model";
 import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
 import {
   OfflineBatchEnquiry,
@@ -10,7 +7,6 @@ import {
 } from "../../models/offline/OfflineBatchEnquiry.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
-import { buildRegexCondition } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   parseOfflineId,
@@ -29,8 +25,6 @@ import {
   enquiryBatchExists,
   submitEnquiryMysql,
 } from "../../modules/offline-enquiry/offline-enquiry.service";
-
-const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
 // MySQL enquiry: batchId is an INT (the migrated id-space), not an ObjectId.
 const enquiryMysqlSchema = z.object({
@@ -90,14 +84,14 @@ export const listCities = async (req: Request, res: Response) => {
   logger.info("listCities invoked", { traceId, path: req.originalUrl });
 
   try {
+    // ── MySQL active-cities read (offline-city). Active only, ordered by manual
+    // `order` then name (mirrors Mongo {status:true} sort {order:1}); name search.
+    // Pagination applied over the (small) active set to keep buildPagination shape.
     const { search, page, limit, skip } = parseListQuery(req.query);
-    const filter: any = { status: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
-    const [data, total] = await Promise.all([
-      OfflineCity.find(filter).sort({ order: 1 }).skip(skip).limit(limit).lean(),
-      OfflineCity.countDocuments(filter),
-    ]);
-    logger.info("listCities success", { traceId, count: data.length });
+    const all = await listActiveCitiesMysql(search);
+    const total = all.length;
+    const data = all.slice(skip, skip + limit);
+    logger.info("listCities success", { traceId, count: data.length, source: "mysql" });
     return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listCities failed", { traceId, error: getErrorMessage(e), stack: e.stack });
@@ -112,25 +106,15 @@ export const listCentersByCity = async (req: Request, res: Response) => {
   logger.info("listCentersByCity invoked", { traceId, path: req.originalUrl, cityId });
 
   try {
-    if (!isObjectId(cityId)) { logger.warn("listCentersByCity invalid id", { traceId, cityId }); return res.status(400).json({ success: false, message: "Invalid city id." }); }
+    // ── MySQL: centers (each with nested active batches) under this city
+    // (offline-batch). SQL ids are ints, not 24-hex ObjectIds.
+    const cid = parseOfflineId(cityId);
+    if (cid == null) { logger.warn("listCentersByCity invalid id (mysql)", { traceId, cityId }); return res.status(400).json({ success: false, message: "Invalid city id." }); }
 
-    const centers = await OfflineCenter.find({ cityId, status: true }).lean();
-    const centerIds = centers.map((c) => c._id);
-    const batches = await OfflineBatch.find({ centerId: { $in: centerIds }, status: true })
-      .sort({ startAt: 1 })
-      .lean();
+    const byCity = await getCentersWithBatchesByCitiesMysql([cid]);
+    const data = byCity.get(String(cid)) ?? [];
 
-    const batchesByCenter: Record<string, any[]> = {};
-    batches.forEach((b) => {
-      (batchesByCenter[String(b.centerId)] ||= []).push(b);
-    });
-
-    const data = centers.map((c: any) => ({
-      ...c,
-      batches: batchesByCenter[String(c._id)] || [],
-    }));
-
-    logger.info("listCentersByCity success", { traceId, cityId, centerCount: centers.length, batchCount: batches.length });
+    logger.info("listCentersByCity success", { traceId, cityId, centerCount: data.length, source: "mysql" });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {
     logger.error("listCentersByCity failed", { traceId, cityId, error: getErrorMessage(e), stack: e.stack });

@@ -1,12 +1,9 @@
 import { Request, Response } from "express";
 import mongoose from "mongoose";
-import { Ebook } from "../../models/ebook/Ebook.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import { generateEbookReceipt } from "../../libs/core/generate";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
-import { buildSearchFilter } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   isEbookMysql,
@@ -14,15 +11,13 @@ import {
   getEbookDetailWithPlans,
   parseEbookId,
 } from "../../modules/catalog-ebook/catalog-ebook.service";
+import { listMyEbookSubscriptions } from "../../modules/commerce-ebook-sub/commerce-ebook-sub.service";
 import type { EBookLanguage } from "@prisma/client";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
 const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
-
-const daysBetween = (from: Date, to: Date) =>
-  Math.max(0, Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)));
 
 // GET /api/v1/client/ebooks
 export const listEbooks = async (req: Request, res: Response) => {
@@ -61,41 +56,24 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
   logger.info("listMySubscriptions invoked", { traceId, path: req.originalUrl, customerId: userId });
 
   try {
-    const now = new Date();
     const { search, page, limit, skip } = parseListQuery(req.query);
 
-    // Optional search by ebook name/author — resolve matching ebook ids first,
-    // then scope the subscription query to them (the searchable text lives on
-    // the populated Ebook, not the subscription row).
-    const baseFilter: any = { customerId: userId, endAt: { $gt: now }, status: true };
-    const searchFilter = buildSearchFilter(search, ["name", "author"]);
-    if (Object.keys(searchFilter).length) {
-      const matchedIds = await Ebook.find({ status: true, ...searchFilter }).select("_id").lean();
-      baseFilter.ebookId = { $in: matchedIds.map((e: any) => e._id) };
+    const custId = userId != null ? parseEbookId(String(userId)) : null;
+    if (custId == null) {
+      logger.info("listMySubscriptions success", { traceId, customerId: userId, count: 0 });
+      return res.status(200).json({ success: true, data: { subscriptions: [] }, pagination: buildPagination(0, page, limit) });
     }
 
-    const [subs, total] = await Promise.all([
-      EbookSubscription.find(baseFilter)
-        .populate("ebookId")
-        .sort({ endAt: 1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      EbookSubscription.countDocuments(baseFilter),
-    ]);
-
+    // Active ebook subscriptions (endAt soonest-first) spread into the ebook
+    // DTO + access window. Optional name/author search scopes by ebook.
     const base = resolveBase(req);
-    const subscriptions = subs
-      .filter((s: any) => s.ebookId)
-      .map((s: any) => ({
-        ...s.ebookId,
-        startAt: s.startAt,
-        endAt: s.endAt,
-        daysLeft: daysBetween(now, s.endAt),
-        shareableLink: buildShareUrl("ebooks", String(s.ebookId._id), base),
-      }));
+    const { subscriptions, total } = await listMyEbookSubscriptions(
+      custId,
+      { search: search?.trim() || undefined, skip, take: limit },
+      (eid) => buildShareUrl("ebooks", eid, base)
+    );
 
-    logger.info("listMySubscriptions success", { traceId, customerId: userId, count: subscriptions.length });
+    logger.info("listMySubscriptions success", { traceId, customerId: userId, count: subscriptions.length, source: "mysql" });
     return res.status(200).json({ success: true, data: { subscriptions }, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listMySubscriptions failed", { traceId, customerId: userId, error: getErrorMessage(error), stack: error.stack });

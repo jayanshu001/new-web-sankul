@@ -1,5 +1,5 @@
 import { Request, Response } from "express";
-import { Book } from "../../models/book/Book.model";
+import { prisma } from "../../config/prisma";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import {
@@ -116,12 +116,18 @@ export const getEbookReceipt = async (req: Request, res: Response) => {
 };
 
 // Helper kept for the books-tab thumbnail lookup so the list endpoint stays lean.
+// MySQL read (ws_book): SQL ids are ints; map keyed by string id → thumbnail||image||null.
 export const lookupBookThumbnails = async (bookIds: string[]) => {
   if (!bookIds.length) return new Map<string, string | null>();
-  const books = await Book.find({ _id: { $in: bookIds } })
-    .select("_id thumbnail image")
-    .lean();
+  const ids = bookIds
+    .map((b) => Number(b))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  if (!ids.length) return new Map<string, string | null>();
+  const books = await prisma.book.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, thumbnail: true, image: true },
+  });
   return new Map<string, string | null>(
-    books.map((b: any) => [String(b._id), b.thumbnail || b.image || null])
+    books.map((b) => [String(b.id), b.thumbnail || b.image || null])
   );
 };

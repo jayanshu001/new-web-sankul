@@ -98,6 +98,36 @@ export const clientExamRepository = {
   findResult: (id: number, customerId: number) =>
     prisma.examResult.findFirst({ where: { id, customerId } }),
 
+  /** Lifetime aggregate analytics row for a customer (one per customer). */
+  overallAnalytics: (customerId: number) =>
+    prisma.examResultDetailAnalytics.findFirst({ where: { customerId } }),
+
+  /** First result row for (customer, exam) — mirrors Mongo findOne natural order. */
+  findResultByExam: (customerId: number, examId: number) =>
+    prisma.examResult.findFirst({ where: { customerId, examId } }),
+
+  /** Set the rating on a single result row by id, returning the updated row. */
+  rateResult: (id: number, ratting: string) =>
+    prisma.examResult.update({ where: { id }, data: { ratting } }),
+
+  /** Past (submitted) attempts of DAILY-type exams, paginated. */
+  pastDailyResults: (customerId: number, skip: number, take: number) =>
+    prisma.examResult.findMany({
+      where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily" } },
+      include: {
+        Exam: {
+          select: { id: true, name: true, type: true, time: true, positiveMarks: true, negativeMarks: true, startAt: true },
+        },
+      },
+      orderBy: [{ submittedAt: "desc" }, { attemptNumber: "desc" }],
+      skip,
+      take,
+    }),
+  countPastDailyResults: (customerId: number) =>
+    prisma.examResult.count({
+      where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily" } },
+    }),
+
   /** Daily-exam drill-down counts by year/month/week via raw SQL date grouping. */
   dailyYears: (now: Date) =>
     prisma.$queryRawUnsafe<any[]>(

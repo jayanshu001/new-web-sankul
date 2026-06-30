@@ -48,6 +48,46 @@ export const commerceEbookSubRepository = {
       orderBy: [{ endAt: "desc" }, { id: "desc" }],
     }),
 
+  /**
+   * Active, unexpired ebook subs for a customer with the joined ebook row,
+   * paginated, `endAt` ASC (soonest-to-expire first) — the "my subscriptions"
+   * listing. Optionally scoped to a set of ebook ids (search-by-ebook).
+   * Mirrors `find({customerId, endAt:{$gt:now}, status:true [, ebookId:{$in}]})
+   * .populate('ebookId').sort({endAt:1}).skip().limit()`.
+   */
+  listActiveWithEbookByCustomer: (
+    customerId: number,
+    opts: { ebookIds?: number[]; skip: number; take: number },
+    now: Date
+  ) =>
+    prisma.eBookSubscription.findMany({
+      where: {
+        customerId,
+        status: { not: false },
+        endAt: { gt: now },
+        ...(opts.ebookIds ? { ebookId: { in: opts.ebookIds } } : {}),
+      },
+      include: { eBook: true },
+      orderBy: [{ endAt: "asc" }, { id: "asc" }],
+      skip: opts.skip,
+      take: opts.take,
+    }),
+
+  /** Count of the active-with-ebook listing above (same predicate). */
+  countActiveWithEbookByCustomer: (
+    customerId: number,
+    opts: { ebookIds?: number[] },
+    now: Date
+  ) =>
+    prisma.eBookSubscription.count({
+      where: {
+        customerId,
+        status: { not: false },
+        endAt: { gt: now },
+        ...(opts.ebookIds ? { ebookId: { in: opts.ebookIds } } : {}),
+      },
+    }),
+
   /** Count active owners of an ebook. */
   countActiveByEbook: (ebookId: number, now: Date) =>
     prisma.eBookSubscription.count({

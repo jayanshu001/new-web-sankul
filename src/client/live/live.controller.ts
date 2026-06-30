@@ -5,7 +5,6 @@ import {
   StreamosError,
 } from "../../admin/live/streamos.service";
 import { io, roomKey } from "../../socket/livechat.socket";
-import { PREVIEW_SECONDS } from "../live-course/entitlement";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { formatScheduledAt } from "../../utils/displayTime";
@@ -68,7 +67,7 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
       hlsUrl: exposePlayback ? hlsUrl ?? null : null, hlsUrls: exposePlayback ? hlsUrls ?? null : null,
       recordings: exposePlayback ? recordings ?? [] : [],
       liveClassId: s.streamId != null ? String(s.streamId) : null,
-      accessLevel: preview.accessLevel, previewSeconds: preview.accessLevel === "full" ? null : PREVIEW_SECONDS,
+      accessLevel: preview.accessLevel, previewSeconds: preview.accessLevel === "full" ? null : liveSql.PREVIEW_SECONDS,
       previewExpiresAt: preview.previewExpiresAt, previewSecondsRemaining: preview.previewSecondsRemaining, purchaseOptions,
     }, "Live session fetched.");
   } catch (err) {

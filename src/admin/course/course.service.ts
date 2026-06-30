@@ -6,8 +6,6 @@
 //   3. Map the return value to the HTTP response.
 
 import mongoose, { Types } from "mongoose";
-import { Course } from "../../models/course/Course.model";
-import { VideoCategory } from "../../models/course/VideoCategory.model";
 import { HttpError } from "../../middlewares/errorHandler";
 import cache from "../../libs/cache";
 import logger from "../../utils/logger";
@@ -56,12 +54,6 @@ export interface CategoryRef {
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
-
-const assertObjectId = (id: string, label: string): void => {
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    throw new HttpError(400, `Invalid ${label} ID`);
-  }
-};
 
 /**
  * Accepts either a real array or a JSON-encoded string (multipart/form-data),
@@ -172,74 +164,6 @@ export const deleteCourseVideoCategory = async (videoCategoryId: string) => {
 // ──────────────────────────────────────────────────────────────────────────────
 // Course CRUD
 // ──────────────────────────────────────────────────────────────────────────────
-
-export interface CreateCourseInput {
-  validated: any; // shape of createCourseSchema
-  materialCategories?: CategoryRef[];
-  examCategories?: CategoryRef[];
-}
-
-export const createCourse = async (input: CreateCourseInput) => {
-  const session = await mongoose.startSession();
-  try {
-    const { validated, materialCategories, examCategories } = input;
-    let course: any;
-    let folder: any;
-
-    await session.withTransaction(async () => {
-      const [created] = await Course.create(
-        [
-          {
-            ...validated,
-            materialCategories: materialCategories ?? [],
-            examCategories: examCategories ?? [],
-          },
-        ],
-        { session }
-      );
-      course = created;
-
-      // "Nested Folder Automation" — every course gets a root video folder.
-      const [created2] = await VideoCategory.create(
-        [
-          {
-            title: `${course.name} - Root`,
-            slug: `${course.name.toLowerCase().replace(/ /g, "-")}-root`,
-            image: course.image,
-            courseId: course._id,
-            order_by: 0,
-          },
-        ],
-        { session }
-      );
-      folder = created2;
-    });
-
-    await invalidateCourseCaches();
-    return { course: course.toObject(), folder: folder.toObject() };
-  } finally {
-    session.endSession();
-  }
-};
-
-export interface UpdateCourseInput {
-  id: string;
-  validated: any;
-  materialCategories?: CategoryRef[];
-  examCategories?: CategoryRef[];
-}
-
-export const updateCourse = async (input: UpdateCourseInput) => {
-  assertObjectId(input.id, "Course");
-  const update: any = { ...input.validated };
-  if (input.materialCategories !== undefined) update.materialCategories = input.materialCategories;
-  if (input.examCategories !== undefined) update.examCategories = input.examCategories;
-
-  const course = await Course.findByIdAndUpdate(input.id, update, { new: true }).lean();
-  if (!course) throw new HttpError(404, "Course not found");
-  await invalidateCourseCaches(input.id);
-  return course;
-};
 
 export const deleteCourse = async (id: string) => {
   const res = await adminCourse.deleteCourse(assertCourseSqlId(id, "Course"));
