@@ -1,6 +1,6 @@
 # WebSankul API
 
-A comprehensive REST API for the WebSankul online education platform, providing services for course management, e-learning content delivery, live classes, examination systems, e-commerce functionality, and student management. Built on Node.js + TypeScript with Express 5, Mongoose, Socket.IO, Redis (BullMQ), and AWS S3.
+A comprehensive REST API for the WebSankul online education platform, providing services for course management, e-learning content delivery, live classes, examination systems, e-commerce functionality, and student management. Built on Node.js + TypeScript with Express 5, MySQL (Prisma), Socket.IO, Redis (BullMQ), and AWS S3.
 
 ## Table of Contents
 
@@ -40,30 +40,48 @@ A comprehensive REST API for the WebSankul online education platform, providing 
 Before you begin, ensure you have the following installed:
 
 - **Node.js**: >= 18.x (recommended 20+)
-- **npm**: >= 9.x
-- **MongoDB**: >= 6.x
+- **Yarn**: >= 1.22 (this project uses Yarn, not npm)
+- **Docker + Docker Compose**: to run the bundled MySQL (and optionally Redis) locally
+- **MySQL**: 8.x (provided via `docker compose ws-mysql` on host port **3307**, or your own instance)
 - **Redis**: >= 6.x (required for rate-limiting, BullMQ, Socket.IO adapter, crash throttle)
 - **Git**: For version control
+
+> **Note:** The platform is **MySQL-only via Prisma**. MongoDB has been fully removed — there is no `MONGODB_URI` any more.
 
 ## Installation
 
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone git@gitlab.com:websankul1/websankul-backend.git
 cd new-web-sankul
 ```
 
 ### 2. Install Dependencies
 
 ```bash
-npm install
+yarn install
 ```
 
-### 3. Build TypeScript (optional for prod)
+### 3. Create your `.env`
+
+Copy the example and fill in the values (see [Configuration](#configuration)):
 
 ```bash
-npm run build
+cp .env.example .env
+```
+
+### 4. Start MySQL and generate the Prisma client
+
+```bash
+yarn db:up            # starts the ws-mysql container (host port 3307)
+yarn prisma:generate  # generates the Prisma client from schema.prisma
+```
+
+### 5. Build TypeScript (optional, for prod)
+
+```bash
+yarn build
 ```
 
 ## Configuration
@@ -79,14 +97,15 @@ Create a `.env` file in the root directory.
 NODE_ENV=development
 PORT=2206
 
-# Database
-MONGODB_URI=mongodb://127.0.0.1:27017/websankul
+# Database (MySQL via Prisma — required in every environment)
+# When using the bundled docker compose ws-mysql (host port 3307):
+DATABASE_URL=mysql://root:your_root_password@127.0.0.1:3307/websankul
+MYSQL_ROOT_PASSWORD=your_root_password
 
-# JWT
-JWT_SECRET=your_jwt_secret
+# JWT (both secrets required — boot fails if missing)
+JWT_ACCESS_SECRET=your_jwt_access_secret
 JWT_REFRESH_SECRET=your_jwt_refresh_secret
-JWT_EXPIRES_IN=7d
-JWT_REFRESH_EXPIRES_IN=30d
+JWT_ADMIN_TTL=1d
 
 # CORS (CSV of allowed origins — REQUIRED in production)
 ALLOWED_ORIGINS=http://localhost:3000,http://localhost:5173
@@ -130,18 +149,34 @@ APP_UNIVERSAL_DOMAIN=https://your-domain.com
 
 ## Database Setup
 
-### 1. Start MongoDB
+### 1. Start MySQL
+
+The repo ships a `docker-compose.yml` with an `ws-mysql` service (host port **3307**) and Redis:
 
 ```bash
-mongod --dbpath /your/data/path
+yarn db:up      # start MySQL
+# yarn db:down  # stop it
 ```
 
-### 2. (Optional) Run Migrations / Backfills
+Point `DATABASE_URL` at it (see Configuration). To use your own MySQL instead, just set `DATABASE_URL` accordingly.
+
+### 2. Generate the Prisma Client
+
+The Prisma schema is introspected from the `ws_*` database. After the DB is up:
+
+```bash
+yarn prisma:generate
+yarn db:verify        # sanity-check the MySQL connection
+```
+
+> Do **not** run `yarn db:pull` for small changes — it rewrites the hand-curated `schema.prisma`. Apply DDL from `docs/migration/schema-changes/*.sql`, then `yarn prisma:generate`.
+
+### 3. (Optional) Run Migrations / Backfills
 
 One-off scripts live in `scripts/`. Example:
 
 ```bash
-npx tsx scripts/backfill-lecture-progress-scope.ts
+yarn tsx scripts/apply-ddl.ts
 ```
 
 ## Running the Application
@@ -149,7 +184,7 @@ npx tsx scripts/backfill-lecture-progress-scope.ts
 ### Development Mode
 
 ```bash
-npm run dev
+yarn dev
 ```
 
 The server starts on `http://localhost:2206/api` (or your configured PORT). `tsx watch` provides auto-reload.
@@ -157,14 +192,16 @@ The server starts on `http://localhost:2206/api` (or your configured PORT). `tsx
 ### Type Check
 
 ```bash
-npm run typecheck
+yarn typecheck
 ```
+
+`yarn typecheck` is the project's only verification gate — run it before considering any change done.
 
 ### Production Mode (PM2)
 
 ```bash
-npm run build
-npm start
+yarn build
+yarn start
 ```
 
 Uses `ecosystem.config.cjs` to launch via PM2 in cluster mode.
@@ -172,8 +209,8 @@ Uses `ecosystem.config.cjs` to launch via PM2 in cluster mode.
 ### CPU / Auto-scale Monitors
 
 ```bash
-npm run monitor:cpu
-npm run monitor:scale
+yarn monitor:cpu
+yarn monitor:scale
 ```
 
 ## Redis Setup
@@ -512,7 +549,7 @@ Public, unauthenticated, rate-limit-light. Generates share URLs that resolve to 
 
 ```
 new-web-sankul/
-├── prisma/                          # (none — this project uses Mongoose)
+├── prisma/                          # schema.prisma (MySQL, ~121 ws_* models, introspected)
 ├── src/
 │   ├── index.ts                     # Application entry point
 │   ├── app.ts                       # Express app, middleware & route mounting
@@ -545,14 +582,13 @@ new-web-sankul/
 │   ├── deeplinking/                 # Public share / deep-link routes
 │   ├── webhooks/                    # HMAC-verified inbound webhooks (Razorpay payout, ...)
 │   ├── socket/                      # Socket.IO server (live chat / polls / streaming)
-│   ├── models/                      # Mongoose schemas
-│   │   ├── customer/  course/  ebook/  book/  exam/  testSeries/
-│   │   ├── educator/  promoter/  admin/  referral/  offline/  system/
-│   │   ├── examCountdown/  Goal.model.ts  enums.ts
+│   ├── modules/                     # MySQL/Prisma business logic (~80 modules)
+│   │   │                            # each: *.repository / *.service / *.transformer
+│   │   │                            #       / *.types / *.validation
 │   ├── middlewares/                 # authenticate, requireRole, errorHandler,
 │   │                                # notFound, metricsMiddleware, requestContext,
 │   │                                # health, validation
-│   ├── config/                      # rateLimiter, redis, mongo, s3, mail, etc.
+│   ├── config/                      # env, prisma, redis, rateLimiter, storage, mail, etc.
 │   ├── libs/                        # Reusable libs (constants, helpers, validators)
 │   ├── utils/                       # logger, crashReporter, metrics, requestLogger,
 │   │                                # requestContext (AsyncLocalStorage)
@@ -562,9 +598,9 @@ new-web-sankul/
 ├── public/                          # .well-known files (AASA, assetlinks.json)
 ├── secrets/                         # Firebase service account, etc. (gitignored)
 ├── logs/                            # Winston daily-rotate log files
-├── dist/                            # Compiled JS output (after `npm run build`)
+├── dist/                            # Compiled JS output (after `yarn build`)
 ├── ecosystem.config.cjs             # PM2 cluster config (production)
-├── docker-compose.yml               # Local Mongo + Redis stack
+├── docker-compose.yml               # Local MySQL (ws-mysql, port 3307) + Redis stack
 ├── redis.conf                       # Local Redis config
 ├── tsconfig.json
 ├── package.json
@@ -609,9 +645,9 @@ Redis-backed via `rate-limit-redis` so limits hold across PM2 / pod instances.
 - **`metricsMiddleware`** — Prometheus counters/histograms
 - **`captureCrashContextMiddleware`** — feeds the Redis-throttled crash reporter
 
-## Data Models (Mongoose)
+## Data Models (MySQL / Prisma)
 
-Key collections include:
+Key tables (`ws_*`, mapped via `@@map`, accessed through Prisma) include:
 
 - **Customer** — student accounts (`customer/`)
 - **Course / CourseSubject / Lecture / LectureProgress** — course catalog + progress
@@ -619,7 +655,7 @@ Key collections include:
 - **LiveCourse / LiveSession / LiveChat / LivePoll** — live classes
 - **Ebook / Book** — digital and physical book inventory
 - **Exam / TestSeries / ExamCountdown / ExamResult** — assessments
-- **Package / Plan** — bundles and pricing (`duration` is in **months**)
+- **Package / Plan** — bundles and pricing (`duration` is in **days**)
 - **Order / Payment / Subscription / PurchaseHistory** — commerce
 - **Address / Tracking** — shipping
 - **Promocode / Referral / BankAccount** — marketing & payouts
@@ -639,7 +675,7 @@ Socket.IO server lives in [src/socket/](src/socket/) and uses the Redis adapter 
 ## Health, Metrics & Crash Reporting
 
 - `GET /healthz` — liveness (always 200 if process is up)
-- `GET /readyz` — readiness (checks Mongo + Redis)
+- `GET /readyz` — readiness (checks MySQL + Redis)
 - `GET /metrics` — Prometheus exposition; requires `Authorization: Bearer $METRICS_TOKEN`
 - Crash reporter emails on unhandled errors, throttled via Redis to avoid email storms across pods
 
@@ -648,7 +684,7 @@ Socket.IO server lives in [src/socket/](src/socket/) and uses the Redis adapter 
 Run the type checker:
 
 ```bash
-npm run typecheck
+yarn typecheck
 ```
 
 > No automated test suite is configured yet — UI / behavior changes should be manually verified per the project's `/verify` workflow.
@@ -661,11 +697,13 @@ npm run typecheck
 lsof -ti:2206 | xargs kill -9
 ```
 
-### MongoDB Connection Failed
+### MySQL Connection Failed
 
-1. Check MongoDB is running: `mongosh`
-2. Verify `MONGODB_URI` in `.env`
-3. Confirm the database name in the connection string
+1. Check the MySQL container is running: `docker compose ps` (start it with `yarn db:up`)
+2. Verify `DATABASE_URL` in `.env` (host `127.0.0.1`, port **3307** for the bundled container)
+3. Confirm the database name in the connection string and that `MYSQL_ROOT_PASSWORD` matches
+4. Sanity-check the connection: `yarn db:verify`
+5. If Prisma errors about the client, run `yarn prisma:generate`
 
 ### Redis Connection Failed
 
@@ -702,7 +740,7 @@ Mobile apps read `/api/v1/client/version` for force-update gates. Update the CMS
 ## Security Best Practices
 
 - Never commit `.env` or `secrets/` to version control
-- Regularly run `npm audit fix`
+- Regularly run `yarn audit`
 - Rotate JWT secrets if exposed; refresh tokens have a separate secret
 - Keep `METRICS_TOKEN` long, random, and out of logs
 - Always set `ALLOWED_ORIGINS` in production (boot will fail otherwise)
@@ -713,7 +751,7 @@ Mobile apps read `/api/v1/client/version` for force-update gates. Update the CMS
 ## Environment-Specific Configuration
 
 ### Development
-- `.env`, `npm run dev` (tsx watch), detailed logging, demo routes (`/demo/live-chat`, `/demo/live-course`) enabled
+- `.env`, `yarn dev` (tsx watch), detailed logging, demo routes (`/demo/live-chat`, `/demo/live-course`) enabled
 
 ### Staging
 - PM2 via `ecosystem.config.cjs`, moderate logging, real third-party endpoints with test credentials
@@ -726,8 +764,8 @@ Mobile apps read `/api/v1/client/version` for force-update gates. Update the CMS
 ### Using PM2
 
 ```bash
-npm run build
-npm start                          # = pm2 start ecosystem.config.cjs
+yarn build
+yarn start                         # = pm2 start ecosystem.config.cjs
 ```
 
 ### PM2 Commands
@@ -742,7 +780,7 @@ pm2 monit
 ### Docker (local stack)
 
 ```bash
-docker compose up -d               # brings up Mongo + Redis
+docker compose up -d               # brings up MySQL (ws-mysql, port 3307) + Redis
 ```
 
 ## License
