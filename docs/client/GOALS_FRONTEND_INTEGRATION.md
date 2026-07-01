@@ -149,6 +149,94 @@ the selected ones):
 
 ---
 
+## 4. Show packages for the selected goals (labels vs. no labels)
+
+Once you know the customer's selection (from §3), fetch the packages to display with:
+
+`GET /api/v1/client/packages/goal`
+
+This endpoint takes **two independent, comma-separated query params** — and *which one you
+use depends on whether the goal has labels*:
+
+| The selected goal… | …means | Call with | You get back |
+|---|---|---|---|
+| **has labels** (`labels` non-empty in `my-goals`) | packages hang off each **label** | `?labelIds=<goalId>:<labelId>,…` | `{ "label": { … } }` groups |
+| **has no labels** (`labels: []` in `my-goals`) | packages hang off the **goal itself** | `?goalIds=<goal _id>` | `{ "goal": { … } }` groups |
+
+> **Key rule 1 — label ids are per-goal.** Every goal numbers its labels from `1`, so the
+> same label id exists under many goals. Send each label **goal-scoped** as
+> `goalId:labelId` (e.g. `19:1`), never a bare label id. A bare id still works for
+> backward compatibility but is **ambiguous** across goals — don't rely on it.
+>
+> **Key rule 2 — a label-less goal is never sent via `labelIds`.** It has no label ids to
+> send. Use its goal `_id` via `goalIds` instead. An empty `labelIds` returns nothing for it.
+
+### How the frontend decides (per selected goal)
+
+After `GET /client/goals/my-goals`, loop the returned goals and bucket them:
+
+```js
+const labelIds = [];
+const goalIds  = [];
+
+for (const goal of myGoals) {
+  if (goal.labels.length > 0) {
+    // goal WITH labels → collect each label goal-scoped as goalId:labelId
+    labelIds.push(...goal.labels.map(l => `${goal._id}:${l._id}`));
+  } else {
+    // goal WITHOUT labels → use the goal id itself
+    goalIds.push(goal._id);
+  }
+}
+```
+
+Then make **one** call with whichever buckets are non-empty (both may be sent together):
+
+```
+GET /client/packages/goal?labelIds=19:1&goalIds=2
+```
+
+- At least one of `labelIds` / `goalIds` is **required** — sending neither returns `400`.
+- Omit a param entirely when its bucket is empty (don't send `labelIds=`).
+
+### Response shape
+
+The `data` array mixes two item types — **distinguish them by the wrapper key**
+(`label` vs `goal`):
+
+```json
+{
+  "success": true,
+  "data": [
+    { "label": { "_id": "1", "name": "Prelims", "goalId": "1", "goalTitle": "GPSC Class 1/2", "packages": [ /* … */ ] } },
+    { "label": { "_id": "2", "name": "Mains",   "goalId": "1", "goalTitle": "GPSC Class 1/2", "packages": [ /* … */ ] } },
+    { "goal":  { "_id": "2", "title": "Dy.So", "packages": [ /* … */ ] } }
+  ]
+}
+```
+
+Render on the client:
+
+- `item.label` groups → show under the label's `goalTitle`, headed by the label `name`.
+- `item.goal` groups (the **label-less** goals) → show as a standalone goal section headed
+  by `goal.title`.
+
+> **Empty `packages: []`?** The group is still returned (with the correct `name`/`title`),
+> there just aren't any active packages tagged to that label/goal yet. That's a
+> content/data state to show as "no packages", **not** an error.
+
+### End-to-end example
+
+1. `GET /client/goals/my-goals` →
+   `[ { "_id":"19","title":"Defence","labels":[{"_id":"1","name":"Teaching"}] },
+      { "_id":"2","title":"Dy.So","labels":[] } ]`
+2. Bucket → `labelIds = ["19:1"]` (Defence › Teaching), `goalIds = ["2"]` (Dy.So has no labels).
+3. `GET /client/packages/goal?labelIds=19:1&goalIds=2`.
+4. Render the `{label:…}` group under *Defence › Teaching*, and the `{goal:…}` group
+   as the *Dy.So* section.
+
+---
+
 ## Quick reference
 
 | Action | Method & path | Body / result |
@@ -158,6 +246,8 @@ the selected ones):
 | **Save selection** (goals-only) | `PUT /client/goals` | `{ goals: [{ goalId, labelIds }] }` |
 | Read selection | `GET /client/goals/my-goals` | selected goals + selected labels only |
 | Read selection (profile) | `GET /client/profile` | `data.goals: [{ _id, name, labels }]` |
+| **Packages — goal WITH labels** | `GET /client/packages/goal?labelIds=<goalId>:<labelId>,…` | `[{ label: { _id, name, goalId, goalTitle, packages } }]` |
+| **Packages — goal WITHOUT labels** | `GET /client/packages/goal?goalIds=…` | `[{ goal: { _id, title, packages } }]` |
 
 ## Round-trip example
 

@@ -33,7 +33,10 @@ export const createAddressSchemaMysql = z.object({
   email: z.string().email("Invalid email").max(100).optional().nullable(),
   address: z.string().min(1, "Address is required").max(255),
   address2: z.string().max(255).optional().default(""),
-  city: z.string().min(1, "City is required").max(20),
+  // `city` is the denormalized city NAME (ws_customer_address.city VARCHAR(20)).
+  // The client sends the dropdown `cityId`; the controller resolves the name from
+  // it when `city` is omitted, so this stays optional to preserve that contract.
+  city: z.string().min(1, "City is required").max(20).optional().nullable(),
   cityId: numericId.optional().nullable(),
   stateId: numericId.optional().nullable(),
   pincode: z.string().min(4).max(10),

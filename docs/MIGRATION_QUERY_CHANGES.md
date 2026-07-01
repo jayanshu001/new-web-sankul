@@ -4,6 +4,49 @@
 
 ---
 
+## 2026-07-01 — Fix: `GET /client/package/goal` label lookup now goal-scoped (`goalId:labelId`)
+
+Goal label ids are assigned **per-goal** (each goal numbers its labels from 1 —
+`goal.admin.service.ts`), but `listPackagesByGoalLabelSql` filtered `ws_package` on
+`goal_label_id` **only**. So `?labelIds=1` matched packages whose `goal_label_id=1` across
+**every** goal — cross-goal leakage (and wrong `goalTitle`/`name` meta when goals shared an
+id). High-impact because id `1` is the most common label id.
+
+- **New query:** `listPackagesByGoalLabelScopedSql(goalId, goalLabelId)` in
+  `src/modules/catalog-package/catalog-package.detail.sql.ts` — filters
+  `{ active: true, goalId, goalLabelId }` (uses both columns; no schema/index change).
+- **Controller** (`src/client/package/package.controller.ts`, `listPackagesByGoal`):
+  `labelIds` now parses **`goalId:labelId`** tokens (e.g. `19:1`) and uses the scoped
+  query + goal-correct meta. A **bare `labelId`** is still accepted (backward-compat) and
+  falls back to the unscoped query + first-goal-that-owns-the-id meta (ambiguous — logged
+  as legacy). `goalIds` (label-less goals) path unchanged.
+- **Contract:** additive — old bare-id calls keep working; new callers should send
+  `goalId:labelId`. Response shape unchanged. Frontend docs updated
+  (`docs/client/GOALS_FRONTEND_INTEGRATION.md`, `docs/client/PACKAGES_BY_GOAL_FRONTEND.md`).
+  `yarn typecheck` green.
+
+---
+
+## 2026-07-01 — Fix: `POST /client/address` rejected valid payloads ("city Required")
+
+After the `ws_customer_address` column additions, `createAddressSchemaMysql` made the
+denormalized `city` NAME (`VARCHAR(20)` NOT NULL) **required**, but the client only sends
+the dropdown `cityId` — so create failed zod with `city: Required` (400).
+
+- **Change (code-only, no DB/schema change):**
+  - `src/client/address/address.validation.ts` — `city` is now `.optional().nullable()`
+    in `createAddressSchemaMysql` (update variant already relaxes via `.partial()`).
+  - `src/client/address/address.controller.ts` — new `resolveCityForStore(city, cityId)`
+    helper resolves the city NAME from `cityId` via
+    `offline-city.service.resolveCityName` (same lookup the cart shipping snapshot uses)
+    when `city` is omitted. `createAddress` now derives it and 400s only when neither
+    `city` nor a resolvable `cityId` yields a name (column is NOT NULL). `updateAddress`
+    refreshes the stored name when `cityId` changes without an explicit `city`.
+- No query/index change; the persisted `city`/`cityId` columns are written as before.
+  Response shape unchanged. `yarn typecheck` green.
+
+---
+
 ## 2026-07-01 — `ws_package.is_individual`: goal-level (label-less) packages
 
 Packages could only be targeted at a goal **label** (`goal_label_id`), so goals with no

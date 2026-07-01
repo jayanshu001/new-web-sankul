@@ -12,6 +12,7 @@ import {
   listPackagesPaginatedSql,
   listPackagesByTypeSql,
   listPackagesByGoalLabelSql,
+  listPackagesByGoalLabelScopedSql,
   listPackagesByGoalIndividualSql,
 } from "../../modules/catalog-package/catalog-package.detail.sql";
 import { listActiveSubscriptionsByCustomer } from "../../modules/commerce-subscription/commerce-subscription.service";
@@ -187,16 +188,37 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
   try {
     const parseIntCsv = (v: unknown): number[] =>
       String(v ?? "").split(",").map((s) => s.trim()).filter((s) => /^\d+$/.test(s)).map(Number);
-    // labelIds → label-based groups (goals WITH labels); goalIds → goal-level
-    // groups of individual packages (label-less goals). At least one is required.
-    const intIds = parseIntCsv(req.query.labelIds);
+    // labelIds → label-based groups (goals WITH labels). Label ids are per-goal
+    // (they restart at 1 per goal), so each entry SHOULD be goal-scoped as
+    // `goalId:labelId` (e.g. "19:1"). A bare `labelId` is still accepted for
+    // backward compatibility (unscoped → may match across goals — see below).
+    // goalIds → goal-level groups of individual packages (label-less goals).
+    // At least one of labelIds / goalIds is required.
+    const parseLabelRefs = (v: unknown): { goalId: number | null; labelId: number }[] =>
+      String(v ?? "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((tok) => {
+          const [a, b] = tok.split(":").map((p) => p.trim());
+          if (b !== undefined) {
+            // composite "goalId:labelId"
+            if (/^\d+$/.test(a) && /^\d+$/.test(b)) return { goalId: Number(a), labelId: Number(b) };
+            return null;
+          }
+          if (/^\d+$/.test(a)) return { goalId: null, labelId: Number(a) }; // legacy bare labelId
+          return null;
+        })
+        .filter((x): x is { goalId: number | null; labelId: number } => x !== null);
+
+    const labelRefs = parseLabelRefs(req.query.labelIds);
     const goalIntIds = parseIntCsv(req.query.goalIds);
 
-    if (!intIds.length && !goalIntIds.length) {
+    if (!labelRefs.length && !goalIntIds.length) {
       logger.warn("listPackagesByGoal missing labelIds/goalIds", { traceId });
       return res.status(400).json({
         success: false,
-        message: "labelIds or goalIds query param is required (comma-separated).",
+        message: "labelIds (goalId:labelId) or goalIds query param is required (comma-separated).",
       });
     }
 
@@ -206,20 +228,38 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
     const goalById = new Map(goals.map((g) => [g.id, g]));
 
     // ── label-based groups ────────────────────────────────────────────────────
-    const metaById = new Map<number, { name: string; goalId: string; goalTitle: string }>();
-    for (const g of goals) {
-      const labels = Array.isArray(g.labels) ? (g.labels as any[]) : [];
-      for (const l of labels) {
-        const lid = Number(l?.id);
-        if (Number.isInteger(lid) && intIds.includes(lid)) metaById.set(lid, { name: String(l?.name ?? ""), goalId: String(g.id), goalTitle: g.name });
+    // Resolve a label's display name within a specific goal.
+    const labelName = (goalId: number, labelId: number): string | null => {
+      const labels = Array.isArray(goalById.get(goalId)?.labels) ? (goalById.get(goalId)!.labels as any[]) : [];
+      const hit = labels.find((l) => Number(l?.id) === labelId);
+      return hit ? String(hit?.name ?? "") : null;
+    };
+    // Legacy fallback: bare labelId with no goal context — find the first goal
+    // that owns a label with this id (ambiguous if multiple goals share the id).
+    const firstGoalForLabel = (labelId: number): number | null => {
+      for (const g of goals) {
+        const labels = Array.isArray(g.labels) ? (g.labels as any[]) : [];
+        if (labels.some((l) => Number(l?.id) === labelId)) return g.id;
       }
-    }
+      return null;
+    };
     const labelGroups = await Promise.all(
-      intIds.map(async (lid) => {
-        const rows = await listPackagesByGoalLabelSql(lid);
+      labelRefs.map(async (ref) => {
+        // Prefer goal-scoped lookup (correct); fall back to unscoped for legacy bare ids.
+        const goalId = ref.goalId ?? firstGoalForLabel(ref.labelId);
+        const rows = goalId != null
+          ? await listPackagesByGoalLabelScopedSql(goalId, ref.labelId)
+          : await listPackagesByGoalLabelSql(ref.labelId);
         const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, base);
-        const meta = metaById.get(lid);
-        return { label: { _id: String(lid), name: meta?.name ?? null, goalId: meta?.goalId ?? null, goalTitle: meta?.goalTitle ?? null, packages: enriched } };
+        return {
+          label: {
+            _id: String(ref.labelId),
+            name: goalId != null ? labelName(goalId, ref.labelId) : null,
+            goalId: goalId != null ? String(goalId) : null,
+            goalTitle: goalId != null ? (goalById.get(goalId)?.name ?? null) : null,
+            packages: enriched,
+          },
+        };
       })
     );
 

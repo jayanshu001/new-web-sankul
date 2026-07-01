@@ -19,13 +19,24 @@ function bodyToRaw(obj) {
 function makeItem(ep, loginScriptFor) {
   // Split path into segments; treat :param as Postman path variable {{param}} placeholder style :param.
   const cleanPath = ep.path.replace(/^\//, "");
-  const segments = cleanPath.split("/");
+  // Split an optional query string off the path so Postman gets a proper
+  // url.query array (editable in the UI) instead of a query buried in a segment.
+  const [pathOnly, queryStr] = cleanPath.split("?");
+  const segments = pathOnly.split("/");
 
   const url = {
     raw: `{{BASEURL}}/${cleanPath}`,
     host: ["{{BASEURL}}"],
     path: segments,
   };
+  if (queryStr) {
+    url.query = queryStr.split("&").map((pair) => {
+      const idx = pair.indexOf("=");
+      return idx >= 0
+        ? { key: pair.slice(0, idx), value: pair.slice(idx + 1) }
+        : { key: pair, value: "" };
+    });
+  }
 
   const request = {
     method: ep.method,

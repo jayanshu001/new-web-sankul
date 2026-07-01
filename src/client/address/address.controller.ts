@@ -31,6 +31,7 @@ import type {
 } from "../../modules/customer-address/customer-address.types";
 import {
   listActiveCities as svcListActiveCities,
+  resolveCityName as svcResolveCityName,
 } from "../../modules/offline-city/offline-city.service";
 import { getActiveGoals } from "../goal/goal.client.service";
 
@@ -54,6 +55,22 @@ const toAddressCreateInput = (body: any, customerId: number): AddressCreateInput
   label: body.label ?? null,
   status: body.status ?? true,
 });
+
+/**
+ * Resolve the denormalized city NAME for storage. Clients send the dropdown
+ * `cityId` (from `GET /client/address/cities`) rather than the city name, so when
+ * `city` is omitted we look the name up from `cityId` (same resolution the cart
+ * shipping snapshot uses). Returns "" when neither yields a name.
+ */
+const resolveCityForStore = async (city?: string | null, cityId?: unknown): Promise<string> => {
+  const explicit = (city ?? "").trim();
+  if (explicit) return explicit;
+  if (cityId != null && cityId !== "") {
+    const resolved = await svcResolveCityName(cityId as string | number);
+    if (resolved?.name) return resolved.name;
+  }
+  return "";
+};
 
 // ─── Addresses ────────────────────────────────────────────────────────────────
 
@@ -111,7 +128,16 @@ export const createAddress = async (req: Request, res: Response) => {
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
     // MySQL ids are integers, not ObjectIds — validate with the int-id schema.
     const data = createAddressSchemaMysql.parse(req.body);
-    const input: AddressCreateInput = toAddressCreateInput(data, cid);
+    // `city` (VARCHAR NOT NULL) is derived from `cityId` when the client omits it.
+    const city = await resolveCityForStore(data.city, data.cityId);
+    if (!city) {
+      logger.warn("createAddress missing city", { traceId, customerId });
+      return res.status(400).json({
+        success: false,
+        message: "City is required. Provide `city` or a valid `cityId`.",
+      });
+    }
+    const input: AddressCreateInput = toAddressCreateInput({ ...data, city }, cid);
     const address = await svcCreateAddress(input);
     logger.info("createAddress success", { traceId, customerId, addressId: address._id, source: "mysql" });
     return res.status(201).json({ success: true, data: address });
@@ -140,6 +166,13 @@ export const updateAddress = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
     }
     const data = updateAddressSchemaMysql.parse(req.body);
+    // If the client changes `cityId` without sending `city`, refresh the stored
+    // city NAME from the new id (city column is NOT NULL — never write empty).
+    let cityUpdate: string | undefined;
+    if (data.city !== undefined || data.cityId !== undefined) {
+      const resolved = await resolveCityForStore(data.city, data.cityId);
+      if (resolved) cityUpdate = resolved;
+    }
     const input: AddressUpdateInput = {
       ...(data.name !== undefined ? { name: data.name } : {}),
       ...(data.phone !== undefined ? { phone: data.phone } : {}),
@@ -147,7 +180,7 @@ export const updateAddress = async (req: Request, res: Response) => {
       ...(data.email !== undefined ? { email: data.email } : {}),
       ...(data.address !== undefined ? { address: data.address } : {}),
       ...(data.address2 !== undefined ? { address2: data.address2 } : {}),
-      ...(data.city !== undefined ? { city: data.city } : {}),
+      ...(cityUpdate !== undefined ? { city: cityUpdate } : {}),
       ...(data.stateId !== undefined
         ? { stateId: data.stateId != null ? Number(data.stateId) : null }
         : {}),
