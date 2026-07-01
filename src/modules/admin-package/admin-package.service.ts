@@ -1,6 +1,7 @@
 import { HttpError } from "../../middlewares/errorHandler";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminPackageRepository as repo } from "./admin-package.repository";
+import { parseLabels } from "../../utils/goalSelection";
 import type { Package, PackageType } from "@prisma/client";
 
 export const ADMIN_PACKAGE_MODULE = "admin-package";
@@ -45,15 +46,27 @@ const labelIdByName = (labels: unknown, name: string): number | null => {
 const resolveGoalFields = async (
   goalIdStr: string | null | undefined,
   goalLabelName: string | null | undefined
-): Promise<{ goalId: number | null; goalLabelId: number | null; goalLabelName: string | null }> => {
+): Promise<{ goalId: number | null; goalLabelId: number | null; goalLabelName: string | null; isIndividual: boolean }> => {
   const goalId = goalIdStr ? parsePackageId(goalIdStr) : null;
-  if (!goalLabelName) return { goalId, goalLabelId: null, goalLabelName: null };
-  if (!goalId) throw new HttpError(400, "goalId is required when goalLabelId is provided.");
+  if (!goalId) {
+    // No goal targeted. A label without a goal is invalid (unchanged contract).
+    if (goalLabelName) throw new HttpError(400, "goalId is required when goalLabelId is provided.");
+    return { goalId: null, goalLabelId: null, goalLabelName: null, isIndividual: false };
+  }
   const goal = await repo.goalById(goalId);
   if (!goal) throw new HttpError(404, "Goal not found for the supplied goalId.");
-  const labelId = labelIdByName(goal.labels, goalLabelName);
-  if (labelId == null) throw new HttpError(400, "goalLabelId does not belong to the supplied goalId.");
-  return { goalId, goalLabelId: labelId, goalLabelName };
+
+  // Goal-driven rule: goal WITH labels → label required (label-based, is_individual=0);
+  // goal with NO labels → label must be omitted (individual/goal-level, is_individual=1).
+  const hasLabels = parseLabels(goal.labels).length > 0;
+  if (hasLabels) {
+    if (!goalLabelName) throw new HttpError(400, "goalLabelId is required for this goal.");
+    const labelId = labelIdByName(goal.labels, goalLabelName);
+    if (labelId == null) throw new HttpError(400, "goalLabelId does not belong to the supplied goalId.");
+    return { goalId, goalLabelId: labelId, goalLabelName, isIndividual: false };
+  }
+  if (goalLabelName) throw new HttpError(400, "This goal has no labels; goalLabelId must be omitted.");
+  return { goalId, goalLabelId: null, goalLabelName: null, isIndividual: true };
 };
 
 /** Resolve a persisted row's goal_label_id (int) → label name for the response DTO. */
@@ -101,6 +114,7 @@ const toPackageDto = (
   packageTypeId: row.packageType ? { _id: String(row.packageType.id), name: row.packageType.name } : idStrOrNull(row.packageTypeId),
   goalId: idStrOrNull(row.goalId),
   goalLabelId: goalLabelName ?? null,
+  isIndividual: row.isIndividual ?? false,
   examCountdownCategoryIds: jsonIdsToStrings(row.examCountdownCategoryIds),
   examCountdownIds: jsonIdsToStrings(row.examCountdownIds),
   packageCategoryId: idStrOrNull(row.packageCategoryId),
@@ -252,6 +266,7 @@ export const createPackage = async (d: PackageWriteInput) => {
       educator_id: d.educatorId ? parsePackageId(d.educatorId) : null,
       goalId: gf.goalId,
       goalLabelId: gf.goalLabelId,
+      isIndividual: gf.isIndividual,
       isPaid: d.isPaid ?? true,
       isSmartCourse: d.isSmartCourse ?? false,
       isPlannerCourse: d.isPlannerCourse ?? false,
@@ -306,6 +321,7 @@ export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"
     const gf = await resolveGoalFields(nextGoalIdStr, nextLabelName);
     data.goalId = gf.goalId;
     data.goalLabelId = gf.goalLabelId;
+    data.isIndividual = gf.isIndividual;
   }
 
   await repo.updatePackage(id, data, {

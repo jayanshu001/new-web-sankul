@@ -4,6 +4,191 @@
 
 ---
 
+## 2026-07-01 — `ws_package.is_individual`: goal-level (label-less) packages
+
+Packages could only be targeted at a goal **label** (`goal_label_id`), so goals with no
+labels could not have packages, and the label-based client listing never surfaced them.
+Added a flag to distinguish label-based vs goal-level packages.
+
+- **DDL:** `docs/migration/schema-changes/2026-07-01_package_is_individual.sql` (idempotent)
+  — `ALTER TABLE ws_package ADD COLUMN is_individual TINYINT(1) NOT NULL DEFAULT 0`.
+  **Applied to staging.** Prisma: `Package.isIndividual Boolean @default(false) @map("is_individual")`.
+- **Semantics:** `is_individual=0` → label-based (`goal_id` + `goal_label_id`).
+  `is_individual=1` → goal-level (`goal_id` set, `goal_label_id` NULL), for label-less goals.
+- **Admin write (goal-driven, `admin-package.service.resolveGoalFields`):** on create/update,
+  the target goal decides — goal **with** labels ⇒ `goalLabelId` required, `is_individual=0`;
+  goal **without** labels ⇒ `goalLabelId` must be omitted, `is_individual=1`. New errors:
+  "goalLabelId is required for this goal." / "This goal has no labels; goalLabelId must be
+  omitted." Package DTO gains `isIndividual` (additive).
+- **Client read:** `GET /client/package/goal` now also accepts `goalIds` (comma-separated).
+  Response is a mix of `{ label: {...packages} }` (label-based, from `labelIds`) and
+  `{ goal: { _id, title, packages } }` (individual, from `goalIds`, via
+  `listPackagesByGoalIndividualSql` = `where { active, goalId, isIndividual:true }`). At
+  least one of `labelIds`/`goalIds` is required.
+- **Fix (regression from the goal-selection migration):** `client-dashboard`
+  `fetchPrioritizedCountdowns` read `customer.goal` as a flat int[]; it's now the composite
+  `[{goalId,labelIds}]`. Switched to `parseGoalSelection(...).flatMap(s => s.labelIds)` so
+  goal-matched exam countdowns work again.
+- Verified end-to-end vs staging (4 create rules + individual/label listings), cleaned up.
+  `yarn typecheck` green.
+
+---
+
+## 2026-07-01 — Restore `/admin/goals` + `PUT /client/goals` as adapters over ws_customer_target_goal
+
+The earlier retirement of `/admin/goals` and `PUT /client/goals` caused 404s from the
+existing admin + client frontends. Both endpoints are **restored**, now backed by
+`ws_customer_target_goal` (no ws_goal), with their **original response contracts intact**.
+
+- **Admin `/api/v1/admin/goals` (GET/POST/PUT/DELETE)** — re-added `src/admin/goal/*`.
+  New `goal.admin.service.ts` reads/writes `prisma.customerTargetGoal` and maps to the old
+  ws_goal DTO: `{ _id, title(=name), labels:[{id,name}], image, isActive(=active),
+  createdAt:null, updatedAt:null }`. GET stays paginated `{ data, meta }` (search on name,
+  order by id since target has no timestamps). Multipart image + label parsing + S3 cleanup
+  preserved. Re-mounted in `admin.routes.ts`.
+- **Client `PUT /api/v1/client/goals`** — re-added `updateMyGoals` in
+  `goal.client.service.ts` + handler/route. Accepts the composite
+  `{ goals:[{goalId,labelIds}] }` (legacy flat array too), validates against
+  ws_customer_target_goal, writes the normalized composite to `ws_customer.goal`. Same
+  effect as `PUT /client/profile/update`; both write paths coexist.
+- Note: `/admin/goals` and `/admin/customer-masters/target-goals` now both manage the same
+  `ws_customer_target_goal` table (two admin UIs, one master) — intentional.
+- Verified end-to-end vs staging (list/create/update/delete + client write/read); staging
+  data restored. `yarn typecheck` green. Postman: Admin "Goals" folder + Complete-2026
+  client PUT re-added.
+
+---
+
+## 2026-07-01 — Drop `ws_goal`: repoint all consumers to `ws_customer_target_goal`
+
+Final step of goal consolidation. Every remaining `prisma.goal` (ws_goal) read is
+repointed to `ws_customer_target_goal`; the `ws_goal` table + Prisma model are dropped.
+API response shapes are unchanged (goal `title` is sourced from target-goal `name`).
+
+- **Code repointed (`prisma.goal` → `prisma.customerTargetGoal`), shapes preserved:**
+  - `src/modules/admin-package/admin-package.repository.ts` — `goalById` / `goalsByIds`
+    (label name↔id resolution for package goalLabelId). Select `{ id, labels }` unchanged.
+  - `src/modules/catalog-package/catalog-package.detail.sql.ts` — `populateGoal` returns
+    `{ _id, title }` (now `title = target.name`).
+  - `src/modules/exam-countdown/exam-countdown.service.ts` — `validateGoalPair` label check.
+  - `src/client/package/package.controller.ts` — `listPackagesByGoal` (`/client/package/goal`);
+    `goalTitle` now = target `name`.
+- **Schema:** removed `model Goal` from `prisma/schema.prisma` + `prisma:generate`.
+- **DDL / data migration:** `docs/migration/schema-changes/2026-07-01_migrate_ws_goal_into_target_goal.sql`
+  (idempotent): (1) INSERT ws_goal rows into ws_customer_target_goal by `title→name`
+  (labels copied verbatim, so `goal_label_id` stays valid); (2) REMAP `ws_package.goal_id`
+  and (3) `ws_exam_countdown.goal_id` from the ws_goal id-space to the new target-goal ids
+  via a name join; (4) `DROP TABLE ws_goal`. No FK constraints referenced ws_goal (verified).
+  **Applied to staging** — Defence/Government/UPSC migrated to target-goal ids 19/20/21
+  (Defence labels preserved), ws_goal dropped, repointed reads verified.
+- **Note:** stale one-off scripts still reference `prisma.goal`/Mongo `Goal`
+  (`scripts/backfill-c4-goal-label-ids.ts`, `backfill-catalog-package-fields.ts`,
+  `backfill-package-goal-id.ts`, `verify-exam-countdown-goal.ts`, `verify-wave8-ddl-sql.ts`).
+  They are completed migrations, excluded from `tsc` (`include: src/**/*`); left as history.
+  The Mongo `Goal` model (`ws_goals` collection) is untouched (separate from the SQL table).
+- **Deploy (prod):** run the migration SQL (steps 1–3) **before** deploying the repointed
+  code, then step 4 (drop) after. `yarn typecheck` green.
+
+---
+
+## 2026-07-01 — Retire admin `/admin/goals` CRUD (consolidate goals on ws_customer_target_goal)
+
+Follow-up to the goal-selection change: all **customer-facing** goal management now lives
+on `ws_customer_target_goal` (which gained `labels`). The parallel `ws_goal` admin CRUD is
+retired so there's a single goal master for client + admin.
+
+- **Removed:** `src/admin/goal/*` (routes/controller/service), `src/modules/goal/goal.service.ts`,
+  and the `router.use("/goals", …)` mount in `src/admin/admin.routes.ts`. The
+  `GET/POST/PUT/DELETE /api/v1/admin/goals` endpoints no longer exist — manage goals via
+  `/admin/customer-masters/target-goals` (now supports `labels`).
+- **Repointed:** the client onboarding endpoint `GET /client/address/characteristic`
+  (`getCharacteristic`) previously called `listActiveGoalsSql()` (ws_goal); it now calls
+  `getActiveGoals()` → `ws_customer_target_goal`. Same `{ _id, title, image, labels }` shape.
+- **`ws_goal` TABLE KEPT (no DDL):** still referenced by `Package.goal_id`/`goal_label_id`
+  (`admin-package`, `catalog-package.detail`) and `ExamCountdown.goal_id`/`goal_label_id`
+  (`client-dashboard`), and by the Mongo `Goal` model (Mongo Package/ExamCountdown `ref`).
+  Only the admin goal-selection CRUD layer was removed, not the table. A full table drop
+  would require migrating those package/countdown FK references (different id space) — out
+  of scope.
+- Postman (Admin): removed the `/admin/goals` "Goals" folder; target-goal create/update
+  bodies now include `labels: [{ name }]`.
+- `yarn typecheck` green; no orphaned references.
+
+---
+
+## 2026-07-01 — Schema + model: goal selection = target goal + optional labels
+
+Two unrelated features shared `ws_customer.goal`: the client goal-selection endpoints
+read it against `ws_goal` (Defence/Government/UPSC, 3 rows, with labels), while the
+profile module read/wrote it against `ws_customer_target_goal` (the real flat master —
+what production data actually holds). Result: `my-goals` mislabeled target-goal ids as
+`ws_goal` rows and could not express "goal selected + only some of its labels".
+
+Resolution (source of truth = `ws_customer_target_goal`, writes via
+`PUT /client/profile/update` only):
+
+- **DDL:** `docs/migration/schema-changes/2026-07-01_customer_target_goal_labels.sql`
+  — `ALTER TABLE ws_customer_target_goal ADD COLUMN labels JSON NULL AFTER image`
+  (idempotent). Labels stored as `[{ id, name }]`; ids assigned by the admin service
+  (mirrors `ws_goal`). **Applied to `websankul_staging_1`.**
+- **Prisma:** `model CustomerTargetGoal` gains `labels Json?` (hand-edit + `prisma:generate`).
+- **Stored selection shape** on `ws_customer.goal`:
+  `[{ "goalId": <id>, "labelIds": [<id>...] }]`. Legacy flat `[<id>...]` still read
+  (coerced to `{ goalId, labelIds: [] }`) — see `src/utils/goalSelection.ts`
+  (`parseGoalSelection`, `parseLabels`).
+- **Reads repointed to `ws_customer_target_goal`:**
+  - `src/client/goal/goal.client.service.ts` — `getActiveGoals` (all active goals + all
+    labels) and `getMySelectedGoals` (selected goals, each with **only** the selected
+    labels; goal with no labels still appears with `labels: []`). Response shape
+    unchanged: `{ _id, title, image, labels: [{ _id, name }] }[]`.
+  - `src/modules/customer-profile/*` — profile read/write; profile `goals[]` DTO now
+    carries `labels: [{ _id, name }]` (additive). Write validates goal/label ids against
+    the DB (unknown dropped, mirroring old lenient behavior).
+- **Writes:** `PUT /client/goals` retired (route + handler + `updateMyGoals` removed);
+  selection is written via `PUT /client/profile/update` `goals: [{ goalId, labelIds }]`.
+- **Admin:** `POST/PUT /admin/customer-masters/target-goals` accept optional
+  `labels: [{ name }]`; DTO returns `labels: [{ _id, name }]`
+  (`src/modules/customer-master/customer-master.service.ts` + validation).
+- Verified end-to-end against staging (seed→write→read→restore); `yarn typecheck` green.
+- **Deploy:** apply the DDL on prod; no backfill required (legacy flat arrays read fine;
+  they simply carry no labels until re-saved).
+
+---
+
+## 2026-07-01 — Response: stable shape for `GET /client/goals/my-goals` regardless of labels
+
+`getMySelectedGoals` (backing `GET /api/v1/client/goals/my-goals`) dropped a goal to
+`null` (filtered out) whenever none of its labels were selected, and short-circuited to
+`data: []` when the customer had no selection at all. So a goal "appeared or not"
+depending on labels — an inconsistent shape the frontend couldn't rely on.
+
+- **Change (code-only, no DB/schema change):** in `src/client/goal/goal.client.service.ts`
+  every active goal is now always returned as `{ _id, title, image, labels }`, where
+  `labels` contains only the selected labels (empty array when none). Goals are never
+  dropped, and the no-selection early-return is removed. Same per-item field shape as
+  before; only the omission behaviour changed. `yarn typecheck` green.
+
+---
+
+## 2026-07-01 — Validation: `courseEducatorId` compulsory on admin course create + update
+
+Admin course create/update accepted an optional/omitted educator. `createCourseSqlSchema`
+had `courseEducatorId` as `.optional()`, and `updateCourse` validated with
+`createCourseSqlSchema.partial()` — relaxing **every** field to optional. This let both
+create and update omit or clear the educator.
+
+- **Change (code-only, no DB/schema change):**
+  - `src/admin/course/course.validation.ts` — `courseEducatorId` in `createCourseSqlSchema`
+    is now required (`z.coerce.number(...).int().positive()`, message "Educator is required").
+    Covers `POST /api/v1/admin/courses` (`createCourse`).
+  - `src/admin/course/course.controller.ts` — `updateCourse` re-requires the field after
+    `.partial()`: `createCourseSqlSchema.partial().required({ courseEducatorId: true })`.
+    Covers `PUT /api/v1/admin/courses/:id`.
+- Field still coerces to a positive integer; all other fields keep their prior optionality.
+  SQL/Mongo service branches and response shape unchanged. `yarn typecheck` green.
+
+---
+
 ## 2026-06-30 — DDL: relocate `ws_offline_city.state` into schema-changes (was un-applied)
 
 The `state` column on `ws_offline_city` (State→City dependent dropdown) had its DDL at

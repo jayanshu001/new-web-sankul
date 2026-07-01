@@ -14,10 +14,14 @@ export const deriveProfileCompleted = (row: Pick<Customer, "fullName">): boolean
 
 export const toProfileDto = (
   row: Customer,
-  goals: { id: number; name: string }[]
+  goals: { id: number; name: string; labels: { id: number; name: string }[] }[]
 ): ProfileDto => {
   const { firstName, middleName, lastName } = splitFullName(row.fullName);
-  const goalDtos: ProfileGoalDto[] = goals.map((g) => ({ _id: String(g.id), name: g.name }));
+  const goalDtos: ProfileGoalDto[] = goals.map((g) => ({
+    _id: String(g.id),
+    name: g.name,
+    labels: g.labels.map((l) => ({ _id: String(l.id), name: l.name })),
+  }));
 
   return {
     id: String(row.id),

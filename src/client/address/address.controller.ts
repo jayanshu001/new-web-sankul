@@ -32,9 +32,7 @@ import type {
 import {
   listActiveCities as svcListActiveCities,
 } from "../../modules/offline-city/offline-city.service";
-import {
-  listActiveGoalsSql,
-} from "../../modules/goal/goal.service";
+import { getActiveGoals } from "../goal/goal.client.service";
 
 /**
  * Map the validated zod body → the MySQL service's normalized input.
@@ -367,7 +365,7 @@ export const getCharacteristic = async (_req: Request, res: Response) => {
       rows.map((e) => ({ _id: e._id, name: e.name }))
     );
 
-    const goalsPromise = listActiveGoalsSql();
+    const goalsPromise = getActiveGoals(traceId);
 
     const [educations, goals] = await Promise.all([
       educationsPromise,

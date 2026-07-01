@@ -10,10 +10,17 @@
  *   - device tokens: single `device` column (newest wins), no array
  *   - facebookId: mapped read-only
  */
+import type { GoalSelectionInput } from "../../utils/goalSelection";
+
+export interface ProfileGoalLabelDto {
+  _id: string;
+  name: string;
+}
 
 export interface ProfileGoalDto {
   _id: string;
   name: string;
+  labels: ProfileGoalLabelDto[];
 }
 
 export interface ProfileDto {
@@ -46,7 +53,9 @@ export interface ProfileUpdateInput {
   middleName?: string;
   lastName?: string;
   email?: string;
-  goals?: string[]; // numeric ids as strings on the MySQL branch
+  // Goal selection: array of { goalId, labelIds } (a target goal + the labels
+  // chosen within it). Legacy flat id arrays are still accepted on read.
+  goals?: GoalSelectionInput[];
   phone2?: string;
   dob?: string;
   gender?: string;

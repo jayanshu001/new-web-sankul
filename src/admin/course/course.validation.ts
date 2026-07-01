@@ -49,7 +49,9 @@ export const createCourseSqlSchema = z.object({
   status: z.boolean(),
   isPaid: z.boolean().optional(),
   isPopular: z.boolean().optional(),
-  courseEducatorId: z.coerce.number().int().positive().optional(),
+  // Educator is compulsory on create. (Update relaxes the whole schema via
+  // .partial() then re-requires this field explicitly — see updateCourse.)
+  courseEducatorId: z.coerce.number({ required_error: "Educator is required" }).int().positive(),
   courseSubjectCategoryId: z.coerce.number().int().positive().optional(),
   videoCategoryId: z.coerce.number().int().positive().optional(),
   // Physical-material kit id (ws_package_course_material). Optional; null detaches.

@@ -26,5 +26,8 @@ export const createTargetGoalSchema = z.object({
   name: z.string().min(1, "Name is required").max(255),
   image: z.string().min(1, "Image is required"),
   active: z.boolean().optional().default(true),
+  // Optional labels (a goal may have none). Stable numeric ids are assigned by
+  // the service; the client supplies names only, mirroring ws_goal labels.
+  labels: z.array(z.object({ name: z.string().min(1).max(255) })).optional(),
 });
 export const updateTargetGoalSchema = createTargetGoalSchema.partial();

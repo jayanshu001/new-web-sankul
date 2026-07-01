@@ -1,5 +1,13 @@
 import { z } from "zod";
 
+// Ids may arrive as a numeric MySQL id (e.g. 48) or a string ("48" / 24-hex
+// ObjectId). Coerce number → string before validating so both are accepted.
+const toIdString = (v: unknown) => (typeof v === "number" ? String(v) : v);
+const optIdString = z.preprocess(toIdString, z.string().nullable().optional());
+const idRegex = /^([0-9a-fA-F]{24}|\d+)$/;
+const optRegexIdString = z.preprocess(toIdString, z.string().regex(idRegex, "Invalid id").nullable().optional());
+const regexIdString = z.preprocess(toIdString, z.string().regex(idRegex, "Invalid id"));
+
 const categoryRefSchema = z.object({
   category: z.string().min(1),
   order: z.number().int().optional(),
@@ -19,18 +27,18 @@ export const createPackageSchema = z.object({
   isPaid: z.boolean().optional(),
   isSmartCourse: z.boolean().optional(),
   isPlannerCourse: z.boolean().optional(),
-  packageTypeId: z.string().nullable().optional(),
-  goalId: z.string().nullable().optional(),
-  goalLabelId: z.string().nullable().optional(),
+  packageTypeId: optIdString,
+  goalId: optIdString,
+  goalLabelId: optIdString,
   // Accept a 24-hex Mongo ObjectId OR a numeric MySQL id (SQL branch sends ints).
-  examCountdownCategoryIds: z.array(z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id")).optional(),
-  examCountdownIds: z.array(z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id")).optional(),
-  packageCategoryId: z.string().nullable().optional(),
-  educatorId: z.string().nullable().optional(),
+  examCountdownCategoryIds: z.array(regexIdString).optional(),
+  examCountdownIds: z.array(regexIdString).optional(),
+  packageCategoryId: optIdString,
+  educatorId: optIdString,
   // Physical-material kit (PackageCourseMaterial). Accepts a 24-hex Mongo
   // ObjectId OR a numeric MySQL id (shared schema, like examCountdownIds). null
   // detaches. Copied onto the subscription's pc_material_id at payment-verify.
-  pcMaterialId: z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id").nullable().optional(),
+  pcMaterialId: optRegexIdString,
   specificSubjects: z.array(categoryRefSchema).optional(),
   materialCategories: z.array(categoryRefSchema).optional(),
   examCategories: z.array(categoryRefSchema).optional(),

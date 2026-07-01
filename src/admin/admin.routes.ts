@@ -77,7 +77,7 @@ router.use("/permission-categories", adminPermissionCategoryRoutes); // -> /api/
 router.use("/guards", adminGuardsRoutes); // -> /api/v1/admin/guards
 router.use("/video-categories", adminVideoCategoryRoutes); // -> /api/v1/admin/video-categories/*
 router.use("/videos", adminVideoRoutes); // -> /api/v1/admin/videos/*
-router.use("/goals", adminGoalRoutes); // -> /api/v1/admin/goals/*
+router.use("/goals", adminGoalRoutes); // -> /api/v1/admin/goals/* (backed by ws_customer_target_goal)
 
 // Future Routes (e.g. Roles, Courses, Notifications)
 router.use("/courses", adminCourseRoutes);

@@ -478,7 +478,7 @@
                 "description": "",
                 "body": {
                   "mode": "raw",
-                  "raw": "{\n  \"firstName\": \"Test\",\n  \"lastName\": \"User\",\n  \"emailAddress\": \"test@example.com\",\n  \"gender\": \"male\",\n  \"language\": \"english\"\n}",
+                  "raw": "{\n  \"firstName\": \"John\",\n  \"lastName\": \"Doe\",\n  \"goals\": [\n    {\n      \"goalId\": \"1\",\n      \"labelIds\": [\n        \"1\"\n      ]\n    },\n    {\n      \"goalId\": \"2\",\n      \"labelIds\": []\n    }\n  ]\n}",
                   "options": {
                     "raw": {
                       "language": "json"
@@ -5627,6 +5627,203 @@
                   }
                 }
               ]
+            }
+          ]
+        },
+        {
+          "name": "🎯 Client Goals",
+          "item": [
+            {
+              "name": "GET Active Goals",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/client/goals",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "client",
+                    "goals"
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{client_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "Returns all active goals with their labels (native UI list)."
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                      "pm.test(\"Success true\", () => pm.expect(pm.response.json().success).to.be.true);",
+                      "pm.test(\"Response < 3s\", () => pm.expect(pm.response.responseTime).to.be.below(3000));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "GET My Selected Goals",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/client/goals/my-goals",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "client",
+                    "goals",
+                    "my-goals"
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{client_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "Returns only the goal labels the authenticated customer has selected."
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                      "pm.test(\"Success true\", () => pm.expect(pm.response.json().success).to.be.true);",
+                      "pm.test(\"Response < 3s\", () => pm.expect(pm.response.responseTime).to.be.below(3000));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "GET Packages By Goal",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/client/package/goal?labelIds={{goal_label_id}}",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "client",
+                    "package",
+                    "goal"
+                  ],
+                  "query": [
+                    {
+                      "key": "labelIds",
+                      "value": "{{goal_label_id}}"
+                    }
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{client_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "Lists packages grouped per goal label. Pass labelIds as a comma-separated query string (sourced from /client/goals/my-goals)."
+              },
+              "response": [],
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test(\"Status 200\", () => pm.response.to.have.status(200));",
+                      "pm.test(\"Success true\", () => pm.expect(pm.response.json().success).to.be.true);",
+                      "pm.test(\"Response < 3s\", () => pm.expect(pm.response.responseTime).to.be.below(3000));"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "PUT Update My Goals",
+              "request": {
+                "method": "PUT",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/client/goals",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "client",
+                    "goals"
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{client_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"goals\": [\n    {\n      \"goalId\": \"1\",\n      \"labelIds\": [\n        \"1\"\n      ]\n    },\n    {\n      \"goalId\": \"2\",\n      \"labelIds\": []\n    }\n  ]\n}",
+                  "options": {
+                    "raw": {
+                      "language": "json"
+                    }
+                  }
+                },
+                "description": "Writes goal selection (composite). Also writable via PUT /client/profile/update."
+              },
+              "response": []
             }
           ]
         }

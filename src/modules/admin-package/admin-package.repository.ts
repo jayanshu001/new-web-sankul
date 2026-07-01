@@ -40,10 +40,10 @@ export const adminPackageRepository = {
   findBare: (id: number) => prisma.package.findUnique({ where: { id } }),
   exists: (id: number) => prisma.package.findUnique({ where: { id }, select: { id: true } }),
 
-  // ── goal labels (JSON [{ id, name }] on ws_goal) — for name↔id resolution ──────
-  goalById: (id: number) => prisma.goal.findUnique({ where: { id }, select: { id: true, labels: true } }),
+  // ── goal labels (JSON [{ id, name }] on ws_customer_target_goal) — name↔id ─────
+  goalById: (id: number) => prisma.customerTargetGoal.findUnique({ where: { id }, select: { id: true, labels: true } }),
   goalsByIds: (ids: number[]) =>
-    ids.length ? prisma.goal.findMany({ where: { id: { in: ids } }, select: { id: true, labels: true } }) : Promise.resolve([]),
+    ids.length ? prisma.customerTargetGoal.findMany({ where: { id: { in: ids } }, select: { id: true, labels: true } }) : Promise.resolve([]),
 
   /** Active plans for a set of packages (list-row pricing buckets). */
   plansForPackages: (packageIds: number[]) =>

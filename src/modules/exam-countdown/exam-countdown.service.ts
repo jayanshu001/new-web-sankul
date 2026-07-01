@@ -58,7 +58,7 @@ export const validateGoalPair = async (
 ): Promise<string | null> => {
   if (goalLabelId != null && goalId == null) return "goalId is required when goalLabelId is provided.";
   if (goalId == null) return null;
-  const goal = await prisma.goal.findUnique({ where: { id: goalId }, select: { labels: true } });
+  const goal = await prisma.customerTargetGoal.findUnique({ where: { id: goalId }, select: { labels: true } });
   if (!goal) return "Goal not found for the supplied goalId.";
   if (goalLabelId != null) {
     const labels = Array.isArray(goal.labels) ? (goal.labels as any[]) : [];

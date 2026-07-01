@@ -167,7 +167,12 @@ export const createCourse = asyncHandler(async (req: Request, res: Response) => 
 
 export const updateCourse = asyncHandler(async (req: Request, res: Response) => {
   coerceCourseBodySql(req);
-  const v = createCourseSqlSchema.partial().parse(req.body);
+  // Educator is compulsory on update: partial() relaxes everything, then we
+  // force courseEducatorId back to required so it can't be cleared/omitted.
+  const v = createCourseSqlSchema
+    .partial()
+    .required({ courseEducatorId: true })
+    .parse(req.body);
   const data = await courseService.updateCourseSql(req.params.id as string, v);
   return success(res, data as any);
 });

@@ -17,6 +17,7 @@ import { customerProfileRepository as repo } from "./customer-profile.repository
 import { toProfileDto } from "./customer-profile.transformer";
 import { splitFullName, joinFullName } from "./customer-profile.name";
 import type { ProfileUpdateInput } from "./customer-profile.types";
+import { parseGoalSelection, parseLabels, type GoalSelection } from "../../utils/goalSelection";
 
 export const PROFILE_MODULE = "customer-profile";
 
@@ -30,23 +31,31 @@ export const parseProfileId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/** Read `goal` JSON column → number[] of target-goal ids (tolerant of shapes). */
-const readGoalIds = (goal: unknown): number[] => {
-  if (!Array.isArray(goal)) return [];
-  return goal
-    .map((g) => Number(g))
-    .filter((n) => Number.isInteger(n) && n > 0);
+/**
+ * Build the stored goal selection for the `goal` JSON column from incoming
+ * goals. Validates against ws_customer_target_goal: unknown goals are dropped
+ * and each goal's labelIds are filtered to labels that actually exist on it
+ * (mirrors the lenient Mongo behavior — invalid ids are silently ignored).
+ */
+const buildGoalSelection = async (goals: unknown): Promise<GoalSelection[]> => {
+  const parsed = parseGoalSelection(goals);
+  if (!parsed.length) return [];
+  const rows = await repo.targetGoalsByIds(parsed.map((s) => s.goalId));
+  const labelIdsByGoal = new Map(rows.map((r) => [r.id, new Set(parseLabels(r.labels).map((l) => l.id))]));
+  const out: GoalSelection[] = [];
+  for (const sel of parsed) {
+    const validLabelIds = labelIdsByGoal.get(sel.goalId);
+    if (!validLabelIds) continue; // unknown goal
+    out.push({ goalId: sel.goalId, labelIds: sel.labelIds.filter((id) => validLabelIds.has(id)) });
+  }
+  return out;
 };
-
-/** Validated profile-update goals (string ids) → int[] for the JSON column. */
-const toGoalIntIds = (goals: string[]): number[] =>
-  goals.map((g) => Number(g)).filter((n) => Number.isInteger(n) && n > 0);
 
 // ─── Get profile ───────────────────────────────────────────────────────────────
 export const getProfile = async (customerId: number): Promise<Envelope<ReturnType<typeof toProfileDto>>> => {
   const row = await repo.findActiveById(customerId);
   if (!row) return { ok: false, message: "Customer not found." };
-  const goals = await repo.hydrateGoals(readGoalIds(row.goal));
+  const goals = await repo.hydrateGoals(parseGoalSelection(row.goal));
   return { ok: true, message: "Profile fetched successfully.", data: toProfileDto(row, goals) };
 };
 
@@ -85,15 +94,15 @@ export const updateProfile = async (
   if (input.educationId !== undefined) data.educationId = input.educationId ? Number(input.educationId) : null;
   if (input.language !== undefined) data.language = input.language;
   if (input.goals !== undefined) {
-    if (!Array.isArray(input.goals)) return { ok: false, message: "Goals must be an array of IDs." };
-    data.goal = toGoalIntIds(input.goals);
+    if (!Array.isArray(input.goals)) return { ok: false, message: "Goals must be an array." };
+    data.goal = (await buildGoalSelection(input.goals)) as unknown as object;
   }
   data.updatedAt = new Date();
 
   await repo.updateById(customerId, data);
   const updated = await repo.findActiveById(customerId);
   if (!updated) return { ok: false, message: "Customer not found." };
-  const goals = await repo.hydrateGoals(readGoalIds(updated.goal));
+  const goals = await repo.hydrateGoals(parseGoalSelection(updated.goal));
   return { ok: true, message: "Profile updated successfully.", data: toProfileDto(updated, goals) };
 };
 

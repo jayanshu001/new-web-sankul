@@ -274,6 +274,7 @@ model CustomerTargetGoal {
   name    String    @db.VarChar(255)
   image   String
   active  Boolean
+  labels  Json?
   //customer   Customer[]
   Package Package[]
 
@@ -1096,6 +1097,7 @@ model Package {
   educator_id               Int?
   goalLabelId               Int?                        @map("goal_label_id")
   goalId                    Int?                        @map("goal_id")
+  isIndividual              Boolean                     @default(false) @map("is_individual")
   isPaid                    Boolean                     @default(true) @map("is_paid")
   isSmartCourse             Boolean                     @default(false) @map("is_smart_course")
   isPlannerCourse           Boolean                     @default(false) @map("is_planner_course")
@@ -2122,19 +2124,6 @@ model ActivityLog {
   @@index([event, createdAt], name: "idx_al_event_created")
   @@index([customerId, createdAt], name: "idx_al_customer_created")
   @@map("ws_activity_log")
-}
-
-model Goal {
-  id        Int       @id @default(autoincrement())
-  title     String    @db.VarChar(255)
-  labels    Json?
-  image     String?   @db.VarChar(512)
-  isActive  Boolean   @default(true) @map("is_active")
-  createdAt DateTime? @map("created_at")
-  updatedAt DateTime? @map("updated_at")
-
-  @@index([isActive, createdAt], name: "idx_goal_active")
-  @@map("ws_goal")
 }
 
 model SearchHistory {

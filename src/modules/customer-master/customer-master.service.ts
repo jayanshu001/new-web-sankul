@@ -13,6 +13,7 @@
  * (others `active`), target-goal has a required `image` (defaulted to "").
  */
 import { prisma } from "../../config/prisma";
+import { parseLabels } from "../../utils/goalSelection";
 
 export const CUSTOMER_MASTER_MODULE = "customer-master";
 export const isCustomerMasterMysql = (): boolean => true;
@@ -174,7 +175,29 @@ export const deleteEducation = async (id: number): Promise<Envelope<null>> => {
 };
 
 // ─── Target Goals ───────────────────────────────────────────────────────────────
-const goalDto = (g: any) => ({ _id: String(g.id), name: g.name, image: g.image, active: g.active });
+const goalDto = (g: any) => ({
+  _id: String(g.id),
+  name: g.name,
+  image: g.image,
+  active: g.active,
+  labels: parseLabels(g.labels).map((l) => ({ _id: String(l.id), name: l.name })),
+});
+
+/**
+ * Assign stable numeric ids to a target goal's labels (stored in the `labels`
+ * JSON). On update an existing label keeps its id (matched by name); new labels
+ * get the next free id. (Same stable-id scheme the retired ws_goal admin used.)
+ */
+const withLabelIds = (
+  labels: { name: string }[],
+  existing?: unknown
+): { id: number; name: string }[] => {
+  const prior = parseLabels(existing);
+  const idByName = new Map<string, number>();
+  for (const l of prior) idByName.set(l.name, l.id);
+  let next = Math.max(0, ...prior.map((l) => l.id)) + 1;
+  return labels.map((l) => ({ id: idByName.get(l.name) ?? next++, name: l.name }));
+};
 
 export const listTargetGoals = async (active?: boolean) => {
   const rows = await prisma.customerTargetGoal.findMany({
@@ -184,22 +207,28 @@ export const listTargetGoals = async (active?: boolean) => {
   return rows.map(goalDto);
 };
 
-export const createTargetGoal = async (input: { name: string; image: string; active: boolean }) => {
+export const createTargetGoal = async (input: { name: string; image: string; active: boolean; labels?: { name: string }[] }) => {
   const row = await prisma.customerTargetGoal.create({
-    data: { name: input.name, image: input.image ?? "", active: input.active },
+    data: {
+      name: input.name,
+      image: input.image ?? "",
+      active: input.active,
+      labels: (input.labels ? withLabelIds(input.labels) : []) as any,
+    },
   });
   return goalDto(row);
 };
 
 export const updateTargetGoal = async (
-  id: number, input: { name?: string; image?: string; active?: boolean }
+  id: number, input: { name?: string; image?: string; active?: boolean; labels?: { name: string }[] }
 ): Promise<Envelope<any>> => {
-  const exists = await prisma.customerTargetGoal.findUnique({ where: { id }, select: { id: true } });
+  const exists = await prisma.customerTargetGoal.findUnique({ where: { id }, select: { id: true, labels: true } });
   if (!exists) return { ok: false, status: 404, message: "Target Goal not found" };
   const data: any = {};
   if (input.name !== undefined) data.name = input.name;
   if (input.image !== undefined) data.image = input.image;
   if (input.active !== undefined) data.active = input.active;
+  if (input.labels !== undefined) data.labels = withLabelIds(input.labels, exists.labels) as any;
   const row = await prisma.customerTargetGoal.update({ where: { id }, data });
   return { ok: true, data: goalDto(row) };
 };

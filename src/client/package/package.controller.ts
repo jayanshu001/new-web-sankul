@@ -12,6 +12,7 @@ import {
   listPackagesPaginatedSql,
   listPackagesByTypeSql,
   listPackagesByGoalLabelSql,
+  listPackagesByGoalIndividualSql,
 } from "../../modules/catalog-package/catalog-package.detail.sql";
 import { listActiveSubscriptionsByCustomer } from "../../modules/commerce-subscription/commerce-subscription.service";
 import { prisma as prismaPkg } from "../../config/prisma";
@@ -184,42 +185,55 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
   logger.info("listPackagesByGoal invoked", { traceId, path: req.originalUrl, userId: req.user?.id, labelIds: req.query.labelIds });
 
   try {
-    const raw = (req.query.labelIds as string) || "";
-    const ids = raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+    const parseIntCsv = (v: unknown): number[] =>
+      String(v ?? "").split(",").map((s) => s.trim()).filter((s) => /^\d+$/.test(s)).map(Number);
+    // labelIds → label-based groups (goals WITH labels); goalIds → goal-level
+    // groups of individual packages (label-less goals). At least one is required.
+    const intIds = parseIntCsv(req.query.labelIds);
+    const goalIntIds = parseIntCsv(req.query.goalIds);
 
-    if (!ids.length) {
-      logger.warn("listPackagesByGoal missing labelIds", { traceId });
+    if (!intIds.length && !goalIntIds.length) {
+      logger.warn("listPackagesByGoal missing labelIds/goalIds", { traceId });
       return res.status(400).json({
         success: false,
-        message: "labelIds query param is required (comma-separated).",
+        message: "labelIds or goalIds query param is required (comma-separated).",
       });
     }
 
-    // ── MySQL branch (label ids are the goal module's synthetic ints) ─────────
-    const intIds = ids.filter((s) => /^\d+$/.test(s)).map(Number);
-    if (!intIds.length) { logger.warn("listPackagesByGoal no valid labelIds (mysql)", { traceId, ids }); return res.status(400).json({ success: false, message: "No valid label ids supplied." }); }
     const cid = req.user?.id ? Number(req.user.id) : null;
-    const goals = await prismaPkg.goal.findMany({ select: { id: true, title: true, labels: true } });
+    const base = resolveBase(req);
+    const goals = await prismaPkg.customerTargetGoal.findMany({ select: { id: true, name: true, labels: true } });
+    const goalById = new Map(goals.map((g) => [g.id, g]));
+
+    // ── label-based groups ────────────────────────────────────────────────────
     const metaById = new Map<number, { name: string; goalId: string; goalTitle: string }>();
     for (const g of goals) {
       const labels = Array.isArray(g.labels) ? (g.labels as any[]) : [];
       for (const l of labels) {
         const lid = Number(l?.id);
-        if (Number.isInteger(lid) && intIds.includes(lid)) metaById.set(lid, { name: String(l?.name ?? ""), goalId: String(g.id), goalTitle: g.title });
+        if (Number.isInteger(lid) && intIds.includes(lid)) metaById.set(lid, { name: String(l?.name ?? ""), goalId: String(g.id), goalTitle: g.name });
       }
     }
-    const resultSql = await Promise.all(
+    const labelGroups = await Promise.all(
       intIds.map(async (lid) => {
         const rows = await listPackagesByGoalLabelSql(lid);
-        const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
+        const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, base);
         const meta = metaById.get(lid);
         return { label: { _id: String(lid), name: meta?.name ?? null, goalId: meta?.goalId ?? null, goalTitle: meta?.goalTitle ?? null, packages: enriched } };
       })
     );
-    logger.info("listPackagesByGoal success (mysql)", { traceId, labelCount: resultSql.length });
+
+    // ── goal-level (individual) groups ─────────────────────────────────────────
+    const goalGroups = await Promise.all(
+      goalIntIds.map(async (gid) => {
+        const rows = await listPackagesByGoalIndividualSql(gid);
+        const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, base);
+        return { goal: { _id: String(gid), title: goalById.get(gid)?.name ?? null, packages: enriched } };
+      })
+    );
+
+    const resultSql = [...labelGroups, ...goalGroups];
+    logger.info("listPackagesByGoal success (mysql)", { traceId, labelCount: labelGroups.length, goalCount: goalGroups.length });
     return res.status(200).json({ success: true, data: resultSql });
   } catch (error: any) {
     logger.error("listPackagesByGoal failed", { traceId, error: getErrorMessage(error), stack: error.stack });

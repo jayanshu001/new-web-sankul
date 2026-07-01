@@ -1,98 +1,77 @@
 import logger from "../../utils/logger";
-import { redisClient } from "../../config/redis";
 import { prisma } from "../../config/prisma";
+import { redisClient } from "../../config/redis";
+import { parseGoalSelection, parseLabels, type GoalSelection } from "../../utils/goalSelection";
 
-// SQL goal labels live in the `ws_goal.labels` JSON as [{ id, name }] (ids
-// assigned by modules/goal). The client selection stores selected LABEL ids on
-// `ws_customer.goal` (Json). Cache is bypassed on the SQL branch so a flag flip
-// can't serve Mongo-shaped cached payloads.
-const sqlLabelArr = (j: any): { id: number; name: string }[] => (Array.isArray(j) ? j : []);
+// Goals are the customer target-goal master (`ws_customer_target_goal`), each
+// optionally carrying labels ([{ id, name }] JSON). The client selection lives on
+// `ws_customer.goal` as [{ goalId, labelIds }] (legacy flat id arrays still read).
+// It can be written here (PUT /client/goals) or via /client/profile/update — both
+// persist the same validated composite shape.
+const MY_SELECTED_GOALS_CACHE_PREFIX = "cache:client:goals:selected:";
+const PROFILE_CACHE_PREFIX = "cache:client:profile:";
+
 const parseGoalCustomerId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
 };
-const selectedGoalIds = (j: any): string[] => (Array.isArray(j) ? j.map((x) => String(x)) : []);
 
-const MY_SELECTED_GOALS_CACHE_PREFIX = "cache:client:goals:selected:";
-const PROFILE_CACHE_PREFIX = "cache:client:profile:";
+/**
+ * Persist the customer's goal selection. Accepts the composite
+ * `[{ goalId, labelIds }]` (or a legacy flat id array); validates against
+ * ws_customer_target_goal — unknown goals dropped, label ids filtered to those
+ * that exist on the goal — then stores the normalized composite on ws_customer.goal.
+ */
+export const updateMyGoals = async (customerId: string, goals: unknown, traceId?: string) => {
+  logger.info("updateMyGoals service invoked", { traceId, customerId });
+  try {
+    if (!Array.isArray(goals)) return { ok: false as const, message: "Goals must be an array." };
+    const cid = parseGoalCustomerId(customerId);
+    if (cid == null) return { ok: false as const, message: "Customer not found." };
+    const exists = await prisma.customer.findFirst({ where: { id: cid }, select: { id: true } });
+    if (!exists) return { ok: false as const, message: "Customer not found." };
+
+    const parsed = parseGoalSelection(goals);
+    const rows = parsed.length
+      ? await prisma.customerTargetGoal.findMany({ where: { id: { in: parsed.map((s) => s.goalId) } }, select: { id: true, labels: true } })
+      : [];
+    const labelSetByGoal = new Map(rows.map((r) => [r.id, new Set(parseLabels(r.labels).map((l) => l.id))]));
+    const selection: GoalSelection[] = [];
+    for (const sel of parsed) {
+      const valid = labelSetByGoal.get(sel.goalId);
+      if (!valid) continue; // unknown goal
+      selection.push({ goalId: sel.goalId, labelIds: sel.labelIds.filter((id) => valid.has(id)) });
+    }
+
+    await prisma.customer.update({ where: { id: cid }, data: { goal: selection as any, updatedAt: new Date() } });
+    try { await redisClient.del(`${MY_SELECTED_GOALS_CACHE_PREFIX}${customerId}`, `${PROFILE_CACHE_PREFIX}${customerId}`); } catch { /* best-effort */ }
+    return { ok: true as const, data: { goals: selection }, message: "Goals updated successfully." };
+  } catch (error) {
+    logger.error("updateMyGoals service error", { traceId, customerId, error: (error as Error).message });
+    return { ok: false as const, message: "Failed to update goals." };
+  }
+};
 
 export const getActiveGoals = async (traceId?: string) => {
   logger.info("getActiveGoals service invoked", { traceId });
 
-  const rows = await prisma.goal.findMany({
-    where: { isActive: true },
-    orderBy: { createdAt: "asc" },
-    select: { id: true, title: true, image: true, labels: true },
+  const rows = await prisma.customerTargetGoal.findMany({
+    where: { active: true },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true, image: true, labels: true },
   });
   return rows.map((g) => ({
     _id: String(g.id),
-    title: g.title,
+    title: g.name,
     image: g.image ?? null,
-    labels: sqlLabelArr(g.labels).map((l) => ({ _id: String(l.id), name: l.name })),
+    labels: parseLabels(g.labels).map((l) => ({ _id: String(l.id), name: l.name })),
   }));
 };
 
 /**
- * Updates the customer's selected goal labels.
- * Accepts an array of goal-label ObjectIds; invalid IDs are filtered out.
- */
-export const updateMyGoals = async (customerId: string, goals: string[], traceId?: string) => {
-  logger.info("updateMyGoals service invoked", { traceId, customerId, goalCount: goals?.length });
-  try {
-    if (!Array.isArray(goals)) {
-      logger.warn("updateMyGoals service invalid input", { traceId, customerId });
-      return { ok: false, message: "Goals must be an array of IDs." };
-    }
-
-    // ─── store selected LABEL ids on ws_customer.goal ───
-    const cid = parseGoalCustomerId(customerId);
-    if (cid == null) return { ok: false, message: "Customer not found." };
-    const validGoals = goals.filter((id) => id != null && String(id).trim() !== "").map(String);
-    const exists = await prisma.customer.findFirst({ where: { id: cid }, select: { id: true } });
-    if (!exists) return { ok: false, message: "Customer not found." };
-    await prisma.customer.update({ where: { id: cid }, data: { goal: validGoals as any, updatedAt: new Date() } });
-    try {
-      await redisClient.del(`${MY_SELECTED_GOALS_CACHE_PREFIX}${customerId}`, `${PROFILE_CACHE_PREFIX}${customerId}`);
-    } catch { /* cache best-effort */ }
-    logger.info("updateMyGoals service completed (sql)", { traceId, customerId, count: validGoals.length });
-    return { ok: true, data: { goals: validGoals }, message: "Goals updated successfully." };
-  } catch (error) {
-    logger.error("updateMyGoals service error", { traceId, customerId, error: (error as Error).message });
-    return { ok: false, message: "Failed to update goals." };
-  }
-};
-
-/**
- * Returns all active goals with an isSelected flag per label for the given customer.
- */
-export const getGoalsWithSelection = async (customerId: string, traceId?: string) => {
-  logger.info("getGoalsWithSelection service invoked", { traceId, customerId });
-  try {
-    const cid = parseGoalCustomerId(customerId);
-    if (cid == null) return { ok: false, message: "Customer not found." };
-    const customer = await prisma.customer.findFirst({ where: { id: cid }, select: { goal: true } });
-    if (!customer) return { ok: false, message: "Customer not found." };
-    const selected = new Set(selectedGoalIds(customer.goal));
-    const goals = await prisma.goal.findMany({
-      where: { isActive: true },
-      orderBy: { createdAt: "asc" },
-      select: { id: true, title: true, image: true, labels: true },
-    });
-    const shaped = goals.map((g) => ({
-      _id: String(g.id),
-      title: g.title,
-      image: g.image ?? null,
-      labels: sqlLabelArr(g.labels).map((l) => ({ _id: String(l.id), name: l.name, isSelected: selected.has(String(l.id)) })),
-    }));
-    return { ok: true, data: shaped };
-  } catch (error) {
-    logger.error("getGoalsWithSelection service error", { traceId, customerId, error: (error as Error).message, stack: (error as Error).stack });
-    return { ok: false, message: "Failed to fetch goals." };
-  }
-};
-
-/**
- * Fetches the user's specifically selected goals, filtering out unused labels
+ * Fetches the customer's selected goals — each returned with ONLY the labels
+ * the customer chose within it. A selected goal with no labels still appears
+ * (empty `labels`). Order follows the stored selection.
  */
 export const getMySelectedGoals = async (customerId: string, traceId?: string) => {
   logger.info("getMySelectedGoals service invoked", { traceId, customerId });
@@ -102,21 +81,32 @@ export const getMySelectedGoals = async (customerId: string, traceId?: string) =
     if (cid == null) return { ok: false, message: "Customer not found." };
     const customer = await prisma.customer.findFirst({ where: { id: cid }, select: { goal: true } });
     if (!customer) return { ok: false, message: "Customer not found." };
-    const selectedIds = selectedGoalIds(customer.goal);
-    if (!selectedIds.length) return { ok: true, data: [] };
-    const selSet = new Set(selectedIds);
-    const goals = await prisma.goal.findMany({
-      where: { isActive: true },
-      orderBy: { createdAt: "asc" },
-      select: { id: true, title: true, image: true, labels: true },
+
+    const selections = parseGoalSelection(customer.goal);
+    if (!selections.length) return { ok: true, data: [] };
+
+    const rows = await prisma.customerTargetGoal.findMany({
+      where: { id: { in: selections.map((s) => s.goalId) }, active: true },
+      select: { id: true, name: true, image: true, labels: true },
     });
-    const filtered = goals
-      .map((g) => {
-        const labels = sqlLabelArr(g.labels).filter((l) => selSet.has(String(l.id))).map((l) => ({ _id: String(l.id), name: l.name }));
-        return labels.length ? { _id: String(g.id), title: g.title, image: g.image ?? null, labels } : null;
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    const shaped = selections
+      .map((sel) => {
+        const row = byId.get(sel.goalId);
+        if (!row) return null;
+        const chosen = new Set(sel.labelIds);
+        return {
+          _id: String(row.id),
+          title: row.name,
+          image: row.image ?? null,
+          labels: parseLabels(row.labels)
+            .filter((l) => chosen.has(l.id))
+            .map((l) => ({ _id: String(l.id), name: l.name })),
+        };
       })
       .filter(Boolean);
-    return { ok: true, data: filtered };
+    return { ok: true, data: shaped };
   } catch (error) {
     logger.error("getMySelectedGoals service error", { traceId, customerId, error: (error as Error).message, stack: (error as Error).stack });
     return { ok: false, message: "Failed to fetch selected goals." };

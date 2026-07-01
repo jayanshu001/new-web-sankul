@@ -1551,118 +1551,6 @@
       ]
     },
     {
-      "name": "Goals",
-      "item": [
-        {
-          "name": "POST Create",
-          "request": {
-            "method": "POST",
-            "header": [],
-            "url": {
-              "raw": "{{BASEURL}}/api/v1/admin/goals",
-              "host": [
-                "{{BASEURL}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "admin",
-                "goals"
-              ]
-            },
-            "body": {
-              "mode": "formdata",
-              "formdata": [
-                {
-                  "key": "name",
-                  "value": "Goal",
-                  "type": "text"
-                },
-                {
-                  "key": "image",
-                  "type": "file",
-                  "src": []
-                }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "GET List",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{BASEURL}}/api/v1/admin/goals",
-              "host": [
-                "{{BASEURL}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "admin",
-                "goals"
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "PUT Update",
-          "request": {
-            "method": "PUT",
-            "header": [],
-            "url": {
-              "raw": "{{BASEURL}}/api/v1/admin/goals/:id",
-              "host": [
-                "{{BASEURL}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "admin",
-                "goals",
-                ":id"
-              ]
-            },
-            "body": {
-              "mode": "formdata",
-              "formdata": [
-                {
-                  "key": "name",
-                  "value": "Goal",
-                  "type": "text"
-                }
-              ]
-            }
-          },
-          "response": []
-        },
-        {
-          "name": "DELETE Delete",
-          "request": {
-            "method": "DELETE",
-            "header": [],
-            "url": {
-              "raw": "{{BASEURL}}/api/v1/admin/goals/:id",
-              "host": [
-                "{{BASEURL}}"
-              ],
-              "path": [
-                "api",
-                "v1",
-                "admin",
-                "goals",
-                ":id"
-              ]
-            }
-          },
-          "response": []
-        }
-      ]
-    },
-    {
       "name": "Courses",
       "item": [
         {
@@ -4308,7 +4196,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Goal\"\n}",
+              "raw": "{\n  \"name\": \"GPSC Class 1/2\",\n  \"image\": \"https://.../g.png\",\n  \"active\": true,\n  \"labels\": [\n    {\n      \"name\": \"Prelims\"\n    },\n    {\n      \"name\": \"Mains\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -4344,7 +4232,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"name\": \"Goal\"\n}",
+              "raw": "{\n  \"name\": \"GPSC Class 1/2\",\n  \"image\": \"https://.../g.png\",\n  \"active\": true,\n  \"labels\": [\n    {\n      \"name\": \"Prelims\"\n    },\n    {\n      \"name\": \"Mains\"\n    }\n  ]\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -14395,6 +14283,149 @@
                 }
               }
             }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Goals",
+      "item": [
+        {
+          "name": "GET List",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{BASEURL}}/api/v1/admin/goals?page=1&limit=10&search=",
+              "host": [
+                "{{BASEURL}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "goals"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "10"
+                },
+                {
+                  "key": "search",
+                  "value": ""
+                }
+              ]
+            },
+            "description": "Backed by ws_customer_target_goal. Returns { data:[{_id,title,labels,image,isActive}], meta }."
+          },
+          "response": []
+        },
+        {
+          "name": "POST Create",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{BASEURL}}/api/v1/admin/goals",
+              "host": [
+                "{{BASEURL}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "goals"
+              ]
+            },
+            "description": "multipart/form-data in practice (image file). title required; labels optional; isActive optional.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Defence\",\n  \"labels\": [\n    {\n      \"name\": \"Prelims\"\n    },\n    {\n      \"name\": \"Mains\"\n    }\n  ],\n  \"isActive\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "PUT Update",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{BASEURL}}/api/v1/admin/goals/:id",
+              "host": [
+                "{{BASEURL}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "goals",
+                ":id"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"title\": \"Defence (updated)\",\n  \"labels\": [\n    {\n      \"name\": \"Prelims\"\n    }\n  ],\n  \"isActive\": true\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "DELETE Delete",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{BASEURL}}/api/v1/admin/goals/:id",
+              "host": [
+                "{{BASEURL}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "admin",
+                "goals",
+                ":id"
+              ]
+            },
+            "description": ""
           },
           "response": []
         }

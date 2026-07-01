@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { parseLabels, type GoalSelection } from "../../utils/goalSelection";
 
 /** Prisma persistence for the customer-profile MySQL branch (ws_customer). */
 export const customerProfileRepository = {
@@ -18,18 +19,37 @@ export const customerProfileRepository = {
     }),
 
   /**
-   * Hydrate goal int-ids (from the `goal` JSON array) into [{ id, name }] via
-   * ws_customer_target_goal. Preserves the order given in the JSON array.
+   * Hydrate goal selections (from the `goal` JSON) into
+   * [{ id, name, labels: [{ id, name }] }] via ws_customer_target_goal. Each
+   * goal carries ONLY the labels the customer selected. Unknown goals are
+   * dropped; order follows the stored selection.
    */
-  hydrateGoals: async (ids: number[]) => {
-    if (!ids.length) return [];
+  hydrateGoals: async (selections: GoalSelection[]) => {
+    if (!selections.length) return [];
     const rows = await prisma.customerTargetGoal.findMany({
-      where: { id: { in: ids } },
-      select: { id: true, name: true },
+      where: { id: { in: selections.map((s) => s.goalId) } },
+      select: { id: true, name: true, labels: true },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
-    return ids.map((id) => byId.get(id)).filter(Boolean) as { id: number; name: string }[];
+    return selections
+      .map((sel) => {
+        const row = byId.get(sel.goalId);
+        if (!row) return null;
+        const chosen = new Set(sel.labelIds);
+        return {
+          id: row.id,
+          name: row.name,
+          labels: parseLabels(row.labels).filter((l) => chosen.has(l.id)),
+        };
+      })
+      .filter(Boolean) as { id: number; name: string; labels: { id: number; name: string }[] }[];
   },
+
+  /** Target goals (id + labels) for the given ids — used to validate writes. */
+  targetGoalsByIds: (ids: number[]) =>
+    ids.length
+      ? prisma.customerTargetGoal.findMany({ where: { id: { in: ids } }, select: { id: true, labels: true } })
+      : Promise.resolve([] as { id: number; labels: unknown }[]),
 
   /** Patch arbitrary scalar columns (caller builds the Prisma data object). */
   updateById: (id: number, data: Record<string, unknown>) =>

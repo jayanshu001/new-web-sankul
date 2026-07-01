@@ -5,6 +5,7 @@
  * module owns the flag + small shared helpers for the 3 dashboard handlers.
  */
 import { isMysqlModule } from "../../config/migration";
+import { parseGoalSelection } from "../../utils/goalSelection";
 
 export const isClientDashboardMysql = (): boolean => isMysqlModule("client-dashboard");
 
@@ -27,8 +28,9 @@ const daysLeftFor = (examDate: Date) => Math.ceil((new Date(examDate).getTime() 
  * Upcoming exam countdowns for the dashboard, prioritised by the user's selected
  * goal-labels then filled with the nearest upcoming, capped at `limit`.
  *
- * The customer's `goal` JSON column is an int[] of goal-label ids
- * (ws_goal.labels[].id). A countdown tagged with `goalLabelId` in that set is
+ * The customer's `goal` JSON column is the composite selection
+ * `[{ goalId, labelIds }]`; the selected label ids (across all chosen goals) are
+ * matched against exam countdowns. A countdown tagged with `goalLabelId` in that set is
  * shown first (ordered by examDate); if fewer than `limit` match (or the user
  * has no goal), the remainder are filled with the nearest upcoming countdowns
  * (excluding the already-picked ones). Falls back to pure nearest-upcoming when
@@ -37,12 +39,11 @@ const daysLeftFor = (examDate: Date) => Math.ceil((new Date(examDate).getTime() 
 export const fetchPrioritizedCountdowns = async (customerId: number | null, limit: number) => {
   const baseWhere = { status: true, examDate: { gte: todayUTC() } };
 
-  // Selected goal-label ids from the customer's goal JSON ([1,2,...]).
+  // Selected goal-label ids from the customer's composite goal selection.
   let selectedLabelIds: number[] = [];
   if (customerId) {
     const c = await prisma.customer.findUnique({ where: { id: customerId }, select: { goal: true } });
-    const raw = Array.isArray(c?.goal) ? (c!.goal as any[]) : [];
-    selectedLabelIds = [...new Set(raw.map((x) => Number(x)).filter((n) => Number.isInteger(n) && n > 0))];
+    selectedLabelIds = [...new Set(parseGoalSelection(c?.goal).flatMap((s) => s.labelIds))];
   }
 
   // Goal-matched first (by examDate asc).

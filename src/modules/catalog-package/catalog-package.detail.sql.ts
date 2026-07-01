@@ -122,8 +122,8 @@ const populatePackageType = async (id: number | null) => {
 };
 const populateGoal = async (id: number | null) => {
   if (id == null) return null;
-  const g = await prisma.goal.findUnique({ where: { id }, select: { id: true, title: true } });
-  return g ? { _id: String(g.id), title: g.title } : null;
+  const g = await prisma.customerTargetGoal.findUnique({ where: { id }, select: { id: true, name: true } });
+  return g ? { _id: String(g.id), title: g.name } : null;
 };
 
 // ── detail ───────────────────────────────────────────────────────────────────
@@ -238,3 +238,7 @@ export const listPackagesByTypeSql = async (packageTypeId: number) =>
 
 export const listPackagesByGoalLabelSql = async (goalLabelId: number) =>
   prisma.package.findMany({ where: { active: true, goalLabelId }, orderBy: [{ order_by: "asc" }, { id: "desc" }] });
+
+// Goal-level ("individual") packages for a label-less goal: goalId set, is_individual=true.
+export const listPackagesByGoalIndividualSql = async (goalId: number) =>
+  prisma.package.findMany({ where: { active: true, goalId, isIndividual: true }, orderBy: [{ order_by: "asc" }, { id: "desc" }] });

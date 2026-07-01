@@ -1,5 +1,6 @@
 import logger from "../../utils/logger";
 import { redisClient } from "../../config/redis";
+import type { GoalSelectionInput } from "../../utils/goalSelection";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { customerAuthRepository } from "../../modules/customer-auth/customer-auth.repository";
 import { invalidateCustomerGate } from "../../middlewares/authenticate";
@@ -36,7 +37,7 @@ interface IProfileUpdateData {
   middleName?: string;
   lastName?: string;
   email?: string;
-  goals?: string[];
+  goals?: GoalSelectionInput[];
   phone2?: string;
   dob?: string;
   gender?: string;
