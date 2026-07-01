@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
-import { ILiveSessionRecording } from "../../models/course/LiveSession.model";
 import {
   createStream as streamosCreateStream,
   getStreamDetails as streamosGetStreamDetails,
@@ -19,6 +18,16 @@ import {
   cancelRemindersForSession,
 } from "../../client/live-reminder/live-reminder.service";
 import * as adminLiveSql from "../../modules/admin-live/admin-live.service";
+
+// Shape of a single StreamOS recording entry (quality ladder / MP4 variant).
+// Formerly imported from the (now-removed) Mongo LiveSession model — inlined so
+// this controller no longer depends on Mongoose. Field shape is unchanged, so
+// the recording JSON persisted/returned is identical.
+type ILiveSessionRecording = {
+  quality?: string;
+  file_size?: number;
+  path: string;
+};
 
 // Admin must wait until 2 minutes before scheduledAt to actually start the
 // Streamos stream. Late starts after scheduledAt remain allowed indefinitely.

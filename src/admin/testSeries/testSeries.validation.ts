@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ExamLanguage } from "../../models/enums";
+import { ExamLanguage } from "../../shared/enums";
 
 // During the Mongo→SQL migration window an id may be either a 24-hex Mongo
 // ObjectId OR a positive integer (SQL autoincrement id, sent as a string by

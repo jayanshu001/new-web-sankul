@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ExamType } from "../../models/enums";
+import { ExamType } from "../../shared/enums";
 
 // ─── Category ─────────────────────────────────────────────────────────────────
 

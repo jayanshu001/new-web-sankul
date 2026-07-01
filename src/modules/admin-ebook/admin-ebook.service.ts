@@ -18,7 +18,7 @@ export const parseEbookId = (id: string): number | null => {
  * terms_and_conditions→termsAndConditions, order_by→order, demo_url→demoUrl,
  * book_url→bookUrl, link→link, book_file_name→bookFileName,
  * demo_file_name→demoFileName (original PDF upload names). SQL-absent fields
- * synthesized: isTrending=false; the PDF-upload status fields
+ * read from ws_ebook.is_trending; the PDF-upload status fields
  * (book/demoUploadStatus/Progress) are omitted (Mongo-only).
  *
  * examCountdown* are stored as JSON int-arrays on ws_ebook (C6) and populated on
@@ -52,7 +52,7 @@ export const toEbookDto = (
   demoFileName: row.demoFileName ?? null,
   bookFileName: row.bookFileName ?? null,
   link: row.shareableLink,
-  isTrending: false,
+  isTrending: row.isTrending,
   status: row.active,
   createdAt: row.createdAt ?? null,
   updatedAt: row.updatedAt ?? null,
@@ -170,6 +170,14 @@ export const deleteEbook = async (id: number): Promise<boolean> => {
   if (!(await repo.exists(id))) return false;
   await repo.delete(id);
   return true;
+};
+
+// Flip ws_ebook.is_trending. Returns the updated DTO, or null if not found.
+export const toggleEbookTrending = async (id: number): Promise<ReturnType<typeof toEbookDto> | null> => {
+  const row = await repo.findById(id);
+  if (!row) return null;
+  const updated = await repo.update(id, { isTrending: !row.isTrending, updatedAt: new Date() });
+  return toEbookDto(updated);
 };
 
 export const reorderEbooks = async (orders: Array<{ id: string; order: number }>) => {

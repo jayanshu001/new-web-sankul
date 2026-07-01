@@ -6,8 +6,18 @@
  * remarks column). Flag OFF until go-live.
  */
 import { offlineEnquiryRepository as repo } from "./offline-enquiry.repository";
-import { toEnquiryDto } from "./offline-enquiry.transformer";
-import type { EnquiryDto, EnquiryInput } from "./offline-enquiry.types";
+import { toBatchEnquiryDto, toEnquiryDto } from "./offline-enquiry.transformer";
+import type {
+  BatchEnquiryDto,
+  BatchEnquiryInput,
+  EnquiryDto,
+  EnquiryInput,
+} from "./offline-enquiry.types";
+
+export {
+  OFFLINE_BATCH_QUALIFICATIONS,
+  type OfflineBatchQualification,
+} from "./offline-enquiry.types";
 
 export const OFFLINE_ENQUIRY_MODULE = "offline-enquiry";
 
@@ -42,6 +52,30 @@ export const submitEnquiryMysql = async (
     batchId: input.batchId,
   });
   return toEnquiryDto(row);
+};
+
+/**
+ * Submit an offline-batch "Register" enquiry (same table as submitEnquiryMysql,
+ * plus `otherQualification`). `mobile` string → BigInt; anonymous (customerId
+ * null) → 0 sentinel. `otherQualification` is persisted only when provided
+ * (controller passes it only for qualification === "other"). Returns the
+ * Mongo-shaped batch-enquiry DTO.
+ */
+export const submitBatchEnquiryMysql = async (
+  input: BatchEnquiryInput
+): Promise<BatchEnquiryDto> => {
+  const digits = input.mobile.replace(/\D/g, "");
+  const mobile = digits ? BigInt(digits) : BigInt(0);
+  const row = await repo.create({
+    customerId: input.customerId ?? 0, // 0 sentinel for anonymous (NOT NULL col)
+    name: input.name,
+    email: input.email,
+    mobile,
+    qualification: input.qualification,
+    otherQualification: input.otherQualification,
+    batchId: input.batchId,
+  });
+  return toBatchEnquiryDto(row);
 };
 
 // ── admin list / delete (Wave 8) ─────────────────────────────────────────────

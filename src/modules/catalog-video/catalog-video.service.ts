@@ -19,7 +19,6 @@
  * util yields an identical URL for a fixed token. NEVER reimplement encryption.
  * See docs/migration/CATALOG_MODULE_SCOPE.md.
  */
-import { isMysqlModule } from "../../config/migration";
 import { catalogVideoRepository as repo } from "./catalog-video.repository";
 import {
   toVideoCategoryDto,
@@ -33,7 +32,7 @@ import type {
 } from "./catalog-video.types";
 
 export const VIDEO_MODULE = "catalog-video";
-export const isVideoMysql = (): boolean => isMysqlModule(VIDEO_MODULE);
+export const isVideoMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseVideoId = (id: string): number | null => {

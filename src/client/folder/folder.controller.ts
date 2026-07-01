@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
-import { Types } from "mongoose";
-import type { FolderType } from "../../models/customer/Folder.model";
-import type { FolderItemKind } from "../../models/customer/FolderItem.model";
+// Folder classification types (formerly imported from the legacy Mongoose models).
+type FolderType = "video" | "material";
+type FolderItemKind = "material" | "video" | "ebook";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
@@ -20,7 +20,7 @@ function userId(req: Request): string | null {
  * Ensure both default folders ("My Videos", "My Materials") exist for a customer.
  * Idempotent — safe to call on every signup and from backfill scripts.
  */
-export async function ensureDefaultFolders(customerId: string | Types.ObjectId) {
+export async function ensureDefaultFolders(customerId: string | number) {
   const cid = folderSql.parseFolderId(String(customerId));
   if (cid != null) return folderSql.ensureDefaultFolders(cid);
   return;

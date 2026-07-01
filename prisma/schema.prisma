@@ -1621,6 +1621,7 @@ model OfflineEnquiry {
   email         String       @map("email")
   mobile        BigInt       @map("mobile")
   qualification String       @map("qualification")
+  otherQualification String? @map("other_qualification") @db.VarChar(255)
   batchId       Int          @map("batch_id")
   batch         OfflineBatch @relation(fields: [batchId], references: [id])
   createdAt     DateTime?    @map("created_at")

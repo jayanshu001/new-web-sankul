@@ -1,18 +1,12 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { Book } from "../../models/book/Book.model";
-import { BookOrder } from "../../models/book/BookOrder.model";
-import { Ebook } from "../../models/ebook/Ebook.model";
-import { EbookPrice } from "../../models/ebook/EbookPrice.model";
-import { BookOrderStatus } from "../../models/enums";
+// Fully migrated to SQL (book-order module) — no mongoose / models imports.
+import { BookOrderStatus } from "../../shared/enums";
 import { generateBookReceipt } from "../../libs/core/generate";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { buildTrackingUrl, COURIER } from "../../config/courier";
 import { fetchLiveAWBData } from "../../libs/courier/tracking";
-import { isNewItem } from "../../utils/isNew";
-import { buildRegexCondition } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   listBooksData,
@@ -24,6 +18,8 @@ import {
   parseBookOrderId,
   getOrderTrackingMysql,
   getOrderTrackingLiveMysql,
+  listMyOrdersMysql,
+  getMyOrderByIdMysql,
 } from "../../modules/book-order/book-order.service";
 import {
   fetchTrendingBooksOnly as fetchTrendingBooksOnlySql,
@@ -82,125 +78,6 @@ export const listBooks = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
-
-type TrendingOpts = { type?: string; search?: string; language?: string; limit?: number };
-
-function resolveTrendingFlags(opts: TrendingOpts) {
-  const wantFree = opts.type === "free";
-  const wantPaid = opts.type === "paid" || !opts.type;
-  const limitNum = Math.min(Math.max(opts.limit ?? 20, 1), 100);
-  return { wantFree, wantPaid, limitNum };
-}
-
-export async function fetchTrendingBooksOnly(opts: TrendingOpts = {}) {
-  const { wantFree, wantPaid, limitNum } = resolveTrendingFlags(opts);
-
-  const bookFilter: any = { status: true, isTrending: true };
-  if (opts.language) bookFilter.language = opts.language;
-  {
-    const rx = buildRegexCondition(opts.search);
-    if (rx) bookFilter.$or = [{ name: rx }, { author: rx }];
-  }
-  if (wantFree) bookFilter.discountedPrice = 0;
-  else if (wantPaid) bookFilter.discountedPrice = { $gt: 0 };
-
-  const books = await Book.find(bookFilter).sort({ orderBy: 1, createdAt: -1 }).lean();
-
-  const items = books.slice(0, limitNum).map((b) => ({
-    type: "book" as const,
-    _id: b._id,
-    name: b.name,
-    description: b.description,
-    author: b.author,
-    language: b.language,
-    image: b.image,
-    thumbnail: b.thumbnail,
-    demoUrl: b.demoUrl,
-    isTrending: b.isTrending,
-    isCombo: b.isCombo,
-    isMagazine: b.isMagazine,
-    listPrice: b.listPrice,
-    discountedPrice: b.discountedPrice,
-    shippingPrice: b.shippingPrice,
-    pages: b.pages ?? 0,
-    price: b.discountedPrice,
-    isFree: b.discountedPrice === 0,
-    isNew: isNewItem(b.createdAt),
-    createdAt: b.createdAt,
-  }));
-
-  return { type: wantFree ? "free" : "paid", items };
-}
-
-export async function fetchTrendingEbooksOnly(opts: TrendingOpts = {}) {
-  const { wantFree, wantPaid, limitNum } = resolveTrendingFlags(opts);
-
-  const ebookFilter: any = { status: true, isTrending: true };
-  if (opts.language) ebookFilter.language = opts.language;
-  {
-    const rx = buildRegexCondition(opts.search);
-    if (rx) ebookFilter.$or = [{ name: rx }, { author: rx }];
-  }
-
-  const ebooks = await Ebook.find(ebookFilter).sort({ order: 1, createdAt: -1 }).lean();
-
-  const ebookIds = ebooks.map((e) => e._id);
-  const plans = ebookIds.length
-    ? await EbookPrice.find({ ebookId: { $in: ebookIds }, status: true }).sort({ duration: 1 }).lean()
-    : [];
-  const plansByEbook = new Map<string, any[]>();
-  plans.forEach((p) => {
-    const key = String(p.ebookId);
-    const arr = plansByEbook.get(key) || [];
-    arr.push(p);
-    plansByEbook.set(key, arr);
-  });
-
-  const items = ebooks
-    .map((e) => {
-      const ePlans = plansByEbook.get(String(e._id)) || [];
-      const minPrice = ePlans.length ? Math.min(...ePlans.map((p) => p.price ?? 0)) : 0;
-      const isFree = minPrice === 0;
-      if (wantFree && !isFree) return null;
-      if (wantPaid && isFree) return null;
-      return {
-        type: "ebook" as const,
-        _id: e._id,
-        name: e.name,
-        description: e.description,
-        author: e.author,
-        publisher: e.publisher,
-        language: e.language,
-        image: e.image,
-        thumbnail: e.thumbnail,
-        demoUrl: e.demoUrl,
-        isTrending: e.isTrending,
-        price: minPrice,
-        isFree,
-        isNew: isNewItem(e.createdAt),
-        plans: ePlans,
-        createdAt: e.createdAt,
-      };
-    })
-    .filter(Boolean)
-    .slice(0, limitNum) as any[];
-
-  return { type: wantFree ? "free" : "paid", items };
-}
-
-export async function fetchTrendingBookItems(opts: TrendingOpts = {}) {
-  const { wantFree, limitNum } = resolveTrendingFlags(opts);
-  const [{ items: bookItems }, { items: ebookItems }] = await Promise.all([
-    fetchTrendingBooksOnly({ ...opts, limit: 100 }),
-    fetchTrendingEbooksOnly({ ...opts, limit: 100 }),
-  ]);
-
-  const merged = [...bookItems, ...ebookItems]
-    .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
-    .slice(0, limitNum);
-
-  return { type: wantFree ? "free" : "paid", items: merged };
-}
 
 // GET /api/v1/client/books/trending?type=paid|free&language=&search=&limit=
 export const listTrendingBooks = async (req: Request, res: Response) => {
@@ -349,32 +226,31 @@ export const listMyOrders = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
+    const cid = parseBookOrderId(String(customerId));
+    if (cid == null) {
+      logger.warn("listMyOrders unauthorized", { traceId });
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
     const { status, page = "1", limit = "20" } = req.query as Record<string, string>;
-    const filter: any = { customerId };
-    if (status && Object.values(BookOrderStatus).includes(status as BookOrderStatus))
-      filter.status = status;
+    const statusFilter =
+      status && Object.values(BookOrderStatus).includes(status as BookOrderStatus)
+        ? status
+        : undefined;
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
-    const skip = (pageNum - 1) * limitNum;
 
-    const [data, total] = await Promise.all([
-      BookOrder.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limitNum),
-      BookOrder.countDocuments(filter),
-    ]);
-
-    const decorated = data.map((o) => {
-      const obj = o.toObject();
-      return {
-        ...obj,
-        trackingUrl: buildTrackingUrl(obj.tracking?.trackingId),
-      };
+    const { data, total } = await listMyOrdersMysql(cid, {
+      status: statusFilter,
+      page: pageNum,
+      limit: limitNum,
     });
 
-    logger.info("listMyOrders success", { traceId, customerId, total, returned: decorated.length });
+    logger.info("listMyOrders success", { traceId, customerId, total, returned: data.length });
     return res.status(200).json({
       success: true,
-      data: decorated,
+      data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
@@ -395,9 +271,8 @@ export const getMyOrderInvoice = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    // Accept a SQL int order id (MySQL id-space) OR a Mongo ObjectId; the
-    // receipt builder branches on isMysqlModule and re-validates ownership.
-    if (!mongoose.Types.ObjectId.isValid(id) && !/^[1-9][0-9]*$/.test(id)) {
+    // SQL int order id (MySQL id-space); the receipt builder re-validates ownership.
+    if (parseBookOrderId(id) == null) {
       logger.warn("getMyOrderInvoice invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid order id." });
     }
@@ -433,28 +308,21 @@ export const getMyOrderById = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    const oid = parseBookOrderId(id);
+    const cid = parseBookOrderId(String(customerId));
+    if (oid == null || cid == null) {
       logger.warn("getMyOrderById invalid id", { traceId, customerId, id });
       return res.status(400).json({ success: false, message: "Invalid order id." });
     }
 
-    const order = await BookOrder.findOne({ _id: id, customerId })
-      .populate("shippingId")
-      .populate("items.bookId", "_id name thumbnail author");
-    if (!order) {
+    const data = await getMyOrderByIdMysql(oid, cid);
+    if (!data) {
       logger.warn("getMyOrderById not found", { traceId, customerId, id });
       return res.status(404).json({ success: false, message: "Order not found." });
     }
 
-    const obj = order.toObject();
     logger.info("getMyOrderById success", { traceId, customerId, orderId: id });
-    return res.status(200).json({
-      success: true,
-      data: {
-        ...obj,
-        trackingUrl: buildTrackingUrl(obj.tracking?.trackingId),
-      },
-    });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     logger.error("getMyOrderById failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

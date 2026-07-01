@@ -9,7 +9,6 @@
  * resolved via the SQL `parent` self-FK (`WHERE parent = id`). See types.ts for
  * the blocked item-listing scope (entitlement + LiveCourse + Mongo embeds).
  */
-import { isMysqlModule } from "../../config/migration";
 import { catalogMaterialRepository as repo } from "./catalog-material.repository";
 import { toMaterialCategoryDto } from "./catalog-material.transformer";
 import type {
@@ -18,7 +17,7 @@ import type {
 } from "./catalog-material.types";
 
 export const MATERIAL_MODULE = "catalog-material";
-export const isMaterialMysql = (): boolean => isMysqlModule(MATERIAL_MODULE);
+export const isMaterialMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseMaterialCategoryId = (id: string): number | null => {

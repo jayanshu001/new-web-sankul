@@ -3,8 +3,6 @@
 // Domain logic for admin ebook endpoints. Same shape as course/package service:
 //   cache-aside on hot reads, HttpError for predictable status codes.
 
-import mongoose from "mongoose";
-import { Ebook, EbookUploadStatus } from "../../models/ebook/Ebook.model";
 import { HttpError } from "../../middlewares/errorHandler";
 import cache from "../../libs/cache";
 import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
@@ -13,17 +11,11 @@ import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
 export const isAdminEbookMysql = adminEbook.isAdminEbookMysql;
 export const parseEbookId = adminEbook.parseEbookId;
 
-// On the SQL branch ids are numeric; the Mongo assertObjectId would 400 them.
+// On the SQL branch ids are numeric.
 const assertEbookSqlId = (id: string, label: string): number => {
   const n = adminEbook.parseEbookId(id);
   if (!n) throw new HttpError(400, `Invalid ${label} ID`);
   return n;
-};
-
-const assertObjectId = (id: string, label: string): void => {
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    throw new HttpError(400, `Invalid ${label} ID`);
-  }
 };
 
 const ebookDetailKey = (id: string) => cache.key("admin", "ebook", `detail:${id}`);
@@ -68,37 +60,10 @@ export const createEbook = async (validated: any) => {
   return adminEbook.createEbook(validated);
 };
 
-// ──────────────────────────────────────────────────────────────────────────────
-// PDF upload status (written by the upload pipeline)
-// ──────────────────────────────────────────────────────────────────────────────
-
-/**
- * Persist the PDF-upload status of an ebook's Book or Demo slot onto the ebook
- * document, then invalidate the ebook list + detail caches so the admin list
- * (which polls every 5s) reads the fresh state. Called by the upload pipeline at
- * each job transition (queued → processing → completed/failed).
- *
- * `target` is the URL field being uploaded ("bookUrl" | "demoUrl"); it maps to
- * the matching {book,demo}UploadStatus / {book,demo}UploadProgress pair. `set`
- * lets the completed transition also write the resolved url/filename in the same
- * update (so the doc never shows completed without its bookUrl).
- */
-export const setEbookUploadStatus = async (
-  ebookId: string,
-  target: "bookUrl" | "demoUrl",
-  fields: { status: EbookUploadStatus; progress?: number; set?: Record<string, unknown> }
-): Promise<void> => {
-  const prefix = target === "demoUrl" ? "demo" : "book";
-  const update: Record<string, unknown> = {
-    [`${prefix}UploadStatus`]: fields.status,
-    ...(fields.set ?? {}),
-  };
-  if (fields.progress !== undefined) {
-    update[`${prefix}UploadProgress`] = fields.progress;
-  }
-  await Ebook.updateOne({ _id: ebookId }, { $set: update });
-  await invalidateEbookCaches(ebookId);
-};
+// NOTE: the former Mongo `setEbookUploadStatus` helper was removed — the live
+// PDF-upload pipeline persists status via `setEbookUploadStatusSql`
+// (src/modules/pdf-upload/pdf-upload.service.ts), which writes the ws_ebook
+// upload columns. This orphan had no remaining callers.
 
 export const updateEbook = async (id: string, validated: any) => {
   // NOTE: the Mongo path best-effort-deletes replaced S3 files; on SQL we skip
@@ -118,16 +83,14 @@ export const deleteEbook = async (id: string) => {
   return;
 };
 
-// ⚠ STAYS Mongo: ws_ebook has no `is_trending` column (isTrending is Mongo-only,
-// synthesized false in the SQL DTO). No admin-ebook SQL branch.
+// Flips ws_ebook.is_trending via the admin-ebook SQL module and invalidates the
+// admin ebook caches so list/detail reads reflect the new value.
 export const toggleEbookTrending = async (id: string) => {
-  assertObjectId(id, "Ebook");
-  const ebook = await Ebook.findById(id).select("isTrending");
-  if (!ebook) throw new HttpError(404, "Ebook not found");
-  ebook.isTrending = !ebook.isTrending;
-  await ebook.save();
+  const numId = assertEbookSqlId(id, "Ebook");
+  const updated = await adminEbook.toggleEbookTrending(numId);
+  if (!updated) throw new HttpError(404, "Ebook not found");
   await invalidateEbookCaches(id);
-  return { isTrending: ebook.isTrending };
+  return { isTrending: updated.isTrending };
 };
 
 export const reorderEbooks = async (orders: Array<{ id: string; order: number }>) => {

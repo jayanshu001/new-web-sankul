@@ -5,7 +5,6 @@
 //   2. Call into this service.
 //   3. Map the return value to the HTTP response.
 
-import mongoose, { Types } from "mongoose";
 import { HttpError } from "../../middlewares/errorHandler";
 import cache from "../../libs/cache";
 import logger from "../../utils/logger";
@@ -46,37 +45,9 @@ export interface ListCoursesQuery {
   sortOrder?: string;
 }
 
-export interface CategoryRef {
-  category: Types.ObjectId;
-  order: number;
-}
-
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
-
-/**
- * Accepts either a real array or a JSON-encoded string (multipart/form-data),
- * normalizes into typed `CategoryRef[]`.
- */
-export const parseCategoryRefs = (raw: any): CategoryRef[] | undefined => {
-  if (raw === undefined || raw === null || raw === "") return undefined;
-  let items = raw;
-  if (typeof raw === "string") {
-    try {
-      items = JSON.parse(raw);
-    } catch {
-      return undefined;
-    }
-  }
-  if (!Array.isArray(items)) return undefined;
-  return items
-    .filter((i: any) => i && mongoose.Types.ObjectId.isValid(i.category))
-    .map((i: any) => ({
-      category: new Types.ObjectId(i.category),
-      order: typeof i.order === "number" ? i.order : Number(i.order) || 0,
-    }));
-};
 
 const courseDetailKey = (id: string) => cache.key("admin", "course", `detail:${id}`);
 

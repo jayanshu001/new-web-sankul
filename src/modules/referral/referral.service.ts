@@ -1,9 +1,8 @@
-import { isMysqlModule } from "../../config/migration";
 import { referralRepository as repo } from "./referral.repository";
 import type { Prisma, RefferalProgram, RefferalTransaction } from "@prisma/client";
 
 export const REFERRAL_MODULE = "referral";
-export const isReferralMysql = (): boolean => isMysqlModule(REFERRAL_MODULE);
+export const isReferralMysql = (): boolean => true;
 
 export const parseCustomerId = (id: string): number | null => {
   const n = Number(id);

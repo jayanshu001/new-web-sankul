@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
-import { RefferalTransactionStatus } from "../models/enums";
+import { RefferalTransactionStatus } from "../shared/enums";
 import { applyPayoutWebhook } from "../modules/referral/referral.service";
 
 const WEBHOOK_SECRET = process.env.RAZORPAY_PAYOUT_WEBHOOK_SECRET ?? "";

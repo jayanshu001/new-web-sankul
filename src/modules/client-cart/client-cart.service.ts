@@ -1,10 +1,9 @@
-import { isMysqlModule } from "../../config/migration";
 import { clientCartRepository as repo } from "./client-cart.repository";
 import { isOfflineCityMysql, resolveCityName } from "../offline-city/offline-city.service";
 import { getFreeShippingMin } from "../book-order/book-order.service";
 
 export const CLIENT_CART_MODULE = "client-cart";
-export const isClientCartMysql = (): boolean => isMysqlModule(CLIENT_CART_MODULE);
+export const isClientCartMysql = (): boolean => true;
 
 export const parseCartId = (id: string): number | null => {
   const n = Number(id);

@@ -117,6 +117,12 @@ export const adminLiveCourseRepository = {
     return new Map(rows.filter((r) => r.packageCategoryId != null).map((r) => [r.packageCategoryId as number, r._count._all]));
   },
 
+  /** PackageCategory details (title/slug/image) for the tab bar. */
+  packageCategoriesByIds: (ids: number[]) =>
+    ids.length
+      ? prisma.packageCategory.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, slug: true, image: true } })
+      : Promise.resolve([] as { id: number; title: string; slug: string; image: string | null }[]),
+
   /** Cross-course session feeds. ids = the courses the customer can see. */
   sessionsForCourses: async (courseIds: number[], opts: { upcoming?: boolean; liveNow?: boolean; now: Date; skip: number; take: number }) => {
     if (!courseIds.length) return { rows: [], total: 0, courseBySession: new Map<number, number[]>() };
@@ -210,6 +216,24 @@ export const adminLiveCourseRepository = {
       return created;
     }),
   updatePoll: (id: number, data: Prisma.LivePollUncheckedUpdateInput) => prisma.livePoll.update({ where: { id }, data }),
+  /**
+   * Edit a poll's question and/or replace its options atomically. Options live in
+   * the separate ws_live_poll_option table (not embedded JSON), so "replace
+   * options" = deleteMany + createMany inside a transaction, re-indexing from 0.
+   * Only called after the service confirms the poll is active with 0 votes.
+   */
+  updatePollWithOptions: (id: number, patch: { question?: string; options?: Array<{ text: string; votes: number }> }) =>
+    prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const data: Prisma.LivePollUncheckedUpdateInput = { updatedAt: now };
+      if (patch.question !== undefined) data.question = patch.question;
+      const updated = await tx.livePoll.update({ where: { id }, data });
+      if (patch.options !== undefined) {
+        await tx.livePollOption.deleteMany({ where: { pollId: id } });
+        if (patch.options.length) await tx.livePollOption.createMany({ data: patch.options.map((o, i) => ({ pollId: id, optionIndex: i, text: o.text, votes: o.votes })) });
+      }
+      return updated;
+    }),
   closePoll: (id: number) => prisma.livePoll.update({ where: { id }, data: { isActive: false, closedAt: new Date(), updatedAt: new Date() } }),
   deletePoll: (id: number) =>
     prisma.$transaction(async (tx) => {

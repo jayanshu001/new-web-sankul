@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { UpdateType } from "../../models/enums";
+import { UpdateType } from "../../shared/enums";
 
 // ─── FAQ ──
 export const faqCreateSchema = z.object({

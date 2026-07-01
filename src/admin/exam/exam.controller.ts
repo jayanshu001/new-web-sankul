@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
-import { ExamStatus } from "../../models/enums";
+import { ExamStatus } from "../../shared/enums";
 import { formatScheduledAt } from "../../utils/displayTime";
 import * as adminExam from "../../modules/admin-exam/admin-exam.service";
 import * as catalogExam from "../../modules/catalog-exam/catalog-exam.service";

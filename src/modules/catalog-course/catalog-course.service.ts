@@ -13,7 +13,6 @@
  * `catalog-course` flips WITH the commerce/dashboard wave (D3, mirrors package).
  * See docs/migration/CATALOG_MODULE_SCOPE.md.
  */
-import { isMysqlModule } from "../../config/migration";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { catalogCourseRepository as repo } from "./catalog-course.repository";
 import { listActivePricesByCourses } from "../commerce-price/commerce-price.service";
@@ -33,7 +32,7 @@ import type {
 import type { PriceDto } from "../commerce-price/commerce-price.types";
 
 export const COURSE_MODULE = "catalog-course";
-export const isCourseMysql = (): boolean => isMysqlModule(COURSE_MODULE);
+export const isCourseMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseCourseId = (id: string): number | null => {

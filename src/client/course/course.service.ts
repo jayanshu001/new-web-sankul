@@ -1,12 +1,8 @@
-import { Types } from "mongoose";
-import { Course } from "../../models/course/Course.model";
-import { PackageCourseEbookPrice } from "../../models/course/PackageCourseEbookPrice.model";
-import { CustomerAddress } from "../../models/customer/CustomerAddress.model";
-import { CustomerShipping } from "../../models/customer/CustomerShipping.model";
-import { CustomerState } from "../../models/customer/CustomerState.model";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
+import { prisma } from "../../config/prisma";
+import { customerAddressRepository } from "../../modules/customer-address/customer-address.repository";
+import { buildTrackingUrl } from "../../config/courier";
+import { toCourseDto } from "../../modules/catalog-course/catalog-course.transformer";
 import { ShippingBody } from "./course.validation";
-import { COURIER } from "../../config/courier";
 import logger from "../../utils/logger";
 import { computeDaysLeft } from "../../utils/planDuration";
 
@@ -14,138 +10,331 @@ import { computeDaysLeft } from "../../utils/planDuration";
 // Shipping
 // ───────────────────────────────────────────────────────────────────────────
 
+/**
+ * Normalized shipping values in the SQL (`ws_customer_address` /
+ * `ws_customer_shipping`) column TYPES: phone/alternate_phone are BIGINT,
+ * pincode is INT, state is an INT FK, userId is the int customer id.
+ *
+ * Mirrors the pre-migration Mongo normalizer: phone/pincode coerced through
+ * `Number()` (defaulting to 0), alternate_phone left null when absent.
+ * `email` becomes "" when absent because the SQL column is NOT NULL (the DTO
+ * re-derives null from "" so the response shape is unchanged).
+ * `state` is only kept when it is a numeric FK — the input contract still
+ * accepts a 24-hex Mongo ObjectId (see course.validation.ts), which has no SQL
+ * FK, so such a value normalizes to null.
+ */
 interface NormalizedShipping {
-  customerId: Types.ObjectId;
+  userId: number;
   name: string;
-  phone: string;
-  alternatePhone: string | null;
-  email: string | null;
+  phone: bigint;
+  alternatePhone: bigint | null;
+  email: string;
   address: string;
   address2: string;
   city: string;
-  stateId: Types.ObjectId | null;
-  pincode: string;
+  state: number | null;
+  pincode: number;
+}
+
+/** "9664796376" | 9664796376 → 9664796376n; non-numeric/empty → 0n. */
+function toPhoneBig(v: string | number | null | undefined): bigint {
+  if (v === null || v === undefined || v === "") return BigInt(0);
+  const n = Math.trunc(Number(v));
+  return Number.isFinite(n) && n > 0 ? BigInt(n) : BigInt(0);
 }
 
 function normalizeShipping(userId: string, body: ShippingBody): NormalizedShipping {
-  const phoneNum = body.phone !== undefined && body.phone !== null ? Number(body.phone) : 0;
-  const altNum =
+  const alternatePhone =
     body.alternate_phone !== undefined && body.alternate_phone !== null
-      ? Number(body.alternate_phone)
+      ? toPhoneBig(body.alternate_phone)
       : null;
-  const pinNum = body.pincode !== undefined && body.pincode !== null ? Number(body.pincode) : 0;
+  const pinNum = Math.trunc(Number(body.pincode));
+  const stateNum =
+    body.state && /^\d+$/.test(String(body.state)) ? Number(body.state) : null;
   return {
-    customerId: new Types.ObjectId(userId),
+    userId: Number(userId),
     name: body.name,
-    phone: String(phoneNum || 0),
-    alternatePhone: altNum !== null ? String(altNum) : null,
-    email: body.email || null,
+    phone: toPhoneBig(body.phone),
+    alternatePhone,
+    email: body.email || "",
     address: body.address,
     address2: body.address_2,
     city: body.city,
-    stateId: body.state ? new Types.ObjectId(body.state) : null,
-    pincode: String(pinNum || 0),
+    state: stateNum,
+    pincode: Number.isFinite(pinNum) ? pinNum : 0,
   };
 }
 
+/** Populated `state` object (Mongo `CustomerState` populate shape) or null. */
+function toStateObject(
+  s: { id: number; name: string; state_code: string; active: boolean } | null | undefined
+) {
+  return s
+    ? { _id: String(s.id), name: s.name, stateCode: s.state_code, active: s.active }
+    : null;
+}
+
+/**
+ * Find-or-create the customer's shipping address, then return the shipping row
+ * with its `state` populated — identical response shape to the pre-migration
+ * Mongo path (`state` object, stringified numeric fields).
+ *
+ * Mirrors the Mongo find-or-create semantics faithfully: a matching row is one
+ * whose owner + every address field (name/phone/alternate_phone/email/address/
+ * address_2/city/state/pincode) equals the normalized input, so re-submitting
+ * the same address never creates a duplicate. The CustomerAddress write is a
+ * side-effect (the address book); the CustomerShipping row is what's returned.
+ */
 export async function upsertCourseOrderShipping(
   userId: string,
   body: ShippingBody,
   traceId?: string
 ) {
   logger.info("upsertCourseOrderShipping service invoked", { traceId, userId });
-  const normalized = normalizeShipping(userId, body);
+  const n = normalizeShipping(userId, body);
 
-  // Mongoose's "alternatePhone: null" needs a conditional query — omit the key
-  // when it's null so we match docs that may have the field missing or null.
-  const matchQuery: Record<string, unknown> = {
-    customerId: normalized.customerId,
-    name: normalized.name,
-    phone: normalized.phone,
-    alternatePhone: normalized.alternatePhone,
-    email: normalized.email,
-    address: normalized.address,
-    address2: normalized.address2,
-    city: normalized.city,
-    stateId: normalized.stateId,
-    pincode: normalized.pincode,
+  // Exact-field match predicate shared by the address + shipping lookups (mirrors
+  // the Mongo `findOne(matchQuery)`; `alternate_phone`/`state` null match null).
+  const match = {
+    userId: n.userId,
+    name: n.name,
+    phone: n.phone,
+    alternate_phone: n.alternatePhone,
+    email: n.email,
+    address: n.address,
+    address_2: n.address2,
+    city: n.city,
+    state: n.state,
+    pincode: n.pincode,
   };
 
-  let address = await CustomerAddress.findOne(matchQuery);
-  if (!address) address = await CustomerAddress.create(normalized);
+  // ── CustomerAddress (address book side-effect) ──
+  const address = await prisma.customerAddress.findFirst({ where: match });
+  if (!address) {
+    // Reuse the customer-address repo's create (owns the address-column write).
+    await customerAddressRepository.create({
+      customerId: n.userId,
+      name: n.name,
+      phone: String(n.phone),
+      alternatePhone: n.alternatePhone !== null ? String(n.alternatePhone) : null,
+      email: n.email,
+      address: n.address,
+      address2: n.address2,
+      city: n.city,
+      stateId: n.state,
+      pincode: String(n.pincode),
+      status: true,
+    });
+  }
 
-  let shipping = await CustomerShipping.findOne(matchQuery);
-  if (!shipping) shipping = await CustomerShipping.create(normalized);
+  // ── CustomerShipping (the returned row) ──
+  let shipping = await prisma.customerShipping.findFirst({ where: match });
+  if (!shipping) {
+    shipping = await prisma.customerShipping.create({
+      data: {
+        name: n.name,
+        phone: n.phone,
+        alternate_phone: n.alternatePhone,
+        email: n.email,
+        address: n.address,
+        address_2: n.address2,
+        city: n.city,
+        state: n.state,
+        pincode: n.pincode,
+        userId: n.userId,
+        status: true,
+        created_at: new Date(),
+        updated_at: new Date(),
+      },
+    });
+  }
 
-  const populated: any = await CustomerShipping.findById(shipping._id)
-    .populate({ path: "stateId", model: CustomerState })
-    .lean();
+  const populated = await prisma.customerShipping.findUnique({
+    where: { id: shipping.id },
+    include: { State: true },
+  });
 
   if (!populated) {
-    logger.warn("upsertCourseOrderShipping service populate missing", { traceId, userId, shippingId: shipping._id });
+    logger.warn("upsertCourseOrderShipping service populate missing", {
+      traceId,
+      userId,
+      shippingId: shipping.id,
+    });
     return null;
   }
 
-  // Match source response: `state` object, stringified numeric fields.
-  populated.state = populated.stateId ?? null;
-  populated.phone = `${populated.phone ?? ""}`;
-  populated.alternate_phone = `${populated.alternatePhone ?? ""}`;
-  populated.pincode = `${populated.pincode ?? ""}`;
-  delete populated.stateId;
-  delete populated.alternatePhone;
-  logger.info("upsertCourseOrderShipping service completed", { traceId, userId, shippingId: shipping._id });
-  return populated;
+  logger.info("upsertCourseOrderShipping service completed", {
+    traceId,
+    userId,
+    shippingId: shipping.id,
+  });
+
+  // Match source response: `state` object, stringified numeric fields, `email`
+  // null when unset (SQL stores "" for the NOT-NULL column), `alternate_phone`
+  // "" when unset.
+  return {
+    _id: String(populated.id),
+    name: populated.name,
+    phone: `${populated.phone ?? ""}`,
+    alternate_phone:
+      populated.alternate_phone !== null && populated.alternate_phone !== undefined
+        ? String(populated.alternate_phone)
+        : "",
+    email: populated.email || null,
+    address: populated.address,
+    address2: populated.address_2,
+    city: populated.city,
+    state: toStateObject(populated.State),
+    pincode: `${populated.pincode ?? ""}`,
+    customerId: populated.userId !== null && populated.userId !== undefined ? String(populated.userId) : null,
+    status: populated.status ?? true,
+    createdAt: populated.created_at ?? null,
+    updatedAt: populated.updated_at ?? null,
+  };
 }
 
 // ───────────────────────────────────────────────────────────────────────────
 // Order details / invoice
 // ───────────────────────────────────────────────────────────────────────────
 
+/** Prisma Decimal | number | null → number | null. */
+function toNum(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "number") return v;
+  const num = Number((v as { toString(): string }).toString());
+  return Number.isFinite(num) ? num : null;
+}
+
+/** Populated plan (Mongo `PackageCourseEbookPrice`) sub-object. */
+function toPlanDto(p: {
+  id: number;
+  courseId: number | null;
+  packageId: number | null;
+  ebookId: number | null;
+  name: string | null;
+  duration: number;
+  price: number;
+  withMaterial: boolean;
+  materialPrice: number | null;
+  isDefault: boolean;
+  status: boolean;
+  created_at: Date | null;
+  updated_at: Date | null;
+}) {
+  return {
+    _id: String(p.id),
+    courseId: p.courseId !== null ? String(p.courseId) : null,
+    packageId: p.packageId !== null ? String(p.packageId) : null,
+    ebookId: p.ebookId !== null ? String(p.ebookId) : null,
+    name: p.name ?? null,
+    duration: p.duration,
+    price: p.price,
+    withMaterial: p.withMaterial,
+    materialPrice: p.materialPrice ?? 0,
+    isDefault: p.isDefault,
+    status: p.status,
+    createdAt: p.created_at ?? null,
+    updatedAt: p.updated_at ?? null,
+  };
+}
+
+/**
+ * Populated `customerShipping` sub-object — the RAW shipping doc (Mongo does NOT
+ * further-populate its `stateId` here), using the Mongo field names
+ * (`alternatePhone`/`stateId`/`address2`). Optional fields are omitted when
+ * unset so the JSON matches the Mongo lean doc.
+ */
+function toShippingSubDto(s: {
+  id: number;
+  name: string;
+  phone: bigint;
+  alternate_phone: bigint | null;
+  email: string;
+  address: string;
+  address_2: string;
+  city: string;
+  state: number | null;
+  pincode: number;
+  userId: number | null;
+  status: boolean | null;
+  created_at: Date | null;
+  updated_at: Date | null;
+}) {
+  return {
+    _id: String(s.id),
+    name: s.name,
+    phone: `${s.phone ?? ""}`,
+    ...(s.alternate_phone !== null && s.alternate_phone !== undefined
+      ? { alternatePhone: String(s.alternate_phone) }
+      : {}),
+    ...(s.email ? { email: s.email } : {}),
+    address: s.address,
+    address2: s.address_2,
+    city: s.city,
+    ...(s.state !== null && s.state !== undefined ? { stateId: String(s.state) } : {}),
+    pincode: `${s.pincode ?? ""}`,
+    ...(s.userId !== null && s.userId !== undefined ? { customerId: String(s.userId) } : {}),
+    status: s.status ?? true,
+    createdAt: s.created_at ?? null,
+    updatedAt: s.updated_at ?? null,
+  };
+}
+
 export async function getOrderDetailsForUser(orderId: string, userId: string, traceId?: string) {
   logger.info("getOrderDetailsForUser service invoked", { traceId, orderId, userId });
-  const subscription: any = await PackageCourseSubscription.findOne({
-    _id: orderId,
-    customerId: userId,
-  })
-    .populate({ path: "packageId", model: PackageCourseEbookPrice })
-    .populate({ path: "courseId", model: Course })
-    .populate({ path: "customerShippingId", model: CustomerShipping })
-    .lean();
 
-  if (!subscription) {
+  const idNum = Number(orderId);
+  const custNum = Number(userId);
+  if (!Number.isInteger(idNum) || idNum <= 0 || !Number.isInteger(custNum)) {
+    logger.warn("getOrderDetailsForUser service invalid id (sql)", { traceId, orderId, userId });
+    return null;
+  }
+
+  const sub = await prisma.packageCourseSubscription.findFirst({
+    where: { id: idNum, customerId: custNum },
+    include: {
+      packageCourseEbookPrice: true, // Mongo `packageId` populate = the plan row
+      course: true,
+      customerShipping: true,
+    },
+  });
+
+  if (!sub) {
     logger.warn("getOrderDetailsForUser service not found", { traceId, orderId, userId });
     return null;
   }
 
-  // Rename populated refs to source contract names
-  subscription.package = subscription.packageId ?? null;
-  subscription.course = subscription.courseId ?? null;
-  subscription.customerShipping = subscription.customerShippingId ?? null;
-  delete subscription.packageId;
-  delete subscription.courseId;
-  delete subscription.customerShippingId;
+  const trackingNum = sub.trackingId !== null && sub.trackingId !== undefined ? Number(sub.trackingId) : null;
 
-  if (subscription.trackingId !== null && subscription.trackingId !== undefined) {
-    const tmp = Math.floor(Date.now() / 1000);
-    const base =
-      subscription.trackingId < COURIER.TIRUPATI.INITIAL_Number
-        ? COURIER.MAHAVIR.BASE_URL
-        : COURIER.TIRUPATI.BASE_URL;
-    subscription.tracking_url = `${base}?Tmp=${tmp}&docno=${subscription.trackingId}`;
-    subscription.tracking_id = subscription.trackingId;
+  const result: Record<string, unknown> = {
+    _id: String(sub.id),
+    customerId: sub.customerId !== null && sub.customerId !== undefined ? String(sub.customerId) : null,
+    // SQL name mapping (see commerce-subscription): pcb_id (planId) → Mongo
+    // `packageId` (the plan), package_id → Mongo `targetPackageId` (the package).
+    courseId: sub.courseId !== null ? String(sub.courseId) : null,
+    targetPackageId: sub.packageId !== null ? String(sub.packageId) : null,
+    packageId: sub.planId !== null ? String(sub.planId) : null,
+    startAt: sub.startAt ?? null,
+    endAt: sub.endAt ?? null,
+    status: sub.status,
+    amount: toNum(sub.amount),
+    courseAmount: toNum(sub.courseAmount),
+    materialAmount: toNum(sub.materialAmount),
+    paidAmount: toNum(sub.paidAmount),
+    createdAt: sub.createdAt ?? null,
+    updatedAt: sub.updatedAt ?? null,
+    // Renamed populated refs to the source contract names.
+    package: sub.packageCourseEbookPrice ? toPlanDto(sub.packageCourseEbookPrice) : null,
+    course: sub.course ? toCourseDto(sub.course) : null,
+    customerShipping: sub.customerShipping ? toShippingSubDto(sub.customerShipping) : null,
+  };
+
+  if (trackingNum !== null) {
+    result.tracking_url = buildTrackingUrl(trackingNum);
+    result.tracking_id = trackingNum;
   }
-  delete subscription.trackingId;
-  subscription.daysLeft = computeDaysLeft(subscription.endAt ?? null);
-  logger.info("getOrderDetailsForUser service completed", { traceId, orderId, userId });
-  return subscription;
-}
+  result.daysLeft = computeDaysLeft(sub.endAt ?? null);
 
-export async function getOrderForInvoice(orderId: string, userId: string, traceId?: string) {
-  logger.info("getOrderForInvoice service invoked", { traceId, orderId, userId });
-  const sub = await PackageCourseSubscription.findOne({
-    _id: orderId,
-    customerId: userId,
-  }).lean();
-  if (!sub) logger.warn("getOrderForInvoice service not found", { traceId, orderId, userId });
-  return sub;
+  logger.info("getOrderDetailsForUser service completed", { traceId, orderId, userId });
+  return result;
 }

@@ -12,7 +12,6 @@
  * data-only computed fields; the controller composes the cart/purchase state.
  * The per-request deep link is supplied by a `buildShareLink` callback.
  */
-import { isMysqlModule } from "../../config/migration";
 import { isNewItem } from "../../utils/isNew";
 import { catalogBookRepository as repo } from "./catalog-book.repository";
 import { toBookDto } from "./catalog-book.transformer";
@@ -23,7 +22,7 @@ import type {
 } from "./catalog-book.types";
 
 export const BOOK_MODULE = "catalog-book";
-export const isBookMysql = (): boolean => isMysqlModule(BOOK_MODULE);
+export const isBookMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseBookId = (id: string): number | null => {

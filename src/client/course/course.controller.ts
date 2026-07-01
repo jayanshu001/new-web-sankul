@@ -1,8 +1,7 @@
 import { Request, Response } from "express";
-import { Types } from "mongoose";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
-import { CRM_LEAD_TYPE } from "../../models/enums";
+import { CRM_LEAD_TYPE } from "../../shared/enums";
 import { GenerateCRMLead } from "../../utils/crm";
 import { buildCourseReceiptHtml, renderPdfFromHtml } from "../../libs/core/generate";
 import { shippingBodySchema } from "./course.validation";
@@ -18,6 +17,10 @@ import {
   parseCourseId,
 } from "../../modules/catalog-course/catalog-course.service";
 import type { ListCoursesOptions } from "../../modules/catalog-course/catalog-course.types";
+
+// Legacy Mongo ObjectId shape (24-hex). Retained only so the order-id validation
+// stays identical to the pre-migration contract; SQL order ids are ints.
+const isObjectId = (v: string) => /^[a-fA-F0-9]{24}$/.test(v);
 
 /**
  * Map the listing query string → the MySQL `listCoursesWithPlans` options.
@@ -220,7 +223,9 @@ export const getOrderDetailsHandler = async (req: Request, res: Response) => {
 
   try {
     if (!userId) return failure(res, "Unauthorized request.", 401);
-    if (!Types.ObjectId.isValid(orderId)) {
+    // Accept a SQL int order id (MySQL id-space) OR a legacy Mongo ObjectId. The
+    // service resolves ownership; a non-int (ObjectId) simply yields no SQL row.
+    if (!isObjectId(orderId) && !/^[1-9][0-9]*$/.test(orderId)) {
       return failure(res, "Please select valid package", 400);
     }
 
@@ -258,7 +263,7 @@ export const getOrderInvoiceHandler = async (req: Request, res: Response) => {
     if (!userId) return failure(res, "Unauthorized request.", 401);
     // Accept a SQL int order id (MySQL id-space) OR a Mongo ObjectId. The
     // receipt builder branches on isMysqlModule and re-validates ownership.
-    if (!Types.ObjectId.isValid(orderId) && !/^[1-9][0-9]*$/.test(orderId)) {
+    if (!isObjectId(orderId) && !/^[1-9][0-9]*$/.test(orderId)) {
       return failure(res, "Please select valid package", 400);
     }
 

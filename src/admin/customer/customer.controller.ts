@@ -1,5 +1,4 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
 import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSchema } from "./customer.validation";
 import { invalidateCustomerGate } from "../../middlewares/authenticate";
 import * as customerSql from "../../modules/admin-customer/admin-customer.service";
@@ -182,7 +181,7 @@ export const toggleCustomerStatus = async (req: Request, res: Response) => {
 export const getCustomerCourseSubscriptions = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    if (!customerSql.parseCustomerId(id)) {
       return res.status(400).json({ success: false, message: "Invalid Customer ID" });
     }
 
@@ -205,7 +204,7 @@ export const getCustomerCourseSubscriptions = async (req: Request, res: Response
 export const getCustomerEbookSubscriptions = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
+    if (!customerSql.parseCustomerId(id)) {
       return res.status(400).json({ success: false, message: "Invalid Customer ID" });
     }
 

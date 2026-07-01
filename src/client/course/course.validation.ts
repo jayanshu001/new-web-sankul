@@ -1,6 +1,9 @@
 import { z } from "zod";
 
 export const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+// Accepts a 24-hex Mongo ObjectId OR a numeric MySQL id. Used where the SQL
+// branch resolves ids as ints (e.g. ws_video / ws_course / ws_package).
+export const idOrObjectIdRegex = /^([0-9a-fA-F]{24}|\d+)$/;
 
 export const objectIdParamSchema = z.object({
   id: z.string().regex(objectIdRegex, "Please select valid package"),
@@ -47,8 +50,8 @@ export const shippingBodySchema = z.object({
 export type ShippingBody = z.infer<typeof shippingBodySchema>;
 
 export const lectureQuerySchema = z.object({
-  id: z.string().regex(objectIdRegex, "Invalid video ID"),
-  course: z.string().regex(objectIdRegex, "Invalid course ID").optional(),
-  package: z.string().regex(objectIdRegex, "Invalid package ID").optional(),
+  id: z.string().regex(idOrObjectIdRegex, "Invalid video ID"),
+  course: z.string().regex(idOrObjectIdRegex, "Invalid course ID").optional(),
+  package: z.string().regex(idOrObjectIdRegex, "Invalid package ID").optional(),
   type: z.enum(["course", "package"]),
 });

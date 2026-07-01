@@ -1,4 +1,3 @@
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 
@@ -9,7 +8,7 @@ import { computeDaysLeft } from "../../utils/planDuration";
  * (entitlement). Read-only. View-counter bump is fire-and-forget.
  */
 export const CLIENT_EDUCATOR_MODULE = "client-educator";
-export const isClientEducatorMysql = (): boolean => isMysqlModule(CLIENT_EDUCATOR_MODULE);
+export const isClientEducatorMysql = (): boolean => true;
 
 export const parseEducatorId = (id: string): number | null => {
   const n = Number(id);

@@ -1,13 +1,19 @@
-import { Types } from "mongoose";
-import { PromoAppliesToType } from "../../models/course/PromoCode.model";
-import { PromotedPackageCourseEbook } from "../../models/course/PromotedPackageCourseEbook.model";
+// The entity kinds a promo code can apply to. Previously sourced from the Mongo
+// PromoCode model; now defined here (the canonical home) since the promo-applies
+// logic lives in this module and Mongo is retired.
+export type PromoAppliesToType =
+  | "package"
+  | "course"
+  | "liveCourse"
+  | "ebook"
+  | "testSeries";
 
-// Shape we actually need — accepts both hydrated `IPromoCode` docs and `.lean()`
-// results, so callers don't have to pick one path.
+// Shape we actually need — accepts both hydrated promo docs and lean/SQL rows,
+// so callers don't have to pick one path.
 interface PromoCoversInput {
   appliesTo?: {
     type: PromoAppliesToType;
-    ids: Array<string | Types.ObjectId>;
+    ids: Array<string | number>;
   } | null;
 }
 
@@ -20,7 +26,7 @@ interface PromoDiscountInput {
 // code applies. Truth source is `promo.appliesTo` populated by the new admin UI.
 export function promoCovers(
   promo: PromoCoversInput,
-  context: { type: PromoAppliesToType; id: string | Types.ObjectId }
+  context: { type: PromoAppliesToType; id: string | number }
 ): boolean {
   const at = promo.appliesTo;
   if (!at || !at.type || !at.ids?.length) return false;
@@ -78,48 +84,13 @@ export interface PlanLinkPercentages {
 }
 
 /**
- * Load the per-plan link rows (customer + promoter percentages) for a promocode
- * and a set of plan ids in ONE query, keyed by stringified planId. Callers then
- * resolve each plan's discount via `resolvePlanDiscount`.
- */
-export async function loadPlanDiscountMap(
-  promocodeId: string | Types.ObjectId,
-  planIds: Array<string | Types.ObjectId>
-): Promise<Map<string, PlanLinkPercentages>> {
-  const ids = planIds.map((id) => String(id));
-  if (!ids.length) return new Map();
-  const rows = await PromotedPackageCourseEbook.find({
-    promocodeId,
-    planId: { $in: ids },
-  })
-    .select("planId customerPercentage promoterPercentage")
-    .lean();
-  const map = new Map<string, PlanLinkPercentages>();
-  for (const r of rows)
-    map.set(String(r.planId), {
-      customerPercentage: Number(r.customerPercentage ?? 0),
-      promoterPercentage: Number(r.promoterPercentage ?? 0),
-    });
-  return map;
-}
-
-/**
- * How many per-plan link rows a code has, total. Used to decide whether a code
- * is "per-plan scoped" (>=1 row → only its linked plans are valid) or a legacy
- * code (0 rows → entity-level scope + top-level discount).
- */
-export async function countPlanLinks(promocodeId: string | Types.ObjectId): Promise<number> {
-  return PromotedPackageCourseEbook.countDocuments({ promocodeId });
-}
-
-/**
  * Resolve the discount for a single plan given its base price and the per-plan
- * map from `loadPlanDiscountMap`. Falls back to the legacy global discount when
- * the plan has no link row.
+ * map (keyed by stringified planId, loaded by the SQL promo-code service). Falls
+ * back to the legacy global discount when the plan has no link row.
  */
 export function resolvePlanDiscount(
   promo: PromoDiscountInput,
-  planId: string | Types.ObjectId,
+  planId: string | number,
   basePrice: number,
   planDiscountMap: Map<string, PlanLinkPercentages>
 ): PerPlanDiscount {

@@ -1,17 +1,15 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-// District module is deprecated in favour of OfflineCity-based "City" lookups below.
-// import { CustomerDistrict } from "../../models/customer/CustomerDistrict.model";
-import { OfflineCenter } from "../../models/offline/OfflineCenter.model";
-import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
 import {
   createAddressSchemaMysql,
   updateAddressSchemaMysql,
 } from "./address.validation";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
-import { buildRegexCondition } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import {
+  parseOfflineId,
+  getCentersWithBatchesByCities as getCentersWithBatchesByCitiesMysql,
+} from "../../modules/offline-batch/offline-batch.service";
 import {
   listStates as lookupListStates,
   listEducations as lookupListEducations,
@@ -284,20 +282,7 @@ export const getStates = async (req: Request, res: Response) => {
   }
 };
 
-// ─── Districts (deprecated — kept commented out in favour of /cities) ─────────
-// export const getDistrictsByState = async (req: Request, res: Response) => {
-//   try {
-//     const stateId = req.params.stateId as string;
-//     if (!mongoose.Types.ObjectId.isValid(stateId))
-//       return res.status(400).json({ success: false, message: "Invalid stateId" });
-//     const districts = await CustomerDistrict.find({ stateId, active: true })
-//       .select("_id name")
-//       .sort({ name: 1 });
-//     return res.status(200).json({ success: true, data: districts });
-//   } catch (error: any) {
-//     return res.status(500).json({ success: false, message: error.message });
-//   }
-// };
+// ─── Districts (deprecated — removed in favour of /cities) ────────────────────
 
 // ─── Cities (moved from /offline) ─────────────────────────────────────────────
 
@@ -333,35 +318,27 @@ export const listCentersByCity = async (req: Request, res: Response) => {
   logger.info("listCentersByCity invoked", { traceId, path: req.originalUrl, cityId, userId: req.user?.id });
 
   try {
-    if (!mongoose.Types.ObjectId.isValid(cityId)) {
+    // ── MySQL: centers (each with nested active batches) under this city
+    // (offline-batch). SQL ids are ints, not 24-hex ObjectIds. Mirrors the
+    // vetted SQL twin in offline.controller; pagination is applied in-memory
+    // over the returned centers to preserve this route's response envelope.
+    const cid = parseOfflineId(cityId);
+    if (cid == null) {
       logger.warn("listCentersByCity invalid id", { traceId, cityId });
       return res.status(400).json({ success: false, message: "Invalid city id." });
     }
 
     const { search, page, limit, skip } = parseListQuery(req.query);
-    const filter: any = { cityId, status: true };
-    { const c = buildRegexCondition(search); if (c) filter.name = c; }
+    const byCity = await getCentersWithBatchesByCitiesMysql([cid]);
+    let all = byCity.get(String(cid)) ?? [];
+    if (search) {
+      const term = search.toLowerCase();
+      all = all.filter((c: any) => String(c?.name ?? "").toLowerCase().includes(term));
+    }
+    const total = all.length;
+    const data = all.slice(skip, skip + limit);
 
-    const [centers, total] = await Promise.all([
-      OfflineCenter.find(filter).sort({ name: 1 }).skip(skip).limit(limit).lean(),
-      OfflineCenter.countDocuments(filter),
-    ]);
-    const centerIds = centers.map((c) => c._id);
-    const batches = await OfflineBatch.find({ centerId: { $in: centerIds }, status: true })
-      .sort({ startAt: 1 })
-      .lean();
-
-    const batchesByCenter: Record<string, any[]> = {};
-    batches.forEach((b) => {
-      (batchesByCenter[String(b.centerId)] ||= []).push(b);
-    });
-
-    const data = centers.map((c: any) => ({
-      ...c,
-      batches: batchesByCenter[String(c._id)] || [],
-    }));
-
-    logger.info("listCentersByCity success", { traceId, cityId, centerCount: centers.length, batchCount: batches.length });
+    logger.info("listCentersByCity success", { traceId, cityId, centerCount: data.length, total, source: "mysql" });
     return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listCentersByCity failed", { traceId, cityId, error: getErrorMessage(e), stack: e.stack });

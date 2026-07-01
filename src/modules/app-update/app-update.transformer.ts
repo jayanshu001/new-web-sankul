@@ -1,7 +1,7 @@
 import type { AppUpdate } from "@prisma/client";
 import type { AppUpdateDto, AppUpdateUpsertInput } from "./app-update.types";
 import { APP_UPDATE_DEFAULTS } from "./app-update.types";
-import type { UpdateType } from "../../models/enums";
+import type { UpdateType } from "../../shared/enums";
 
 /** MySQL column retains legacy typo `isUpdateAvailble`. */
 export const toAppUpdateDto = (row: AppUpdate | null): AppUpdateDto => {

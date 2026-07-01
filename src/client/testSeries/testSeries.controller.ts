@@ -1,7 +1,5 @@
 import { Request, Response } from "express";
 import { z } from "zod";
-import { TestSeriesPrice } from "../../models/testSeries/TestSeriesPrice.model";
-import { resolveLivePromo } from "../live-course/promo";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
@@ -12,11 +10,11 @@ import {
   getTestSeriesDetailMysql,
   listSeriesPapersMysql,
 } from "../../modules/client-testseries/client-testseries.service";
+import { findPlanForOrder } from "../../modules/test-series-order/test-series-order.service";
+import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
-
-const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
 
 // Test series is charged at the raw plan price (minus any promo discount),
 // matching the eBook flow — NO GST, NO handling fee. The gstAmount/handlingFee
@@ -131,7 +129,7 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
 // ─── Checkout ────────────────────────────────────────────────────────────────
 
 const previewSchema = z.object({
-  planId: objectId,
+  planId: z.coerce.number().int().positive(),
   promocode: z.string().trim().min(1).optional(),
 });
 
@@ -154,26 +152,26 @@ export const previewCheckout = async (req: Request, res: Response) => {
       return failure(res, "Validation failed.", 422, { errors: e.issues });
     }
 
-    const plan = await TestSeriesPrice.findOne({ _id: body.planId, status: true });
+    // ─── SQL branch (int id-space) — planId is numeric ───
+    const plan = await findPlanForOrder(body.planId);
     if (!plan) { logger.warn("previewCheckout plan not found", { traceId, customerId, planId: body.planId }); return failure(res, "Plan not found or inactive.", 404); }
 
     let discountAmount = 0;
     let promocodeId: string | null = null;
     let promoMeta: any = null;
     if (body.promocode) {
-      const { result, error } = await resolveLivePromo(body.promocode, plan.price, {
+      const { result, error } = await resolvePromoForPlanSql(body.promocode, plan.price, {
         type: "testSeries",
-        id: String(plan.testSeriesId),
-      }, String(plan._id), customerId);
+        id: plan.testSeriesId,
+      }, body.planId);
       if (error || !result) { logger.warn("previewCheckout promo rejected", { traceId, customerId, promocode: body.promocode, error }); return failure(res, error ?? "Invalid promo code.", 400); }
       discountAmount = result.discountAmount;
-      // promo is null on the referral path; there's no promocode doc to record.
       promocodeId = result.promo ? String(result.promo._id) : null;
       promoMeta = {
         promocode: result.promo ? result.promo.promocode : body.promocode.trim().toUpperCase(),
         discountType: result.discountType,
         discountValue: result.discountValue,
-        isReferral: !!result.referrerId,
+        isReferral: false,
       };
     }
 
@@ -187,7 +185,7 @@ export const previewCheckout = async (req: Request, res: Response) => {
       res,
       {
         plan: {
-          _id: plan._id,
+          _id: plan.id,
           testSeriesId: plan.testSeriesId,
           durationDays: plan.durationDays,
           price: plan.price,

@@ -2,7 +2,9 @@ import { Socket, Namespace } from "socket.io";
 import { verifyAccessToken } from "../utils/jwtSigner";
 import { io } from "./livechat.socket";
 import logger from "../utils/logger";
-import type { PdfUploadJobStatus } from "../models/system/PdfUploadJob.model";
+
+// PDF-upload job lifecycle status (mirrors ws_pdf_upload_job.status).
+type PdfUploadJobStatus = "queued" | "in_progress" | "completed" | "failed";
 
 // Admin-side live progress for PDF upload batches. This is a NAMESPACE on the
 // shared Socket.io server created by initLiveChatSocket() — not a second server

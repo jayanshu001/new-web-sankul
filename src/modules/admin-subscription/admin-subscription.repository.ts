@@ -83,6 +83,26 @@ export const adminSubscriptionRepository = {
         updatedAt: d.now,
       },
     }),
+  patchSub: (
+    id: number,
+    d: {
+      startAt?: Date; endAt?: Date; status?: boolean;
+      shippingId?: number | null; trackingId?: bigint | null; remarks?: string; now: Date;
+    }
+  ) =>
+    prisma.packageCourseSubscription.update({
+      where: { id },
+      data: {
+        ...(d.startAt !== undefined ? { startAt: d.startAt } : {}),
+        ...(d.endAt !== undefined ? { endAt: d.endAt } : {}),
+        ...(d.status !== undefined ? { status: d.status } : {}),
+        ...(d.shippingId !== undefined ? { shippingId: d.shippingId } : {}),
+        ...(d.trackingId !== undefined ? { trackingId: d.trackingId } : {}),
+        ...(d.remarks !== undefined ? { remarks: d.remarks } : {}),
+        updatedAt: d.now,
+      },
+    }),
+  deleteSub: (id: number) => prisma.packageCourseSubscription.delete({ where: { id } }),
 
   // ── hydration ────────────────────────────────────────────────────────────────
   customersByIds: (ids: number[]) =>

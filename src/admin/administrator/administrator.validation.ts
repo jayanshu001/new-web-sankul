@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AdminRole } from "../../models/enums";
+import { AdminRole } from "../../shared/enums";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 

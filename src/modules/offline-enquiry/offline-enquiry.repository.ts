@@ -10,13 +10,18 @@ export const offlineEnquiryRepository = {
   batchExists: async (batchId: number): Promise<boolean> =>
     (await prisma.offlineBatch.count({ where: { id: batchId } })) > 0,
 
-  /** Insert an enquiry row. customer_id stores 0 for anonymous (NOT NULL col). */
+  /**
+   * Insert an enquiry row. customer_id stores 0 for anonymous (NOT NULL col).
+   * `otherQualification` is optional (only the batch-enquiry "Register" form
+   * sets it; maps to ws_offline_enquiry.other_qualification).
+   */
   create: (input: {
     customerId: number;
     name: string;
     email: string;
     mobile: bigint;
     qualification: string;
+    otherQualification?: string | null;
     batchId: number;
   }) =>
     prisma.offlineEnquiry.create({
@@ -26,6 +31,7 @@ export const offlineEnquiryRepository = {
         email: input.email,
         mobile: input.mobile,
         qualification: input.qualification,
+        otherQualification: input.otherQualification ?? null,
         batchId: input.batchId,
       },
     }),

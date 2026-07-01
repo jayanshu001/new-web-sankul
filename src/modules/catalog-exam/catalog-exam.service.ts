@@ -8,7 +8,6 @@
  * Children resolve via the SQL `parent_id` self-FK (the Mongo `childCategoryIds[]`
  * embed has no SQL column). Active = status=true AND deleted=false. See types.ts.
  */
-import { isMysqlModule } from "../../config/migration";
 import { catalogExamRepository as repo } from "./catalog-exam.repository";
 import { toExamCategoryDto } from "./catalog-exam.transformer";
 import type {
@@ -17,7 +16,7 @@ import type {
 } from "./catalog-exam.types";
 
 export const EXAM_MODULE = "catalog-exam";
-export const isExamMysql = (): boolean => isMysqlModule(EXAM_MODULE);
+export const isExamMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseExamCategoryId = (id: string): number | null => {

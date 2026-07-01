@@ -9,9 +9,6 @@
  * customer); on fire, the dispatcher fans out the per-user feed row — exactly
  * how admin targeted-scheduled notifications already work.
  */
-import { Types } from "mongoose";
-import { ILiveSessionReminder } from "../../models/customer/LiveSessionReminder.model";
-import { ILiveSession } from "../../models/course/LiveSession.model";
 import logger from "../../utils/logger";
 import {
   parseReminderId,
@@ -24,8 +21,10 @@ import {
 export const DEFAULT_MINUTES_BEFORE = 30;
 export const MAX_MINUTES_BEFORE = 7 * 24 * 60; // up to a week before
 
+// Reminder / session are Mongo-shaped DTOs produced by the SQL service
+// (`client-live-reminder.service` toReminderShape); read dynamically downstream.
 export type UpsertReminderResult =
-  | { ok: true; reminder: ILiveSessionReminder; session: ILiveSession }
+  | { ok: true; reminder: any; session: any }
   | { ok: false; status: number; message: string };
 
 /**
@@ -51,9 +50,9 @@ export async function removeReminder(
   customerId: string,
   liveSessionId: string,
   traceId?: string
-): Promise<ILiveSessionReminder | null> {
+): Promise<any | null> {
   logger.info("removeReminder service invoked", { traceId, customerId, liveSessionId });
-  return removeReminderSql(customerId, liveSessionId, traceId) as Promise<ILiveSessionReminder | null>;
+  return removeReminderSql(customerId, liveSessionId, traceId) as Promise<any | null>;
 }
 
 /**
@@ -62,7 +61,7 @@ export async function removeReminder(
  * the reminders are cancelled instead.
  */
 export async function syncRemindersForSession(
-  liveSessionId: Types.ObjectId | string
+  liveSessionId: string | number
 ): Promise<void> {
   const sid = parseReminderId(liveSessionId as any);
   if (sid) await syncRemindersForSessionSql(sid);
@@ -73,7 +72,7 @@ export async function syncRemindersForSession(
  * its backing job) for it.
  */
 export async function cancelRemindersForSession(
-  liveSessionId: Types.ObjectId | string
+  liveSessionId: string | number
 ): Promise<void> {
   const sid = parseReminderId(liveSessionId as any);
   if (sid) await cancelRemindersForSessionSql(sid);

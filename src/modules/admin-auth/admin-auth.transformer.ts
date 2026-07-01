@@ -3,7 +3,7 @@ import type {
   AdminRoleRow,
   AdminPermissionRow,
 } from "@prisma/client";
-import { AdminRole } from "../../models/enums";
+import { AdminRole } from "../../shared/enums";
 
 /**
  * Shape returned to the admin client. Identical to the MongoDB branch so the

@@ -17,13 +17,12 @@
  * ws_exam_category=`parent_id`, ws_video via the catalog-category-tree DAG).
  * Exam.status is Boolean → Mongo status:PUBLISHED collapses to status=true.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { defaultListingQualities } from "../../utils/videoQualities";
 import { getPurchasedMaterialIds } from "../client-material/client-material.service";
 
 export const CLIENT_CATALOG_MODULE = "client-catalog";
-export const isClientCatalogMysql = (): boolean => isMysqlModule(CLIENT_CATALOG_MODULE);
+export const isClientCatalogMysql = (): boolean => true;
 
 export const parseCatId = (id: string): number | null => {
   const n = Number(id);

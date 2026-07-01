@@ -23,11 +23,10 @@
  *     `{ _id, name, phone, email }` from the Customer table where available.
  *   - TestSeriesOrder is read-only here (listOrders).
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const ADMIN_TESTSERIES_MODULE = "admin-testseries";
-export const isAdminTestSeriesMysql = (): boolean => isMysqlModule(ADMIN_TESTSERIES_MODULE);
+export const isAdminTestSeriesMysql = (): boolean => true;
 
 export const parseAtsId = (id: string): number | null => {
   const n = Number(id);

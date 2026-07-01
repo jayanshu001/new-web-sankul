@@ -1,8 +1,4 @@
 import { Request, Response } from "express";
-import { BookOrder } from "../../models/book/BookOrder.model";
-import { BookOrderStatus } from "../../models/enums";
-import { EbookPrice } from "../../models/ebook/EbookPrice.model";
-import { EbookSubscription } from "../../models/ebook/EbookSubscription.model";
 import * as cvSql from "../../modules/client-category-video/client-category-video.service";
 import * as clientMatSql from "../../modules/client-material/client-material.service";
 import * as clientExamSql from "../../modules/client-exam/client-exam.service";
@@ -383,102 +379,6 @@ export const listProductsByExamCountdown = async (req: Request, res: Response) =
     logger.error("listProductsByExamCountdown failed", { traceId, examCountdownId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
-};
-
-// Shared enrichment for the two books-ebooks listings (by ExamCountdown and by
-// ExamCountdownCategory). Takes the raw Book/Ebook docs + the viewer, joins
-// ebook pricing/ownership and book ownership, stamps a uniform
-// isPaid/isPurchased/daysLeft contract on every row, tags each row with `type`,
-// and returns the merged list sorted by createdAt desc (caller paginates).
-//
-// Per-type flag semantics:
-//   ebook → isPaid from admin flag (price-derived fallback); isPurchased/daysLeft
-//           from active EbookSubscription (subscription model, can expire).
-//   book  → physical one-time purchase: isPaid is always true (no free-book
-//           concept) and daysLeft is always null (no expiry); isPurchased from a
-//           BookOrder in a fulfilled state (verified/shipped/delivered), mirroring
-//           getBookDetail.
-const shapeBooksAndEbooks = async (
-  books: any[],
-  ebooks: any[],
-  customerId: string | undefined
-) => {
-  const now = new Date();
-  const ebookIds = ebooks.map((e) => e._id);
-  const bookIds = books.map((b) => b._id);
-
-  const [ebookPlans, ebookSubs, ownedBookOrders] = await Promise.all([
-    ebookIds.length
-      ? EbookPrice.find({ ebookId: { $in: ebookIds }, status: true }).sort({ duration: 1 }).lean()
-      : Promise.resolve([] as any[]),
-    customerId && ebookIds.length
-      ? EbookSubscription.find({
-          customerId,
-          ebookId: { $in: ebookIds },
-          status: true,
-          endAt: { $gt: now },
-        })
-          .select("ebookId endAt")
-          .lean()
-      : Promise.resolve([] as any[]),
-    customerId && bookIds.length
-      ? BookOrder.find({
-          customerId,
-          "items.bookId": { $in: bookIds },
-          status: {
-            $in: [BookOrderStatus.VERIFIED, BookOrderStatus.SHIPPED, BookOrderStatus.DELIVERED],
-          },
-        })
-          .select("items.bookId")
-          .lean()
-      : Promise.resolve([] as any[]),
-  ]);
-
-  const plansByEbook: Record<string, any[]> = {};
-  for (const p of ebookPlans as any[]) (plansByEbook[String(p.ebookId)] ||= []).push(p);
-  const endAtByEbook = new Map<string, Date>();
-  for (const s of ebookSubs as any[]) {
-    const key = String(s.ebookId);
-    const prev = endAtByEbook.get(key);
-    if (!prev || s.endAt.getTime() > prev.getTime()) endAtByEbook.set(key, s.endAt);
-  }
-  const ownedBookIds = new Set<string>();
-  for (const o of ownedBookOrders as any[]) {
-    for (const it of o.items ?? []) if (it.bookId) ownedBookIds.add(String(it.bookId));
-  }
-  const daysBetween = (from: Date, to: Date) =>
-    Math.max(0, Math.ceil((to.getTime() - from.getTime()) / (1000 * 60 * 60 * 24)));
-
-  const ebooksWithPricing = ebooks.map((e: any) => {
-    const ePlans = plansByEbook[String(e._id)] || [];
-    const endAt = endAtByEbook.get(String(e._id)) || null;
-    // Admin-controlled `isPaid` field is the source of truth (default true);
-    // fall back to the price-derived rule only if it's absent.
-    const isPaid =
-      typeof e.isPaid === "boolean" ? e.isPaid : ePlans.some((p: any) => (p.price ?? 0) > 0);
-    return {
-      ...e,
-      type: "ebook" as const,
-      plans: ePlans,
-      isPaid,
-      isPurchased: !!endAt,
-      subscriptionEndAt: endAt,
-      daysLeft: endAt ? daysBetween(now, endAt) : null,
-    };
-  });
-
-  const booksShaped = books.map((b: any) => ({
-    ...b,
-    type: "book" as const,
-    isPaid: true,
-    isPurchased: ownedBookIds.has(String(b._id)),
-    daysLeft: null as number | null,
-  }));
-
-  return [...booksShaped, ...ebooksWithPricing].sort(
-    (a, b) =>
-      new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime()
-  );
 };
 
 // GET /client/exam-countdown-categories/:id/books-ebooks

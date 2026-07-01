@@ -2,7 +2,7 @@ import path from "path";
 import ejs from "ejs";
 import puppeteer from "puppeteer";
 
-import { ExamResultType } from "../../models/enums";
+import { ExamResultType } from "../../shared/enums";
 import { prisma } from "../../config/prisma";
 
 // Receipt/PDF DB reads. Each generator selects its SQL loader.

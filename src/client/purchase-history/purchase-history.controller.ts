@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 import {
   BookOrderStatus,
   PackageCourseEbookOrderStatus,
-} from "../../models/enums";
+} from "../../shared/enums";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import * as phSql from "../../modules/client-purchase-history/client-purchase-history.service";

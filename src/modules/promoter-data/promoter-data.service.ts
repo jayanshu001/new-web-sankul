@@ -1,9 +1,8 @@
-import { isMysqlModule } from "../../config/migration";
 import { promoterDataRepository as repo } from "./promoter-data.repository";
 import { prisma } from "../../config/prisma";
 
 export const PROMOTER_DATA_MODULE = "promoter-data";
-export const isPromoterDataMysql = (): boolean => isMysqlModule(PROMOTER_DATA_MODULE);
+export const isPromoterDataMysql = (): boolean => true;
 
 export const parsePromoterId = (id: string): number | null => {
   const n = Number(id);

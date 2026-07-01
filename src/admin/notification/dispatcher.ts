@@ -1,4 +1,3 @@
-import mongoose from "mongoose";
 import { AudienceFilter } from "./audience";
 import {
   dispatchAudience as sqlDispatchAudience,
@@ -12,9 +11,8 @@ export interface DispatchResult {
   invalidTokensPruned: number;
   failureReason: string | null;
   isBroadcast: boolean;
-  // ObjectId[] on the Mongo path, number[] on the SQL path. Callers only read
-  // `.length`, so the union keeps both branches type-compatible.
-  targetCustomerIds: (mongoose.Types.ObjectId | number)[];
+  // SQL row ids. Callers only read `.length`.
+  targetCustomerIds: number[];
 }
 
 /**
@@ -31,8 +29,7 @@ export async function dispatchAudience(
     deepLink?: string | null;
     data?: Record<string, unknown>;
   },
-  audienceFilter: AudienceFilter,
-  parentId?: mongoose.Types.ObjectId
+  audienceFilter: AudienceFilter
 ): Promise<DispatchResult> {
   return sqlDispatchAudience(payload, audienceFilter);
 }

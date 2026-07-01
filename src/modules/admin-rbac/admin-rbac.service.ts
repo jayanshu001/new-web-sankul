@@ -1,8 +1,7 @@
-import { isMysqlModule } from "../../config/migration";
 import { adminRbacRepository as repo } from "./admin-rbac.repository";
 
 export const RBAC_MODULE = "admin-rbac";
-export const isRbacMysql = (): boolean => isMysqlModule(RBAC_MODULE);
+export const isRbacMysql = (): boolean => true;
 
 export const parseRbacId = (id: string): bigint | null => {
   try {

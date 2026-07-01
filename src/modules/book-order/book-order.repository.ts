@@ -40,6 +40,52 @@ export const bookOrderRepository = {
   findOrderItems: (orderKey: string) =>
     prisma.bookOrderItem.findMany({ where: { order_id: orderKey } }),
 
+  // ── customer-facing order views (listMyOrders / getMyOrderById) ────────────
+
+  /**
+   * A page of the customer's own orders (newest first) + the matching total.
+   * Mirrors `BookOrder.find({customerId,[status]}).sort({createdAt:-1})` +
+   * `countDocuments`.
+   */
+  findMyOrders: (input: {
+    customerId: number;
+    status?: string;
+    skip: number;
+    take: number;
+  }) => {
+    const where = {
+      userId: input.customerId,
+      ...(input.status ? { status: input.status } : {}),
+    };
+    return prisma.$transaction([
+      prisma.bookOrder.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: input.skip,
+        take: input.take,
+      }),
+      prisma.bookOrder.count({ where }),
+    ]);
+  },
+
+  /** Line items for a set of order keys (one query for the whole page). */
+  findOrderItemsByKeys: (orderKeys: string[]) =>
+    prisma.bookOrderItem.findMany({ where: { order_id: { in: orderKeys } } }),
+
+  /** A single owned order with its populated shipping — for the detail view. */
+  findMyOrderById: (orderId: number, customerId: number) =>
+    prisma.bookOrder.findFirst({
+      where: { id: orderId, userId: customerId },
+      include: { shipping: true },
+    }),
+
+  /** Line items for one order, with the populated Book (detail view). */
+  findOrderItemsWithBook: (orderKey: string) =>
+    prisma.bookOrderItem.findMany({
+      where: { order_id: orderKey },
+      include: { Book: true },
+    }),
+
   // ── cart/purchase state reads (catalog-book composition) ───────────────────
 
   /**

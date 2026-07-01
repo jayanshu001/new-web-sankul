@@ -36,6 +36,37 @@ export interface EnquiryInput {
   batchId: number;
 }
 
+/**
+ * Qualification values surfaced in the offline-batch "Register" form dropdown.
+ * When the user picks "other", the free-text lands in `otherQualification`
+ * (SQL column `ws_offline_enquiry.other_qualification`). Kept here (not in the
+ * legacy Mongoose model) so the client controller stays Mongo-free.
+ */
+export const OFFLINE_BATCH_QUALIFICATIONS = [
+  "post_graduate",
+  "graduate",
+  "10_plus_2",
+  "other",
+] as const;
+export type OfflineBatchQualification =
+  (typeof OFFLINE_BATCH_QUALIFICATIONS)[number];
+
+/**
+ * The batch-enquiry "Register" write. Same table as EnquiryInput, but carries
+ * `otherQualification` (free-text kept only when qualification === "other").
+ */
+export interface BatchEnquiryInput {
+  customerId: number | null; // null → anonymous → stored as 0
+  name: string;
+  email: string;
+  /** Digits-only string; parsed to BigInt for the column. */
+  mobile: string;
+  qualification: string;
+  /** Free-text; null unless qualification === "other". */
+  otherQualification: string | null;
+  batchId: number;
+}
+
 /** The created enquiry, Mongo-shaped (the response returns the enquiry doc). */
 export interface EnquiryDto {
   _id: string;
@@ -48,4 +79,27 @@ export interface EnquiryDto {
   qualification: string;
   batchId: string;
   createdAt: Date | null;
+}
+
+/**
+ * The created batch enquiry, Mongo-shaped. Adds `otherQualification` over the
+ * base enquiry DTO, and preserves the Mongo `timestamps:true` shape by
+ * surfacing `updatedAt` — but ws_offline_enquiry has NO updated_at column, so
+ * it is always null (no column invented).
+ */
+export interface BatchEnquiryDto {
+  _id: string;
+  /** 0 sentinel → null (anonymous). */
+  customerId: number | null;
+  name: string;
+  email: string;
+  /** BigInt column → string (Mongo shape). */
+  mobile: string;
+  qualification: string;
+  /** Free-text; null unless qualification === "other". */
+  otherQualification: string | null;
+  batchId: string;
+  createdAt: Date | null;
+  /** No SQL column → always null (Mongo timestamps shape). */
+  updatedAt: Date | null;
 }

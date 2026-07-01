@@ -1,10 +1,9 @@
-import { Types } from "mongoose";
 import { creditReferrerMysql } from "../../modules/referral/referral.service";
 
 interface CreditOpts {
-  referrerId: Types.ObjectId | string;
-  buyerId: Types.ObjectId | string;
-  orderId: Types.ObjectId | string;
+  referrerId: number | string;
+  buyerId: number | string;
+  orderId: number | string;
   paidAmount: number;
   source: "course" | "package" | "ebook" | "liveCourse" | "testSeries";
 }

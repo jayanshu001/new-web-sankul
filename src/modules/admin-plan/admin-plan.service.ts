@@ -1,8 +1,7 @@
-import { isMysqlModule } from "../../config/migration";
 import { adminPlanRepository as repo, OWNED } from "./admin-plan.repository";
 
 export const ADMIN_PLAN_MODULE = "admin-plan";
-export const isAdminPlanMysql = (): boolean => isMysqlModule(ADMIN_PLAN_MODULE);
+export const isAdminPlanMysql = (): boolean => true;
 
 export const parsePlanId = (id: string): number | null => {
   const n = Number(id);

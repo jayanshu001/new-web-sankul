@@ -616,6 +616,27 @@ export const updatePoll = async (pollId: number, patch: { question?: string; isA
   return loadPollWithOptions(updated);
 };
 
+/**
+ * Edit an active poll's question and/or options — only permitted while the poll
+ * is active AND has zero votes (mirrors the Mongo guard). Returns discriminated
+ * strings for the guard failures so the controller maps them to the exact same
+ * HTTP codes/messages; otherwise returns the poll DTO with reloaded options.
+ */
+export const updatePollWithOptions = async (
+  pollId: number,
+  patch: { question?: string; options?: string[] }
+): Promise<"not_found" | "closed" | "has_votes" | any> => {
+  const poll = await repo.findPoll(pollId);
+  if (!poll) return "not_found";
+  if (!poll.isActive) return "closed";
+  if (poll.totalVotes > 0) return "has_votes";
+  const updated = await repo.updatePollWithOptions(pollId, {
+    question: patch.question,
+    options: patch.options ? patch.options.map((text) => ({ text, votes: 0 })) : undefined,
+  });
+  return loadPollWithOptions(updated);
+};
+
 export const closePoll = async (pollId: number): Promise<"not_found" | any> => {
   if (!(await repo.findPoll(pollId))) return "not_found";
   return loadPollWithOptions(await repo.closePoll(pollId));
@@ -1080,9 +1101,14 @@ export const listUpcomingBatches = async (customerId: number | null, q: { search
   const ids = rows.map((r) => r.id);
   const [daysLeft, counts, owned] = await Promise.all([getDaysLeftMap(customerId, ids), getPurchaseCounts(ids), getOwnedCourseIds(customerId)]);
   const liveBatches = rows.map((r) => { const key = String(r.id); return { ...toCourseDto(r), daysLeft: daysLeft.has(key) ? daysLeft.get(key) ?? null : null, isPurchased: owned.has(key), purchaseCount: counts.get(key) ?? 0 }; });
-  // ⚠ category tab bar: PackageCategory has no SQL table → emit id+count only
-  // (no title/slug/image). The "All" count is the sum.
-  const categories = [...catCounts].map(([catId, count]) => ({ _id: String(catId), title: null, slug: null, image: null, count }));
+  // category tab bar: resolve PackageCategory (ws_package_category) for title/slug/
+  // image; unknown ids fall back to nulls. The "All" count is the sum.
+  const catRows = await repo.packageCategoriesByIds([...catCounts.keys()]);
+  const catById = new Map(catRows.map((c) => [c.id, c]));
+  const categories = [...catCounts].map(([catId, count]) => {
+    const c = catById.get(catId);
+    return { _id: String(catId), title: c?.title ?? null, slug: c?.slug ?? null, image: c?.image ?? null, count };
+  });
   const allCount = [...catCounts.values()].reduce((n, c) => n + c, 0);
   return { liveBatches, total, page: q.page, limit: q.limit, categories, allCount, selectedCategoryId: q.categoryId ? String(q.categoryId) : null };
 };

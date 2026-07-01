@@ -1,10 +1,9 @@
-import { isMysqlModule } from "../../config/migration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
 
 export const ADMIN_SUBSCRIPTION_MODULE = "admin-subscription";
-export const isAdminSubscriptionMysql = (): boolean => isMysqlModule(ADMIN_SUBSCRIPTION_MODULE);
+export const isAdminSubscriptionMysql = (): boolean => true;
 
 export const parseSubId = (id: string): number | null => {
   const n = Number(id);
@@ -96,6 +95,36 @@ export const getCourseSubscriptionById = async (id: number): Promise<"not_found"
     withMaterial: r.pcMaterialId != null && r.pcMaterialId > 0,
     createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
   };
+};
+
+// ── course/package subscription update / delete (admin edit) ─────────────────
+// Only columns that exist on ws_package_course_subscription are patched;
+// Mongo-only fields (paymentStatus/paymentMethod) have no column. Returns the
+// same DTO shape as getCourseSubscriptionById.
+export const updateCourseSubscription = async (
+  id: number,
+  patch: {
+    startAt?: Date; endAt?: Date; status?: boolean;
+    shippingId?: number | null; trackingId?: bigint | null; remark?: string;
+  }
+): Promise<"not_found" | any> => {
+  if (!(await repo.findCourseSubById(id))) return "not_found";
+  await repo.patchSub(id, {
+    startAt: patch.startAt,
+    endAt: patch.endAt,
+    status: patch.status,
+    shippingId: patch.shippingId,
+    trackingId: patch.trackingId,
+    remarks: patch.remark,
+    now: new Date(),
+  });
+  return getCourseSubscriptionById(id);
+};
+
+export const deleteCourseSubscription = async (id: number): Promise<boolean> => {
+  if (!(await repo.findCourseSubById(id))) return false;
+  await repo.deleteSub(id);
+  return true;
 };
 
 // ── course/package subscription create (admin manual grant) ──────────────────

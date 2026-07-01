@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PaymentMethod } from "../../models/enums";
+import { PaymentMethod } from "../../shared/enums";
 
 // Accept either a Mongo ObjectId (24-hex) OR a MySQL numeric id, so the same
 // validation works on MySQL where ids are integers. Coerce first: the FE sends

@@ -1,6 +1,4 @@
 import { Request, Response } from "express";
-import { Types } from "mongoose";
-import { LivePoll } from "../../models/course/LivePoll.model";
 import { io, roomKey } from "../../socket/livechat.socket";
 import { resolveLiveClassId } from "../live/live.guards";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
@@ -89,35 +87,27 @@ export const getPollsByClass = async (req: Request, res: Response) => {
 };
 
 // PATCH /api/v1/admin/live-polls/:pollId — edit question/options (only when 0 votes)
-// ⚠ STAYS Mongo (no SQL branch): the option-replacement-with-0-votes-guard is
-// intricate (replaces the embedded options[]); low-value edge path. The SQL
-// admin-live-course service exposes updatePoll for question/isActive only.
 export const updatePoll = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const pollId = req.params.pollId as string;
   logger.info("updatePoll invoked", { traceId, path: req.originalUrl, pollId, userId: req.user?.id });
 
   try {
-    if (!Types.ObjectId.isValid(pollId)) {
+    const pid = liveSql.parseLiveId(pollId);
+    if (!pid) {
       logger.warn("updatePoll invalid id", { traceId, pollId });
       return failure(res, "Invalid pollId.", 422);
     }
 
-    const poll = await LivePoll.findById(pollId);
-    if (!poll) { logger.warn("updatePoll not found", { traceId, pollId }); return failure(res, "Poll not found.", 404); }
-    if (!poll.isActive) { logger.warn("updatePoll already closed", { traceId, pollId }); return failure(res, "Cannot edit a closed poll.", 400); }
-    if (poll.totalVotes > 0) { logger.warn("updatePoll has votes", { traceId, pollId, votes: poll.totalVotes }); return failure(res, "Cannot edit a poll that already has votes.", 400); }
-
     const { question, options } = req.body;
-    let changed = false;
+    const patch: { question?: string; options?: string[] } = {};
 
     if (question !== undefined) {
       if (typeof question !== "string" || question.trim().length === 0) {
         logger.warn("updatePoll invalid question", { traceId, pollId });
         return failure(res, "question must be a non-empty string.", 422);
       }
-      poll.question = question.trim();
-      changed = true;
+      patch.question = question.trim();
     }
 
     if (options !== undefined) {
@@ -130,26 +120,31 @@ export const updatePoll = async (req: Request, res: Response) => {
         logger.warn("updatePoll empty option", { traceId, pollId });
         return failure(res, "All options must be non-empty strings.", 422);
       }
-      poll.options = optionTexts.map((text) => ({ text, votes: 0 }));
-      changed = true;
+      patch.options = optionTexts;
     }
 
-    if (!changed) { logger.warn("updatePoll no fields", { traceId, pollId }); return failure(res, "Provide question or options to update.", 422); }
+    if (patch.question === undefined && patch.options === undefined) {
+      logger.warn("updatePoll no fields", { traceId, pollId });
+      return failure(res, "Provide question or options to update.", 422);
+    }
 
-    await poll.save();
+    const result = await liveSql.updatePollWithOptions(pid, patch);
+    if (result === "not_found") { logger.warn("updatePoll not found", { traceId, pollId }); return failure(res, "Poll not found.", 404); }
+    if (result === "closed") { logger.warn("updatePoll already closed", { traceId, pollId }); return failure(res, "Cannot edit a closed poll.", 400); }
+    if (result === "has_votes") { logger.warn("updatePoll has votes", { traceId, pollId }); return failure(res, "Cannot edit a poll that already has votes.", 400); }
 
     const pollData = {
-      _id: poll._id,
-      liveClassId: poll.liveClassId,
-      question: poll.question,
-      options: poll.options,
-      totalVotes: poll.totalVotes,
-      createdByName: poll.createdByName,
-      createdAt: poll.createdAt,
+      _id: result._id,
+      liveClassId: result.liveClassId,
+      question: result.question,
+      options: result.options,
+      totalVotes: result.totalVotes,
+      createdByName: result.createdByName,
+      createdAt: result.createdAt,
     };
 
     // Broadcast updated poll to all students — they re-render the poll card
-    io?.to(roomKey(poll.liveClassId)).emit("poll_updated", { poll: pollData });
+    io?.to(roomKey(result.liveClassId)).emit("poll_updated", { poll: pollData });
 
     logger.info("updatePoll success", { traceId, pollId, adminId: req.user!.id });
     return success(res, { poll: pollData }, "Poll updated.");

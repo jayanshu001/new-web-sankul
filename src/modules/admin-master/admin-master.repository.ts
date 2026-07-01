@@ -105,7 +105,134 @@ export const adminMasterRepository = {
   },
   videoInCategory: (categoryId: number) => prisma.video.findFirst({ where: { videoCategoryId: categoryId }, select: { id: true } }),
   hasChildren: (categoryId: number) => prisma.videoCategory.findFirst({ where: { parent: categoryId }, select: { id: true } }),
+
+  // ── duplicate (clone a category + its sub-tree + videos) ────────────────────
+  // The Mongo source modelled a childCategoryIds[] DAG; SQL models a single-parent
+  // tree via the `parent` self-FK, so we clone along that tree. Runs in one
+  // transaction: collect source + descendants, create clones (create() one-by-one
+  // so new ids are returned — createMany does NOT), remap `parent`, then clone the
+  // videos whose category is in the cloned set (remapping vcategory_id). Returns
+  // null when the source id doesn't exist.
+  vcDuplicate: (sourceId: number) =>
+    prisma.$transaction(async (tx) => {
+      const source = await tx.videoCategory.findUnique({ where: { id: sourceId } });
+      if (!source) return null;
+
+      // BFS the parent-tree, collecting every node once (guards against cycles).
+      const nodesById = new Map<number, any>();
+      nodesById.set(source.id, source);
+      const queue: number[] = [source.id];
+      while (queue.length) {
+        const cur = queue.shift()!;
+        const children = await tx.videoCategory.findMany({ where: { parent: cur } });
+        for (const ch of children) {
+          if (nodesById.has(ch.id)) continue;
+          nodesById.set(ch.id, ch);
+          queue.push(ch.id);
+        }
+      }
+
+      const rootTitle = await nextUnassignedTitle(tx, source.title);
+      const idMap = new Map<number, number>();
+
+      // Pass 1: create clones (parent temporarily 0 so all ids exist for rewiring).
+      for (const [oldId, node] of nodesById) {
+        const isRoot = oldId === source.id;
+        const title = isRoot ? rootTitle : node.title;
+        const slug = await uniqueSlugTx(tx, slugify(title));
+        const created = await tx.videoCategory.create({
+          data: {
+            title,
+            slug,
+            image: node.image,
+            pdf: node.pdf ?? null,
+            parent: 0,
+            educatorId: 0,
+            liveCourseId: null,
+            order_by: node.order_by ?? 0,
+            status: node.status ?? true,
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+        idMap.set(oldId, created.id);
+      }
+      const rootId = idMap.get(source.id)!;
+
+      // Pass 2: rewire each descendant clone's parent to the new id (root stays 0).
+      let subCategories = 0;
+      for (const [oldId, node] of nodesById) {
+        if (oldId === source.id) continue;
+        subCategories += 1;
+        const newId = idMap.get(oldId)!;
+        const newParent = node.parent != null ? idMap.get(node.parent) ?? 0 : 0;
+        await tx.videoCategory.update({ where: { id: newId }, data: { parent: newParent, updated_at: new Date() } });
+      }
+
+      // Clone videos across all mapped categories, remapping vcategory_id.
+      const oldIds = Array.from(nodesById.keys());
+      const videos = await tx.video.findMany({ where: { videoCategoryId: { in: oldIds } } });
+      for (const v of videos) {
+        await tx.video.create({
+          data: {
+            videoCategoryId: idMap.get(v.videoCategoryId!)!,
+            liveSessionId: null,
+            title: v.title,
+            topic: v.topic,
+            slug: v.slug,
+            platform: v.platform,
+            priceType: v.priceType,
+            youtube_id: v.youtube_id,
+            aws_id: v.aws_id,
+            vimeo_id: v.vimeo_id,
+            order: v.order ?? 0,
+            status: v.status ?? true,
+            created_at: new Date(),
+            updated_at: new Date(),
+          },
+        });
+      }
+
+      return { rootId, rootTitle, subCategories, videos: videos.length };
+    }),
 };
+
+// ── duplicate helpers (ported from the Mongo controller) ──────────────────────
+const slugify = (s: string) =>
+  s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+// Next unclaimed "<title> (Copy)" / "<title> (Copy N)" title among unassigned
+// (no live course) categories — mirrors the Mongo `courseId:null,liveCourseId:null`
+// filter as closely as the SQL schema allows (no courseId column on the category).
+async function nextUnassignedTitle(tx: any, baseTitle: string): Promise<string> {
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const base = `${baseTitle} (Copy`;
+  const regex = new RegExp(`^${escape(base)}(?:\\s(\\d+))?\\)$`);
+  const existing = await tx.videoCategory.findMany({
+    where: { liveCourseId: null, title: { startsWith: base } },
+    select: { title: true },
+  });
+  const taken = new Set<number>();
+  for (const e of existing) {
+    const m = (e.title || "").match(regex);
+    if (!m) continue;
+    taken.add(m[1] ? parseInt(m[1], 10) : 1);
+  }
+  if (!taken.has(1)) return `${baseTitle} (Copy)`;
+  let n = 2;
+  while (taken.has(n)) n++;
+  return `${baseTitle} (Copy ${n})`;
+}
+
+async function uniqueSlugTx(tx: any, base: string): Promise<string> {
+  let candidate = base || "category";
+  let n = 1;
+  while (await tx.videoCategory.findFirst({ where: { slug: candidate }, select: { id: true } })) {
+    n += 1;
+    candidate = `${base}-${n}`;
+  }
+  return candidate;
+}
 
 function subjWhere(opts?: { search?: string }) {
   const where: any = {};

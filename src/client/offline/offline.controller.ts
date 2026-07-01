@@ -1,10 +1,5 @@
 import { Request, Response } from "express";
 import { z } from "zod";
-import { OfflineBatch } from "../../models/offline/OfflineBatch.model";
-import {
-  OfflineBatchEnquiry,
-  OFFLINE_BATCH_QUALIFICATIONS,
-} from "../../models/offline/OfflineBatchEnquiry.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
@@ -24,6 +19,8 @@ import {
 import {
   enquiryBatchExists,
   submitEnquiryMysql,
+  submitBatchEnquiryMysql,
+  OFFLINE_BATCH_QUALIFICATIONS,
 } from "../../modules/offline-enquiry/offline-enquiry.service";
 
 // MySQL enquiry: batchId is an INT (the migrated id-space), not an ObjectId.
@@ -240,6 +237,7 @@ export const submitEnquiry = async (req: Request, res: Response) => {
 // The offline-batch "Register" form (name/email/number/qualification +
 // optional free-text when "other" is chosen). Auth is REQUIRED — customerId is
 // always recorded against the logged-in customer.
+// MySQL enquiry: batchId is an INT (the migrated id-space), not an ObjectId.
 const batchEnquirySchema = z
   .object({
     name: z.string().min(1).max(255),
@@ -247,7 +245,7 @@ const batchEnquirySchema = z
     mobile: z.string().min(6).max(20),
     qualification: z.enum(OFFLINE_BATCH_QUALIFICATIONS),
     otherQualification: z.string().min(1).max(255).optional(),
-    batchId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid batch id."),
+    batchId: z.coerce.number().int().positive(),
   })
   .refine((d) => d.qualification !== "other" || !!d.otherQualification, {
     message: "otherQualification is required when qualification is 'other'.",
@@ -260,23 +258,29 @@ export const submitBatchEnquiry = async (req: Request, res: Response) => {
   logger.info("submitBatchEnquiry invoked", { traceId, path: req.originalUrl, customerId: userId });
 
   try {
+    // ── MySQL batch-enquiry write path (offline-enquiry, same ws_offline_enquiry
+    // table as submitEnquiry). Batch id is an int; existence checked via the
+    // offline-enquiry repo. otherQualification retained only for "other".
     const data = batchEnquirySchema.parse(req.body);
 
-    const batch = await OfflineBatch.exists({ _id: data.batchId });
-    if (!batch) { logger.warn("submitBatchEnquiry batch not found", { traceId, batchId: data.batchId }); return res.status(404).json({ success: false, message: "Batch not found." }); }
+    if (!(await enquiryBatchExists(data.batchId))) {
+      logger.warn("submitBatchEnquiry batch not found (mysql)", { traceId, batchId: data.batchId });
+      return res.status(404).json({ success: false, message: "Batch not found." });
+    }
 
-    const enquiry = await OfflineBatchEnquiry.create({
-      customerId: userId,
+    const customerIdInt = userId != null ? Number(userId) : null;
+    const enquiry = await submitBatchEnquiryMysql({
+      customerId: Number.isInteger(customerIdInt as number) ? (customerIdInt as number) : null,
       name: data.name,
       email: data.email,
       mobile: data.mobile,
       qualification: data.qualification,
       // Only retain the free-text when "other" is selected.
-      otherQualification: data.qualification === "other" ? data.otherQualification : null,
+      otherQualification: data.qualification === "other" ? data.otherQualification ?? null : null,
       batchId: data.batchId,
     });
 
-    logger.info("submitBatchEnquiry success", { traceId, customerId: userId, batchId: data.batchId, enquiryId: enquiry._id });
+    logger.info("submitBatchEnquiry success (mysql)", { traceId, customerId: userId, batchId: data.batchId, enquiryId: enquiry._id });
     return res.status(201).json({ success: true, data: enquiry });
   } catch (e: any) {
     if (e.issues) { logger.warn("submitBatchEnquiry validation failed", { traceId, customerId: userId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }

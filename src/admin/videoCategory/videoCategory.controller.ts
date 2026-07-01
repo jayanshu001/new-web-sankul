@@ -1,7 +1,4 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { VideoCategory } from "../../models/course/VideoCategory.model";
-import { Video } from "../../models/course/Video.model";
 import {
   createVideoCategorySchema,
   updateVideoCategorySchema,
@@ -187,161 +184,18 @@ export const deleteVideoCategory = async (req: Request, res: Response) => {
   }
 };
 
-const slugify = (s: string) =>
-  s.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-
-async function nextAvailableUnassignedTitle(baseTitle: string): Promise<string> {
-  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const base = `${baseTitle} (Copy`;
-  const regex = new RegExp(`^${escape(base)}(?:\\s(\\d+))?\\)$`);
-  const existing = await VideoCategory.find({
-    courseId: null,
-    liveCourseId: null,
-    title: { $regex: `^${escape(base)}` },
-  })
-    .select("title")
-    .lean();
-  const taken = new Set<number>();
-  for (const e of existing) {
-    const m = (e.title || "").match(regex);
-    if (!m) continue;
-    taken.add(m[1] ? parseInt(m[1], 10) : 1);
-  }
-  if (!taken.has(1)) return `${baseTitle} (Copy)`;
-  let n = 2;
-  while (taken.has(n)) n++;
-  return `${baseTitle} (Copy ${n})`;
-}
-
-async function uniqueSlug(base: string, session: mongoose.ClientSession): Promise<string> {
-  let candidate = base || "category";
-  let n = 1;
-  while (await VideoCategory.exists({ slug: candidate }).session(session)) {
-    n += 1;
-    candidate = `${base}-${n}`;
-  }
-  return candidate;
-}
-
 // POST /:id/duplicate
 export const duplicateVideoCategory = async (req: Request, res: Response) => {
-  const session = await mongoose.startSession();
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    }
-    const source = await VideoCategory.findById(id).lean();
-    if (!source) {
-      return res.status(404).json({ success: false, message: "Video Category not found" });
-    }
 
-    let rootId: mongoose.Types.ObjectId | null = null;
-    let rootTitle = "";
-    const counts = { subCategories: 0, videos: 0 };
-
-    await session.withTransaction(async () => {
-      // BFS the DAG of childCategoryIds, collecting every node once.
-      const nodesById = new Map<string, any>();
-      nodesById.set(String(source._id), source);
-      const queue: any[] = [source];
-      while (queue.length) {
-        const cur = queue.shift();
-        const childIds: string[] = (cur.childCategoryIds || []).map((x: any) => String(x));
-        for (const cid of childIds) {
-          if (nodesById.has(cid)) continue;
-          const next = await VideoCategory.findById(cid).session(session).lean();
-          if (!next) continue;
-          nodesById.set(cid, next);
-          queue.push(next);
-        }
-      }
-
-      rootTitle = await nextAvailableUnassignedTitle(source.title);
-      const idMap = new Map<string, mongoose.Types.ObjectId>();
-
-      // Pass 1: create clones without children (so all ids exist for rewiring).
-      for (const [oldId, node] of nodesById) {
-        const isRoot = oldId === String(source._id);
-        const title = isRoot ? rootTitle : node.title;
-        const slugBase = slugify(title);
-        const slug = await uniqueSlug(slugBase, session);
-        const [doc] = await VideoCategory.create(
-          [
-            {
-              title,
-              slug,
-              image: node.image,
-              courseId: null,
-              liveCourseId: null,
-              childCategoryIds: [],
-              educatorId: null,
-              order_by: node.order_by ?? 0,
-              status: node.status ?? true,
-            },
-          ],
-          { session }
-        );
-        idMap.set(oldId, doc._id as mongoose.Types.ObjectId);
-        if (isRoot) rootId = doc._id as mongoose.Types.ObjectId;
-        else counts.subCategories += 1;
-      }
-
-      // Pass 2: rewire each clone's childCategoryIds to the new ids.
-      for (const [oldId, node] of nodesById) {
-        const newId = idMap.get(oldId)!;
-        const newChildIds = (node.childCategoryIds || [])
-          .map((c: any) => idMap.get(String(c)))
-          .filter(Boolean);
-        if (newChildIds.length) {
-          await VideoCategory.updateOne(
-            { _id: newId },
-            { $set: { childCategoryIds: newChildIds } },
-            { session }
-          );
-        }
-      }
-
-      // Clone videos across all mapped categories.
-      const oldIds = Array.from(nodesById.values()).map((c) => c._id);
-      const videos = await Video.find({ videoCategoryId: { $in: oldIds } })
-        .session(session)
-        .lean();
-      if (videos.length) {
-        const clones = videos.map((v: any) => ({
-          videoCategoryId: idMap.get(String(v.videoCategoryId))!,
-          liveSessionId: null,
-          title: v.title,
-          topic: v.topic,
-          slug: v.slug,
-          platform: v.platform,
-          priceType: v.priceType,
-          youtube_id: v.youtube_id,
-          aws_id: v.aws_id,
-          vimeo_id: v.vimeo_id,
-          order: v.order ?? 0,
-          status: v.status ?? true,
-        }));
-        await Video.insertMany(clones, { session });
-        counts.videos = clones.length;
-      }
-    });
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        id: rootId,
-        name: rootTitle,
-        courseId: null,
-        liveCourseId: null,
-        createdAt: new Date(),
-        itemsCloned: counts,
-      },
-    });
+    const numId = vcat.parseMasterId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    const r = await vcat.fullVcDuplicate(numId);
+    if (r === "not_found") return res.status(404).json({ success: false, message: "Video Category not found" });
+    return res.status(200).json({ success: true, data: r });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
-  } finally {
-    await session.endSession();
   }
 };
 

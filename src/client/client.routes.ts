@@ -11,7 +11,6 @@ import clientMaterialRoutes from "./material/material.routes";
 import clientPackageRoutes from "./package/package.routes";
 import clientPromocodeRoutes from "./promocode/promocode.routes";
 import clientEbookRoutes from "./ebook/ebook.routes";
-import clientOrdersRoutes from "./orders/orders.routes";
 import clientCmsRoutes from "./cms/cms.routes";
 import clientInquiryRoutes from "./inquiry/inquiry.routes";
 import clientNotificationRoutes from "./notification/notification.routes";
@@ -64,7 +63,8 @@ router.use("/materials", clientMaterialRoutes); // -> /api/v1/client/materials/*
 router.use("/packages", clientPackageRoutes); // -> /api/v1/client/packages/*
 router.use("/promocodes", clientPromocodeRoutes); // -> /api/v1/client/promocodes/*
 router.use("/ebooks", clientEbookRoutes); // -> /api/v1/client/ebooks/*
-router.use("/orders", clientOrdersRoutes); // -> /api/v1/client/orders/*
+// Legacy Mongo /orders/* surface removed 2026-07-01 — superseded by the SQL
+// /payment/* (create-order + verify) surface below.
 router.use("/", clientCmsRoutes); // -> /api/v1/client/{faqs|popup|banners|testimonials|terms|version|upgrade}
 router.use("/", clientInquiryRoutes); // -> /api/v1/client/{inquiry|contactus}
 router.use("/", clientNotificationRoutes); // -> /api/v1/client/{notifications|image-notifications}

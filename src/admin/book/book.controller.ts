@@ -1,7 +1,5 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { BookOrder } from "../../models/book/BookOrder.model";
-import { BookOrderStatus } from "../../models/enums";
+import { BookOrderStatus } from "../../shared/enums";
 import {
   createBookSchema,
   updateBookSchema,
@@ -331,46 +329,28 @@ export const getOrderById = async (req: Request, res: Response) => {
   }
 };
 
-// ⚠ STAY Mongo (no SQL branch): updateOrderStatus / setOrderTracking /
-// addOrderTrackingEvent all write the embedded `tracking.history[]` array +
-// paidAt/shippedAt/deliveredAt/cancelledAt timestamps. SQL `ws_book_tracking`
-// is a single flat row per AWB (status varchar(10), no history/location/note/
-// courier columns) and ws_book_order has only created/updated/order_date — the
-// full SHIPPED→DELIVERED→CANCELLED lifecycle + event history is not
-// representable. (book-order's verify path already writes the one "verified"
-// tracking row; admin status transitions remain Mongo until the table grows.)
+// ⚠ NOT REPRESENTABLE ON SQL (no SQL twin): updateOrderStatus /
+// setOrderTracking / addOrderTrackingEvent used to write the embedded
+// `tracking.history[]` array + paidAt/shippedAt/deliveredAt/cancelledAt
+// timestamps in Mongo. SQL `ws_book_tracking` is a single flat row per AWB
+// (status varchar(10), no history/location/note/courier columns) and
+// ws_book_order has only created/updated/order_date — the full
+// SHIPPED→DELIVERED→CANCELLED lifecycle + event history is not representable.
+// (book-order's verify path already writes the one "verified" tracking row.)
+// These handlers validate their input and return 501 until the SQL schema
+// grows the required columns. See NEEDS-MANUAL-PORT.
 export const updateOrderStatus = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const id = req.params.id as string;
   logger.info("updateOrderStatus invoked", { traceId, path: req.originalUrl, id });
 
   try {
-    if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("updateOrderStatus invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid order id." }); }
-
-    const { status, location, remarks } = updateOrderStatusSchema.parse(req.body);
-
-    const order = await BookOrder.findById(id);
-    if (!order) { logger.warn("updateOrderStatus not found", { traceId, id }); return res.status(404).json({ success: false, message: "Order not found." }); }
-
-    const now = new Date();
-    const update: any = { status };
-    if (remarks) update.remarks = remarks;
-    if (status === BookOrderStatus.VERIFIED && !order.paidAt) update.paidAt = now;
-    if (status === BookOrderStatus.SHIPPED && !order.shippedAt) update.shippedAt = now;
-    if (status === BookOrderStatus.DELIVERED && !order.deliveredAt) update.deliveredAt = now;
-    if (status === BookOrderStatus.CANCELLED && !order.cancelledAt) update.cancelledAt = now;
-
-    const updated = await BookOrder.findByIdAndUpdate(
-      id,
-      {
-        $set: { ...update, "tracking.status": status },
-        $push: { "tracking.history": { status, location, note: remarks, at: now } },
-      },
-      { new: true }
-    );
-
-    logger.info("updateOrderStatus success", { traceId, id, status });
-    return res.status(200).json({ success: true, data: updated });
+    updateOrderStatusSchema.parse(req.body);
+    logger.warn("updateOrderStatus not supported on MySQL backend", { traceId, id });
+    return res.status(501).json({
+      success: false,
+      message: "Order status transitions are not supported on the MySQL backend.",
+    });
   } catch (error: any) {
     if (error.issues) { logger.warn("updateOrderStatus validation failed", { traceId, id, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
     logger.error("updateOrderStatus failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });
@@ -384,34 +364,12 @@ export const setOrderTracking = async (req: Request, res: Response) => {
   logger.info("setOrderTracking invoked", { traceId, path: req.originalUrl, id });
 
   try {
-    if (!mongoose.Types.ObjectId.isValid(id)) { logger.warn("setOrderTracking invalid id", { traceId, id }); return res.status(400).json({ success: false, message: "Invalid order id." }); }
-
-    const { trackingId, courier, status, location, note } = setTrackingSchema.parse(req.body);
-
-    const updated = await BookOrder.findByIdAndUpdate(
-      id,
-      {
-        $set: {
-          "tracking.trackingId": trackingId,
-          "tracking.courier": courier,
-          "tracking.status": status ?? "shipped",
-          status: BookOrderStatus.SHIPPED,
-          shippedAt: new Date(),
-        },
-        $push: {
-          "tracking.history": {
-            status: status ?? "shipped",
-            location,
-            note: note ?? `Handed over to ${courier}`,
-            at: new Date(),
-          },
-        },
-      },
-      { new: true }
-    );
-    if (!updated) { logger.warn("setOrderTracking not found", { traceId, id }); return res.status(404).json({ success: false, message: "Order not found." }); }
-    logger.info("setOrderTracking success", { traceId, id, trackingId, courier });
-    return res.status(200).json({ success: true, data: updated });
+    setTrackingSchema.parse(req.body);
+    logger.warn("setOrderTracking not supported on MySQL backend", { traceId, id });
+    return res.status(501).json({
+      success: false,
+      message: "Order tracking is not supported on the MySQL backend.",
+    });
   } catch (error: any) {
     if (error.issues) { logger.warn("setOrderTracking validation failed", { traceId, id, issues: error.issues }); return res.status(400).json({ success: false, errors: error.issues }); }
     logger.error("setOrderTracking failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });
@@ -425,25 +383,12 @@ export const addOrderTrackingEvent = async (req: Request, res: Response) => {
   logger.info("addOrderTrackingEvent invoked", { traceId, path: req.originalUrl, id });
 
   try {
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: "Invalid order id." });
-    }
-
-    const { status, location, note, at } = addTrackingEventSchema.parse(req.body);
-    const eventAt = at ?? new Date();
-
-    const updated = await BookOrder.findByIdAndUpdate(
-      id,
-      {
-        $set: { "tracking.status": status },
-        $push: { "tracking.history": { status, location, note, at: eventAt } },
-      },
-      { new: true }
-    );
-    if (!updated) return res.status(404).json({ success: false, message: "Order not found." });
-
-    logger.info("addOrderTrackingEvent success", { traceId, id, status });
-    return res.status(200).json({ success: true, data: updated });
+    addTrackingEventSchema.parse(req.body);
+    logger.warn("addOrderTrackingEvent not supported on MySQL backend", { traceId, id });
+    return res.status(501).json({
+      success: false,
+      message: "Order tracking events are not supported on the MySQL backend.",
+    });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     logger.error("addOrderTrackingEvent failed", { traceId, id, error: getErrorMessage(error), stack: error.stack });

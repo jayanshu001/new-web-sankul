@@ -4,6 +4,199 @@
 
 ---
 
+## 2026-07-01 — `GET /client/live-courses/upcoming-batches`: populate category tab bar from ws_package_category
+
+The category tab bar emitted `title/slug/image: null` — a stale gap: the code comment said
+"PackageCategory has no SQL table", but `ws_package_category` (Prisma `PackageCategory`) now
+exists.
+
+- **Change (code-only, no DB/schema change):** added `repo.packageCategoriesByIds` in
+  `src/modules/admin-live-course/admin-live-course.repository.ts`; `listUpcomingBatches`
+  (`admin-live-course.service.ts`) now resolves the per-category counts to their
+  `PackageCategory` rows and emits real `title`/`slug`/`image` (unknown ids still fall back
+  to null). DTO shape unchanged (`{ _id, title, slug, image, count }`); only values filled.
+- Verified vs staging (category id 2 → `title:"Package 2"`, `slug:"package-2"`, image set).
+  `yarn typecheck` green.
+
+---
+
+## 2026-07-01 — `POST /client/courses/shipping` + `GET /client/courses/orders/:id`: ported to SQL (course.service)
+
+The last three Mongo-only functions in `src/client/course/course.service.ts`
+(`normalizeShipping`, `upsertCourseOrderShipping`, `getOrderDetailsForUser`) now
+run on SQL — the file imports **zero** mongoose / `src/models/**`. The
+`getOrderDetailsHandler` id guard also now accepts a SQL-int id (was 24-hex
+ObjectId only), mirroring `getOrderInvoiceHandler`.
+
+- **Shipping find-or-create (no schema change)** — `upsertCourseOrderShipping`:
+  - `prisma.customerAddress.findFirst({where:<10-field match>})`; on miss reuses
+    `customerAddressRepository.create(...)` (address-book side-effect).
+  - `prisma.customerShipping.findFirst({where:<same 10-field match>})`; on miss
+    `customerShipping.create(...)`; then `findUnique({include:{State:true}})`.
+  - Match predicate = owner (`user_id`) + every address field
+    (`name/phone/alternate_phone/email/address/address_2/city/state/pincode`),
+    faithfully mirroring the Mongo `findOne(matchQuery)` so a re-submit never
+    duplicates. `phone`/`alternate_phone` BIGINT, `pincode`/`state` INT.
+  - Response DTO unchanged: `state` populated object (`{_id,name,stateCode,
+    active}`), `phone`/`alternate_phone`/`pincode` stringified, `email` null when
+    the NOT-NULL column is "".
+- **Order details (no schema change)** — `getOrderDetailsForUser`:
+  - `prisma.packageCourseSubscription.findFirst({where:{id,customerId},
+    include:{packageCourseEbookPrice,course,customerShipping}})`.
+  - Populated refs renamed to `package` (the plan = pcb_id), `course`
+    (reuses `catalog-course` `toCourseDto`), `customerShipping` (raw shipping
+    doc — `stateId` NOT further populated, per Mongo). `tracking_url` via
+    `buildTrackingUrl`; `daysLeft` via `computeDaysLeft`.
+- **DTO drift (no SQL source — omitted, NOT invented):** the subscription doc's
+  Mongo-only fields (`paymentStatus`, `promocodeId`, `promoterId`, `referrerId`,
+  `originalAmount`/`discountAmount`/`coinsUsed`, `razorpay*`, `paidAt`,
+  `withMaterial`, `remark`) are not reproduced (they live on the order row / do
+  not exist on `ws_package_course_subscription`). `course` sub-object follows the
+  SQL `toCourseDto` shape (no `subtitle`/`materialCategories`/`examCategories`;
+  `order` not `ordered`). `state` input still constrained to 24-hex ObjectId by
+  `course.validation.ts` → SQL `state` FK is null until that regex is relaxed.
+
+---
+
+## 2026-07-01 — `GET /client/books/orders` + `/orders/:id`: read path ported to SQL (book-order)
+
+The last two Mongo-only handlers in `src/client/book/book.controller.ts`
+(`listMyOrders`, `getMyOrderById`) now run on SQL — the file imports **zero**
+mongoose / `src/models/**` (the `getMyOrderInvoice` id guard also dropped its
+`mongoose.Types.ObjectId` check for the SQL-int `parseBookOrderId`).
+
+- **New reads (no DB/schema change):** in `src/modules/book-order/`:
+  - repository `findMyOrders` (`prisma.$transaction([bookOrder.findMany({where:{userId[,status]}, orderBy:{createdAt:'desc'}, skip, take}), bookOrder.count(...)])`),
+    `findOrderItemsByKeys` (page-wide line items in one query — avoids N+1),
+    `findMyOrderById` (`findFirst({where:{id,userId}, include:{shipping}})`),
+    `findOrderItemsWithBook` (`include:{Book}`).
+  - service `listMyOrdersMysql(customerId,{status?,page,limit}) → {data,total}` and
+    `getMyOrderByIdMysql(orderId,customerId) → MyOrderDto|null`.
+  - transformer `toMyOrderListDto` / `toMyOrderDetailDto` — Mongo-shaped
+    `BookOrder.toObject()` + `trackingUrl` (via `buildTrackingUrl`). Detail populates
+    `shippingId` (ws_customer_shipping) + `items.bookId` ({_id,name,thumbnail,author}).
+- **DTO drift (no SQL column — omitted, NOT invented; consistent with existing
+  `toBookOrderDto`):** `totalListPrice`/`totalDiscountedPrice`/`totalShippingPrice`,
+  `razorpayOrderPayload`, `shippedAt`/`deliveredAt`/`cancelledAt`, `remarks`,
+  `tracking.courier`, item `name`/`weight`/`isMagazine`. `tracking.history` stays
+  synthesized (D-B3). Gated by the existing `book-order` flag path (reads are
+  unconditional here since every other handler in the file is already SQL-only).
+
+---
+
+## 2026-07-01 — Mongo removal: schema add `ws_offline_enquiry.other_qualification`
+
+Part of the final MongoDB removal (porting the last Mongo-only handlers to SQL).
+
+- **Schema (DDL):** `ALTER TABLE ws_offline_enquiry ADD COLUMN other_qualification VARCHAR(255) NULL DEFAULT NULL` —
+  DDL in `docs/migration/schema-changes/2026-07-01_offline_enquiry_other_qualification.sql`.
+  Prisma `OfflineEnquiry` model gains `otherQualification String? @map("other_qualification") @db.VarChar(255)`.
+- **Why:** the client batch-enquiry handler (`POST /client/offline/batch-enquiry`) stored a
+  free-text `otherQualification` in Mongo (`OfflineBatchEnquiry`); SQL folds batch enquiries into
+  `ws_offline_enquiry`, which lacked the column. Additive + prod-safe (existing rows → NULL); no backfill.
+- **Other Mongo-removal ports (code-only, no DB change):** admin `updatePoll` (SQL option replace),
+  `duplicateCategory` / `duplicateVideoCategory` (SQL subtree clone), `toggleEbookTrending`
+  (wired to existing `ws_ebook.is_trending`), client book order reads + course shipping/order-details
+  ported to their SQL modules. Legacy Mongo `/client/orders/*` surface deleted (superseded by SQL `/client/payment/*`).
+
+---
+
+## 2026-07-01 — `GET /client/learning/progress/my`: video-centric `percentCompleted` (extends the resume change)
+
+Follow-up to the `/dashboard/resume` change — the Progress-screen feed now uses the same
+video-centric `percentCompleted`.
+
+- **Change (code-only, no DB/schema change):** in
+  `src/modules/client-lecture-progress/client-lecture-progress.service.ts`,
+  `listMyLearningProgress` course/package/live cards now set
+  `percentCompleted: percentOf(lastPositionSec, lastDurationSec)` (was
+  `pct(completedCount, total)`). `completedLectures`/`totalLectures` preserved; response
+  shape unchanged. `resumeNext` inherits the same value.
+- **Callers:** `/client/learning/progress/my` (now video-centric) and `buildResumeDashboard`
+  (already re-derived the same value → still consistent; its override kept as a defensive
+  guarantee + for `minutesLeft`). No other consumers.
+- Verified vs staging (customer 472366: pos 1257 / dur 2493 → `percentCompleted=50`,
+  `completedLectures:0/totalLectures:1` preserved, `resumeNext=50`). `yarn typecheck` green.
+  FE doc updated: `docs/client/DASHBOARD_RESUME_PROGRESS.md`.
+
+---
+
+## 2026-07-01 — `GET /client/dashboard/resume`: video-centric `percentCompleted`
+
+Home My-Courses/Resume cards showed course/package-wide completion
+(`completedLectures / totalLectures`), so a user halfway through one long lecture saw ~2%.
+Per FE request, `percentCompleted` on `recentCourse` / `recentPackage` / `resumeLecture` is
+now **video-centric** — based on the last-watched lecture's `resume.positionSec/durationSec`.
+
+- **Change (code-only, no DB/schema change):** in
+  `src/modules/client-lecture-progress/client-lecture-progress.service.ts`,
+  `buildResumeDashboard` maps each card's `percentCompleted` to
+  `percentOf(resume.positionSec, resume.durationSec)` (round(pos/dur·100), 0 when dur=0).
+  `completedLectures`/`totalLectures` preserved; response shape unchanged.
+- **Scope:** ONLY `buildResumeDashboard` (sole caller: `dashboard.controller` →
+  `/client/dashboard/resume`). `listMyLearningProgress` (the `/client/learning/progress/my`
+  feed) is untouched — it keeps course-wide percent, so nothing else changes.
+- Verified vs staging (customer 472366: pos 30 / dur 2492 → `percentCompleted=1`,
+  `completedLectures:0/totalLectures:1` preserved). `yarn typecheck` green.
+  FE doc: `docs/client/DASHBOARD_RESUME_PROGRESS.md`.
+
+---
+
+## 2026-07-01 — Port `duplicateVideoCategory` (POST /admin/video-categories/:id/duplicate) to SQL
+
+`src/admin/videoCategory/videoCategory.controller.ts` no longer imports mongoose or
+`src/models/**`; `duplicateVideoCategory` now delegates to the admin-master SQL module.
+
+- **Change (code-only, no schema change):** added `fullVcDuplicate(id)` in
+  `src/modules/admin-master/admin-master.service.ts` and `vcDuplicate(sourceId)` (a
+  `prisma.$transaction`) plus `slugify` / `nextUnassignedTitle` / `uniqueSlugTx` helpers in
+  `admin-master.repository.ts`.
+- **Hierarchy:** the Mongo `childCategoryIds[]` DAG collapses to the SQL single-parent
+  **tree** (`ws_video_category.parent` self-FK — the same mechanism the rest of the module
+  already uses; `ws_video_category_relation` is NOT used here). Clone flow: BFS descendants
+  by `parent`; create clones one-by-one via `create()` (createMany returns no ids) with
+  `parent=0` temporarily; remap `parent` to new ids in pass 2 (root stays `parent=0`,
+  `educator_id=0`, `live_course_id=null`); clone `ws_video` rows whose `vcategory_id` is in
+  the cloned set, remapping `vcategory_id` (`live_session_id=null`). Root title from
+  `nextUnassignedTitle` (`"<title> (Copy [N])"`, filtered to `liveCourseId=null` — SQL has no
+  `courseId` column on the category), slugs de-duped via `uniqueSlugTx`.
+- **Response contract unchanged:** `{ id, name, courseId:null, liveCourseId:null, createdAt,
+  itemsCloned:{ subCategories, videos } }`; `id` returned as `String(rootId)` to preserve the
+  prior ObjectId-as-string type. subCategories excludes the root (matches Mongo). 400 invalid
+  id / 404 not found / 200 preserved.
+
+## 2026-07-01 — Fix: `GET /client/courses/lecture` id validation accepts numeric MySQL ids
+
+`GET /client/courses/lecture?id=33141` returned `"Invalid video ID"`. `lectureQuerySchema`
+validated `id`/`course`/`package` against the 24-hex Mongo ObjectId regex, but the handler
+resolves them via `lecSql.parseLecId(String(...))` as MySQL ints (`33141` = `ws_video` id).
+
+- **Change (code-only, no DB/schema change):** added `idOrObjectIdRegex`
+  (`/^([0-9a-fA-F]{24}|\d+)$/`) in `src/client/course/course.validation.ts` and applied it
+  to `lectureQuerySchema.id/course/package` — accepts a Mongo ObjectId OR numeric MySQL id.
+  Global `objectIdRegex` and other schemas untouched. Garbage ids still rejected; response
+  shape unchanged. Verified parse + `yarn typecheck` green.
+- **Note for FE:** the endpoint still requires `type` (`course`|`package`) + the matching
+  `course`/`package` id — `?id=…` alone now fails on missing `type`, not "Invalid video ID".
+
+---
+
+## 2026-07-01 — Fix: lecture-note / audio-note id validation accepts numeric MySQL ids
+
+`POST /client/lecture-notes` (and the sibling `/client/lecture-audio-notes`) rejected
+valid requests with `"Invalid id"`. The Zod `objectId` validator still enforced a 24-hex
+Mongo ObjectId (`/^[0-9a-fA-F]{24}$/`), but both modules run on MySQL — the controllers
+parse `videoId` / `liveSessionId` / note `id` via `lnSql.parseLnId(String(...))` as
+integers (e.g. `videoId: "33141"` is a `ws_video` id).
+
+- **Change (code-only, no DB/schema change):** loosened the shared `objectId` regex to
+  `/^([0-9a-fA-F]{24}|\d+)$/` in `src/client/lecture-note/lecture-note.validation.ts` and
+  `src/client/lecture-audio-note/lecture-audio-note.validation.ts` — accepts a Mongo
+  ObjectId OR a numeric MySQL id. Covers videoId, liveSessionId, and the note id param.
+  Garbage ids still rejected; response shapes unchanged. Verified parse + `yarn typecheck` green.
+
+---
+
 ## 2026-07-01 — Fix: `GET /client/package/goal` label lookup now goal-scoped (`goalId:labelId`)
 
 Goal label ids are assigned **per-goal** (each goal numbers its labels from 1 —

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PromocodeType } from "../../models/enums";
+import { PromocodeType } from "../../shared/enums";
 
 // Accept a 24-hex Mongo ObjectId OR a positive integer id (the SQL/MySQL branch
 // sends int ids). Mirrors how ebook.validation was widened for examCountdown.

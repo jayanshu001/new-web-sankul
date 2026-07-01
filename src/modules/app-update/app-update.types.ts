@@ -1,4 +1,4 @@
-import type { UpdateType } from "../../models/enums";
+import type { UpdateType } from "../../shared/enums";
 
 /** Stable API / admin contract (matches Mongoose JSON shape). */
 export interface AppUpdateDto {

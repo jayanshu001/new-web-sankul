@@ -1,8 +1,7 @@
-import { isMysqlModule } from "../../config/migration";
 import { adminVideoRepository as repo } from "./admin-video.repository";
 
 export const ADMIN_VIDEO_MODULE = "admin-video";
-export const isAdminVideoMysql = (): boolean => isMysqlModule(ADMIN_VIDEO_MODULE);
+export const isAdminVideoMysql = (): boolean => true;
 
 export const parseVideoId = (id: string): number | null => {
   const n = Number(id);

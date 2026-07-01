@@ -1,8 +1,4 @@
 import { Request, Response } from "express";
-import { Course } from "../../models/course/Course.model";
-import { Package } from "../../models/course/Package.model";
-import { Ebook } from "../../models/ebook/Ebook.model";
-import { Book } from "../../models/book/Book.model";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import {
@@ -14,13 +10,6 @@ import {
   removeWishlistMysql,
   checkWishlistMysql,
 } from "../../modules/client-wishlist/client-wishlist.service";
-
-const typeToModel: Record<string, any> = {
-  course: Course,
-  package: Package,
-  ebook: Ebook,
-  book: Book,
-};
 
 // GET /api/v1/client/wishlist
 export const listWishlist = async (req: Request, res: Response) => {
@@ -87,7 +76,7 @@ export const removeFromWishlist = async (req: Request, res: Response) => {
 
   try {
     if (!userId) { logger.warn("removeFromWishlist unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
-    if (!typeToModel[itemType]) { logger.warn("removeFromWishlist invalid itemType", { traceId, customerId: userId, itemType }); return res.status(400).json({ success: false, message: "Invalid itemType." }); }
+    if (!isWlType(itemType)) { logger.warn("removeFromWishlist invalid itemType", { traceId, customerId: userId, itemType }); return res.status(400).json({ success: false, message: "Invalid itemType." }); }
 
     // ─── SQL branch (int id-space) ───
     const cidNum = parseWlId(String(userId));

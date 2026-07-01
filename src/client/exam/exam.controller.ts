@@ -1,5 +1,4 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
 import { generateExamSolutionPdf } from "../../libs/core/generate";
 import {
   rateResultSchema,
@@ -30,7 +29,9 @@ import {
 } from "../../modules/client-exam/client-exam.service";
 import * as catalogExam from "../../modules/catalog-exam/catalog-exam.service";
 
-const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
+// Legacy Mongo ObjectId shape (24-hex). Preserves the exact pre-migration
+// validation behaviour without pulling in mongoose.
+const isObjectId = (v: string) => /^[a-fA-F0-9]{24}$/.test(v);
 const norm = (s: string) => (s ?? "").trim().toLowerCase();
 
 // ─── Discovery ────────────────────────────────────────────────────────────────

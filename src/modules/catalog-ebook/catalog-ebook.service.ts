@@ -12,7 +12,6 @@
  * a `buildShareLink(ebookId)` callback and the controller supplies it. Verify
  * via live-DB tsx, not HTTP, while OFF.
  */
-import { isMysqlModule } from "../../config/migration";
 import { isNewItem } from "../../utils/isNew";
 import { catalogEbookRepository as repo } from "./catalog-ebook.repository";
 import { toEbookDto, toEbookPlanDto } from "./catalog-ebook.transformer";
@@ -26,7 +25,7 @@ import type {
 } from "./catalog-ebook.types";
 
 export const EBOOK_MODULE = "catalog-ebook";
-export const isEbookMysql = (): boolean => isMysqlModule(EBOOK_MODULE);
+export const isEbookMysql = (): boolean => true;
 
 /** Parse a string id to a positive int, else null. */
 export const parseEbookId = (id: string): number | null => {

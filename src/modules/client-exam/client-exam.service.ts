@@ -1,8 +1,7 @@
-import { isMysqlModule } from "../../config/migration";
 import { clientExamRepository as repo } from "./client-exam.repository";
 
 export const CLIENT_EXAM_MODULE = "client-exam";
-export const isClientExamMysql = (): boolean => isMysqlModule(CLIENT_EXAM_MODULE);
+export const isClientExamMysql = (): boolean => true;
 
 export const parseExamId = (id: string): number | null => {
   const n = Number(id);

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { EBookLanguage, PackageCourseEbookOrderStatus, PackageCourseEbookPaymentType, PaymentMethod } from "../../models/enums";
+import { EBookLanguage, PackageCourseEbookOrderStatus, PackageCourseEbookPaymentType, PaymentMethod } from "../../shared/enums";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 // On the SQL (MySQL) branch the attached countdown/category ids are numeric

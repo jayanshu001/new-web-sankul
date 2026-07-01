@@ -64,7 +64,133 @@ export const adminMaterialRepository = {
     prisma.material.updateMany({ where: { id, materialCategoryId: categoryId }, data: { order_by: order } }),
   bulkSetStatus: (ids: number[], status: boolean) => prisma.material.updateMany({ where: { id: { in: ids } }, data: { status } }),
   bulkDelete: (ids: number[]) => prisma.material.deleteMany({ where: { id: { in: ids } } }),
+
+  /**
+   * Deep-clone a category subtree (single-parent `parent` tree — the Mongo
+   * `ancestors[]` DAG is not used here) plus all `ws_material` rows under it, in
+   * one interactive transaction.
+   *   1. Walk children via `where parent = <id>` to collect the subtree.
+   *   2. Create the root clone (new title, same parent as source).
+   *   3. Create each descendant clone, remapping old parent id → new id via an
+   *      id-map (one-by-one so create() returns the new id — createMany does not).
+   *   4. Clone every material whose category is in the cloned set, remapping the
+   *      category id.
+   * Returns null when the source category does not exist.
+   */
+  cloneCategoryTree: async (sourceId: number) => {
+    const source = await prisma.materialCategory.findUnique({ where: { id: sourceId } });
+    if (!source) return null;
+
+    return prisma.$transaction(async (tx) => {
+      const now = new Date();
+      const newTitle = await nextAvailableCopyTitle(tx, source.name, source.parent);
+
+      // old category id → new category id
+      const idMap = new Map<number, number>();
+
+      const root = await tx.materialCategory.create({
+        data: {
+          name: newTitle,
+          slug: slugify(newTitle),
+          image: source.image ?? null,
+          parent: source.parent,
+          order_by: source.order_by,
+          status: source.status,
+          created_at: now,
+          updated_at: now,
+        },
+      });
+      idMap.set(source.id, root.id);
+
+      // BFS over descendants, remapping parent ids as we go.
+      let subCategories = 0;
+      const queue: number[] = [source.id];
+      while (queue.length) {
+        const parentOldId = queue.shift()!;
+        const children = await tx.materialCategory.findMany({ where: { parent: parentOldId }, orderBy: { id: "asc" } });
+        for (const child of children) {
+          const newParentId = idMap.get(parentOldId)!;
+          const childClone = await tx.materialCategory.create({
+            data: {
+              name: child.name,
+              slug: child.slug || slugify(child.name),
+              image: child.image ?? null,
+              parent: newParentId,
+              order_by: child.order_by,
+              status: child.status,
+              created_at: now,
+              updated_at: now,
+            },
+          });
+          idMap.set(child.id, childClone.id);
+          subCategories += 1;
+          queue.push(child.id);
+        }
+      }
+
+      // Clone materials across every mapped category, remapping the category id.
+      const oldCategoryIds = Array.from(idMap.keys());
+      const materials = await tx.material.findMany({ where: { materialCategoryId: { in: oldCategoryIds } } });
+      if (materials.length) {
+        await tx.material.createMany({
+          data: materials.map((m) => ({
+            materialCategoryId: idMap.get(m.materialCategoryId!)!,
+            name: m.name,
+            direct_link: m.direct_link,
+            file: m.file,
+            fileName: m.fileName,
+            order_by: m.order_by,
+            status: m.status,
+            description: m.description,
+            thumbnail: m.thumbnail,
+            fileSize: m.fileSize,
+            fileMime: m.fileMime,
+            language: m.language,
+            isPreview: m.isPreview,
+            isPaid: m.isPaid,
+            created_at: now,
+            updated_at: now,
+          })),
+        });
+      }
+
+      return { root, subCategories, materials: materials.length };
+    });
+  },
 };
+
+/**
+ * Next free "<title> (Copy)" / "<title> (Copy N)" among siblings sharing the same
+ * `parent`. Mirrors the Mongo helper: prefilter by prefix in SQL, disambiguate the
+ * suffix number in JS.
+ */
+async function nextAvailableCopyTitle(
+  tx: Prisma.TransactionClient,
+  baseTitle: string,
+  parent: number,
+): Promise<string> {
+  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const base = `${baseTitle} (Copy`;
+  const regex = new RegExp(`^${escape(base)}(?:\\s(\\d+))?\\)$`);
+  const siblings = await tx.materialCategory.findMany({
+    where: { parent, name: { startsWith: base } },
+    select: { name: true },
+  });
+  const taken = new Set<number>();
+  for (const s of siblings) {
+    const m = (s.name || "").match(regex);
+    if (!m) continue;
+    taken.add(m[1] ? parseInt(m[1], 10) : 1);
+  }
+  if (!taken.has(1)) return `${baseTitle} (Copy)`;
+  let n = 2;
+  while (taken.has(n)) n++;
+  return `${baseTitle} (Copy ${n})`;
+}
+
+function slugify(input: string): string {
+  return input.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
 
 export { ROOT };
 

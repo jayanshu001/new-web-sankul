@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import bcrypt from "bcryptjs";
-import { AdminRole } from "../../models/enums";
+import { AdminRole } from "../../shared/enums";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import {
   createAdministratorSchema,

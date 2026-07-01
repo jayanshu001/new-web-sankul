@@ -1,12 +1,13 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
 import { applyPromocodeSchema } from "./promocode.validation";
 import { computePromoDiscount } from "./applies-to";
 import * as pcSql from "../../modules/promo-code/promo-code.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
-const isObjectId = (v?: string | null) => !!v && mongoose.Types.ObjectId.isValid(v);
+// Legacy 24-hex ObjectId shape — tolerated alongside the SQL integer ids so a
+// stray Mongo-style id doesn't hard-fail selection (real ids parse via parsePcId).
+const isObjectId = (v?: string | null) => !!v && /^[0-9a-fA-F]{24}$/.test(v);
 
 type PlanDoc = any;
 

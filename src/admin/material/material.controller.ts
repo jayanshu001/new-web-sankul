@@ -1,7 +1,4 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { Material } from "../../models/course/Material.model";
-import { MaterialCategory } from "../../models/course/MaterialCategory.model";
 import {
   createMaterialCategorySchema,
   updateMaterialCategorySchema,
@@ -13,41 +10,6 @@ import {
   bulkDeleteSchema,
 } from "./material.validation";
 import * as adminMaterial from "../../modules/admin-material/admin-material.service";
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function slugify(input: string): string {
-  return input
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-async function nextAvailableCopyTitle(
-  baseTitle: string,
-  parent: mongoose.Types.ObjectId | null
-): Promise<string> {
-  const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const base = `${baseTitle} (Copy`;
-  const regex = new RegExp(`^${escape(base)}(?:\\s(\\d+))?\\)$`);
-  const siblings = await MaterialCategory.find({
-    parent: parent ?? null,
-    title: { $regex: `^${escape(base)}` },
-  })
-    .select("title")
-    .lean();
-  const taken = new Set<number>();
-  for (const s of siblings) {
-    const m = (s.title || "").match(regex);
-    if (!m) continue;
-    taken.add(m[1] ? parseInt(m[1], 10) : 1);
-  }
-  if (!taken.has(1)) return `${baseTitle} (Copy)`;
-  let n = 2;
-  while (taken.has(n)) n++;
-  return `${baseTitle} (Copy ${n})`;
-}
 
 // ─── Categories ───────────────────────────────────────────────────────────────
 
@@ -157,121 +119,19 @@ export const reorderCategories = async (req: Request, res: Response) => {
   }
 };
 
-// ⚠ STAYS Mongo: duplicateCategory is a BFS subtree+materials clone that depends
-// on the Mongo-only ancestors[] (and clones Mongo-only material fields). Same call
-// as the videoCategory `duplicate` that stayed Mongo. No admin-material SQL branch.
+// Deep-clone a category subtree + its materials. Single-parent SQL tree walk over
+// `parent` (the Mongo ancestors[] DAG is not used); logic lives in the
+// admin-material SQL module.
 export const duplicateCategory = async (req: Request, res: Response) => {
-  const session = await mongoose.startSession();
   try {
     const id = req.params.id as string;
-    if (!mongoose.Types.ObjectId.isValid(id))
-      return res.status(400).json({ success: false, message: "Invalid category id." });
-
-    const source = await MaterialCategory.findById(id).lean();
-    if (!source) return res.status(404).json({ success: false, message: "Category not found." });
-
-    let rootId: mongoose.Types.ObjectId | null = null;
-    let rootTitle = "";
-    const counts = { subCategories: 0, materials: 0 };
-
-    await session.withTransaction(async () => {
-      const newTopTitle = await nextAvailableCopyTitle(source.title, source.parent ?? null);
-      rootTitle = newTopTitle;
-
-      const idMap = new Map<string, mongoose.Types.ObjectId>();
-
-      // Clone root
-      const [rootDoc] = await MaterialCategory.create(
-        [
-          {
-            title: newTopTitle,
-            slug: slugify(newTopTitle),
-            image: source.image ?? null,
-            parent: source.parent ?? null,
-            ancestors: source.ancestors ?? [],
-            order: source.order ?? 0,
-            status: source.status ?? true,
-          },
-        ],
-        { session }
-      );
-      rootId = rootDoc._id as mongoose.Types.ObjectId;
-      idMap.set(String(source._id), rootId);
-
-      // BFS over descendants
-      const queue: mongoose.Types.ObjectId[] = [source._id as mongoose.Types.ObjectId];
-      while (queue.length) {
-        const parentOldId = queue.shift()!;
-        const children = await MaterialCategory.find({ parent: parentOldId })
-          .session(session)
-          .lean();
-        for (const child of children) {
-          const newParentId = idMap.get(String(parentOldId))!;
-          const newAncestorsAtParent = await MaterialCategory.findById(newParentId)
-            .session(session)
-            .select("ancestors")
-            .lean();
-          const [childDoc] = await MaterialCategory.create(
-            [
-              {
-                title: child.title,
-                slug: child.slug ?? slugify(child.title),
-                image: child.image ?? null,
-                parent: newParentId,
-                ancestors: [...(newAncestorsAtParent?.ancestors ?? []), newParentId],
-                order: child.order ?? 0,
-                status: child.status ?? true,
-              },
-            ],
-            { session }
-          );
-          idMap.set(String(child._id), childDoc._id as mongoose.Types.ObjectId);
-          counts.subCategories += 1;
-          queue.push(child._id as mongoose.Types.ObjectId);
-        }
-      }
-
-      // Clone materials across all mapped categories
-      const oldCategoryIds = Array.from(idMap.keys()).map((s) => new mongoose.Types.ObjectId(s));
-      const materials = await Material.find({ materialCategoryId: { $in: oldCategoryIds } })
-        .session(session)
-        .lean();
-      if (materials.length) {
-        const clones = materials.map((m) => ({
-          materialCategoryId: idMap.get(String(m.materialCategoryId))!,
-          title: m.title,
-          description: m.description,
-          file: m.file,
-          originalName: m.originalName,
-          directLink: m.directLink,
-          thumbnail: m.thumbnail,
-          fileSize: m.fileSize,
-          fileMime: m.fileMime,
-          language: m.language,
-          isPreview: m.isPreview,
-          isPaid: m.isPaid,
-          order: m.order,
-          status: m.status,
-        }));
-        await Material.insertMany(clones, { session });
-        counts.materials = clones.length;
-      }
-    });
-
-    return res.status(200).json({
-      success: true,
-      data: {
-        id: rootId,
-        name: rootTitle,
-        parent: source.parent ?? null,
-        createdAt: new Date(),
-        itemsCloned: counts,
-      },
-    });
+    const numId = adminMaterial.parseMaterialId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+    const data = await adminMaterial.duplicateCategory(numId);
+    if (data === "not_found") return res.status(404).json({ success: false, message: "Category not found." });
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
-  } finally {
-    await session.endSession();
   }
 };
 

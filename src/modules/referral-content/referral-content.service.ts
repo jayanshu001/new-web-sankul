@@ -1,11 +1,9 @@
 import type { RefferalTerm, RefferalFaq } from "@prisma/client";
 import { prisma } from "../../config/prisma";
-import { isMysqlModule } from "../../config/migration";
 
 export const REFERRAL_CONTENT_MODULE = "referral-content";
 
-export const isReferralContentMysql = (): boolean =>
-  isMysqlModule(REFERRAL_CONTENT_MODULE);
+export const isReferralContentMysql = (): boolean => true;
 
 export const parseRcId = (id: string): number | null => {
   const n = Number(id);

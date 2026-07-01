@@ -4,10 +4,9 @@
  * free dashboard), lecture-progress (resume hub), catalog/commerce reads. This
  * module owns the flag + small shared helpers for the 3 dashboard handlers.
  */
-import { isMysqlModule } from "../../config/migration";
 import { parseGoalSelection } from "../../utils/goalSelection";
 
-export const isClientDashboardMysql = (): boolean => isMysqlModule("client-dashboard");
+export const isClientDashboardMysql = (): boolean => true;
 
 export const parseCdId = (id: string): number | null => {
   const n = Number(id);

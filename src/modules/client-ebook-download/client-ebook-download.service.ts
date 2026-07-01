@@ -1,4 +1,3 @@
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 /**
@@ -13,7 +12,7 @@ import { prisma } from "../../config/prisma";
  * listEbookDownloads / countActiveEbookDownloads filter.
  */
 export const EBOOK_DOWNLOAD_MODULE = "client-ebook-download";
-export const isEbookDownloadMysql = (): boolean => isMysqlModule(EBOOK_DOWNLOAD_MODULE);
+export const isEbookDownloadMysql = (): boolean => true;
 
 export const parseDlId = (id: string): number | null => {
   const n = Number(id);

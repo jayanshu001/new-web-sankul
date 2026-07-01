@@ -156,6 +156,30 @@ export const reorderCategories = async (orders: Array<{ id: string; order: numbe
   return true;
 };
 
+/**
+ * Deep-clone a category subtree + its materials. Returns "not_found" when the
+ * source category is absent, else a DTO matching the legacy Mongo handler shape:
+ * `{ id, name, parent, createdAt, itemsCloned: { subCategories, materials } }`.
+ */
+export const duplicateCategory = async (id: number): Promise<"not_found" | {
+  id: string;
+  name: string;
+  parent: string | null;
+  createdAt: Date | null;
+  itemsCloned: { subCategories: number; materials: number };
+}> => {
+  const result = await repo.cloneCategoryTree(id);
+  if (!result) return "not_found";
+  const { root, subCategories, materials } = result;
+  return {
+    id: String(root.id),
+    name: root.name,
+    parent: root.parent && root.parent > 0 ? String(root.parent) : null,
+    createdAt: root.created_at ?? null,
+    itemsCloned: { subCategories, materials },
+  };
+};
+
 // category sub-resources
 export const getCategoryCourses = async (id: number) => {
   const rows = await repo.coursesForCategory(id);

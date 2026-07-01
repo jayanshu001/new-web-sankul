@@ -12,11 +12,10 @@
  * recordings are always empty on SQL (FE falls back to the synthetic ladder),
  * matching how SQL videos (not promoted-from-live) behave.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const CATEGORY_VIDEO_MODULE = "client-category-video";
-export const isCategoryVideoMysql = (): boolean => isMysqlModule(CATEGORY_VIDEO_MODULE);
+export const isCategoryVideoMysql = (): boolean => true;
 
 export const parseCvId = (id: string): number | null => {
   const n = Number(id);

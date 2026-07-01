@@ -1,4 +1,3 @@
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 
@@ -12,7 +11,7 @@ import { computeEndAt, extendEndAt } from "../../utils/planDuration";
  * Idempotent verify + dual-read fallback (SQL first, Mongo on miss).
  */
 export const TEST_SERIES_ORDER_MODULE = "test-series-order";
-export const isTestSeriesOrderMysql = (): boolean => isMysqlModule(TEST_SERIES_ORDER_MODULE);
+export const isTestSeriesOrderMysql = (): boolean => true;
 
 export const parseTsId = (id: string): number | null => {
   const n = Number(id);

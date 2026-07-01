@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { z } from "zod";
-import { PaymentMethod, PackageCourseEbookOrderStatus, PackageCourseEbookOrderType } from "../../models/enums";
+import { PaymentMethod, PackageCourseEbookOrderStatus, PackageCourseEbookOrderType } from "../../shared/enums";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as tsSql from "../../modules/admin-testseries/admin-testseries.service";

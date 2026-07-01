@@ -16,14 +16,12 @@
 // logger because the logger itself is initialized lazily and we want the
 // check to run as early as possible.
 
-import { hasMysqlMigrationModules, isMongoFallbackEnabled } from "./migration";
-
 const REQUIRED = [
   "JWT_ACCESS_SECRET",
   "JWT_REFRESH_SECRET",
-  // MONGODB_URI is no longer always-required — migration is complete and Mongo is
-  // an opt-in fallback (MONGO_FALLBACK_ENABLED). It's required only when re-enabled
-  // (see the conditional check below).
+  // The app is MySQL-only (Prisma); DATABASE_URL is always required — validated
+  // below. MongoDB has been fully removed, so MONGODB_URI is no longer used.
+  "DATABASE_URL",
 ] as const;
 
 const REQUIRED_IN_PROD = [
@@ -53,21 +51,6 @@ export const validateEnv = (): EnvValidationResult => {
     const v = env[key];
     if (!v || v.trim() === "") {
       missing.push(key);
-    }
-  }
-
-  if (hasMysqlMigrationModules()) {
-    const dbUrl = env.DATABASE_URL?.trim();
-    if (!dbUrl) {
-      missing.push("DATABASE_URL");
-    }
-  }
-
-  // MONGODB_URI only required when the legacy Mongo fallback is explicitly on.
-  if (isMongoFallbackEnabled()) {
-    const mongoUri = env.MONGODB_URI?.trim();
-    if (!mongoUri) {
-      missing.push("MONGODB_URI");
     }
   }
 

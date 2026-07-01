@@ -16,7 +16,6 @@
 // storm or LB health-check storm doesn't accidentally get throttled.
 
 import type { RequestHandler } from "express";
-import mongoose from "mongoose";
 import { redisClient } from "../config/redis";
 import { isShuttingDown } from "../utils/gracefulShutdown";
 import {
@@ -75,29 +74,6 @@ export const readinessHandler: RequestHandler = async (_req, res) => {
 
   const checks: Record<string, { ok: boolean; latencyMs?: number; error?: string }> = {};
 
-  // Mongo: rely on the existing connection's readyState + a cheap admin ping.
-  // readyState alone is fine for "is the driver connected", but a primary
-  // failover can leave readyState=1 while writes are silently buffering. The
-  // ping forces a real roundtrip.
-  const mongoStart = Date.now();
-  try {
-    if (mongoose.connection.readyState !== 1) {
-      throw new Error(`mongoose readyState=${mongoose.connection.readyState}`);
-    }
-    await withTimeout(
-      mongoose.connection.db!.admin().ping() as unknown as Promise<unknown>,
-      PING_TIMEOUT_MS,
-      "mongo"
-    );
-    checks.mongo = { ok: true, latencyMs: Date.now() - mongoStart };
-  } catch (err) {
-    checks.mongo = {
-      ok: false,
-      latencyMs: Date.now() - mongoStart,
-      error: (err as Error).message,
-    };
-  }
-
   // Redis: PING is the canonical check. ioredis short-circuits with a queued
   // error if not connected, so the timeout is belt-and-suspenders.
   const redisStart = Date.now();
@@ -134,21 +110,6 @@ export const readinessHandler: RequestHandler = async (_req, res) => {
  * queue depths — nothing sensitive.
  */
 export const healthReportHandler: RequestHandler = async (_req, res) => {
-  // --- MongoDB ---
-  let mongoDB: "connected" | "disconnected" = "disconnected";
-  try {
-    if (mongoose.connection.readyState === 1) {
-      await withTimeout(
-        mongoose.connection.db!.admin().ping() as unknown as Promise<unknown>,
-        PING_TIMEOUT_MS,
-        "mongo"
-      );
-      mongoDB = "connected";
-    }
-  } catch {
-    mongoDB = "disconnected";
-  }
-
   // --- Redis ---
   let redis: "connected" | "disconnected" = "disconnected";
   try {
@@ -179,7 +140,7 @@ export const healthReportHandler: RequestHandler = async (_req, res) => {
     service: "web-sankul-api",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
-    database: { mongoDB, redis },
+    database: { redis },
     messageQueue: {
       workerPdfEmailQueue,
       counts,

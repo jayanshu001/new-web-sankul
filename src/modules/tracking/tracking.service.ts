@@ -5,11 +5,10 @@
  * Two admin reads: paginated list + a summary (byEvent / dailyCount / total /
  * uniqueUsers). DTO mirrors the Mongo doc shape (`_id` string).
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const TRACKING_MODULE = "tracking";
-export const isTrackingMysql = (): boolean => isMysqlModule(TRACKING_MODULE);
+export const isTrackingMysql = (): boolean => true;
 
 export const parseTrackingId = (id: string): number | null => {
   const n = Number(id);

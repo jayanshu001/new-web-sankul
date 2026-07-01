@@ -1,6 +1,9 @@
 import { z } from "zod";
-import mongoose from "mongoose";
-import { BookLanguage, BookOrderStatus, BookCourier } from "../../models/enums";
+import { BookLanguage, BookOrderStatus, BookCourier } from "../../shared/enums";
+
+// 24-char hex ObjectId shape (replaces the former mongoose.Types.ObjectId.isValid
+// check now that mongoose is no longer a dependency of this module).
+const isObjectIdLike = (id: string) => /^[a-fA-F0-9]{24}$/.test(id);
 
 const zBool = z.preprocess(
   (v) => (typeof v === "string" ? v === "true" : v),
@@ -27,7 +30,7 @@ const zObjectIdArray = z.preprocess((v) => {
     return [s];
   }
   return v;
-}, z.array(z.string().refine((id) => mongoose.Types.ObjectId.isValid(id), "Invalid id.")));
+}, z.array(z.string().refine((id) => isObjectIdLike(id), "Invalid id.")));
 
 export const createBookSchema = z.object({
   name: z.string().min(1).max(255),

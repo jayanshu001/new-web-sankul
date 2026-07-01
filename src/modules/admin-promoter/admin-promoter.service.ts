@@ -1,5 +1,4 @@
 import bcrypt from "bcryptjs";
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { promoterDataRepository } from "../promoter-data/promoter-data.repository";
 import {
@@ -36,7 +35,7 @@ import {
  *     `promocodeId` scope filter is ignored and recent rows' `promocode` is null.
  */
 export const ADMIN_PROMOTER_MODULE = "admin-promoter";
-export const isAdminPromoterMysql = (): boolean => isMysqlModule(ADMIN_PROMOTER_MODULE);
+export const isAdminPromoterMysql = (): boolean => true;
 
 const SALT_ROUNDS = 10;
 

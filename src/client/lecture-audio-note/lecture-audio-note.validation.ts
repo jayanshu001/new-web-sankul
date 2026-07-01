@@ -1,6 +1,8 @@
 import { z } from "zod";
 
-const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id");
+// Accept a 24-hex Mongo ObjectId OR a numeric MySQL id: this module runs on MySQL,
+// so ids like "33141" (ws_video / ws_live_session ints) are valid.
+const objectId = z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id");
 
 // Body fields arrive as strings because of multipart/form-data. We coerce
 // here rather than relying on JSON parsing.

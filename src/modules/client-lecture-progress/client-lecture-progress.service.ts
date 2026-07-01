@@ -376,6 +376,10 @@ const resolveSessions = async (sessionIds: number[]) => {
 /**
  * Unified "Resume Learning" feed (course + package + live cards), SQL mirror of
  * learning/progress.controller.listMyLearningProgress. Returns { cards, resumeNext }.
+ *
+ * `percentCompleted` is VIDEO-centric — progress through the last-watched lecture
+ * (`percentOf(lastPositionSec, lastDurationSec)`), not course/package-wide completion.
+ * `completedLectures`/`totalLectures` remain the container-wide counts for analytics.
  */
 export const listMyLearningProgress = async (customerId: number): Promise<{ cards: any[]; resumeNext: any }> => {
   const now = new Date();
@@ -423,7 +427,7 @@ export const listMyLearningProgress = async (customerId: number): Promise<{ card
       title: c.name, subtitle: c.educator?.name ? `By ${c.educator.name}` : null,
       educator: educatorOf(c.educator), thumbnail: c.image ?? null,
       daysLeft: daysLeftOf(sub?.endAt, now), subscriptionEndAt: sub?.endAt ?? null,
-      percentCompleted: pct(p.completedCount, total), completedLectures: p.completedCount, totalLectures: total,
+      percentCompleted: percentOf(p.lastPositionSec, p.lastDurationSec), completedLectures: p.completedCount, totalLectures: total,
       lastWatchedAt: p.lastWatchedAt, lecture: p.lastVideoId ? lectureMap.get(p.lastVideoId) ?? null : null,
       resume: { videoId: p.lastVideoId ? String(p.lastVideoId) : null, liveSessionId: null, positionSec: p.lastPositionSec, durationSec: p.lastDurationSec },
     });
@@ -436,7 +440,7 @@ export const listMyLearningProgress = async (customerId: number): Promise<{ card
       title: pkg.name, subtitle: pkg.educator_id && eduById.get(pkg.educator_id)?.name ? `By ${eduById.get(pkg.educator_id)!.name}` : null,
       educator: pkg.educator_id ? educatorOf(eduById.get(pkg.educator_id)) : null, thumbnail: pkg.image ?? null,
       daysLeft: daysLeftOf(sub?.endAt, now), subscriptionEndAt: sub?.endAt ?? null,
-      percentCompleted: pct(p.completedCount, total), completedLectures: p.completedCount, totalLectures: total,
+      percentCompleted: percentOf(p.lastPositionSec, p.lastDurationSec), completedLectures: p.completedCount, totalLectures: total,
       lastWatchedAt: p.lastWatchedAt, lecture: p.lastVideoId ? lectureMap.get(p.lastVideoId) ?? null : null,
       resume: { videoId: p.lastVideoId ? String(p.lastVideoId) : null, liveSessionId: null, positionSec: p.lastPositionSec, durationSec: p.lastDurationSec },
     });
@@ -449,7 +453,7 @@ export const listMyLearningProgress = async (customerId: number): Promise<{ card
       type: "live", id: String(lc.id), liveCourseId: String(lc.id), courseId: null, packageId: null,
       title: lc.name, subtitle: edu?.name ? `By ${edu.name}` : null, educator: educatorOf(edu), thumbnail: lc.image ?? null,
       daysLeft: daysLeftOf(sub?.endAt, now), subscriptionEndAt: sub?.endAt ?? null,
-      percentCompleted: pct(p.completedCount, total), completedLectures: p.completedCount, totalLectures: total,
+      percentCompleted: percentOf(p.lastPositionSec, p.lastDurationSec), completedLectures: p.completedCount, totalLectures: total,
       lastWatchedAt: p.lastWatchedAt,
       lecture: (p.lastLiveSessionId ? sessionMap.get(p.lastLiveSessionId) : null) ?? (p.lastVideoId ? lectureMap.get(p.lastVideoId) : null) ?? null,
       resume: { videoId: p.lastVideoId ? String(p.lastVideoId) : null, liveSessionId: p.lastLiveSessionId ? String(p.lastLiveSessionId) : null, positionSec: p.lastPositionSec, durationSec: p.lastDurationSec },
@@ -628,15 +632,26 @@ export const buildResumeNextCardSql = async (input:
  */
 export const buildResumeDashboard = async (customerId: number): Promise<{ resumeLecture: any; recentCourse: any; recentPackage: any }> => {
   const { cards } = await listMyLearningProgress(customerId);
-  const withMinutesLeft = (c: any) => {
+  // Dashboard resume cards show VIDEO-centric progress — `percentCompleted` reflects
+  // how far through the current/last-watched lecture the user is
+  // (`positionSec / durationSec`), NOT course/package-wide completion.
+  // `listMyLearningProgress` already produces video-centric `percentCompleted`; this
+  // re-derivation is kept as a defensive, self-documenting guarantee for the dashboard
+  // and to add `minutesLeft`. `completedLectures`/`totalLectures` are preserved for
+  // analytics/the Progress screen. See docs/client/DASHBOARD_RESUME_PROGRESS.md.
+  const withVideoProgress = (c: any) => {
     if (!c) return null;
     const dur = c.resume?.durationSec ?? 0, pos = c.resume?.positionSec ?? 0;
-    return { ...c, minutesLeft: dur > 0 ? Math.max(0, Math.floor((dur - pos) / 60)) : 0 };
+    return {
+      ...c,
+      percentCompleted: percentOf(pos, dur),
+      minutesLeft: dur > 0 ? Math.max(0, Math.floor((dur - pos) / 60)) : 0,
+    };
   };
   return {
-    resumeLecture: withMinutesLeft(cards.find((c: any) => c.type === "live")),
-    recentCourse: withMinutesLeft(cards.find((c: any) => c.type === "course")),
-    recentPackage: withMinutesLeft(cards.find((c: any) => c.type === "package")),
+    resumeLecture: withVideoProgress(cards.find((c: any) => c.type === "live")),
+    recentCourse: withVideoProgress(cards.find((c: any) => c.type === "course")),
+    recentPackage: withVideoProgress(cards.find((c: any) => c.type === "package")),
   };
 };
 

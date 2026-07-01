@@ -1,5 +1,4 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
 import { generateEbookReceipt } from "../../libs/core/generate";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -17,7 +16,9 @@ import type { EBookLanguage } from "@prisma/client";
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
-const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
+// Legacy Mongo ObjectId shape (24-hex). Retained only to keep the invoice id
+// validation identical to the pre-migration contract; SQL order ids are ints.
+const isObjectId = (v: string) => /^[a-fA-F0-9]{24}$/.test(v);
 
 // GET /api/v1/client/ebooks
 export const listEbooks = async (req: Request, res: Response) => {

@@ -5,8 +5,6 @@
 // own SQL modules. Errors thrown as `HttpError(code, message)` for the global
 // handler.
 
-import mongoose from "mongoose";
-import { Book } from "../../models/book/Book.model";
 import { HttpError } from "../../middlewares/errorHandler";
 import {
   listChatMessagesMysql,
@@ -24,12 +22,6 @@ export const isAdminPackageMysql = adminPackage.isAdminPackageMysql;
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
-
-const assertObjectId = (id: string, label: string): void => {
-  if (!mongoose.Types.ObjectId.isValid(id)) {
-    throw new HttpError(400, `Invalid ${label} id.`);
-  }
-};
 
 // On the SQL branch ids are numeric.
 const assertPkgSqlId = (id: string, label: string): number => {
@@ -177,37 +169,22 @@ export const listPromotedCodes = async (packageId: string) => {
   return promoCode.listPromocodesForPackage(assertPkgSqlId(packageId, "package"));
 };
 
-// ⚠ STAYS Mongo: Book.packageIds (the many-to-many link) has no SQL column —
-// ws_book has no packageIds (confirmed by admin-book). No SQL branch.
-// Physical books linked to this package (the "material (Book)" tab). Paginated
-// to mirror listSubscribers. Books carry `packageIds`; a book belongs here when
-// its `packageIds` array contains this package id.
+// The Book↔Package many-to-many link (`Book.packageIds`) was Mongo-only — ws_book
+// has no package-link column and admin-book synthesizes `packageIds: []`. With no
+// SQL representation of the relationship, no book can belong to a package, so this
+// always returns an empty (but correctly-shaped, paginated) list.
 export const listBooks = async (packageId: string, query: PaginationQuery) => {
-  assertObjectId(packageId, "package");
+  assertPkgSqlId(packageId, "package");
   const pageNum = Math.max(parseInt(query.page ?? "1", 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(query.limit ?? "20", 10) || 20, 1), 100);
-  const skip = (pageNum - 1) * limitNum;
-
-  const filter = { packageIds: packageId };
-  const [data, total] = await Promise.all([
-    Book.find(filter)
-      .select(
-        "_id name author image thumbnail listPrice discountedPrice shippingPrice language isMagazine isCombo isTrending status orderBy createdAt"
-      )
-      .sort({ orderBy: 1, createdAt: -1 })
-      .skip(skip)
-      .limit(limitNum)
-      .lean(),
-    Book.countDocuments(filter),
-  ]);
 
   return {
-    data,
+    data: [] as unknown[],
     pagination: {
-      total,
+      total: 0,
       page: pageNum,
       limit: limitNum,
-      totalPages: Math.ceil(total / limitNum),
+      totalPages: 0,
     },
   };
 };

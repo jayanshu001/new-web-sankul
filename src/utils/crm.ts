@@ -1,5 +1,5 @@
 import logger from "./logger";
-import { CRM_LEAD_TYPE } from "../models/enums";
+import { CRM_LEAD_TYPE } from "../shared/enums";
 
 export interface GenerateCRMLeadArgs {
   params: { userId: string; courseId: string };

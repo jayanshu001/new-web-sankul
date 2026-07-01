@@ -1,6 +1,4 @@
 import { Request, Response } from "express";
-import mongoose, { Model } from "mongoose";
-import { FaqType } from "../../models/system/FaqType.model";
 import {
   listFaqsPaged as listFaqsPagedService,
   getFaqById,
@@ -87,8 +85,7 @@ import { getErrorMessage } from "../../utils/httpResponse";
 import { z } from "zod";
 import * as cmsx from "../../modules/cms/cms-extra.service";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
-
-const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
+import { FAQ_TYPES, FAQ_TYPE_LABELS } from "../../modules/faq/faq.types";
 
 // Parse the standard admin list query: search/page/limit (via parseListQuery)
 // plus sortBy/sortOrder. `sortBy` stays a raw string — each service whitelists
@@ -133,9 +130,6 @@ const listResponse = (
   return res.status(200).json(body);
 };
 
-// cms-extra (SocialLink/Type, CurrentAffair, LiveBanner) SQL flag + helpers.
-const cmsxOn = () => cmsx.isCmsExtraMysql();
-const cmsxIdInvalid = (id: string) => (cmsxOn() ? cmsx.parseCmsId(id) == null : !isObjectId(id));
 // SQL body schemas: FK ids are numeric ints (not 24-hex) on the SQL path.
 const socialLinkCreateSqlSchema = z.object({
   typeId: z.coerce.number().int().positive(),
@@ -152,101 +146,6 @@ const liveBannerCreateSqlSchema = z.object({
   orderBy: z.number().int().default(0),
 });
 const liveBannerUpdateSqlSchema = liveBannerCreateSqlSchema.partial();
-
-// Generic CRUD helpers — keeps each resource below to a thin wrapper.
-// `model.modelName` tags log entries so each derived endpoint is identifiable.
-const genericList = (model: Model<any>, sort: Record<string, 1 | -1> = { createdAt: -1 }) =>
-  async (_req: Request, res: Response) => {
-    const traceId = _req.traceId;
-    const m = model.modelName;
-    logger.info(`cms ${m} list invoked`, { traceId, path: _req.originalUrl });
-
-    try {
-      const data = await model.find().sort(sort).lean();
-      logger.info(`cms ${m} list success`, { traceId, count: data.length });
-      return res.status(200).json({ success: true, data });
-    } catch (e: any) {
-      logger.error(`cms ${m} list failed`, { traceId, error: getErrorMessage(e), stack: e.stack });
-      return res.status(500).json({ success: false, message: e.message });
-    }
-  };
-
-const genericGet = (model: Model<any>) => async (req: Request, res: Response) => {
-  const traceId = req.traceId;
-  const m = model.modelName;
-  const id = req.params.id as string;
-  logger.info(`cms ${m} get invoked`, { traceId, path: req.originalUrl, id });
-
-  try {
-    if (!isObjectId(id)) { logger.warn(`cms ${m} get invalid id`, { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
-    const doc = await model.findById(id).lean();
-    if (!doc) { logger.warn(`cms ${m} get not found`, { traceId, id }); return res.status(404).json({ success: false, message: "Not found." }); }
-    logger.info(`cms ${m} get success`, { traceId, id });
-    return res.status(200).json({ success: true, data: doc });
-  } catch (e: any) {
-    logger.error(`cms ${m} get failed`, { traceId, id, error: getErrorMessage(e), stack: e.stack });
-    return res.status(500).json({ success: false, message: e.message });
-  }
-};
-
-const genericCreate = (model: Model<any>, schema: any, transform?: (d: any) => any) =>
-  async (req: Request, res: Response) => {
-    const traceId = req.traceId;
-    const m = model.modelName;
-    logger.info(`cms ${m} create invoked`, { traceId, path: req.originalUrl });
-
-    try {
-      const parsed = schema.parse(req.body);
-      const payload = transform ? transform(parsed) : parsed;
-      const doc = await model.create(payload);
-      logger.info(`cms ${m} create success`, { traceId, id: doc._id });
-      return res.status(201).json({ success: true, data: doc });
-    } catch (e: any) {
-      if (e.issues) { logger.warn(`cms ${m} create validation failed`, { traceId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
-      logger.error(`cms ${m} create failed`, { traceId, error: getErrorMessage(e), stack: e.stack });
-      return res.status(500).json({ success: false, message: e.message });
-    }
-  };
-
-const genericUpdate = (model: Model<any>, schema: any, transform?: (d: any) => any) =>
-  async (req: Request, res: Response) => {
-    const traceId = req.traceId;
-    const m = model.modelName;
-    const id = req.params.id as string;
-    logger.info(`cms ${m} update invoked`, { traceId, path: req.originalUrl, id });
-
-    try {
-      if (!isObjectId(id)) { logger.warn(`cms ${m} update invalid id`, { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
-      const parsed = schema.parse(req.body);
-      const payload = transform ? transform(parsed) : parsed;
-      const doc = await model.findByIdAndUpdate(id, { $set: payload }, { new: true });
-      if (!doc) { logger.warn(`cms ${m} update not found`, { traceId, id }); return res.status(404).json({ success: false, message: "Not found." }); }
-      logger.info(`cms ${m} update success`, { traceId, id });
-      return res.status(200).json({ success: true, data: doc });
-    } catch (e: any) {
-      if (e.issues) { logger.warn(`cms ${m} update validation failed`, { traceId, id, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
-      logger.error(`cms ${m} update failed`, { traceId, id, error: getErrorMessage(e), stack: e.stack });
-      return res.status(500).json({ success: false, message: e.message });
-    }
-  };
-
-const genericDelete = (model: Model<any>) => async (req: Request, res: Response) => {
-  const traceId = req.traceId;
-  const m = model.modelName;
-  const id = req.params.id as string;
-  logger.info(`cms ${m} delete invoked`, { traceId, path: req.originalUrl, id });
-
-  try {
-    if (!isObjectId(id)) { logger.warn(`cms ${m} delete invalid id`, { traceId, id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
-    const doc = await model.findByIdAndDelete(id);
-    if (!doc) { logger.warn(`cms ${m} delete not found`, { traceId, id }); return res.status(404).json({ success: false, message: "Not found." }); }
-    logger.info(`cms ${m} delete success`, { traceId, id });
-    return res.status(200).json({ success: true, message: "Deleted." });
-  } catch (e: any) {
-    logger.error(`cms ${m} delete failed`, { traceId, id, error: getErrorMessage(e), stack: e.stack });
-    return res.status(500).json({ success: false, message: e.message });
-  }
-};
 
 // ─── FAQ ──
 export const listFaqs = async (req: Request, res: Response) => {
@@ -333,9 +232,62 @@ export const listFaqTypes = async (_req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: e.message });
   }
 };
-export const getFaqType = genericGet(FaqType);
-export const createFaqType = genericCreate(FaqType, faqTypeCreateSchema);
-export const updateFaqType = genericUpdate(FaqType, faqTypeUpdateSchema);
+// FAQ categories are FIXED (general, referral) on the legacy MySQL schema —
+// `ws_faq.type` is an enum, there is no `ws_faq_types` table. So types are a
+// synthetic read-only list: get resolves against FAQ_TYPES; create/update/delete
+// are not representable and return a fixed-category message.
+const FAQ_CATEGORY_FIXED_MESSAGE =
+  "FAQ categories are fixed (general, referral) on the legacy MySQL schema and cannot be modified.";
+
+export const getFaqType = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  logger.info("getFaqType invoked", { traceId, path: req.originalUrl, id });
+
+  try {
+    if (!(FAQ_TYPES as readonly string[]).includes(id)) {
+      logger.warn("getFaqType not found", { traceId, id });
+      return res.status(404).json({ success: false, message: "Not found." });
+    }
+    const type = id as (typeof FAQ_TYPES)[number];
+    return res.status(200).json({
+      success: true,
+      data: { _id: type, title: FAQ_TYPE_LABELS[type] ?? type },
+    });
+  } catch (e: any) {
+    logger.error("getFaqType failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+export const createFaqType = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("createFaqType invoked", { traceId, path: req.originalUrl });
+
+  try {
+    faqTypeCreateSchema.parse(req.body);
+    return res.status(400).json({ success: false, message: FAQ_CATEGORY_FIXED_MESSAGE });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    logger.error("createFaqType failed", { traceId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+export const updateFaqType = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = req.params.id as string;
+  logger.info("updateFaqType invoked", { traceId, path: req.originalUrl, id });
+
+  try {
+    faqTypeUpdateSchema.parse(req.body);
+    return res.status(400).json({ success: false, message: FAQ_CATEGORY_FIXED_MESSAGE });
+  } catch (e: any) {
+    if (e.issues) return res.status(400).json({ success: false, errors: e.issues });
+    logger.error("updateFaqType failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
 
 export const deleteFaqType = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -343,13 +295,7 @@ export const deleteFaqType = async (req: Request, res: Response) => {
   logger.info("deleteFaqType invoked", { traceId, path: req.originalUrl, id });
 
   try {
-    // FAQ categories are fixed (general, referral) on the legacy MySQL schema
-    // and cannot be deleted.
-    return res.status(400).json({
-      success: false,
-      message:
-        "FAQ categories are fixed (general, referral) on the legacy MySQL schema and cannot be deleted.",
-    });
+    return res.status(400).json({ success: false, message: FAQ_CATEGORY_FIXED_MESSAGE });
   } catch (e: any) {
     logger.error("deleteFaqType failed", { traceId, id, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

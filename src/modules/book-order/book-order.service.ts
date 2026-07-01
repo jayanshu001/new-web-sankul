@@ -13,20 +13,25 @@
  *
  * Flag OFF until go-live sign-off.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 import { bookOrderRepository as repo } from "./book-order.repository";
-import { toBookOrderRow, toBookOrderDto } from "./book-order.transformer";
+import {
+  toBookOrderRow,
+  toBookOrderDto,
+  toMyOrderListDto,
+  toMyOrderDetailDto,
+} from "./book-order.transformer";
 import type {
   BookOrderDto,
   BookOrderRow,
   CreatedBookOrder,
   CreateOrderItemInput,
+  MyOrderDto,
 } from "./book-order.types";
 
 export const BOOK_ORDER_MODULE = "book-order";
 
-export const isBookOrderMysql = (): boolean => isMysqlModule(BOOK_ORDER_MODULE);
+export const isBookOrderMysql = (): boolean => true;
 
 export const parseBookOrderId = (id: string): number | null => {
   const n = Number(id);
@@ -264,6 +269,51 @@ export const getOrderTrackingMysql = async (orderId: number, customerId: number)
     // Single tracking row → one history entry (keeps the UI timeline non-empty).
     history: trackStatus ? [{ status: trackStatus, location: null, note: null, at: trackAt }] : [],
   };
+};
+
+// ── customer-facing order views (listMyOrders / getMyOrderById) ──────────────
+
+/**
+ * SQL counterpart of the Mongo `listMyOrders`. A page of the customer's own
+ * orders (newest first, optional status filter) as Mongo-shaped DTOs (each with
+ * its `trackingUrl`), plus the total for the pagination envelope. Line items are
+ * fetched for the whole page in one query and grouped by order key.
+ */
+export const listMyOrdersMysql = async (
+  customerId: number,
+  opts: { status?: string; page: number; limit: number }
+): Promise<{ data: MyOrderDto[]; total: number }> => {
+  const skip = (opts.page - 1) * opts.limit;
+  const [orders, total] = await repo.findMyOrders({
+    customerId,
+    status: opts.status,
+    skip,
+    take: opts.limit,
+  });
+  const items = await repo.findOrderItemsByKeys(orders.map((o) => o.receiptId));
+  const byKey = new Map<string, typeof items>();
+  for (const it of items) {
+    const arr = byKey.get(it.order_id) ?? [];
+    arr.push(it);
+    byKey.set(it.order_id, arr);
+  }
+  const data = orders.map((o) => toMyOrderListDto(o, byKey.get(o.receiptId) ?? []));
+  return { data, total };
+};
+
+/**
+ * SQL counterpart of the Mongo `getMyOrderById`. One owned order as a Mongo-shaped
+ * DTO with the shipping address + line-item books populated and `trackingUrl`
+ * decorated. Null when the order isn't the customer's (→ 404).
+ */
+export const getMyOrderByIdMysql = async (
+  orderId: number,
+  customerId: number
+): Promise<MyOrderDto | null> => {
+  const order = await repo.findMyOrderById(orderId, customerId);
+  if (!order) return null;
+  const items = await repo.findOrderItemsWithBook(order.receiptId);
+  return toMyOrderDetailDto(order, items);
 };
 
 /** Live-tracking lookup: order status + AWB (BigInt→number). Null if not owned. */

@@ -75,6 +75,76 @@ export interface BookOrderDto {
   updatedAt: Date | null;
 }
 
+/** A populated book on a detail-order line item (mirrors Mongo `.populate("items.bookId", "_id name thumbnail author")`). */
+export interface BookOrderItemBookDto {
+  _id: string;
+  name: string;
+  thumbnail: string | null;
+  author: string | null;
+}
+
+/**
+ * Line item on the customer-facing order views. `bookId` is a string on the
+ * list (unpopulated, Mongo `_id`-shape) OR a populated book object on the detail
+ * view (matching the Mongo `.populate`).
+ */
+export interface MyOrderItemDto {
+  bookId: string | BookOrderItemBookDto | null;
+  qty: number;
+  listPrice: number;
+  price: number;
+  shippingPrice: number;
+}
+
+/**
+ * Populated shipping address on the detail view (Mongo `.populate("shippingId")`).
+ * SQL drift: `stateId` is the raw int FK; `address2`/`alternatePhone` map the
+ * SQL columns; no SQL source for a nested state doc (flagged).
+ */
+export interface MyOrderShippingDto {
+  _id: string;
+  name: string | null;
+  phone: string | null;
+  alternatePhone: string | null;
+  email: string | null;
+  address: string | null;
+  address2: string | null;
+  city: string | null;
+  stateId: string | null;
+  pincode: string | null;
+  status: boolean | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+}
+
+/**
+ * The customer-facing order DTO (GET /client/books/orders + /orders/:id). Mirrors
+ * the Mongo `BookOrder.toObject()` + `trackingUrl` decoration. `shippingId` is a
+ * string on the list, a populated object on the detail view.
+ *
+ * SQL-drift gaps (no column — omitted, NOT invented): totalListPrice,
+ * totalDiscountedPrice, totalShippingPrice, razorpayOrderPayload, shippedAt,
+ * deliveredAt, cancelledAt, remarks, item.name/weight/isMagazine, tracking.courier.
+ */
+export interface MyOrderDto {
+  _id: string;
+  receiptId: string;
+  customerId: number;
+  shippingId: string | MyOrderShippingDto | null;
+  items: MyOrderItemDto[];
+  orderType: string;
+  paymentMethod: string;
+  amount: number;
+  status: string;
+  razorpayOrderId: string | null;
+  razorpayPaymentId: string | null;
+  tracking: BookOrderTrackingDto;
+  paidAt: Date | null;
+  createdAt: Date | null;
+  updatedAt: Date | null;
+  trackingUrl: string | null;
+}
+
 /** Minimal order row for the verify owner-lookup. */
 export interface BookOrderRow {
   /** int PK. */

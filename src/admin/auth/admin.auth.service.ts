@@ -1,10 +1,13 @@
 import logger from "../../utils/logger";
 import bcrypt from "bcryptjs";
-import { AdminUser } from "../../models/admin/AdminUser.model";
 import { redisClient } from "../../config/redis";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { adminAuthRepository } from "../../modules/admin-auth/admin-auth.repository";
 import { toAdminDto } from "../../modules/admin-auth/admin-auth.transformer";
+import {
+  createAdministrator,
+  emailInUse,
+} from "../../modules/admin-auth/administrator.service";
 import {
   signAccessToken,
   signRefreshToken,
@@ -97,9 +100,11 @@ export async function createAdminUser(data: {
 }, traceId?: string): Promise<{ ok: boolean; message: string }> {
   logger.info("createAdminUser service invoked", { traceId, email: data.email });
 
-  // Only non-deleted admins block the email — a soft-deleted admin's email is reusable.
-  const exists = await AdminUser.findOne({ email: data.email.toLowerCase(), deleted: false });
-  if (exists) {
+  // ws_users has no soft-delete column; an existing row (any status) blocks the
+  // email. Roles live in spatie pivots (no `role` enum column on ws_users), so
+  // the legacy string `role` is not persisted on this branch — the bootstrap
+  // create only writes the core administrator row.
+  if (await emailInUse(data.email)) {
     logger.warn("createAdminUser service conflict", { traceId, email: data.email });
     return { ok: false, message: "Admin with this email already exists." };
   }
@@ -110,9 +115,17 @@ export async function createAdminUser(data: {
   }
 
   const hashed = await bcrypt.hash(data.password, SALT_ROUNDS);
-  const created = await AdminUser.create({ ...data, password: hashed, email: data.email.toLowerCase() });
+  await createAdministrator({
+    firstName: data.firstName,
+    lastName: data.lastName ?? null,
+    email: data.email,
+    passwordHash: hashed,
+    image: "",
+    status: true,
+    isDark: false,
+  });
 
-  logger.info("createAdminUser service success", { traceId, adminId: created._id });
+  logger.info("createAdminUser service success (sql)", { traceId, email: data.email });
   return { ok: true, message: "Admin user created successfully." };
 }
 

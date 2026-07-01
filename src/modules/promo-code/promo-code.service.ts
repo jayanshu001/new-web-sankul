@@ -13,11 +13,10 @@
  * Mongo doc shape so the admin/client response contracts are unchanged. Note the
  * Mongo doc casing: `promo_start_at` / `promo_expire_at`.
  */
-import { isMysqlModule } from "../../config/migration";
 import { prisma } from "../../config/prisma";
 
 export const PROMO_CODE_MODULE = "promo-code";
-export const isPromoCodeMysql = (): boolean => isMysqlModule(PROMO_CODE_MODULE);
+export const isPromoCodeMysql = (): boolean => true;
 
 export const parsePcId = (id: string): number | null => {
   const n = Number(id);

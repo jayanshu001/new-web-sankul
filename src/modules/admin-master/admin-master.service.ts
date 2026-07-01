@@ -83,7 +83,8 @@ export const vcDelete = async (id: number) => { if (!(await repo.vcFind(id))) re
 // binding it sets each listed child's `parent` to this category (and detaches any
 // removed ones back to root). A child can have only one parent (single-parent
 // model), so attaching a child here moves it out of any previous parent.
-// `duplicate` (DAG clone) stays on Mongo.
+// `duplicate` clones along the single-parent tree (the Mongo DAG collapses to a
+// tree on SQL) — see fullVcDuplicate.
 // ════════════════════════════════════════════════════════════════════════════
 const toFullVcDto = (c: any, children: any[], educator: any | null) => ({
   id: String(c.id),
@@ -212,6 +213,27 @@ export const fullVcToggle = async (id: number): Promise<boolean | null> => {
 };
 
 export const fullVcCategoryExists = async (id: number) => !!(await repo.vcFind(id));
+
+// Clone a category + its parent-tree descendants + their videos. Returns
+// "not_found" or the DTO the controller responds with (id as string, matching the
+// prior Mongo ObjectId shape).
+export const fullVcDuplicate = async (
+  id: number
+): Promise<
+  | "not_found"
+  | { id: string; name: string; courseId: null; liveCourseId: null; createdAt: Date; itemsCloned: { subCategories: number; videos: number } }
+> => {
+  const result = await repo.vcDuplicate(id);
+  if (!result) return "not_found";
+  return {
+    id: String(result.rootId),
+    name: result.rootTitle,
+    courseId: null,
+    liveCourseId: null,
+    createdAt: new Date(),
+    itemsCloned: { subCategories: result.subCategories, videos: result.videos },
+  };
+};
 
 export const listCategoryCourses = async (categoryId: number, q: { search?: string; status?: string; page: number; per_page: number }) => {
   const opts = { search: q.search, status: q.status === "active" ? true : q.status === "inactive" ? false : undefined };

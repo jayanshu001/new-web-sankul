@@ -1,6 +1,4 @@
 import { Request, Response } from "express";
-import mongoose from "mongoose";
-import { PackageCourseSubscription } from "../../models/customer/PackageCourseSubscription.model";
 import {
   createSubscriptionSchema,
   updateSubscriptionSchema,
@@ -8,7 +6,7 @@ import {
   adminCreateAddressSchema,
   adminUpdateAddressSchema,
 } from "./subscription.validation";
-import { PaymentMethod } from "../../models/enums";
+import { PaymentMethod } from "../../shared/enums";
 import * as subSql from "../../modules/admin-subscription/admin-subscription.service";
 import {
   listAddresses as sqlListAddresses,
@@ -20,8 +18,6 @@ import {
 import type { AddressCreateInput, AddressUpdateInput } from "../../modules/customer-address/customer-address.types";
 import { getCustomer as sqlGetCustomer } from "../../modules/admin-customer/admin-customer.service";
 import { resolveCityName } from "../../modules/offline-city/offline-city.service";
-
-const isObjectId = (v: string) => mongoose.Types.ObjectId.isValid(v);
 
 const paginated = (req: Request) => {
   const pageNum = Math.max(parseInt((req.query.page as string) || "1", 10) || 1, 1);
@@ -59,15 +55,11 @@ export const getCourseSubscriptionById = async (req: Request, res: Response) => 
   }
 };
 
-// ⚠ STAY Mongo (no SQL branch): createCourseSubscription / updateCourseSubscription /
-// deleteCourseSubscription + listCustomerAddresses / adminCreateCustomerAddress.
-// The subscription writes set Mongo-only fields (paymentStatus/paidAmount/
-// paymentMethod/withMaterial/remark/targetPackageId) with grant-extend logic;
-// ws_package_course_subscription lacks those columns. The address handlers touch
-// CustomerAddress (held OFF — offline-city dep). Only the read/report surface is
-// on SQL (admin-subscription module, Wave 7). Revisit writes with the payment wave.
-// Gateway methods map to the SQL 2-value `payment_type` enum; everything else
-// (admin/offline grants — backend/bank/cash/free) is treated as "backend".
+// All subscription reads/writes now run on SQL (admin-subscription module).
+// ws_package_course_subscription has no payment_status column, so paymentStatus
+// is Mongo-only history (status conveys active). Gateway methods map to the SQL
+// 2-value `payment_type` enum; everything else (admin/offline grants —
+// backend/bank/cash/free) is treated as "backend".
 const ONLINE_METHODS: string[] = [PaymentMethod.RAZORPAY, PaymentMethod.PAYKUN, PaymentMethod.PAYTM];
 
 export const createCourseSubscription = async (req: Request, res: Response) => {
@@ -226,19 +218,31 @@ export const adminDeleteCustomerAddress = async (req: Request, res: Response) =>
 
 export const updateCourseSubscription = async (req: Request, res: Response) => {
   try {
-    const id = req.params.id as string;
-    if (!isObjectId(id))
+    const numId = subSql.parseSubId(req.params.id as string);
+    if (!numId)
       return res.status(400).json({ success: false, message: "Invalid subscription id." });
 
     const data = updateSubscriptionSchema.parse(req.body);
-    const update: any = { ...data };
-    if (data.startAt) update.startAt = new Date(data.startAt);
-    if (data.endAt) update.endAt = new Date(data.endAt);
-    if (data.remark !== undefined) update.remark = data.remark;
+    // Only columns present on ws_package_course_subscription are patched; the
+    // customerShippingId ObjectId string maps to the numeric `shipping` column.
+    const shippingId =
+      data.customerShippingId === undefined
+        ? undefined
+        : data.customerShippingId === null
+        ? null
+        : subSql.parseSubId(String(data.customerShippingId)) ?? null;
 
-    const sub = await PackageCourseSubscription.findByIdAndUpdate(id, { $set: update }, { new: true });
-    if (!sub) return res.status(404).json({ success: false, message: "Subscription not found." });
-    return res.status(200).json({ success: true, data: sub });
+    const result = await subSql.updateCourseSubscription(numId, {
+      startAt: data.startAt ? new Date(data.startAt) : undefined,
+      endAt: data.endAt ? new Date(data.endAt) : undefined,
+      status: data.status,
+      shippingId,
+      trackingId: data.trackingId === undefined ? undefined : data.trackingId === null ? null : BigInt(data.trackingId),
+      remark: data.remark,
+    });
+    if (result === "not_found")
+      return res.status(404).json({ success: false, message: "Subscription not found." });
+    return res.status(200).json({ success: true, data: result });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
     return res.status(500).json({ success: false, message: error.message });
@@ -247,10 +251,10 @@ export const updateCourseSubscription = async (req: Request, res: Response) => {
 
 export const deleteCourseSubscription = async (req: Request, res: Response) => {
   try {
-    const id = req.params.id as string;
-    if (!isObjectId(id))
+    const numId = subSql.parseSubId(req.params.id as string);
+    if (!numId)
       return res.status(400).json({ success: false, message: "Invalid subscription id." });
-    const deleted = await PackageCourseSubscription.findByIdAndDelete(id);
+    const deleted = await subSql.deleteCourseSubscription(numId);
     if (!deleted) return res.status(404).json({ success: false, message: "Subscription not found." });
     return res.status(200).json({ success: true, message: "Subscription deleted." });
   } catch (error: any) {

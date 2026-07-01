@@ -1,6 +1,4 @@
 import { Request, Response } from "express";
-import { Types } from "mongoose";
-import { LiveSessionReminder } from "../../models/customer/LiveSessionReminder.model";
 import {
   upsertReminder,
   removeReminder,
@@ -47,8 +45,6 @@ function publicReminder(reminder: any) {
   };
 }
 
-const SESSION_FIELDS = "title status scheduledAt subject streamId liveCourseIds";
-
 // SQL branch: the admin-live-course service returns a flat reminder DTO (id,
 // liveSessionId, liveCourseId, minutesBefore, remindAt, sessionScheduledAt,
 // status, optional nested `session`). Shape it to the same public contract.
@@ -82,10 +78,9 @@ function sqlReminderToPublic(r: any) {
   };
 }
 
-// ⚠ STAY Mongo (no SQL branch): setLiveSessionReminder / removeLiveSessionReminder.
-// They provision/cancel a scheduled Notification row + BullMQ job (the
-// notification pipeline is not migrated), so the write path stays on Mongo even
-// under the live-course flag. Only the two read handlers above branch to SQL.
+// setLiveSessionReminder / removeLiveSessionReminder delegate to the SQL service
+// (`client-live-reminder.service`), which provisions/cancels the scheduled
+// notification row + BullMQ job on the migrated tables. No Mongo path remains.
 //
 // POST /api/v1/client/live-reminders
 // Body: { liveSessionId, minutesBefore? }  — set (or replace) a reminder for a
@@ -116,15 +111,12 @@ export const setLiveSessionReminder = async (req: Request, res: Response) => {
     const result = await upsertReminder(customerId, liveSessionId, minutesBefore, traceId);
     if (!result.ok) { logger.warn("setLiveSessionReminder upsert failed", { traceId, customerId, liveSessionId, message: result.message }); return failure(res, result.message, result.status); }
 
-    // Re-read with the session populated so the response is self-contained.
-    const populated = await LiveSessionReminder.findById(result.reminder._id)
-      .populate("liveSessionId", SESSION_FIELDS)
-      .lean();
-
+    // The SQL service already returns a Mongo-shaped, session-populated reminder
+    // (`toReminderShape`), so the response is self-contained without a re-read.
     logger.info("setLiveSessionReminder success", { traceId, customerId, liveSessionId, reminderId: result.reminder._id });
     return success(
       res,
-      { reminder: publicReminder(populated ?? result.reminder) },
+      { reminder: publicReminder(result.reminder) },
       "Reminder set — you'll be notified before the class starts.",
       201
     );
@@ -207,7 +199,7 @@ export const removeLiveSessionReminder = async (req: Request, res: Response) => 
   try {
     if (!customerId) { logger.warn("removeLiveSessionReminder unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
-    if (!Types.ObjectId.isValid(liveSessionId)) {
+    if (!liveSql.parseLiveId(liveSessionId)) {
       logger.warn("removeLiveSessionReminder invalid id", { traceId, customerId, liveSessionId });
       return failure(res, "Invalid liveSessionId.", 422);
     }
