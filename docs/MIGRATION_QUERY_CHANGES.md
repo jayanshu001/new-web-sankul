@@ -4,6 +4,78 @@
 
 ---
 
+## 2026-07-01 — P1/P2 scalability hardening (no DB/schema/query change)
+
+Non-breaking items from `docs/SCALABILITY_OPTIMIZATION_AUDIT.md`. Code/config only; no
+data-layer change. `yarn typecheck` green. All response shapes preserved.
+
+- **P1.1** `src/index.ts` — background schedulers gated behind `WORKER_ENABLED` (defaults
+  **ON**; set `=false` on API-only replicas). `stopPlanPopularityScheduler()` now called on shutdown.
+- **P1.5** `src/index.ts` — graceful-shutdown `preClose` now drains Socket.io (`io.close()`),
+  camera-ingest WS clients + server, and the pooled PDF browser.
+- **P1.6** — added an upper bound (`Math.min(..., 500)`) to the ad-hoc page-limit parsing in
+  `client/package`, `client/categories`, `client/notification`, `promoter/customer`,
+  `admin/customer` controllers. Default (20) + envelope unchanged; only blocks extreme `limit` abuse.
+- **P1.10** `src/config/prisma.ts` — added a `$use` timing middleware populating request-context
+  `dbMs` (instrumentation only; never alters params/results).
+- **P1.2** `src/modules/admin-notification/admin-notification.service.ts` — chunk the per-recipient
+  feed `createMany` into 500-row batches (FCM multicast was already 500-batched in `utils/fcm.ts`).
+  Identical recipient set + response.
+- **P2.1** `src/libs/core/generate.ts` — Puppeteer now uses a lazy singleton browser + bounded page
+  pool (max 3) instead of launch/close per request. PDF bytes + signatures identical.
+- **P2.2** `src/app.ts` + `src/utils/logger.ts` — `morgan("dev")` gated to non-production; winston
+  level defaults to `info` in production (`LOG_LEVEL` override). Logs only; no response change.
+- **P2.3** `src/utils/metrics.ts` — added process gauges (RSS, heap used/total, event-loop lag) with
+  `pid`/`instance` labels. Existing metrics unchanged (additive).
+- **P0.2/P0.3** (prior entry below) — global limiter mount + trust proxy + Redis store fix.
+
+Deferred (behavior-changing or unverifiable — need product/staging decision): P1.3 single-device
+enforcement, P1.7 dashboard `take` limits, P1.8 package-detail CTE batching (reverted — needs a
+staging count-equivalence test), P1.9 search min-length + FULLTEXT, P2.4 JSON body-limit reduction,
+P1.4 ffmpeg offload.
+
+---
+
+## 2026-07-01 — P0 scalability hardening: rate limiting (no DB/schema/query change)
+
+Fixes from `docs/SCALABILITY_OPTIMIZATION_AUDIT.md` P0.2 + P0.3. Code-only; no data-layer change.
+
+- **P0.3** `src/config/rateLimiter.ts` — all limiters (global/otp/admin/adminMutation) now build
+  their `RedisStore` unconditionally via a `redisStore(prefix?)` helper instead of the
+  `isRedisReady()`-at-import gate (which raced Redis `connecting` → silent per-process in-memory
+  fallback, weakening limits across the PM2 cluster). Limits/messages/keys unchanged.
+- **P0.2** `src/app.ts` — added `app.set("trust proxy", 1)` (real client IP behind the LB) and
+  mounted `globalLimiter` (60/min per IP) on the **public** surfaces only (`/api/v1/client`,
+  `/educator`, `/promoter`). Admin keeps its own per-admin `adminLimiter`; the HMAC Razorpay
+  webhook and `/healthz`/`/readyz`/`/metrics` are NOT throttled. Response envelope unchanged;
+  429 only fires above the limit.
+- P0.1 (readyz MySQL ping) + P0.4 (otpLimiter re-enable, timingSafeEqual) were implemented
+  separately in the working tree; not modified here.
+
+---
+
+## 2026-07-01 — Implementation-audit remediation (security/observability; no DB/schema change)
+
+Fixes from `docs/IMPLEMENTATION_ISSUES_AUDIT.md` (v1.1). Code-only; no queries/schema changed.
+
+- **I0.1** `src/client/webhook/webhook.controller.ts` — Razorpay payment webhook now verifies
+  the signature against `req.rawBody` (buffer stashed in `app.ts`), not `JSON.stringify(req.body)`.
+- **I0.2** `src/middlewares/health.ts` — `/readyz` now runs a real MySQL `prisma.$queryRaw\`SELECT 1\``
+  check alongside Redis; stale "Pings Mongo" comments corrected.
+- **I1.2** 35 client-controller catch blocks — `failure(res, getErrorMessage(err), 500)` →
+  generic `"Something went wrong. Please try again later."` (real error still logged).
+- **I1.3** `src/webhooks/razorpay-payout.controller.ts` — structured logs on every branch;
+  catch returns generic 500 (no `error.message` leak).
+- **I1.4** `src/middlewares/authenticate.ts` — new `optionalAuthenticate`; wired into
+  `client/tracking` + `client/offline` enquiry routes (invalid token → anonymous, not 401).
+- **I1.5** `src/client/profile/customer.{routes,controller}.ts` — `PATCH /firebase-token` now
+  requires `authenticate` and binds to `req.user.phone` (ignores body `phoneNumber`).
+- **I1.8** `src/client/auth/auth.service.ts` (OTP `crypto.timingSafeEqual`) +
+  `auth.routes.ts` (`otpLimiter` re-enabled on generate/resend).
+- `yarn typecheck` green.
+
+---
+
 ## 2026-07-01 — `GET /client/live-courses/upcoming-batches`: populate category tab bar from ws_package_category
 
 The category tab bar emitted `title/slug/image: null` — a stale gap: the code comment said

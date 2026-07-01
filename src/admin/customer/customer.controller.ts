@@ -27,7 +27,7 @@ export const getCustomers = async (req: Request, res: Response) => {
     } = req.query as Record<string, string>;
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
 
     const { items, total } = await customerSql.listCustomers({
       search,
@@ -187,7 +187,7 @@ export const getCustomerCourseSubscriptions = async (req: Request, res: Response
 
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
 
     // Subscription models are not yet on SQL — return an empty page on the
     // ws_customer branch so the admin detail view degrades gracefully.
@@ -210,7 +210,7 @@ export const getCustomerEbookSubscriptions = async (req: Request, res: Response)
 
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
 
     // Ebook-subscription model not yet on SQL — empty page on ws_customer branch.
     return res.status(200).json({

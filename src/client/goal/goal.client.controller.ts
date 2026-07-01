@@ -28,7 +28,7 @@ export const fetchActiveGoalsHandler = async (req: Request, res: Response) => {
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -73,7 +73,7 @@ export const fetchMySelectedGoalsHandler = async (req: Request, res: Response) =
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -101,6 +101,6 @@ export const updateMyGoalsHandler = async (req: Request, res: Response) => {
     return success(res, result.data, result.message ?? "Goals updated.", 200);
   } catch (err) {
     logger.error("updateMyGoalsHandler failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };

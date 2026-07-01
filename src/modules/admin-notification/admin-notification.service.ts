@@ -190,24 +190,32 @@ export async function dispatchAudience(
   if (!isBroadcast && resolved.customerIds.length && status === "sent") {
     try {
       const now = new Date();
-      await prisma.notification.createMany({
-        data: resolved.customerIds.map((id) => ({
-          customerId: id,
-          broadcast: false,
-          title: payload.title,
-          body: payload.body,
-          image: payload.image ?? null,
-          type: payload.type ?? "general",
-          deepLink: payload.deepLink ?? null,
-          data: (payload.data ?? {}) as any,
-          status: "sent",
-          sentAt: now,
-          recipientCount: 1,
-          audience: { all: false, userIds: [id] } as any,
-          createdAt: now,
-          updatedAt: now,
-        })),
-      });
+      // Chunk the per-recipient feed insert to bound memory/packet size for
+      // large targeted audiences. Each row is independent, so the set of rows
+      // inserted is identical regardless of batch boundaries (order-independent).
+      const FEED_INSERT_BATCH_SIZE = 500;
+      const ids = resolved.customerIds;
+      for (let i = 0; i < ids.length; i += FEED_INSERT_BATCH_SIZE) {
+        const batch = ids.slice(i, i + FEED_INSERT_BATCH_SIZE);
+        await prisma.notification.createMany({
+          data: batch.map((id) => ({
+            customerId: id,
+            broadcast: false,
+            title: payload.title,
+            body: payload.body,
+            image: payload.image ?? null,
+            type: payload.type ?? "general",
+            deepLink: payload.deepLink ?? null,
+            data: (payload.data ?? {}) as any,
+            status: "sent",
+            sentAt: now,
+            recipientCount: 1,
+            audience: { all: false, userIds: [id] } as any,
+            createdAt: now,
+            updatedAt: now,
+          })),
+        });
+      }
     } catch (err) {
       logger.error("SQL: failed to fan out per-recipient notification rows", {
         error: (err as Error).message,

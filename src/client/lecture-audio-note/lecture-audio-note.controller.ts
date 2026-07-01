@@ -64,7 +64,7 @@ export const createAudioNote = async (req: Request, res: Response) => {
     // Best-effort orphan cleanup if the DB write blew up after the upload landed.
     if (file?.location) await deleteFromS3FileUrl(file.location);
     logger.error("createAudioNote failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -108,7 +108,7 @@ export const listAudioNotes = async (req: Request, res: Response) => {
     return success(res, { notes, lecture, resumeNext }, "Audio notes fetched.", 200);
   } catch (err) {
     logger.error("listAudioNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -144,7 +144,7 @@ export const updateAudioNote = async (req: Request, res: Response) => {
     return success(res, { note }, "Audio note updated.", 200);
   } catch (err) {
     logger.error("updateAudioNote failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -173,6 +173,6 @@ export const deleteAudioNote = async (req: Request, res: Response) => {
     return success(res, {}, "Audio note deleted.", 200);
   } catch (err) {
     logger.error("deleteAudioNote failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };

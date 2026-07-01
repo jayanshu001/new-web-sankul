@@ -1,5 +1,5 @@
 import { Router } from "express";
-import authenticate, { requireRole } from "../../middlewares/authenticate";
+import authenticate, { requireRole, optionalAuthenticate } from "../../middlewares/authenticate";
 import {
   getOfflineDashboard,
   // listCities,            // moved to /api/v1/client/address/cities
@@ -25,17 +25,9 @@ router.get("/batches", authenticate, requireRole("customer"), listBatches);
 router.get("/centers/:id", authenticate, requireRole("customer"), getCenterDetail);
 router.get("/batches/:id", authenticate, requireRole("customer"), getBatchDetail);
 
-// Enquiry accepts both anonymous and authenticated — attempt to attach userId if present
-router.post("/enquiry", (req, res, next) => {
-  // Best-effort auth: run authenticate but don't block if no header
-  if (req.headers.authorization) {
-    return authenticate(req, res, (err?: any) => {
-      if (err) return next();
-      return next();
-    });
-  }
-  return next();
-}, submitEnquiry);
+// Enquiry accepts both anonymous and authenticated — attach userId when a valid
+// token is present; a stale/invalid token must NOT block this public route.
+router.post("/enquiry", optionalAuthenticate, submitEnquiry);
 
 // Offline-batch "Register" form — auth REQUIRED (Bearer token, customer role).
 router.post("/batch-enquiry", authenticate, requireRole("customer"), submitBatchEnquiry);

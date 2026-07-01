@@ -7,16 +7,17 @@
 //              Returns 200 unless the process is wedged (timeouts kick in).
 //
 //   /readyz  — Readiness. "Should the LB send traffic here right now?"
-//              Pings Mongo, Redis, and the notification queue. Returns 503
-//              if any dependency is unhealthy. K8s uses this to decide
-//              whether to KEEP traffic flowing; failing /readyz briefly
-//              during a Mongo blip is preferable to spraying 5xx at users.
+//              Pings MySQL (Prisma) + Redis. Returns 503 if any dependency is
+//              unhealthy. K8s uses this to decide whether to KEEP traffic
+//              flowing; failing /readyz briefly during a DB/Redis blip is
+//              preferable to spraying 5xx at users.
 //
 // Both endpoints are mounted BEFORE the global rate limiter so a scrape
 // storm or LB health-check storm doesn't accidentally get throttled.
 
 import type { RequestHandler } from "express";
 import { redisClient } from "../config/redis";
+import { prisma } from "../config/prisma";
 import { isShuttingDown } from "../utils/gracefulShutdown";
 import {
   getPdfUploadQueueOrNull,
@@ -53,7 +54,7 @@ export const livenessHandler: RequestHandler = (_req, res) => {
 };
 
 /**
- * Readiness probe. Pings Mongo and Redis with a tight timeout each. Returns
+ * Readiness probe. Pings MySQL (Prisma) and Redis with a tight timeout each. Returns
  * 200 only if every check passes. Anything else → 503 + per-check status.
  *
  * Note: we don't ping the notification queue separately because it shares
@@ -73,6 +74,16 @@ export const readinessHandler: RequestHandler = async (_req, res) => {
   }
 
   const checks: Record<string, { ok: boolean; latencyMs?: number; error?: string }> = {};
+
+  // MySQL (Prisma): the primary datastore. A trivial `SELECT 1` confirms the
+  // connection pool can serve queries right now.
+  const mysqlStart = Date.now();
+  try {
+    await withTimeout(prisma.$queryRaw`SELECT 1`, PING_TIMEOUT_MS, "mysql");
+    checks.mysql = { ok: true, latencyMs: Date.now() - mysqlStart };
+  } catch (err) {
+    checks.mysql = { ok: false, latencyMs: Date.now() - mysqlStart, error: (err as Error).message };
+  }
 
   // Redis: PING is the canonical check. ioredis short-circuits with a queued
   // error if not connected, so the timeout is belt-and-suspenders.

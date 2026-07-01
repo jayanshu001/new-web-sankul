@@ -35,7 +35,7 @@ export const generateOtpHandler = async (req: Request, res: Response) => {
     return success(res, { isNewUser: result.isNewUser }, result.message, 200);
   } catch (err) {
     logger.error("generateOtpHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -75,7 +75,7 @@ export const validateOtpHandler = async (req: Request, res: Response) => {
     );
   } catch (err) {
     logger.error("validateOtpHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -110,7 +110,7 @@ export const refreshTokenHandler = async (req: Request, res: Response) => {
     );
   } catch (err) {
     logger.error("refreshTokenHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -132,7 +132,7 @@ export const logoutHandler = async (req: Request, res: Response) => {
     return success(res, {}, result.message, 200);
   } catch (err) {
     logger.error("logoutHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -185,6 +185,6 @@ export const resendOtpHandler = async (req: Request, res: Response) => {
     return success(res, {}, result.message, 200);
   } catch (err) {
     logger.error("resendOtpHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };

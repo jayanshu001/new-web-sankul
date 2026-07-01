@@ -67,7 +67,7 @@ export const listCoursesHandler = async (req: Request, res: Response) => {
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -87,7 +87,7 @@ export const listCourseCategoriesHandler = async (req: Request, res: Response) =
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -118,7 +118,7 @@ export const listCoursesByCategoryHandler = async (req: Request, res: Response) 
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -159,7 +159,7 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -206,7 +206,7 @@ export const addCourseOrderShippingHandler = async (
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -244,7 +244,7 @@ export const getOrderDetailsHandler = async (req: Request, res: Response) => {
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 

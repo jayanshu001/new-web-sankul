@@ -197,6 +197,29 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
 };
 
 /**
+ * Best-effort auth for routes that serve BOTH anonymous and authenticated
+ * callers (e.g. event tracking, offline enquiry). Attaches `req.user` when a
+ * valid Bearer token is present; on a missing/invalid/expired token it silently
+ * continues anonymously (never 401s). Use strict `authenticate` when an invalid
+ * token must block. Note: this intentionally skips the revocation/account-gate
+ * checks — it only enriches the request with an identity when one is available.
+ */
+export const optionalAuthenticate = async (req: Request, _res: Response, next: NextFunction) => {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : undefined;
+  if (!token) return next();
+  try {
+    const decoded = verifyAccessToken<any>(token);
+    const role = decoded.role ?? "customer";
+    req.user = { id: decoded.id, phone: decoded.phone, email: decoded.email, role, ...decoded };
+    updateContext({ userId: decoded.id, userRole: role });
+  } catch {
+    // Invalid/expired token on an optional route → proceed anonymously.
+  }
+  return next();
+};
+
+/**
  * Middleware factory — restrict access to specific roles.
  * Usage: router.get("/admin-only", authenticate, requireRole("admin", "super_admin"), handler)
  */

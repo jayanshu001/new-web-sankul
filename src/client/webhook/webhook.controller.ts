@@ -26,11 +26,20 @@ export const paymentWebhook = async (req: Request, res: Response) => {
 
   try {
     const signature = req.headers["x-razorpay-signature"] as string;
-    const rawBody = JSON.stringify(req.body);
+    // Razorpay signs the RAW request bytes — verify against the buffer stashed by
+    // the JSON body-parser (app.ts), not a re-serialized `JSON.stringify(req.body)`
+    // (whitespace/key-order differences there cause valid webhooks to fail).
+    const rawBodyBuf = (req as any).rawBody as Buffer | undefined;
+    const rawBody = rawBodyBuf ? rawBodyBuf.toString("utf8") : JSON.stringify(req.body);
 
     if (RAZORPAY_WEBHOOK_SECRET) {
       if (!signature || !verifySignature(rawBody, signature)) {
-        logger.warn("paymentWebhook signature mismatch", { traceId });
+        logger.warn("paymentWebhook signature mismatch", {
+          traceId,
+          event: req.body?.event,
+          orderId: req.body?.payload?.payment?.entity?.order_id,
+          hasRawBody: !!rawBodyBuf,
+        });
         return res.status(401).json({ success: false, message: "Invalid signature." });
       }
     }

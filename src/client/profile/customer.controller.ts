@@ -54,7 +54,7 @@ export const updateProfileHandler = async (req: Request, res: Response) => {
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -83,7 +83,7 @@ export const getProfileHandler = async (req: Request, res: Response) => {
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -134,7 +134,7 @@ export const upsertProfilePictureHandler = async (req: Request, res: Response) =
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -157,22 +157,32 @@ export const deleteAccountHandler = async (req: Request, res: Response) => {
     return success(res, {}, result.message, 200);
   } catch (err) {
     logger.error("deleteAccountHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
 /**
  * PATCH /api/v1/client/profile/firebase-token
- * Body: { phoneNumber: string; firebaseToken: string }
- * No auth required — called immediately after login on device.
+ * Body: { firebaseToken: string; platform?: "ios" | "android" }
+ * Authenticated — the token is bound to the caller's phone from the JWT (any
+ * `phoneNumber` in the body is ignored). Legacy; prefer PUT /device-token.
  */
 export const updateFirebaseTokenHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
-  logger.info("updateFirebaseTokenHandler invoked", { traceId });
+  const userId = req.user?.id;
+  logger.info("updateFirebaseTokenHandler invoked", { traceId, userId });
   try {
-    const { phoneNumber, firebaseToken, platform } = req.body;
-    if (!phoneNumber || !firebaseToken) {
-      return failure(res, "phoneNumber and firebaseToken are required.", 422);
+    // Bind to the AUTHENTICATED user's phone (from the JWT) — never trust a
+    // `phoneNumber` from the body, which previously let anyone overwrite another
+    // user's push token. The body phone (if any) is ignored.
+    const phoneNumber = req.user?.phone;
+    const { firebaseToken, platform } = req.body;
+    if (!phoneNumber) {
+      logger.warn("updateFirebaseTokenHandler no phone on token", { traceId, userId });
+      return failure(res, "Unauthorized request.", 401);
+    }
+    if (!firebaseToken) {
+      return failure(res, "firebaseToken is required.", 422);
     }
     const normalizedPlatform =
       platform === "ios" || platform === "android" ? platform : undefined;
@@ -187,7 +197,7 @@ export const updateFirebaseTokenHandler = async (req: Request, res: Response) =>
     return success(res, {}, result.message, 200);
   } catch (err) {
     logger.error("updateFirebaseTokenHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -221,7 +231,7 @@ export const registerDeviceTokenHandler = async (req: Request, res: Response) =>
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -254,7 +264,7 @@ export const unregisterDeviceTokenHandler = async (req: Request, res: Response) 
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -291,6 +301,6 @@ export const deleteProfilePictureHandler = async (req: Request, res: Response) =
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };

@@ -64,7 +64,9 @@ const consoleFormat = winston.format.combine(
 
 //  Create logger
 const baseLogger = winston.createLogger({
-  level: 'debug',
+  // Production defaults to `info` to cut log volume + disk I/O at high RPS; dev
+  // stays `debug`. Override explicitly with LOG_LEVEL when needed.
+  level: process.env.LOG_LEVEL ?? (process.env.NODE_ENV === 'production' ? 'info' : 'debug'),
   format: customFormat,
   defaultMeta: { service: 'Web-sankul' },
   transports: [

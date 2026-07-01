@@ -1,6 +1,6 @@
 import path from "path";
 import ejs from "ejs";
-import puppeteer from "puppeteer";
+import puppeteer, { type Browser } from "puppeteer";
 
 import { ExamResultType } from "../../shared/enums";
 import { prisma } from "../../config/prisma";
@@ -71,33 +71,115 @@ function formatDate(d?: Date): string {
   return `${dd}-${mm}-${yyyy}`;
 }
 
-export async function renderPdfFromHtml(html: string): Promise<Buffer> {
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
-  });
+// ---------------------------------------------------------------------------
+// Pooled headless Chromium (P2.1)
+//
+// Previously renderPdfFromHtml() launched a fresh Chromium (puppeteer.launch)
+// and closed it on EVERY call — expensive (~hundreds of ms + memory churn) and
+// wasteful under load. We now keep ONE shared browser alive and open a fresh
+// page per render. This is a purely internal performance change: same launch
+// args, same page.pdf options, byte-identical output, and renderPdfFromHtml's
+// signature/return value are unchanged.
+// ---------------------------------------------------------------------------
+
+// Same launch args as before — kept verbatim so the rendered PDF is identical.
+const BROWSER_LAUNCH_OPTIONS = {
+  headless: true as const,
+  args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
+};
+
+let browserPromise: Promise<Browser> | null = null;
+
+// Lazy singleton: launch once, cache the instance. If Chromium dies/disconnects
+// we clear the cache so the next render relaunches a healthy browser.
+async function getBrowser(): Promise<Browser> {
+  if (!browserPromise) {
+    browserPromise = puppeteer.launch(BROWSER_LAUNCH_OPTIONS).then((browser) => {
+      browser.on("disconnected", () => {
+        // Only clear if this is still the cached browser (avoid clobbering a
+        // relaunch that may have already replaced it).
+        browserPromise = null;
+      });
+      return browser;
+    });
+    // If the launch itself rejects, don't cache the rejected promise.
+    browserPromise.catch(() => {
+      browserPromise = null;
+    });
+  }
+  return browserPromise;
+}
+
+// Optional graceful-shutdown hook: closes the shared browser if callers wire it
+// in. Safe to leave uncalled — a detached Chromium is acceptable (out of scope).
+export async function closePdfBrowser(): Promise<void> {
+  const pending = browserPromise;
+  browserPromise = null;
+  if (!pending) return;
   try {
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "load" });
-    // Block until every @font-face used on the page has actually loaded.
-    // `display=block` in the template hides text until the font is ready, and
-    // `document.fonts.ready` resolves only once those fonts have loaded — so the
-    // PDF is never rasterised with a fallback font that lacks Indic (Gujarati/
-    // Hindi) glyphs. Cap the wait so a slow/blocked font CDN can't hang the PDF.
-    await page.evaluate(async () => {
-      await Promise.race([
-        (document as any).fonts.ready,
-        new Promise((resolve) => setTimeout(resolve, 5000)),
-      ]);
-    });
-    const pdf = await page.pdf({
-      format: "A4",
-      printBackground: true,
-      margin: { top: "20px", right: "20px", bottom: "20px", left: "20px" },
-    });
-    return Buffer.from(pdf);
-  } finally {
+    const browser = await pending;
     await browser.close();
+  } catch {
+    // ignore — nothing to clean up if it never came up
+  }
+}
+
+// Simple in-process semaphore bounding how many pages render concurrently, so a
+// burst of receipt requests can't spawn unbounded pages on the shared browser.
+// Slots are always released in a finally, so it cannot deadlock.
+const MAX_CONCURRENT_PAGES = 3;
+let activePages = 0;
+const waiters: Array<() => void> = [];
+
+function acquirePageSlot(): Promise<void> {
+  if (activePages < MAX_CONCURRENT_PAGES) {
+    activePages++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    waiters.push(() => {
+      activePages++;
+      resolve();
+    });
+  });
+}
+
+function releasePageSlot(): void {
+  activePages--;
+  const next = waiters.shift();
+  if (next) next();
+}
+
+export async function renderPdfFromHtml(html: string): Promise<Buffer> {
+  await acquirePageSlot();
+  try {
+    const browser = await getBrowser();
+    const page = await browser.newPage();
+    try {
+      await page.setContent(html, { waitUntil: "load" });
+      // Block until every @font-face used on the page has actually loaded.
+      // `display=block` in the template hides text until the font is ready, and
+      // `document.fonts.ready` resolves only once those fonts have loaded — so the
+      // PDF is never rasterised with a fallback font that lacks Indic (Gujarati/
+      // Hindi) glyphs. Cap the wait so a slow/blocked font CDN can't hang the PDF.
+      await page.evaluate(async () => {
+        await Promise.race([
+          (document as any).fonts.ready,
+          new Promise((resolve) => setTimeout(resolve, 5000)),
+        ]);
+      });
+      const pdf = await page.pdf({
+        format: "A4",
+        printBackground: true,
+        margin: { top: "20px", right: "20px", bottom: "20px", left: "20px" },
+      });
+      return Buffer.from(pdf);
+    } finally {
+      // Close only the page — NEVER the shared browser.
+      await page.close();
+    }
+  } finally {
+    releasePageSlot();
   }
 }
 

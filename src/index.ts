@@ -30,7 +30,11 @@ import { initLiveChatSocket } from "./socket/livechat.socket";
 import { initCameraIngest } from "./socket/camera-ingest";
 import { initPdfProgressSocket } from "./socket/pdf-progress.socket";
 import { initPdfUploadScheduler } from "./admin/pdfUpload/pdfUpload.scheduler";
-import { initPlanPopularityScheduler } from "./modules/plan-popularity/plan-popularity.scheduler";
+import {
+  initPlanPopularityScheduler,
+  stopPlanPopularityScheduler,
+} from "./modules/plan-popularity/plan-popularity.scheduler";
+import { closePdfBrowser } from "./libs/core/generate";
 import { installGracefulShutdown } from "./utils/gracefulShutdown";
 
 const PORT = process.env.PORT || 5000;
@@ -62,31 +66,76 @@ const startServer = async () => {
     } catch (err) {
       logger.error("[permissions] catalog sync failed (continuing boot):", err);
     }
-    await initNotificationScheduler();
-    // BullMQ pipeline that uploads admin-supplied PDFs to Spaces and attaches
-    // each to its ebook, strictly one-at-a-time, with live Socket.io progress.
-    await initPdfUploadScheduler();
-    // Periodic recompute of the "Most Popular" pricing-plan flags (sales-driven).
-    initPlanPopularityScheduler();
+    // Background workers (notification dispatch, PDF-upload pipeline, plan-popularity
+    // recompute). Gated so a horizontally-scaled deploy can run them in ONE dedicated
+    // worker process instead of every API replica (which would duplicate FCM sends and
+    // defeat the single-flight PDF design). Defaults to ENABLED so existing
+    // single-process deploys are unaffected; set WORKER_ENABLED=false on API-only replicas.
+    const workersEnabled = process.env.WORKER_ENABLED !== "false";
+    if (workersEnabled) {
+      await initNotificationScheduler();
+      // BullMQ pipeline that uploads admin-supplied PDFs to Spaces and attaches
+      // each to its ebook, strictly one-at-a-time, with live Socket.io progress.
+      await initPdfUploadScheduler();
+      // Periodic recompute of the "Most Popular" pricing-plan flags (sales-driven).
+      initPlanPopularityScheduler();
+    } else {
+      logger.info("[workers] WORKER_ENABLED=false — background schedulers skipped in this process.");
+    }
 
     const httpServer = createServer(app);
     httpServer.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
     httpServer.headersTimeout = HEADERS_TIMEOUT_MS;
 
-    // Attach Socket.io for live class chat
-    initLiveChatSocket(httpServer, allowedOrigins);
+    // Attach Socket.io for live class chat (handle retained for graceful drain)
+    const io = initLiveChatSocket(httpServer, allowedOrigins);
 
     // Attach the camera-ingest WebSocket bridge (browser camera → ffmpeg → RTMP)
-    initCameraIngest(httpServer);
+    const wss = initCameraIngest(httpServer);
 
     // Attach the admin PDF-upload progress namespace (/admin/pdf-uploads).
     // Must run AFTER initLiveChatSocket — it reuses that shared Socket.io server.
     initPdfProgressSocket();
 
     // Wire SIGTERM / SIGINT to the orchestrated shutdown — stops the LB
-    // sending traffic via /readyz=503, drains in-flight, closes BullMQ + Mongo
-    // + Redis, then exits. See utils/gracefulShutdown.ts for the full order.
-    installGracefulShutdown({ httpServer });
+    // sending traffic via /readyz=503, drains in-flight, closes BullMQ +
+    // Redis, then exits. See utils/gracefulShutdown.ts for the full order.
+    // preClose explicitly drains the socket servers (so upgraded WS connections
+    // don't linger through the deploy) and stops the plan-popularity cron.
+    installGracefulShutdown({
+      httpServer,
+      preClose: async () => {
+        if (workersEnabled) {
+          try {
+            stopPlanPopularityScheduler();
+          } catch (err) {
+            logger.warn("[shutdown] stopPlanPopularityScheduler failed", { err: (err as Error).message });
+          }
+        }
+        try {
+          await io.close();
+        } catch (err) {
+          logger.warn("[shutdown] Socket.io close failed", { err: (err as Error).message });
+        }
+        try {
+          for (const client of wss.clients) {
+            try {
+              client.close();
+            } catch {
+              /* ignore individual client close errors */
+            }
+          }
+          await new Promise<void>((resolve) => wss.close(() => resolve()));
+        } catch (err) {
+          logger.warn("[shutdown] camera-ingest WS close failed", { err: (err as Error).message });
+        }
+        try {
+          await closePdfBrowser();
+        } catch (err) {
+          logger.warn("[shutdown] PDF browser close failed", { err: (err as Error).message });
+        }
+      },
+    });
 
     httpServer.listen(PORT, async () => {
       logger.info(`API server running at http://localhost:${PORT}`);

@@ -20,7 +20,7 @@ export const getChatHistory = async (req: Request, res: Response) => {
     return success(res, { messages }, "Chat history fetched", 200);
   } catch (err) {
     logger.error("getChatHistory failed", { traceId, liveClassId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -37,6 +37,6 @@ export const getChatBanStatus = async (req: Request, res: Response) => {
     return success(res, payload, "Chat ban status fetched", 200);
   } catch (err) {
     logger.error("getChatBanStatus failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };

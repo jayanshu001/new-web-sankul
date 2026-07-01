@@ -27,6 +27,27 @@ Highest priority:
 
 ---
 
+## Resolution Status — updated 2026-07-01
+
+Re-audited against current code and remediated. Summary:
+
+| ID | Issue | Status | What changed |
+|----|-------|--------|--------------|
+| I0.1 | Webhook verifies re-serialized JSON | ✅ Fixed | `webhook.controller.ts` now verifies against `req.rawBody` buffer (falls back to `JSON.stringify` only if absent) + logs event/orderId on mismatch. |
+| I0.2 | `/readyz` `/health` probe Mongo | ✅ Fixed | Readiness already dropped the Mongo probe; added a real MySQL `SELECT 1` (Prisma) check + Redis, and corrected stale "Pings Mongo" comments in `health.ts`. |
+| I1.1 | Uneven logging/trace coverage | ◑ Improved | Payout webhook now fully logged (see I1.3); broader logging standard remains a gradual effort. |
+| I1.2 | Handlers leak internal error messages | ✅ Fixed | All 35 client-controller `failure(res, getErrorMessage(err), 500)` sites now return a generic message; the real error is still logged server-side. (`asyncHandler` adoption remains a future refactor.) |
+| I1.3 | Payout webhook weak observability | ✅ Fixed | Structured logs on every branch (secret/rawbody/signature/ignored/unknown/already/applied/error); catch now returns generic 500 (no `error.message` leak). |
+| I1.4 | "Optional" auth blocks stale tokens | ✅ Fixed | Added `optionalAuthenticate` middleware; `tracking` + `offline/enquiry` routes use it (invalid token → continue anonymously). |
+| I1.5 | Public `/firebase-token` abuse | ✅ Fixed | Route now requires `authenticate`; handler binds to `req.user.phone` (JWT) and ignores any body `phoneNumber`. |
+| I1.6 | Completion-log route normalization | ○ Not changed | Low severity; the completion log already merges `route` from request context. Left as-is. |
+| I1.7 | MongoDB-era artifacts | ✅ Resolved (prior work) | `db.ts`, `secondaryRead.ts`, `src/models/` deleted; `mongoose` removed from `package.json`; zero `import mongoose` in `src`. |
+| I1.8 | OTP not constant-time / limiter off | ✅ Fixed | OTP compared with `crypto.timingSafeEqual`; `otpLimiter` re-enabled on `/otp/generate` + `/otp/resend`. |
+
+Legend: ✅ fixed · ◑ partially addressed · ○ deferred (low severity).
+
+---
+
 ## Priority 0 — Must Fix Before Production
 
 ### I0.1 Payment Webhook Signature Verification Uses Re-Serialized JSON
@@ -260,30 +281,30 @@ Recommendations:
 
 ### Phase 1 — Before Production (blockers)
 
-| Step | Action | Files |
-|------|--------|-------|
-| 1.1 | Fix payment webhook raw body verification | `src/client/webhook/webhook.controller.ts` |
-| 1.2 | Fix `/readyz` MySQL probe | `src/middlewares/health.ts` |
-| 1.3 | Re-enable OTP limiter + timing-safe compare | `auth.routes.ts`, `auth.service.ts` |
-| 1.4 | Secure or deprecate public `/firebase-token` | `customer.routes.ts`, `customer.controller.ts` |
+| Step | Action | Files | Status |
+|------|--------|-------|--------|
+| 1.1 | Fix payment webhook raw body verification | `src/client/webhook/webhook.controller.ts` | ✅ Done |
+| 1.2 | Fix `/readyz` MySQL probe | `src/middlewares/health.ts` | ✅ Done |
+| 1.3 | Re-enable OTP limiter + timing-safe compare | `auth.routes.ts`, `auth.service.ts` | ✅ Done |
+| 1.4 | Secure or deprecate public `/firebase-token` | `customer.routes.ts`, `customer.controller.ts` | ✅ Done |
 
 ### Phase 2 — Hardening
 
-| Step | Action |
-|------|--------|
-| 2.1 | Introduce `asyncHandler`; route errors through `errorHandler` |
-| 2.2 | Add structured logs to payout webhook branches |
-| 2.3 | Implement `optionalAuthenticate` for best-effort routes |
-| 2.4 | Fix request completion log route normalization |
-| 2.5 | Add Prisma query timing middleware for `dbMs` |
+| Step | Action | Status |
+|------|--------|--------|
+| 2.1 | Introduce `asyncHandler`; route errors through `errorHandler` | ◑ `asyncHandler` exists + used in admin; client 500s now return generic messages (full refactor pending) |
+| 2.2 | Add structured logs to payout webhook branches | ✅ Done |
+| 2.3 | Implement `optionalAuthenticate` for best-effort routes | ✅ Done |
+| 2.4 | Fix request completion log route normalization | ○ Deferred (low severity) |
+| 2.5 | Add Prisma query timing middleware for `dbMs` | ○ Deferred |
 
 ### Phase 3 — Cleanup
 
-| Step | Action |
-|------|--------|
-| 3.1 | Remove `db.ts`, `secondaryRead.ts`, unused Mongoose models |
-| 3.2 | Remove `mongoose` dependency |
-| 3.3 | Standardize logging standard across services |
+| Step | Action | Status |
+|------|--------|--------|
+| 3.1 | Remove `db.ts`, `secondaryRead.ts`, unused Mongoose models | ✅ Done (prior Mongo-removal) |
+| 3.2 | Remove `mongoose` dependency | ✅ Done (prior Mongo-removal) |
+| 3.3 | Standardize logging standard across services | ◑ Ongoing |
 
 ---
 
@@ -292,3 +313,4 @@ Recommendations:
 | Date | Version | Notes |
 |------|---------|-------|
 | 2026-07-01 | 1.0 | Split from `SCALABILITY_OPTIMIZATION_AUDIT.md` |
+| 2026-07-01 | 1.1 | Re-audited against current code + remediated: I0.1, I0.2, I1.2, I1.3, I1.4, I1.5, I1.8 fixed; I1.7 already resolved (Mongo removed); I1.1 improved; I1.6 deferred. See Resolution Status. |

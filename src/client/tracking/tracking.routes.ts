@@ -1,15 +1,11 @@
 import { Router } from "express";
-import authenticate from "../../middlewares/authenticate";
+import { optionalAuthenticate } from "../../middlewares/authenticate";
 import { trackEvent } from "./tracking.controller";
 
 const router = Router();
 
-// Best-effort auth: attach customerId if header present, otherwise allow anonymous track.
-router.post("/", (req, res, next) => {
-  if (req.headers.authorization) {
-    return authenticate(req, res, (err?: any) => (err ? next() : next()));
-  }
-  return next();
-}, trackEvent);
+// Best-effort auth: attach customerId when a valid token is present, otherwise
+// track anonymously (a stale/invalid token must NOT block this public route).
+router.post("/", optionalAuthenticate, trackEvent);
 
 export default router;

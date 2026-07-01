@@ -15,7 +15,7 @@ export const listMyNotifications = async (req: Request, res: Response) => {
 
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
     const skip = (pageNum - 1) * limitNum;
 
     const cid = notifSql.parseNotifId(String(userId));

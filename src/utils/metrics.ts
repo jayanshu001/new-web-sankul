@@ -15,10 +15,25 @@
 //   cache_hits_total{domain}                      counter
 //   cache_misses_total{domain}                    counter
 //
+//   process_resident_memory_bytes{pid,instance}   gauge (sampled at scrape)
+//   nodejs_heap_used_bytes{pid,instance}           gauge (sampled at scrape)
+//   nodejs_heap_total_bytes{pid,instance}          gauge (sampled at scrape)
+//   nodejs_eventloop_lag_seconds{pid,instance}     gauge (sampled at scrape)
+//
 // Label cardinality is bounded by funnelling unknown routes through the
 // `normalizeRoute` helper before recording.
 
+import { monitorEventLoopDelay } from "node:perf_hooks";
+
 type Labels = Record<string, string | number>;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Process/instance identity — constant labels for the process-level gauges.
+// ──────────────────────────────────────────────────────────────────────────────
+
+const PID = String(process.pid);
+const INSTANCE = process.env.INSTANCE_ID ?? process.env.pm_id ?? PID;
+const PROCESS_LABELS: Labels = { pid: PID, instance: INSTANCE };
 
 const labelsKey = (labels: Labels): string =>
   Object.keys(labels)
@@ -169,7 +184,60 @@ export const cacheMissesTotal = new Counter(
   "Cache misses via cache.aside (loader invoked), labelled by domain."
 );
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Process-level gauges (additive; labelled by pid + instance).
+//
+// These reflect the state of THIS Node process at scrape time. They are sampled
+// inside renderMetrics() below so the emitted values are always current, mirroring
+// the default process metrics that prom-client would otherwise expose.
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const processResidentMemoryBytes = new Gauge(
+  "process_resident_memory_bytes",
+  "Resident set size (RSS) of the Node process in bytes, labelled by pid and instance."
+);
+
+export const nodejsHeapUsedBytes = new Gauge(
+  "nodejs_heap_used_bytes",
+  "V8 heap used in bytes, labelled by pid and instance."
+);
+
+export const nodejsHeapTotalBytes = new Gauge(
+  "nodejs_heap_total_bytes",
+  "V8 heap total (allocated) in bytes, labelled by pid and instance."
+);
+
+export const nodejsEventLoopLagSeconds = new Gauge(
+  "nodejs_eventloop_lag_seconds",
+  "Mean event-loop lag in seconds since the previous scrape, labelled by pid and instance."
+);
+
+// Started once at module load; sampled + reset each scrape so the reported mean
+// reflects the interval between scrapes rather than the whole process lifetime.
+const eventLoopDelay = monitorEventLoopDelay({ resolution: 10 });
+eventLoopDelay.enable();
+
+/**
+ * Refresh the process-level gauges from live runtime counters. Called from
+ * renderMetrics() so /metrics always exposes current values.
+ */
+const sampleProcessMetrics = (): void => {
+  const mem = process.memoryUsage();
+  processResidentMemoryBytes.set(mem.rss, PROCESS_LABELS);
+  nodejsHeapUsedBytes.set(mem.heapUsed, PROCESS_LABELS);
+  nodejsHeapTotalBytes.set(mem.heapTotal, PROCESS_LABELS);
+
+  // `mean` is in nanoseconds; convert to seconds. Guard against NaN (no samples yet).
+  const meanNs = eventLoopDelay.mean;
+  nodejsEventLoopLagSeconds.set(
+    Number.isFinite(meanNs) ? meanNs / 1e9 : 0,
+    PROCESS_LABELS
+  );
+  eventLoopDelay.reset();
+};
+
 export const renderMetrics = (): string => {
+  sampleProcessMetrics();
   return [
     httpRequestsTotal.render(),
     httpRequestDurationMs.render(),
@@ -177,6 +245,10 @@ export const renderMetrics = (): string => {
     queueDlqTotal.render(),
     cacheHitsTotal.render(),
     cacheMissesTotal.render(),
+    processResidentMemoryBytes.render(),
+    nodejsHeapUsedBytes.render(),
+    nodejsHeapTotalBytes.render(),
+    nodejsEventLoopLagSeconds.render(),
   ]
     .filter(Boolean)
     .join("\n\n");

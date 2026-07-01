@@ -64,7 +64,7 @@ export const listPackages = async (req: Request, res: Response) => {
     } = req.query as Record<string, string>;
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
     const skip = (pageNum - 1) * limitNum;
 
     const cid = req.user?.id ? Number(req.user.id) : null;
@@ -357,7 +357,7 @@ export const getChatMessages = async (req: Request, res: Response) => {
     }
     const { page = "1", limit = "20" } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
     const { data, total } = await listChatMessagesMysql(packageIdInt, pageNum, limitNum);
     logger.info("getChatMessages success (mysql)", { traceId, customerId, packageId, total });
     return res.status(200).json({

@@ -57,10 +57,12 @@ router.delete("/profile-picture", authenticate, deleteProfilePictureHandler);
 
 /**
  * @route  PATCH /api/v1/client/profile/firebase-token
- * @desc   Update firebase token by phone number (post-login sync from device)
- * @access Public
+ * @desc   Update the authenticated customer's firebase token (legacy path; prefer
+ *         PUT /device-token). Now REQUIRES auth — the token is bound to the
+ *         authenticated user, not an arbitrary phone number from the body.
+ * @access Private (Customer)
  */
-router.patch("/firebase-token", updateFirebaseTokenHandler);
+router.patch("/firebase-token", authenticate, updateFirebaseTokenHandler);
 
 /**
  * @route  PUT /api/v1/client/profile/device-token

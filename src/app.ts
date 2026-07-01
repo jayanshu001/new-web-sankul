@@ -33,6 +33,12 @@ import { razorpayPayoutWebhook } from "./webhooks/razorpay-payout.controller";
 
 const app = express();
 
+// Behind a load balancer / reverse proxy: trust the first proxy hop so `req.ip`
+// reflects the real client IP (from X-Forwarded-For) instead of the LB's IP.
+// Without this, per-IP rate limiting would bucket ALL traffic under one LB IP.
+// Increase the hop count if there is more than one proxy in front of the app.
+app.set("trust proxy", 1);
+
 // --- Security & Performance -------------------------------------------------
 app.use(helmet());
 app.use(compression());
@@ -153,7 +159,12 @@ app.use(
 );
 
 // --- Logging ---------------------------------------------------------------
-app.use(morgan("dev"));
+// morgan's per-request line is useful in dev but noisy + I/O-heavy at production
+// RPS (requestLogger already captures structured start/complete logs). Gate it off
+// in production.
+if (process.env.NODE_ENV !== "production") {
+  app.use(morgan("dev"));
+}
 app.use(requestLogger);
 // Open the AsyncLocalStorage scope immediately after requestLogger seeds the
 // traceId — every downstream middleware, route handler, mongoose hook, and
@@ -278,21 +289,24 @@ app.get("/metrics", (req, res) => {
   return res.status(200).send(renderMetrics() + "\n");
 });
 
-// --- Global Rate Limiter ---------------------------------------------------
-// app.use(globalLimiter);
-
 // --- Routes ----------------------------------------------------------------
+// Global per-IP rate limiter (Anti-DDoS, 60/min) mounted on the PUBLIC API
+// surfaces only. Admin already has its own per-admin `adminLimiter` (240/min)
+// inside adminRoutes, so it is intentionally NOT double-limited here. The
+// Razorpay webhook below is HMAC-verified and must not be throttled (provider
+// retries). Health/metrics are mounted above the limiter and stay unaffected.
+// Relies on `trust proxy` (set above) so limiting keys on the real client IP.
 // Master Client Routes (Mobile App / Web Portal)
-app.use("/api/v1/client", clientRoutes);
+app.use("/api/v1/client", globalLimiter, clientRoutes);
 
-// Master Admin Routes (Dashboard)
+// Master Admin Routes (Dashboard) — own per-admin limiter inside adminRoutes
 app.use("/api/v1/admin", adminRoutes);
 
 // Master Educator Routes (Educator Portal)
-app.use("/api/v1/educator", educatorRoutes);
+app.use("/api/v1/educator", globalLimiter, educatorRoutes);
 
 // Master Promoter Routes (Promoter Portal)
-app.use("/api/v1/promoter", promoterRoutes);
+app.use("/api/v1/promoter", globalLimiter, promoterRoutes);
 
 // Inbound webhooks (HMAC-verified; no Bearer auth — request authenticity is proven by signature)
 app.post("/api/v1/webhooks/razorpay-payout", razorpayPayoutWebhook);

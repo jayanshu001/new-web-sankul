@@ -1,6 +1,18 @@
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import RedisStore from "rate-limit-redis";
-import { redisClient, isRedisReady } from "./redis";
+import { redisClient } from "./redis";
+
+// Always construct the Redis-backed store. `RedisStore` only holds a `sendCommand`
+// callback and does NOT connect at construction, so the previous `isRedisReady()`
+// gate was a boot-time race: if Redis was still `connecting` during module import,
+// the limiter silently fell back to per-process memory for the whole process
+// lifetime (each PM2 worker / node getting its own counter, weakening the limit).
+// Building it unconditionally keeps every limiter cluster-wide and consistent.
+const redisStore = (prefix?: string) =>
+  new RedisStore({
+    sendCommand: (...args: string[]) => redisClient.call(args[0], ...args.slice(1)) as any,
+    ...(prefix ? { prefix } : {}),
+  });
 
 // Global API rate limiter (Anti-DDOS) — 60 req/min per IP
 export const globalLimiter = rateLimit({
@@ -12,12 +24,7 @@ export const globalLimiter = rateLimit({
     success: false,
     message: "Too many requests, please try again later.",
   },
-  // Use Redis store if ready, otherwise fallback to in-memory
-  store: isRedisReady()
-    ? new RedisStore({
-        sendCommand: (...args: string[]) => redisClient.call(args[0], ...args.slice(1)) as any,
-      })
-    : undefined,
+  store: redisStore(),
 });
 
 // OTP generation specific strict rate limit (Anti-Spam)
@@ -30,12 +37,7 @@ export const otpLimiter = rateLimit({
     success: false,
     message: "Too many OTP requests from this IP, please try again after 15 minutes.",
   },
-  store: isRedisReady()
-    ? new RedisStore({
-        sendCommand: (...args: string[]) => redisClient.call(args[0], ...args.slice(1)) as any,
-        prefix: "rl:otp:",
-      })
-    : undefined,
+  store: redisStore("rl:otp:"),
 });
 
 // Admin surface limiter — keys by admin user id when authenticated, else IP.
@@ -57,12 +59,7 @@ export const adminLimiter = rateLimit({
     success: false,
     message: "Too many admin requests, please slow down.",
   },
-  store: isRedisReady()
-    ? new RedisStore({
-        sendCommand: (...args: string[]) => redisClient.call(args[0], ...args.slice(1)) as any,
-        prefix: "rl:admin:",
-      })
-    : undefined,
+  store: redisStore("rl:admin:"),
 });
 
 // Tight limiter for write-sensitive mutations (referral credit, plan default flips,
@@ -80,10 +77,5 @@ export const adminMutationLimiter = rateLimit({
     success: false,
     message: "Mutation rate exceeded; retry shortly.",
   },
-  store: isRedisReady()
-    ? new RedisStore({
-        sendCommand: (...args: string[]) => redisClient.call(args[0], ...args.slice(1)) as any,
-        prefix: "rl:adminmut:",
-      })
-    : undefined,
+  store: redisStore("rl:adminmut:"),
 });

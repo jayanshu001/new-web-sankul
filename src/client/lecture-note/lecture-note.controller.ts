@@ -42,7 +42,7 @@ export const createNote = async (req: Request, res: Response) => {
     return success(res, { note }, "Note created.", 201);
   } catch (err) {
     logger.error("createNote failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -83,7 +83,7 @@ export const listNotes = async (req: Request, res: Response) => {
     return success(res, { notes, lecture, resumeNext }, "Notes fetched.", 200);
   } catch (err) {
     logger.error("listNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -109,7 +109,7 @@ export const listSavedMaterialNotes = async (req: Request, res: Response) => {
     return success(res, { items }, "Saved materials fetched.", 200);
   } catch (err) {
     logger.error("listSavedMaterialNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -144,7 +144,7 @@ export const updateNote = async (req: Request, res: Response) => {
     return success(res, { note }, "Note updated.", 200);
   } catch (err) {
     logger.error("updateNote failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
 
@@ -169,6 +169,6 @@ export const deleteNote = async (req: Request, res: Response) => {
     return success(res, {}, "Note deleted.", 200);
   } catch (err) {
     logger.error("deleteNote failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };

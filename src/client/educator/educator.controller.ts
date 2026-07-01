@@ -46,6 +46,6 @@ export const getEducatorWithCoursesHandler = async (
       error: getErrorMessage(err),
       stack: (err as Error).stack,
     });
-    return failure(res, getErrorMessage(err), 500);
+    return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };

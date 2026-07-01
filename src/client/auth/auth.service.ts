@@ -1,5 +1,6 @@
 import logger from "../../utils/logger";
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import { redisClient } from "../../config/redis";
 import { customerAuthRepository } from "../../modules/customer-auth/customer-auth.repository";
 import {
@@ -227,7 +228,12 @@ export async function validateOtp(
 
   const triedOtp = (row.triedOtp ?? 0) + 1;
 
-  if (row.otp !== otp) {
+  // Constant-time OTP comparison to avoid a timing side-channel. (Length differs →
+  // definitely wrong; OTP length is fixed so the length check leaks nothing useful.)
+  const otpBuf = Buffer.from(String(row.otp ?? ""), "utf8");
+  const inputBuf = Buffer.from(String(otp ?? ""), "utf8");
+  const otpMismatch = otpBuf.length !== inputBuf.length || !crypto.timingSafeEqual(otpBuf, inputBuf);
+  if (otpMismatch) {
     await customerAuthRepository.bumpTriedOtp(row.id, triedOtp, osType);
     const remaining = OTP_MAX_ATTEMPTS - triedOtp;
     logger.warn("validateOtp service wrong otp", { traceId, customerId: row.id, remaining });

@@ -3,10 +3,7 @@ import { generateOtpHandler, validateOtpHandler, refreshTokenHandler, resendOtpH
 import authenticate from "../../middlewares/authenticate";
 import { logoutAllDevicesHandler } from "../../middlewares/logoutAllDevices";
 import { customerAuthRepository } from "../../modules/customer-auth/customer-auth.repository";
-// TEMP (testing): otpLimiter disabled so repeated OTP requests don't hit the
-// 15-min / 5-request 429. RESTORE before merging — re-add it to the two
-// /otp routes below and uncomment this import.
-// import { otpLimiter } from "../../config/rateLimiter";
+import { otpLimiter } from "../../config/rateLimiter";
 
 const router = Router();
 
@@ -15,14 +12,14 @@ const router = Router();
  * @desc   Send OTP to phone number (creates account if first time)
  * @access Public
  */
-router.post("/otp/generate", /* otpLimiter, */ generateOtpHandler); // TEMP: rate limit off for testing
+router.post("/otp/generate", otpLimiter, generateOtpHandler);
 
 /**
  * @route  POST /api/v1/auth/otp/resend
  * @desc   Resend an OTP to the user's phone number
  * @access Public
  */
-router.post("/otp/resend", /* otpLimiter, */ resendOtpHandler); // TEMP: rate limit off for testing
+router.post("/otp/resend", otpLimiter, resendOtpHandler);
 
 /**
  * @route  POST /api/v1/auth/otp/validate
