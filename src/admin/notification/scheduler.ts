@@ -168,6 +168,24 @@ export async function cancelNotificationJob(notificationId: string): Promise<voi
   }
 }
 
+const REHYDRATE_LOCK_KEY = "notif:rehydrate:boot-lock";
+const REHYDRATE_LOCK_TTL_SEC = 120;
+
+/**
+ * Only one worker process should scan scheduled rows on boot. BullMQ jobIds are
+ * idempotent, but the SQL scan + enqueue loop is wasteful when duplicated.
+ */
+async function tryAcquireRehydrateLock(conn: RedisType): Promise<boolean> {
+  const acquired = await conn.set(
+    REHYDRATE_LOCK_KEY,
+    String(process.pid),
+    "EX",
+    REHYDRATE_LOCK_TTL_SEC,
+    "NX"
+  );
+  return acquired === "OK";
+}
+
 /**
  * Boot-time rehydrate: enqueue every notification still in "scheduled" status.
  * BullMQ's deterministic jobId (notification._id) makes this idempotent — if
@@ -306,7 +324,12 @@ export async function initNotificationScheduler(): Promise<void> {
     logger.error("Notification worker error", { error: err.message });
   });
 
-  const rehydrated = await rehydrateScheduledNotifications();
+  let rehydrated = 0;
+  if (connection && (await tryAcquireRehydrateLock(connection))) {
+    rehydrated = await rehydrateScheduledNotifications();
+  } else {
+    logger.info("Notification rehydrate skipped — another worker holds the boot lock.");
+  }
   logger.info("BullMQ notification scheduler started.", { rehydrated });
 
   // Sample queue depth periodically and publish to the /metrics registry.

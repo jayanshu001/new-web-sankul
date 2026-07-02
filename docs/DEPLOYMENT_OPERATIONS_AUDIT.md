@@ -620,3 +620,28 @@ pm2 logs websankul-worker --lines 50
 | Date | Version | Notes |
 |------|---------|-------|
 | 2026-07-01 | 1.0 | Split from `SCALABILITY_OPTIMIZATION_AUDIT.md` |
+| 2026-07-01 | 1.1 | Deployment fixes applied (PM2 split, worker-only mode, compose hardening) |
+
+---
+
+## Fix Status (2026-07-01)
+
+| Item | Status |
+|------|--------|
+| D0.1 Build step + `deploy:prod` script | **Fixed** — `package.json` |
+| D0.2 Module format (`"type": "module"` removed) | **Fixed** — `package.json` |
+| D0.3 PM2 API + worker split | **Fixed** — `ecosystem.config.cjs`, `index.ts` |
+| D0.4 `listen_timeout` / `kill_timeout` | **Fixed** — `ecosystem.config.cjs` (45s / 40s) |
+| D1.1 Memory limits per process type | **Fixed** — API 512M, worker 768M |
+| D1.2 `connection_limit` documentation | **Fixed** — `.env.example`, `env.ts` warn, `DEPLOY_RUNBOOK.md` |
+| D1.4 Docker localhost bind | **Fixed** — `docker-compose.yml` |
+| D1.5 Redis hardening notes | **Fixed** — `redis.conf`, runbook |
+| D1.6 RabbitMQ removed | **Fixed** — `docker-compose.yml` |
+| D1.7 Env validation by profile | **Fixed** — `env.ts` `DEPLOY_PROFILE` warnings |
+| D1.8 OS deps documented | **Fixed** — `DEPLOY_RUNBOOK.md` § 7e |
+| D1.9 DDL migrate in deploy script | **Fixed** — `yarn deploy:prod` |
+| D1.10 Ops detail in runbook | **Fixed** — `DEPLOY_RUNBOOK.md` § 7a–7f |
+| D2.1 cpuMonitor/autoScale | **Documented** — do not run in prod |
+| D2.2 Metrics instance labels | **Already present** — `metrics.ts` uses `pm_id` |
+| D2.3 LOG_LEVEL in PM2 | **Fixed** — `ecosystem.config.cjs` `env_production` |
+| Rehydrate leader lock | **Fixed** — `scheduler.ts` |

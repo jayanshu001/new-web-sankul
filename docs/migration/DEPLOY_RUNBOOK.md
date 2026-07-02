@@ -127,12 +127,91 @@ yarn migration:api  # smoke tests vs real MySQL
 
 ## 7. Run / deploy
 
-- **Local:** `yarn dev`
-- **Prod:** `yarn build && yarn start` (pm2)
+- **Local:** `yarn dev` (single process via tsx — workers + HTTP together)
+- **Local PM2 (split topology):** `yarn build && pm2 start ecosystem.config.cjs`
+- **Production:** `yarn deploy:prod` (install → migrate → generate → build → pm2 reload)
 
-Sanity: boots with no Mongo connection, Prisma connected, schedulers up, `/readyz` → 200 once warm.
+### 7a. PM2 process topology (production)
 
-## 8. Rollback
+Two PM2 apps in `ecosystem.config.cjs`:
 
-DDL/backfills are additive — no revert needed. Re-enabling Mongo is a one-line change in `src/config/migration.ts` (`isMongoFallbackEnabled`). **Snapshot MySQL before step 4** on production.
+| App | Role | Env flags |
+|-----|------|-----------|
+| `websankul-api` | HTTP + WebSockets (cluster ×2 default) | `WORKER_ENABLED=false`, `HTTP_SERVER_ENABLED=true` |
+| `websankul-worker` | BullMQ (notifications, PDF upload, plan popularity) | `WORKER_ENABLED=true`, `HTTP_SERVER_ENABLED=false` |
+
+```bash
+# First deploy
+yarn build
+pm2 start ecosystem.config.cjs --env production
+
+# Subsequent deploys
+yarn deploy:prod
+
+# Logs
+pm2 logs websankul-api --lines 50
+pm2 logs websankul-worker --lines 50
+pm2 status
+```
+
+**Do not** run `cpuMonitor.ts` / `autoScale.ts` in production.
+
+### 7b. Health probes
+
+| Endpoint | Expect |
+|----------|--------|
+| `GET /healthz` | 200 always (liveness) |
+| `GET /readyz` | 200 when MySQL + Redis healthy; 503 during graceful shutdown |
+
+Post-deploy smoke:
+
+```bash
+curl -s http://localhost:5000/healthz
+curl -s http://localhost:5000/readyz
+```
+
+### 7c. MySQL connection pool sizing
+
+Add `connection_limit` to `DATABASE_URL` in production:
+
+```
+DATABASE_URL="mysql://user:pass@host:3306/db?connection_limit=10"
+```
+
+Formula: `connection_limit × (api_instances + worker_instances) × server_count ≤ max_connections × 0.8`
+
+Example: `max_connections=150`, 2 API + 1 worker, `connection_limit=10` → 30 connections.
+
+### 7d. Redis (production)
+
+- Use managed Redis or hardened self-hosted instance with **AUTH** (`REDIS_PASSWORD` in app `.env`).
+- Queue backend is **BullMQ/Redis** — RabbitMQ is not used (removed from `docker-compose.yml`).
+- Local dev: `yarn db:up` starts MySQL (`127.0.0.1:3307`) + Redis (`127.0.0.1:6380`).
+
+### 7e. OS dependencies (server packages)
+
+Required on the host for full feature parity:
+
+```bash
+# Ubuntu/Debian
+apt-get install -y ffmpeg chromium-browser fonts-noto fonts-noto-cjk
+```
+
+- **ffmpeg** — live camera ingest (`src/socket/camera-ingest.ts`)
+- **Chromium** — Puppeteer PDF receipts/solutions (`src/libs/core/generate.ts`)
+
+### 7f. Rollback
+
+```bash
+git checkout <previous-tag-or-commit>
+yarn install --frozen-lockfile
+yarn build
+pm2 reload ecosystem.config.cjs --env production
+```
+
+DDL/backfills are additive — snapshot MySQL before schema deploys on production.
+
+Sanity: boots with Prisma connected, `/readyz` → 200 once warm, **one** PDF worker processing uploads.
+
+> Full operations checklist: `docs/DEPLOYMENT_OPERATIONS_AUDIT.md`
 7
