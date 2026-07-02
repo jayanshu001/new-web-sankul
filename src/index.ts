@@ -12,16 +12,14 @@ dotenv.config();
 };
 
 import { validateEnvOrExit } from "./config/env";
-// Fail fast if JWT_ACCESS_SECRET / JWT_REFRESH_SECRET are missing (MONGODB_URI
-// only required when MONGO_FALLBACK_ENABLED=true). In prod, also requires
-// ALLOWED_ORIGINS + RAZORPAY_WEBHOOK_SECRET.
 validateEnvOrExit();
 
 import { createServer } from "http";
+import type { Server as SocketIOServer } from "socket.io";
+import type { WebSocketServer } from "ws";
 import app from "./app";
 import { connectPrisma } from "./config/prisma";
 import logger from "./utils/logger";
-import { sendEmail } from "./utils/emailService";
 import getLocalIpAddress from "./utils/getLocalIp";
 import { pm2Ready } from "./utils/pm2Logger";
 import { initNotificationScheduler } from "./admin/notification/scheduler";
@@ -38,6 +36,12 @@ import { closePdfBrowser } from "./libs/core/generate";
 import { installGracefulShutdown } from "./utils/gracefulShutdown";
 
 const PORT = process.env.PORT || 5000;
+
+const httpEnabled = process.env.HTTP_SERVER_ENABLED !== "false";
+const workersEnabled = process.env.WORKER_ENABLED !== "false";
+
+const bootMs = (label: string, startedAt: number) =>
+  logger.info(`[boot] ${label}`, { ms: Date.now() - startedAt });
 
 // HTTP server keep-alive tuning. Node's default keepAliveTimeout is 5s and
 // headersTimeout is 60s; we set keepAliveTimeout > the typical AWS ELB / GCP
@@ -57,89 +61,126 @@ const allowedOrigins = (
   .map((o) => o.trim())
   .filter(Boolean);
 
-const startServer = async () => {
-  try {
-    await connectPrisma();
-    logger.info("[db] MySQL-only: all modules served from MySQL (Prisma).");
+const closeCameraIngest = async (wss: WebSocketServer): Promise<void> => {
+  for (const client of wss.clients) {
     try {
-      await syncPermissionCatalog();
-    } catch (err) {
-      logger.error("[permissions] catalog sync failed (continuing boot):", err);
+      client.close();
+    } catch {
+      /* ignore individual client close errors */
     }
-    // Background workers (notification dispatch, PDF-upload pipeline, plan-popularity
-    // recompute). Gated so a horizontally-scaled deploy can run them in ONE dedicated
-    // worker process instead of every API replica (which would duplicate FCM sends and
-    // defeat the single-flight PDF design). Defaults to ENABLED so existing
-    // single-process deploys are unaffected; set WORKER_ENABLED=false on API-only replicas.
-    const workersEnabled = process.env.WORKER_ENABLED !== "false";
+  }
+  await new Promise<void>((resolve) => wss.close(() => resolve()));
+};
+
+const buildPreClose =
+  (sockets?: { io?: SocketIOServer; wss?: WebSocketServer }) => async (): Promise<void> => {
     if (workersEnabled) {
-      await initNotificationScheduler();
-      // BullMQ pipeline that uploads admin-supplied PDFs to Spaces and attaches
-      // each to its ebook, strictly one-at-a-time, with live Socket.io progress.
-      await initPdfUploadScheduler();
-      // Periodic recompute of the "Most Popular" pricing-plan flags (sales-driven).
-      initPlanPopularityScheduler();
+      try {
+        stopPlanPopularityScheduler();
+      } catch (err) {
+        logger.warn("[shutdown] stopPlanPopularityScheduler failed", {
+          err: (err as Error).message,
+        });
+      }
+    }
+    if (sockets?.io) {
+      try {
+        await sockets.io.close();
+      } catch (err) {
+        logger.warn("[shutdown] Socket.io close failed", { err: (err as Error).message });
+      }
+    }
+    if (sockets?.wss) {
+      try {
+        await closeCameraIngest(sockets.wss);
+      } catch (err) {
+        logger.warn("[shutdown] camera-ingest WS close failed", {
+          err: (err as Error).message,
+        });
+      }
+    }
+    try {
+      await closePdfBrowser();
+    } catch (err) {
+      logger.warn("[shutdown] PDF browser close failed", { err: (err as Error).message });
+    }
+  };
+
+const startWorkers = async (): Promise<void> => {
+  const t0 = Date.now();
+  await initNotificationScheduler();
+  bootMs("notification scheduler", t0);
+
+  const t1 = Date.now();
+  await initPdfUploadScheduler();
+  bootMs("PDF upload scheduler", t1);
+
+  const t2 = Date.now();
+  initPlanPopularityScheduler();
+  bootMs("plan popularity scheduler", t2);
+};
+
+const startServer = async () => {
+  if (!httpEnabled && !workersEnabled) {
+    logger.error(
+      "[boot] FATAL: HTTP_SERVER_ENABLED=false and WORKER_ENABLED=false — nothing to run."
+    );
+    process.exit(1);
+  }
+
+  try {
+    const tDb = Date.now();
+    await connectPrisma();
+    bootMs("MySQL (Prisma)", tDb);
+    logger.info("[db] MySQL-only: all modules served from MySQL (Prisma).");
+
+    if (httpEnabled) {
+      const tPerm = Date.now();
+      try {
+        await syncPermissionCatalog();
+        bootMs("permission catalog sync", tPerm);
+      } catch (err) {
+        logger.error("[permissions] catalog sync failed (continuing boot):", err);
+      }
+    }
+
+    if (workersEnabled) {
+      await startWorkers();
     } else {
       logger.info("[workers] WORKER_ENABLED=false — background schedulers skipped in this process.");
+    }
+
+    // Worker-only process: no HTTP listener, signal PM2 ready after workers are up.
+    if (!httpEnabled) {
+      installGracefulShutdown({ preClose: buildPreClose() });
+      logger.info("[worker] Background worker process ready (no HTTP server).", {
+        pid: process.pid,
+        workersEnabled,
+      });
+      pm2Ready();
+      return;
     }
 
     const httpServer = createServer(app);
     httpServer.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
     httpServer.headersTimeout = HEADERS_TIMEOUT_MS;
 
-    // Attach Socket.io for live class chat (handle retained for graceful drain)
     const io = initLiveChatSocket(httpServer, allowedOrigins);
-
-    // Attach the camera-ingest WebSocket bridge (browser camera → ffmpeg → RTMP)
     const wss = initCameraIngest(httpServer);
-
-    // Attach the admin PDF-upload progress namespace (/admin/pdf-uploads).
-    // Must run AFTER initLiveChatSocket — it reuses that shared Socket.io server.
     initPdfProgressSocket();
 
-    // Wire SIGTERM / SIGINT to the orchestrated shutdown — stops the LB
-    // sending traffic via /readyz=503, drains in-flight, closes BullMQ +
-    // Redis, then exits. See utils/gracefulShutdown.ts for the full order.
-    // preClose explicitly drains the socket servers (so upgraded WS connections
-    // don't linger through the deploy) and stops the plan-popularity cron.
     installGracefulShutdown({
       httpServer,
-      preClose: async () => {
-        if (workersEnabled) {
-          try {
-            stopPlanPopularityScheduler();
-          } catch (err) {
-            logger.warn("[shutdown] stopPlanPopularityScheduler failed", { err: (err as Error).message });
-          }
-        }
-        try {
-          await io.close();
-        } catch (err) {
-          logger.warn("[shutdown] Socket.io close failed", { err: (err as Error).message });
-        }
-        try {
-          for (const client of wss.clients) {
-            try {
-              client.close();
-            } catch {
-              /* ignore individual client close errors */
-            }
-          }
-          await new Promise<void>((resolve) => wss.close(() => resolve()));
-        } catch (err) {
-          logger.warn("[shutdown] camera-ingest WS close failed", { err: (err as Error).message });
-        }
-        try {
-          await closePdfBrowser();
-        } catch (err) {
-          logger.warn("[shutdown] PDF browser close failed", { err: (err as Error).message });
-        }
-      },
+      preClose: buildPreClose({ io, wss }),
     });
 
-    httpServer.listen(PORT, async () => {
+    const tListen = Date.now();
+    httpServer.listen(PORT, () => {
+      bootMs("httpServer.listen", tListen);
       logger.info(`API server running at http://localhost:${PORT}`);
-      logger.info(`Server Local IP: ${getLocalIpAddress()}`, { "localurl": `http://${getLocalIpAddress()}:${PORT}` });
+      logger.info(`Server Local IP: ${getLocalIpAddress()}`, {
+        localurl: `http://${getLocalIpAddress()}:${PORT}`,
+      });
       pm2Ready();
     });
   } catch (error) {

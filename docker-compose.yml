@@ -3,7 +3,8 @@ services:
     image: mysql:8.0
     container_name: ws-mysql
     ports:
-      - "3307:3306"
+      # Bind to localhost only — avoids clashes with other projects on shared dev hosts.
+      - "127.0.0.1:3307:3306"
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-websankul_dev}
       MYSQL_DATABASE: websankul_staging
@@ -27,7 +28,8 @@ services:
     image: redis:alpine
     container_name: ws-redis
     ports:
-      - "6380:6379"
+      # Localhost-only publish; pair with REDIS_PASSWORD in production-like dev.
+      - "127.0.0.1:6380:6379"
     volumes:
       - redis_data:/data
       - ./redis.conf:/usr/local/etc/redis/redis.conf
@@ -41,21 +43,6 @@ services:
       timeout: 5s
       retries: 5
 
-  rabbitmq:
-    image: rabbitmq:3-management
-    container_name: socket-rabbitmq
-    ports:
-      - "5673:5672"
-      - "15673:15672"
-    environment:
-      - RABBITMQ_DEFAULT_USER=admin
-      - RABBITMQ_DEFAULT_PASS=S3cretPass
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    restart: always
-    networks:
-      - socket-network
-
 networks:
   socket-network:
     driver: bridge
@@ -63,4 +50,3 @@ networks:
 volumes:
   mysql_data:
   redis_data:
-  rabbitmq_data:

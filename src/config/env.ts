@@ -35,6 +35,43 @@ const REQUIRED_IN_PROD = [
 
 const SECRET_MIN_LENGTH = 32;
 
+/** Warn in production when feature integrations are likely needed but unset. */
+const PROD_FEATURE_VARS: { key: string; feature: string; profiles: ("api" | "worker")[] }[] = [
+  { key: "SMTP_HOST", feature: "email (OTP, receipts)", profiles: ["api", "worker"] },
+  { key: "FIREBASE_SERVICE_ACCOUNT", feature: "push notifications", profiles: ["worker"] },
+  { key: "DO_ACCESS_KEY_ID", feature: "file uploads (DigitalOcean Spaces)", profiles: ["api", "worker"] },
+  { key: "DO_SECRET_ACCESS_KEY", feature: "file uploads (DigitalOcean Spaces)", profiles: ["api", "worker"] },
+  { key: "RAZORPAY_PAYOUT_WEBHOOK_SECRET", feature: "referral payouts", profiles: ["api"] },
+  { key: "METRICS_TOKEN", feature: "/metrics scrape auth", profiles: ["api"] },
+];
+
+const deployProfile = (): "api" | "worker" | "all" => {
+  const raw = process.env.DEPLOY_PROFILE?.trim().toLowerCase();
+  if (raw === "api" || raw === "worker") return raw;
+  // Single-process / dev: surface all integration warnings.
+  return "all";
+};
+
+const warnMissingProdFeatures = (
+  env: NodeJS.ProcessEnv,
+  warnings: string[],
+  profile: "api" | "worker" | "all"
+): void => {
+  for (const { key, feature, profiles } of PROD_FEATURE_VARS) {
+    if (profile !== "all" && !profiles.includes(profile)) continue;
+    const v = env[key];
+    if (!v || v.trim() === "") {
+      warnings.push(`${key} not set — ${feature} may fail at runtime.`);
+    }
+  }
+  const dbUrl = env.DATABASE_URL?.trim() ?? "";
+  if (dbUrl && !/connection_limit=/i.test(dbUrl)) {
+    warnings.push(
+      "DATABASE_URL has no connection_limit= — size the Prisma pool for PM2 cluster (see docs/DEPLOYMENT_OPERATIONS_AUDIT.md § D1.2)."
+    );
+  }
+};
+
 export interface EnvValidationResult {
   ok: boolean;
   missing: string[];
@@ -59,6 +96,7 @@ export const validateEnv = (): EnvValidationResult => {
       const v = env[key];
       if (!v || v.trim() === "") missing.push(key);
     }
+    warnMissingProdFeatures(env, warnings, deployProfile());
   } else {
     for (const key of REQUIRED_IN_PROD) {
       const v = env[key];
