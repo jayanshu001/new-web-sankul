@@ -12,6 +12,7 @@ dotenv.config();
 };
 
 import { validateEnvOrExit } from "./config/env";
+import { parseAllowedOrigins } from "./config/corsOrigins";
 validateEnvOrExit();
 
 import { createServer } from "http";
@@ -53,13 +54,10 @@ const KEEP_ALIVE_TIMEOUT_MS = Number(process.env.KEEP_ALIVE_TIMEOUT_MS) || 65_00
 const HEADERS_TIMEOUT_MS =
   Number(process.env.HEADERS_TIMEOUT_MS) || KEEP_ALIVE_TIMEOUT_MS + 5_000;
 
-const allowedOrigins = (
-  process.env.ALLOWED_ORIGINS ??
+const allowedOrigins = parseAllowedOrigins(
+  process.env.ALLOWED_ORIGINS,
   "http://localhost:3000,http://localhost:5173,http://localhost:5174"
-)
-  .split(",")
-  .map((o) => o.trim())
-  .filter(Boolean);
+);
 
 const closeCameraIngest = async (wss: WebSocketServer): Promise<void> => {
   for (const client of wss.clients) {

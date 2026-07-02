@@ -225,6 +225,10 @@ export const optionalAuthenticate = async (req: Request, _res: Response, next: N
  */
 export const requireRole = (...roles: string[]) => {
   return (req: Request, res: Response, next: NextFunction) => {
+    // CORS preflight has no Bearer token; authenticate already skips OPTIONS
+    // but per-route requireRole must not 403 before cors can answer preflight.
+    if (req.method === "OPTIONS") return next();
+
     if (!req.user || !roles.includes(req.user.role)) {
       return failure(res, "Access denied. Insufficient permissions.", 403);
     }

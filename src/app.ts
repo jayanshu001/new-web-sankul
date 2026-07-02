@@ -23,6 +23,7 @@ import {
 } from "./middlewares/health";
 import { requestContextMiddleware } from "./middlewares/requestContext";
 import deeplinkingRoutes from "./deeplinking/deeplinking.routes";
+import { isAllowedOrigin, parseAllowedOrigins } from "./config/corsOrigins";
 
 // ─── Route modules ──────────────────────────────────────────────────────────
 import clientRoutes from "./client/client.routes";
@@ -129,19 +130,16 @@ if (isProd && (!allowedOriginsRaw || allowedOriginsRaw.trim() === "")) {
   process.exit(1);
 }
 
-const allowedOrigins = (
-  allowedOriginsRaw ?? "http://localhost:3000,http://localhost:5173,http://localhost:5174,http://143.110.187.121:5173,http://143.110.187.121:5173/,https://websankul-admin.4tysixapplabs.com/,https://websankul-admin.4tysixapplabs.com"
-)
-  .split(",")
-  .map((o) => o.trim())
-  .filter(Boolean); 
-
+const allowedOrigins = parseAllowedOrigins(
+  allowedOriginsRaw,
+  "http://localhost:3000,http://localhost:5173,http://localhost:5174"
+);
 
 app.use(
   cors({
     origin(origin, cb) {
       if (!origin) return cb(null, true);
-      if (allowedOrigins.includes(origin)) return cb(null, true);
+      if (isAllowedOrigin(origin, allowedOrigins)) return cb(null, true);
       console.error(`Blocked by CORS: ${origin}`); // Log blocked origin for debugging
       return cb(null, false);
     },
