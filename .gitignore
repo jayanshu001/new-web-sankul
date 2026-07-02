@@ -19,3 +19,9 @@ __pycache__/
 
 # Stray uploaded player scripts at repo root
 /*-player-script.js
+
+# Local-only tooling/docs — kept on disk, not tracked in git
+/.claude/
+/docs/
+graphify-out/
+.graphify/cache/
