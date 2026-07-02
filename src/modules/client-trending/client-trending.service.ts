@@ -139,10 +139,13 @@ export const buildFreeDashboard = async (customerId: number | null) => {
   const freeVideos = (await prisma.video.findMany({ where: videoWhere, orderBy: { order: "asc" }, take: FREE_LIMIT, select: { id: true, title: true, topic: true, priceType: true, videoCategoryId: true, VideoCategory: { select: { id: true, title: true, image: true } } } }))
     .map((v) => ({ _id: String(v.id), title: v.title, topic: v.topic, priceType: v.priceType, videoCategoryId: v.VideoCategory ? { _id: String(v.VideoCategory.id), title: v.VideoCategory.title, image: v.VideoCategory.image } : null }));
 
-  const dashboard: Array<{ title: string; type: string; data: unknown }> = [];
-  if (trendingFreeBooks.items.length) dashboard.push({ title: "Trending Free Books", type: "trending-book", data: trendingFreeBooks.items.slice(0, FREE_LIMIT) });
-  if (trendingFreeEbooks.items.length) dashboard.push({ title: "Trending Free Ebooks", type: "trending-ebook", data: trendingFreeEbooks.items.slice(0, FREE_LIMIT) });
-  if (freeEbookData.length) dashboard.push({ title: "Free Ebooks", type: "free-ebook", data: freeEbookData });
-  if (freeVideos.length) dashboard.push({ title: "Free Videos", type: "video", data: freeVideos });
+  // Every section is always present; empty array as `data` when unavailable so
+  // the response shape stays stable for the client.
+  const dashboard: Array<{ title: string; type: string; data: unknown }> = [
+    { title: "Trending Free Books", type: "trending-book", data: trendingFreeBooks.items.slice(0, FREE_LIMIT) },
+    { title: "Trending Free Ebooks", type: "trending-ebook", data: trendingFreeEbooks.items.slice(0, FREE_LIMIT) },
+    { title: "Free Ebooks", type: "free-ebook", data: freeEbookData },
+    { title: "Free Videos", type: "video", data: freeVideos },
+  ];
   return dashboard;
 };

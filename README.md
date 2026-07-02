@@ -2,7 +2,15 @@
 
 A comprehensive REST API for the WebSankul online education platform, providing services for course management, e-learning content delivery, live classes, examination systems, e-commerce functionality, and student management. Built on Node.js + TypeScript with Express 5, MySQL (Prisma), Socket.IO, Redis (BullMQ), and AWS S3.
 
-## Table of Contents
+## ⚠️ Temporary — Tasks to be Turned ON Once Testing Ends
+
+> **This section is temporary.** The items below are intentionally disabled/relaxed for the testing phase. Re-enable them before going to production, then delete this section.
+
+1. **Re-enable single-device enforcement** — turn it back on for **both** the Login flow and the Socket connection (currently relaxed to allow concurrent test sessions).
+2. **Turn ON the rate limiter** — restore global + admin + auth rate-limiting tiers (currently disabled/bypassed for testing).
+3. **Switch to real OTP** — remove the testing OTP bypass and the whitelisted test phone numbers; restore live 2Factor OTP delivery.
+
+## 📋 Table of Contents
 
 - [Features](#features)
 - [Prerequisites](#prerequisites)
@@ -16,26 +24,26 @@ A comprehensive REST API for the WebSankul online education platform, providing 
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 
-## Features
+## ✨ Features
 
-- **Course Management**: Courses, subjects, lectures, videos, materials, and folders
-- **Live Classes**: Live courses, live sessions, live chat, live polls, live reminders (Socket.IO + HLS)
-- **Digital Content**: E-books, lecture notes, lecture audio notes, downloadable materials
-- **Physical Products**: Book ordering, shipping, and tracking
-- **Examination System**: Quizzes, test series, exam countdowns, and analytics
-- **Package System**: Bundled course/ebook/test offerings with plans
-- **Payment Integration**: Razorpay payments and payout webhooks
-- **User Management**: Students, educators, promoters, administrators with role-based access
-- **Notifications**: Push notifications via Firebase Admin + image notifications
-- **Referral Program**: Student referral, rewards, and bank-account payouts
-- **Deep Linking**: iOS Universal Links / Android App Links + share URL generation
-- **Search**: Unified search across courses, ebooks, materials, and exams
-- **Security**: JWT auth, Helmet, CORS allowlist, rate limiting (global + admin + auth tiers)
-- **Caching & Queues**: Redis caching, BullMQ background workers, Socket.IO Redis adapter
-- **Observability**: Winston logging (daily rotate), Prometheus `/metrics`, crash reporter with Redis-throttled emails
-- **File Storage**: AWS S3 via multer-s3 (uploads), PDFKit for invoices, Puppeteer for rendering
+- **🎓 Course Management**: Courses, subjects, lectures, videos, materials, and folders
+- **📡 Live Classes**: Live courses, live sessions, live chat, live polls, live reminders (Socket.IO + HLS)
+- **📚 Digital Content**: E-books, lecture notes, lecture audio notes, downloadable materials
+- **📖 Physical Products**: Book ordering, shipping, and tracking
+- **✅ Examination System**: Quizzes, test series, exam countdowns, and analytics
+- **📦 Package System**: Bundled course/ebook/test offerings with plans
+- **💳 Payment Integration**: Razorpay payments and payout webhooks
+- **👥 User Management**: Students, educators, promoters, administrators with role-based access
+- **🔔 Notifications**: Push notifications via Firebase Admin + image notifications
+- **🎯 Referral Program**: Student referral, rewards, and bank-account payouts
+- **🔗 Deep Linking**: iOS Universal Links / Android App Links + share URL generation
+- **🔍 Search**: Unified search across courses, ebooks, materials, and exams
+- **🔐 Security**: JWT auth, Helmet, CORS allowlist, rate limiting (global + admin + auth tiers)
+- **⚡ Caching & Queues**: Redis caching, BullMQ background workers, Socket.IO Redis adapter
+- **📊 Observability**: Winston logging (daily rotate), Prometheus `/metrics`, crash reporter with Redis-throttled emails
+- **🗂️ File Storage**: AWS S3 via multer-s3 (uploads), PDFKit for invoices, Puppeteer for rendering
 
-## Prerequisites
+## 📦 Prerequisites
 
 Before you begin, ensure you have the following installed:
 
@@ -48,7 +56,7 @@ Before you begin, ensure you have the following installed:
 
 > **Note:** The platform is **MySQL-only via Prisma**. MongoDB has been fully removed — there is no `MONGODB_URI` any more.
 
-## Installation
+## 🚀 Installation
 
 ### 1. Clone the Repository
 
@@ -84,11 +92,15 @@ yarn prisma:generate  # generates the Prisma client from schema.prisma
 yarn build
 ```
 
-## Configuration
+## ⚙️ Configuration
 
 ### Environment Variables
 
-Create a `.env` file in the root directory.
+Create a `.env` file in the root directory. Use `.env.example` as a template:
+
+```bash
+cp .env.example .env
+```
 
 #### Required Environment Variables:
 
@@ -147,7 +159,7 @@ APP_SCHEME=websankul
 APP_UNIVERSAL_DOMAIN=https://your-domain.com
 ```
 
-## Database Setup
+## 🗄️ Database Setup
 
 ### 1. Start MySQL
 
@@ -179,7 +191,7 @@ One-off scripts live in `scripts/`. Example:
 yarn tsx scripts/apply-ddl.ts
 ```
 
-## Running the Application
+## 🎯 Running the Application
 
 ### Development Mode
 
@@ -213,7 +225,7 @@ yarn monitor:cpu
 yarn monitor:scale
 ```
 
-## Redis Setup
+## 🔧 Redis Setup
 
 Redis is required for rate-limiting, BullMQ workers, Socket.IO multi-pod adapter, and the crash-reporter throttle. A sample `redis.conf` ships at the repo root.
 
@@ -231,7 +243,9 @@ redis-cli ping
 # Should return: PONG
 ```
 
-## API Documentation
+**Note**: For local development without auth, leave `REDIS_USERNAME` / `REDIS_PASSWORD` empty in your `.env`.
+
+## 📚 API Documentation
 
 ### Base URL
 
@@ -254,7 +268,7 @@ The API is split by **caller portal**, not by version. All routes live under `/a
 
 ---
 
-## Authentication
+## 🔐 Authentication
 
 All protected endpoints require a valid JWT in the Authorization header:
 
@@ -281,7 +295,7 @@ A refresh token is sent via the `x-refresh-token` header on rotation endpoints.
 
 ---
 
-## API Endpoints
+## 📖 API Endpoints
 
 ### Public Endpoints (No Authentication)
 
@@ -474,7 +488,7 @@ GET    /api/v1/admin/materials/*
 GET    /api/v1/admin/quizzes/*              # Exams
 GET    /api/v1/admin/test-series/*
 GET    /api/v1/admin/packages/*
-GET    /api/v1/admin/plans/*                # Pricing plans (duration in months)
+GET    /api/v1/admin/plans/*                # Pricing plans (duration in days)
 GET    /api/v1/admin/master/*               # State / city / misc masters
 ```
 
@@ -545,7 +559,7 @@ Public, unauthenticated, rate-limit-light. Generates share URLs that resolve to 
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```
 new-web-sankul/
@@ -607,24 +621,25 @@ new-web-sankul/
 └── README.md
 ```
 
-## Middleware
+## 🔍 Middleware
 
-### Authentication
+### Authentication Middleware
 
 **`authenticate`** ([middlewares/authenticate.ts](src/middlewares/authenticate.ts)): Verifies the JWT Bearer token and attaches the user to `req`.
 
 ```typescript
+// Usage in routes
 router.use(authenticate, adminLimiter);
 router.get("/protected", authenticate, controller.handler);
 ```
 
 > **Auth required on all APIs** — every route (admin + client + educator + promoter) must require a Bearer token; routes are never public by default. Public exceptions (`/auth/login`, `/auth/refresh`, OTP generate/validate, webhooks, `/share`, `/healthz`) are explicit.
 
-### Authorization
+### Authorization Middleware
 
 **`requireRole([roles])`**: Checks that the authenticated user holds the required role / permission. Used per-domain after `authenticate`.
 
-### Validation
+### Validation Middleware
 
 **`validate(schema)`**: Validates `req.body` / `req.query` / `req.params` against a Zod schema.
 
@@ -638,16 +653,16 @@ Three tiers in [config/rateLimiter.ts](src/config/rateLimiter.ts):
 
 Redis-backed via `rate-limit-redis` so limits hold across PM2 / pod instances.
 
-### Observability
+### Observability Middleware
 
 - **`requestLogger`** — seeds a per-request `traceId`
 - **`requestContextMiddleware`** — AsyncLocalStorage scope so downstream code sees the same context
 - **`metricsMiddleware`** — Prometheus counters/histograms
 - **`captureCrashContextMiddleware`** — feeds the Redis-throttled crash reporter
 
-## Data Models (MySQL / Prisma)
+## 🎯 Database Models
 
-Key tables (`ws_*`, mapped via `@@map`, accessed through Prisma) include:
+The application uses Prisma ORM with MySQL. Key tables (`ws_*`, mapped via `@@map`, accessed through Prisma) include:
 
 - **Customer** — student accounts (`customer/`)
 - **Course / CourseSubject / Lecture / LectureProgress** — course catalog + progress
@@ -664,22 +679,7 @@ Key tables (`ws_*`, mapped via `@@map`, accessed through Prisma) include:
 - **Educator / Promoter** — portal users
 - **Goal / OfflineCenter / Inquiry** — misc domains
 
-## Real-time (Socket.IO)
-
-Socket.IO server lives in [src/socket/](src/socket/) and uses the Redis adapter so events fan out across PM2 cluster workers and pods. Used by:
-
-- Live chat (`/live-chat` namespace)
-- Live polls (`/live-polls`)
-- Live streaming (`/live-sessions` — HLS signaling + viewer counts)
-
-## Health, Metrics & Crash Reporting
-
-- `GET /healthz` — liveness (always 200 if process is up)
-- `GET /readyz` — readiness (checks MySQL + Redis)
-- `GET /metrics` — Prometheus exposition; requires `Authorization: Bearer $METRICS_TOKEN`
-- Crash reporter emails on unhandled errors, throttled via Redis to avoid email storms across pods
-
-## Testing
+## 🧪 Testing
 
 Run the type checker:
 
@@ -687,9 +687,32 @@ Run the type checker:
 yarn typecheck
 ```
 
-> No automated test suite is configured yet — UI / behavior changes should be manually verified per the project's `/verify` workflow.
+> `yarn typecheck` is the project's only verification gate. No automated test suite is configured yet — UI / behavior changes should be manually verified per the project's `/verify` workflow.
 
-## Troubleshooting
+## 📊 Monitoring
+
+### Health & Readiness
+
+- `GET /healthz` — liveness (always 200 if the process is up)
+- `GET /readyz` — readiness (checks MySQL + Redis)
+
+### Metrics
+
+- `GET /metrics` — Prometheus exposition; requires `Authorization: Bearer $METRICS_TOKEN`
+
+### Crash Reporting
+
+Crash reporter emails on unhandled errors, throttled via Redis to avoid email storms across pods.
+
+### Real-time (Socket.IO)
+
+The Socket.IO server lives in [src/socket/](src/socket/) and uses the Redis adapter so events fan out across PM2 cluster workers and pods. Used by:
+
+- Live chat (`/live-chat` namespace)
+- Live polls (`/live-polls`)
+- Live streaming (`/live-sessions` — HLS signaling + viewer counts)
+
+## 🐛 Troubleshooting
 
 ### Port Already in Use
 
@@ -721,6 +744,12 @@ lsof -ti:2206 | xargs kill -9
 2. Confirm the IAM user has `s3:PutObject` on the bucket
 3. Confirm `AWS_REGION` matches the bucket's region
 
+### Prisma Client Not Found
+
+```bash
+yarn prisma:generate
+```
+
 ### OTP Not Sending
 
 1. Verify `TWO_FACTOR_API_KEY`
@@ -737,7 +766,7 @@ lsof -ti:2206 | xargs kill -9
 
 Mobile apps read `/api/v1/client/version` for force-update gates. Update the CMS `version` document — do not bump it via code.
 
-## Security Best Practices
+## 🔐 Security Best Practices
 
 - Never commit `.env` or `secrets/` to version control
 - Regularly run `yarn audit`
@@ -748,7 +777,7 @@ Mobile apps read `/api/v1/client/version` for force-update gates. Update the CMS
 - Webhook endpoints must verify HMAC against `req.rawBody` — never trust signature claims in JSON
 - Monitor `/metrics` + `logs/` for anomalies
 
-## Environment-Specific Configuration
+## 📝 Environment-Specific Configuration
 
 ### Development
 - `.env`, `yarn dev` (tsx watch), detailed logging, demo routes (`/demo/live-chat`, `/demo/live-course`) enabled
@@ -759,7 +788,7 @@ Mobile apps read `/api/v1/client/version` for force-update gates. Update the CMS
 ### Production
 - PM2 cluster mode, structured logging, Prometheus scraping, `ALLOWED_ORIGINS` enforced, demo routes disabled
 
-## Deployment
+## 🚢 Deployment
 
 ### Using PM2
 
@@ -783,18 +812,20 @@ pm2 monit
 docker compose up -d               # brings up MySQL (ws-mysql, port 3307) + Redis
 ```
 
-## License
+## 📄 License
 
 ISC License — Copyright (c) WebSankul Developers
 
-## Authors
+## 👥 Authors
 
 **WebSankul Developers**
 
-## Support
+## 🙋 Support
 
 For support and questions, please contact the development team or create an issue in the repository.
 
 ---
 
-**Built for education**
+**Built with ❤️ for education**
+</content>
+</invoke>

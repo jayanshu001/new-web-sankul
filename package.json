@@ -57,7 +57,8 @@
     "migration:api:offline-enquiry": "tsx docs/migration/api-tests/run-module.ts offline-enquiry",
     "migration:api:package-chat": "tsx docs/migration/api-tests/run-module.ts package-chat",
     "db:pull": "prisma db pull",
-    "prisma:generate": "prisma generate"
+    "prisma:generate": "prisma generate",
+    "push:all": "git push gitlab migration:dhruv-dev && git push origin migration"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1020.0",

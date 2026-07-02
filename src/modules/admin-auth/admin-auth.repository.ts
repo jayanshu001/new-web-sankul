@@ -98,6 +98,27 @@ export const adminAuthRepository = {
     });
   },
 
+  /**
+   * Permissions granted through the given role(s) via the spatie pivot
+   * ws_role_has_permissions. Used to build the *effective* permission set for a
+   * login (role-derived perms are how access is normally granted here; direct
+   * per-user perms are the exception). Returns [] for no roles / no grants.
+   */
+  findRolePermissions: async (roleIds: bigint[]) => {
+    if (!roleIds.length) return [];
+    const links = await prisma.adminRoleHasPermission.findMany({
+      where: { roleId: { in: roleIds } },
+    });
+    if (!links.length) return [];
+    // De-dup permission ids across roles before the row lookup.
+    const uniqueIds = Array.from(
+      new Map(links.map((l) => [String(l.permissionId), l.permissionId])).values()
+    );
+    return prisma.adminPermissionRow.findMany({
+      where: { id: { in: uniqueIds } },
+    });
+  },
+
   // ─── Tokens (ws_admin_access_tokens) ─────────────────────────────────────
   createToken: (input: {
     adminUserId: bigint;

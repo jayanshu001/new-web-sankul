@@ -4,6 +4,82 @@
 
 ---
 
+## 2026-07-02 — Admin login/profile returns effective permissions (read query + DTO shape change)
+
+Additive read query + **breaking shape change to the auth DTO only**. `yarn typecheck`
+green. `toAdminListDto` (administrator CRUD) untouched — still object arrays.
+
+- `src/modules/admin-auth/admin-auth.repository.ts` — new `findRolePermissions(roleIds)`:
+  resolves permissions granted via the assigned role(s) through the spatie pivot
+  `ws_role_has_permissions` (de-duped ids → `ws_permissions` rows). Prior code only
+  read direct per-user grants (`ws_model_has_permissions`), so role-derived perms
+  (the normal case) were missing from the payload.
+- `src/admin/auth/admin.auth.service.ts` (`buildSqlAdminDto`) — now unions role perms
+  + direct perms into the *effective* set before building the DTO. Applies to login,
+  refresh, and profile-update responses.
+- `src/modules/admin-auth/admin-auth.transformer.ts` — `AdminDto.roles` changed from
+  `{_id,name,guardName}[]` → `string[]` (role names); `AdminDto.permissions` changed
+  from `{_id,name}[]` → flat effective `string[]` (de-duped, sorted). Super-admins
+  return `["*"]` (`SUPER_ADMIN_PERMISSION_WILDCARD`). API enforces roles, not
+  permission keys — keys are for the panel UI. FE contract:
+  `docs/admin/ADMIN_LOGIN_PERMISSIONS.md`.
+
+---
+
+## 2026-07-02 — Notification target-options search endpoint (read-only query)
+
+Additive read query only; no schema/index/write change. `yarn typecheck` green.
+
+- `src/modules/admin-notification/admin-notification.service.ts` — added
+  `searchTargetOptions({entity,q,skip,take})`: paginated `findMany`+`count` over
+  `ws_course` / `ws_package` / `ws_live_course` / `ws_book` / `ws_ebook` /
+  `ws_test_series`, filtered by label `contains q`, ordered by label asc. Label
+  field: `test-series`→`title`, others→`name` (Course.name nullable → "").
+  Returns `{id,label}` rows for the admin panel's searchable target dropdown.
+- New route `GET /api/v1/admin/notifications/target-options` (+ `listTargetOptions`
+  controller) — Bearer, admin/super_admin. Query: `entity` (required), `q`,
+  `page`, `limit` (max 50).
+- Frontend surface reduced to two actions (In-App Screen / Open External Link),
+  no channel field; docs updated (`ADMIN_PANEL_NOTIFICATION_GUIDE.md`,
+  `NOTIFICATION_DEEPLINK_ADMIN.md`). Other `target` kinds + `channelId` still
+  accepted by the API for internal senders.
+
+---
+
+## 2026-07-02 — Notification deep-link target builder (no DB/schema/query change)
+
+Code only; no query, schema, or index change. `yarn typecheck` green. Response
+envelope unchanged. New env var `APP_SCHEME` (optional, default `com.gpscvideo.gpsc`)
+documented in `.env.example`.
+
+- New `src/utils/notificationTarget.ts` — `notificationTargetSchema` (semantic
+  discriminated union: `content` / `appPath` / `deepLink` / `screen` / `external` /
+  `dialog`) + `buildNotificationRouting()` emitting FCM `data` fields per the
+  RN tap-payload spec (deepLink / viewType / screen / params).
+- `src/admin/notification/notification.controller.ts` — `broadcastSchema` gains
+  optional `target` + `channelId`; the broadcast handler resolves them into
+  `deepLink` + `data` at the boundary, so persist / schedule / re-dispatch / FCM
+  paths are unchanged. Freeform `deepLink`/`data` kept as escape hatch (target wins).
+- Docs: `docs/notifications/NOTIFICATION_DEEPLINK_ADMIN.md` (backend contract +
+  admin-panel selection) and copied the RN spec to `docs/notifications/notification-tap-payload.md`.
+
+---
+
+## 2026-07-02 — Client dashboard sections always present (no DB/schema/query change)
+
+Response-shaping only; no query, schema, or index change. `yarn typecheck` green.
+
+- `src/modules/client-dashboard/client-dashboard.service.ts` (`buildHomeDashboard`) and
+  `src/modules/client-trending/client-trending.service.ts` (`buildFreeDashboard`) — dropped the
+  `if (...length)` guards so **every** section is always emitted in `dashboard[]`. Sections with no
+  data now return `data: []` (empty array) instead of being omitted, giving the client a fixed-length,
+  stable section list.
+- Home `daily-test` section changed from a single object / omitted to an array: `[dailyTestSection]`
+  when present, `[]` when absent (uniform array-typed `data` across sections). **Frontend contract
+  note:** consumers reading `daily-test.data` as an object must now read `data[0]`.
+
+---
+
 ## 2026-07-01 — P1/P2 scalability hardening (no DB/schema/query change)
 
 Non-breaking items from `docs/SCALABILITY_OPTIMIZATION_AUDIT.md`. Code/config only; no

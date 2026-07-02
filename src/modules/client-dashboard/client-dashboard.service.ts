@@ -164,15 +164,18 @@ export const buildHomeDashboard = async (customerId: number | null) => {
     dailyTestSection = { ...dailyTest, _id: String(dailyTest.id), isAttempt, lastResult };
   }
 
-  const dashboard: Array<{ title: string; type: string; data: unknown }> = [];
-  if (banners.length) dashboard.push({ title: "Banner", type: "banner", data: banners });
-  if (examCountdowns.length) dashboard.push({ title: "Exam Countdown", type: "exam-countdown", data: examCountdowns });
-  if (dailyTestSection) dashboard.push({ title: "Daily Test", type: "daily-test", data: dailyTestSection });
-  if (recentlyAdded.length) dashboard.push({ title: "Recently Added", type: "package", data: recentlyAdded });
-  if (coursesWithPlans.length) dashboard.push({ title: "Course Subjects", type: "course", data: coursesWithPlans });
-  if (courseCategoriesData.length) dashboard.push({ title: "Course Categories", type: "courseCategory", data: courseCategoriesData });
-  if (trendingBookData.length) dashboard.push({ title: "Trending Books", type: "trending-book", data: trendingBookData });
-  if (trendingEbookData.length) dashboard.push({ title: "Trending Ebooks", type: "trending-ebook", data: trendingEbookData });
+  // Every section is always present; when a section has no data we return an
+  // empty array as `data` so the response shape stays stable for the client.
+  const dashboard: Array<{ title: string; type: string; data: unknown }> = [
+    { title: "Banner", type: "banner", data: banners },
+    { title: "Exam Countdown", type: "exam-countdown", data: examCountdowns },
+    { title: "Daily Test", type: "daily-test", data: dailyTestSection ? [dailyTestSection] : [] },
+    { title: "Recently Added", type: "package", data: recentlyAdded },
+    { title: "Course Subjects", type: "course", data: coursesWithPlans },
+    { title: "Course Categories", type: "courseCategory", data: courseCategoriesData },
+    { title: "Trending Books", type: "trending-book", data: trendingBookData },
+    { title: "Trending Ebooks", type: "trending-ebook", data: trendingEbookData },
+  ];
 
   return { unreadNotifications, dashboard, testimonial: testimonials };
 };

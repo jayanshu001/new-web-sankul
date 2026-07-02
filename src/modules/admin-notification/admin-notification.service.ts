@@ -13,7 +13,8 @@
  *    entitlement signal is status=true (+ endAt null/future), per the migration's
  *    documented drift.
  *  - claim-lock / fanout / persistence: prisma.notification (ws_notification).
- *  - id type: SQL ints; the BullMQ jobId is String(id) — works for int or hex.
+ *  - id type: SQL ints; the BullMQ jobId is `notif-${id}` (numeric-only ids are
+ *    rejected by BullMQ), namespaced in the scheduler — see jobIdFor().
  *
  * Runtime ids ARE SQL ints (customer-auth + catalog-* make req ids SQL), so the
  * admin-supplied courseIds/userIds arrive as numeric strings on the SQL path.
@@ -328,7 +329,7 @@ export async function listScheduledForRehydrate(): Promise<{ id: string; schedul
 
 // ─── Admin controller persistence (ws_notification parent rows) ──────────────────
 
-/** Create a scheduled parent row; returns its int id (BullMQ jobId = String(id)). */
+/** Create a scheduled parent row; returns its int id (BullMQ jobId = `notif-${id}`). */
 export async function createScheduled(input: {
   broadcast: boolean;
   title: string;
@@ -465,6 +466,68 @@ export async function deleteOne(
   if (!row) return { existed: false, wasScheduled: false };
   await prisma.notification.delete({ where: { id } });
   return { existed: true, wasScheduled: row.status === "scheduled" };
+}
+
+// ─── Deep-link target options (searchable picker source) ─────────────────────
+// Powers the admin panel's server-side searchable dropdown: given a content
+// entity + query, return {id,label} rows so the admin picks an item instead of
+// typing a numeric id. Label field per model: TestSeries uses `title`, the rest
+// use `name` (Course.name is nullable → coalesced to "" for display).
+export type TargetEntity =
+  | "course"
+  | "package"
+  | "live-course"
+  | "book"
+  | "ebook"
+  | "test-series";
+
+export const TARGET_ENTITIES: TargetEntity[] = [
+  "course",
+  "package",
+  "live-course",
+  "book",
+  "ebook",
+  "test-series",
+];
+
+export async function searchTargetOptions(opts: {
+  entity: TargetEntity;
+  q?: string;
+  skip: number;
+  take: number;
+}): Promise<{ data: { id: number; label: string }[]; total: number }> {
+  const q = opts.q?.trim();
+
+  // Each branch keeps its Prisma delegate + label field explicit (delegates are
+  // not structurally compatible, so a generic helper can't type-check cleanly).
+  const run = async <T extends { id: number }>(
+    findMany: (args: any) => Promise<T[]>,
+    count: (args: any) => Promise<number>,
+    labelField: string
+  ) => {
+    const where = q ? { [labelField]: { contains: q } } : {};
+    const [rows, total] = await Promise.all([
+      findMany({ where, orderBy: { [labelField]: "asc" }, skip: opts.skip, take: opts.take }),
+      count({ where }),
+    ]);
+    const data = rows.map((r: any) => ({ id: r.id, label: String(r[labelField] ?? "") }));
+    return { data, total };
+  };
+
+  switch (opts.entity) {
+    case "course":
+      return run((a) => prisma.course.findMany(a), (a) => prisma.course.count(a), "name");
+    case "package":
+      return run((a) => prisma.package.findMany(a), (a) => prisma.package.count(a), "name");
+    case "live-course":
+      return run((a) => prisma.liveCourse.findMany(a), (a) => prisma.liveCourse.count(a), "name");
+    case "book":
+      return run((a) => prisma.book.findMany(a), (a) => prisma.book.count(a), "name");
+    case "ebook":
+      return run((a) => prisma.eBook.findMany(a), (a) => prisma.eBook.count(a), "name");
+    case "test-series":
+      return run((a) => prisma.testSeries.findMany(a), (a) => prisma.testSeries.count(a), "title");
+  }
 }
 
 // ─── ImageNotification CRUD (in-app banner images; ws_image_notification) ────────

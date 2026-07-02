@@ -34,14 +34,21 @@ function parseAdminId(id: string): bigint | null {
   }
 }
 
-/** Resolve roles + direct permissions and build the shared admin DTO. */
+/**
+ * Resolve the admin's *effective* permission set and build the shared admin DTO.
+ * Effective = permissions granted via the assigned role(s) (spatie
+ * ws_role_has_permissions) UNIONED with any directly-assigned per-user perms.
+ * The transformer flattens + de-dupes to permission-key strings (and returns the
+ * wildcard for super-admins).
+ */
 async function buildSqlAdminDto(row: Awaited<ReturnType<typeof adminAuthRepository.findActiveByEmail>>) {
   if (!row) throw new Error("buildSqlAdminDto called with null row");
-  const [roles, permissions] = await Promise.all([
-    adminAuthRepository.findRoles(row.id),
+  const roles = await adminAuthRepository.findRoles(row.id);
+  const [rolePermissions, directPermissions] = await Promise.all([
+    adminAuthRepository.findRolePermissions(roles.map((r) => r.id)),
     adminAuthRepository.findDirectPermissions(row.id),
   ]);
-  return toAdminDto(row, roles, permissions);
+  return toAdminDto(row, roles, [...rolePermissions, ...directPermissions]);
 }
 
 // ─── Login ────────────────────────────────────────────────────────────────────

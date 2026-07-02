@@ -33,6 +33,17 @@ interface NotificationJobData {
   notificationId: string;
 }
 
+/**
+ * BullMQ rejects two kinds of custom job id: a pure-integer string ("Custom Id
+ * cannot be integers", since it reserves numeric ids for its internal counter)
+ * AND a single-colon id ("Custom Id cannot contain :", reserved for the 3-part
+ * repeatable-job format). Notification ids are MySQL integer PKs (e.g. "42"),
+ * so we namespace them with a hyphen — non-numeric and colon-free. The
+ * `notificationId` payload stays the raw numeric string for the dispatcher;
+ * only the BullMQ-facing id is prefixed.
+ */
+const jobIdFor = (notificationId: string): string => `notif-${notificationId}`;
+
 let queue: Queue<NotificationJobData> | null = null;
 let dlq: Queue<NotificationJobData & { lastError: string }> | null = null;
 let worker: Worker<NotificationJobData> | null = null;
@@ -118,7 +129,7 @@ export async function scheduleNotificationJob(
   // Remove any stale job for the same id (e.g. user rescheduled). BullMQ will
   // throw if a job with the same id already exists in a different state.
   try {
-    const existing = await queue.getJob(notificationId);
+    const existing = await queue.getJob(jobIdFor(notificationId));
     if (existing) await existing.remove();
   } catch {
     // ignore — getJob can throw if job is in a locked state; add() below will
@@ -129,7 +140,7 @@ export async function scheduleNotificationJob(
     "dispatch",
     { notificationId },
     {
-      jobId: notificationId,
+      jobId: jobIdFor(notificationId),
       delay,
       attempts: 3,
       backoff: { type: "exponential", delay: 5_000 },
@@ -144,7 +155,7 @@ export async function scheduleNotificationJob(
  */
 export async function cancelNotificationJob(notificationId: string): Promise<void> {
   if (!queue) return;
-  const job = await queue.getJob(notificationId);
+  const job = await queue.getJob(jobIdFor(notificationId));
   if (job) {
     try {
       await job.remove();
@@ -267,7 +278,9 @@ export async function initNotificationScheduler(): Promise<void> {
             "dead-letter",
             { notificationId: job.data.notificationId, lastError: err.message },
             {
-              jobId: `dlq:${job.id}`,
+              // Hyphen, not colon: BullMQ rejects single-colon custom ids
+              // (only the 3-part repeatable format is allowed).
+              jobId: `dlq-${job.id}`,
               removeOnComplete: false,
               // DLQ items never expire automatically — they're meant to be
               // inspected and replayed by hand. Cap retention to 30 days.

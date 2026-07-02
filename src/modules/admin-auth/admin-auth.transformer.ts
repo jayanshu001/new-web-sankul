@@ -6,8 +6,22 @@ import type {
 import { AdminRole } from "../../shared/enums";
 
 /**
- * Shape returned to the admin client. Identical to the MongoDB branch so the
- * API response contract is unchanged across the migration.
+ * Wildcard permission key returned for super-admins. The panel treats
+ * `permissions.includes("*")` as "all access" (super-admin bypasses per-permission
+ * gating; the API itself enforces roles, not permission keys).
+ */
+export const SUPER_ADMIN_PERMISSION_WILDCARD = "*";
+
+/**
+ * Shape returned to the admin client on login / refresh / profile-update.
+ *
+ * `roles` and `permissions` are FLAT STRING arrays for the role-based UI:
+ *  - `roles`       — all assigned role names, e.g. ["editor"].
+ *  - `permissions` — the EFFECTIVE, de-duplicated permission KEYS the user has
+ *                    (merged from role grants + direct grants), e.g.
+ *                    ["books.edit","courses.view"]. Super-admins get ["*"].
+ * These are the same dotted keys used in the Permissions catalog, so the UI's
+ * `permissions.includes("books.edit")` checks line up exactly.
  */
 export interface AdminDto {
   id: string;
@@ -15,8 +29,8 @@ export interface AdminDto {
   lastName: string;
   email: string;
   role: string;
-  roles: Array<{ _id: string; name: string; guardName: string }>;
-  permissions: Array<{ _id: string; name: string }>;
+  roles: string[];
+  permissions: string[];
   image: string;
   isDark: boolean;
 }
@@ -88,21 +102,24 @@ export const toAdminDto = (
   row: AdminUser,
   roles: AdminRoleRow[],
   permissions: AdminPermissionRow[]
-): AdminDto => ({
-  id: String(row.id),
-  firstName: row.firstName,
-  lastName: row.lastName ?? "",
-  email: row.email,
-  role: deriveRole(roles.map((r) => r.name)),
-  roles: roles.map((r) => ({
-    _id: String(r.id),
-    name: r.name,
-    guardName: r.guardName,
-  })),
-  permissions: permissions.map((p) => ({
-    _id: String(p.id),
-    name: p.name,
-  })),
-  image: row.image ?? "",
-  isDark: row.isDark === "dark",
-});
+): AdminDto => {
+  const roleNames = roles.map((r) => r.name);
+  const role = deriveRole(roleNames);
+  // Super-admins short-circuit to the wildcard; everyone else gets their
+  // effective keys flattened, de-duplicated, and sorted for a stable payload.
+  const permissionKeys =
+    role === AdminRole.SUPER_ADMIN
+      ? [SUPER_ADMIN_PERMISSION_WILDCARD]
+      : Array.from(new Set(permissions.map((p) => p.name))).sort();
+  return {
+    id: String(row.id),
+    firstName: row.firstName,
+    lastName: row.lastName ?? "",
+    email: row.email,
+    role,
+    roles: roleNames,
+    permissions: permissionKeys,
+    image: row.image ?? "",
+    isDark: row.isDark === "dark",
+  };
+};

@@ -3,6 +3,11 @@ import { z } from "zod";
 import { dispatchAudience } from "./dispatcher";
 import { scheduleNotificationJob, cancelNotificationJob } from "./scheduler";
 import {
+  buildNotificationRouting,
+  notificationTargetSchema,
+  NOTIFICATION_CHANNELS,
+} from "../../utils/notificationTarget";
+import {
   parseIntId,
   createScheduled as sqlCreateScheduled,
   createImmediateLog as sqlCreateImmediateLog,
@@ -10,6 +15,9 @@ import {
   listAdminLog as sqlListAdminLog,
   bulkDelete as sqlBulkDelete,
   deleteOne as sqlDeleteOne,
+  searchTargetOptions as sqlSearchTargetOptions,
+  TARGET_ENTITIES,
+  TargetEntity,
   listImageNotifications as sqlListImages,
   createImageNotification as sqlCreateImage,
   updateImageNotification as sqlUpdateImage,
@@ -26,8 +34,15 @@ const broadcastSchema = z.object({
   body: z.string().min(1),
   image: z.string().optional(),
   type: z.string().max(50).optional().default("general"),
+  // Legacy / escape-hatch: hand-formed routing. `target` (below) is preferred —
+  // it lets the admin panel pick a destination semantically and have the backend
+  // build the correct FCM data fields (deepLink/viewType/screen/params).
   deepLink: z.string().optional(),
   data: z.record(z.any()).optional(),
+  // Structured tap destination; resolved into deepLink + data before dispatch.
+  target: notificationTargetSchema.optional(),
+  // Android notification channel (spec §3.1). Applied into data.channelId.
+  channelId: z.enum(NOTIFICATION_CHANNELS).optional(),
   platforms: z.array(z.enum(["ios", "android"])).optional(),
   courseIds: z.array(z.string()).optional(),
   userIds: z.array(z.string()).optional(),
@@ -41,7 +56,45 @@ export const broadcastNotification = async (req: Request, res: Response) => {
   try {
     const file = req.file as any;
     if (file?.location) req.body.image = file.location;
+
+    // In multipart/form-data (image upload) every field arrives as a STRING, so
+    // object/array fields are sent JSON-encoded by the client. Decode them back
+    // before Zod validation. JSON requests already have real objects (no-op).
+    const decodeJsonField = (key: string) => {
+      const v = req.body[key];
+      if (typeof v === "string" && v.trim()) {
+        try {
+          req.body[key] = JSON.parse(v);
+        } catch {
+          /* leave as-is; Zod will surface a clear type error */
+        }
+      }
+    };
+    ["target", "data", "platforms", "courseIds", "userIds", "customerIds"].forEach(
+      decodeJsonField
+    );
+
     const data = broadcastSchema.parse(req.body);
+
+    // Resolve the structured target (and channel) into the wire-level routing
+    // fields ONCE, here at the boundary. Everything downstream (immediate send,
+    // scheduled persistence + re-dispatch, per-recipient feed rows, FCM) keeps
+    // reading plain `deepLink` + `data`, so no other path needs to change.
+    //   - deepLink → top-level FcmPayload.deepLink (fcm.ts mirrors it into data)
+    //   - viewType/screen/params/channelId → the `data` record (all strings)
+    // Explicit `data`/`deepLink` remain an escape hatch; the resolved target
+    // wins on conflicts so the app-routing contract is guaranteed.
+    const extraData: Record<string, string> = {};
+    for (const [k, v] of Object.entries(data.data ?? {})) {
+      extraData[k] = typeof v === "string" ? v : JSON.stringify(v);
+    }
+    if (data.target) {
+      const routing = buildNotificationRouting(data.target);
+      if (routing.deepLink) data.deepLink = routing.deepLink;
+      Object.assign(extraData, routing.data);
+    }
+    if (data.channelId) extraData.channelId = data.channelId;
+    data.data = Object.keys(extraData).length ? extraData : undefined;
 
     // Audience ids are numeric strings on the SQL path.
     const idValid = (v: string) => parseIntId(v) != null;
@@ -243,6 +296,44 @@ export const deleteNotification = async (req: Request, res: Response) => {
     if (!r.existed) return res.status(404).json({ success: false, message: "Not found." });
     if (r.wasScheduled) await cancelNotificationJob(id);
     return res.status(200).json({ success: true, message: "Notification deleted." });
+  } catch (e: any) {
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
+// ─── Deep-link target options (searchable picker for the admin panel) ──────
+// GET /api/v1/admin/notifications/target-options?entity=&q=&page=&limit=
+// Returns { id, label } rows for the selected content entity so the panel can
+// render a server-side searchable dropdown instead of a manual id input.
+export const listTargetOptions = async (req: Request, res: Response) => {
+  try {
+    const { entity, q, page = "1", limit = "20" } = req.query as Record<string, string>;
+    if (!entity || !TARGET_ENTITIES.includes(entity as TargetEntity)) {
+      return res.status(400).json({
+        success: false,
+        message: `entity is required and must be one of: ${TARGET_ENTITIES.join(", ")}`,
+      });
+    }
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 50);
+    const skip = (pageNum - 1) * limitNum;
+
+    const { data, total } = await sqlSearchTargetOptions({
+      entity: entity as TargetEntity,
+      q,
+      skip,
+      take: limitNum,
+    });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: {
+        total,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: Math.ceil(total / limitNum),
+      },
+    });
   } catch (e: any) {
     return res.status(500).json({ success: false, message: e.message });
   }

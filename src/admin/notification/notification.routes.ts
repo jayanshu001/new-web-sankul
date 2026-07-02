@@ -3,6 +3,7 @@ import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
 import {
   broadcastNotification,
+  listTargetOptions,
   bulkDeleteNotifications,
   cancelScheduledNotification,
   listNotifications,
@@ -19,6 +20,8 @@ router.use(authenticate, requireRole("admin", "super_admin"));
 
 // Broadcast / log
 router.post("/broadcast", uploadS3.single("image"), broadcastNotification);
+// Searchable picker source for the deep-link target dropdown.
+router.get("/target-options", listTargetOptions);
 router.get("/", listNotifications);
 router.post("/bulk-delete", bulkDeleteNotifications);
 router.post("/:id/cancel", cancelScheduledNotification);
