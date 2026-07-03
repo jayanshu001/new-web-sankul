@@ -87,6 +87,31 @@ export const adminAuthRepository = {
     });
   },
 
+  /** Role rows for MANY admins at once — { adminId(string) → role rows }.
+   * Batches the spatie pivot lookup so callers (e.g. live-chat history role
+   * resolution) avoid an N+1 across a page of messages. */
+  findRolesForMany: async (adminIds: bigint[]): Promise<Map<string, { id: bigint; name: string }[]>> => {
+    const out = new Map<string, { id: bigint; name: string }[]>();
+    if (!adminIds.length) return out;
+    const links = await prisma.adminModelHasRole.findMany({
+      where: { modelId: { in: adminIds } },
+    });
+    if (!links.length) return out;
+    const roleRows = await prisma.adminRoleRow.findMany({
+      where: { id: { in: Array.from(new Set(links.map((l) => l.roleId))) } },
+    });
+    const roleById = new Map(roleRows.map((r) => [String(r.id), r]));
+    for (const l of links) {
+      const key = String(l.modelId);
+      const role = roleById.get(String(l.roleId));
+      if (!role) continue;
+      const arr = out.get(key) ?? [];
+      arr.push({ id: role.id, name: role.name });
+      out.set(key, arr);
+    }
+    return out;
+  },
+
   /** Permissions directly assigned to an admin (not via role). */
   findDirectPermissions: async (adminId: bigint) => {
     const links = await prisma.adminModelHasPermission.findMany({

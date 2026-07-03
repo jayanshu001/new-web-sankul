@@ -41,7 +41,7 @@ export interface AdminDto {
  * has role rows, so we map the highest-privilege matching role name, falling
  * back to "admin".
  */
-const deriveRole = (roleNames: string[]): string => {
+export const deriveRole = (roleNames: string[]): string => {
   const lower = roleNames.map((n) => n.toLowerCase());
   if (lower.some((n) => n.includes("super"))) return AdminRole.SUPER_ADMIN;
   if (lower.some((n) => n.includes("editor"))) return AdminRole.EDITOR;
