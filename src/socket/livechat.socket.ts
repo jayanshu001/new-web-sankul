@@ -109,6 +109,56 @@ async function viewerCount(liveClassId: string): Promise<number> {
   }
 }
 
+// Emit `viewer_stats` { active, unique, joins } to the live room. Piggybacks
+// wherever `viewer_count` is emitted so the admin Viewers tab updates in real
+// time (it falls back to the REST attendance summary when this is absent):
+//   - active = currently-in-room viewers (same value as viewer_count.count)
+//   - unique = distinct viewers who joined this session
+//   - joins  = total join events
+// liveClassId doubles as the attendance streamId (resolveLiveClassId returns the
+// streamId, and attendance rows are keyed on it — see openAttendance). Best-effort:
+// a stats failure must never break presence, so viewer_count is emitted separately.
+async function emitViewerStats(liveClassId: string) {
+  if (!io) return;
+  try {
+    const [active, counts] = await Promise.all([
+      viewerCount(liveClassId),
+      adminLiveSql.getViewerStatsCounts(liveClassId),
+    ]);
+    io.to(roomKey(liveClassId)).emit("viewer_stats", {
+      active,
+      unique: counts.unique,
+      joins: counts.joins,
+    });
+  } catch (err) {
+    logger.warn("viewer_stats emit failed", { liveClassId, err: (err as Error).message });
+  }
+}
+
+// Deliver a viewer's chat message under privateChat mode: it must NOT fan out to
+// other viewers, but stays visible to admins (moderation) and echoes back to the
+// sender so they see their own message. Emits `new_message` to every admin socket
+// in the room + the sender. Cluster-wide via the Redis adapter (RemoteSocket.emit
+// routes back to the owning pod).
+async function emitPrivateViewerMessage(
+  liveClassId: string,
+  senderSocket: AuthenticatedSocket,
+  payload: Record<string, any>
+) {
+  if (!io) return;
+  // Always echo to the sender.
+  senderSocket.emit("new_message", payload);
+  try {
+    const sockets = await io.in(roomKey(liveClassId)).fetchSockets();
+    for (const s of sockets) {
+      const isAdmin = (s.data?.isAdmin as boolean | undefined) ?? false;
+      if (isAdmin && s.id !== senderSocket.id) s.emit("new_message", payload);
+    }
+  } catch (err) {
+    logger.warn("private-chat admin fan-out failed", { liveClassId, err: (err as Error).message });
+  }
+}
+
 // Open an attendance row for this socket's stint in a live class. Best-effort.
 async function openAttendance(socket: AuthenticatedSocket, liveClassId: string) {
   try {
@@ -248,6 +298,9 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
     // need socket.data.
     socket.data.customerId = auth.customerId;
     socket.data.userName = auth.userName;
+    // isAdmin on socket.data so cross-pod fetchSockets() (private-chat fan-out to
+    // admins only) can tell admin watchers from viewers on other pods.
+    socket.data.isAdmin = auth.isAdmin;
     next();
   });
 
@@ -278,6 +331,7 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
           });
         }
         io.to(roomKey(prev)).emit("viewer_count", { liveClassId: prev, count: await viewerCount(prev) });
+        await emitViewerStats(prev);
       }
 
       socket.join(roomKey(liveClassId));
@@ -286,6 +340,15 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
         await openAttendance(socket, liveClassId);
       } else {
         socket.liveRoom = liveClassId;
+      }
+
+      // Hydrate the joiner (admin panel or viewer) with the current chat settings
+      // immediately so the input state / private-chat badge is correct on load.
+      try {
+        const settings = await liveCourseSql.getChatSettings(liveClassId);
+        socket.emit("chat_settings", settings);
+      } catch (err) {
+        logger.warn("chat_settings emit on join failed", { liveClassId, err: (err as Error).message });
       }
 
       try {
@@ -322,6 +385,9 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
         liveClassId,
         count: await viewerCount(liveClassId),
       });
+      // Populate the Viewers tab immediately on join (and refresh it for the
+      // whole room on every subsequent join).
+      await emitViewerStats(liveClassId);
     });
 
     // ── Vote on a poll (students only) ────────────────────────────────────────
@@ -346,12 +412,18 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
         if (r === "invalid_option") { socket.emit("error", { message: "Invalid option" }); return; }
         // Re-voting is allowed — a customer may change their vote any number of times.
 
-        // Broadcast live counts to everyone in the room
-        io.to(roomKey(r.liveClassId)).emit("poll_update", {
-          pollId,
-          options: r.options,
-          totalVotes: r.totalVotes,
-        });
+        // Broadcast the FULL current poll to everyone in the room so the admin
+        // panel re-renders exact tallies in place (options[].votes + totalVotes)
+        // without a refresh. `r` is the fresh poll DTO (_id, liveClassId, question,
+        // options, totalVotes, isActive, …). The FE registers BOTH event names but
+        // with DIFFERENT payload shapes:
+        //   - poll_update  → the RAW poll object (handler reads fields directly)
+        //   - poll_updated → a { poll } ENVELOPE (same shape the admin updatePoll
+        //                    controller emits). Emitting raw here made the FE read
+        //                    payload.poll = undefined → poll.pollId undefined →
+        //                    re-vote broke. Wrap it so both handlers get what they expect.
+        io.to(roomKey(r.liveClassId)).emit("poll_update", r);
+        io.to(roomKey(r.liveClassId)).emit("poll_updated", { poll: r });
         logger.info("Live poll: vote recorded", { pollId, optionIndex, customerId: socket.customerId });
       } catch (err: any) {
         logger.error("Live poll: vote failed", { pollId, error: err.message });
@@ -382,6 +454,16 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
         return;
       }
 
+      // Per-session chat settings (server-side enforcement — never trust the
+      // client). chatEnabled=false blocks VIEWER sends (admins are unaffected;
+      // they use the REST path). privateChat=true keeps the viewer's message off
+      // the public fan-out (see below).
+      const chatSettings = await liveCourseSql.getChatSettings(liveClassId);
+      if (!chatSettings.chatEnabled) {
+        socket.emit("chat_disabled", { liveClassId, message: "Chat is currently disabled by the host." });
+        return;
+      }
+
       try {
         const saved = await liveCourseSql.sendCustomerChatMessage({
           liveClassId,
@@ -389,7 +471,7 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
           userName: socket.userName!,
           message: text,
         });
-        io.to(roomKey(liveClassId)).emit("new_message", {
+        const messagePayload = {
           _id: saved._id,
           liveClassId,
           customerId: socket.customerId,
@@ -401,8 +483,15 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
           role: null,
           message: text,
           createdAt: saved.createdAt,
-        });
-        logger.info("Live chat: message sent", { liveClassId, customerId: socket.customerId });
+        };
+        if (chatSettings.privateChat) {
+          // Private chat: message is persisted (moderation/history) but NOT fanned
+          // out to other viewers — only the sender + admins receive it live.
+          await emitPrivateViewerMessage(liveClassId, socket, messagePayload);
+        } else {
+          io.to(roomKey(liveClassId)).emit("new_message", messagePayload);
+        }
+        logger.info("Live chat: message sent", { liveClassId, customerId: socket.customerId, privateChat: chatSettings.privateChat });
       } catch (err) {
         logger.error("Live chat: message save failed", { liveClassId, error: (err as Error).message });
         socket.emit("error", { message: "Failed to send message" });
@@ -427,6 +516,7 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
         liveClassId,
         count: await viewerCount(liveClassId),
       });
+      await emitViewerStats(liveClassId);
     });
 
     socket.on("disconnect", async () => {
@@ -446,6 +536,7 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
           });
         }
         io.to(roomKey(room)).emit("viewer_count", { liveClassId: room, count: await viewerCount(room) });
+        await emitViewerStats(room);
       }
       logger.info("Live chat: client disconnected", { socketId: socket.id, customerId: socket.customerId });
     });

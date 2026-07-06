@@ -31,7 +31,7 @@ export const adminLiveCourseRepository = {
   findPackageCategory: (id: number) =>
     prisma.packageCategory.findUnique({ where: { id }, select: { id: true, title: true, slug: true, image: true } }),
   coursesSlimByIds: (ids: number[]) =>
-    prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, level: true, isPaid: true, status: true } }),
+    prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, level: true, isPaid: true, status: true, educatorId: true } }),
   myLiveCourseSubs: (customerId: number, filterStatus: string, now: Date) => {
     const where: any = { customerId, paymentStatus: "verified" };
     if (filterStatus === "active") { where.status = true; where.OR = [{ endAt: null }, { endAt: { gte: now } }]; }
@@ -196,6 +196,27 @@ export const adminLiveCourseRepository = {
   banCustomer: (liveClassId: string, customerId: number, bannedBy: number | null, reason: string | null) =>
     prisma.liveChatBan.create({ data: { liveClassId, customerId, bannedBy, reason, createdAt: new Date(), updatedAt: new Date() } }),
   unbanCustomer: (customerId: number) => prisma.liveChatBan.deleteMany({ where: { customerId } }),
+
+  // ── chat settings (ws_live_chat_setting) — per-liveClassId toggles ──────────
+  chatSettingFor: (liveClassId: string) => prisma.liveChatSetting.findUnique({ where: { liveClassId } }),
+  upsertChatSetting: (liveClassId: string, data: { chatEnabled?: boolean; privateChat?: boolean }) => {
+    const now = new Date();
+    return prisma.liveChatSetting.upsert({
+      where: { liveClassId },
+      create: {
+        liveClassId,
+        chatEnabled: data.chatEnabled ?? true,
+        privateChat: data.privateChat ?? false,
+        createdAt: now,
+        updatedAt: now,
+      },
+      update: {
+        ...(data.chatEnabled !== undefined ? { chatEnabled: data.chatEnabled } : {}),
+        ...(data.privateChat !== undefined ? { privateChat: data.privateChat } : {}),
+        updatedAt: now,
+      },
+    });
+  },
 
   // ── polls (ws_live_poll / ws_live_poll_option / ws_live_poll_vote) ──────────
   activePoll: (liveClassId: string) => prisma.livePoll.findFirst({ where: { liveClassId, isActive: true } }),

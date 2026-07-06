@@ -52,6 +52,61 @@ export const sendAdminMessage = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/admin/live-chat/:liveClassId/settings
+// Returns the per-session chat settings { chatEnabled, privateChat }; defaults
+// to { chatEnabled: true, privateChat: false } when nothing has been saved.
+export const getChatSettings = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveClassId = String(req.params.liveClassId ?? "");
+  logger.info("getChatSettings invoked", { traceId, path: req.originalUrl, liveClassId, userId: req.user?.id });
+
+  try {
+    if (!liveClassId.trim()) return failure(res, "liveClassId is required.", 422);
+    const settings = await liveSql.getChatSettings(liveClassId);
+    return success(res, { settings }, "Chat settings fetched.");
+  } catch (err) {
+    logger.error("getChatSettings failed", { traceId, liveClassId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to fetch chat settings.", 500);
+  }
+};
+
+// PATCH /api/v1/admin/live-chat/:liveClassId/settings
+// Body: { chatEnabled?: boolean, privateChat?: boolean } (partial). Persists,
+// broadcasts `chat_settings` to the room so viewers + admins react live, and
+// returns the full updated object.
+export const updateChatSettings = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const liveClassId = String(req.params.liveClassId ?? "");
+  logger.info("updateChatSettings invoked", { traceId, path: req.originalUrl, liveClassId, body: req.body, userId: req.user?.id });
+
+  try {
+    if (!liveClassId.trim()) return failure(res, "liveClassId is required.", 422);
+
+    const patch: { chatEnabled?: boolean; privateChat?: boolean } = {};
+    if (req.body?.chatEnabled !== undefined) {
+      if (typeof req.body.chatEnabled !== "boolean") return failure(res, "chatEnabled must be a boolean.", 422);
+      patch.chatEnabled = req.body.chatEnabled;
+    }
+    if (req.body?.privateChat !== undefined) {
+      if (typeof req.body.privateChat !== "boolean") return failure(res, "privateChat must be a boolean.", 422);
+      patch.privateChat = req.body.privateChat;
+    }
+    if (patch.chatEnabled === undefined && patch.privateChat === undefined) {
+      return failure(res, "Provide chatEnabled and/or privateChat to update.", 422);
+    }
+
+    const settings = await liveSql.updateChatSettings(liveClassId, patch);
+    // Broadcast so the admin panel + every viewer in the room hydrate live.
+    io?.to(roomKey(liveClassId)).emit("chat_settings", settings);
+
+    logger.info("updateChatSettings success", { traceId, liveClassId, settings });
+    return success(res, { settings }, "Chat settings updated.");
+  } catch (err) {
+    logger.error("updateChatSettings failed", { traceId, liveClassId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to update chat settings.", 500);
+  }
+};
+
 // GET /api/v1/admin/live-chat/:liveClassId/history
 export const getChatHistory = async (req: Request, res: Response) => {
   const traceId = req.traceId;

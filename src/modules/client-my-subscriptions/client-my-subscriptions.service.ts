@@ -13,7 +13,7 @@ const daysLeftOf = (endAt: Date | null, now: Date) =>
   endAt ? Math.max(0, Math.ceil((endAt.getTime() - now.getTime()) / MS_PER_DAY)) : null;
 
 const idStr = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
-const emptyAction = { courseId: null as any, packageId: null as any, planId: null as any, testSeriesId: null as any, ebookId: null as any };
+const emptyAction = { courseId: null as any, packageId: null as any, planId: null as any, testSeriesId: null as any, ebookId: null as any, liveCourseId: null as any };
 
 // ── course + package cards (dedup to furthest endAt per target, soonest-first) ──
 export const buildCourseAndPackageCards = async (customerId: number, now: Date) => {
@@ -50,6 +50,47 @@ export const buildCourseAndPackageCards = async (customerId: number, now: Date) 
       endAt: s.endAt ?? null,
       action: { ...emptyAction, kind: s.courseId && s.courseId > 0 ? "course" : "package", courseId: idStr(s.courseId), packageId: idStr(s.packageId), planId: idStr(s.planId) },
       meta: { duration: plan?.duration ?? null, packageName: pkg?.name ?? null },
+    };
+  });
+};
+
+// endAt sort key: a lifetime sub (endAt null) sorts as "furthest out" (never
+// expires), so Infinity. Used both to dedup (keep the furthest) and to order the
+// merged course tab soonest-expiring first.
+const endKey = (endAt: Date | null | undefined) => (endAt ? endAt.getTime() : Infinity);
+
+// ── live-course cards (dedup per liveCourseId, soonest-first) ──────────────────
+export const buildLiveCourseCards = async (customerId: number, now: Date) => {
+  const all = await repo.activeLiveCourseSubs(customerId, now);
+  // Dedup per live course, keeping the furthest-out entitlement (lifetime wins).
+  const byFurthest = [...all].sort((a, b) => endKey(b.endAt) - endKey(a.endAt));
+  const seen = new Set<string>();
+  const deduped = byFurthest.filter((s) => {
+    const key = `l:${s.liveCourseId}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  const subs = deduped.sort((a, b) => endKey(a.endAt) - endKey(b.endAt)); // soonest-first
+  if (!subs.length) return [];
+
+  const courses = new Map((await repo.liveCoursesByIds([...new Set(subs.map((s) => s.liveCourseId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
+  const plans = new Map((await repo.livePlansByIds([...new Set(subs.map((s) => s.planId).filter((x): x is number => x != null && x > 0))])).map((p) => [p.id, p]));
+
+  return subs.map((s) => {
+    const course = courses.get(s.liveCourseId);
+    const plan = s.planId ? plans.get(s.planId) : null;
+    return {
+      _id: String(s.id),
+      title: course?.name || "Live Course",
+      author: null,
+      thumbnail: course?.image || null,
+      badge: "Live",
+      daysLeft: daysLeftOf(s.endAt ?? null, now),
+      startAt: s.startAt ?? null,
+      endAt: s.endAt ?? null,
+      action: { ...emptyAction, kind: "live_course" as const, liveCourseId: idStr(s.liveCourseId), planId: idStr(s.planId) },
+      meta: { duration: plan?.duration ?? null },
     };
   });
 };

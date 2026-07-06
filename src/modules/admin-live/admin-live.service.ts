@@ -44,14 +44,22 @@ const idStr = (v: number | null | undefined): string | null =>
 const jArr = (v: any): any[] => (Array.isArray(v) ? v : []);
 
 // ── public view (matches Mongo publicView shape exactly) ─────────────────────
+/** A session's chosen recording folder for one linked live course. */
+export interface CourseFolderLink {
+  liveCourseId: number;
+  folderId: number | null;
+}
+
 export interface PublicSessionView {
   id: string;
   title: string | null;
   liveCourseIds: string[];
   liveCourseId: string | null;
   liveCourses?: any[];
+  // Per-course recording-folder selection: [{ liveCourseId, folderId }]. Replaces
+  // the old `subject`-derived folder. folderId is null when none was chosen.
+  liveCourseFolders: { liveCourseId: string; folderId: string | null }[];
   subject: string;
-  educatorId: string | null;
   endAt: Date | null;
   status: string;
   scheduledAt: Date | null;
@@ -92,17 +100,22 @@ export const hlsRecordingsOf = (row: SqlLiveSession): any[] => jArr(row.recordin
 export const toPublicView = (
   row: SqlLiveSession,
   liveCourseIds: number[],
-  liveCourses?: any[]
+  liveCourses?: any[],
+  courseFolders?: CourseFolderLink[]
 ): PublicSessionView => {
   const idList = liveCourseIds.map(String);
+  const folderList = (courseFolders ?? []).map((l) => ({
+    liveCourseId: String(l.liveCourseId),
+    folderId: l.folderId != null ? String(l.folderId) : null,
+  }));
   return {
     id: String(row.id),
     title: row.title ?? null,
     liveCourseIds: idList,
     liveCourseId: idList[0] ?? null,
     liveCourses: liveCourses,
+    liveCourseFolders: folderList,
     subject: row.subject ?? "",
-    educatorId: idStr(row.educatorId),
     endAt: row.endAt ?? null,
     status: row.status,
     scheduledAt: row.scheduledAt ?? null,
@@ -148,20 +161,82 @@ export const getLinkedCourses = async (liveSessionId: number): Promise<any[]> =>
     .map((c) => ({ _id: String(c.id), name: c.name, image: c.image ?? null, thumbnail: null }));
 };
 
-/** Replace the full set of session↔course links (set semantics, deduped). */
-export const setLinkedCourseIds = async (liveSessionId: number, courseIds: number[]): Promise<void> => {
-  const unique = Array.from(new Set(courseIds));
+/** Per-course chosen recording folders for a session, in stable link order. */
+export const getLinkedCourseFolders = async (liveSessionId: number): Promise<CourseFolderLink[]> => {
+  const rows = await prisma.liveSessionCourse.findMany({
+    where: { liveSessionId },
+    select: { liveCourseId: true, folderId: true },
+    orderBy: { id: "asc" },
+  });
+  return rows.map((r) => ({ liveCourseId: r.liveCourseId, folderId: r.folderId ?? null }));
+};
+
+/**
+ * Replace the full set of session↔course links, each carrying its chosen
+ * recording folder (set semantics; deduped by liveCourseId, last wins).
+ */
+export const setLinkedCourseFolders = async (
+  liveSessionId: number,
+  links: CourseFolderLink[]
+): Promise<void> => {
+  const byCourse = new Map<number, number | null>();
+  for (const l of links) byCourse.set(l.liveCourseId, l.folderId ?? null);
+  const data = Array.from(byCourse.entries()).map(([liveCourseId, folderId]) => ({
+    liveSessionId,
+    liveCourseId,
+    folderId,
+  }));
   await prisma.$transaction([
     prisma.liveSessionCourse.deleteMany({ where: { liveSessionId } }),
-    ...(unique.length > 0
-      ? [
-          prisma.liveSessionCourse.createMany({
-            data: unique.map((liveCourseId) => ({ liveSessionId, liveCourseId })),
-            skipDuplicates: true,
-          }),
-        ]
+    ...(data.length > 0
+      ? [prisma.liveSessionCourse.createMany({ data, skipDuplicates: true })]
       : []),
   ]);
+};
+
+/** Replace the session↔course links by id only (no folder). Thin wrapper. */
+export const setLinkedCourseIds = async (liveSessionId: number, courseIds: number[]): Promise<void> => {
+  await setLinkedCourseFolders(
+    liveSessionId,
+    Array.from(new Set(courseIds)).map((liveCourseId) => ({ liveCourseId, folderId: null }))
+  );
+};
+
+/**
+ * Validate `liveCourseFolders` payload — `[{ liveCourseId, folderId }]`. Each id
+ * must be a valid int, each liveCourseId must be within `allowedCourseIds` (the
+ * session's course set), and each folderId must actually belong to that course
+ * (ws_video_category.live_course_id match). Returns parsed links or an error.
+ */
+export const validateLiveCourseFolders = async (
+  rawPairs: unknown,
+  allowedCourseIds: number[]
+): Promise<{ links: CourseFolderLink[]; error?: string }> => {
+  if (rawPairs === undefined || rawPairs === null) return { links: [] };
+  if (!Array.isArray(rawPairs)) {
+    return { links: [], error: "liveCourseFolders must be an array of { liveCourseId, folderId }." };
+  }
+  const allowed = new Set(allowedCourseIds);
+  const links: CourseFolderLink[] = [];
+  for (const p of rawPairs) {
+    const cid = parseAlId(String((p as any)?.liveCourseId ?? ""));
+    const fid = parseAlId(String((p as any)?.folderId ?? ""));
+    if (cid == null || fid == null) {
+      return { links: [], error: "Each liveCourseFolders entry needs a valid liveCourseId and folderId." };
+    }
+    if (!allowed.has(cid)) {
+      return { links: [], error: `liveCourseFolders references live course ${cid}, which is not in liveCourseIds.` };
+    }
+    const belongs = await prisma.videoCategory.findFirst({
+      where: { id: fid, liveCourseId: cid },
+      select: { id: true },
+    });
+    if (!belongs) {
+      return { links: [], error: `Folder ${fid} does not belong to live course ${cid}.` };
+    }
+    links.push({ liveCourseId: cid, folderId: fid });
+  }
+  return { links };
 };
 
 /**
@@ -229,9 +304,8 @@ export const findSessionByStreamId = (
 
 export interface CreateSessionInput {
   title: string;
-  liveCourseIds: number[];
-  subject: string;
-  educatorId: number | null;
+  // Course links + their chosen recording folder. Course set derives from these.
+  courseFolders: CourseFolderLink[];
   endAt: Date | null;
   scheduledAt?: Date | null;
   status: string;
@@ -241,7 +315,7 @@ export interface CreateSessionInput {
   hlsUrls?: any;
 }
 
-/** Create a session row + its course links; returns row & linked ids. */
+/** Create a session row + its course/folder links; returns row & linked ids. */
 export const createSession = async (
   input: CreateSessionInput
 ): Promise<{ row: SqlLiveSession; liveCourseIds: number[] }> => {
@@ -249,8 +323,7 @@ export const createSession = async (
   const row = await prisma.liveSession.create({
     data: {
       title: input.title,
-      subject: input.subject,
-      educatorId: input.educatorId,
+      // `subject`/`educator_id` columns retained but no longer written.
       endAt: input.endAt,
       scheduledAt: input.scheduledAt ?? null,
       status: input.status,
@@ -263,8 +336,8 @@ export const createSession = async (
       updatedAt: now,
     },
   });
-  await setLinkedCourseIds(row.id, input.liveCourseIds);
-  return { row, liveCourseIds: input.liveCourseIds };
+  await setLinkedCourseFolders(row.id, input.courseFolders);
+  return { row, liveCourseIds: input.courseFolders.map((l) => l.liveCourseId) };
 };
 
 /** Patch arbitrary session columns; bumps updatedAt. Returns the fresh row. */
@@ -272,8 +345,6 @@ export const updateSession = async (
   id: number,
   data: {
     title?: string;
-    subject?: string;
-    educatorId?: number | null;
     endAt?: Date | null;
     scheduledAt?: Date | null;
     status?: string;
@@ -317,6 +388,7 @@ export interface ListInput {
   status?: string;
   upcoming?: boolean;
   courseIds?: number[]; // ANY-of filter
+  search?: string; // contains match on title | streamId (case-insensitive via MySQL collation)
   skip: number;
   take: number;
 }
@@ -325,10 +397,23 @@ export const listSessions = async (
   input: ListInput
 ): Promise<{ rows: SqlLiveSession[]; total: number }> => {
   const where: any = {};
+  // Multiple OR-groups (upcoming split, search) can't both live on `where.OR`
+  // without clobbering each other — collect them here and AND them together.
+  const and: any[] = [];
   if (input.status) where.status = input.status;
-  if (input.upcoming) {
+  // Tri-state SCHEDULED split (undefined = no split):
+  //   true  → "Scheduled": future-dated (scheduledAt > now)
+  //   false → "To start":  time reached or go-live-now (scheduledAt <= now OR NULL)
+  // Both force status=SCHEDULED and partition it cleanly (> now vs <= now/null),
+  // so per-tab `total` reflects exactly that subset.
+  if (input.upcoming !== undefined) {
     where.status = "SCHEDULED";
-    where.scheduledAt = { gte: new Date() };
+    const now = new Date();
+    if (input.upcoming) {
+      where.scheduledAt = { gt: now };
+    } else {
+      and.push({ OR: [{ scheduledAt: { lte: now } }, { scheduledAt: null }] });
+    }
   }
   if (input.courseIds && input.courseIds.length > 0) {
     const links = await prisma.liveSessionCourse.findMany({
@@ -338,6 +423,15 @@ export const listSessions = async (
     const sessionIds = Array.from(new Set(links.map((l) => l.liveSessionId)));
     where.id = { in: sessionIds.length > 0 ? sessionIds : [-1] };
   }
+  // Free-text search (contains, case-insensitive via the column collation —
+  // MySQL utf8mb4_*_ci; Prisma's `mode:"insensitive"` is Postgres-only). Matches
+  // the visible list columns: session title + streamId. AND-combines with every
+  // filter above (its own OR-group, so it composes with the upcoming=false OR).
+  const search = input.search?.trim();
+  if (search) {
+    and.push({ OR: [{ title: { contains: search } }, { streamId: { contains: search } }] });
+  }
+  if (and.length > 0) where.AND = and;
   const [rows, total] = await Promise.all([
     prisma.liveSession.findMany({
       where,
@@ -418,6 +512,28 @@ export const getAttendance = async (
     records,
     summary: { totalJoins: records.length, uniqueViewers, currentlyActive },
   };
+};
+
+/**
+ * Lightweight viewer counts for the live socket's `viewer_stats` event — the
+ * count-only counterpart of getAttendance's summary (no row/customer hydration):
+ *  - joins  = total attendance rows for the stream (every join event)
+ *  - unique = distinct viewers (distinct customerId; anonymous/null rows collapse
+ *             to one, matching getAttendance's uniqueViewers semantics)
+ * `active` (currently in-room) is computed socket-side from the live room, not here.
+ */
+export const getViewerStatsCounts = async (
+  streamId: string
+): Promise<{ unique: number; joins: number }> => {
+  const [joins, distinct] = await Promise.all([
+    prisma.liveSessionAttendance.count({ where: { streamId } }),
+    prisma.liveSessionAttendance.findMany({
+      where: { streamId },
+      select: { customerId: true },
+      distinct: ["customerId"],
+    }),
+  ]);
+  return { unique: distinct.length, joins };
 };
 
 /**
@@ -763,34 +879,38 @@ export const resolvePromotedVideosSql = async (liveSessionId: number): Promise<a
 };
 
 /**
- * Best-effort: for each linked live course, resolve/create the subject folder and
- * file the best recording into it. Never throws. Mirrors maybeAutoPromoteRecording.
+ * Best-effort: file the best recording into each linked course's CHOSEN folder
+ * (ws_live_session_course.folder_id, set at create/update time). Never throws.
+ * Courses with no folder chosen are skipped. Idempotent per folder (dedupe by
+ * aws_id=path in promoteRecordingToFolderSql).
  */
 export const maybeAutoPromoteRecordingSql = async (params: {
   sessionId: number;
   sessionTitle: string | null;
-  subject: string | null;
   recordings: any[];
-  liveCourseIds: number[];
 }): Promise<void> => {
   try {
     const recording = pickRecordingSql(params.recordings ?? []);
     if (!recording?.path) return;
-    if (!normalizeSubjectKeySql(params.subject)) return;
-    if (!params.liveCourseIds.length) return;
 
-    for (const liveCourseId of params.liveCourseIds) {
+    const links = await getLinkedCourseFolders(params.sessionId);
+    const folderIds = Array.from(
+      new Set(links.map((l) => l.folderId).filter((f): f is number => f != null))
+    );
+    if (!folderIds.length) return;
+
+    for (const folderId of folderIds) {
       try {
-        const folderRef = await resolveOrCreateSubjectFolderSql({
-          liveCourseId,
-          subject: params.subject ?? "",
+        const folder = await prisma.videoCategory.findFirst({
+          where: { id: folderId },
+          select: { id: true },
         });
-        if (!folderRef) continue;
+        if (!folder) continue;
         await promoteRecordingToFolderSql({
           liveSessionId: params.sessionId,
           sessionTitle: params.sessionTitle,
           recording,
-          folderId: folderRef.id,
+          folderId,
         });
       } catch {
         // per-course best-effort — swallow (the recording stays on the session)

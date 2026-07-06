@@ -7,6 +7,8 @@ import {
   banCustomerFromChat,
   unbanCustomerFromChat,
   listChatBans,
+  getChatSettings,
+  updateChatSettings,
 } from "./livechat.controller";
 
 const router = Router();
@@ -19,5 +21,7 @@ router.post("/bans",                          banCustomerFromChat);     // POST 
 router.delete("/bans/:customerId",            unbanCustomerFromChat);   // DELETE /api/v1/admin/live-chat/bans/:customerId
 router.delete("/messages/:messageId",         deleteChatMessage);       // DELETE /api/v1/admin/live-chat/messages/:messageId
 router.get("/:liveClassId/history",           getChatHistory);          // GET    /api/v1/admin/live-chat/:liveClassId/history
+router.get("/:liveClassId/settings",          getChatSettings);         // GET    /api/v1/admin/live-chat/:liveClassId/settings
+router.patch("/:liveClassId/settings",        updateChatSettings);      // PATCH  /api/v1/admin/live-chat/:liveClassId/settings
 
 export default router;

@@ -25,6 +25,21 @@ export const clientMySubscriptionsRepository = {
       orderBy: { endAt: "desc" },
     }),
 
+  // live courses: ALL active+verified rows (latest endAt first). Unlike course/
+  // package/ebook, a live-course sub can be LIFETIME (endAt = null) — include
+  // those (they never expire) alongside not-yet-expired rows. Ownership requires
+  // payment_status = "verified" (mirrors admin-live-course activeSubsForCourses).
+  activeLiveCourseSubs: (customerId: number, now: Date) =>
+    prisma.liveCourseSubscription.findMany({
+      where: {
+        customerId,
+        status: true,
+        paymentStatus: "verified",
+        OR: [{ endAt: null }, { endAt: { gt: now } }],
+      },
+      orderBy: { endAt: "desc" },
+    }),
+
   // hydration
   coursesByIds: (ids: number[]) =>
     ids.length ? prisma.course.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
@@ -36,4 +51,8 @@ export const clientMySubscriptionsRepository = {
     ids.length ? prisma.packageCourseEbookPrice.findMany({ where: { id: { in: ids } }, select: { id: true, packageId: true, duration: true } }) : Promise.resolve([]),
   ebooksByIds: (ids: number[]) =>
     ids.length ? prisma.eBook.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, author: true, image: true, thumbnail: true } }) : Promise.resolve([]),
+  liveCoursesByIds: (ids: number[]) =>
+    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
+  livePlansByIds: (ids: number[]) =>
+    ids.length ? prisma.liveCoursePlan.findMany({ where: { id: { in: ids } }, select: { id: true, duration: true } }) : Promise.resolve([]),
 };

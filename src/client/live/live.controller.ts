@@ -45,7 +45,7 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
           if (details.mp4Recordings.length > 0) patch.mp4Recordings = await streamosEnrichMp4Sizes(details.mp4Recordings);
           const liveClassId = String(s.streamId);
           io?.to(roomKey(liveClassId)).emit("recordings_ready", { streamId: s.streamId, liveClassId, status: "READY", recordings: details.recordings });
-          await liveSql.maybeAutoPromoteRecordingSql({ id: s.id, title: s.title, subject: s.subject, recordings: details.recordings, liveCourseIds });
+          await liveSql.maybeAutoPromoteRecordingSql({ id: s.id, title: s.title, recordings: details.recordings });
         }
         if (Object.keys(patch).length) await adminLive.updateSession(s.id, patch);
       } catch (err) {

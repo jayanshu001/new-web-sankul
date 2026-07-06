@@ -28,7 +28,12 @@ docs/migration/api-tests/*/.api-doc-calls.json
 
 # Local-only tooling/docs — kept on disk, not tracked in git
 /.claude/
-/docs/
+/docs/admin
+/docs/audit
+/docs/backend
+/docs/client
+/docs/frontend
+/docs/notifications
 
 # Throwaway end-to-end/diagnostic probes (kept local, never pushed)
 scripts/_tmp_*.ts

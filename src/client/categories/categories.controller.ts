@@ -464,9 +464,18 @@ export const listPackagesByCategory = async (req: Request, res: Response) => {
   try {
     const catId = pkgCatSql.parsePkgCatId(id);
     if (catId == null) return res.status(400).json({ success: false, message: "Invalid package category id" });
-    const data = await pkgCatSql.listPackagesAndLiveByCategory(catId);
-    logger.info("listPackagesByCategory success (sql)", { traceId, categoryId: id, recordedCount: data.recorded.length, liveCount: data.live.length });
-    return res.status(200).json({ success: true, data });
+    const customerId = pkgCatSql.parsePkgCatId(String(req.user?.id ?? ""));
+    const { pageNum, limitNum, skip, search } = parsePaging(req);
+    const tab = String(req.query.tab ?? "").toLowerCase() === "live" ? "live" : "recorded";
+    const data = await pkgCatSql.listPackagesAndLiveByCategory(catId, customerId, {
+      tab, search: search || null, skip, take: limitNum,
+    });
+    logger.info("listPackagesByCategory success (sql)", { traceId, categoryId: id, tab, recordedCount: data.recorded.length, liveCount: data.live.length, total: data.total });
+    return res.status(200).json({
+      success: true,
+      data: { tab: data.tab, recorded: data.recorded, live: data.live, counts: data.counts },
+      pagination: { total: data.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(data.total / limitNum) },
+    });
   } catch (error: any) {
     logger.error("listPackagesByCategory failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

@@ -563,6 +563,32 @@ export const unbanCustomerFromChat = async (customerId: number): Promise<boolean
   return r.count > 0;
 };
 
+// ── chat settings (per liveClassId) ─────────────────────────────────────────────
+export interface ChatSettings {
+  chatEnabled: boolean;
+  privateChat: boolean;
+}
+
+/** Defaults preserve today's behavior: chat on, public. */
+export const DEFAULT_CHAT_SETTINGS: ChatSettings = { chatEnabled: true, privateChat: false };
+
+/** Current settings for a live class — defaults when no row saved. */
+export const getChatSettings = async (liveClassId: string): Promise<ChatSettings> => {
+  const row = await repo.chatSettingFor(liveClassId);
+  return row
+    ? { chatEnabled: row.chatEnabled, privateChat: row.privateChat }
+    : { ...DEFAULT_CHAT_SETTINGS };
+};
+
+/** Persist a partial settings patch (upsert); returns the FULL updated object. */
+export const updateChatSettings = async (
+  liveClassId: string,
+  patch: { chatEnabled?: boolean; privateChat?: boolean }
+): Promise<ChatSettings> => {
+  const row = await repo.upsertChatSetting(liveClassId, patch);
+  return { chatEnabled: row.chatEnabled, privateChat: row.privateChat };
+};
+
 // ── polls ──────────────────────────────────────────────────────────────────────
 const toPollDto = (p: any, options: any[]) => ({
   _id: String(p.id),
@@ -590,9 +616,10 @@ export const getActivePoll = async (liveClassId: string, customerId: number) => 
 /**
  * Record a student's vote (the socket `submit_vote` path). Validates the poll
  * exists, is active and the option index is in range, then records the vote and
- * bumps counters. Returns the poll's liveClassId + fresh option/total counts so
- * the socket can broadcast `poll_update` to the right room — exactly the data
- * the Mongo path emitted. Discriminated string results map to the socket's
+ * bumps counters. Returns the FULL fresh poll DTO (`toPollDto`: _id, liveClassId,
+ * question, options[{text,votes}], totalVotes, isActive, …) so the socket can
+ * broadcast the complete current poll on `poll_update` and the panel re-renders
+ * exact tallies in place. Discriminated string results map to the socket's
  * existing error emits. Re-voting is allowed: a customer may change their vote
  * any number of times (the vote row is moved, so each customer still counts once).
  */
@@ -601,7 +628,7 @@ export const submitPollVote = async (
   customerId: number,
   optionIndex: number
 ): Promise<
-  | { liveClassId: string; options: Array<{ text: string | null; votes: number }>; totalVotes: number }
+  | Awaited<ReturnType<typeof loadPollWithOptions>>
   | "not_found"
   | "closed"
   | "invalid_option"
@@ -615,12 +642,8 @@ export const submitPollVote = async (
   // vote row is moved (still one per customer), so counts stay consistent.
   await repo.upsertPollVote(pollId, customerId, optionIndex);
   const fresh = await repo.findPoll(pollId);
-  const freshOptions = await repo.pollOptions(pollId);
-  return {
-    liveClassId: poll.liveClassId,
-    options: freshOptions.map((o) => ({ text: o.text ?? null, votes: o.votes })),
-    totalVotes: fresh?.totalVotes ?? poll.totalVotes,
-  };
+  // Re-read from the fresh row so totalVotes/options reflect the vote just cast.
+  return loadPollWithOptions(fresh ?? poll);
 };
 
 export const getPollsByClass = async (liveClassId: string) => {
@@ -756,7 +779,7 @@ const toClientPlan = (p: LiveCoursePlan) => {
 
 // ⚠ packageCategoryId is surfaced as the bare id (no Mongo populate — no SQL
 // ws_package_category table). courseEducatorId likewise bare id.
-const plansGrouped = async (courseIds: number[]) => {
+export const plansGrouped = async (courseIds: number[]) => {
   const plans = await repo.activePlansForCourses(courseIds);
   const byCourse = new Map<number, any[]>();
   for (const p of plans) { const a = byCourse.get(p.liveCourseId) ?? []; a.push(toClientPlan(p)); byCourse.set(p.liveCourseId, a); }
@@ -766,7 +789,7 @@ const plansGrouped = async (courseIds: number[]) => {
 // Split a course's flat plan list into the { withMaterial, withoutMaterial }
 // shape the client/courses detail + live-course detail endpoints use, so the
 // live-course listing matches that contract.
-const splitPlansByMaterial = (arr: any[]) => ({
+export const splitPlansByMaterial = (arr: any[]) => ({
   withMaterial: arr.filter((p) => p.withMaterial),
   withoutMaterial: arr.filter((p) => !p.withMaterial),
 });
@@ -838,14 +861,48 @@ export const listMyLiveCoursesForClient = async (
   const courseById = new Map(courses.map((c) => [c.id, c]));
   const planById = new Map(plans.map((p) => [p.id, p]));
 
+  // Educator names for the "By <educator>" card subtitle.
+  const eduIds = [...new Set(courses.map((c) => c.educatorId).filter((n): n is number => n != null))];
+  const educators = eduIds.length
+    ? await prisma.courseEducator.findMany({ where: { id: { in: eduIds } }, select: { id: true, name: true, image: true } })
+    : [];
+  const eduById = new Map(educators.map((e) => [e.id, e]));
+
+  // Per-course progress for the card's bar / "X of Y sessions completed" label.
+  // A "session" here = a recorded lecture (the unit progress heartbeats actually
+  // drive), so numerator and denominator share one universe and the ratio stays
+  // sane (<=100%). total = active videos under the course's folders (same folder->
+  // video counting as getRecordingsForClient's totalLectures); completed = the
+  // customer's completed VIDEO lectures in that live-course container.
+  const totalByCourse = new Map<number, number>();
+  const doneByCourse = new Map<number, number>();
+  await Promise.all(courseIds.map(async (id) => {
+    const folders = await prisma.videoCategory.findMany({ where: { liveCourseId: id, status: true }, select: { id: true } });
+    const folderIds = folders.map((f) => f.id);
+    const [total, done] = await Promise.all([
+      folderIds.length ? prisma.video.count({ where: { status: true, videoCategoryId: { in: folderIds } } }) : Promise.resolve(0),
+      prisma.lectureProgress.count({ where: { customerId, liveCourseId: id, completed: true, videoId: { not: null } } }),
+    ]);
+    totalByCourse.set(id, total);
+    doneByCourse.set(id, done);
+  }));
+
   const liveCourses = subs.map((s) => {
     const active = s.status === true && (s.endAt == null || new Date(s.endAt).getTime() >= now.getTime());
     const c = s.liveCourseId != null ? courseById.get(s.liveCourseId) : null;
     const p = s.planId != null ? planById.get(s.planId) : null;
+    const edu = c?.educatorId != null ? eduById.get(c.educatorId) ?? null : null;
+    const totalSessions = c ? totalByCourse.get(c.id) ?? 0 : 0;
+    const completedSessions = c ? doneByCourse.get(c.id) ?? 0 : 0;
     return {
       subscriptionId: String(s.id),
       liveCourse: c
-        ? { _id: String(c.id), name: c.name, image: c.image, level: c.level, isPaid: c.isPaid, status: c.status, shareableLink: buildShareUrl("live-courses", String(c.id), baseUrl) }
+        ? {
+            _id: String(c.id), name: c.name, image: c.image, level: c.level, isPaid: c.isPaid, status: c.status,
+            educatorId: edu ? String(edu.id) : null,
+            educatorName: edu?.name ?? null,
+            shareableLink: buildShareUrl("live-courses", String(c.id), baseUrl),
+          }
         : null,
       plan: p ? { _id: String(p.id), name: p.name, duration: p.duration, price: p.price } : null,
       startAt: s.startAt ?? null,
@@ -853,6 +910,11 @@ export const listMyLiveCoursesForClient = async (
       paymentStatus: s.paymentStatus,
       active,
       daysLeft: active ? computeDaysLeft(s.endAt ?? null, now) : 0,
+      progress: {
+        completedSessions,
+        totalSessions,
+        percentCompleted: totalSessions > 0 ? Math.min(100, Math.round((completedSessions / totalSessions) * 100)) : 0,
+      },
     };
   });
   return { liveCourses, total: liveCourses.length };
@@ -1048,31 +1110,35 @@ const pickRecording = (recs: any[]): any | null => {
   }
   return recs[0] ?? null;
 };
-/** Silent best-effort (never throws): file the best recording into each course's subject folder. */
+/**
+ * Silent best-effort (never throws): file the best recording into each linked
+ * course's CHOSEN folder (ws_live_session_course.folder_id, picked at
+ * create/update). Courses with no folder chosen are skipped. Idempotent per
+ * folder (dedupe by aws_id=path).
+ */
 export const maybeAutoPromoteRecordingSql = async (session: {
-  id: number; title: string | null; subject: string | null; recordings: any; liveCourseIds: number[];
+  id: number; title: string | null; recordings: any;
 }): Promise<void> => {
   try {
     const recs = Array.isArray(session.recordings) ? session.recordings : [];
     const rec = pickRecording(recs);
     if (!rec?.path) return;
-    const subjectKey = normalizeSubjectKey(session.subject);
-    if (!subjectKey || !session.liveCourseIds.length) return;
     const path = String(rec.path).replace(/(?:"|%22|%2522)+$/i, "");
-    for (const liveCourseId of session.liveCourseIds) {
+    const links = await prisma.liveSessionCourse.findMany({
+      where: { liveSessionId: session.id },
+      select: { folderId: true },
+    });
+    const folderIds = Array.from(
+      new Set(links.map((l) => l.folderId).filter((f): f is number => f != null))
+    );
+    for (const folderId of folderIds) {
       try {
-        let folder = await prisma.videoCategory.findFirst({ where: { liveCourseId, subjectKey }, select: { id: true } });
-        if (!folder) {
-          const last = await prisma.videoCategory.findFirst({ where: { liveCourseId }, orderBy: { order_by: "desc" }, select: { order_by: true } });
-          folder = await prisma.videoCategory.create({
-            data: { title: (session.subject ?? "").trim(), slug: subjectKey.replace(/\s+/g, "-"), subjectKey, liveCourseId, parent: 0, educatorId: 0, image: " ", pdf: " ", order_by: (last?.order_by ?? 0) + 1, status: true } as any,
-            select: { id: true },
-          });
-        }
-        const dup = await prisma.video.findFirst({ where: { videoCategoryId: folder.id, aws_id: path }, select: { id: true } });
+        const folder = await prisma.videoCategory.findFirst({ where: { id: folderId }, select: { id: true } });
+        if (!folder) continue;
+        const dup = await prisma.video.findFirst({ where: { videoCategoryId: folderId, aws_id: path }, select: { id: true } });
         if (dup) continue;
         await prisma.video.create({
-          data: { videoCategoryId: folder.id, liveSessionId: session.id, title: session.title ?? "", topic: "", platform: "aws", slug: subjectKey.replace(/\s+/g, "-"), aws_id: path, priceType: "paid", order: 0, status: true } as any,
+          data: { videoCategoryId: folderId, liveSessionId: session.id, title: session.title ?? "", topic: "", platform: "aws", slug: `rec-${Date.now().toString(36)}`, aws_id: path, priceType: "paid", order: 0, status: true } as any,
         });
       } catch { /* per-course best-effort */ }
     }
@@ -1412,10 +1478,20 @@ export const lcFolderBelongsToCourse = async (folderId: number, liveCourseId: nu
   !!(await prisma.videoCategory.findFirst({ where: { id: folderId, liveCourseId }, select: { id: true } }));
 
 // ── folder handlers ───────────────────────────────────────────────────────────
-/** listFolders: every folder owned by the course (by liveCourseId) + relation rows. */
-export const lcListFolders = async (liveCourseId: number): Promise<{ folders: any[]; relations: any[] }> => {
+/**
+ * listFolders: every folder owned by the course (by liveCourseId) + relation rows.
+ * Optional `search` filters by folder title (case-insensitive `contains`, per the
+ * table's default CI collation) — used by the admin folder picker.
+ */
+export const lcListFolders = async (
+  liveCourseId: number,
+  search?: string
+): Promise<{ folders: any[]; relations: any[] }> => {
+  const where: any = { liveCourseId };
+  const term = search?.trim();
+  if (term) where.title = { contains: term };
   const folders = await prisma.videoCategory.findMany({
-    where: { liveCourseId },
+    where,
     orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
   });
   if (!folders.length) return { folders: [], relations: [] };

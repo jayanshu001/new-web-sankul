@@ -8,8 +8,8 @@ import * as tsOrderSql from "../../modules/test-series-order/test-series-order.s
 // `type` selects which subscription library to return. Defaults to "course",
 // which preserves the original behaviour (course + package together) for
 // callers that don't send the param.
-//   - course      → course AND package subscriptions, each tagged with its own
-//                   `action.kind` ("course" | "package")
+//   - course      → course, package AND live-course subscriptions, each tagged
+//                   with its own `action.kind` ("course" | "package" | "live_course")
 //   - test_series → test-series subscriptions
 //   - ebook       → ebook subscriptions
 const querySchema = z.object({
@@ -30,12 +30,13 @@ type Card = {
   startAt: Date | null;
   endAt: Date | null;
   action: {
-    kind: "course" | "package" | "test_series" | "ebook";
+    kind: "course" | "package" | "live_course" | "test_series" | "ebook";
     courseId: any;
     packageId: any;
     planId: any;
     testSeriesId: any;
     ebookId: any;
+    liveCourseId: any;
   };
   meta: Record<string, any>;
 };
@@ -72,7 +73,15 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
     } else if (type === "ebook") {
       cards = (await mySubSql.buildEbookCards(numericCid, now)) as unknown as Card[];
     } else {
-      cards = (await mySubSql.buildCourseAndPackageCards(numericCid, now)) as unknown as Card[];
+      // "course" tab = recorded course + package + live-course subscriptions,
+      // merged and re-sorted soonest-expiring first (lifetime endAt=null last).
+      const [courseAndPackage, liveCourse] = await Promise.all([
+        mySubSql.buildCourseAndPackageCards(numericCid, now),
+        mySubSql.buildLiveCourseCards(numericCid, now),
+      ]);
+      cards = [...courseAndPackage, ...liveCourse].sort(
+        (a, b) => (a.endAt ? a.endAt.getTime() : Infinity) - (b.endAt ? b.endAt.getTime() : Infinity)
+      ) as unknown as Card[];
     }
 
     const total = cards.length;

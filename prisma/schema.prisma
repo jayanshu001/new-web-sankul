@@ -1886,9 +1886,11 @@ model LiveSessionCourse {
   id            Int       @id @default(autoincrement())
   liveSessionId Int       @map("live_session_id")
   liveCourseId  Int       @map("live_course_id")
+  folderId      Int?      @map("folder_id")
   createdAt     DateTime? @map("created_at")
 
   @@unique([liveSessionId, liveCourseId], map: "uq_lsc")
+  @@index([folderId], map: "idx_lsc_folder")
   @@map("ws_live_session_course")
 }
 
@@ -1932,6 +1934,17 @@ model LiveChatBan {
   updatedAt   DateTime? @map("updated_at")
 
   @@map("ws_live_chat_ban")
+}
+
+model LiveChatSetting {
+  id          Int       @id @default(autoincrement())
+  liveClassId String    @unique @map("live_class_id")
+  chatEnabled Boolean   @default(true) @map("chat_enabled")
+  privateChat Boolean   @default(false) @map("private_chat")
+  createdAt   DateTime? @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+
+  @@map("ws_live_chat_setting")
 }
 
 model LivePoll {
@@ -1983,6 +1996,7 @@ model LiveSessionAttendance {
   createdAt     DateTime? @map("created_at")
   updatedAt     DateTime? @map("updated_at")
 
+  @@index([streamId], map: "idx_lsa_stream")
   @@map("ws_live_session_attendance")
 }
 

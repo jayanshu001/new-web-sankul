@@ -11,6 +11,7 @@
  * category resolve entirely on MySQL.
  */
 import { prisma } from "../../config/prisma";
+import * as liveSql from "../admin-live-course/admin-live-course.service";
 
 export const PACKAGE_CATEGORY_MODULE = "package-category";
 export const isPackageCategoryMysql = (): boolean => true;
@@ -75,40 +76,96 @@ const toCategoryPackageDto = (p: any, allPlans: any[]) => {
   };
 };
 
-// ws_live_course row → the Mongo `live[]` shape (courseEducatorId ← educator_id).
-const toCategoryLiveDto = (c: any) => ({
-  _id: String(c.id),
-  name: c.name,
-  description: c.description ?? null,
-  image: c.image ?? null,
-  shareableLink: c.shareableLink ?? null,
-  ordered: c.ordered,
-  isPaid: c.isPaid,
-  isPopular: c.isPopular,
-  level: c.level ?? null,
-  classType: c.classType,
-  withMaterial: c.withMaterial ?? null,
-  withoutMaterial: c.withoutMaterial ?? null,
-  courseEducatorId: idStr(c.educatorId),
-});
-
 /**
  * GET /client/package-categories/:id → { recorded, live }. Active packages (with
  * plans/defaultPlan/startingPrice) and active live courses in this package
  * category. No category existence check / 404 — mirrors the Mongo handler, which
  * returns empty arrays for an unknown id.
+ *
+ * Live courses use the SAME card contract as GET /client/live-courses
+ * (`admin-live-course.listClient`): full course DTO + plans split by material +
+ * per-customer `daysLeft`/`isPurchased`. Passing `customerId` (from the bearer
+ * token) is what lets daysLeft/isPurchased resolve; without it they default to
+ * null/false. Reusing the canonical helpers keeps the two live-course listings
+ * byte-identical so a card here and on the Live Batches tab agree.
  */
-export const listPackagesAndLiveByCategory = async (categoryId: number) => {
-  const [packages, liveCourses] = await Promise.all([
-    prisma.package.findMany({ where: { active: true, packageCategoryId: categoryId }, orderBy: { order_by: "asc" } }),
-    prisma.liveCourse.findMany({ where: { status: true, packageCategoryId: categoryId }, orderBy: { ordered: "asc" } }),
+export type PackageCategoryTab = "recorded" | "live";
+
+export interface ListPackagesAndLiveOpts {
+  tab?: PackageCategoryTab;
+  search?: string | null;
+  skip?: number;
+  take?: number;
+}
+
+/**
+ * The listing has two FE tabs — `recorded` (packages) and `live` (live courses).
+ * Each tab searches (title/name, case-insensitive) and paginates independently at
+ * the DB level, so the FE calls this per active tab (`?tab=live&page=2&search=x`).
+ * `counts` carries the total matching rows for BOTH tabs under the current search
+ * so the tab badges stay accurate regardless of which tab is being paged. Only the
+ * active tab's list is populated; the other returns `[]` (keys kept for contract).
+ */
+export const listPackagesAndLiveByCategory = async (
+  categoryId: number,
+  customerId: number | null = null,
+  opts: ListPackagesAndLiveOpts = {}
+) => {
+  const tab: PackageCategoryTab = opts.tab === "live" ? "live" : "recorded";
+  const search = opts.search?.trim() || null;
+  const skip = opts.skip ?? 0;
+  const take = opts.take ?? 20;
+
+  const pkgWhere: any = { active: true, packageCategoryId: categoryId };
+  const liveWhere: any = { status: true, packageCategoryId: categoryId };
+  if (search) {
+    pkgWhere.name = { contains: search };
+    liveWhere.name = { contains: search };
+  }
+
+  // Both-tab counts for the FE tab badges — computed under the current search so
+  // the badge on the inactive tab still reflects what a switch would return.
+  const [recordedTotal, liveTotal] = await Promise.all([
+    prisma.package.count({ where: pkgWhere }),
+    prisma.liveCourse.count({ where: liveWhere }),
   ]);
-  const plans = packages.length
-    ? await prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packages.map((p) => p.id) }, status: true } })
-    : [];
+  const counts = { recorded: recordedTotal, live: liveTotal };
+
+  if (tab === "recorded") {
+    const packages = await prisma.package.findMany({ where: pkgWhere, orderBy: { order_by: "asc" }, skip, take });
+    const plans = packages.length
+      ? await prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packages.map((p) => p.id) }, status: true } })
+      : [];
+    return {
+      tab,
+      recorded: packages.map((p) => toCategoryPackageDto(p, plans)),
+      live: [] as any[],
+      counts,
+      total: recordedTotal,
+    };
+  }
+
+  const liveCourses = await prisma.liveCourse.findMany({ where: liveWhere, orderBy: { ordered: "asc" }, skip, take });
+  const liveIds = liveCourses.map((c) => c.id);
+  const [liveDaysLeft, liveOwned, livePlans] = await Promise.all([
+    liveSql.getDaysLeftMap(customerId, liveIds),
+    liveSql.getOwnedCourseIds(customerId),
+    liveIds.length ? liveSql.plansGrouped(liveIds) : Promise.resolve(new Map<number, any[]>()),
+  ]);
   return {
-    recorded: packages.map((p) => toCategoryPackageDto(p, plans)),
-    live: liveCourses.map(toCategoryLiveDto),
+    tab,
+    recorded: [] as any[],
+    live: liveCourses.map((c) => {
+      const key = String(c.id);
+      return {
+        ...liveSql.toCourseDto(c),
+        daysLeft: liveDaysLeft.has(key) ? liveDaysLeft.get(key) ?? null : null,
+        isPurchased: liveOwned.has(key),
+        plans: liveSql.splitPlansByMaterial(livePlans.get(c.id) ?? []),
+      };
+    }),
+    counts,
+    total: liveTotal,
   };
 };
 

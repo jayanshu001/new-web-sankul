@@ -33,13 +33,15 @@ function zodIssueResponse(res: Response, err: z.ZodError) {
   return failure(res, "Validation failed.", 422, { errors: messages });
 }
 
-// GET /api/v1/admin/live-courses/:liveCourseId/folders
+// GET /api/v1/admin/live-courses/:liveCourseId/folders?search=<query>
 // Returns the flat list of folders for this course PLUS the parent/child
-// relation rows so the UI can build a tree.
+// relation rows so the UI can build a tree. Optional `search` filters folders
+// whose title contains the query (case-insensitive) — the panel's folder picker.
 export const listFolders = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const liveCourseId = String(req.params.liveCourseId ?? "");
-  logger.info("listFolders invoked", { traceId, path: req.originalUrl, liveCourseId, userId: req.user?.id });
+  const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+  logger.info("listFolders invoked", { traceId, path: req.originalUrl, liveCourseId, search: search || null, userId: req.user?.id });
 
   try {
     const id = liveCourseSql.parseLiveId(liveCourseId);
@@ -47,7 +49,7 @@ export const listFolders = async (req: Request, res: Response) => {
       logger.warn("listFolders course not found (sql)", { traceId, liveCourseId });
       return failure(res, "Live course not found.", 404);
     }
-    const { folders, relations } = await liveCourseSql.lcListFolders(id);
+    const { folders, relations } = await liveCourseSql.lcListFolders(id, search || undefined);
     logger.info("listFolders success (sql)", { traceId, liveCourseId, folderCount: folders.length, relationCount: relations.length });
     return success(res, { folders, relations }, "Folders fetched.");
   } catch (err) {

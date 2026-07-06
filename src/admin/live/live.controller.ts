@@ -29,10 +29,6 @@ type ILiveSessionRecording = {
   path: string;
 };
 
-// Admin must wait until 2 minutes before scheduledAt to actually start the
-// Streamos stream. Late starts after scheduledAt remain allowed indefinitely.
-export const START_WINDOW_MS = 2 * 60 * 1000;
-
 // Shared secret guarding the public recording webhook. Streamos doesn't sign
 // its callbacks, so we register the webhook URL with `?key=<secret>` and
 // verify it here. When unset we log a warning but still accept — mirrors the
@@ -95,9 +91,10 @@ function liveCourseFieldProvided(body: any): boolean {
 }
 
 // POST /api/v1/admin/live-sessions
-// Two modes:
-//  - `scheduledAt` in the future → store as SCHEDULED, no Streamos call yet.
-//  - otherwise → create on Streamos immediately, status = CREATED.
+// Always persists a SCHEDULED session — creating never starts the stream, whether
+// "schedule for later" (scheduledAt set) or "go live now" (scheduledAt null). The
+// StreamOS stream is created only via POST /:id/start. Body: { title, liveCourseIds,
+// liveCourseFolders:[{liveCourseId,folderId}], scheduledAt?, endAt? }.
 export const createLiveSession = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("createLiveSession invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
@@ -123,15 +120,18 @@ export const createLiveSession = async (req: Request, res: Response) => {
         return failure(res, "liveCourseIds is required (provide at least one live course).", 400);
       }
 
-      const subjectSql = typeof req.body?.subject === "string" ? req.body.subject.trim() : "";
-      if (!subjectSql) {
-        return failure(
-          res,
-          "subject is required — recordings are auto-grouped into a folder named after it.",
-          422
-        );
-      }
-      if (subjectSql.length > 300) return failure(res, "subject is too long (max 300).", 422);
+      // Per-course recording folder selection replaces the old `subject` folder.
+      // Each folderId must belong to its liveCourseId. `subject` is no longer read.
+      const folderValSql = await adminLiveSql.validateLiveCourseFolders(
+        req.body?.liveCourseFolders,
+        courseSql.ids
+      );
+      if (folderValSql.error) return failure(res, folderValSql.error, 422);
+      const folderByCourseSql = new Map(folderValSql.links.map((l) => [l.liveCourseId, l.folderId]));
+      const courseFoldersSql = courseSql.ids.map((liveCourseId) => ({
+        liveCourseId,
+        folderId: folderByCourseSql.get(liveCourseId) ?? null,
+      }));
 
       const endAtParsedSql = parseScheduledAt(req.body?.endAt);
       if (
@@ -142,51 +142,21 @@ export const createLiveSession = async (req: Request, res: Response) => {
       }
       const endAtSql = endAtParsedSql ?? null;
 
-      let educatorIdSql: number | null = null;
-      if (req.body?.educatorId) {
-        const e = adminLiveSql.parseAlId(String(req.body.educatorId));
-        if (e == null) return failure(res, "educatorId must be a valid id.", 422);
-        educatorIdSql = e;
-      }
-
-      if (scheduledAt && scheduledAt.getTime() > Date.now()) {
-        const { row, liveCourseIds } = await adminLiveSql.createSession({
-          title,
-          liveCourseIds: courseSql.ids,
-          subject: subjectSql,
-          educatorId: educatorIdSql,
-          endAt: endAtSql,
-          scheduledAt,
-          status: "SCHEDULED",
-        });
-        logger.info("createLiveSession scheduled (sql)", { traceId, sessionId: row.id });
-        return success(
-          res,
-          { session: adminLiveSql.toPublicView(row, liveCourseIds) },
-          "Live session scheduled.",
-          201
-        );
-      }
-
-      // Immediate create — StreamOS first (unchanged), then SQL persist.
-      const createdSql = await streamosCreateStream(title);
+      // Creating NEVER auto-starts the stream. Both "schedule for later" and "go
+      // live now" persist a SCHEDULED session (no StreamOS call here). The stream
+      // is created only via POST /admin/live-sessions/:id/start ("Go Live").
       const { row, liveCourseIds } = await adminLiveSql.createSession({
         title,
-        liveCourseIds: courseSql.ids,
-        subject: subjectSql,
-        educatorId: educatorIdSql,
+        courseFolders: courseFoldersSql,
         endAt: endAtSql,
-        status: "CREATED",
-        streamId: createdSql.streamId,
-        rtmpUrl: createdSql.rtmpUrl,
-        hlsUrl: createdSql.hlsUrl,
-        hlsUrls: createdSql.hlsUrls ?? null,
+        scheduledAt: scheduledAt ?? null,
+        status: "SCHEDULED",
       });
-      logger.info("createLiveSession success (sql)", { traceId, streamId: row.streamId, sessionId: row.id });
+      logger.info("createLiveSession scheduled (sql)", { traceId, sessionId: row.id });
       return success(
         res,
-        { session: adminLiveSql.toPublicView(row, liveCourseIds) },
-        "Live stream created.",
+        { session: adminLiveSql.toPublicView(row, liveCourseIds, undefined, courseFoldersSql) },
+        "Live session scheduled.",
         201
       );
   } catch (err) {
@@ -211,7 +181,14 @@ export const listLiveSessions = async (req: Request, res: Response) => {
 
   try {
     const status = typeof req.query.status === "string" ? req.query.status : undefined;
-    const upcoming = req.query.upcoming === "true";
+    const search = typeof req.query.search === "string" ? req.query.search.trim() : undefined;
+    // Tri-state for the SCHEDULED sub-tabs: true = future ("Scheduled"),
+    // false = due/go-live-now ("To start"), undefined = all SCHEDULED. Collapsing
+    // to a boolean would merge "false" and "absent", over-counting the tabs.
+    const upcoming =
+      req.query.upcoming === "true" ? true
+      : req.query.upcoming === "false" ? false
+      : undefined;
     const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
     const page  = Math.max(1, parseInt(req.query.page as string) || 1);
 
@@ -240,16 +217,21 @@ export const listLiveSessions = async (req: Request, res: Response) => {
         status,
         upcoming,
         courseIds: courseIdsSql,
+        search: search || undefined,
         skip: (page - 1) * limit,
         take: limit,
       });
       const sessions = await Promise.all(
         rows.map(async (row) => {
-          const courses = await adminLiveSql.getLinkedCourses(row.id);
+          const [courses, courseFolders] = await Promise.all([
+            adminLiveSql.getLinkedCourses(row.id),
+            adminLiveSql.getLinkedCourseFolders(row.id),
+          ]);
           return adminLiveSql.toPublicView(
             row,
             courses.map((c) => Number(c._id)),
-            courses
+            courses,
+            courseFolders
           );
         })
       );
@@ -303,14 +285,11 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
               recordings: details.recordings,
             });
             // C7: mirror the webhook's auto-promote so a missed webhook still
-            // files the recording into the subject folder (best-effort).
-            const courseIdsForPromote = await adminLiveSql.getLinkedCourseIds(row.id);
+            // files the recording into each course's chosen folder (best-effort).
             await adminLiveSql.maybeAutoPromoteRecordingSql({
               sessionId: row.id,
               sessionTitle: row.title ?? null,
-              subject: row.subject ?? null,
               recordings: details.recordings,
-              liveCourseIds: courseIdsForPromote,
             });
           }
           if (Object.keys(patch).length > 0) {
@@ -330,12 +309,13 @@ export const getLiveSessionStatus = async (req: Request, res: Response) => {
       }
 
       const courses = await adminLiveSql.getLinkedCourses(row.id);
+      const courseFolders = await adminLiveSql.getLinkedCourseFolders(row.id);
       // C7: promotedVideos resolved via ws_video.live_session_id.
       const promotedVideosSql = await adminLiveSql.resolvePromotedVideosSql(row.id);
       return success(
         res,
         {
-          session: adminLiveSql.toPublicView(row, courses.map((c) => Number(c._id)), courses),
+          session: adminLiveSql.toPublicView(row, courses.map((c) => Number(c._id)), courses, courseFolders),
           isLive,
           promotedVideos: promotedVideosSql,
         },
@@ -498,18 +478,9 @@ export const startScheduledLiveSession = async (req: Request, res: Response) => 
       if (rowSql.status !== "SCHEDULED") {
         return failure(res, `Only SCHEDULED sessions can be started (current: ${rowSql.status}).`, 409);
       }
-      if (!rowSql.scheduledAt) {
-        return failure(res, "Session has no scheduledAt; cannot determine start window.", 422);
-      }
-      const earliestSql = rowSql.scheduledAt.getTime() - START_WINDOW_MS;
-      if (Date.now() < earliestSql) {
-        const secondsRemaining = Math.ceil((earliestSql - Date.now()) / 1000);
-        return failure(
-          res,
-          `Too early to start. You can start within 2 minutes of the scheduled time (in ${secondsRemaining}s).`,
-          409
-        );
-      }
+      // "Go Live" starts a SCHEDULED session at ANY time — the previous 2-minute
+      // start-window restriction was removed. scheduledAt may be null (sessions
+      // created via "go live now"), which is fine.
       const createdSql = await streamosCreateStream(rowSql.title ?? "");
       const updatedSql = await adminLiveSql.updateSession(rowSql.id, {
         streamId: createdSql.streamId,
@@ -518,11 +489,14 @@ export const startScheduledLiveSession = async (req: Request, res: Response) => 
         hlsUrls: createdSql.hlsUrls ?? null,
         status: "CREATED",
       });
-      const coursesSql = await adminLiveSql.getLinkedCourses(updatedSql.id);
+      const [coursesSql, courseFoldersSql] = await Promise.all([
+        adminLiveSql.getLinkedCourses(updatedSql.id),
+        adminLiveSql.getLinkedCourseFolders(updatedSql.id),
+      ]);
       logger.info("startScheduledLiveSession success (sql)", { traceId, sessionId: updatedSql.id, streamId: updatedSql.streamId });
       return success(
         res,
-        { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql) },
+        { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql, courseFoldersSql) },
         "Live stream started."
       );
   } catch (err) {
@@ -539,7 +513,8 @@ export const startScheduledLiveSession = async (req: Request, res: Response) => 
 };
 
 // PATCH /api/v1/admin/live-sessions/:id
-// Allowed only while SCHEDULED. Editable fields: title, scheduledAt.
+// Allowed only while SCHEDULED. Editable: title, scheduledAt, liveCourseIds,
+// liveCourseFolders, endAt.
 export const updateScheduledLiveSession = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("updateScheduledLiveSession invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
@@ -553,14 +528,17 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
 
       const patch: {
         title?: string;
-        subject?: string;
-        educatorId?: number | null;
         endAt?: Date | null;
         scheduledAt?: Date | null;
       } = {};
       let changedSql = false;
       let scheduleChangedSql = false;
-      let courseIdsToSet: number[] | null = null;
+
+      // Course links (liveCourseIds) and per-course folders (liveCourseFolders)
+      // are recomputed together below so a pure-course edit preserves existing
+      // folder choices and a pure-folder edit preserves the course set.
+      let courseIdsToSet: number[] | null = null;      // set when liveCourseIds provided
+      let folderOverrides: Map<number, number | null> | null = null; // set when liveCourseFolders provided
 
       if (req.body?.title !== undefined) {
         const t = typeof req.body.title === "string" ? req.body.title.trim() : "";
@@ -588,11 +566,14 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
         courseIdsToSet = courseSql.ids;
         changedSql = true;
       }
-      if (req.body?.subject !== undefined) {
-        const next = typeof req.body.subject === "string" ? req.body.subject.trim() : "";
-        if (!next) return failure(res, "subject cannot be empty.", 422);
-        if (next.length > 300) return failure(res, "subject is too long (max 300).", 422);
-        patch.subject = next;
+      if (req.body?.liveCourseFolders !== undefined) {
+        // Validate against the effective course set: the newly provided ids, or
+        // (when courses aren't changing) the session's existing linked courses.
+        const existingLinks = await adminLiveSql.getLinkedCourseFolders(rowSql.id);
+        const allowed = courseIdsToSet ?? existingLinks.map((l) => l.liveCourseId);
+        const folderVal = await adminLiveSql.validateLiveCourseFolders(req.body.liveCourseFolders, allowed);
+        if (folderVal.error) return failure(res, folderVal.error, 422);
+        folderOverrides = new Map(folderVal.links.map((l) => [l.liveCourseId, l.folderId]));
         changedSql = true;
       }
       if (req.body?.endAt !== undefined) {
@@ -601,21 +582,11 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
         patch.endAt = parsed;
         changedSql = true;
       }
-      if (req.body?.educatorId !== undefined) {
-        if (req.body.educatorId === null || req.body.educatorId === "") {
-          patch.educatorId = null;
-        } else {
-          const e = adminLiveSql.parseAlId(String(req.body.educatorId));
-          if (e == null) return failure(res, "educatorId must be a valid id.", 422);
-          patch.educatorId = e;
-        }
-        changedSql = true;
-      }
 
       if (!changedSql) {
         return failure(
           res,
-          "Provide title, scheduledAt, liveCourseIds, subject, endAt, or educatorId to update.",
+          "Provide title, scheduledAt, liveCourseIds, liveCourseFolders, or endAt to update.",
           422
         );
       }
@@ -624,19 +595,31 @@ export const updateScheduledLiveSession = async (req: Request, res: Response) =>
       if (Object.keys(patch).length > 0) {
         updatedSql = await adminLiveSql.updateSession(rowSql.id, patch);
       }
-      if (courseIdsToSet) {
-        await adminLiveSql.setLinkedCourseIds(rowSql.id, courseIdsToSet);
+      if (courseIdsToSet || folderOverrides) {
+        const existing = await adminLiveSql.getLinkedCourseFolders(rowSql.id);
+        const existingFolderByCourse = new Map(existing.map((l) => [l.liveCourseId, l.folderId]));
+        const targetCourses = courseIdsToSet ?? existing.map((l) => l.liveCourseId);
+        const links = targetCourses.map((cid) => ({
+          liveCourseId: cid,
+          folderId: folderOverrides?.has(cid)
+            ? folderOverrides.get(cid) ?? null
+            : existingFolderByCourse.get(cid) ?? null,
+        }));
+        await adminLiveSql.setLinkedCourseFolders(rowSql.id, links);
       }
       if (scheduleChangedSql) {
         await syncRemindersForSession(String(rowSql.id)).catch((e) =>
           logger.error("updateScheduledLiveSession reminder sync failed (sql)", { traceId, error: getErrorMessage(e) })
         );
       }
-      const coursesSql = await adminLiveSql.getLinkedCourses(rowSql.id);
+      const [coursesSql, courseFoldersSql] = await Promise.all([
+        adminLiveSql.getLinkedCourses(rowSql.id),
+        adminLiveSql.getLinkedCourseFolders(rowSql.id),
+      ]);
       logger.info("updateScheduledLiveSession success (sql)", { traceId, sessionId: rowSql.id });
       return success(
         res,
-        { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql) },
+        { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql, courseFoldersSql) },
         "Live session updated."
       );
   } catch (err) {
@@ -971,15 +954,12 @@ export const recordingWebhook = async (req: Request, res: Response) => {
         logger.warn("recordingWebhook stream not found (sql)", { traceId, streamId });
         return res.status(200).json({ success: true, message: "Acknowledged (no matching stream)." });
       }
-      // C7: auto-promote the best recording into each linked course's subject
+      // C7: auto-promote the best recording into each linked course's chosen
       // folder (best-effort — never throws).
-      const courseIdsForPromoteSql = await adminLiveSql.getLinkedCourseIds(updatedSql.id);
       await adminLiveSql.maybeAutoPromoteRecordingSql({
         sessionId: updatedSql.id,
         sessionTitle: updatedSql.title ?? null,
-        subject: updatedSql.subject ?? null,
         recordings,
-        liveCourseIds: courseIdsForPromoteSql,
       });
       const liveClassIdSql = String(streamId);
       io?.to(roomKey(liveClassIdSql)).emit("recordings_ready", {
