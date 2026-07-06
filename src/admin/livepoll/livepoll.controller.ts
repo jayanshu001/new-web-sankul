@@ -38,7 +38,7 @@ export const createPoll = async (req: Request, res: Response) => {
 
     const { poll: created, closedPollId } = await liveSql.createPoll({ liveClassId, question: question.trim(), options: optionTexts, createdBy: liveSql.parseLiveId(String(req.user!.id)), createdByName: adminName });
     if (closedPollId) io?.to(roomKey(liveClassId)).emit("poll_closed", { pollId: closedPollId });
-    const pollData = { _id: created._id, liveClassId: created.liveClassId, question: created.question, options: created.options, totalVotes: created.totalVotes, createdByName: created.createdByName, createdAt: created.createdAt };
+    const pollData = { _id: created._id, liveClassId: created.liveClassId, question: created.question, options: created.options, totalVotes: created.totalVotes, isActive: true, createdByName: created.createdByName, createdAt: created.createdAt };
     io?.to(roomKey(liveClassId)).emit("poll_created", { poll: pollData });
     return success(res, { poll: pollData }, "Poll created and sent to live class.", 201);
   } catch (err) {
@@ -139,6 +139,7 @@ export const updatePoll = async (req: Request, res: Response) => {
       question: result.question,
       options: result.options,
       totalVotes: result.totalVotes,
+      isActive: true,
       createdByName: result.createdByName,
       createdAt: result.createdAt,
     };

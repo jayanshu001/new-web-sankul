@@ -1,6 +1,8 @@
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminLiveCourseRepository as repo } from "./admin-live-course.repository";
+import { adminAuthRepository } from "../admin-auth/admin-auth.repository";
+import { deriveRole } from "../admin-auth/admin-auth.transformer";
 import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession } from "@prisma/client";
 
 export const LIVE_COURSE_MODULE = "live-course";
@@ -467,11 +469,32 @@ export const getReminderForSession = async (customerId: number, liveSessionId: n
 };
 
 // ── chat ─────────────────────────────────────────────────────────────────────
-const toChatMessageDto = (m: any) => ({ _id: String(m.id), customerId: idStrOrNull(m.customerId), userName: m.userName ?? null, message: m.message ?? null, createdAt: m.createdAt ?? null });
+// `isAdmin` + `role` let the FE style admin/super-admin messages identically on
+// history reload and on the live `new_message` event. There is no stored role
+// column (ws_live_chat_message only has is_admin + admin_id), so `role` is
+// resolved from the admin's current spatie roles at read time; non-admin
+// (customer) rows get role: null.
+const toChatMessageDto = (m: any, role: string | null = null) => ({ _id: String(m.id), customerId: idStrOrNull(m.customerId), userName: m.userName ?? null, message: m.message ?? null, isAdmin: !!m.isAdmin, role: m.isAdmin ? role : null, createdAt: m.createdAt ?? null });
 
 export const getChatHistory = async (liveClassId: string, limit: number, before?: Date) => {
   const rows = await repo.chatHistory(liveClassId, limit, before);
-  return rows.reverse().map(toChatMessageDto); // chrono order (Mongo reverses too)
+  // Batch-resolve the current role for every distinct admin author on this
+  // page (one pivot query, not one per message).
+  const adminIds = Array.from(
+    new Set(rows.filter((r: any) => r.isAdmin && r.adminId != null).map((r: any) => String(r.adminId)))
+  );
+  const roleByAdminId = new Map<string, string>();
+  if (adminIds.length) {
+    try {
+      const rolesMap = await adminAuthRepository.findRolesForMany(adminIds.map((id) => BigInt(id)));
+      for (const [id, roles] of rolesMap) roleByAdminId.set(id, deriveRole(roles.map((r) => r.name)));
+    } catch {
+      /* best-effort: fall back to a generic admin role below */
+    }
+  }
+  const roleFor = (m: any): string | null =>
+    m.isAdmin ? (m.adminId != null ? roleByAdminId.get(String(m.adminId)) ?? "admin" : "admin") : null;
+  return rows.reverse().map((m: any) => toChatMessageDto(m, roleFor(m))); // chrono order (Mongo reverses too)
 };
 
 export const getChatBanStatus = async (customerId: number) => {
@@ -509,7 +532,25 @@ export const deleteChatMessage = async (id: number, deletedBy: number | null): P
   return { liveClassId: existing.liveClassId, deletedAt };
 };
 
-export const listChatBans = async () => (await repo.listChatBans()).map((b) => ({ _id: String(b.id), liveClassId: b.liveClassId, customerId: idStrOrNull(b.customerId), reason: b.reason ?? null, createdAt: b.createdAt ?? null }));
+export const listChatBans = async () => {
+  const bans = await repo.listChatBans();
+  const custs = new Map((await repo.customersByIds([...new Set(bans.map((b) => b.customerId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
+  // liveClassId is a LiveSession Streamos streamId string — resolve to a session so the panel can show which live session the ban is from.
+  const sessions = new Map((await repo.sessionsByStreamIds([...new Set(bans.map((b) => b.liveClassId).filter((x): x is string => !!x && x.trim() !== ""))])).map((s) => [s.streamId, s]));
+  return bans.map((b) => {
+    const c = b.customerId != null ? custs.get(b.customerId) : undefined;
+    const s = b.liveClassId ? sessions.get(b.liveClassId) : undefined;
+    return {
+      _id: String(b.id),
+      liveClassId: b.liveClassId,
+      customerId: idStrOrNull(b.customerId),
+      customer: c ? { _id: String(c.id), fullName: c.fullName ?? null, emailAddress: c.emailAddress ?? null, phoneNumber: c.phoneNumber } : null,
+      liveSession: s ? { _id: String(s.id), title: s.title ?? null, subject: s.subject ?? null, scheduledAt: s.scheduledAt ?? null, status: s.status } : null,
+      reason: b.reason ?? null,
+      createdAt: b.createdAt ?? null,
+    };
+  });
+};
 
 export const banCustomerFromChat = async (liveClassId: string, customerId: number, bannedBy: number | null, reason: string | null): Promise<"already" | any> => {
   if (await repo.chatBanForCustomer(customerId)) return "already";
@@ -552,7 +593,8 @@ export const getActivePoll = async (liveClassId: string, customerId: number) => 
  * bumps counters. Returns the poll's liveClassId + fresh option/total counts so
  * the socket can broadcast `poll_update` to the right room — exactly the data
  * the Mongo path emitted. Discriminated string results map to the socket's
- * existing error emits; "already" mirrors the Mongo duplicate-key (11000) case.
+ * existing error emits. Re-voting is allowed: a customer may change their vote
+ * any number of times (the vote row is moved, so each customer still counts once).
  */
 export const submitPollVote = async (
   pollId: number,
@@ -563,19 +605,15 @@ export const submitPollVote = async (
   | "not_found"
   | "closed"
   | "invalid_option"
-  | "already"
 > => {
   const poll = await repo.findPoll(pollId);
   if (!poll) return "not_found";
   if (!poll.isActive) return "closed";
   const options = await repo.pollOptions(pollId);
   if (optionIndex < 0 || optionIndex >= options.length) return "invalid_option";
-  try {
-    await repo.recordPollVote(pollId, customerId, optionIndex);
-  } catch (err: any) {
-    if (err?.code === "P2002") return "already"; // unique (pollId,customerId)
-    throw err;
-  }
+  // Re-votable: a customer may change their vote as many times as they want. The
+  // vote row is moved (still one per customer), so counts stay consistent.
+  await repo.upsertPollVote(pollId, customerId, optionIndex);
   const fresh = await repo.findPoll(pollId);
   const freshOptions = await repo.pollOptions(pollId);
   return {

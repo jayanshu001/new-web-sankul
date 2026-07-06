@@ -172,6 +172,14 @@ export const adminLiveCourseRepository = {
     prisma.liveSessionReminder.findFirst({ where: { customerId, liveSessionId } }),
   sessionsByIds: (ids: number[]) =>
     ids.length ? prisma.liveSession.findMany({ where: { id: { in: ids } } }) : Promise.resolve([]),
+  // liveClassId on chat/ban rows is a LiveSession Streamos `streamId` string.
+  sessionsByStreamIds: (streamIds: string[]) =>
+    streamIds.length
+      ? prisma.liveSession.findMany({
+          where: { streamId: { in: streamIds } },
+          select: { id: true, streamId: true, title: true, subject: true, scheduledAt: true, status: true },
+        })
+      : Promise.resolve([]),
 
   // ── chat (ws_live_chat_message / ws_live_chat_ban) ──────────────────────────
   chatHistory: (liveClassId: string, limit: number, before?: Date) =>
@@ -197,17 +205,27 @@ export const adminLiveCourseRepository = {
   pollVoteFor: (pollId: number, customerId: number) => prisma.livePollVote.findFirst({ where: { pollId, customerId } }),
   pollOptionAt: (pollId: number, optionIndex: number) => prisma.livePollOption.findFirst({ where: { pollId, optionIndex } }),
   /**
-   * Record one vote atomically: insert the (pollId,customerId) vote row (the
-   * @@unique uq_lpv guards double-voting), bump that option's votes and the
-   * poll's totalVotes. The vote insert is FIRST so a duplicate throws (P2002)
-   * before any counter moves — mirrors the Mongo unique-index 11000 behaviour.
+   * Re-votable poll: a customer may change their vote any number of times, but
+   * still counts once (the @@unique uq_lpv row is MOVED, not duplicated). First
+   * vote → insert + bump new option + bump totalVotes. Change to another option →
+   * old option −1, new option +1, totalVotes unchanged (still = distinct voters).
+   * Same option → no-op. All atomic in one transaction.
    */
-  recordPollVote: (pollId: number, customerId: number, optionIndex: number) =>
+  upsertPollVote: (pollId: number, customerId: number, optionIndex: number) =>
     prisma.$transaction(async (tx) => {
       const now = new Date();
-      await tx.livePollVote.create({ data: { pollId, customerId, optionIndex, createdAt: now, updatedAt: now } });
+      const existing = await tx.livePollVote.findFirst({ where: { pollId, customerId } });
+      if (!existing) {
+        await tx.livePollVote.create({ data: { pollId, customerId, optionIndex, createdAt: now, updatedAt: now } });
+        await tx.livePollOption.updateMany({ where: { pollId, optionIndex }, data: { votes: { increment: 1 } } });
+        await tx.livePoll.update({ where: { id: pollId }, data: { totalVotes: { increment: 1 }, updatedAt: now } });
+        return;
+      }
+      if (existing.optionIndex === optionIndex) return; // same choice — nothing to move
+      await tx.livePollVote.update({ where: { id: existing.id }, data: { optionIndex, updatedAt: now } });
+      await tx.livePollOption.updateMany({ where: { pollId, optionIndex: existing.optionIndex }, data: { votes: { decrement: 1 } } });
       await tx.livePollOption.updateMany({ where: { pollId, optionIndex }, data: { votes: { increment: 1 } } });
-      await tx.livePoll.update({ where: { id: pollId }, data: { totalVotes: { increment: 1 }, updatedAt: now } });
+      await tx.livePoll.update({ where: { id: pollId }, data: { updatedAt: now } });
     }),
   createPollWithOptions: (poll: Prisma.LivePollUncheckedCreateInput, options: Array<{ text: string; votes: number }>) =>
     prisma.$transaction(async (tx) => {

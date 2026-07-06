@@ -4,6 +4,7 @@ import { resolveLiveClassId } from "../live/live.guards";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
+import { adminAuthRepository } from "../../modules/admin-auth/admin-auth.repository";
 
 // POST /api/v1/admin/live-chat/message
 export const sendAdminMessage = async (req: Request, res: Response) => {
@@ -23,10 +24,23 @@ export const sendAdminMessage = async (req: Request, res: Response) => {
     if (text.length > 2000) { logger.warn("sendAdminMessage too long", { traceId, liveClassId, length: text.length }); return failure(res, "Message too long (max 2000 characters).", 422); }
 
     const admin = req.user as any;
-    const adminName = [admin?.firstName, admin?.lastName].filter(Boolean).join(" ") || admin?.email || "Admin";
+    // The admin JWT only carries { id, email, role } — no name. Look up the
+    // admin's real name from ws_users so the FE shows a person, not an email.
+    // If there's no name on record, fall back to "Super Admin" (never the email).
+    let dbName = "";
+    try {
+      const adminIdBig = BigInt(String(admin.id));
+      const row = await adminAuthRepository.findById(adminIdBig);
+      dbName = [row?.firstName, row?.lastName].filter(Boolean).join(" ").trim();
+    } catch (e) {
+      logger.warn("sendAdminMessage: admin name lookup failed", { traceId, adminId: admin?.id, error: getErrorMessage(e) });
+    }
+    const adminName = dbName || "Super Admin";
 
     const saved = await liveSql.sendAdminChatMessage({ liveClassId, adminId: liveSql.parseLiveId(String(admin.id)), userName: adminName, message: text });
-    const payload = { _id: saved._id, liveClassId, adminId: admin.id, isAdmin: true, userName: adminName, message: text, createdAt: saved.createdAt };
+    // `role` lets the FE reliably detect a super admin (vs admin/editor) and
+    // style the message accordingly — see getChatHistory for the reload path.
+    const payload = { _id: saved._id, liveClassId, adminId: admin.id, isAdmin: true, role: admin?.role ?? "admin", userName: adminName, message: text, createdAt: saved.createdAt };
 
     io?.to(roomKey(liveClassId)).emit("new_message", payload);
 

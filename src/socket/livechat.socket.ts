@@ -20,6 +20,9 @@ export let io: SocketServer;
 interface AuthenticatedSocket extends Socket {
   customerId?: string;
   userName?: string;
+  // Admin/super_admin sockets join rooms read-only: they receive live events
+  // (poll counts, chat, presence) but cannot vote or post messages.
+  isAdmin?: boolean;
   // The live class this socket is currently in, plus its open attendance row.
   liveRoom?: string;
   attendanceId?: string;
@@ -93,7 +96,8 @@ async function viewerCount(liveClassId: string): Promise<number> {
     const customers = new Set<string>();
     for (const s of sockets) {
       const cid = (s.data?.customerId as string | undefined) ?? (s as any).customerId;
-      if (cid) customers.add(cid);
+      // Admin watchers (customerId "admin:<id>") don't count as viewers.
+      if (cid && !cid.startsWith("admin:")) customers.add(cid);
     }
     return customers.size;
   } catch (err) {
@@ -132,14 +136,24 @@ async function closeAttendance(socket: AuthenticatedSocket) {
   }
 }
 
-async function authenticateSocket(token: string): Promise<{ customerId: string; userName: string } | null> {
+async function authenticateSocket(
+  token: string
+): Promise<{ customerId: string; userName: string; isAdmin: boolean } | null> {
   try {
     // Keyring-aware verify so socket auth survives JWT key rotation alongside
     // HTTP requests. See utils/jwtSigner.ts + config/jwtKeys.ts.
     const decoded = verifyAccessToken<any>(token);
 
+    // Admin/super_admin tokens (type "admin", see admin.auth.service.ts) join
+    // rooms read-only to watch live poll counts / chat. They skip the customer
+    // lookup and are barred from submit_vote / send_message downstream.
+    if (decoded.type === "admin") {
+      const adminName = (decoded.email as string) || `Admin_${String(decoded.id).slice(-4)}`;
+      return { customerId: `admin:${decoded.id}`, userName: adminName, isAdmin: true };
+    }
+
     if (decoded.type !== "customer") {
-      logger.warn("Live chat auth rejected: token type is not customer", {
+      logger.warn("Live chat auth rejected: token type is not customer/admin", {
         type: decoded.type, id: decoded.id, tokenTail: token.slice(-6),
       });
       return null;
@@ -178,7 +192,7 @@ async function authenticateSocket(token: string): Promise<{ customerId: string; 
     }
     const userName = (row.fullName ?? "").trim() || `User_${decoded.id.slice(-4)}`;
 
-    return { customerId: decoded.id, userName };
+    return { customerId: decoded.id, userName, isAdmin: false };
   } catch (err) {
     logger.warn("Live chat auth rejected: token verify threw", {
       error: (err as Error).message, tokenTail: token.slice(-6),
@@ -227,6 +241,7 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
 
     socket.customerId = auth.customerId;
     socket.userName = auth.userName;
+    socket.isAdmin = auth.isAdmin;
     // Also stash on socket.data so the Redis adapter's fetchSockets() can
     // see the customerId on RemoteSocket objects from OTHER pods. Local
     // socket reads continue to use socket.customerId; only cross-pod reads
@@ -254,17 +269,24 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
         socket.leave(roomKey(prev));
         await closeAttendance(socket);
         socket.liveRoom = undefined;
-        io.to(roomKey(prev)).emit("user_left", {
-          liveClassId: prev,
-          customerId: socket.customerId,
-          userName: socket.userName,
-          leftAt: new Date().toISOString(),
-        });
+        if (!socket.isAdmin) {
+          io.to(roomKey(prev)).emit("user_left", {
+            liveClassId: prev,
+            customerId: socket.customerId,
+            userName: socket.userName,
+            leftAt: new Date().toISOString(),
+          });
+        }
         io.to(roomKey(prev)).emit("viewer_count", { liveClassId: prev, count: await viewerCount(prev) });
       }
 
       socket.join(roomKey(liveClassId));
-      await openAttendance(socket, liveClassId);
+      // Admins watch read-only: no attendance row, no presence broadcast.
+      if (!socket.isAdmin) {
+        await openAttendance(socket, liveClassId);
+      } else {
+        socket.liveRoom = liveClassId;
+      }
 
       try {
         // getChatHistory returns chrono order (oldest→newest); limit 50.
@@ -287,12 +309,15 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
       }
 
       // ── Presence: tell the room someone joined + the new viewer count ──────
-      io.to(roomKey(liveClassId)).emit("user_joined", {
-        liveClassId,
-        customerId: socket.customerId,
-        userName: socket.userName,
-        joinedAt: new Date().toISOString(),
-      });
+      // Admins are invisible watchers — announce joins for real viewers only.
+      if (!socket.isAdmin) {
+        io.to(roomKey(liveClassId)).emit("user_joined", {
+          liveClassId,
+          customerId: socket.customerId,
+          userName: socket.userName,
+          joinedAt: new Date().toISOString(),
+        });
+      }
       io.to(roomKey(liveClassId)).emit("viewer_count", {
         liveClassId,
         count: await viewerCount(liveClassId),
@@ -301,6 +326,10 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
 
     // ── Vote on a poll (students only) ────────────────────────────────────────
     socket.on("submit_vote", async ({ pollId, optionIndex }: { pollId: string; optionIndex: number }) => {
+      if (socket.isAdmin) {
+        socket.emit("error", { message: "Admins cannot vote" });
+        return;
+      }
       if (!pollId || typeof optionIndex !== "number") {
         socket.emit("error", { message: "pollId and optionIndex are required" });
         return;
@@ -315,7 +344,7 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
         if (r === "not_found") { socket.emit("error", { message: "Poll not found" }); return; }
         if (r === "closed") { socket.emit("error", { message: "Poll is closed" }); return; }
         if (r === "invalid_option") { socket.emit("error", { message: "Invalid option" }); return; }
-        if (r === "already") { socket.emit("error", { message: "You have already voted on this poll" }); return; }
+        // Re-voting is allowed — a customer may change their vote any number of times.
 
         // Broadcast live counts to everyone in the room
         io.to(roomKey(r.liveClassId)).emit("poll_update", {
@@ -332,6 +361,10 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
 
     // ── Send chat message ─────────────────────────────────────────────────────
     socket.on("send_message", async ({ liveClassId, message }: { liveClassId: string; message: string }) => {
+      if (socket.isAdmin) {
+        socket.emit("error", { message: "Admins cannot send chat messages" });
+        return;
+      }
       const streamId = await resolveLiveClassId(liveClassId);
       if (!streamId) {
         socket.emit("error", { message: "No live session for this id" }); return;
@@ -361,6 +394,11 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
           liveClassId,
           customerId: socket.customerId,
           userName: socket.userName,
+          // Keep the payload shape uniform with the admin path (livechat
+          // controller) + history DTO so the FE can branch on isAdmin/role
+          // without special-casing the source.
+          isAdmin: false,
+          role: null,
           message: text,
           createdAt: saved.createdAt,
         });
@@ -377,12 +415,14 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
       socket.leave(roomKey(liveClassId));
       await closeAttendance(socket);
       if (socket.liveRoom === liveClassId) socket.liveRoom = undefined;
-      io.to(roomKey(liveClassId)).emit("user_left", {
-        liveClassId,
-        customerId: socket.customerId,
-        userName: socket.userName,
-        leftAt: new Date().toISOString(),
-      });
+      if (!socket.isAdmin) {
+        io.to(roomKey(liveClassId)).emit("user_left", {
+          liveClassId,
+          customerId: socket.customerId,
+          userName: socket.userName,
+          leftAt: new Date().toISOString(),
+        });
+      }
       io.to(roomKey(liveClassId)).emit("viewer_count", {
         liveClassId,
         count: await viewerCount(liveClassId),
@@ -397,12 +437,14 @@ export function initLiveChatSocket(httpServer: HttpServer, allowedOrigins: strin
         const room = socket.liveRoom;
         socket.liveRoom = undefined;
         await closeAttendance(socket);
-        io.to(roomKey(room)).emit("user_left", {
-          liveClassId: room,
-          customerId: socket.customerId,
-          userName: socket.userName,
-          leftAt: new Date().toISOString(),
-        });
+        if (!socket.isAdmin) {
+          io.to(roomKey(room)).emit("user_left", {
+            liveClassId: room,
+            customerId: socket.customerId,
+            userName: socket.userName,
+            leftAt: new Date().toISOString(),
+          });
+        }
         io.to(roomKey(room)).emit("viewer_count", { liveClassId: room, count: await viewerCount(room) });
       }
       logger.info("Live chat: client disconnected", { socketId: socket.id, customerId: socket.customerId });

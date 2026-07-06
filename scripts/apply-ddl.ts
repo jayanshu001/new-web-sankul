@@ -19,7 +19,7 @@
 
 import { PrismaClient } from "@prisma/client";
 import { execFileSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -47,6 +47,13 @@ async function appliedSet(): Promise<Set<string>> {
 }
 
 function pendingFiles(applied: Set<string>): string[] {
+  // The DDL dir may be absent — docs/ is kept local-only (untracked), so a fresh
+  // checkout has no schema-changes folder. Treat "no dir" as "nothing to apply"
+  // rather than letting readdirSync throw ENOENT and crash the whole run.
+  if (!existsSync(DDL_DIR)) {
+    console.log(`(no DDL dir at ${DDL_DIR} — nothing to apply)`);
+    return [];
+  }
   return readdirSync(DDL_DIR)
     .filter((f) => f.endsWith(".sql"))
     .sort() // dated filenames sort chronologically
