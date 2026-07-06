@@ -4,6 +4,8 @@ import { adminLiveCourseRepository as repo } from "./admin-live-course.repositor
 import { adminAuthRepository } from "../admin-auth/admin-auth.repository";
 import { deriveRole } from "../admin-auth/admin-auth.transformer";
 import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession } from "@prisma/client";
+import { getVodStreamMeta } from "../../admin/live/streamos.service";
+import { redisClient } from "../../config/redis";
 
 export const LIVE_COURSE_MODULE = "live-course";
 export const isLiveCourseMysql = (): boolean => true;
@@ -936,6 +938,53 @@ export const buildPurchaseOptionsSql = async (courseIds: number[]) => {
 };
 
 // ── listLiveCourseRecordings (folders + lectures + per-quality) — SQL ──────────
+// Recordings are immutable once StreamOS finishes producing them, so a longish
+// cache is safe; capped so a re-processed/late recording is picked up within the hour.
+const VOD_META_CACHE_TTL_SEC = 3600;
+
+type VodRec = { quality: string | null; file_size: number | null; path: string };
+interface CachedVodMeta {
+  hlsUrl: string | null;
+  hls: VodRec[];
+  mp4: VodRec[];
+}
+
+/**
+ * Resolve a session's StreamOS recording (VOD) into playable URLs via
+ * get-vod-stream-meta, Redis-cached per streamId. Returns null on ANY failure so
+ * the caller falls back to the stored webhook recordings — the accessKey never
+ * leaves the server; only the resolved CDN URLs reach the client.
+ */
+const resolveVodMeta = async (streamId: string): Promise<CachedVodMeta | null> => {
+  const cacheKey = `vodmeta:${streamId}`;
+  try {
+    const cached = await redisClient.get(cacheKey);
+    if (cached) return JSON.parse(cached) as CachedVodMeta;
+  } catch {
+    /* cache read best-effort */
+  }
+  try {
+    const meta = await getVodStreamMeta(streamId);
+    const norm = (r: { quality: string; path: string }): VodRec => ({
+      quality: r.quality || null,
+      file_size: null,
+      path: sanitizeRecPath(r.path),
+    });
+    const out: CachedVodMeta = { hlsUrl: meta.hlsUrl ?? null, hls: meta.hls.map(norm), mp4: meta.mp4.map(norm) };
+    // Only cache a non-empty resolution so a transient blip doesn't get pinned.
+    if (out.hlsUrl || out.hls.length || out.mp4.length) {
+      try {
+        await redisClient.set(cacheKey, JSON.stringify(out), "EX", VOD_META_CACHE_TTL_SEC);
+      } catch {
+        /* cache write best-effort */
+      }
+    }
+    return out;
+  } catch {
+    return null;
+  }
+};
+
 export const getRecordingsForClient = async (
   courseId: number,
   customerId: number | null
@@ -964,6 +1013,8 @@ export const getRecordingsForClient = async (
   type RecEntry = { quality: string | null; file_size: number | null; path: string };
   const recBySession = new Map<number, RecEntry[]>();
   const mp4BySession = new Map<number, RecEntry[]>();
+  // VOD-meta-resolved playable URLs per session (get-vod-stream-meta, cached).
+  const vodBySession = new Map<number, CachedVodMeta | null>();
   const shapeRecs = (raw: unknown): RecEntry[] =>
     (Array.isArray(raw) ? raw : [])
       .filter((r: any) => typeof r?.path === "string" && r.path.length > 0)
@@ -973,11 +1024,21 @@ export const getRecordingsForClient = async (
         path: sanitizeRecPath(r.path),
       }));
   if (sessionIds.length) {
-    const sessions = await prisma.liveSession.findMany({ where: { id: { in: sessionIds } }, select: { id: true, recordings: true, mp4Recordings: true } });
+    const sessions = await prisma.liveSession.findMany({ where: { id: { in: sessionIds } }, select: { id: true, streamId: true, recordings: true, mp4Recordings: true } });
     for (const s of sessions) {
       recBySession.set(s.id, shapeRecs(s.recordings));
       mp4BySession.set(s.id, shapeRecs(s.mp4Recordings));
     }
+    // Resolve the actually-playable URLs for each session's recording via
+    // StreamOS get-vod-stream-meta (cached). Failure-isolated per session — a
+    // session that can't resolve falls back to its stored webhook recordings.
+    await Promise.all(
+      sessions
+        .filter((s) => !!s.streamId)
+        .map(async (s) => {
+          vodBySession.set(s.id, await resolveVodMeta(String(s.streamId)));
+        })
+    );
   }
 
   // per-video resume progress
@@ -996,8 +1057,14 @@ export const getRecordingsForClient = async (
   const shapeLecture = (v: (typeof videos)[number]) => {
     const canPlay = subscribed || v.priceType === "free";
     const p = progByVideo.get(v.id);
-    const hlsList = v.liveSessionId ? recBySession.get(v.liveSessionId) ?? [] : [];
-    const mp4List = v.liveSessionId ? mp4BySession.get(v.liveSessionId) ?? [] : [];
+    // Prefer StreamOS VOD-meta-resolved URLs (actually playable); fall back to the
+    // stored webhook recordings when the meta resolution is empty/unavailable.
+    const vod = v.liveSessionId ? vodBySession.get(v.liveSessionId) ?? null : null;
+    const storedHls = v.liveSessionId ? recBySession.get(v.liveSessionId) ?? [] : [];
+    const storedMp4 = v.liveSessionId ? mp4BySession.get(v.liveSessionId) ?? [] : [];
+    const hlsList = vod?.hls?.length ? vod.hls : storedHls;
+    const mp4List = vod?.mp4?.length ? vod.mp4 : storedMp4;
+    const hlsMasterUrl = vod?.hlsUrl ?? null;
     const mp4Url = pickBestMp4(mp4List);
     // `recordings` is the PRIMARY playback array = plain MP4 (un-DRM'd, simple
     // <video>/MP4). The DRM-HLS m3u8 ladder lives in `hlsRecordings`. `qualities`
@@ -1009,6 +1076,9 @@ export const getRecordingsForClient = async (
       locked: !canPlay, youtube_id: v.youtube_id ?? null, aws_id: sanitizeRecPath(v.aws_id ?? null), vimeo_id: v.vimeo_id ?? null,
       recordings: mp4List,
       hlsRecordings: hlsList,
+      // Master adaptive HLS playlist (from VOD meta) — a single URL a player can
+      // load directly; null when only the stored webhook ladder is available.
+      hlsUrl: hlsMasterUrl,
       qualities: qualitiesFromSessionRecordings(hlsList),
       mp4Recordings: mp4List, mp4Url,
       progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,

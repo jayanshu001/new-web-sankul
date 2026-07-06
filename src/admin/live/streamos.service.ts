@@ -2,6 +2,10 @@ import axios, { AxiosError, AxiosRequestConfig, AxiosResponse } from "axios";
 import logger from "../../utils/logger";
 
 const STREAMOS_BASE = "https://streamapi.streamos.co/streamos";
+// VOD (recording) metadata lives at the API ROOT, NOT under /streamos — the
+// /streamos-prefixed variant 404s. This is what resolves a finished recording
+// into its playable master HLS + per-quality mp4/m3u8 URLs.
+const STREAMOS_ROOT = "https://streamapi.streamos.co";
 
 // Only transient gateway blips are retried inline (fast, small backoff).
 // 429 is deliberately excluded: per the Streamos docs it means the org has
@@ -312,6 +316,52 @@ export async function getUploadedVideoDetails(recordingId: string): Promise<Uplo
     title: payload.title,
     dateAndTime: payload.dateAndTime,
     recordings: normalizeRecordings(payload.recordings),
+    raw: body,
+  };
+}
+
+export interface VodStreamMetaResult {
+  // Master HLS playlist for the whole recording (adaptive ladder).
+  hlsUrl?: string;
+  duration: number | null;
+  // Per-quality entries split by container. `path` is the playable URL.
+  hls: StreamosRecording[]; // type === "m3u8"
+  mp4: StreamosRecording[]; // type === "mp4"
+  raw: any;
+}
+
+// GET https://streamapi.streamos.co/get-vod-stream-meta?id=<streamId>&accessKey=…
+// Resolves a FINISHED recording (VOD) into its playable URLs. Returns
+// `{ data: { hls_url, duration, meta: [{ label, url, type, height, width }] } }`.
+// We split `meta[]` into m3u8 (`hls`) and mp4 (`mp4`) per-quality lists. accessKey
+// stays server-side — only the resolved URLs are ever handed to the client.
+export async function getVodStreamMeta(streamId: string): Promise<VodStreamMetaResult> {
+  const { accessKey } = getCreds();
+
+  const res = await request<any>({
+    method: "GET",
+    url: `${STREAMOS_ROOT}/get-vod-stream-meta`,
+    params: { id: streamId, accessKey },
+  });
+
+  const body = res.data ?? {};
+  const payload = body.data ?? {};
+  const metaArr: any[] = Array.isArray(payload.meta) ? payload.meta : [];
+
+  const toRec = (m: any): StreamosRecording => ({
+    quality: typeof m.label === "string" && m.label ? m.label : m.height ? `${m.height}p` : "",
+    path: String(m.url ?? ""),
+  });
+  const withUrl = metaArr.filter((m) => m && typeof m.url === "string" && m.url.length > 0);
+  const hls = withUrl.filter((m) => String(m.type).toLowerCase() === "m3u8").map(toRec).filter((r) => r.path);
+  const mp4 = withUrl.filter((m) => String(m.type).toLowerCase() === "mp4").map(toRec).filter((r) => r.path);
+
+  const dur = Number(payload.duration);
+  return {
+    hlsUrl: typeof payload.hls_url === "string" && payload.hls_url ? payload.hls_url : undefined,
+    duration: Number.isFinite(dur) ? dur : null,
+    hls,
+    mp4,
     raw: body,
   };
 }
