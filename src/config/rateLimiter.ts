@@ -1,8 +1,9 @@
-import type { RequestHandler } from "express";
+import type { Request, RequestHandler } from "express";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import RedisStore from "rate-limit-redis";
 import { redisClient } from "./redis";
 import logger from "../utils/logger";
+import { verifyAccessToken } from "../utils/jwtSigner";
 
 // Temporary kill-switch for load / QA testing. Set RATE_LIMIT_DISABLED=true in
 // .env to turn EVERY limiter into a no-op pass-through (no counting, no 429s).
@@ -37,17 +38,57 @@ const redisStore = (prefix?: string) =>
     ...(prefix ? { prefix } : {}),
   });
 
-// Global API rate limiter (Anti-DDOS) — 60 req/min per IP
+const parsePositiveInt = (raw: string | undefined, fallback: number): number => {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+};
+
+/** Best-effort user id from Bearer JWT for rate-limit keying (no session/Redis checks). */
+const bearerUserId = (req: Request): string | null => {
+  const auth = req.headers.authorization || "";
+  const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+  if (!token) return null;
+  try {
+    const decoded = verifyAccessToken<{ id?: string }>(token);
+    return decoded?.id ?? null;
+  } catch {
+    return null;
+  }
+};
+
+const userOrIpKey = (req: Request, namespace: string): string => {
+  const uid = bearerUserId(req);
+  return uid ? `${namespace}:user:${uid}` : `${namespace}:ip:${ipKeyGenerator(req.ip ?? "")}`;
+};
+
+// Educator / promoter surfaces — moderate per-IP budget (no SPA burst pattern).
 export const globalLimiter = gate(rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 60,
+  max: parsePositiveInt(process.env.RATE_LIMIT_GLOBAL_MAX, 300),
   standardHeaders: true,
   legacyHeaders: false,
   message: {
     success: false,
     message: "Too many requests, please try again later.",
   },
-  store: redisStore(),
+  store: redisStore("rl:global:"),
+}));
+
+// Client surface (mobile + student web) — burst-friendly for screens that fire
+// 6–8 parallel API calls. Keys by customer id when a valid Bearer token is
+// present so NAT/shared-IP users don't share one bucket; falls back to IP for
+// pre-login traffic (OTP has its own strict limiter on /auth/otp/*).
+export const clientLimiter = gate(rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: parsePositiveInt(process.env.RATE_LIMIT_CLIENT_MAX, 300),
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => userOrIpKey(req, "client"),
+  message: {
+    success: false,
+    message: "Too many requests, please try again later.",
+  },
+  store: redisStore("rl:client:"),
 }));
 
 // OTP generation specific strict rate limit (Anti-Spam)

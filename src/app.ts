@@ -9,7 +9,7 @@ import path from "path";
 import requestLogger from "./utils/requestLogger";
 import notFoundMiddleware from "./middlewares/notFound";
 import errorHandler from "./middlewares/errorHandler";
-import { globalLimiter } from "./config/rateLimiter";
+import { clientLimiter, globalLimiter } from "./config/rateLimiter";
 import {
   initCrashReporter,
   captureCrashContextMiddleware,
@@ -288,14 +288,14 @@ app.get("/metrics", (req, res) => {
 });
 
 // --- Routes ----------------------------------------------------------------
-// Global per-IP rate limiter (Anti-DDoS, 60/min) mounted on the PUBLIC API
-// surfaces only. Admin already has its own per-admin `adminLimiter` (240/min)
-// inside adminRoutes, so it is intentionally NOT double-limited here. The
-// Razorpay webhook below is HMAC-verified and must not be throttled (provider
-// retries). Health/metrics are mounted above the limiter and stay unaffected.
-// Relies on `trust proxy` (set above) so limiting keys on the real client IP.
+// Client uses `clientLimiter` (300/min per user, burst-friendly for home-screen
+// parallel fetches). Educator/promoter use `globalLimiter`. Admin has its own
+// per-admin `adminLimiter` (240/min) inside adminRoutes — not double-limited.
+// Razorpay webhook is HMAC-verified and must not be throttled (provider retries).
+// Health/metrics are mounted above limiters and stay unaffected.
+// Relies on `trust proxy` (set above) so IP fallbacks key on the real client IP.
 // Master Client Routes (Mobile App / Web Portal)
-app.use("/api/v1/client", globalLimiter, clientRoutes);
+app.use("/api/v1/client", clientLimiter, clientRoutes);
 
 // Master Admin Routes (Dashboard) — own per-admin limiter inside adminRoutes
 app.use("/api/v1/admin", adminRoutes);
