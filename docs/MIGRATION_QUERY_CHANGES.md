@@ -42,6 +42,26 @@ all statuses. Additive/non-breaking. No schema/index change.
 
 ---
 
+## 2026-07-06 — live-course recordings resolved via StreamOS get-vod-stream-meta (playable URLs)
+
+**Files:** `src/admin/live/streamos.service.ts` (+`getVodStreamMeta`),
+`src/modules/admin-live-course/admin-live-course.service.ts` (cached `resolveVodMeta`
++ wired into `getRecordingsForClient`). No schema/DDL change.
+
+**What changed:** `GET /client/live-courses/:id/recordings` lecture URLs previously came
+only from the stored webhook/`streamDetails` recordings, which aren't reliably playable.
+We now resolve each recording's session `streamId` through StreamOS
+`GET https://streamapi.streamos.co/get-vod-stream-meta?id=<streamId>&accessKey=…` (the API
+ROOT, NOT under `/streamos`) → `{ data: { hls_url, meta:[{label,url,type}] } }`, split into
+per-quality `hls` (m3u8) + `mp4` lists. Result is **Redis-cached per streamId**
+(`vodmeta:<streamId>`, TTL 3600s). `shapeLecture` now prefers the VOD-resolved URLs and
+**falls back to the stored recordings** when resolution is empty/unavailable (failure-isolated
+per session). New additive lecture field **`hlsUrl`** = master adaptive playlist. `accessKey`
+stays server-side — only resolved CDN URLs reach the client. Uses existing
+`STREAMOS_ACCESS_KEY` (no new env var). Additive/non-breaking.
+
+---
+
 ## 2026-07-06 — live chat: per-session chatEnabled + privateChat settings (new table ws_live_chat_setting)
 
 **Schema:** `docs/migration/schema-changes/2026-07-06_live_chat_setting.sql` — new table
