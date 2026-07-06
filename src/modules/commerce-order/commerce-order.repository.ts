@@ -199,6 +199,10 @@ export const commerceOrderRepository = {
               : null,
           status: true,
           payment_type: "online",
+          // ws_package_course_subscription.created_at has NO DB default (introspected
+          // legacy table) — set it explicitly or purchase-history purchasedAt is null.
+          createdAt: input.now,
+          updatedAt: input.now,
         },
       });
       return { order, subscription: sub, extended: false as const };
@@ -304,6 +308,10 @@ export const commerceOrderRepository = {
               : null,
           status: true,
           payment_type: "online",
+          // ws_package_course_subscription.created_at has NO DB default (introspected
+          // legacy table) — set it explicitly or purchase-history purchasedAt is null.
+          createdAt: input.now,
+          updatedAt: input.now,
         },
       });
       return { order, subscription: sub, extended: false as const };

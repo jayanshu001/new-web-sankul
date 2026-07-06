@@ -37,7 +37,12 @@ Pending / failed / cancelled orders are intentionally hidden from this screen.
 
 `GET /api/v1/client/purchase-history/subscriptions`
 
-Course and package purchases (both stored in `PackageCourseSubscription`). Each row carries a badge (`Live` / `Recorded` / `Test Series`) resolved through `Package → PackageType` and a `kind` field that distinguishes course vs package.
+Course, package **and live-course** purchases. Course/package subs come from
+`PackageCourseSubscription`; live-course subs come from the separate
+`LiveCourseSubscription` table and are unioned into the same list (merged by
+`purchasedAt` desc, paginated together). Each row carries a badge
+(`Live` / `Recorded` / `Test Series`) and a `kind` field that distinguishes course vs
+package vs live-course.
 
 ### Row shape
 
@@ -64,11 +69,17 @@ Course and package purchases (both stored in `PackageCourseSubscription`). Each 
 }
 ```
 
-**`kind`** is one of `"course" | "package"`:
+**`kind`** is one of `"course" | "package" | "live-course"`:
 - `course` → `meta.courseId` set, `meta.targetPackageId` null
 - `package` → `meta.targetPackageId` set, `meta.courseId` null
+- `live-course` → `meta.liveCourseId` set, `badge` is `"Live"`, `amount` is the paid
+  amount, and `meta.razorpayOrderId` / `meta.razorpayPaymentId` are populated (the
+  live-course table stores them inline). Its `_id` and `receiptUrl` are **`lc_`-prefixed**
+  (e.g. `.../subscriptions/lc_42/receipt`) because live-course subs use a separate table
+  with its own id space — pass the prefixed id through to the receipt endpoint verbatim.
 
-`meta.planId` is the `PackageCourseEbookPrice._id` in both cases.
+For `course`/`package`, `meta.planId` is the `PackageCourseEbookPrice._id`; for
+`live-course` it is the `LiveCoursePlan._id`.
 
 ---
 
@@ -183,7 +194,11 @@ Each list row exposes a `receiptUrl`. Hitting it returns a uniform receipt objec
 }
 ```
 
-**`kind` is one of `"book" | "course" | "ebook"`.**
+**`kind` is one of `"book" | "course" | "package" | "ebook" | "live-course"`.**
+
+For `live-course` receipts, hit the row's `receiptUrl` as-is (it is `lc_`-prefixed). The
+receipt has full payment parity — real `razorpayOrderId` / `razorpayPaymentId`, `paidAt`,
+and a `totals.subTotal` / `totals.discount` / `totals.grandTotal` split.
 
 **Notes per kind:**
 

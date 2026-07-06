@@ -96,7 +96,9 @@ export const verifyOrderMysql = async (order: any, razorpayPaymentId: string, no
     const startAt = now;
     const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
     const sub = await tx.testSeriesSubscription.create({
-      data: { orderId: o.id, customerId: o.customerId, testSeriesId: o.testSeriesId, planId: o.planId, price: orderPrice, startAt, endAt, paymentType: "online", promocodeId: o.promocodeId ?? null, status: true },
+      // created_at has no DB default (introspected legacy table) — set it or the row is
+      // invisible to created_at-windowed reads (admin dashboard, purchase history).
+      data: { orderId: o.id, customerId: o.customerId, testSeriesId: o.testSeriesId, planId: o.planId, price: orderPrice, startAt, endAt, paymentType: "online", promocodeId: o.promocodeId ?? null, status: true, createdAt: now, updatedAt: now },
     });
     return { sub, o };
   });

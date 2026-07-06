@@ -162,12 +162,18 @@ export async function renderPdfFromHtml(html: string): Promise<Buffer> {
       // `document.fonts.ready` resolves only once those fonts have loaded — so the
       // PDF is never rasterised with a fallback font that lacks Indic (Gujarati/
       // Hindi) glyphs. Cap the wait so a slow/blocked font CDN can't hang the PDF.
-      await page.evaluate(async () => {
-        await Promise.race([
+      //
+      // ⚠ This callback is serialized (`.toString()`) and run inside Chromium, so it
+      // must NOT be `async`: with tsconfig target < ES2017 (es2016 here) tsc downlevels
+      // async/await into the `__awaiter` helper, which does NOT exist in the browser
+      // context → "__awaiter is not defined" at PDF time. Return the Promise directly
+      // (page.evaluate awaits a returned thenable) so no helper is injected.
+      await page.evaluate(() =>
+        Promise.race([
           (document as any).fonts.ready,
           new Promise((resolve) => setTimeout(resolve, 5000)),
-        ]);
-      });
+        ])
+      );
       const pdf = await page.pdf({
         format: "A4",
         printBackground: true,
@@ -442,9 +448,10 @@ async function loadCourseReceiptFromMysql(
   };
 }
 
-export async function buildCourseReceiptHtml(orderId: string, customerId: string): Promise<string> {
-  const loaded = await loadCourseReceiptFromMysql(orderId, customerId);
-
+// Shared EJS render for a loaded receipt — course / live-course / test-series
+// all produce the same CourseReceiptData shape and use the identical invoice
+// template, so the item/totals assembly lives here once.
+function renderReceiptHtml(loaded: CourseReceiptData): Promise<string> {
   const validity =
     loaded.duration && loaded.duration > 0
       ? `${loaded.duration} day${loaded.duration > 1 ? "s" : ""}`
@@ -478,6 +485,104 @@ export async function buildCourseReceiptHtml(orderId: string, customerId: string
   };
 
   return ejs.renderFile(TEMPLATE_PATH, data);
+}
+
+export async function buildCourseReceiptHtml(orderId: string, customerId: string): Promise<string> {
+  return renderReceiptHtml(await loadCourseReceiptFromMysql(orderId, customerId));
+}
+
+// ── live-course invoice (ws_live_course_subscription — single table) ────────────
+async function loadLiveCourseReceiptFromMysql(
+  orderId: string,
+  customerId: string,
+): Promise<CourseReceiptData> {
+  const subId = Number(orderId);
+  const custId = Number(customerId);
+  if (!Number.isInteger(subId) || subId <= 0) throw new Error("Invalid order id.");
+
+  const sub = await prisma.liveCourseSubscription.findFirst({
+    where: { id: subId, customerId: custId },
+    select: {
+      paidAmount: true, originalAmount: true, createdAt: true, paidAt: true,
+      paymentStatus: true, razorpayPaymentId: true, razorpayOrderId: true,
+      withMaterial: true, liveCourseId: true, planId: true,
+    },
+  });
+  if (!sub) throw new Error("Order not found.");
+  if (sub.paymentStatus && sub.paymentStatus !== "verified" && !sub.razorpayPaymentId) {
+    throw new Error("Order has not been paid yet.");
+  }
+
+  const [course, plan, customer] = await Promise.all([
+    prisma.liveCourse.findFirst({ where: { id: sub.liveCourseId }, select: { name: true } }),
+    sub.planId ? prisma.liveCoursePlan.findFirst({ where: { id: sub.planId }, select: { duration: true } }) : Promise.resolve(null),
+    prisma.customer.findFirst({ where: { id: custId }, select: { fullName: true, phoneNumber: true, emailAddress: true } }),
+  ]);
+
+  const rawAmount = sub.paidAmount != null ? Number(sub.paidAmount) : sub.originalAmount != null ? Number(sub.originalAmount) : 0;
+
+  return {
+    paymentMethod: "Online",
+    razorpayPaymentId: sub.razorpayPaymentId || "-",
+    receipt: sub.razorpayOrderId || String(subId),
+    createdDate: formatDate(sub.paidAt ?? sub.createdAt ?? undefined),
+    userName: (customer?.fullName || "").trim() || "-",
+    userPhone: customer?.phoneNumber || "-",
+    userEmailAddress: customer?.emailAddress || "-",
+    productName: course?.name || "Live Course",
+    withMaterial: !!sub.withMaterial,
+    duration: plan?.duration ?? null, // live-course plan duration is in DAYS
+    amount: Number.isFinite(rawAmount) ? rawAmount : 0,
+  };
+}
+
+export async function buildLiveCourseReceiptHtml(orderId: string, customerId: string): Promise<string> {
+  return renderReceiptHtml(await loadLiveCourseReceiptFromMysql(orderId, customerId));
+}
+
+// ── test-series invoice (ws_test_series_subscription — single table) ────────────
+// Razorpay ids + method come from the parent ws_test_series_order (via order_id);
+// the subscription row carries only price/plan. Duration is DAYS (duration_days).
+async function loadTestSeriesReceiptFromMysql(
+  orderId: string,
+  customerId: string,
+): Promise<CourseReceiptData> {
+  const subId = Number(orderId);
+  const custId = Number(customerId);
+  if (!Number.isInteger(subId) || subId <= 0) throw new Error("Invalid order id.");
+
+  const sub = await prisma.testSeriesSubscription.findFirst({
+    where: { id: subId, customerId: custId },
+    select: { price: true, createdAt: true, testSeriesId: true, planId: true, orderId: true, paymentType: true },
+  });
+  if (!sub) throw new Error("Order not found.");
+
+  const [ts, plan, order, customer] = await Promise.all([
+    prisma.testSeries.findFirst({ where: { id: sub.testSeriesId }, select: { title: true } }),
+    sub.planId ? prisma.testSeriesPrice.findFirst({ where: { id: sub.planId }, select: { durationDays: true } }) : Promise.resolve(null),
+    sub.orderId ? prisma.testSeriesOrder.findFirst({ where: { id: sub.orderId }, select: { paymentMethod: true, razorpayPaymentId: true, razorpayOrderId: true } }) : Promise.resolve(null),
+    prisma.customer.findFirst({ where: { id: custId }, select: { fullName: true, phoneNumber: true, emailAddress: true } }),
+  ]);
+
+  const rawAmount = sub.price != null ? Number(sub.price) : 0;
+
+  return {
+    paymentMethod: String(order?.paymentMethod || sub.paymentType || "Online"),
+    razorpayPaymentId: order?.razorpayPaymentId || "-",
+    receipt: order?.razorpayOrderId || String(subId),
+    createdDate: formatDate(sub.createdAt ?? undefined),
+    userName: (customer?.fullName || "").trim() || "-",
+    userPhone: customer?.phoneNumber || "-",
+    userEmailAddress: customer?.emailAddress || "-",
+    productName: ts?.title || "Test Series",
+    withMaterial: false,
+    duration: plan?.durationDays ?? null,
+    amount: Number.isFinite(rawAmount) ? rawAmount : 0,
+  };
+}
+
+export async function buildTestSeriesReceiptHtml(orderId: string, customerId: string): Promise<string> {
+  return renderReceiptHtml(await loadTestSeriesReceiptFromMysql(orderId, customerId));
 }
 
 // Course/package order receipt — same EJS template + Puppeteer pipeline as the

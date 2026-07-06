@@ -3,7 +3,7 @@ import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { CRM_LEAD_TYPE } from "../../shared/enums";
 import { GenerateCRMLead } from "../../utils/crm";
-import { buildCourseReceiptHtml, renderPdfFromHtml } from "../../libs/core/generate";
+import { buildCourseReceiptHtml, buildLiveCourseReceiptHtml, buildTestSeriesReceiptHtml, renderPdfFromHtml } from "../../libs/core/generate";
 import { shippingBodySchema } from "./course.validation";
 import {
   upsertCourseOrderShipping,
@@ -261,17 +261,34 @@ export const getOrderInvoiceHandler = async (req: Request, res: Response) => {
 
   try {
     if (!userId) return failure(res, "Unauthorized request.", 401);
-    // Accept a SQL int order id (MySQL id-space) OR a Mongo ObjectId. The
-    // receipt builder branches on isMysqlModule and re-validates ownership.
-    if (!isObjectId(orderId) && !/^[1-9][0-9]*$/.test(orderId)) {
+    // Same invoice route serves three subscription tables. Live-course ("lc_")
+    // and test-series ("ts_") ids are prefixed (their PK space is separate from
+    // the package/course subscription) — strip the prefix before validating and
+    // dispatch to the matching receipt builder. Unprefixed = course/package.
+    const LIVE_ID_PREFIX = "lc_";
+    const TS_ID_PREFIX = "ts_";
+    const isLive = orderId.startsWith(LIVE_ID_PREFIX);
+    const isTs = orderId.startsWith(TS_ID_PREFIX);
+    const rawOrderId = isLive
+      ? orderId.slice(LIVE_ID_PREFIX.length)
+      : isTs
+      ? orderId.slice(TS_ID_PREFIX.length)
+      : orderId;
+
+    // Accept a SQL int order id (MySQL id-space) OR a Mongo ObjectId. Each
+    // builder does its own ownership (_id + customerId) + paid re-validation.
+    if (!isObjectId(rawOrderId) && !/^[1-9][0-9]*$/.test(rawOrderId)) {
       return failure(res, "Please select valid package", 400);
     }
 
-    // Build the receipt HTML (shared EJS template — identical to the ebook/book
-    // invoices) then rasterise it via the shared Puppeteer renderer.
-    // buildCourseReceiptHtml does its own ownership (_id + customerId) and paid
-    // checks.
-    const html = await buildCourseReceiptHtml(orderId, userId);
+    // Build the receipt HTML (shared EJS template — identical across course /
+    // live-course / test-series / ebook / book invoices) then rasterise it via
+    // the shared Puppeteer renderer.
+    const html = isLive
+      ? await buildLiveCourseReceiptHtml(rawOrderId, userId)
+      : isTs
+      ? await buildTestSeriesReceiptHtml(rawOrderId, userId)
+      : await buildCourseReceiptHtml(rawOrderId, userId);
     const buffer = await renderPdfFromHtml(html);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", buffer.length);

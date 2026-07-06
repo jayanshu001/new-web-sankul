@@ -7,13 +7,21 @@ import {
   getEbookReceiptMysql,
   getBookReceiptMysql,
   getCourseReceiptMysql,
+  getLiveCourseReceiptMysql,
+  getTestSeriesReceiptMysql,
 } from "../../modules/client-purchase-history/client-purchase-history.service";
+
+// Live-course and test-series subscriptions share the /subscriptions/:id/receipt route
+// but live in separate tables (ws_live_course_subscription / ws_test_series_subscription),
+// so the list emits "lc_"- / "ts_"-prefixed ids to disambiguate here.
+const LIVE_ID_PREFIX = "lc_";
+const TS_ID_PREFIX = "ts_";
 
 // Receipts return a uniform JSON shape so the frontend can render a receipt
 // screen and (later) generate a PDF locally. Server-side PDF can be swapped
 // in without changing the URL.
 type ReceiptResponse = {
-  kind: "book" | "course" | "ebook" | "package";
+  kind: "book" | "course" | "ebook" | "package" | "live-course";
   receiptId: string;
   purchasedAt: Date;
   paidAt: Date | null;
@@ -75,12 +83,23 @@ export const getCourseReceipt = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("getCourseReceipt unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    // SQL int id-space: SQL subscription ids are ints, not 24-hex.
-    const sid = parsePhId(id);
     const cidNum = parsePhId(String(userId));
-    if (sid == null) { logger.warn("getCourseReceipt invalid id (sql)", { traceId, customerId: userId, subscriptionId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
     if (cidNum == null) { return res.status(401).json({ success: false, message: "Unauthorized." }); }
-    const data = await getCourseReceiptMysql(sid, cidNum);
+
+    // Live-course ("lc_") and test-series ("ts_") subs use prefixed ids (separate
+    // tables) — route them apart; unprefixed = package/course subscription.
+    const isLive = id.startsWith(LIVE_ID_PREFIX);
+    const isTs = id.startsWith(TS_ID_PREFIX);
+    const sid = parsePhId(
+      isLive ? id.slice(LIVE_ID_PREFIX.length) : isTs ? id.slice(TS_ID_PREFIX.length) : id
+    );
+    if (sid == null) { logger.warn("getCourseReceipt invalid id (sql)", { traceId, customerId: userId, subscriptionId: id }); return res.status(400).json({ success: false, message: "Invalid id." }); }
+
+    const data = isLive
+      ? await getLiveCourseReceiptMysql(sid, cidNum)
+      : isTs
+      ? await getTestSeriesReceiptMysql(sid, cidNum)
+      : await getCourseReceiptMysql(sid, cidNum);
     if (!data) { logger.warn("getCourseReceipt not found (sql)", { traceId, customerId: userId, subscriptionId: id }); return res.status(404).json({ success: false, message: "Subscription not found." }); }
     logger.info("getCourseReceipt success (sql)", { traceId, customerId: userId, subscriptionId: id });
     return res.status(200).json({ success: true, data });

@@ -198,6 +198,8 @@ export const getDashboard = async (req: Request, res: Response) => {
             course: { amount: d.revenue.course.revenue, deltaPct: deltaPct(d.revenue.course.revenue, d.revenue.coursePrev) },
             ebook: { amount: d.revenue.ebook.revenue, deltaPct: deltaPct(d.revenue.ebook.revenue, d.revenue.ebookPrev) },
             book: { amount: d.revenue.book.revenue, deltaPct: deltaPct(d.revenue.book.revenue, d.revenue.bookPrev) },
+            testSeries: { amount: d.revenue.testSeries.revenue, deltaPct: deltaPct(d.revenue.testSeries.revenue, d.revenue.testSeriesPrev) },
+            liveCourse: { amount: d.revenue.liveCourse.revenue, deltaPct: deltaPct(d.revenue.liveCourse.revenue, d.revenue.liveCoursePrev) },
           },
           totalOrderReports: { range: totalRange || "today", windowStart: totalWindow.start, windowEnd: totalWindow.end, unit: bucket.unit, totalOrders: d.totals.orders, totalEarnings: d.totals.earnings, series },
           newCustomers: d.newCustomers,
@@ -205,6 +207,8 @@ export const getDashboard = async (req: Request, res: Response) => {
           recentCourseSubscriptions: d.recentCourseSubs,
           recentBookOrders: d.recentBookOrders,
           recentEbookSubscriptions: d.recentEbookSubs,
+          recentTestSeriesSubscriptions: d.recentTestSeriesSubs,
+          recentLiveCourseSubscriptions: d.recentLiveCourseSubs,
           summary: d.summary,
         },
       });

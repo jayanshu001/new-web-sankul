@@ -3,9 +3,13 @@ import { z } from "zod";
 // Ids may arrive as a numeric MySQL id (e.g. 48) or a string ("48" / 24-hex
 // ObjectId). Coerce number → string before validating so both are accepted.
 const toIdString = (v: unknown) => (typeof v === "number" ? String(v) : v);
-const optIdString = z.preprocess(toIdString, z.string().nullable().optional());
+// Optional-id preprocess: an empty string means "not set / detach" — coerce it
+// (and null) to null so `.nullable().optional()` accepts it instead of the regex
+// rejecting "" as an "Invalid id".
+const toOptIdString = (v: unknown) => (v === "" || v == null ? null : toIdString(v));
+const optIdString = z.preprocess(toOptIdString, z.string().nullable().optional());
 const idRegex = /^([0-9a-fA-F]{24}|\d+)$/;
-const optRegexIdString = z.preprocess(toIdString, z.string().regex(idRegex, "Invalid id").nullable().optional());
+const optRegexIdString = z.preprocess(toOptIdString, z.string().regex(idRegex, "Invalid id").nullable().optional());
 const regexIdString = z.preprocess(toIdString, z.string().regex(idRegex, "Invalid id"));
 
 const categoryRefSchema = z.object({

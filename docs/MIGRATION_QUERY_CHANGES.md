@@ -15,6 +15,209 @@
 
 ---
 
+## 2026-07-06 — courses/orders/:id/invoice: PDF invoice for live-course + test-series
+
+**Files:** `src/libs/core/generate.ts` (new `loadLiveCourseReceiptFromMysql` +
+`buildLiveCourseReceiptHtml`, `loadTestSeriesReceiptFromMysql` + `buildTestSeriesReceiptHtml`,
+extracted shared `renderReceiptHtml`), `src/client/course/course.controller.ts`
+(`getOrderInvoiceHandler` prefix dispatch).
+
+**What changed:** `GET /client/courses/orders/:id/invoice` returns a Puppeteer-rendered
+**PDF** and was course/package-only — it rejected `lc_`/`ts_` ids with 400. It now accepts
+the same `lc_` (live-course) / `ts_` (test-series) prefixes the purchase-history subscriptions
+list emits, strips the prefix, and dispatches to a matching receipt builder (unprefixed =
+course/package, unchanged). All three share the same EJS invoice template + `CourseReceiptData`
+shape via the new `renderReceiptHtml` helper.
+
+**Query-level:** live loader reads `liveCourseSubscription` (paidAmount/originalAmount,
+razorpay ids inline, `paymentStatus`), + `liveCourse.name`, + `liveCoursePlan.duration` (DAYS),
++ `customer` (fetched separately — no relation). Test-series loader reads
+`testSeriesSubscription` (price, planId, orderId), + `testSeries.title`, +
+`testSeriesPrice.duration_days`, + razorpay ids/method via the `testSeriesOrder` hop, +
+`customer`. Both re-validate ownership (`id` + `customerId`); live throws "not paid" unless
+verified/has razorpay id. Additive/non-breaking. No schema/index change.
+
+---
+
+## 2026-07-06 — purchase-history/subscriptions: union in test-series subs (+ receipt)
+
+**Files:** `src/modules/client-purchase-history/client-purchase-history.repository.ts`,
+`.../client-purchase-history.service.ts` (`listSubscriptions`, new `getTestSeriesReceiptMysql`),
+`src/client/purchase-history/receipts.controller.ts` (`getCourseReceipt` dispatch).
+
+**What changed:** `GET /client/purchase-history/subscriptions` previously unioned only
+`ws_package_course_subscription` + `ws_live_course_subscription`. It now also unions
+`ws_test_series_subscription` (standalone test-series purchases). Each test-series row:
+`kind:"test-series"`, `badge:"Test Series"`, title/thumbnail from `ws_test_series`,
+`amount` from the subscription `price`, `_id`/`receiptUrl` carry a **`ts_` prefix** (like
+live's `lc_`) so the shared `/subscriptions/:id/receipt` route disambiguates the PK space.
+
+**Query-level:** two new reads unioned into the tab —
+`testSeriesSubscription.findMany({ customerId, status:true }, take: skip+take)` +
+`testSeriesSubscription.count({ customerId, status:true })` (status=true = "purchased",
+same active-sub convention as the package tab). `grandTotal` and the over-fetch/merge-by-
+purchasedAt/slice pagination now span all three tables, so `total`/`totalPages` are correct.
+Titles via `testSeries.findMany` (id,title,thumbnail). New `getTestSeriesReceiptMysql`
+resolves duration via `ws_test_series_price.duration_days` and razorpay ids/method via the
+`ws_test_series_order` hop (subscription has no razorpay cols); controller routes `ts_`-prefixed
+ids to it. Additive/non-breaking — existing package/live rows unchanged. No schema/index change.
+
+---
+
+## 2026-07-06 — admin dashboard: add Test Series + Live Course (all sections)
+
+**Files:** `src/modules/admin-dashboard/admin-dashboard.service.ts`,
+`.../admin-dashboard.transformer.ts`, `src/admin/dashboard/dashboard.controller.ts`,
+`src/modules/test-series-order/test-series-order.service.ts`.
+
+**What:** `GET /admin/dashboard` now surfaces test-series and live-course across every
+section — order-report cards, summary counts, recent lists, and the totals chart.
+
+**New reads:**
+- Revenue/count per window: `ws_test_series_subscription` SUM(`price`) (no status
+  filter — rows are created only on verify, so all are paid) and
+  `ws_live_course_subscription` SUM(`paid_amount`) WHERE `payment_status='verified'`
+  (single-table has pending + folded rows; only verified is real money). Both for
+  current + previous windows (deltaPct) and the total window.
+- Time-series buckets added for both tables (`seriesFor`), same HOUR()/DAYOFMONTH() IST
+  grouping; live-course restricted to `payment_status='verified'`.
+- Catalog counts: `ws_test_series` WHERE status=true, `ws_live_course` WHERE status=true.
+- Recent lists (`recentTestSeriesSubscriptions` / `recentLiveCourseSubscriptions`),
+  newest-first, `take=recentLimit`. These two subscription models carry only scalar FKs
+  (NO Prisma relations), so customer + catalog refs are batch-loaded by id and populated
+  in the transformer (mirrors the book-order item population). `ws_test_series` exposes
+  `title`/`thumbnail` → mapped to the DTO's `name`/`image`.
+
+**Totals decision:** `totalOrders`/`totalEarnings` (Total Order Reports chart) now FOLD
+IN test-series + live-course so the aggregate stays consistent with the per-category
+cards. "Course" bucket is unchanged = `ws_package_course_subscription` with
+`course_id IS NOT NULL` (recorded courses only); live courses are a separate table, so
+no double-counting.
+
+**Write fix (data visibility):** `testSeriesSubscription.create` in the verify tx did
+not set `created_at` (introspected legacy column, no DB default) → rows were invisible
+to created_at-windowed reads. Now sets `createdAt`/`updatedAt = now` (live-course create
+already did). Optional backfill for pre-fix rows:
+`UPDATE ws_test_series_subscription SET created_at = start_at WHERE created_at IS NULL AND start_at IS NOT NULL;`
+
+**Contract:** existing dashboard fields unchanged; all additions are additive. Verified
+end-to-end against MySQL (live-course revenue 518/2, populated recent refs, catalog counts).
+
+---
+
+## 2026-07-06 — admin package validation: empty-string optional id → null (pcMaterialId)
+
+**File:** `src/admin/package/package.validation.ts`.
+
+**Bug — create/update package failed with `pcMaterialId: "Invalid id"`.** `createPackageSchema`/
+`updatePackageSchema` validated `pcMaterialId` via `optRegexIdString`, whose preprocess only
+coerced `number → string`. The admin form sends `pcMaterialId: ""` when no physical-material kit
+is selected; empty string is neither null nor undefined, so it reached `z.string().regex(idRegex)`
+and was rejected as "Invalid id" — even though the field means "null detaches". (Surfaced as a save
+failure on the package edit screen; `GET /:id` does no validation.)
+
+**Fix (input coercion only, no DB/query/schema change):** added a shared `toOptIdString` preprocess
+that maps `""` and `null` → `null` for both optional-id helpers (`optIdString`, `optRegexIdString`).
+Mirrors the pattern already in `course.validation.ts`. Behavior: `""`/`null`/absent accepted (detach /
+no-op), valid numeric & 24-hex ids pass, invalid strings still rejected; on `.partial()` update an
+omitted `pcMaterialId` stays absent (no accidental detach). Side benefit: the other optional ids
+(`packageTypeId`, `goalId`, `goalLabelId`, `packageCategoryId`, `educatorId`) now store `null` instead
+of `""` when cleared.
+
+---
+
+## 2026-07-06 — admin dashboard: populate recent-list refs (SQL rows → Mongo-shaped DTO)
+
+**Files:** `src/modules/admin-dashboard/admin-dashboard.service.ts`,
+`src/modules/admin-dashboard/admin-dashboard.transformer.ts` (new).
+
+**Bug — `GET /admin/dashboard` recent lists rendered blank.** The service returned raw
+Prisma rows straight through the controller, so the shapes never matched the admin UI's
+expected populate() contract: relation objects came back under generated names
+(`package`/`course`/`customer`/`eBook`), amounts under `amount`/`price`, ids as `id`, and
+book orders exposed the raw `order_items` JSON instead of `items[]`. Result:
+`targetPackageId`/`customerId` null, `paidAmount` 0, blank book titles.
+
+**Fix (read-only reshape, no schema/DDL change):**
+- New transformer maps each recent row to the stable DTO:
+  `recentPackageSubscriptions[]` → `{ _id, paidAmount (=amount), createdAt, customerId{_id,firstName,lastName,phoneNumber}, targetPackageId{_id,name,image} }`;
+  `recentCourseSubscriptions[]` → same with `courseId`;
+  `recentEbookSubscriptions[]` → `paidAmount` from `price`, `ebookId{_id,name,image}`.
+  Customer `full_name` split into firstName/lastName via shared `splitFullName`.
+- `recentBookOrders[].items[]`: line items resolved child-rows-first
+  (`ws_book_order_item`), falling back to the `order_items` JSON snapshot (mirrors
+  admin-book `getOrder`); referenced books batch-loaded to populate
+  `items[].bookId{_id,name,image}`.
+
+**New queries:** `bookOrderItem.findMany({ where: { order_id: { in: recentReceiptIds } } })`
+and `book.findMany({ where: { id: { in: bookIds } } })` — both bounded by the recent-list
+limit (≤25). Added `image` to the existing `eBookSubscription` include's `eBook` select.
+No index/schema change.
+
+---
+
+## 2026-07-06 — subscriptions: set created_at on write + PDF receipt __awaiter fix
+
+**Files:** `src/modules/commerce-order/commerce-order.repository.ts`
+(`verifyPackageTx`, `verifyCourseTx` — both fresh-grant `packageCourseSubscription.create`),
+`src/modules/client-purchase-history/client-purchase-history.service.ts` (`listSubscriptions`),
+`src/libs/core/generate.ts` (`renderPdfFromHtml`).
+
+**Bug 1 — purchase-history `purchasedAt` (and dates) null.** `ws_package_course_subscription.created_at`
+is an introspected legacy column with NO DB default and NO Prisma `@default(now())`,
+and the two fresh-grant `create` calls never set it → every SQL-created subscription
+landed with `created_at = NULL`, so the subscriptions tab showed `purchasedAt: null`.
+- **Write fix:** both `create` calls now set `createdAt`/`updatedAt` = `input.now`.
+- **Read fix (covers existing null rows):** `listSubscriptions` falls back
+  `purchasedAt = created_at ?? start_at ?? null` (start_at is always set on a fresh grant).
+- **Backfill (optional, for pre-fix rows):**
+  `UPDATE ws_package_course_subscription SET created_at = start_at WHERE created_at IS NULL AND start_at IS NOT NULL;`
+
+**Bug 2 — "__awaiter is not defined" when downloading receipts.** `renderPdfFromHtml`
+passed an `async () => { await … }` callback to Puppeteer `page.evaluate`. With
+tsconfig `target: es2016` (< ES2017), tsc downlevels async/await into the `__awaiter`
+helper; the callback is `.toString()`-serialized and run inside Chromium, where
+`__awaiter` does not exist → ReferenceError at PDF time. Fixed by making the callback
+non-async and returning the Promise directly (`() => Promise.race([...])`) so no helper
+is injected into the browser-side code. **No query change** — behavioral/build fix.
+
+Same read-side `created_at ?? start_at` fallback also applied to the live-course rows
+in `listSubscriptions` for parity (live-course writes already set `created_at`).
+
+**Deploy note:** prod runs compiled `dist/` (CommonJS, `pm2 dist/index.js`). Both fixes
+require a fresh `yarn build` + restart; the local `dist/` was stale (rebuilt here).
+
+---
+
+## 2026-07-06 — purchase-history subscriptions tab: union live-course subs + live receipt
+
+**Files:** `src/modules/client-purchase-history/client-purchase-history.repository.ts`,
+`.../client-purchase-history.service.ts` (`listSubscriptions`, new `getLiveCourseReceiptMysql`),
+`src/client/purchase-history/receipts.controller.ts` (`getCourseReceipt`).
+
+**Problem:** Live-course purchases live in `ws_live_course_subscription` (single-table
+design — payment + entitlement inline), NOT `ws_package_course_subscription`. The
+`GET /client/purchase-history/subscriptions` list and the `/subscriptions/:id/receipt`
+endpoint only read the package table, so live courses never appeared and had no receipt.
+
+**Query changes:**
+- New reads on `ws_live_course_subscription` filtered by `payment_status = "verified"`
+  (`listLiveSubscriptions` / `countLiveSubscriptions`) — the live-course "purchased"
+  contract (pending rows are unpaid). Mirrors the package tab's `status=true` filter.
+- `listSubscriptions` now UNIONS both tables: each over-fetched to `skip+take`, merged
+  by `purchasedAt` desc, then sliced (correct pagination when top rows favor one table).
+  `total` = `countSubscriptions + countLiveSubscriptions`.
+- Live rows emit an `lc_`-prefixed `_id` / `receiptUrl` so `/subscriptions/:id/receipt`
+  disambiguates the two integer PK spaces. Controller routes `lc_<id>` →
+  `getLiveCourseReceiptMysql`, plain `<id>` → `getCourseReceiptMysql` (unchanged).
+- New receipt kind `"live-course"`. Full payment parity (razorpay ids, paidAt,
+  original/discount/paid split) since the single-table carries these inline.
+
+**Contract:** existing course/package rows and receipts unchanged; live-course rows are
+additive. No schema/DDL change (reads over an already-migrated table).
+
+---
+
 ## 2026-07-06 — admin live-sessions list: server-side ?search= + tri-state upcoming split
 
 **Files:** `src/admin/live/live.controller.ts` (`listLiveSessions`),
@@ -39,6 +242,40 @@ per-tab/per-status `total` reflects the fully filtered subset (status + upcoming
 `Page X of Y` is accurate on every tab. Pagination (`page`/`limit`, `skip=(page-1)*limit`,
 `take=limit`, response `{ sessions, total, page, limit }`) was already present and honored for
 all statuses. Additive/non-breaking. No schema/index change.
+
+---
+
+## 2026-07-06 — live HLS playback security: NO code change (blocked on StreamOS capability)
+
+**Files:** none (assessment only). Logged for traceability.
+
+**Context:** live playback `hlsURL` from StreamOS `createStream` is unsigned/openly playable.
+Confirmed we have NO signing layer (no CloudFront signing, no StreamOS secure-playback call;
+the `txSecret`/`txTime` token is RTMP-PUSH-side only) and the playback CDN
+(`liveclasses.cloud-front.in`) is StreamOS-owned, so we cannot sign it from our backend
+alone. Decision: confirm StreamOS per-viewer live token-auth capability FIRST; only then
+build an authenticated `GET /client/live-sessions/:id/playback` seam that mints a short-TTL
+signed manifest URL (token must cover manifest + segments). No endpoint shipped yet — a
+`/playback` returning the unsigned URL would be security theater. When implemented: new
+mint secret → `config/env.ts` + `.env.example`; stop returning raw `hlsUrl` from
+`getLiveSessionForClient`.
+
+---
+
+## 2026-07-06 — live sessions: POST /:id/provision (encoder creds before Go Live); start reuses provisioned stream
+
+**Files:** `src/admin/live/live.controller.ts` (+`provisionLiveSession`, `startScheduledLiveSession`
+reuse logic), `src/admin/live/live.routes.ts` (+`POST /:id/provision`). No schema/query change.
+
+**What changed:** admins can now get rtmpUrl/hlsUrl/streamId on a SCHEDULED session BEFORE
+going live (to configure OBS). New `POST /admin/live-sessions/:id/provision` creates the
+StreamOS stream and persists `streamId/rtmpUrl/hlsUrl/hlsUrls` while the session STAYS
+SCHEDULED (does NOT transition to CREATED). Idempotent — if already provisioned (has a
+streamId) it returns the session as-is without creating a second StreamOS stream. Returns
+the full session view (same shape as start). `POST /:id/start` now REUSES an
+already-provisioned stream (only flips status → CREATED, keeping the rtmpUrl the admin
+configured); it still provisions on the fly when unprovisioned, preserving "go live now".
+Additive/non-breaking.
 
 ---
 

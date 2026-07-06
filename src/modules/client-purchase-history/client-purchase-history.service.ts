@@ -11,18 +11,37 @@ export const parsePhId = (id: string): number | null => {
 const RECEIPT_BASE = "/api/v1/client/purchase-history";
 
 // ── subscriptions tab ──────────────────────────────────────────────────────────
+// The tab UNIONS three independent tables:
+//  - ws_package_course_subscription → course/package subs (badge via PackageType)
+//  - ws_live_course_subscription    → live-course subs (single-table; badge "Live")
+//  - ws_test_series_subscription    → test-series subs (single-table; badge "Test Series")
+// Since each table has its own integer PK space, live rows carry a "lc_"-prefixed and
+// test-series rows a "ts_"-prefixed _id / receipt path so /subscriptions/:id/receipt can
+// disambiguate. All tables are over-fetched to (skip+take), merged by purchasedAt desc,
+// then sliced so pagination is correct even when the top rows all come from one table.
+const LIVE_ID_PREFIX = "lc_";
+const TS_ID_PREFIX = "ts_";
+
 export const listSubscriptions = async (customerId: number, skip: number, take: number, page: number, limit: number) => {
-  const [subs, total] = await Promise.all([
-    repo.listSubscriptions(customerId, skip, take),
+  const overFetch = skip + take;
+  const [subs, total, liveSubs, liveTotal, tsSubs, tsTotal] = await Promise.all([
+    repo.listSubscriptions(customerId, 0, overFetch),
     repo.countSubscriptions(customerId),
+    repo.listLiveSubscriptions(customerId, overFetch),
+    repo.countLiveSubscriptions(customerId),
+    repo.listTestSeriesSubscriptions(customerId, overFetch),
+    repo.countTestSeriesSubscriptions(customerId),
   ]);
-  if (!subs.length) return { data: [], pagination: { total, page, limit, totalPages: 0 } };
+  const grandTotal = total + liveTotal + tsTotal;
+  if (!subs.length && !liveSubs.length && !tsSubs.length) return { data: [], pagination: { total: grandTotal, page, limit, totalPages: 0 } };
 
   const courses = new Map((await repo.coursesByIds([...new Set(subs.map((s) => s.courseId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
   const packages = new Map((await repo.packagesByIds([...new Set(subs.map((s) => s.packageId).filter((x): x is number => x != null && x > 0))])).map((p) => [p.id, p]));
   const types = new Map((await repo.packageTypesByIds([...new Set([...packages.values()].map((p) => p.packageTypeId).filter((x): x is number => x != null && x > 0))])).map((t) => [t.id, t]));
+  const liveCourses = new Map((await repo.liveCoursesByIds([...new Set(liveSubs.map((s) => s.liveCourseId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
+  const testSeries = new Map((await repo.testSeriesByIds([...new Set(tsSubs.map((s) => s.testSeriesId).filter((x): x is number => x != null && x > 0))])).map((t) => [t.id, t]));
 
-  const data = subs.map((s) => {
+  const pkgRows = subs.map((s) => {
     const course = s.courseId ? courses.get(s.courseId) : null;
     const pkg = s.packageId ? packages.get(s.packageId) : null;
     const type = pkg?.packageTypeId ? types.get(pkg.packageTypeId) : null;
@@ -34,7 +53,9 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
       thumbnail: course?.image || pkg?.image || null,
       badge: type?.name || null,
       amount: s.amount != null ? Number(s.amount) : null,
-      purchasedAt: s.createdAt ?? null,
+      // Legacy SQL-created rows may have a null created_at (no DB default) — fall
+      // back to start_at so the purchase date still renders. New rows set both.
+      purchasedAt: s.createdAt ?? s.startAt ?? null,
       startAt: s.startAt ?? null,
       endAt: s.endAt ?? null,
       receiptUrl: `${RECEIPT_BASE}/subscriptions/${s.id}/receipt`,
@@ -48,7 +69,60 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
       },
     };
   });
-  return { data, pagination: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+
+  const liveRows = liveSubs.map((s) => {
+    const lc = s.liveCourseId ? liveCourses.get(s.liveCourseId) : null;
+    return {
+      _id: `${LIVE_ID_PREFIX}${s.id}`,
+      kind: "live-course",
+      title: lc?.name || "Live Course",
+      author: null,
+      thumbnail: lc?.image || null,
+      badge: "Live",
+      amount: s.paidAmount != null ? Number(s.paidAmount) : null,
+      purchasedAt: s.createdAt ?? s.startAt ?? null,
+      startAt: s.startAt ?? null,
+      endAt: s.endAt ?? null,
+      receiptUrl: `${RECEIPT_BASE}/subscriptions/${LIVE_ID_PREFIX}${s.id}/receipt`,
+      meta: {
+        liveCourseId: s.liveCourseId != null && s.liveCourseId > 0 ? String(s.liveCourseId) : null,
+        planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
+        // live-course single-table DOES carry razorpay ids (unlike the package sub).
+        razorpayOrderId: s.razorpayOrderId ?? null,
+        razorpayPaymentId: s.razorpayPaymentId ?? null,
+      },
+    };
+  });
+
+  const tsRows = tsSubs.map((s) => {
+    const ts = s.testSeriesId ? testSeries.get(s.testSeriesId) : null;
+    return {
+      _id: `${TS_ID_PREFIX}${s.id}`,
+      kind: "test-series",
+      title: ts?.title || "Test Series",
+      author: null,
+      thumbnail: ts?.thumbnail || null,
+      badge: "Test Series",
+      amount: s.price != null ? Number(s.price) : null,
+      purchasedAt: s.createdAt ?? s.startAt ?? null,
+      startAt: s.startAt ?? null,
+      endAt: s.endAt ?? null,
+      receiptUrl: `${RECEIPT_BASE}/subscriptions/${TS_ID_PREFIX}${s.id}/receipt`,
+      meta: {
+        testSeriesId: s.testSeriesId != null && s.testSeriesId > 0 ? String(s.testSeriesId) : null,
+        planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
+        // razorpay ids live on ws_test_series_order (via order_id), not the subscription.
+        razorpayOrderId: null,
+        razorpayPaymentId: null,
+      },
+    };
+  });
+
+  const data = [...pkgRows, ...liveRows, ...tsRows]
+    .sort((a, b) => (b.purchasedAt?.getTime() ?? 0) - (a.purchasedAt?.getTime() ?? 0))
+    .slice(skip, skip + take);
+
+  return { data, pagination: { total: grandTotal, page, limit, totalPages: Math.ceil(grandTotal / limit) } };
 };
 
 // ── books tab ────────────────────────────────────────────────────────────────
@@ -244,6 +318,108 @@ export const getCourseReceiptMysql = async (subId: number, customerId: number) =
       targetPackageId: sub.packageId != null ? String(sub.packageId) : null,
       planId: sub.planId != null ? String(sub.planId) : null,
       duration: plan?.duration ?? null,
+      startAt: sub.startAt ?? null,
+      endAt: sub.endAt ?? null,
+    },
+  };
+};
+
+// ── live-course receipt (SQL, single-table) ──────────────────────────────────
+// UNLIKE course/package, ws_live_course_subscription carries payment inline, so
+// this receipt has FULL parity: real razorpay ids, paidAt, and the discount split
+// (original_amount → subTotal, discount_amount → discount, paid_amount → grandTotal).
+export const getLiveCourseReceiptMysql = async (subId: number, customerId: number) => {
+  const sub = await repo.liveSubscriptionForReceipt(subId, customerId);
+  if (!sub) return null;
+
+  const [plan, course] = await Promise.all([
+    sub.planId ? repo.livePlanForReceipt(sub.planId) : Promise.resolve(null),
+    repo.liveCourseForReceipt(sub.liveCourseId),
+  ]);
+
+  const paid = Number(sub.paidAmount ?? 0);
+  const subTotal = sub.originalAmount != null ? Number(sub.originalAmount) : paid;
+  const discount = sub.discountAmount != null ? Number(sub.discountAmount) : 0;
+
+  return {
+    kind: "live-course" as const,
+    receiptId: String(sub.id),
+    purchasedAt: sub.createdAt ?? null,
+    paidAt: sub.paidAt ?? null,
+    status: sub.paymentStatus ?? "verified",
+    customer: { id: String(sub.customerId) },
+    payment: {
+      method: "razorpay",
+      razorpayOrderId: sub.razorpayOrderId ?? null,
+      razorpayPaymentId: sub.razorpayPaymentId ?? null,
+    },
+    items: [
+      {
+        name: course?.name ? `Live Course: ${course.name}` : "Live Course subscription",
+        qty: 1,
+        unitPrice: subTotal,
+        lineTotal: subTotal,
+      },
+    ],
+    totals: {
+      subTotal,
+      discount,
+      grandTotal: paid,
+      currency: "INR" as const,
+    },
+    extra: {
+      liveCourseId: String(sub.liveCourseId),
+      planId: sub.planId != null ? String(sub.planId) : null,
+      duration: plan?.duration ?? null,
+      startAt: sub.startAt ?? null,
+      endAt: sub.endAt ?? null,
+      withMaterial: sub.withMaterial ?? false,
+    },
+  };
+};
+
+// ── test-series receipt (single subscription, ownership-scoped) ──────────────────
+export const getTestSeriesReceiptMysql = async (subId: number, customerId: number) => {
+  const sub = await repo.testSeriesSubscriptionForReceipt(subId, customerId);
+  if (!sub) return null;
+
+  const [plan, ts, order] = await Promise.all([
+    sub.planId ? repo.testSeriesPlanForReceipt(sub.planId) : Promise.resolve(null),
+    repo.testSeriesForReceipt(sub.testSeriesId),
+    sub.orderId ? repo.testSeriesOrderForReceipt(sub.orderId) : Promise.resolve(null),
+  ]);
+
+  const total = sub.price != null ? Number(sub.price) : 0;
+
+  return {
+    kind: "test-series" as const,
+    receiptId: String(sub.id),
+    purchasedAt: sub.createdAt ?? null,
+    paidAt: sub.createdAt ?? null,
+    status: sub.status ? "verified" : "inactive",
+    customer: { id: String(sub.customerId) },
+    payment: {
+      method: order?.paymentMethod ?? sub.paymentType ?? "razorpay",
+      razorpayOrderId: order?.razorpayOrderId ?? null,
+      razorpayPaymentId: order?.razorpayPaymentId ?? null,
+    },
+    items: [
+      {
+        name: ts?.title ? `Test Series: ${ts.title}` : "Test Series subscription",
+        qty: 1,
+        unitPrice: total,
+        lineTotal: total,
+      },
+    ],
+    totals: {
+      subTotal: total,
+      grandTotal: total,
+      currency: "INR" as const,
+    },
+    extra: {
+      testSeriesId: String(sub.testSeriesId),
+      planId: sub.planId != null ? String(sub.planId) : null,
+      duration: plan?.durationDays ?? null,
       startAt: sub.startAt ?? null,
       endAt: sub.endAt ?? null,
     },

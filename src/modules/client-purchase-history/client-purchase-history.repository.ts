@@ -27,6 +27,35 @@ export const clientPurchaseHistoryRepository = {
   countSubscriptions: (customerId: number) =>
     prisma.packageCourseSubscription.count({ where: { customerId, status: true } }),
 
+  // Live-course subscriptions live in their OWN single-table (ws_live_course_subscription
+  // carries payment + entitlement together — see live-course-order.service). They are
+  // NOT in ws_package_course_subscription, so the subscriptions tab must union them in.
+  // "Purchased" for live = payment_status="verified" (pending rows are unpaid).
+  listLiveSubscriptions: (customerId: number, take: number) =>
+    prisma.liveCourseSubscription.findMany({
+      where: { customerId, paymentStatus: "verified" },
+      orderBy: { id: "desc" },
+      take,
+    }),
+  countLiveSubscriptions: (customerId: number) =>
+    prisma.liveCourseSubscription.count({ where: { customerId, paymentStatus: "verified" } }),
+  liveCoursesByIds: (ids: number[]) =>
+    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
+
+  // Test-series subscriptions live in their OWN single-table
+  // (ws_test_series_subscription), separate from package/live subs. "Purchased" =
+  // status=true (active). Unioned into the subscriptions tab like live subs.
+  listTestSeriesSubscriptions: (customerId: number, take: number) =>
+    prisma.testSeriesSubscription.findMany({
+      where: { customerId, status: true },
+      orderBy: { id: "desc" },
+      take,
+    }),
+  countTestSeriesSubscriptions: (customerId: number) =>
+    prisma.testSeriesSubscription.count({ where: { customerId, status: true } }),
+  testSeriesByIds: (ids: number[]) =>
+    ids.length ? prisma.testSeries.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, thumbnail: true } }) : Promise.resolve([]),
+
   coursesByIds: (ids: number[]) =>
     ids.length ? prisma.course.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
   packagesByIds: (ids: number[]) =>
@@ -92,4 +121,27 @@ export const clientPurchaseHistoryRepository = {
   /** razorpay ids via the order hop (no razorpay cols on the subscription). */
   courseOrderForReceipt: (id: number) =>
     prisma.packageCourseOrder.findFirst({ where: { id }, select: { gatewayOrderId: true, gatewayPaymentId: true } }),
+
+  // ── live-course receipt (single subscription, ownership-scoped) ──────────────
+  /** verified live-course sub (single-table carries payment fields inline). */
+  liveSubscriptionForReceipt: (subId: number, customerId: number) =>
+    prisma.liveCourseSubscription.findFirst({ where: { id: subId, customerId, paymentStatus: "verified" } }),
+  liveCourseForReceipt: (id: number) =>
+    prisma.liveCourse.findFirst({ where: { id }, select: { id: true, name: true } }),
+  /** live-course plan row carrying duration (DAYS — see live-course-order.service). */
+  livePlanForReceipt: (planId: number) =>
+    prisma.liveCoursePlan.findFirst({ where: { id: planId }, select: { id: true, duration: true } }),
+
+  // ── test-series receipt (single subscription, ownership-scoped) ──────────────
+  /** active test-series sub (status=true mirrors "verified"). */
+  testSeriesSubscriptionForReceipt: (subId: number, customerId: number) =>
+    prisma.testSeriesSubscription.findFirst({ where: { id: subId, customerId, status: true } }),
+  testSeriesForReceipt: (id: number) =>
+    prisma.testSeries.findFirst({ where: { id }, select: { id: true, title: true } }),
+  /** test-series plan row carrying duration in DAYS (duration_days). */
+  testSeriesPlanForReceipt: (planId: number) =>
+    prisma.testSeriesPrice.findFirst({ where: { id: planId }, select: { id: true, durationDays: true } }),
+  /** razorpay ids + method via the order hop (ws_test_series_subscription has no razorpay cols). */
+  testSeriesOrderForReceipt: (id: number) =>
+    prisma.testSeriesOrder.findFirst({ where: { id }, select: { razorpayOrderId: true, razorpayPaymentId: true, paymentMethod: true } }),
 };

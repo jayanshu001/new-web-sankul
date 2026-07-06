@@ -4,6 +4,7 @@ import {
   createLiveSession,
   listLiveSessions,
   getLiveSessionStatus,
+  provisionLiveSession,
   startScheduledLiveSession,
   updateScheduledLiveSession,
   deleteLiveSession,
@@ -30,6 +31,7 @@ router.get("/streamos/recordings/:recordingId",  getUploadedVideoDetails); // GE
 router.post("/",          createLiveSession);            // POST   /api/v1/admin/live-sessions
 router.get("/",           listLiveSessions);             // GET    /api/v1/admin/live-sessions
 router.post("/end",       endLiveSession);               // POST   /api/v1/admin/live-sessions/end
+router.post("/:id/provision", provisionLiveSession);     // POST   /api/v1/admin/live-sessions/:id/provision
 router.post("/:id/start", startScheduledLiveSession);    // POST   /api/v1/admin/live-sessions/:id/start
 router.post("/:id/promote-recording", promoteSessionRecording); // POST /api/v1/admin/live-sessions/:id/promote-recording
 router.get("/:id/attendance", getLiveSessionAttendance);   // GET    /api/v1/admin/live-sessions/:id/attendance

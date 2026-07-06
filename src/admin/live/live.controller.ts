@@ -465,9 +465,65 @@ export const getLiveSessionAttendance = async (req: Request, res: Response) => {
   }
 };
 
+// POST /api/v1/admin/live-sessions/:id/provision
+// Provisions the StreamOS stream (streamId + rtmpUrl + hlsUrl) for a SCHEDULED
+// session WITHOUT going live — so admins can configure OBS before Go Live. The
+// session STAYS SCHEDULED; only the encoder credentials are populated. Idempotent:
+// if the session is already provisioned (has a streamId), returns it as-is without
+// creating a second StreamOS stream.
+export const provisionLiveSession = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("provisionLiveSession invoked", { traceId, path: req.originalUrl, sessionId: req.params.id, userId: req.user?.id });
+
+  try {
+    const rowSql = await adminLiveSql.findSessionByAnyId(String(req.params.id));
+    if (!rowSql) return failure(res, "Live session not found.", 404);
+    if (rowSql.status !== "SCHEDULED") {
+      return failure(res, `Only SCHEDULED sessions can be provisioned (current: ${rowSql.status}).`, 409);
+    }
+
+    // Already provisioned → return as-is (no second StreamOS stream).
+    let updatedSql = rowSql;
+    let alreadyProvisioned = false;
+    if (rowSql.streamId) {
+      alreadyProvisioned = true;
+    } else {
+      const createdSql = await streamosCreateStream(rowSql.title ?? "");
+      updatedSql = await adminLiveSql.updateSession(rowSql.id, {
+        streamId: createdSql.streamId,
+        rtmpUrl: createdSql.rtmpUrl,
+        hlsUrl: createdSql.hlsUrl,
+        hlsUrls: createdSql.hlsUrls ?? null,
+        // status stays SCHEDULED — provisioning does NOT go live.
+      });
+    }
+
+    const [coursesSql, courseFoldersSql] = await Promise.all([
+      adminLiveSql.getLinkedCourses(updatedSql.id),
+      adminLiveSql.getLinkedCourseFolders(updatedSql.id),
+    ]);
+    logger.info("provisionLiveSession success (sql)", { traceId, sessionId: updatedSql.id, streamId: updatedSql.streamId, alreadyProvisioned });
+    return success(
+      res,
+      { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql, courseFoldersSql) },
+      alreadyProvisioned ? "Live session already provisioned." : "Encoder credentials provisioned."
+    );
+  } catch (err) {
+    if (err instanceof StreamosError) {
+      logger.error("provisionLiveSession streamos error", { traceId, message: err.message, upstreamStatus: err.upstreamStatus });
+      return failure(res, err.message, err.status);
+    }
+    logger.error("provisionLiveSession failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to provision live session.", 500);
+  }
+};
+
 // POST /api/v1/admin/live-sessions/:id/start
-// Promotes a SCHEDULED session to CREATED by calling Streamos. Only allowed
-// when current time is within 2 minutes of scheduledAt; late starts are fine.
+// Flips a SCHEDULED session live (status → CREATED). Works at any time (no start
+// window). If the session was already provisioned (via /provision), it REUSES that
+// StreamOS stream — same streamId/rtmpUrl the admin already configured in OBS — and
+// only flips status. Otherwise it provisions on the fly, preserving the original
+// "go live now" behavior.
 export const startScheduledLiveSession = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("startScheduledLiveSession invoked", { traceId, path: req.originalUrl, sessionId: req.params.sessionId, userId: req.user?.id });
@@ -481,12 +537,22 @@ export const startScheduledLiveSession = async (req: Request, res: Response) => 
       // "Go Live" starts a SCHEDULED session at ANY time — the previous 2-minute
       // start-window restriction was removed. scheduledAt may be null (sessions
       // created via "go live now"), which is fine.
-      const createdSql = await streamosCreateStream(rowSql.title ?? "");
+      //
+      // Reuse an already-provisioned stream so the rtmpUrl the admin configured in
+      // OBS stays valid; only create a new StreamOS stream when unprovisioned.
+      const streamFields = rowSql.streamId
+        ? {}
+        : await (async () => {
+            const createdSql = await streamosCreateStream(rowSql.title ?? "");
+            return {
+              streamId: createdSql.streamId,
+              rtmpUrl: createdSql.rtmpUrl,
+              hlsUrl: createdSql.hlsUrl,
+              hlsUrls: createdSql.hlsUrls ?? null,
+            };
+          })();
       const updatedSql = await adminLiveSql.updateSession(rowSql.id, {
-        streamId: createdSql.streamId,
-        rtmpUrl: createdSql.rtmpUrl,
-        hlsUrl: createdSql.hlsUrl,
-        hlsUrls: createdSql.hlsUrls ?? null,
+        ...streamFields,
         status: "CREATED",
       });
       const [coursesSql, courseFoldersSql] = await Promise.all([
