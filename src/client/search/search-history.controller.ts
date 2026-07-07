@@ -12,6 +12,7 @@
 import { Request, Response } from "express";
 import * as historyService from "../../modules/client-search-history/client-search-history.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import logger from "../../utils/logger";
 
 const customerIdOf = (req: Request): number | null => {
@@ -26,8 +27,9 @@ export const listSearchHistory = async (req: Request, res: Response) => {
     const customerId = customerIdOf(req);
     if (!customerId) return failure(res, "Unauthorized.", 401);
 
-    const items = await historyService.list(customerId);
-    return success(res, { items, total: items.length }, "Recent searches fetched.");
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { items, total } = await historyService.listPaged(customerId, search, skip, limit);
+    return success(res, { items, total, pagination: buildPagination(total, page, limit) }, "Recent searches fetched.");
   } catch (error: any) {
     logger.error("listSearchHistory failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return failure(res, getErrorMessage(error), 500);

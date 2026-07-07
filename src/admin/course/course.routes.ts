@@ -39,7 +39,7 @@ import {
 const router = Router();
 
 // All course management endpoints are admin-only.
-router.use(authenticate, requireRole("admin", "super_admin"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // GET pre-requisites
 router.get("/pre-requisites", getPreRequisites);

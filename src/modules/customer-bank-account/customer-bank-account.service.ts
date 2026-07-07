@@ -28,9 +28,15 @@ type Result<T> =
   | { ok: true; status: number; data: T }
   | { ok: false; status: number; message: string };
 
-export const listBankAccounts = async (customerId: number) => {
-  const rows = await repo.listByCustomer(customerId);
-  return rows.map(toBankAccountDto);
+export const listBankAccounts = async (
+  customerId: number,
+  opts: { search?: string; skip?: number; take?: number } = {}
+) => {
+  const [rows, total] = await Promise.all([
+    repo.listByCustomer(customerId, opts),
+    repo.countByCustomer(customerId, opts),
+  ]);
+  return { items: rows.map(toBankAccountDto), total };
 };
 
 /** Owner-scoped fetch (withdrawal flow). Returns null if not found/owned. */

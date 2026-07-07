@@ -24,6 +24,7 @@
  *   - TestSeriesOrder is read-only here (listOrders).
  */
 import { prisma } from "../../config/prisma";
+import { andWhere, dateWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 
 export const ADMIN_TESTSERIES_MODULE = "admin-testseries";
 export const isAdminTestSeriesMysql = (): boolean => true;
@@ -632,45 +633,98 @@ export const deletePrice = async (priceId: number): Promise<boolean> => {
 
 // ── Subscriptions / Orders ────────────────────────────────────────────────────
 
+// ── subscription list (Reports contract) ──────────────────────────────────────
+// Shared contract across the 4 admin subscription reports — see
+// docs/REPORTS_SUBSCRIPTIONS_ADMIN.md. Returns { summary, data, pagination };
+// summary respects all filters but ignores pagination. `status` here is the
+// normalized active|expired|inactive (not the raw boolean); paymentMethod is the
+// coarse online|backend (= paymentType on this table; no order join needed).
 export type ListSubsOpts = {
   testSeriesId: number | null;
   customerId: number | null;
-  status: boolean | null;
+  status?: string;
+  paymentMethod?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  search?: string;
+  sortBy?: string;
+  sortOrder?: string;
   page: number;
   limit: number;
 };
 
-const customerShortDto = (c: any) =>
-  c
-    ? {
-        _id: String(c.id),
-        name: c.fullName ?? null,
-        phone: c.phoneNumber ?? null,
-        email: c.emailAddress ?? null,
-      }
-    : null;
+// Search id-resolvers (id-set → OR { in }), mirroring admin-subscription.repository.
+const customerIdsByText = async (q: string): Promise<number[]> =>
+  (
+    await prisma.customer.findMany({
+      where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] },
+      select: { id: true },
+    })
+  ).map((r) => r.id);
+
+const testSeriesIdsByText = async (q: string): Promise<number[]> =>
+  (await prisma.testSeries.findMany({ where: { title: { contains: q } }, select: { id: true } })).map((r) => r.id);
+
+const SUB_SORT_FIELDS: Record<string, "createdAt" | "startAt" | "endAt" | "price"> = {
+  createdAt: "createdAt",
+  startAt: "startAt",
+  endAt: "endAt",
+  price: "price",
+  amount: "price",
+};
 
 export const listSubscriptions = async (opts: ListSubsOpts) => {
-  const where: any = {};
-  if (opts.testSeriesId != null) where.testSeriesId = opts.testSeriesId;
-  if (opts.customerId != null) where.customerId = opts.customerId;
-  if (opts.status !== null) where.status = opts.status;
+  const now = new Date();
+  const emptyPage = {
+    summary: { totalCount: 0, totalRevenue: 0, activeCount: 0, expiredCount: 0 },
+    data: [] as any[],
+    pagination: { total: 0, page: opts.page, limit: opts.limit, totalPages: 0 },
+  };
 
-  const [rows, total] = await Promise.all([
+  const base: any = {};
+  if (opts.testSeriesId != null) base.testSeriesId = opts.testSeriesId;
+  if (opts.customerId != null) base.customerId = opts.customerId;
+  if (opts.paymentMethod === "online" || opts.paymentMethod === "backend") base.paymentType = opts.paymentMethod;
+  const dw = dateWhere(opts.dateFrom, opts.dateTo);
+
+  let searchWhere: Record<string, any> | undefined;
+  if (opts.search) {
+    const [customerIdsIn, seriesIdsIn] = await Promise.all([
+      customerIdsByText(opts.search),
+      testSeriesIdsByText(opts.search),
+    ]);
+    if (!customerIdsIn.length && !seriesIdsIn.length) return emptyPage;
+    const or: any[] = [];
+    if (customerIdsIn.length) or.push({ customerId: { in: customerIdsIn } });
+    if (seriesIdsIn.length) or.push({ testSeriesId: { in: seriesIdsIn } });
+    searchWhere = { OR: or };
+  }
+
+  // andWhere combines the OR-bearing search + status fragments safely.
+  const baseWhere = andWhere(base, dw, searchWhere);
+  const listWhere = andWhere(baseWhere, statusWhere(opts.status, now));
+  const sortField = SUB_SORT_FIELDS[opts.sortBy ?? ""] ?? "createdAt";
+  const sortDir = (opts.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc";
+
+  const [rows, agg, activeCount, expiredCount] = await Promise.all([
     prisma.testSeriesSubscription.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
+      where: listWhere,
+      orderBy: { [sortField]: sortDir },
       skip: (opts.page - 1) * opts.limit,
       take: opts.limit,
     }),
-    prisma.testSeriesSubscription.count({ where }),
+    prisma.testSeriesSubscription.aggregate({ where: listWhere, _count: { _all: true }, _sum: { price: true } }),
+    prisma.testSeriesSubscription.count({ where: andWhere(listWhere, statusWhere("active", now)) }),
+    prisma.testSeriesSubscription.count({ where: andWhere(listWhere, statusWhere("expired", now)) }),
   ]);
+  const total = agg._count._all;
 
   const seriesIds = [...new Set(rows.map((r) => r.testSeriesId).filter((v): v is number => v != null))];
   const customerIds = [...new Set(rows.map((r) => r.customerId).filter((v): v is number => v != null))];
-  const [seriesRows, customerRows] = await Promise.all([
+  const planIds = [...new Set(rows.map((r) => r.planId).filter((v): v is number => v != null))];
+  const [seriesRows, customerRows, planRows] = await Promise.all([
     seriesIds.length
-      ? prisma.testSeries.findMany({ where: { id: { in: seriesIds } }, select: { id: true, title: true } })
+      ? prisma.testSeries.findMany({ where: { id: { in: seriesIds } }, select: { id: true, title: true, thumbnail: true } })
       : [],
     customerIds.length
       ? prisma.customer.findMany({
@@ -678,17 +732,41 @@ export const listSubscriptions = async (opts: ListSubsOpts) => {
           select: { id: true, fullName: true, phoneNumber: true, emailAddress: true },
         })
       : [],
+    planIds.length
+      ? prisma.testSeriesPrice.findMany({
+          where: { id: { in: planIds } },
+          select: { id: true, name: true, durationDays: true, price: true },
+        })
+      : [],
   ]);
-  const seriesById = new Map(seriesRows.map((t) => [t.id, { _id: String(t.id), title: t.title }]));
+  const seriesById = new Map(seriesRows.map((t) => [t.id, t]));
   const custById = new Map(customerRows.map((c) => [c.id, c]));
+  const planById = new Map(planRows.map((p) => [p.id, p]));
 
-  const data = rows.map((s) => ({
-    ...subscriptionDto(s),
-    testSeriesId: s.testSeriesId != null ? seriesById.get(s.testSeriesId) ?? null : null,
-    customerId: s.customerId != null ? customerShortDto(custById.get(s.customerId)) : null,
-  }));
+  const data = rows.map((r) => {
+    const series = r.testSeriesId != null ? seriesById.get(r.testSeriesId) : null;
+    const plan = r.planId != null ? planById.get(r.planId) : null;
+    const product = series
+      ? { _id: String(series.id), type: "testSeries" as const, name: series.title ?? null, image: series.thumbnail ?? null }
+      : null;
+    return reportRow({
+      cust: r.customerId != null ? custById.get(r.customerId) : undefined,
+      product,
+      plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.durationDays ?? null, price: num(plan.price) } : null,
+      amount: num(r.price),
+      paymentMethod: r.paymentType === "backend" ? "backend" : "online",
+      status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
+      startAt: r.startAt ?? null,
+      endAt: r.endAt ?? null,
+      createdAt: r.createdAt ?? null,
+    });
+  });
 
-  return { data, total };
+  return {
+    summary: { totalCount: total, totalRevenue: num(agg._sum.price ?? 0), activeCount, expiredCount },
+    data,
+    pagination: { total, page: opts.page, limit: opts.limit, totalPages: Math.ceil(total / opts.limit) },
+  };
 };
 
 export type GrantWrite = {
@@ -766,6 +844,16 @@ export type ListOrdersOpts = {
   page: number;
   limit: number;
 };
+
+const customerShortDto = (c: any) =>
+  c
+    ? {
+        _id: String(c.id),
+        name: c.fullName ?? null,
+        phone: c.phoneNumber ?? null,
+        email: c.emailAddress ?? null,
+      }
+    : null;
 
 const orderDto = (o: any) => ({
   _id: String(o.id),

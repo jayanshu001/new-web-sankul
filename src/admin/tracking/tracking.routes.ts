@@ -4,7 +4,7 @@ import { listActivity, activitySummary } from "./tracking.controller";
 
 const router = Router();
 
-router.use(authenticate, requireRole("admin", "super_admin"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 router.get("/", listActivity);
 router.get("/summary", activitySummary);

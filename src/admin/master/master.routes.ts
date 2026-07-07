@@ -10,7 +10,7 @@ import { getPackageCategories, createPackageCategory, updatePackageCategory, del
 const router = Router();
 
 // All master data endpoints are admin-only.
-router.use(authenticate, requireRole("admin", "super_admin"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // Educator Master
 router.get("/educators", getEducators);

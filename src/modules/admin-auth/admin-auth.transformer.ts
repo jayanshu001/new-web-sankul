@@ -31,6 +31,13 @@ export interface AdminDto {
   role: string;
   roles: string[];
   permissions: string[];
+  /**
+   * True for super-admins. The panel uses this as the "allow all" short-circuit
+   * so it never has to list every catalog key. Equivalent to
+   * `permissions.includes("*")` / `role === "super_admin"`, surfaced explicitly
+   * per the frontend RBAC contract (rbac-module-visibility.md §2).
+   */
+  isSuperAdmin: boolean;
   image: string;
   isDark: boolean;
 }
@@ -105,12 +112,12 @@ export const toAdminDto = (
 ): AdminDto => {
   const roleNames = roles.map((r) => r.name);
   const role = deriveRole(roleNames);
+  const isSuperAdmin = role === AdminRole.SUPER_ADMIN;
   // Super-admins short-circuit to the wildcard; everyone else gets their
   // effective keys flattened, de-duplicated, and sorted for a stable payload.
-  const permissionKeys =
-    role === AdminRole.SUPER_ADMIN
-      ? [SUPER_ADMIN_PERMISSION_WILDCARD]
-      : Array.from(new Set(permissions.map((p) => p.name))).sort();
+  const permissionKeys = isSuperAdmin
+    ? [SUPER_ADMIN_PERMISSION_WILDCARD]
+    : Array.from(new Set(permissions.map((p) => p.name))).sort();
   return {
     id: String(row.id),
     firstName: row.firstName,
@@ -119,6 +126,7 @@ export const toAdminDto = (
     role,
     roles: roleNames,
     permissions: permissionKeys,
+    isSuperAdmin,
     image: row.image ?? "",
     isDark: row.isDark === "dark",
   };

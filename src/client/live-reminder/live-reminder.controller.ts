@@ -6,6 +6,7 @@ import {
   MAX_MINUTES_BEFORE,
 } from "./live-reminder.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import logger from "../../utils/logger";
 import { formatScheduledAt } from "../../utils/displayTime";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
@@ -140,14 +141,18 @@ export const listMyLiveSessionReminders = async (req: Request, res: Response) =>
     if (!customerId) { logger.warn("listMyLiveSessionReminders unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
     const upcomingOnly = req.query.upcoming === "true";
+    // Standard list query: `search` filters on the session title; `page`/`limit`
+    // paginate the (in-memory, filtered+sorted) result set.
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
     const cid = liveSql.parseLiveId(String(customerId));
-    if (!cid) return success(res, { reminders: [], total: 0, limit: null }, "Reminders fetched.");
-    let lim = upcomingOnly ? 50 : 0;
-    const raw = req.query.limit;
-    if (raw !== undefined && raw !== "") { const n = Number(raw); if (!Number.isFinite(n) || n < 1) return failure(res, "limit must be a positive number.", 422); lim = Math.min(Math.floor(n), 100); }
+    if (!cid) return success(res, { reminders: [], total: 0, limit, pagination: buildPagination(0, page, limit) }, "Reminders fetched.");
     const dtos = await liveSql.listRemindersForCustomer(cid);
     let reminders = dtos.map((r: any) => sqlReminderToPublic(r));
+    if (search) {
+      const s = search.toLowerCase();
+      reminders = reminders.filter((r) => (r.session?.title ?? "").toLowerCase().includes(s));
+    }
     if (upcomingOnly) {
       const now = Date.now();
       reminders = reminders.filter((r) => r.status === "scheduled" && r.session?.scheduledAt && new Date(r.session.scheduledAt).getTime() > now)
@@ -156,9 +161,9 @@ export const listMyLiveSessionReminders = async (req: Request, res: Response) =>
       reminders.sort((a, b) => new Date(a.remindAt as any).getTime() - new Date(b.remindAt as any).getTime());
     }
     const total = reminders.length;
-    if (lim > 0) reminders = reminders.slice(0, lim);
+    reminders = reminders.slice(skip, skip + limit);
     logger.info("listMyLiveSessionReminders success", { traceId, customerId, total, upcomingOnly });
-    return success(res, { reminders, total, limit: lim || null }, "Reminders fetched.");
+    return success(res, { reminders, total, limit, pagination: buildPagination(total, page, limit) }, "Reminders fetched.");
   } catch (err) {
     logger.error("listMyLiveSessionReminders failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch reminders.", 500);

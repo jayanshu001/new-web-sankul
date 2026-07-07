@@ -256,14 +256,19 @@ export const listVideoCategoryChildren = async (req: Request, res: Response) => 
       logger.warn("listVideoCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
     }
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const result = await getVideoCategoryChildren(catId, search || undefined);
+    const { pageNum, limitNum, skip, search } = parsePaging(req);
+    const result = await getVideoCategoryChildren(catId, search || undefined, { skip, take: limitNum });
     if (!result) {
       logger.warn("listVideoCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
       return res.status(404).json({ success: false, message: "Video category not found." });
     }
-    logger.info("listVideoCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
-    return res.status(200).json({ success: true, data: result });
+    const { total, ...data } = result;
+    logger.info("listVideoCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, total, source: "mysql" });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
   } catch (error: any) {
     logger.error("listVideoCategoryChildren failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -284,14 +289,19 @@ export const listMaterialCategoryChildren = async (req: Request, res: Response) 
       logger.warn("listMaterialCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
     }
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const result = await getMaterialCategoryChildren(catId, search || undefined);
+    const { pageNum, limitNum, skip, search } = parsePaging(req);
+    const result = await getMaterialCategoryChildren(catId, search || undefined, { skip, take: limitNum });
     if (!result) {
       logger.warn("listMaterialCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
       return res.status(404).json({ success: false, message: "Material category not found." });
     }
-    logger.info("listMaterialCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
-    return res.status(200).json({ success: true, data: result });
+    const { total, ...data } = result;
+    logger.info("listMaterialCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, total, source: "mysql" });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
   } catch (error: any) {
     logger.error("listMaterialCategoryChildren failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -312,14 +322,19 @@ export const listExamCategoryChildren = async (req: Request, res: Response) => {
       logger.warn("listExamCategoryChildren invalid id (mysql)", { traceId, categoryId: id });
       return res.status(400).json({ success: false, message: "Invalid category id." });
     }
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
-    const result = await getExamCategoryChildren(catId, search || undefined);
+    const { pageNum, limitNum, skip, search } = parsePaging(req);
+    const result = await getExamCategoryChildren(catId, search || undefined, { skip, take: limitNum });
     if (!result) {
       logger.warn("listExamCategoryChildren parent not found (mysql)", { traceId, categoryId: id });
       return res.status(404).json({ success: false, message: "Exam category not found." });
     }
-    logger.info("listExamCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, source: "mysql" });
-    return res.status(200).json({ success: true, data: result });
+    const { total, ...data } = result;
+    logger.info("listExamCategoryChildren success", { traceId, categoryId: id, childCount: result.list.length, total, source: "mysql" });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+    });
   } catch (error: any) {
     logger.error("listExamCategoryChildren failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

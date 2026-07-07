@@ -50,4 +50,6 @@ export interface ExamCategoryChildDto extends ExamCategoryDto {
 export interface ExamCategoryChildrenResult {
   parent: ExamCategoryDto;
   list: Array<{ category: ExamCategoryChildDto }>;
+  /** Total active children matching the filter (pagination). */
+  total: number;
 }

@@ -35,6 +35,23 @@ export const listTestimonialsPaged = async (q: {
   return { items: rows.map(toTestimonialDto), total };
 };
 
+/**
+ * Client list: rating desc ordering + `?search=` (name/title/description) +
+ * pagination. Reuses the repository page/count helpers over the identical where.
+ */
+export const listTestimonialsClientPaged = async (q: {
+  search?: string;
+  skip?: number;
+  take?: number;
+}): Promise<{ items: TestimonialDto[]; total: number }> => {
+  const opts = { search: q.search, skip: q.skip, take: q.take };
+  const [rows, total] = await Promise.all([
+    testimonialRepository.findPage(opts),
+    testimonialRepository.count(opts),
+  ]);
+  return { items: rows.map(toTestimonialDto), total };
+};
+
 export const getTestimonialById = async (
   id: string
 ): Promise<TestimonialDto | null> => {

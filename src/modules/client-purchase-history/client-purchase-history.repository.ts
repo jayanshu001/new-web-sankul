@@ -64,27 +64,37 @@ export const clientPurchaseHistoryRepository = {
     ids.length ? prisma.packageType.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }) : Promise.resolve([]),
 
   // ── books tab ──────────────────────────────────────────────────────────────
-  listBookOrders: (customerId: number, statuses: string[], skip: number, take: number) =>
+  // `search` filters on the order_items JSON text (a String column) — book names
+  // live inside that JSON, so a LIKE over the raw text matches by book title.
+  listBookOrders: (customerId: number, statuses: string[], skip: number, take: number, search?: string) =>
     prisma.bookOrder.findMany({
-      where: { userId: customerId, status: { in: statuses } },
+      where: { userId: customerId, status: { in: statuses }, ...(search ? { orderItems: { contains: search } } : {}) },
       include: { BookTracking: { select: { tracking_id: true, status: true } } },
       orderBy: { id: "desc" },
       skip, take,
     }),
-  countBookOrders: (customerId: number, statuses: string[]) =>
-    prisma.bookOrder.count({ where: { userId: customerId, status: { in: statuses } } }),
+  countBookOrders: (customerId: number, statuses: string[], search?: string) =>
+    prisma.bookOrder.count({ where: { userId: customerId, status: { in: statuses }, ...(search ? { orderItems: { contains: search } } : {}) } }),
   booksByIds: (ids: number[]) =>
     ids.length ? prisma.book.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, thumbnail: true, image: true } }) : Promise.resolve([]),
 
   // ── ebooks tab ───────────────────────────────────────────────────────────────
-  listEbookOrders: (customerId: number, status: string, skip: number, take: number) =>
+  // ws_ebook_order has no ebook_id and no title column, so name search is resolved
+  // upstream (ebook name → price ids) and passed in as `planIds` to constrain here.
+  listEbookOrders: (customerId: number, status: string, skip: number, take: number, planIds?: number[]) =>
     prisma.eBookOrder.findMany({
-      where: { userId: customerId, status: status as any },
+      where: { userId: customerId, status: status as any, ...(planIds ? { planId: { in: planIds } } : {}) },
       orderBy: { id: "desc" },
       skip, take,
     }),
-  countEbookOrders: (customerId: number, status: string) =>
-    prisma.eBookOrder.count({ where: { userId: customerId, status: status as any } }),
+  countEbookOrders: (customerId: number, status: string, planIds?: number[]) =>
+    prisma.eBookOrder.count({ where: { userId: customerId, status: status as any, ...(planIds ? { planId: { in: planIds } } : {}) } }),
+  /** ebook ids whose name matches the search text (name-search entry point). */
+  ebookIdsByName: (search: string) =>
+    prisma.eBook.findMany({ where: { name: { contains: search } }, select: { id: true } }),
+  /** price (plan) ids linked to the given ebook ids (ws_ebook_order filters by plan_id). */
+  planIdsByEbookIds: (ebookIds: number[]) =>
+    ebookIds.length ? prisma.packageCourseEbookPrice.findMany({ where: { ebookId: { in: ebookIds } }, select: { id: true } }) : Promise.resolve([]),
   /** ebook order → plan → ebook (ws_ebook_order has no ebook_id). */
   plansByIds: (ids: number[]) =>
     ids.length ? prisma.packageCourseEbookPrice.findMany({ where: { id: { in: ids } }, select: { id: true, ebookId: true } }) : Promise.resolve([]),

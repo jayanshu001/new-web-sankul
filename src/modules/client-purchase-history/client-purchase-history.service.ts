@@ -131,10 +131,10 @@ const parseOrderItems = (json: string | null): any[] => {
   try { const a = JSON.parse(json); return Array.isArray(a) ? a : []; } catch { return []; }
 };
 
-export const listBooks = async (customerId: number, statuses: string[], skip: number, take: number, page: number, limit: number) => {
+export const listBooks = async (customerId: number, statuses: string[], skip: number, take: number, page: number, limit: number, search?: string) => {
   const [orders, total] = await Promise.all([
-    repo.listBookOrders(customerId, statuses, skip, take),
-    repo.countBookOrders(customerId, statuses),
+    repo.listBookOrders(customerId, statuses, skip, take, search),
+    repo.countBookOrders(customerId, statuses, search),
   ]);
   // first-item thumbnails from the order_items JSON (the `item` field is bookId).
   const itemsByOrder = new Map<number, any[]>();
@@ -427,10 +427,20 @@ export const getTestSeriesReceiptMysql = async (subId: number, customerId: numbe
 };
 
 // ── ebooks tab ─────────────────────────────────────────────────────────────────
-export const listEbooks = async (customerId: number, status: string, skip: number, take: number, page: number, limit: number) => {
+export const listEbooks = async (customerId: number, status: string, skip: number, take: number, page: number, limit: number, search?: string) => {
+  // Name search: ws_ebook_order carries no ebook_id/title, so resolve matching
+  // ebook names → their price (plan) ids and constrain the order query by plan_id.
+  let planIdsFilter: number[] | undefined;
+  if (search) {
+    const ebookIds = (await repo.ebookIdsByName(search)).map((e) => e.id);
+    planIdsFilter = (await repo.planIdsByEbookIds(ebookIds)).map((p) => p.id);
+    if (!planIdsFilter.length) {
+      return { data: [], pagination: { total: 0, page, limit, totalPages: 0 } };
+    }
+  }
   const [orders, total] = await Promise.all([
-    repo.listEbookOrders(customerId, status, skip, take),
-    repo.countEbookOrders(customerId, status),
+    repo.listEbookOrders(customerId, status, skip, take, planIdsFilter),
+    repo.countEbookOrders(customerId, status, planIdsFilter),
   ]);
   // ws_ebook_order has no ebook_id → hop order.plan_id → price.ebook_id → ebook.
   const planIds = [...new Set(orders.map((o) => o.planId).filter((x): x is number => x != null && x > 0))];

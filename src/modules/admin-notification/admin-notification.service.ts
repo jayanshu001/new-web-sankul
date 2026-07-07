@@ -546,10 +546,20 @@ export async function listImageNotifications() {
   return rows.map(imageDto);
 }
 
-/** Client feed: active in-app banner images, newest first. Same DTO/flag. */
-export async function listActiveImageNotifications() {
-  const rows = await prisma.imageNotification.findMany({ where: { active: true }, orderBy: { id: "desc" } });
-  return rows.map(imageDto);
+/**
+ * Client feed: active in-app banner images, newest first. Same DTO/flag.
+ * Paginated (skip/take) with a sibling count over the identical where. Banner
+ * rows have no natural text field, so there is no `search` support here.
+ */
+export async function listActiveImageNotifications(
+  opts: { skip?: number; take?: number } = {}
+): Promise<{ data: any[]; total: number }> {
+  const where = { active: true };
+  const [rows, total] = await Promise.all([
+    prisma.imageNotification.findMany({ where, orderBy: { id: "desc" }, skip: opts.skip, take: opts.take }),
+    prisma.imageNotification.count({ where }),
+  ]);
+  return { data: rows.map(imageDto), total };
 }
 
 export async function createImageNotification(input: {

@@ -6,6 +6,7 @@ import {
   refreshAdminToken,
   logoutAdmin,
   updateAdminProfile,
+  getAdminProfile,
 } from "./admin.auth.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
@@ -42,6 +43,36 @@ export const adminLoginHandler = async (req: Request, res: Response) => {
     );
   } catch (err) {
     logger.error("adminLoginHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+/**
+ * GET /api/v1/admin/auth/me
+ * Protected: requires admin JWT. Returns the current admin's effective
+ * permissions/roles/isSuperAdmin for session rehydration.
+ */
+export const adminMeHandler = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const adminId = req.user?.id;
+  logger.info("adminMeHandler invoked", { traceId, path: req.originalUrl, adminId });
+
+  try {
+    if (!adminId) {
+      logger.warn("adminMeHandler unauthorized", { traceId });
+      return failure(res, "Unauthorized request.", 401);
+    }
+
+    const result = await getAdminProfile(adminId, traceId);
+    if (!result.ok) {
+      logger.warn("adminMeHandler failed", { traceId, adminId, message: result.message });
+      return failure(res, result.message, 401);
+    }
+
+    logger.info("adminMeHandler success", { traceId, adminId });
+    return success(res, { admin: result.admin }, result.message, 200);
+  } catch (err) {
+    logger.error("adminMeHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, getErrorMessage(err), 500);
   }
 };

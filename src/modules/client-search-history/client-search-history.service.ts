@@ -47,6 +47,21 @@ export const list = async (customerId: number): Promise<SearchHistoryDto[]> => {
   return transformer.toDtoList(rows);
 };
 
+// Paginated list with optional query-text search. Returns the page + the total
+// matching count (for the pagination envelope).
+export const listPaged = async (
+  customerId: number,
+  search: string | undefined,
+  skip: number,
+  take: number
+): Promise<{ items: SearchHistoryDto[]; total: number }> => {
+  const [rows, total] = await Promise.all([
+    repo.listPaged(customerId, search, skip, take),
+    repo.countList(customerId, search),
+  ]);
+  return { items: transformer.toDtoList(rows), total };
+};
+
 export const clear = async (customerId: number): Promise<number> => {
   const { count } = await repo.clearAll(customerId);
   return count;

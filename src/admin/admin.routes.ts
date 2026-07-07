@@ -38,7 +38,8 @@ import adminLiveSessionRoutes from "./live/live.routes";
 import adminLiveCourseRoutes from "./live-course/live-course.routes";
 import adminTestSeriesRoutes from "./testSeries/testSeries.routes";
 import adminUploadsRoutes from "./uploads/uploads.routes";
-import authenticate from "../middlewares/authenticate";
+import authenticate, { requireRole } from "../middlewares/authenticate";
+import { enforceRbac } from "../middlewares/rbacEnforce";
 import { adminLimiter } from "../config/rateLimiter";
 
 const router = Router();
@@ -69,6 +70,20 @@ router.use("/auth", adminAuthRoutes); // -> /api/v1/admin/auth/*
 // From here on, every admin route requires a valid Bearer token AND is
 // metered by the admin-tier rate limiter (per-admin-id when authenticated).
 router.use(authenticate, adminLimiter);
+
+// Coarse admin-SURFACE gate: only admin-staff tokens (role admin/super_admin/
+// editor) may reach any admin route — customer/promoter/educator tokens are
+// rejected here. This replaces the per-sub-router `requireRole("admin",...)`
+// gates (now removed) so authorization is unified on catalog RBAC below; this
+// line is purely the "is this an admin at all" boundary, NOT per-permission.
+router.use(requireRole("admin", "super_admin", "editor"));
+
+// Per-endpoint RBAC enforcement (rbac-module-visibility.md §4). Runs after
+// authenticate so req.user is set; maps each route to its catalog permission
+// key(s) and denies callers who lack them. Ships in SHADOW MODE by default
+// (RBAC_ENFORCE unset ⇒ log-only, never blocks); set RBAC_ENFORCE=true to turn
+// on hard 403s. Super-admins bypass. See middlewares/rbacEnforce.ts.
+router.use(enforceRbac);
 
 router.use("/administrators", adminAdministratorRoutes); // -> /api/v1/admin/administrators/*
 router.use("/roles", adminRoleRoutes); // -> /api/v1/admin/roles/*

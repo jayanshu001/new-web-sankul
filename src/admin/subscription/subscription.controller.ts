@@ -29,14 +29,18 @@ const paginated = (req: Request) => {
 
 export const listCourseSubscriptions = async (req: Request, res: Response) => {
   try {
-    const { customerId, courseId, packageId, status, fromDate, toDate, search, sortBy, sortOrder, type } =
-      req.query as Record<string, string>;
-
+    const q = req.query as Record<string, string>;
+    // Reports contract (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md). dateFrom/dateTo are
+    // the shared names; fromDate/toDate accepted as legacy aliases.
     const { pageNum, limitNum } = paginated(req);
-    const { items, pagination } = await subSql.listCourseSubscriptions({
-      customerId, courseId, packageId, status, fromDate, toDate, search, sortBy, sortOrder, type, page: pageNum, limit: limitNum,
+    const { summary, data, pagination } = await subSql.listCourseSubscriptions({
+      customerId: q.customerId, courseId: q.courseId, packageId: q.packageId, type: q.type,
+      status: q.status, paymentMethod: q.paymentMethod,
+      dateFrom: q.dateFrom ?? q.fromDate, dateTo: q.dateTo ?? q.toDate,
+      search: q.search, sortBy: q.sortBy, sortOrder: q.sortOrder,
+      page: pageNum, limit: limitNum,
     });
-    return res.status(200).json({ success: true, items, pagination });
+    return res.status(200).json({ success: true, summary, data, pagination });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

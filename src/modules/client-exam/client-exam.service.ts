@@ -51,11 +51,20 @@ const toCategoryDto = (c: any) => ({
 });
 
 // ─── listExamsByCategory ──────────────────────────────────────────────────────
-export const listExamsByCategory = async (categoryId: number, customerId: number | null) => {
+// `subjects` and `completedTests` are whole-category summaries, so they are
+// computed over the FULL (search-filtered) exam set; only `exams` is windowed.
+// The list is sliced in JS (rather than pushing skip/take into Prisma) so the
+// two summaries keep their original, page-independent semantics. `total` is the
+// full filtered count for the pagination envelope.
+export const listExamsByCategory = async (
+  categoryId: number,
+  customerId: number | null,
+  opts: { skip?: number; take?: number; search?: string | null } = {}
+) => {
   const now = new Date();
   const [subjects, exams] = await Promise.all([
     repo.subCategories(categoryId),
-    repo.examsByCategory(categoryId, now),
+    repo.examsByCategory(categoryId, now, opts.search ?? null),
   ]);
 
   const resultByExam = new Map<string, any>();
@@ -73,7 +82,12 @@ export const listExamsByCategory = async (categoryId: number, customerId: number
   });
   const completedTests = decorated.filter((e) => e.type === "subject" && e.isCompleted);
 
-  return { subjects: subjects.map(toCategoryDto), exams: decorated, completedTests };
+  const total = decorated.length;
+  const skip = opts.skip ?? 0;
+  const take = opts.take ?? decorated.length;
+  const pagedExams = decorated.slice(skip, skip + take);
+
+  return { subjects: subjects.map(toCategoryDto), exams: pagedExams, completedTests, total };
 };
 
 // ─── listExamsByCategoryPaged ─────────────────────────────────────────────────
@@ -138,10 +152,10 @@ export const getExamDetail = async (examId: number) => {
 };
 
 // ─── listMyResults ────────────────────────────────────────────────────────────
-export const listMyResults = async (customerId: number, page: number, limit: number) => {
+export const listMyResults = async (customerId: number, page: number, limit: number, search?: string | null) => {
   const [rows, total] = await Promise.all([
-    repo.myResults(customerId, (page - 1) * limit, limit),
-    repo.countMyResults(customerId),
+    repo.myResults(customerId, (page - 1) * limit, limit, search ?? null),
+    repo.countMyResults(customerId, search ?? null),
   ]);
   const items = rows.map((r: any) => ({
     ...toResultDto(r),
@@ -198,10 +212,10 @@ export const rateResult = async (customerId: number, examId: number, ratting: st
 };
 
 // ─── listMyPastDailyResults ───────────────────────────────────────────────────
-export const listPastDailyResults = async (customerId: number, page: number, limit: number) => {
+export const listPastDailyResults = async (customerId: number, page: number, limit: number, search?: string | null) => {
   const [rows, total] = await Promise.all([
-    repo.pastDailyResults(customerId, (page - 1) * limit, limit),
-    repo.countPastDailyResults(customerId),
+    repo.pastDailyResults(customerId, (page - 1) * limit, limit, search ?? null),
+    repo.countPastDailyResults(customerId, search ?? null),
   ]);
   const items = rows.map((r: any) => ({
     _id: String(r.id),
@@ -251,7 +265,7 @@ const weekRange = (year: number, month: number, week: number) => {
   return { start, end };
 };
 
-export const getDailyExams = async (opts: { year?: number; month?: number; week?: number; customerId: number | null }) => {
+export const getDailyExams = async (opts: { year?: number; month?: number; week?: number; customerId: number | null; skip?: number; take?: number; search?: string | null }) => {
   const now = new Date();
   // Level 1: years
   if (!opts.year) {
@@ -281,9 +295,15 @@ export const getDailyExams = async (opts: { year?: number; month?: number; week?
     });
     return { level: "weeks", data };
   }
-  // Level 4: tests in the week, decorated per-customer
+  // Level 4: tests in the week, decorated per-customer (paginated + name search)
   const { start, end } = weekRange(opts.year, opts.month, opts.week);
-  const exams = await repo.dailyInWindow(start, end);
+  const search = opts.search ?? null;
+  const skip = opts.skip ?? 0;
+  const take = opts.take ?? 20;
+  const [exams, total] = await Promise.all([
+    repo.dailyInWindowPaged(start, end, search, skip, take),
+    repo.countDailyInWindow(start, end, search),
+  ]);
   const resultByExam = new Map<string, any>();
   if (opts.customerId && exams.length) {
     const results = await repo.resultsForCustomerExams(opts.customerId, exams.map((e) => e.id));
@@ -293,7 +313,7 @@ export const getDailyExams = async (opts: { year?: number; month?: number; week?
     const dto = toExamDto(e);
     return { ...dto, isCompleted: resultByExam.has(dto._id), lastResult: resultByExam.get(dto._id) ?? null };
   });
-  return { level: "tests", data };
+  return { level: "tests", data, total };
 };
 
 // ─── saveAnswers (scoring WRITE) ──────────────────────────────────────────────
@@ -582,12 +602,20 @@ export const submitAttempt = async (
   return { ok: true as const, data: { examResult: toAttemptDto(updated), rank } };
 };
 
-export const listAttempts = async (customerId: number, examId: number) => {
+export const listAttempts = async (
+  customerId: number,
+  examId: number,
+  opts: { skip?: number; take?: number } = {}
+) => {
   const exam = await repo.findExam(examId);
   if (!exam) return { ok: false as const, status: 404, message: "Exam not found." };
-  const attempts = await repo.attemptsForExam(customerId, examId);
+  const [attempts, total] = await Promise.all([
+    repo.attemptsForExam(customerId, examId, opts.skip, opts.take),
+    repo.countAttemptsForExam(customerId, examId),
+  ]);
   return {
     ok: true as const,
+    total,
     data: {
       exam: { _id: String(exam.id), title: exam.name, type: exam.type, durationMinutes: exam.time },
       attempts: attempts.map(toAttemptDto),

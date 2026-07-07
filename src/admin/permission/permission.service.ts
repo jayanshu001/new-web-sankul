@@ -22,11 +22,13 @@ export interface ListPermissionsInput {
 }
 
 export const listPermissions = async (input: ListPermissionsInput) => {
-  const { guard, search, page, per_page } = input;
+  const { guard, search, category_id, page, per_page } = input;
 
-  // ws_permissions; category derived from name prefix.
-  const { items, total } = await rbac.listPermissions({ guard, search, page, per_page });
-  return { items, pagination: { page, per_page, total } };
+  // ws_permissions; category is the FK (category_id filter) — the derived-from-name
+  // `category` field on each row is separate. The controller builds the pagination
+  // envelope from { items, total }.
+  const { items, total } = await rbac.listPermissions({ guard, search, category_id, page, per_page });
+  return { items, total };
 };
 
 export const getPermission = async (id: string, guard?: string) => {

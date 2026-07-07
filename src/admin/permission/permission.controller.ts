@@ -30,8 +30,16 @@ export const listPermissions = asyncHandler(async (req: Request, res: Response) 
       errors: formatZodErrors(parsed.error.issues),
     });
   }
-  const data = await permissionService.listPermissions(parsed.data);
-  return res.status(200).json({ success: true, data });
+  const { page, per_page } = parsed.data;
+  const { items, total } = await permissionService.listPermissions(parsed.data);
+  // House-standard list envelope: `data` is the page array, `pagination` a sibling
+  // with total + totalPages (same as roles/books). See permissions-categories-list-
+  // server-side.md.
+  return res.status(200).json({
+    success: true,
+    data: items,
+    pagination: { total, page, limit: per_page, totalPages: Math.ceil(total / per_page) },
+  });
 });
 
 export const getPermission = asyncHandler(async (req: Request, res: Response) => {

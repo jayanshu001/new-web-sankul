@@ -31,12 +31,22 @@ const dto = (n: any) => ({
   status: n.status, createdAt: n.createdAt ?? null, updatedAt: n.updatedAt ?? null,
 });
 
-export const listNotifications = async (customerId: number, skip: number, take: number) => {
-  const where = visWhere(customerId);
+export const listNotifications = async (
+  customerId: number,
+  skip: number,
+  take: number,
+  search?: string
+) => {
+  const base = visWhere(customerId);
+  // `search` narrows the paginated list + its total by title/body; the unread
+  // badge stays over the FULL visible set (base) so it remains a true count.
+  const where: any = search
+    ? { AND: [base, { OR: [{ title: { contains: search } }, { body: { contains: search } }] }] }
+    : base;
   const [rows, total, unread] = await Promise.all([
     prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, skip, take }),
     prisma.notification.count({ where }),
-    prisma.notification.count({ where: { ...where, isRead: false } }),
+    prisma.notification.count({ where: { ...base, isRead: false } }),
   ]);
   return { data: rows.map(dto), total, unreadCount: unread };
 };

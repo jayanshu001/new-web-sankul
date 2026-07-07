@@ -57,6 +57,33 @@ export const listFaqsPaged = async (q: {
   return { items: rows.map(toFaqDto), total };
 };
 
+/**
+ * Client list: created_at asc ordering, optional type filter + `?search=`
+ * (question/answer) + pagination. Reuses the repository page/count helpers over
+ * the identical where.
+ */
+export const listFaqsClientPaged = async (q: {
+  typeId?: string;
+  search?: string;
+  skip?: number;
+  take?: number;
+}): Promise<{ items: FaqDto[]; total: number }> => {
+  const type = resolveCategoryFilter(q.typeId);
+  const opts = {
+    type,
+    search: q.search,
+    sortBy: "createdAt",
+    sortDir: "asc" as const,
+    skip: q.skip,
+    take: q.take,
+  };
+  const [rows, total] = await Promise.all([
+    faqRepository.findPage(opts),
+    faqRepository.count(opts),
+  ]);
+  return { items: rows.map(toFaqDto), total };
+};
+
 export const getFaqById = async (id: string): Promise<FaqDto | null> => {
   const numId = parseFaqId(id);
   if (!numId) return null;
@@ -117,4 +144,27 @@ export const listFaqTypes = async (): Promise<FaqTypeDto[]> => {
     createdAt: undefined,
     updatedAt: undefined,
   }));
+};
+
+/**
+ * Client faq-types list with `?search=` (title) + pagination. The catalogue is
+ * a fixed synthetic list (no table), so search/paging apply in memory.
+ */
+export const listFaqTypesClientPaged = async (q: {
+  search?: string;
+  skip?: number;
+  take?: number;
+}): Promise<{ items: FaqTypeDto[]; total: number }> => {
+  const all: FaqTypeDto[] = FAQ_TYPES.map((t) => ({
+    ...toFaqTypeDto(t),
+    createdAt: undefined,
+    updatedAt: undefined,
+  }));
+  const s = q.search?.trim().toLowerCase();
+  const filtered = s ? all.filter((t) => t.title.toLowerCase().includes(s)) : all;
+  const total = filtered.length;
+  const start = q.skip ?? 0;
+  const items =
+    q.take != null ? filtered.slice(start, start + q.take) : filtered.slice(start);
+  return { items, total };
 };

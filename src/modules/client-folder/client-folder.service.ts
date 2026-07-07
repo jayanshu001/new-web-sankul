@@ -142,10 +142,14 @@ export const removeItem = async (customerId: number, type: string, folderId: num
   return r.count > 0;
 };
 
-export const allItems = async (customerId: number, type: string) => {
+export const allItems = async (customerId: number, type: string, search?: string, skip = 0, take = 20) => {
   await ensureDefaultFolders(customerId);
-  const folders = await prisma.folder.findMany({ where: { customerId, type }, orderBy: [{ isDefaultFolder: "desc" }, { createdAt: "desc" }] });
-  if (!folders.length) return [];
+  const where: any = { customerId, type, ...(search ? { name: { contains: search } } : {}) };
+  const [folders, total] = await Promise.all([
+    prisma.folder.findMany({ where, orderBy: [{ isDefaultFolder: "desc" }, { createdAt: "desc" }], skip, take }),
+    prisma.folder.count({ where }),
+  ]);
+  if (!folders.length) return { data: [], total };
   const items = await prisma.folderItem.findMany({ where: { folderId: { in: folders.map((f) => f.id) }, customerId, kind: kindOf(type) }, orderBy: { addedAt: "desc" } });
   const refMap = await hydrateRefs(kindOf(type), items.map((i) => i.refId));
   const byFolder = new Map<number, any[]>();
@@ -155,7 +159,7 @@ export const allItems = async (customerId: number, type: string) => {
     const row = { _id: String(it.id), kind: it.kind, refId: String(it.refId), addedAt: it.addedAt, ref };
     (byFolder.get(it.folderId) ?? byFolder.set(it.folderId, []).get(it.folderId)!).push(row);
   }
-  return folders.map((f) => ({ folder: folderDto(f), list: byFolder.get(f.id) ?? [] }));
+  return { data: folders.map((f) => ({ folder: folderDto(f), list: byFolder.get(f.id) ?? [] })), total };
 };
 
 /** Profile-dashboard: count saved items of a kind whose content still exists. */

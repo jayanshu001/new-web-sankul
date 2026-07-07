@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import * as notifSql from "../../modules/client-notification/client-notification.service";
 import * as adminNotifSql from "../../modules/admin-notification/admin-notification.service";
 
@@ -13,15 +14,12 @@ export const listMyNotifications = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("listMyNotifications unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
-    const { page = "1", limit = "20" } = req.query as Record<string, string>;
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
-    const skip = (pageNum - 1) * limitNum;
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
     const cid = notifSql.parseNotifId(String(userId));
     if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
-    const { data, total, unreadCount } = await notifSql.listNotifications(cid, skip, limitNum);
-    return res.status(200).json({ success: true, data, unreadCount, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
+    const { data, total, unreadCount } = await notifSql.listNotifications(cid, skip, limit, search);
+    return res.status(200).json({ success: true, data, unreadCount, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listMyNotifications failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -75,9 +73,11 @@ export const listActiveImageNotifications = async (_req: Request, res: Response)
   logger.info("listActiveImageNotifications invoked", { traceId, path: _req.originalUrl });
 
   try {
-    const data = await adminNotifSql.listActiveImageNotifications();
+    // No natural text field on banner rows → pagination only (no `search`).
+    const { page, limit, skip } = parseListQuery(_req.query);
+    const { data, total } = await adminNotifSql.listActiveImageNotifications({ skip, take: limit });
     logger.info("listActiveImageNotifications success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listActiveImageNotifications failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

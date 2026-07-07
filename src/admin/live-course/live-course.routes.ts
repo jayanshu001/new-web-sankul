@@ -53,7 +53,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate, requireRole("admin", "super_admin"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // --- Plans (declared first so they don't collide with /:id patterns) -------
 router.get("/plans/:planId",                 getLiveCoursePlan);

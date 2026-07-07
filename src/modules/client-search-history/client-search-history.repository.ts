@@ -20,6 +20,21 @@ export const listRecent = (customerId: number, take: number) =>
     take,
   });
 
+// Newest-first paginated list with optional query-text search (`skip`/`take`).
+export const listPaged = (customerId: number, search: string | undefined, skip: number, take: number) =>
+  prisma.searchHistory.findMany({
+    where: { customerId, ...(search ? { query: { contains: search } } : {}) },
+    orderBy: { createdAt: "desc" },
+    skip,
+    take,
+  });
+
+// Total rows matching the same customer/search filter (pagination count).
+export const countList = (customerId: number, search: string | undefined) =>
+  prisma.searchHistory.count({
+    where: { customerId, ...(search ? { query: { contains: search } } : {}) },
+  });
+
 // Ids of the rows to KEEP (the newest `keep`), used to compute the overflow.
 export const listKeepIds = async (customerId: number, keep: number): Promise<number[]> => {
   const rows = await prisma.searchHistory.findMany({

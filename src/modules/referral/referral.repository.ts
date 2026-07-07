@@ -35,17 +35,19 @@ export const referralRepository = {
     }),
 
   // ─── Transactions ─────────────────────────────────────────────────────────
-  listTransactions: (customerId: number, opts: { type?: "credit" | "debit"; skip: number; take: number }) =>
+  // `search` matches on the human-readable `description` (the only natural text
+  // column on the ledger row).
+  listTransactions: (customerId: number, opts: { type?: "credit" | "debit"; search?: string; skip: number; take: number }) =>
     prisma.refferalTransaction.findMany({
-      where: { customerId, ...(opts.type ? { type: opts.type } : {}) },
+      where: { customerId, ...(opts.type ? { type: opts.type } : {}), ...(opts.search ? { description: { contains: opts.search } } : {}) },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
     }),
 
-  countTransactions: (customerId: number, opts: { type?: "credit" | "debit" }) =>
+  countTransactions: (customerId: number, opts: { type?: "credit" | "debit"; search?: string }) =>
     prisma.refferalTransaction.count({
-      where: { customerId, ...(opts.type ? { type: opts.type } : {}) },
+      where: { customerId, ...(opts.type ? { type: opts.type } : {}), ...(opts.search ? { description: { contains: opts.search } } : {}) },
     }),
 
   findTransaction: (id: number, customerId: number) =>

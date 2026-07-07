@@ -1,6 +1,7 @@
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminLiveCourseRepository as repo } from "./admin-live-course.repository";
+import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 import { adminAuthRepository } from "../admin-auth/admin-auth.repository";
 import { deriveRole } from "../admin-auth/admin-auth.transformer";
 import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession, Prisma } from "@prisma/client";
@@ -250,23 +251,76 @@ const hydrateSubs = async (rows: LiveCourseSubscription[]) => {
   });
 };
 
-export const listSubscriptions = async (q: { liveCourseId?: string; customerId?: string; planId?: string; paymentStatus?: string; status?: string; page?: string; limit?: string }): Promise<"bad_course" | "bad_customer" | { subscriptions: any[]; total: number; page: number; limit: number }> => {
-  const page = Math.max(1, parseInt(q.page as any) || 1);
-  const limit = Math.min(100, parseInt(q.limit as any) || 20);
-  let liveCourseId: number | undefined, customerId: number | undefined, planId: number | undefined;
+// ── subscription list (Reports contract) ─────────────────────────────────────
+// Shared contract across the 4 admin subscription reports — see
+// docs/REPORTS_SUBSCRIPTIONS_ADMIN.md. Returns { summary, data, pagination };
+// summary respects all filters but ignores pagination. `status` here is the
+// normalized active|expired|inactive (not the raw boolean); paymentMethod is the
+// coarse online|backend (online = razorpay_order_id present). amount = paid_amount.
+export const listSubscriptions = async (q: {
+  liveCourseId?: string; customerId?: string; status?: string; paymentMethod?: string;
+  dateFrom?: string; dateTo?: string; search?: string; sortBy?: string; sortOrder?: string;
+  page: number; limit: number;
+}): Promise<
+  | "bad_course"
+  | "bad_customer"
+  | { summary: { totalCount: number; totalRevenue: number; activeCount: number; expiredCount: number }; data: any[]; pagination: { total: number; page: number; limit: number; totalPages: number } }
+> => {
+  const now = new Date();
+  let liveCourseId: number | undefined, customerId: number | undefined;
   if (q.liveCourseId) { liveCourseId = parseLiveId(q.liveCourseId) ?? undefined; if (!liveCourseId) return "bad_course"; }
   if (q.customerId) { customerId = parseLiveId(q.customerId) ?? undefined; if (!customerId) return "bad_customer"; }
-  if (q.planId) planId = parseLiveId(q.planId) ?? undefined;
-  const opts = {
-    liveCourseId, customerId, planId,
-    paymentStatus: ["pending", "verified", "failed"].includes(q.paymentStatus as any) ? q.paymentStatus : undefined,
-    status: q.status === "true" ? true : q.status === "false" ? false : undefined,
-  };
-  const [rows, total] = await Promise.all([
-    repo.listSubscriptions({ ...opts, skip: (page - 1) * limit, take: limit }),
-    repo.countSubscriptions(opts),
+
+  const emptyPage = { summary: { totalCount: 0, totalRevenue: 0, activeCount: 0, expiredCount: 0 }, data: [], pagination: { total: 0, page: q.page, limit: q.limit, totalPages: 0 } };
+
+  let customerIdsIn: number[] | undefined;
+  if (q.search) {
+    customerIdsIn = await repo.customerIdsByText(q.search);
+    if (!customerIdsIn.length) return emptyPage;
+  }
+
+  const base = repo.buildSubBaseWhere({
+    customerId, liveCourseId,
+    paymentMethod: q.paymentMethod === "online" ? "online" : q.paymentMethod === "backend" ? "backend" : undefined,
+    fromDate: q.dateFrom ? new Date(q.dateFrom) : undefined,
+    toDate: q.dateTo ? new Date(q.dateTo) : undefined,
+    customerIdsIn,
+  });
+  const listWhere = andWhere(base, statusWhere(q.status, now));
+  const sortBy = q.sortBy ?? "createdAt";
+  const sortDir = (q.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc";
+
+  const [rows, agg, activeCount, expiredCount] = await Promise.all([
+    repo.listSubsByWhere(listWhere, sortBy, sortDir, (q.page - 1) * q.limit, q.limit),
+    repo.aggSubs(listWhere),
+    repo.countSubs(andWhere(listWhere, statusWhere("active", now))),
+    repo.countSubs(andWhere(listWhere, statusWhere("expired", now))),
   ]);
-  return { subscriptions: await hydrateSubs(rows), total, page, limit };
+  const total = agg._count._all;
+
+  const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
+  const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.liveCourseId))])).map((c) => [c.id, c]));
+  const plans = new Map((await repo.plansByIds([...new Set(rows.map((r) => r.planId).filter((x): x is number => x != null))])).map((p) => [p.id, p]));
+
+  const data = rows.map((r) => {
+    const course = courses.get(r.liveCourseId);
+    const plan = r.planId != null ? plans.get(r.planId) : undefined;
+    return reportRow({
+      cust: r.customerId ? custs.get(r.customerId) : undefined,
+      product: course ? { _id: String(course.id), type: "liveCourse" as const, name: course.name, image: course.image ?? null } : null,
+      plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: Number(plan.price) } : null,
+      amount: r.paidAmount != null ? Number(r.paidAmount) : 0,
+      paymentMethod: r.razorpayOrderId ? "online" : "backend",
+      status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
+      startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
+    });
+  });
+
+  return {
+    summary: { totalCount: total, totalRevenue: Number(agg._sum.paidAmount ?? 0), activeCount, expiredCount },
+    data,
+    pagination: { total, page: q.page, limit: q.limit, totalPages: Math.ceil(total / q.limit) },
+  };
 };
 
 export const getSubscription = async (id: number): Promise<"not_found" | any> => {

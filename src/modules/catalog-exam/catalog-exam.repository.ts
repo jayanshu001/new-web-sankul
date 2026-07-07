@@ -157,16 +157,25 @@ export const catalogExamRepository = {
    * `order_by`. Optional name search. Mirrors the Mongo
    * `ExamCategory.find({_id:{$in:childCategoryIds}, status:true})`.
    */
-  listActiveChildren: (parentId: number, opts?: { search?: string }) =>
+  listActiveChildren: (parentId: number, opts?: { search?: string; skip?: number; take?: number }) =>
     prisma.examCategory.findMany({
-      where: {
-        parent: parentId,
-        status: true,
-        deleted: false,
-        ...(opts?.search ? { name: { contains: opts.search } } : {}),
-      },
+      where: catalogExamRepository.activeChildrenWhere(parentId, opts),
       orderBy: [{ order_by: "asc" }, { id: "asc" }],
+      ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts?.take !== undefined ? { take: opts.take } : {}),
     }),
+
+  /** Count of active children matching the same filter as `listActiveChildren`. */
+  countActiveChildren: (parentId: number, opts?: { search?: string }) =>
+    prisma.examCategory.count({ where: catalogExamRepository.activeChildrenWhere(parentId, opts) }),
+
+  /** Shared WHERE for active children list/count. */
+  activeChildrenWhere: (parentId: number, opts?: { search?: string }) => ({
+    parent: parentId,
+    status: true,
+    deleted: false,
+    ...(opts?.search ? { name: { contains: opts.search } } : {}),
+  }),
 
   /** UNCONDITIONAL count of exams in a category (no status filter — Mongo parity). */
   countExams: (categoryId: number) =>

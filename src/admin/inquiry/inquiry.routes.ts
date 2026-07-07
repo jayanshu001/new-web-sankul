@@ -12,7 +12,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate, requireRole("admin", "super_admin"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // Inquiries (read-only list + delete; submitted via client)
 router.get("/inquiries", listInquiries);

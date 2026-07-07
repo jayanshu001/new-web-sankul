@@ -49,4 +49,6 @@ export interface MaterialCategoryChildDto extends MaterialCategoryDto {
 export interface MaterialCategoryChildrenResult {
   parent: MaterialCategoryDto;
   list: Array<{ category: MaterialCategoryChildDto }>;
+  /** Total active children matching the filter (pagination). */
+  total: number;
 }

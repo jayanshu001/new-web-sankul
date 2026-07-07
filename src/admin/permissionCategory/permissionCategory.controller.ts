@@ -40,7 +40,14 @@ export const listPermissionCategories = async (req: Request, res: Response) => {
       sortBy: sort_by,
       sortDir: sort_dir,
     });
-    return res.status(200).json({ success: true, data: result });
+    // House-standard list envelope: `data` is the page array, `pagination` a
+    // sibling with total + totalPages. See permissions-categories-list-server-side.md.
+    const total = result.pagination.total;
+    return res.status(200).json({
+      success: true,
+      data: result.items,
+      pagination: { total, page, limit: per_page, totalPages: Math.ceil(total / per_page) },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

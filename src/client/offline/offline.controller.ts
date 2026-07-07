@@ -125,15 +125,18 @@ export const listCenters = async (req: Request, res: Response) => {
   logger.info("listCenters invoked", { traceId, path: req.originalUrl });
 
   try {
-    const { cityId, search } = req.query as Record<string, string>;
+    const { cityId } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
     const cid = cityId ? parseOfflineId(cityId) : null;
-    const data = await listCentersMysql({
+    const { data, total } = await listCentersMysql({
       cityId: cid ?? undefined,
-      search: search?.trim() || undefined,
+      search: search || undefined,
+      skip,
+      take: limit,
     });
     logger.info("listCenters success", { traceId, count: data.length, source: "mysql" });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listCenters failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -146,16 +149,19 @@ export const listBatches = async (req: Request, res: Response) => {
   logger.info("listBatches invoked", { traceId, path: req.originalUrl });
 
   try {
-    const { centerId, cityId, upcoming, search } = req.query as Record<string, string>;
+    const { centerId, cityId, upcoming } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
-    const data = await listBatchesMysql({
+    const { data, total } = await listBatchesMysql({
       centerId: centerId ? parseOfflineId(centerId) ?? undefined : undefined,
       cityId: cityId ? parseOfflineId(cityId) ?? undefined : undefined,
       upcoming: upcoming === "true",
-      search: search?.trim() || undefined,
+      search: search || undefined,
+      skip,
+      take: limit,
     });
     logger.info("listBatches success", { traceId, count: data.length, source: "mysql" });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listBatches failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

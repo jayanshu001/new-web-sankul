@@ -41,6 +41,24 @@ export const listBannersPaged = async (q: {
   return { items: rows.map(toBannerDto), total };
 };
 
+/**
+ * Client list: orderBy asc, optional `key` filter + pagination. Banner rows are
+ * image + redirect only (no natural text field) → pagination ONLY, no `search`.
+ */
+export const listBannersClientPaged = async (q: {
+  key?: string;
+  skip?: number;
+  take?: number;
+}): Promise<{ items: BannerSliderDto[]; total: number }> => {
+  const key = resolveBannerKey(q.key);
+  const opts = { key, skip: q.skip, take: q.take };
+  const [rows, total] = await Promise.all([
+    bannerSliderRepository.findPage(opts),
+    bannerSliderRepository.count(opts),
+  ]);
+  return { items: rows.map(toBannerDto), total };
+};
+
 export const getBannerById = async (
   id: string
 ): Promise<BannerSliderDto | null> => {

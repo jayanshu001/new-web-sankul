@@ -34,17 +34,8 @@ export const listCountdowns = async (req: Request, res: Response) => {
   logger.info("listCountdowns invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const {
-      categoryId,
-      search = "",
-      page = "1",
-      limit = "20",
-      includePast = "false",
-    } = req.query as Record<string, string>;
-
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
-    const skip = (pageNum - 1) * limitNum;
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { categoryId, includePast = "false" } = req.query as Record<string, string>;
 
     let catId: number | null = null;
     if (categoryId) {
@@ -56,12 +47,12 @@ export const listCountdowns = async (req: Request, res: Response) => {
     }
     const r = await ecSql.listCountdownsClient({
       categoryId: catId, search: search || null, includePast: includePast === "true",
-      skip, limitNum, pageNum, todayUTC: todayUTC(),
+      skip, limitNum: limit, pageNum: page, todayUTC: todayUTC(),
     });
     logger.info("listCountdowns success (sql)", { traceId, total: r.total });
     return res.status(200).json({
       success: true, data: r.data,
-      pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
+      pagination: buildPagination(r.total, page, limit),
     });
   } catch (error: any) {
     logger.error("listCountdowns failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -75,12 +66,16 @@ export const upcomingCountdowns = async (req: Request, res: Response) => {
   logger.info("upcomingCountdowns invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const requested = parseInt((req.query.limit as string) ?? "5", 10) || 5;
-    const limitNum = Math.min(Math.max(requested, 1), 20);
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
-    const data = await ecSql.upcomingCountdownsClient(limitNum, todayUTC());
-    logger.info("upcomingCountdowns success (sql)", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    const r = await ecSql.upcomingCountdownsClient({
+      search: search || null, skip, limit, page, todayUTC: todayUTC(),
+    });
+    logger.info("upcomingCountdowns success (sql)", { traceId, count: r.data.length });
+    return res.status(200).json({
+      success: true, data: r.data,
+      pagination: buildPagination(r.total, page, limit),
+    });
   } catch (error: any) {
     logger.error("upcomingCountdowns failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

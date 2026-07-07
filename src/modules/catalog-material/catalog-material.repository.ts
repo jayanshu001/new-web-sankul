@@ -16,15 +16,24 @@ export const catalogMaterialRepository = {
    * `order_by`. Optional title search. Mirrors the Mongo
    * `MaterialCategory.find({_id:{$in:childCategoryIds}, status:true})`.
    */
-  listActiveChildren: (parentId: number, opts?: { search?: string }) =>
+  listActiveChildren: (parentId: number, opts?: { search?: string; skip?: number; take?: number }) =>
     prisma.materialCategory.findMany({
-      where: {
-        parent: parentId,
-        status: true,
-        ...(opts?.search ? { name: { contains: opts.search } } : {}),
-      },
+      where: catalogMaterialRepository.activeChildrenWhere(parentId, opts),
       orderBy: [{ order_by: "asc" }, { id: "asc" }],
+      ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts?.take !== undefined ? { take: opts.take } : {}),
     }),
+
+  /** Count of active children matching the same filter as `listActiveChildren`. */
+  countActiveChildren: (parentId: number, opts?: { search?: string }) =>
+    prisma.materialCategory.count({ where: catalogMaterialRepository.activeChildrenWhere(parentId, opts) }),
+
+  /** Shared WHERE for active children list/count. */
+  activeChildrenWhere: (parentId: number, opts?: { search?: string }) => ({
+    parent: parentId,
+    status: true,
+    ...(opts?.search ? { name: { contains: opts.search } } : {}),
+  }),
 
   /** Count of active materials directly in a category. */
   countActiveMaterials: (categoryId: number) =>

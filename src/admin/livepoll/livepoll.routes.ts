@@ -6,7 +6,7 @@ import { createPoll, closePoll, updatePoll, deletePoll, getPollsByClass, getPoll
 const router = Router();
 
 // All routes require admin authentication
-router.use(authenticate, requireRole("admin", "super_admin", "editor"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 router.post("/", createPoll);                                  // POST   /api/v1/admin/live-polls
 router.get("/:liveClassId", getPollsByClass);                 // GET    /api/v1/admin/live-polls/:liveClassId

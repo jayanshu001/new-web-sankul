@@ -26,6 +26,24 @@ const sltDto = (r: any) => ({ _id: String(r.id), title: r.title, createdAt: r.cr
 export const listSocialLinkTypes = async () =>
   (await prisma.socialLinkType.findMany({ orderBy: { title: "asc" } })).map(sltDto);
 
+// Client read: `?search=` (title) + pagination, ordered by title.
+export const listSocialLinkTypesPaged = async (q: {
+  search?: string; skip?: number; take?: number;
+}) => {
+  const qq = q.search?.trim();
+  const where = qq ? { title: { contains: qq } } : {};
+  const [rows, total] = await Promise.all([
+    prisma.socialLinkType.findMany({
+      where,
+      orderBy: { title: "asc" },
+      ...(q.skip != null ? { skip: q.skip } : {}),
+      ...(q.take != null ? { take: q.take } : {}),
+    }),
+    prisma.socialLinkType.count({ where }),
+  ]);
+  return { items: rows.map(sltDto), total };
+};
+
 export const getSocialLinkType = async (id: number) => {
   const r = await prisma.socialLinkType.findUnique({ where: { id } });
   return r ? sltDto(r) : null;
@@ -83,6 +101,27 @@ export const listClientSocialLinks = async () => {
     orderBy: { orderBy: "asc" },
   });
   return (await hydrateTypes(rows)).map(slDto);
+};
+
+// Client read (paged): active links only, ordered by orderBy, with `?search=`
+// (title/link) + pagination. Mirrors listClientSocialLinks + count over the
+// identical where.
+export const listClientSocialLinksPaged = async (q: {
+  search?: string; skip?: number; take?: number;
+}) => {
+  const qq = q.search?.trim();
+  const where: any = { status: true };
+  if (qq) where.OR = [{ title: { contains: qq } }, { link: { contains: qq } }];
+  const [rows, total] = await Promise.all([
+    prisma.socialLink.findMany({
+      where,
+      orderBy: { orderBy: "asc" },
+      ...(q.skip != null ? { skip: q.skip } : {}),
+      ...(q.take != null ? { take: q.take } : {}),
+    }),
+    prisma.socialLink.count({ where }),
+  ]);
+  return { items: (await hydrateTypes(rows)).map(slDto), total };
 };
 
 export const getSocialLink = async (id: number) => {
@@ -178,6 +217,31 @@ export const listClientCurrentAffairs = async (limit = 0) => {
   return rows.map((r) => ({ _id: String(r.id), title: r.title, image: r.image, youtubeLink: r.youtubeLink }));
 };
 
+// Client read (paged): active affairs, newest first, only the fields the client
+// renders, with `?search=` (title) + pagination. Mirrors listClientCurrentAffairs
+// + count over the identical where.
+export const listClientCurrentAffairsPaged = async (q: {
+  search?: string; skip?: number; take?: number;
+}) => {
+  const qq = q.search?.trim();
+  const where: any = { status: true };
+  if (qq) where.title = { contains: qq };
+  const [rows, total] = await Promise.all([
+    prisma.currentAffair.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      select: { id: true, title: true, image: true, youtubeLink: true },
+      ...(q.skip != null ? { skip: q.skip } : {}),
+      ...(q.take != null ? { take: q.take } : {}),
+    }),
+    prisma.currentAffair.count({ where }),
+  ]);
+  return {
+    items: rows.map((r) => ({ _id: String(r.id), title: r.title, image: r.image, youtubeLink: r.youtubeLink })),
+    total,
+  };
+};
+
 export const getCurrentAffair = async (id: number) => {
   const r = await prisma.currentAffair.findUnique({ where: { id } });
   return r ? caDto(r) : null;
@@ -227,6 +291,24 @@ export const listLiveBannersPaged = async (q: {
     prisma.liveBannerSlider.findMany({
       where,
       orderBy: { [LB_SORT_COLUMNS[q.sortBy ?? ""] ?? "orderBy"]: q.sortDir ?? "asc" },
+      ...(q.skip != null ? { skip: q.skip } : {}),
+      ...(q.take != null ? { take: q.take } : {}),
+    }),
+    prisma.liveBannerSlider.count({ where }),
+  ]);
+  return { items: rows.map(lbDto), total };
+};
+
+// Client read (paged): ordered by orderBy. Live-banner rows are image +
+// liveCourseId only (no natural text field) → pagination ONLY, no `search`.
+export const listLiveBannersClientPaged = async (q: {
+  skip?: number; take?: number;
+}) => {
+  const where = {};
+  const [rows, total] = await Promise.all([
+    prisma.liveBannerSlider.findMany({
+      where,
+      orderBy: { orderBy: "asc" },
       ...(q.skip != null ? { skip: q.skip } : {}),
       ...(q.take != null ? { take: q.take } : {}),
     }),

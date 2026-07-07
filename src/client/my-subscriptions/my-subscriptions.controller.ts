@@ -14,6 +14,7 @@ import * as tsOrderSql from "../../modules/test-series-order/test-series-order.s
 //   - ebook       → ebook subscriptions
 const querySchema = z.object({
   type: z.enum(["course", "test_series", "ebook"]).default("course"),
+  search: z.string().optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });
@@ -56,6 +57,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
     const parsed = querySchema.safeParse(req.query);
     if (!parsed.success) { logger.warn("listMySubscriptions validation failed", { traceId, customerId: userId, issues: parsed.error.issues }); return res.status(400).json({ success: false, message: parsed.error.issues[0]?.message ?? "Invalid query", errors: parsed.error.issues }); }
     const { type, page: pageNum, limit: limitNum } = parsed.data;
+    const search = parsed.data.search?.trim();
     const skip = (pageNum - 1) * limitNum;
 
     const now = new Date();
@@ -82,6 +84,13 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
       cards = [...courseAndPackage, ...liveCourse].sort(
         (a, b) => (a.endAt ? a.endAt.getTime() : Infinity) - (b.endAt ? b.endAt.getTime() : Infinity)
       ) as unknown as Card[];
+    }
+
+    // `?search=` filters the built cards on their display title (case-insensitive)
+    // before paginating, so `total` reflects the filtered set.
+    if (search) {
+      const q = search.toLowerCase();
+      cards = cards.filter((c) => (c.title ?? "").toLowerCase().includes(q));
     }
 
     const total = cards.length;

@@ -3,6 +3,7 @@ import {
   toAdminListDto,
   type AdminListDto,
 } from "./admin-auth.transformer";
+import { invalidateAdminPermissions } from "./admin-permission-resolver";
 
 /**
  * SQL (ws_users) administrator CRUD service. Used by the administrator
@@ -130,6 +131,9 @@ export const updateAdministrator = async (
 
   if (data.roleId !== undefined) {
     await adminAuthRepository.setAdminRole(id, data.roleId, ADMIN_MODEL_TYPE);
+    // Role reassignment changes this admin's effective permissions — drop the
+    // cached set so the next request (and /auth/me) reflects it immediately.
+    await invalidateAdminPermissions(id);
   }
 
   return buildListDto(row);
@@ -143,6 +147,7 @@ export const updateAdministrator = async (
  */
 export const deleteAdministrator = async (id: bigint): Promise<void> => {
   await adminAuthRepository.deleteAdmin(id, ADMIN_MODEL_TYPE);
+  await invalidateAdminPermissions(id);
 };
 
 export const setAdministratorStatus = async (

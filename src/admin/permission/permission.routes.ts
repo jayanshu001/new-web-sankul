@@ -14,12 +14,10 @@ const router = Router();
 
 // Catalog is readable by both admin and super_admin (frontend caches it
 // across the session for the Roles page tree).
-router.get(
-  "/catalog",
-  authenticate,
-  requireRole("admin", "super_admin"),
-  getPermissionCatalog
-);
+// Catalog read is gated by the admin-router staff gate + catalog RBAC
+// (permissions.view via enforceRbac); the super_admin floor below covers the
+// permission-management routes.
+router.get("/catalog", authenticate, getPermissionCatalog);
 
 router.use(authenticate, requireRole("super_admin"));
 

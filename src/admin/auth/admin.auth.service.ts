@@ -97,6 +97,30 @@ export async function adminLogin(
   return { ok: true, message: "Login successful.", token, refreshToken, admin: dto as unknown as Record<string, unknown> };
 }
 
+// ─── Session rehydrate (GET /admin/auth/me) ─────────────────────────────────
+/**
+ * Return the current admin's DTO (same shape as login/refresh: permissions,
+ * roles, isSuperAdmin). Lets the panel re-fetch EFFECTIVE permissions on
+ * navigation so a mid-session role/grant change is picked up without a token
+ * refresh (rbac-module-visibility.md §5). Resolves grants live each call.
+ */
+export async function getAdminProfile(
+  adminId: string,
+  traceId?: string
+): Promise<{ ok: boolean; message: string; admin?: Record<string, unknown> }> {
+  logger.info("getAdminProfile service invoked", { traceId, adminId });
+
+  const id = parseAdminId(adminId);
+  if (!id) return { ok: false, message: "Admin not found." };
+  const row = await adminAuthRepository.findActiveById(id);
+  if (!row) {
+    logger.warn("getAdminProfile service admin missing or disabled (sql)", { traceId, adminId });
+    return { ok: false, message: "Admin not found or disabled." };
+  }
+  const dto = await buildSqlAdminDto(row);
+  return { ok: true, message: "OK.", admin: dto as unknown as Record<string, unknown> };
+}
+
 // ─── Register (internal / seeder use) ────────────────────────────────────────
 export async function createAdminUser(data: {
   firstName: string;

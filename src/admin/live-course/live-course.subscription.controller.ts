@@ -31,24 +31,34 @@ const updateSubscriptionSchema = z
 
 // GET /api/v1/admin/live-courses/subscriptions
 // GET /api/v1/admin/live-courses/:id/subscriptions   (:id → liveCourseId filter)
-// Filters: customerId, liveCourseId, planId, paymentStatus, status, page, limit.
+// Reports contract (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md): filters customerId,
+// liveCourseId, status (active|expired|inactive), paymentMethod (online|backend),
+// search (customer name/phone/email), dateFrom/dateTo, sortBy/sortOrder, page/limit.
+// Envelope is hand-rolled { success, summary, data, pagination } (siblings — NOT
+// nested under success()'s `data`), matching the course/package report endpoint.
 export const listLiveCourseSubscriptions = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listLiveCourseSubscriptions invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
+    const q = req.query as Record<string, string>;
+    const page = Math.max(1, parseInt(q.page, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(q.limit, 10) || 20));
     const r = await liveSql.listSubscriptions({
-      liveCourseId: req.params.id ? String(req.params.id) : (req.query.liveCourseId ? String(req.query.liveCourseId) : undefined),
-      customerId: req.query.customerId ? String(req.query.customerId) : undefined,
-      planId: req.query.planId ? String(req.query.planId) : undefined,
-      paymentStatus: req.query.paymentStatus as string | undefined,
-      status: req.query.status as string | undefined,
-      page: req.query.page as string | undefined,
-      limit: req.query.limit as string | undefined,
+      liveCourseId: req.params.id ? String(req.params.id) : (q.liveCourseId ? String(q.liveCourseId) : undefined),
+      customerId: q.customerId ? String(q.customerId) : undefined,
+      status: q.status,
+      paymentMethod: q.paymentMethod,
+      dateFrom: q.dateFrom ?? q.fromDate,
+      dateTo: q.dateTo ?? q.toDate,
+      search: q.search,
+      sortBy: q.sortBy,
+      sortOrder: q.sortOrder,
+      page, limit,
     });
     if (r === "bad_course") return failure(res, "Invalid live course id.", 422);
     if (r === "bad_customer") return failure(res, "Invalid customer id.", 422);
-    return success(res, r, "Subscriptions fetched.");
+    return res.status(200).json({ success: true, summary: r.summary, data: r.data, pagination: r.pagination });
   } catch (err) {
     logger.error("listLiveCourseSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list subscriptions.", 500);

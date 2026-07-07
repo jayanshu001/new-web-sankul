@@ -45,11 +45,24 @@ export const catalogVideoRepository = {
    * `childCategoryIds[]` is a DAG; SQL derives children from the single `parent`
    * FK (same divergence as admin-master). Optional title search.
    */
-  listActiveChildren: (parentId: number, opts?: { search?: string }) =>
+  listActiveChildren: (parentId: number, opts?: { search?: string; skip?: number; take?: number }) =>
     prisma.videoCategory.findMany({
-      where: { parent: parentId, status: true, ...(opts?.search ? { title: { contains: opts.search } } : {}) },
+      where: catalogVideoRepository.activeChildrenWhere(parentId, opts),
       orderBy: [{ order_by: "asc" }, { title: "asc" }],
+      ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts?.take !== undefined ? { take: opts.take } : {}),
     }),
+
+  /** Count of active children matching the same filter as `listActiveChildren`. */
+  countActiveChildren: (parentId: number, opts?: { search?: string }) =>
+    prisma.videoCategory.count({ where: catalogVideoRepository.activeChildrenWhere(parentId, opts) }),
+
+  /** Shared WHERE for active children list/count. */
+  activeChildrenWhere: (parentId: number, opts?: { search?: string }) => ({
+    parent: parentId,
+    status: true,
+    ...(opts?.search ? { title: { contains: opts.search } } : {}),
+  }),
 
   /** Of the given category ids, which have ≥1 active child (havingChildDirectory). */
   parentsWithChildren: (childIds: number[]) =>

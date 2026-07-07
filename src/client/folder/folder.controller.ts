@@ -206,9 +206,11 @@ function makeFolderController(type: FolderType) {
     try {
       if (!uid) { logger.warn(`${type}Folder allItems unauthorized`, { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
+      const { search, page, limit, skip } = parseListQuery(req.query);
       const cid = folderSql.parseFolderId(uid);
       if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
-      return res.status(200).json({ success: true, data: await folderSql.allItems(cid, type) });
+      const { data, total } = await folderSql.allItems(cid, type, search || undefined, skip, limit);
+      return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
     } catch (error: any) {
       logger.error(`${type}Folder allItems failed`, { traceId, customerId: uid, error: getErrorMessage(error), stack: error.stack });
       return res.status(500).json({ success: false, message: error.message });

@@ -101,12 +101,17 @@ export const listActiveVideoCategories = async (): Promise<VideoCategoryDto[]> =
  */
 export const getVideoCategoryChildren = async (
   parentId: number,
-  search?: string
-): Promise<{ parent: VideoCategoryDto; list: { category: VideoCategoryDto & { count: number; havingChildDirectory: boolean } }[] } | null> => {
+  search?: string,
+  paging?: { skip?: number; take?: number }
+): Promise<{ parent: VideoCategoryDto; list: { category: VideoCategoryDto & { count: number; havingChildDirectory: boolean } }[]; total: number } | null> => {
   const parentRow = await repo.findCategoryByIdAny(parentId);
   if (!parentRow) return null;
 
-  const children = await repo.listActiveChildren(parentId, { search: search?.trim() || undefined });
+  const searchOpt = search?.trim() || undefined;
+  const [children, total] = await Promise.all([
+    repo.listActiveChildren(parentId, { search: searchOpt, skip: paging?.skip, take: paging?.take }),
+    repo.countActiveChildren(parentId, { search: searchOpt }),
+  ]);
   const childIds = children.map((c) => c.id);
   const [counts, parentsWithKids] = await Promise.all([
     Promise.all(childIds.map((cid) => repo.countActiveVideosByCategory(cid))),
@@ -117,5 +122,5 @@ export const getVideoCategoryChildren = async (
   const list = children.map((c, i) => ({
     category: { ...toVideoCategoryDto(c), count: counts[i], havingChildDirectory: hasKids.has(c.id) },
   }));
-  return { parent: toVideoCategoryDto(parentRow), list };
+  return { parent: toVideoCategoryDto(parentRow), list, total };
 };

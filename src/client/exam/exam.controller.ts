@@ -70,9 +70,10 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
     const catId = parseExamId(categoryId);
     if (!catId) return res.status(400).json({ success: false, message: "Invalid category id." });
     const cid = customerId ? parseExamId(customerId) : null;
-    const data = await svcListExamsByCategory(catId, cid);
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { total, ...data } = await svcListExamsByCategory(catId, cid, { skip, take: limit, search });
     logger.info("listExamsByCategory success (sql)", { traceId, customerId, categoryId, examCount: data.exams.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listExamsByCategory failed", { traceId, customerId, categoryId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -131,10 +132,15 @@ export const getDailyExams = async (req: Request, res: Response) => {
     }
 
     // ─── daily-exam drill-down ─────────────────────────────
+    // Pagination + search apply only to the leaf "tests" level (a genuine exam
+    // list); the years/months/weeks levels are bounded aggregate summaries.
     const cid = customerId ? parseExamId(customerId) : null;
-    const r = await svcGetDailyExams({ year: yearQ, month: monthQ, week: weekQ, customerId: cid });
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const r = await svcGetDailyExams({ year: yearQ, month: monthQ, week: weekQ, customerId: cid, skip, take: limit, search });
     logger.info("getDailyExams success (sql)", { traceId, customerId, level: r.level });
-    return res.status(200).json({ success: true, data: { level: r.level, items: r.data } });
+    const body: Record<string, any> = { success: true, data: { level: r.level, items: r.data } };
+    if (r.level === "tests") body.pagination = buildPagination((r as any).total ?? r.data.length, page, limit);
+    return res.status(200).json(body);
   } catch (error: any) {
     logger.error("getDailyExams failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -315,19 +321,17 @@ export const listMyResults = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    const { page = "1", limit = "20", examId } = req.query as Record<string, string>;
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const { search, page, limit } = parseListQuery(req.query);
 
     // ─── ws_exam_result ────────────────────────────────────
     const cid = parseExamId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const { items, total } = await svcListMyResults(cid, pageNum, limitNum);
+    const { items, total } = await svcListMyResults(cid, page, limit, search);
     logger.info("listMyResults success (sql)", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
       data: items,
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      pagination: buildPagination(total, page, limit),
     });
   } catch (error: any) {
     logger.error("listMyResults failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
@@ -349,19 +353,17 @@ export const listMyPastDailyResults = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    const { page = "1", limit = "20" } = req.query as Record<string, string>;
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+    const { search, page, limit } = parseListQuery(req.query);
 
     // ─── ws_exam_result ⋈ ws_exam (DAILY, submitted) ───────
     const cid = parseExamId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
-    const { items: data, total } = await svcListPastDailyResults(cid, pageNum, limitNum);
+    const { items: data, total } = await svcListPastDailyResults(cid, page, limit, search);
     logger.info("listMyPastDailyResults success (sql)", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
       data,
-      pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+      pagination: buildPagination(total, page, limit),
     });
   } catch (error: any) {
     logger.error("listMyPastDailyResults failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
@@ -570,10 +572,11 @@ export const listAttempts = async (req: Request, res: Response) => {
     const cid = parseExamId(customerId);
     const eid = parseExamId(examId);
     if (!cid || !eid) return res.status(400).json({ success: false, message: "Please select valid exam!!" });
-    const r = await svcListAttempts(cid, eid);
+    const { page, limit, skip } = parseListQuery(req.query);
+    const r = await svcListAttempts(cid, eid, { skip, take: limit });
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
     logger.info("listAttempts success (sql)", { traceId, customerId, examId });
-    return res.status(200).json({ success: true, data: r.data });
+    return res.status(200).json({ success: true, data: r.data, pagination: buildPagination(r.total, page, limit) });
   } catch (error: any) {
     logger.error("listAttempts failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

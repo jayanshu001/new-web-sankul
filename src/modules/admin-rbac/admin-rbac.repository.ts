@@ -48,18 +48,20 @@ export const adminRbacRepository = {
     prisma.adminModelHasRole.findFirst({ where: { roleId }, select: { roleId: true } }).then(Boolean),
 
   // ─── Permissions ──────────────────────────────────────────────────────────
-  listPermissions: (opts: { guard?: string; search?: string; skip?: number; take?: number }) => {
+  listPermissions: (opts: { guard?: string; search?: string; categoryId?: number; skip?: number; take?: number }) => {
     const where: Prisma.AdminPermissionRowWhereInput = {};
     if (opts.guard) where.guardName = opts.guard;
+    if (opts.categoryId !== undefined) where.categoryId = opts.categoryId;
     if (opts.search) where.name = { contains: opts.search.trim() };
     return prisma.adminPermissionRow.findMany({
       where, orderBy: { name: "asc" },
       ...(opts.take !== undefined ? { skip: opts.skip ?? 0, take: opts.take } : {}),
     });
   },
-  countPermissions: (opts: { guard?: string; search?: string }) => {
+  countPermissions: (opts: { guard?: string; search?: string; categoryId?: number }) => {
     const where: Prisma.AdminPermissionRowWhereInput = {};
     if (opts.guard) where.guardName = opts.guard;
+    if (opts.categoryId !== undefined) where.categoryId = opts.categoryId;
     if (opts.search) where.name = { contains: opts.search.trim() };
     return prisma.adminPermissionRow.count({ where });
   },
@@ -101,6 +103,36 @@ export const adminRbacRepository = {
   /** Count of permissions per role (for the list view's permission_count). */
   permissionCountsByRole: (roleIds: bigint[]) =>
     prisma.adminRoleHasPermission.groupBy({ by: ["roleId"], where: { roleId: { in: roleIds } }, _count: { permissionId: true } }),
+  /**
+   * Assigned permission rows for MANY roles at once → Map<roleId(string),
+   * {id,name}[]>. Two queries regardless of N (links + permission rows), so the
+   * roles LIST can embed each role's permissions without an N+1. `name` is the
+   * catalog key (ws_permissions.name is seeded to catalog keys). Sorted by key.
+   */
+  permissionsForRoles: async (roleIds: bigint[]): Promise<Map<string, { id: string; name: string }[]>> => {
+    const out = new Map<string, { id: string; name: string }[]>();
+    if (!roleIds.length) return out;
+    const links = await prisma.adminRoleHasPermission.findMany({ where: { roleId: { in: roleIds } } });
+    if (!links.length) return out;
+    const permIds = [...new Set(links.map((l) => l.permissionId))];
+    const perms = await prisma.adminPermissionRow.findMany({
+      where: { id: { in: permIds } },
+      select: { id: true, name: true },
+      orderBy: { name: "asc" },
+    });
+    const permById = new Map(perms.map((p) => [String(p.id), { id: String(p.id), name: p.name }]));
+    for (const l of links) {
+      const p = permById.get(String(l.permissionId));
+      if (!p) continue;
+      const key = String(l.roleId);
+      const arr = out.get(key) ?? [];
+      arr.push(p);
+      out.set(key, arr);
+    }
+    // Keep each role's list stable (by catalog key).
+    for (const arr of out.values()) arr.sort((a, b) => a.name.localeCompare(b.name));
+    return out;
+  },
   removePermissionFromAllRoles: (permissionId: bigint) =>
     prisma.adminRoleHasPermission.deleteMany({ where: { permissionId } }),
 };

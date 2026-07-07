@@ -390,8 +390,21 @@ const resolveSessions = async (sessionIds: number[]) => {
  * `percentCompleted` is VIDEO-centric — progress through the last-watched lecture
  * (`percentOf(lastPositionSec, lastDurationSec)`), not course/package-wide completion.
  * `completedLectures`/`totalLectures` remain the container-wide counts for analytics.
+ *
+ * PURCHASED-ONLY: a course/package/live card is emitted ONLY when the customer has
+ * an ACTIVE subscription for it (the `*Subs` queries below already scope to
+ * status=true + endAt>now, plus paymentStatus=verified for live). Preview / free
+ * watches inside a paid container stamp a container pointer but must NOT surface a
+ * card here, and an expired subscription drops the card. Genuinely-free standalone
+ * videos surface via the separate free feed (`listFreeResume`, type:"free"), not
+ * this container feed. Each card carries `isPurchased: true` for defensive client
+ * filtering. See docs/client/DASHBOARD_RESUME_PROGRESS.md + the FE purchased-only
+ * request (home-my-courses-subject-progress).
  */
-export const listMyLearningProgress = async (customerId: number): Promise<{ cards: any[]; resumeNext: any }> => {
+export const listMyLearningProgress = async (
+  customerId: number,
+  opts: { search?: string; skip?: number; limit?: number } = {}
+): Promise<{ cards: any[]; resumeNext: any; total: number }> => {
   const now = new Date();
   const [perCourse, perPackage, perLive] = await Promise.all([
     rollupByContainer(customerId, "courseId"),
@@ -431,11 +444,13 @@ export const listMyLearningProgress = async (customerId: number): Promise<{ card
   const cards: any[] = [];
   for (const p of perCourse) {
     const c = courseById.get(p._id); if (!c) continue;
-    const sub = courseSubBy.get(p._id); const total = totals.courseTotal.get(p._id) ?? 0;
+    const sub = courseSubBy.get(p._id);
+    if (!sub) continue; // purchased-only: no active subscription ⇒ no card
+    const total = totals.courseTotal.get(p._id) ?? 0;
     cards.push({
       type: "course", id: String(c.id), courseId: String(c.id), liveCourseId: null, packageId: null,
       title: c.name, subtitle: c.educator?.name ? `By ${c.educator.name}` : null,
-      educator: educatorOf(c.educator), thumbnail: c.image ?? null,
+      educator: educatorOf(c.educator), thumbnail: c.image ?? null, isPurchased: true,
       daysLeft: daysLeftOf(sub?.endAt, now), subscriptionEndAt: sub?.endAt ?? null,
       percentCompleted: percentOf(p.lastPositionSec, p.lastDurationSec), completedLectures: p.completedCount, totalLectures: total,
       lastWatchedAt: p.lastWatchedAt, lecture: p.lastVideoId ? lectureMap.get(p.lastVideoId) ?? null : null,
@@ -444,11 +459,13 @@ export const listMyLearningProgress = async (customerId: number): Promise<{ card
   }
   for (const p of perPackage) {
     const pkg = packageById.get(p._id); if (!pkg) continue;
-    const sub = packageSubBy.get(p._id); const total = totals.packageTotal.get(p._id) ?? 0;
+    const sub = packageSubBy.get(p._id);
+    if (!sub) continue; // purchased-only: no active subscription ⇒ no card
+    const total = totals.packageTotal.get(p._id) ?? 0;
     cards.push({
       type: "package", id: String(pkg.id), packageId: String(pkg.id), courseId: p.lastCourseId ? String(p.lastCourseId) : null, liveCourseId: null,
       title: pkg.name, subtitle: pkg.educator_id && eduById.get(pkg.educator_id)?.name ? `By ${eduById.get(pkg.educator_id)!.name}` : null,
-      educator: pkg.educator_id ? educatorOf(eduById.get(pkg.educator_id)) : null, thumbnail: pkg.image ?? null,
+      educator: pkg.educator_id ? educatorOf(eduById.get(pkg.educator_id)) : null, thumbnail: pkg.image ?? null, isPurchased: true,
       daysLeft: daysLeftOf(sub?.endAt, now), subscriptionEndAt: sub?.endAt ?? null,
       percentCompleted: percentOf(p.lastPositionSec, p.lastDurationSec), completedLectures: p.completedCount, totalLectures: total,
       lastWatchedAt: p.lastWatchedAt, lecture: p.lastVideoId ? lectureMap.get(p.lastVideoId) ?? null : null,
@@ -457,11 +474,13 @@ export const listMyLearningProgress = async (customerId: number): Promise<{ card
   }
   for (const p of perLive as any[]) {
     const lc = liveById.get(p._id); if (!lc) continue;
-    const sub = liveSubBy.get(p._id); const total = totals.liveTotal.get(p._id) ?? 0;
+    const sub = liveSubBy.get(p._id);
+    if (!sub) continue; // purchased-only: no active verified subscription ⇒ no card
+    const total = totals.liveTotal.get(p._id) ?? 0;
     const edu = lc.educatorId ? eduById.get(lc.educatorId) : null;
     cards.push({
       type: "live", id: String(lc.id), liveCourseId: String(lc.id), courseId: null, packageId: null,
-      title: lc.name, subtitle: edu?.name ? `By ${edu.name}` : null, educator: educatorOf(edu), thumbnail: lc.image ?? null,
+      title: lc.name, subtitle: edu?.name ? `By ${edu.name}` : null, educator: educatorOf(edu), thumbnail: lc.image ?? null, isPurchased: true,
       daysLeft: daysLeftOf(sub?.endAt, now), subscriptionEndAt: sub?.endAt ?? null,
       percentCompleted: percentOf(p.lastPositionSec, p.lastDurationSec), completedLectures: p.completedCount, totalLectures: total,
       lastWatchedAt: p.lastWatchedAt,
@@ -470,7 +489,17 @@ export const listMyLearningProgress = async (customerId: number): Promise<{ card
     });
   }
   cards.sort((a, b) => new Date(b.lastWatchedAt).getTime() - new Date(a.lastWatchedAt).getTime());
-  return { cards, resumeNext: cards[0] ?? null };
+
+  // `search` filters the flat card stream by course/package/live-course title;
+  // resumeNext = the most-recent matching card (hero), independent of the page.
+  const matched = opts.search
+    ? cards.filter((c) => (c.title ?? "").toLowerCase().includes(opts.search!.toLowerCase()))
+    : cards;
+  const total = matched.length;
+  const skip = opts.skip ?? 0;
+  const limit = opts.limit ?? matched.length;
+  const paged = matched.slice(skip, skip + limit);
+  return { cards: paged, resumeNext: matched[0] ?? null, total };
 };
 
 /**

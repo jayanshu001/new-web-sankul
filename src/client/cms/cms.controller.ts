@@ -1,22 +1,23 @@
 import { Request, Response } from "express";
 import {
-  listFaqs as listFaqsService,
-  listFaqTypes as listFaqTypesService,
+  listFaqsClientPaged as listFaqsService,
+  listFaqTypesClientPaged as listFaqTypesService,
 } from "../../modules/faq/faq.service";
-import { listBanners as listBannersService } from "../../modules/banner-slider/banner-slider.service";
-import { listTestimonials as listTestimonialsService } from "../../modules/testimonial/testimonial.service";
+import { listBannersClientPaged as listBannersService } from "../../modules/banner-slider/banner-slider.service";
+import { listTestimonialsClientPaged as listTestimonialsService } from "../../modules/testimonial/testimonial.service";
 import { getClientTerms } from "../../modules/terms/terms.service";
 import { getActivePopup as getActivePopupService } from "../../modules/popup/popup.service";
 import { checkClientUpgrade } from "../../modules/cms/upgrade-check.service";
 import { getVersionSettings } from "../../modules/version/version.service";
 import {
-  listClientSocialLinks as listClientSocialLinksSql,
-  listSocialLinkTypes as listSocialLinkTypesSql,
-  listClientCurrentAffairs as listClientCurrentAffairsSql,
-  listLiveBanners as listLiveBannersSql,
+  listClientSocialLinksPaged as listClientSocialLinksSql,
+  listSocialLinkTypesPaged as listSocialLinkTypesSql,
+  listClientCurrentAffairsPaged as listClientCurrentAffairsSql,
+  listLiveBannersClientPaged as listLiveBannersSql,
 } from "../../modules/cms/cms-extra.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 
 // GET /api/v1/client/faqs[?typeId=…]
 export const listFaqs = async (req: Request, res: Response) => {
@@ -26,11 +27,19 @@ export const listFaqs = async (req: Request, res: Response) => {
   try {
     const { typeId, type } = req.query as Record<string, string>;
     const filterKey = typeId ?? type;
-    const data = await listFaqsService(
-      filterKey ? { typeId: filterKey } : undefined
-    );
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { items: data, total } = await listFaqsService({
+      typeId: filterKey || undefined,
+      search,
+      skip,
+      take: limit,
+    });
     logger.info("listFaqs success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: buildPagination(total, page, limit),
+    });
   } catch (e: any) {
     logger.error("listFaqs failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -38,14 +47,19 @@ export const listFaqs = async (req: Request, res: Response) => {
 };
 
 // GET /api/v1/client/faq-types
-export const listFaqTypes = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listFaqTypes invoked", { traceId, path: _req.originalUrl });
+export const listFaqTypes = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listFaqTypes invoked", { traceId, path: req.originalUrl });
 
   try {
-    const data = await listFaqTypesService();
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { items: data, total } = await listFaqTypesService({ search, skip, take: limit });
     logger.info("listFaqTypes success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: buildPagination(total, page, limit),
+    });
   } catch (e: any) {
     logger.error("listFaqTypes failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -74,9 +88,18 @@ export const listBanners = async (req: Request, res: Response) => {
 
   try {
     const { key } = req.query as Record<string, string>;
-    const data = await listBannersService(key ? { key } : undefined);
+    const { page, limit, skip } = parseListQuery(req.query);
+    const { items: data, total } = await listBannersService({
+      key: key || undefined,
+      skip,
+      take: limit,
+    });
     logger.info("listBanners success", { traceId, key, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: buildPagination(total, page, limit),
+    });
   } catch (e: any) {
     logger.error("listBanners failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -84,14 +107,19 @@ export const listBanners = async (req: Request, res: Response) => {
 };
 
 // GET /api/v1/client/cms/live-banners
-export const listLiveBanners = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listLiveBanners invoked", { traceId, path: _req.originalUrl });
+export const listLiveBanners = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listLiveBanners invoked", { traceId, path: req.originalUrl });
 
   try {
-    const data = await listLiveBannersSql();
+    const { page, limit, skip } = parseListQuery(req.query);
+    const { items: data, total } = await listLiveBannersSql({ skip, take: limit });
     logger.info("listLiveBanners success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: buildPagination(total, page, limit),
+    });
   } catch (e: any) {
     logger.error("listLiveBanners failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -99,14 +127,19 @@ export const listLiveBanners = async (_req: Request, res: Response) => {
 };
 
 // GET /api/v1/client/testimonials
-export const listTestimonials = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listTestimonials invoked", { traceId, path: _req.originalUrl });
+export const listTestimonials = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listTestimonials invoked", { traceId, path: req.originalUrl });
 
   try {
-    const data = await listTestimonialsService();
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { items: data, total } = await listTestimonialsService({ search, skip, take: limit });
     logger.info("listTestimonials success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: buildPagination(total, page, limit),
+    });
   } catch (e: any) {
     logger.error("listTestimonials failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -114,14 +147,19 @@ export const listTestimonials = async (_req: Request, res: Response) => {
 };
 
 // GET /api/v1/client/social-links — active social links, ordered
-export const listSocialLinks = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listSocialLinks invoked", { traceId, path: _req.originalUrl });
+export const listSocialLinks = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listSocialLinks invoked", { traceId, path: req.originalUrl });
 
   try {
-    const data = await listClientSocialLinksSql();
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { items: data, total } = await listClientSocialLinksSql({ search, skip, take: limit });
     logger.info("listSocialLinks success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: buildPagination(total, page, limit),
+    });
   } catch (e: any) {
     logger.error("listSocialLinks failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -129,33 +167,41 @@ export const listSocialLinks = async (_req: Request, res: Response) => {
 };
 
 // GET /api/v1/client/social-link-types
-export const listSocialLinkTypes = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listSocialLinkTypes invoked", { traceId, path: _req.originalUrl });
+export const listSocialLinkTypes = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listSocialLinkTypes invoked", { traceId, path: req.originalUrl });
 
   try {
-    const data = await listSocialLinkTypesSql();
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { items: data, total } = await listSocialLinkTypesSql({ search, skip, take: limit });
     logger.info("listSocialLinkTypes success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: buildPagination(total, page, limit),
+    });
   } catch (e: any) {
     logger.error("listSocialLinkTypes failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }
 };
 
-// GET /api/v1/client/current-affairs[?limit=N] — active current affairs for
-// the home screen, newest first. Returns only the fields the client renders
-// (image, title, youtubeLink). `?limit=` optionally caps the list (0/absent =
-// no cap).
+// GET /api/v1/client/current-affairs[?search=&page=&limit=] — active current
+// affairs for the home screen, newest first. Returns only the fields the client
+// renders (image, title, youtubeLink). Supports `?search=` (title) + pagination.
 export const listCurrentAffairs = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("listCurrentAffairs invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const limit = Math.max(parseInt(req.query.limit as string) || 0, 0);
-    const data = await listClientCurrentAffairsSql(limit);
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { items: data, total } = await listClientCurrentAffairsSql({ search, skip, take: limit });
     logger.info("listCurrentAffairs success", { traceId, count: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({
+      success: true,
+      data,
+      pagination: buildPagination(total, page, limit),
+    });
   } catch (e: any) {
     logger.error("listCurrentAffairs failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

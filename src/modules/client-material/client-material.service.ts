@@ -144,7 +144,11 @@ export const hasNewlyAdded = async (categoryId: number, days = 10): Promise<bool
 export const findCategory = (id: number) =>
   prisma.materialCategory.findFirst({ where: { id, status: true }, select: { id: true, name: true, image: true, parent: true } });
 
-export const getCategoryContents = async (categoryId: number, customerId: number | null) => {
+export const getCategoryContents = async (
+  categoryId: number,
+  customerId: number | null,
+  opts: { skip?: number; take?: number; search?: string | null } = {}
+) => {
   const current = await findCategory(categoryId);
   if (!current) return null;
 
@@ -158,7 +162,14 @@ export const getCategoryContents = async (categoryId: number, customerId: number
     return { _id: String(c.id), title: c.name, image: c.image, order: c.order_by, havingChildDirectory: grandChildren > 0, count, isNewlyAdded };
   }));
 
-  const matsRaw = await prisma.material.findMany({ where: { materialCategoryId: categoryId, status: true }, orderBy: { order_by: "asc" }, select: MAT_SELECT });
+  // Leaf materials at this node — the genuine collection we paginate. Child
+  // folders (`subjects`) + breadcrumbs are node metadata and stay intact.
+  const matsWhere: any = { materialCategoryId: categoryId, status: true };
+  if (opts.search) matsWhere.name = { contains: opts.search };
+  const [matsRaw, materialsTotal] = await Promise.all([
+    prisma.material.findMany({ where: matsWhere, orderBy: { order_by: "asc" }, skip: opts.skip, take: opts.take, select: MAT_SELECT }),
+    prisma.material.count({ where: matsWhere }),
+  ]);
   const ownedIds = await getPurchasedMaterialIds(customerId, matsRaw.map(toLite));
   const materials = matsRaw.map((m) => shapeMaterial(m, ownedIds));
 
@@ -172,7 +183,7 @@ export const getCategoryContents = async (categoryId: number, customerId: number
   );
   const breadcrumbs = chainRows.map((r) => ({ _id: String(r.id), title: r.title }));
 
-  return { current: { _id: String(current.id), title: current.name, image: current.image }, breadcrumbs, subjects, materials };
+  return { current: { _id: String(current.id), title: current.name, image: current.image }, breadcrumbs, subjects, materials, materialsTotal };
 };
 
 /**
@@ -220,17 +231,27 @@ export const trackDownload = async (materialId: number) => {
   return { _id: String(row.id), downloadCount: row.downloadCount };
 };
 
-export const getRecentMaterials = async (customerId: number | null, days: number, limit: number) => {
+export const getRecentMaterials = async (
+  customerId: number | null,
+  days: number,
+  opts: { skip: number; take: number; search?: string | null }
+) => {
   const cutoff = new Date(Date.now() - days * 86_400_000);
-  const matsRaw = await prisma.material.findMany({
-    where: { status: true, created_at: { gt: cutoff } },
-    orderBy: { created_at: "desc" }, take: limit,
-    select: { ...MAT_SELECT, MaterialCategory: { select: { id: true, name: true } } },
-  });
+  const where: any = { status: true, created_at: { gt: cutoff } };
+  if (opts.search) where.name = { contains: opts.search };
+  const [matsRaw, total] = await Promise.all([
+    prisma.material.findMany({
+      where,
+      orderBy: { created_at: "desc" }, skip: opts.skip, take: opts.take,
+      select: { ...MAT_SELECT, MaterialCategory: { select: { id: true, name: true } } },
+    }),
+    prisma.material.count({ where }),
+  ]);
   const ownedIds = await getPurchasedMaterialIds(customerId, matsRaw.map(toLite));
-  return matsRaw.map((m) => {
+  const materials = matsRaw.map((m) => {
     const shaped = shapeMaterial(m, ownedIds);
     (shaped as any).materialCategoryId = m.MaterialCategory ? { _id: String(m.MaterialCategory.id), title: m.MaterialCategory.name } : null;
     return shaped;
   });
+  return { materials, total };
 };

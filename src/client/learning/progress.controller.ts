@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   parseLpId,
   reportLiveSessionProgress as sqlReportLiveSession,
@@ -69,11 +70,12 @@ export const listMyLearningProgress = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("listMyLearningProgress unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
 
+    const { search, page, limit, skip } = parseListQuery(req.query);
     const sid = parseLpId(String(userId));
-    if (sid == null) return res.status(200).json({ success: true, data: { cards: [], resumeNext: null } });
-    const data = await sqlListMyLearningProgress(sid);
-    logger.info("listMyLearningProgress (sql) success", { traceId, customerId: userId, cardCount: data.cards.length });
-    return res.status(200).json({ success: true, data });
+    if (sid == null) return res.status(200).json({ success: true, data: { cards: [], resumeNext: null, pagination: buildPagination(0, page, limit) } });
+    const { cards, resumeNext, total } = await sqlListMyLearningProgress(sid, { search, skip, limit });
+    logger.info("listMyLearningProgress (sql) success", { traceId, customerId: userId, cardCount: cards.length });
+    return res.status(200).json({ success: true, data: { cards, resumeNext, pagination: buildPagination(total, page, limit) } });
   } catch (e: any) {
     logger.error("listMyLearningProgress failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

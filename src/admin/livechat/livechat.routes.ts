@@ -13,7 +13,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate, requireRole("admin", "super_admin", "editor"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 router.post("/message",                       sendAdminMessage);        // POST   /api/v1/admin/live-chat/message
 router.get("/bans",                           listChatBans);            // GET    /api/v1/admin/live-chat/bans

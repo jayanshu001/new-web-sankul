@@ -28,7 +28,14 @@ export const listRoles = async (req: Request, res: Response) => {
     const { guard, search, page, per_page, sort_by, sort_dir } = parsed.data;
 
     const { items, total } = await rbac.listRoles({ guard, search, page, per_page, sort_by, sort_dir });
-    return res.status(200).json({ success: true, data: { items, pagination: { page, per_page, total } } });
+    // House-standard list envelope (matches books/customers/etc.): `data` is the
+    // page array and `pagination` is a SIBLING with total + totalPages, so the
+    // admin pager can advance. See roles-list-server-side.md.
+    return res.status(200).json({
+      success: true,
+      data: items,
+      pagination: { total, page, limit: per_page, totalPages: Math.ceil(total / per_page) },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

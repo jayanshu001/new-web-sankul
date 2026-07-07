@@ -19,7 +19,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate, requireRole("admin", "super_admin", "editor"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // --- Streamos passthrough utilities (defined first so they don't collide
 //     with the `:id` patterns below). -----------------------------------------

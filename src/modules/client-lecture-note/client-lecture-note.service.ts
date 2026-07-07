@@ -99,12 +99,21 @@ export const createNote = async (data: {
   return noteDto(row);
 };
 
-export const listNotes = async (customerId: number, lectureType: string, key: { videoId?: number; liveSessionId?: number }) => {
+export const listNotes = async (
+  customerId: number,
+  lectureType: string,
+  key: { videoId?: number; liveSessionId?: number },
+  opts: { search?: string; skip?: number; take?: number } = {}
+) => {
   const where: any = { customerId, lectureType };
   if (key.videoId != null) where.videoId = key.videoId;
   if (key.liveSessionId != null) where.liveSessionId = key.liveSessionId;
-  const rows = await prisma.lectureNote.findMany({ where, orderBy: [{ timestampSec: "asc" }, { createdAt: "asc" }] });
-  return rows.map(noteDto);
+  if (opts.search) where.content = { contains: opts.search };
+  const [rows, total] = await Promise.all([
+    prisma.lectureNote.findMany({ where, orderBy: [{ timestampSec: "asc" }, { createdAt: "asc" }], skip: opts.skip, take: opts.take }),
+    prisma.lectureNote.count({ where }),
+  ]);
+  return { notes: rows.map(noteDto), total };
 };
 
 export const findOwnedNote = (id: number, customerId: number) =>
@@ -135,12 +144,21 @@ export const createAudioNote = async (data: {
   return audioNoteDto(row);
 };
 
-export const listAudioNotes = async (customerId: number, lectureType: string, key: { videoId?: number; liveSessionId?: number }) => {
+export const listAudioNotes = async (
+  customerId: number,
+  lectureType: string,
+  key: { videoId?: number; liveSessionId?: number },
+  opts: { search?: string; skip?: number; take?: number } = {}
+) => {
   const where: any = { customerId, lectureType };
   if (key.videoId != null) where.videoId = key.videoId;
   if (key.liveSessionId != null) where.liveSessionId = key.liveSessionId;
-  const rows = await prisma.lectureAudioNote.findMany({ where, orderBy: [{ timestampSec: "asc" }, { createdAt: "asc" }] });
-  return rows.map(audioNoteDto);
+  if (opts.search) where.title = { contains: opts.search };
+  const [rows, total] = await Promise.all([
+    prisma.lectureAudioNote.findMany({ where, orderBy: [{ timestampSec: "asc" }, { createdAt: "asc" }], skip: opts.skip, take: opts.take }),
+    prisma.lectureAudioNote.count({ where }),
+  ]);
+  return { notes: rows.map(audioNoteDto), total };
 };
 
 export const findOwnedAudioNote = (id: number, customerId: number) =>
@@ -162,7 +180,10 @@ export const deleteAudioNote = (id: number) => prisma.lectureAudioNote.delete({ 
  * (recorded) and liveSessionId (live), join titles from ws_video / ws_live_session,
  * drop untitled, sort by last-note desc.
  */
-export const savedMaterials = async (customerId: number) => {
+export const savedMaterials = async (
+  customerId: number,
+  opts: { search?: string; skip?: number; limit?: number } = {}
+) => {
   type Bucket = { textNotesCount: number; voiceNotesCount: number; lastNoteAt: Date };
   const recorded = new Map<number, Bucket>();
   const live = new Map<number, Bucket>();
@@ -193,5 +214,13 @@ export const savedMaterials = async (customerId: number) => {
     ...[...live.entries()].map(([id, b]) => ({ kind: "live" as const, videoId: null as string | null, liveSessionId: String(id), title: sTitle.get(id) ?? null, textNotesCount: b.textNotesCount, voiceNotesCount: b.voiceNotesCount, lastNoteAt: b.lastNoteAt })),
   ].filter((r) => r.title !== null && r.title !== "").sort((a, b) => b.lastNoteAt.getTime() - a.lastNoteAt.getTime());
 
-  return items;
+  // Grouping/title contract stays intact — `search` (lecture title) filters the
+  // top-level group list, then we paginate that list. `total` = full match count.
+  const filtered = opts.search
+    ? items.filter((r) => (r.title ?? "").toLowerCase().includes(opts.search!.toLowerCase()))
+    : items;
+  const total = filtered.length;
+  const skip = opts.skip ?? 0;
+  const limit = opts.limit ?? 20;
+  return { items: filtered.slice(skip, skip + limit), total };
 };

@@ -18,6 +18,7 @@
  * Exam.status is Boolean → Mongo status:PUBLISHED collapses to status=true.
  */
 import { prisma } from "../../config/prisma";
+import { defaultListingQualities } from "../../utils/videoQualities";
 import { getPurchasedMaterialIds } from "../client-material/client-material.service";
 
 export const CLIENT_CATALOG_MODULE = "client-catalog";
@@ -102,19 +103,44 @@ export const catalogVideos = async (opts: {
   let selected = roots;
   if (opts.categoryIds) { const allow = new Set(opts.categoryIds); selected = roots.filter((c) => allow.has(c.id)); }
 
+  // Only `course` keeps the legacy inlined per-category video `list`. `package`
+  // and `live-course` use the newer stripped shape (category + context-dependent
+  // `count`, no inlined list) — they were never reverted.
+  const inlineList = opts.type === "course";
   const { descendantsOf } = await import("../catalog-category-tree/category-tree.service");
   const list = await Promise.all(selected.map(async (cat) => {
     const subtree = await descendantsOf([cat.id]);
-    // `count` is context-dependent: a directory node reports its direct child-folder
-    // count; a leaf (no child folders) reports the video count across its subtree.
-    // The per-category video list itself is no longer returned by this endpoint.
     const [videoCount, childCount] = await Promise.all([
       prisma.video.count({ where: { videoCategoryId: { in: subtree }, status: true } }),
       prisma.videoCategoryRelation.count({ where: { parent: cat.id } }),
     ]);
     const havingChildDirectory = childCount > 0;
-    const count = havingChildDirectory ? childCount : videoCount;
-    return { category: { _id: String(cat.id), title: cat.title, image: cat.image, havingChildDirectory, count }, _subtree: subtree };
+
+    if (!inlineList) {
+      // stripped shape: directory node → child-folder count; leaf → subtree video count.
+      const count = havingChildDirectory ? childCount : videoCount;
+      return { category: { _id: String(cat.id), title: cat.title, image: cat.image, havingChildDirectory, count }, _subtree: subtree };
+    }
+
+    // course: legacy inlined video list (title search applies to the list; count = subtree count).
+    const videoWhere: any = { videoCategoryId: cat.id, status: true };
+    if (opts.search) videoWhere.title = { contains: opts.search };
+    const videos = await prisma.video.findMany({ where: videoWhere, orderBy: { order: "asc" } });
+    let progByVideo = new Map<number, any>();
+    if (opts.customerId && videos.length) {
+      const rows = await prisma.lectureProgress.findMany({ where: { customerId: opts.customerId, videoId: { in: videos.map((v) => v.id) } }, select: { videoId: true, positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true } });
+      progByVideo = new Map(rows.map((r) => [r.videoId!, r]));
+    }
+    const videoList = videos.map((v) => {
+      const p = progByVideo.get(v.id);
+      return {
+        _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, order: v.order,
+        youtube_id: v.youtube_id ?? null, aws_id: v.aws_id ?? null, vimeo_id: v.vimeo_id ?? null,
+        recordings: [], qualities: defaultListingQualities(),
+        progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
+      };
+    });
+    return { category: { _id: String(cat.id), title: cat.title, image: cat.image, havingChildDirectory, count: videoCount }, list: videoList, _subtree: subtree };
   }));
 
   const union = [...new Set(list.flatMap((g) => g._subtree))];
@@ -213,10 +239,31 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
   let ordered = catIds.map((cid) => byId.get(cid)).filter(Boolean) as any[];
   if (opts.search) ordered = ordered.filter((c) => (c.name ?? "").toLowerCase().includes(opts.search!.toLowerCase()));
 
-  // Per category: `count` is context-dependent — a directory node reports its
-  // direct child-folder count; a leaf reports the material count across its
-  // subtree. The per-category material list is no longer returned (perf).
-  // `totals.items` still tracks the true material count (via `_itemCount`).
+  // Only `course` keeps the legacy inlined per-category `materials` array.
+  // `package` and `live-course` use the newer stripped shape (category + context-
+  // dependent `count`, no inlined materials) — they were never reverted.
+  const inlineMaterials = opts.type === "course";
+
+  // course only: fetch each folder's OWN direct materials across all categories,
+  // resolve ownership once, then group.
+  const directByCat = new Map<number, any[]>();
+  let ownedIds = new Set<number>();
+  if (inlineMaterials) {
+    const allDirect: any[] = [];
+    await Promise.all(ordered.map(async (cat) => {
+      const mats = await prisma.material.findMany({
+        where: { materialCategoryId: cat.id, status: true },
+        orderBy: [{ order_by: "asc" }, { created_at: "desc" }],
+      });
+      directByCat.set(cat.id, mats);
+      allDirect.push(...mats);
+    }));
+    ownedIds = await getPurchasedMaterialIds(
+      opts.customerId ?? null,
+      allDirect.map((m) => ({ _id: m.id, materialCategoryId: m.materialCategoryId, isPaid: !!m.isPaid }))
+    );
+  }
+
   const list = await Promise.all(ordered.map(async (cat) => {
     const subtreeIds = await descendantIds("ws_material_category", "parent", cat.id);
     const [itemCount, children, ancestors] = await Promise.all([
@@ -225,9 +272,17 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
       materialCategoryAncestors(cat.parent),
     ]);
     const childCategoryIds = children.map((c) => String(c.id));
-    const havingChildDirectory = childCategoryIds.length > 0;
-    const count = havingChildDirectory ? childCategoryIds.length : itemCount;
-    return { category: shapeMaterialCategoryDoc(cat, ancestors, childCategoryIds, count), _itemCount: itemCount };
+
+    if (!inlineMaterials) {
+      // stripped shape: directory node → child-folder count; leaf → subtree material count.
+      const havingChildDirectory = childCategoryIds.length > 0;
+      const count = havingChildDirectory ? childCategoryIds.length : itemCount;
+      return { category: shapeMaterialCategoryDoc(cat, ancestors, childCategoryIds, count), _itemCount: itemCount };
+    }
+
+    // course: legacy inlined materials (count = subtree material count).
+    const materials = (directByCat.get(cat.id) ?? []).map((m) => shapeMaterialDoc(m, ownedIds));
+    return { category: shapeMaterialCategoryDoc(cat, ancestors, childCategoryIds, itemCount), materials, _itemCount: itemCount };
   }));
   return {
     list: list.map(({ _itemCount, ...rest }) => rest),

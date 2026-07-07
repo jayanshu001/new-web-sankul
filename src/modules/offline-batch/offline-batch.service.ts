@@ -31,16 +31,23 @@ export const parseOfflineId = (id: string): number | null => {
 
 // ── centers ───────────────────────────────────────────────────────────────
 
-/** Centers (+ city ref), optional cityId + name search. */
+/** Centers (+ city ref), optional cityId + name search, paginated. Returns the
+ *  page + total matching count for the pagination envelope. */
 export const listCenters = async (opts?: {
   cityId?: number;
   search?: string;
-}): Promise<OfflineCenterWithCityDto[]> => {
-  const rows = await repo.listCenters({
-    cityId: opts?.cityId,
-    search: opts?.search?.trim() || undefined,
-  });
-  return rows.map((r) => ({ ...toOfflineCenterDto(r), city: toOfflineCityRef(r.city) }));
+  skip?: number;
+  take?: number;
+}): Promise<{ data: OfflineCenterWithCityDto[]; total: number }> => {
+  const filter = { cityId: opts?.cityId, search: opts?.search?.trim() || undefined };
+  const [rows, total] = await Promise.all([
+    repo.listCenters({ ...filter, skip: opts?.skip, take: opts?.take }),
+    repo.countCentersList(filter),
+  ]);
+  return {
+    data: rows.map((r) => ({ ...toOfflineCenterDto(r), city: toOfflineCityRef(r.city) })),
+    total,
+  };
 };
 
 /** Admin centers (+ city ref): optional cityId + name search, newest first,
@@ -78,35 +85,48 @@ export const getCenterDetail = async (
 
 // ── batches ───────────────────────────────────────────────────────────────
 
-/** Batches (+ center→city), optional center/city/upcoming/name filters. */
+/** Batches (+ center→city), optional center/city/upcoming/name filters,
+ *  paginated. Returns the page + total matching count. */
 export const listBatches = async (opts?: {
   centerId?: number;
   cityId?: number;
   upcoming?: boolean;
   search?: string;
   now?: Date;
-}): Promise<Array<OfflineBatchDto & { center: OfflineCenterWithCityDto | null }>> => {
+  skip?: number;
+  take?: number;
+}): Promise<{
+  data: Array<OfflineBatchDto & { center: OfflineCenterWithCityDto | null }>;
+  total: number;
+}> => {
   // city filter resolves to that city's center ids (the Mongo path does the same).
   let centerIds: number[] | undefined;
   if (opts?.centerId == null && opts?.cityId != null) {
     const centers = await repo.listCentersByCities([opts.cityId]);
     centerIds = centers.map((c) => c.id);
-    if (!centerIds.length) return [];
+    if (!centerIds.length) return { data: [], total: 0 };
   }
 
-  const rows = await repo.listBatches({
+  const filter = {
     centerId: opts?.centerId,
     centerIds,
     search: opts?.search?.trim() || undefined,
     upcomingAfter: opts?.upcoming ? opts?.now ?? new Date() : undefined,
-  });
+  };
+  const [rows, total] = await Promise.all([
+    repo.listBatches({ ...filter, skip: opts?.skip, take: opts?.take }),
+    repo.countBatches(filter),
+  ]);
 
-  return rows.map((r) => ({
-    ...toOfflineBatchDto(r),
-    center: r.center
-      ? { ...toOfflineCenterDto(r.center), city: toOfflineCityRef(r.center.city) }
-      : null,
-  }));
+  return {
+    data: rows.map((r) => ({
+      ...toOfflineBatchDto(r),
+      center: r.center
+        ? { ...toOfflineCenterDto(r.center), city: toOfflineCityRef(r.center.city) }
+        : null,
+    })),
+    total,
+  };
 };
 
 /** Admin batches (+ center→city): optional center/name/upcoming filters, newest

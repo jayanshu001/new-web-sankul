@@ -37,14 +37,17 @@ export const findCategoryById = async (id: number): Promise<ExamCategoryDto | nu
  */
 export const getCategoryChildren = async (
   parentId: number,
-  search?: string
+  search?: string,
+  paging?: { skip?: number; take?: number }
 ): Promise<ExamCategoryChildrenResult | null> => {
   const parentRow = await repo.findCategoryById(parentId);
   if (!parentRow) return null;
 
-  const children = await repo.listActiveChildren(parentId, {
-    search: search?.trim() || undefined,
-  });
+  const searchOpt = search?.trim() || undefined;
+  const [children, total] = await Promise.all([
+    repo.listActiveChildren(parentId, { search: searchOpt, skip: paging?.skip, take: paging?.take }),
+    repo.countActiveChildren(parentId, { search: searchOpt }),
+  ]);
 
   const childIds = children.map((c) => c.id);
   const [counts, parentsWithKids] = await Promise.all([
@@ -61,7 +64,7 @@ export const getCategoryChildren = async (
     },
   }));
 
-  return { parent: toExamCategoryDto(parentRow), list };
+  return { parent: toExamCategoryDto(parentRow), list, total };
 };
 
 // ─── Admin / client category READ helpers (SQL parity) ──────────────────────

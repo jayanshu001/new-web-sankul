@@ -51,7 +51,7 @@ const coerceCurrentAffair = (req: Request, _res: Response, next: NextFunction) =
   next();
 };
 
-router.use(authenticate, requireRole("admin", "super_admin"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // FAQ
 router.get("/faqs", listFaqs);

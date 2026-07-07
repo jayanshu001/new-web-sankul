@@ -9,6 +9,7 @@ import {
 } from "./lecture-note.validation";
 import { buildResumeNextCard } from "../learning/resumeCard";
 import { buildLectureRef } from "../learning/lectureRef";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import * as lnSql from "../../modules/client-lecture-note/client-lecture-note.service";
 
 // POST /api/v1/client/lecture-notes
@@ -59,28 +60,30 @@ export const listNotes = async (req: Request, res: Response) => {
     const parsed = listNotesQuerySchema.safeParse(req.query);
     if (!parsed.success) { logger.warn("listNotes validation failed", { traceId, userId, issues: parsed.error.issues }); return failure(res, parsed.error.issues[0]?.message ?? "Invalid request", 400); }
     const { lectureType, videoId, liveSessionId } = parsed.data;
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
     const cid = lnSql.parseLnId(String(userId));
     if (cid == null) return failure(res, "Unauthorized.", 401);
     let notes;
+    let total;
     let refInput: any;
     if (lectureType === "recorded") {
       const vid = lnSql.parseLnId(String(videoId));
       if (vid == null) return failure(res, "Lecture not found.", 404);
       const guard = await lnSql.authorizeRecorded(cid, vid);
       if ("error" in guard) return failure(res, guard.error, guard.status);
-      notes = await lnSql.listNotes(cid, lectureType, { videoId: vid });
+      ({ notes, total } = await lnSql.listNotes(cid, lectureType, { videoId: vid }, { search, skip, take: limit }));
       refInput = { lectureType: "recorded", userId, videoId: videoId! } as const;
     } else {
       const lsid = lnSql.parseLnId(String(liveSessionId));
       if (lsid == null) return failure(res, "Live session not found.", 404);
       const guard = await lnSql.authorizeLive(cid, lsid);
       if ("error" in guard) return failure(res, guard.error, guard.status);
-      notes = await lnSql.listNotes(cid, lectureType, { liveSessionId: lsid });
+      ({ notes, total } = await lnSql.listNotes(cid, lectureType, { liveSessionId: lsid }, { search, skip, take: limit }));
       refInput = { lectureType: "live", userId, liveSessionId: liveSessionId! } as const;
     }
     const [lecture, resumeNext] = await Promise.all([buildLectureRef(refInput), buildResumeNextCard(refInput)]);
-    return success(res, { notes, lecture, resumeNext }, "Notes fetched.", 200);
+    return success(res, { notes, lecture, resumeNext, pagination: buildPagination(total, page, limit) }, "Notes fetched.", 200);
   } catch (err) {
     logger.error("listNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Something went wrong. Please try again later.", 500);
@@ -103,10 +106,11 @@ export const listSavedMaterialNotes = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("listSavedMaterialNotes unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
+    const { search, page, limit, skip } = parseListQuery(req.query);
     const cid = lnSql.parseLnId(String(userId));
     if (cid == null) return failure(res, "Unauthorized.", 401);
-    const items = await lnSql.savedMaterials(cid);
-    return success(res, { items }, "Saved materials fetched.", 200);
+    const { items, total } = await lnSql.savedMaterials(cid, { search, skip, limit });
+    return success(res, { items, pagination: buildPagination(total, page, limit) }, "Saved materials fetched.", 200);
   } catch (err) {
     logger.error("listSavedMaterialNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Something went wrong. Please try again later.", 500);

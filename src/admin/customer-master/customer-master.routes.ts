@@ -8,7 +8,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate, requireRole("admin", "super_admin"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // States — moved to /api/v1/admin/address/states (see admin/address/admin.address.routes.ts)
 // router.get("/states", getStates);

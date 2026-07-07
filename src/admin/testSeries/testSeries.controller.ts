@@ -497,20 +497,28 @@ export const listSubscriptions = async (req: Request, res: Response) => {
   logger.info("listSubscriptions invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { testSeriesId, customerId, status, page = "1", limit = "20" } =
-      req.query as Record<string, string>;
-    const p = Math.max(1, parseInt(page, 10) || 1);
-    const l = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    // Reports contract (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md). Hand-rolled
+    // top-level envelope { success, summary, data, pagination } — matches the
+    // Course/Package subscription report, not the success() wrapper.
+    const q = req.query as Record<string, string>;
+    const p = Math.max(1, parseInt(q.page ?? "1", 10) || 1);
+    const l = Math.min(100, Math.max(1, parseInt(q.limit ?? "20", 10) || 20));
 
-    const r = await tsSql.listSubscriptions({
-      testSeriesId: testSeriesId ? tsSql.parseAtsId(testSeriesId) : null,
-      customerId: customerId ? tsSql.parseAtsId(customerId) : null,
-      status: status === "true" ? true : status === "false" ? false : null,
+    const { summary, data, pagination } = await tsSql.listSubscriptions({
+      testSeriesId: q.testSeriesId ? tsSql.parseAtsId(q.testSeriesId) : null,
+      customerId: q.customerId ? tsSql.parseAtsId(q.customerId) : null,
+      status: q.status,
+      paymentMethod: q.paymentMethod,
+      dateFrom: q.dateFrom ?? q.fromDate,
+      dateTo: q.dateTo ?? q.toDate,
+      search: q.search,
+      sortBy: q.sortBy,
+      sortOrder: q.sortOrder,
       page: p,
       limit: l,
     });
-    logger.info("listSubscriptions success", { traceId, total: r.total });
-    return success(res, { data: r.data, total: r.total, page: p, limit: l }, "Fetched.");
+    logger.info("listSubscriptions success", { traceId, total: pagination.total });
+    return res.status(200).json({ success: true, summary, data, pagination });
   } catch (err) {
     logger.error("listSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list subscriptions.", 500);

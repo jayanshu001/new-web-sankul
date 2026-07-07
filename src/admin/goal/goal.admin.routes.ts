@@ -5,7 +5,7 @@ import {
   updateGoalHandler,
   deleteGoalHandler,
 } from "./goal.admin.controller";
-import authenticate, { requireRole } from "../../middlewares/authenticate";
+import authenticate from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
 
 const router = Router();
@@ -13,30 +13,24 @@ const router = Router();
 /**
  * GOAL MANAGEMENT ROUTES (Admin)
  * Base Path: /api/v1/admin/goals
+ *
+ * Authorization is via catalog RBAC (enforceRbac maps these to goals.view /
+ * goals.create / goals.edit / goals.delete) + the admin-router staff gate — NOT
+ * a hardcoded requireRole. A role granted the goals.* catalog permission
+ * authorizes the matching endpoint. (Previously gated super_admin-only, which
+ * ignored catalog grants — see goals-403-despite-granted-permission.md.)
  */
 
 // Create a new goal (supports multipart/form-data for image)
-router.post(
-  "/",
-  authenticate,
-  requireRole("super_admin"),
-  uploadS3.single("image"),
-  createGoalHandler
-);
+router.post("/", authenticate, uploadS3.single("image"), createGoalHandler);
 
 // Read all goals natively built for dashboard
-router.get("/", authenticate, requireRole("super_admin"), getGoalsHandler);
+router.get("/", authenticate, getGoalsHandler);
 
 // Update specific goal
-router.put(
-  "/:id",
-  authenticate,
-  requireRole("super_admin"),
-  uploadS3.single("image"),
-  updateGoalHandler
-);
+router.put("/:id", authenticate, uploadS3.single("image"), updateGoalHandler);
 
 // Delete goal
-router.delete("/:id", authenticate, requireRole("super_admin"), deleteGoalHandler);
+router.delete("/:id", authenticate, deleteGoalHandler);
 
 export default router;

@@ -1,4 +1,5 @@
 import { adminRbacRepository as repo } from "./admin-rbac.repository";
+import { invalidateAllAdminPermissions } from "../admin-auth/admin-permission-resolver";
 
 export const RBAC_MODULE = "admin-rbac";
 export const isRbacMysql = (): boolean => true;
@@ -42,16 +43,22 @@ export const listRoles = async (opts: {
     repo.listRoles({ guard: opts.guard, search: opts.search, sortBy: opts.sort_by, sortDir, skip: (opts.page - 1) * opts.per_page, take: opts.per_page }),
     repo.countRoles({ guard: opts.guard, search: opts.search }),
   ]);
-  const counts = rows.length ? await repo.permissionCountsByRole(rows.map((r) => r.id)) : [];
-  const countMap = new Map(counts.map((c: any) => [String(c.roleId), c._count.permissionId]));
-  const items = rows.map((r) => ({
-    id: String(r.id),
-    name: r.name,
-    guard_name: r.guardName,
-    permission_count: countMap.get(String(r.id)) ?? 0,
-    created_at: r.createdAt ?? null,
-    updated_at: r.updatedAt ?? null,
-  }));
+  // Embed each role's assigned permissions ({id, name} where name == catalog key)
+  // so the Edit Role modal can preselect without a second call; `permission_count`
+  // is derived from the same data. See roles-list-include-permissions.md.
+  const permsByRole = rows.length ? await repo.permissionsForRoles(rows.map((r) => r.id)) : new Map();
+  const items = rows.map((r) => {
+    const permissions = permsByRole.get(String(r.id)) ?? [];
+    return {
+      id: String(r.id),
+      name: r.name,
+      guard_name: r.guardName,
+      permission_count: permissions.length,
+      permissions, // [{ id, name }] — name is the catalog key
+      created_at: r.createdAt ?? null,
+      updated_at: r.updatedAt ?? null,
+    };
+  });
   return { items, total };
 };
 
@@ -114,21 +121,26 @@ export const getRolePermissions = async (id: bigint, guard?: string) => {
 
 export const syncRolePermissions = async (id: bigint, permissionIds: bigint[]) => {
   await repo.setRolePermissions(id, permissionIds);
+  // A role's permission set can change access for every admin holding that role,
+  // so bust the whole per-admin RBAC cache (cheaper than enumerating members).
+  await invalidateAllAdminPermissions();
   const role = await repo.findRole(id);
   const perms = await repo.permissionsForRole(id);
   return toRoleDetail(role, perms);
 };
 
 // ─── Permissions ────────────────────────────────────────────────────────────
-export const listPermissions = async (opts: { guard?: string; search?: string; page?: number; per_page?: number }) => {
+export const listPermissions = async (opts: { guard?: string; search?: string; category_id?: string; page?: number; per_page?: number }) => {
+  const categoryId = opts.category_id ? Number(opts.category_id) : undefined;
+  const catId = Number.isInteger(categoryId) ? categoryId : undefined;
   if (opts.page && opts.per_page) {
     const [rows, total] = await Promise.all([
-      repo.listPermissions({ guard: opts.guard, search: opts.search, skip: (opts.page - 1) * opts.per_page, take: opts.per_page }),
-      repo.countPermissions({ guard: opts.guard, search: opts.search }),
+      repo.listPermissions({ guard: opts.guard, search: opts.search, categoryId: catId, skip: (opts.page - 1) * opts.per_page, take: opts.per_page }),
+      repo.countPermissions({ guard: opts.guard, search: opts.search, categoryId: catId }),
     ]);
     return { items: rows.map((p) => ({ ...toPermissionDto(p), category: permissionCategory(p.name) })), total };
   }
-  const rows = await repo.listPermissions({ guard: opts.guard, search: opts.search });
+  const rows = await repo.listPermissions({ guard: opts.guard, search: opts.search, categoryId: catId });
   return { items: rows.map((p) => ({ ...toPermissionDto(p), category: permissionCategory(p.name) })), total: rows.length };
 };
 

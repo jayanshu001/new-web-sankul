@@ -108,13 +108,14 @@ export const getReferralStatus = async () => {
 // ─── Transactions ────────────────────────────────────────────────────────────
 export const listTransactions = async (
   customerId: number,
-  opts: { type?: string; page: number; limit: number }
+  opts: { type?: string; search?: string; page: number; limit: number }
 ) => {
   const type = opts.type === "credit" || opts.type === "debit" ? opts.type : undefined;
+  const search = opts.search?.trim() || undefined;
   const skip = (opts.page - 1) * opts.limit;
   const [rows, total] = await Promise.all([
-    repo.listTransactions(customerId, { type, skip, take: opts.limit }),
-    repo.countTransactions(customerId, { type }),
+    repo.listTransactions(customerId, { type, search, skip, take: opts.limit }),
+    repo.countTransactions(customerId, { type, search }),
   ]);
   return { items: rows.map(toTransactionDto), total };
 };

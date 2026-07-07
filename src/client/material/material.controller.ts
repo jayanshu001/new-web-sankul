@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import * as matSql from "../../modules/client-material/client-material.service";
 
 // ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -22,9 +23,11 @@ export const getCategoryContents = async (req: Request, res: Response) => {
     const catId = matSql.parseMatId(id);
     if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
     const userNum = matSql.parseMatId(String(req.user?.id ?? ""));
-    const data = await matSql.getCategoryContents(catId, userNum);
-    if (!data) return res.status(404).json({ success: false, message: "Category not found." });
-    return res.status(200).json({ success: true, data });
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const result = await matSql.getCategoryContents(catId, userNum, { skip, take: limit, search });
+    if (!result) return res.status(404).json({ success: false, message: "Category not found." });
+    const { materialsTotal, ...data } = result;
+    return res.status(200).json({ success: true, data, pagination: buildPagination(materialsTotal, page, limit) });
   } catch (error: any) {
     logger.error("getCategoryContents failed", { traceId, categoryId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -84,11 +87,11 @@ export const getRecentMaterials = async (req: Request, res: Response) => {
 
   try {
     const days = Math.max(parseInt((req.query.days as string) || "10", 10), 1);
-    const limit = Math.min(Math.max(parseInt((req.query.limit as string) || "20", 10), 1), 100);
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
     const userNum = matSql.parseMatId(String(req.user?.id ?? ""));
-    const data = await matSql.getRecentMaterials(userNum, days, limit);
-    return res.status(200).json({ success: true, data });
+    const { materials, total } = await matSql.getRecentMaterials(userNum, days, { skip, take: limit, search });
+    return res.status(200).json({ success: true, data: materials, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("getRecentMaterials failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

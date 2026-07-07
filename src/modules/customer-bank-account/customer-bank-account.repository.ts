@@ -1,17 +1,43 @@
 import { prisma } from "../../config/prisma";
+import type { Prisma } from "@prisma/client";
 import type {
   BankAccountCreateInput,
   BankAccountUpdateInput,
 } from "./customer-bank-account.types";
 
+/** Owner-scoped where-clause + optional text search, shared by list/count. */
+const buildBankAccountWhere = (customerId: number, search?: string): Prisma.CustomerBankAccountWhereInput => {
+  const s = search?.trim();
+  return {
+    customerId,
+    ...(s
+      ? {
+          OR: [
+            { accountHolderName: { contains: s } },
+            { bankName: { contains: s } },
+            { accountNumber: { contains: s } },
+            { ifscCode: { contains: s } },
+          ],
+        }
+      : {}),
+  };
+};
+
 /** Prisma persistence for the customer-bank-account MySQL branch. */
 export const customerBankAccountRepository = {
-  /** All accounts for a customer, newest first. */
-  listByCustomer: (customerId: number) =>
+  /** All accounts for a customer, newest first. `search` matches on account-holder
+   *  name, bank name, account number, or IFSC (the natural text columns). */
+  listByCustomer: (customerId: number, opts: { search?: string; skip?: number; take?: number } = {}) =>
     prisma.customerBankAccount.findMany({
-      where: { customerId },
+      where: buildBankAccountWhere(customerId, opts.search),
       orderBy: { createdAt: "desc" },
+      ...(opts.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts.take !== undefined ? { take: opts.take } : {}),
     }),
+
+  /** Count for pagination over the IDENTICAL where as listByCustomer. */
+  countByCustomer: (customerId: number, opts: { search?: string } = {}) =>
+    prisma.customerBankAccount.count({ where: buildBankAccountWhere(customerId, opts.search) }),
 
   /** Single account scoped to its owner (withdrawal flow + update/delete). */
   findOwned: (id: number, customerId: number) =>

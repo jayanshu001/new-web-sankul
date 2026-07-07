@@ -15,6 +15,375 @@
 
 ---
 
+## 2026-07-07 — client CMS lists search + pagination sweep, BATCH 4 (CMS reads)
+
+Continues the standing rule (every client LIST endpoint gets `?search=` +
+`?page=&limit=`). Client CMS reads in `client/cms/cms.controller.ts` now parse
+`parseListQuery` + return `buildPagination`, backed by new paged service helpers:
+- `modules/faq/faq.service.ts`: `listFaqsClientPaged` (type filter + search on
+  question/answer, created_at asc) and `listFaqTypesClientPaged` (in-memory search/page
+  over the fixed synthetic FAQ_TYPES list).
+- `modules/banner-slider/banner-slider.service.ts`: `listBannersClientPaged` (key filter
+  + pagination ONLY — banner rows have no natural text field, so no search).
+- `modules/testimonial/testimonial.service.ts`: `listTestimonialsClientPaged` (search on
+  name/title/description, rating desc).
+- `modules/cms/cms-extra.service.ts`: `listSocialLinkTypesPaged` (search title),
+  `listClientSocialLinksPaged` (active only, search title/link, orderBy asc),
+  `listClientCurrentAffairsPaged` (active, newest first, search title), and
+  `listLiveBannersClientPaged`.
+
+Query-level: each helper is `findMany(where, orderBy, skip/take)` + `count(where)` over
+the identical where (contains-match search; MySQL `_ci` collation = case-insensitive);
+response gains a sibling `pagination` block. No schema/DDL change. (Logged retroactively —
+these changes were already present in the working tree, authored outside this session.)
+
+---
+
+## 2026-07-07 — Permissions + Permission-Categories lists: house envelope + category_id filter
+
+Fixes permissions-categories-list-server-side.md.
+
+- **`GET /admin/permissions`**: was `{ data: { items, total } }` (no pagination block).
+  Now `{ data: [...], pagination: { total, page, limit, totalPages } }` (permission.
+  controller). Added the **`category_id`** filter, which was validated but IGNORED:
+  `permission.service.listPermissions` now passes it through to
+  `admin-rbac.service/repository.listPermissions` + `countPermissions`
+  (`where.categoryId`). search (name contains) + guard (exact/optional) already worked.
+- **`GET /admin/permission-categories`**: was `{ data: { items, pagination:{page,per_page,
+  total} } }` (nested, no totalPages). Now `{ data: [...], pagination: { total, page,
+  limit, totalPages } }` (permissionCategory.controller). search/title, status(bool),
+  sort_by/sort_dir already worked.
+- **`GET /admin/guards`**: unchanged — `{ data: { guards: [...] } }` already accepted.
+- No DB/schema change.
+
+---
+
+## 2026-07-07 — Admin authz unified on catalog RBAC (legacy `requireRole` gates removed)
+
+Fixes goals-403-despite-granted-permission.md: admin routes were gated by coarse
+`requireRole(...)` role checks that ignored catalog permissions, so a role granted
+`goals.view` still got 403 ("Access denied. Insufficient permissions." from
+`requireRole`, `authenticate.ts:233`) because goals was `requireRole("super_admin")`-only.
+
+- **admin.routes.ts:** added ONE coarse admin-surface gate
+  `router.use(requireRole("admin","super_admin","editor"))` after `authenticate`
+  (keeps customer/promoter/educator tokens out); catalog `enforceRbac` (shadow) remains
+  the single granular authz below it.
+- **Removed** the per-sub-router broad gate `router.use(authenticate, requireRole("admin",
+  "super_admin"[, "editor"]))` from 31 domain route files (→ `router.use(authenticate)`),
+  plus the per-route broad gates on `permissions/catalog` and `uploads/presign`.
+- **goals:** dropped `requireRole("super_admin")` on all 4 routes → now authorized by
+  catalog RBAC (`goals.view/create/edit/delete`) + the staff gate.
+- **Kept** `requireRole("super_admin")` as a hard floor on the 6 RBAC/admin-management
+  groups (roles, permissions[mgmt], permission-categories, guards, administrators,
+  admin-register) — super-admin-only is the intended invariant there; catalog keys still
+  layer on top via enforceRbac.
+- Enforcement stays **shadow** (`RBAC_ENFORCE` unset): granted users now pass; enforceRbac
+  logs would-be-denies. No DB/schema change; no response-shape change.
+
+---
+
+## 2026-07-07 — Permission catalog seeded under REAL guards (was unusable "api")
+
+`admin/permission/permissions.seeder.ts`. The boot sync inserted every catalog key
+under `guardName="api"` — but "api" is **not** a valid guard (`GUARDS = [web, educator,
+promoter]`), and spatie permissions are guard-scoped, so no role (all web/educator/
+promoter) could ever reference a catalog permission → `permission_ids` always resolved
+empty → saves wiped roles. Fix: seed each catalog key under **all** `SEED_GUARDS`
+(web/educator/promoter). Now batched per guard (findMany existing → `createMany
+{skipDuplicates}`) instead of ~250×N sequential `findFirst`. Legacy/non-catalog rows
+are left intact (logged as deprecated); the old "api"-guard rows are harmless orphans
+(no guard uses them). Runs on every API boot (`index.ts` httpEnabled) — a restart/deploy
+seeds existing envs; no manual migration needed. `name == catalog key` (unchanged).
+NOT done (optional, per doc): migrating existing role→permission assignments from legacy
+names to catalog keys — FE already surfaces those under "Other assigned".
+
+---
+
+## 2026-07-07 — `GET /admin/roles` list now embeds each role's `permissions[]`
+
+`admin-rbac.service.listRoles` + new `admin-rbac.repository.permissionsForRoles`. The
+roles list previously returned only `permission_count`, so the Edit Role modal had
+nothing to preselect and could save `permission_ids: []` (wiping the role). Each list
+item now also carries `permissions: [{ id, name }]` (name == catalog key,
+`ws_permissions.name`), `permission_count` derived from the same set. Batched: 2 queries
+(links + permission rows) regardless of page size — no N+1. `PUT /admin/roles/:id`
+already applies `permission_ids` and echoes `permissions` via `toRoleDetail` (the prior
+`[]` echo was the FE sending `[]`, not a backend drop). Detail (`GET /admin/roles/:id`)
+already returned `permissions`. No DB/schema change.
+
+---
+
+## 2026-07-07 — `GET /admin/roles` list envelope aligned to house standard
+
+`admin/role/role.controller.ts` `listRoles` was returning a non-standard envelope
+(`data: { items, pagination: { page, per_page, total } }`) — pagination nested inside
+`data`, no `totalPages`, `per_page` key — which broke the admin pager (FE reads
+`pagination` as a SIBLING of `data` with `total`+`totalPages`). Changed to the same
+shape as books/customers: `{ success, data: [...roles], pagination: { total, page,
+limit, totalPages } }`. Filtering/sorting were already correct (guard exact + optional,
+search = name `contains`, page/per_page, sort_by/sort_dir; each role carries
+`permission_count`) — only the envelope changed. No DB/schema change.
+
+---
+
+## 2026-07-07 — `GET /admin/permissions` per_page cap raised 200 → 1000
+
+`admin/permission/permission.validation.ts` `listQuerySchema.per_page` max was 200,
+below the ~250-key permission catalog — so a guard-filtered "fetch all permissions"
+call (e.g. `?guard=promoter&per_page=1000` for the role-assignment UI) 422'd. Raised
+the cap to 1000 (permissions are a bounded, code-defined catalog). Default (20) and
+min (1) unchanged. No DB/schema change. Note: the full registry grouped by module is
+also available via `GET /admin/permissions/catalog`.
+
+---
+
+## 2026-07-07 — Resume/Progress feeds: purchased-only cards + `isPurchased`
+
+`modules/client-lecture-progress/client-lecture-progress.service.ts` →
+`listMyLearningProgress` (feeds **both** `GET /client/learning/progress/my` and, via
+`buildResumeDashboard`, `GET /client/dashboard/resume`).
+
+- **Query/logic change:** course/package/live cards are now emitted **only when an
+  active subscription exists** for the container. Previously the `courseSubs` /
+  `packageSubs` / `liveSubs` rows (already scoped `status=true` + `endAt>now`, plus
+  `paymentStatus=verified` for live) were fetched but used only for `daysLeft`; each
+  card loop now does `if (!sub) continue`. Effect: preview/free watches inside a paid
+  container no longer surface a card, and an expired subscription drops the card.
+- **Shape:** added `isPurchased: true` on each emitted card (always true now that
+  unpurchased cards are filtered) for defensive client filtering. Additive; no existing
+  field changed. `dashboard/resume` inherits both via the shared card list.
+- **Not changed:** `listFreeResume` (separate `type:"free"` feed) and
+  `listMyCoursesForResume` (course-only "My Courses" resume endpoint) — the latter still
+  emits started-but-unpurchased courses; flag if it needs the same gate.
+- No schema/DDL change.
+
+---
+
+## 2026-07-07 — client API search + pagination sweep, BATCH 3 (user-scoped lists)
+
+Continues the standing rule (every client LIST endpoint gets `?search=` + `?page=&limit=`).
+Batch 3 domains: wishlist, my-subscriptions, purchase-history, referral, notification,
+lecture-note, lecture-audio-note, learning, folder, search-history, offline, live-reminder.
+
+**Endpoints changed:**
+- **wishlist `/`** — heterogeneous (course/package/ebook/book); resolve → filter by title →
+  slice → re-group; `pagination` added (array-slice, no DB count).
+- **my-subscriptions `/`** — search added to its existing Zod-schema pagination (filters cards by title before slice).
+- **purchase-history:** `/books`, `/ebooks` search added (books: LIKE on `ws_book_order.order_items`
+  JSON; ebooks: name→`plan_id IN` chain on `ws_ebook_order`); `/subscriptions` pagination-only
+  (4-table union, titles in separate name tables — no single searchable where). All 3 moved to `parseListQuery`.
+- **referral:** `/transactions` search on `ws_refferal_transaction.description`; `/bank-accounts`
+  gained pagination + OR-search across holder/bank/number/ifsc.
+- **notification:** `/notifications` search on title/body (unreadCount stays over full set);
+  `/image-notifications` pagination-only (no text field).
+- **lecture-note:** `/` search on note content; `/saved-materials` paginates the by-lecture
+  group list (grouping/title contract intact). **lecture-audio-note `/`** search on title.
+- **learning `/progress/my`** — search on course/package/live-course title; `resumeNext` hero
+  stays page-independent.
+- **folder:** `/all-items` gained search + pagination (`/` already had it).
+- **search-history `/history`** — search on query text + pagination (capped 10 rows/customer on write).
+- **offline:** `/centers`, `/batches` gained pagination (search pre-existed).
+- **live-reminder `/`** — search on session title + pagination (in-memory slice after upcoming filter/sort).
+
+**Contract note:** `pagination` additive; item fields unchanged; DB `count()` shares the
+`findMany` where; heterogeneous/merged lists (wishlist, my-subscriptions, purchase-history
+subscriptions, learning, live-reminder) slice the resolved array with `total` = full filtered length.
+
+## 2026-07-07 — Admin RBAC: per-endpoint permission enforcement (shadow) + `isSuperAdmin` + `/auth/me`
+
+Implements the backend half of the frontend RBAC contract (`rbac-module-visibility.md`).
+No schema/DDL changes — reads use the existing spatie pivots
+(`ws_role_has_permissions`, `ws_model_has_roles`, `ws_model_has_permissions`).
+
+- **`isSuperAdmin` (bool)** added to the admin DTO (`admin-auth.transformer.ts` →
+  login / refresh / `/auth/me` responses). Purely additive; existing
+  `permissions:["*"]` + `role:"super_admin"` unchanged.
+- **`GET /api/v1/admin/auth/me`** (new, auth-protected) returns the same admin DTO for
+  session rehydration (effective permissions/roles/isSuperAdmin) without a token refresh.
+- **`requirePermission` middleware** (`middlewares/requirePermission.ts`) + **central
+  route→catalog-key map** (`middlewares/rbacRouteMap.ts`, 519 rules) + **`enforceRbac`**
+  gate mounted once in `admin.routes.ts` after `authenticate`. Resolves each admin's
+  EFFECTIVE keys via a new cached resolver (`admin-permission-resolver.ts`, Redis key
+  `admin_perms:{id}`, 60s TTL). Super-admins bypass.
+- **Query-level:** authorization now issues, per admin request (cache-miss only), the
+  same 3 pivot reads used at login (`findRoles` + `findRolePermissions` +
+  `findDirectPermissions`). Cache busted on role-permission sync
+  (`invalidateAllAdminPermissions`, SCAN `admin_perms:*`) and on admin role
+  reassignment / delete (`invalidateAdminPermissions`).
+- **Rollout:** ships in **SHADOW MODE** — new env `RBAC_ENFORCE` (default false) logs
+  would-be-403s without blocking; set `true` to enforce (403 `{success:false,"Forbidden"}`).
+  Unmapped routes (e.g. `/pc-materials`, `/uploads/presign`, `streamos/webhook`,
+  `cms/current-affairs`) are allowed + logged as coverage gaps. No response-contract
+  change on success paths.
+
+---
+
+## 2026-07-07 — catalog videos/materials tabs: inlined child arrays restored for `course` ONLY
+
+Reverted the response-shape half of the previous entry for the catalog **videos** and
+**materials** tabs (`client-catalog.service.ts`), **scoped to `type=course` only** —
+`package` and `live-course` keep the newer stripped shape (context-dependent `count`, no
+inlined list). Pagination + search unchanged. The `catalogVideos`/`catalogMaterials`
+functions now branch on `opts.type === "course"` (`inlineList` / `inlineMaterials`): the
+course path fetches the inlined video/material docs, the other types skip that work.
+
+- `catalogVideos`: per-category `list` of video docs is back (`_id,title,topic,platform,
+  priceType,order,youtube_id,aws_id,vimeo_id,recordings,qualities,progress`), and `count`
+  reverts to the subtree video count. Video-title `search` (`title:{contains}`) restored.
+- `catalogMaterials`: per-category `materials` array is back (full shaped Material docs +
+  `isPurchased`, paid-gating on `file`/`directLink` via `getPurchasedMaterialIds`), and
+  `count` reverts to the subtree material count.
+- **Pagination is unchanged** — `catalog.controller.ts` `paginateCategories` still windows
+  the top-level category `list` and appends `pagination`; category-name search unchanged.
+- `tests` tab was not affected by the original change and is untouched.
+
+## 2026-07-07 — catalog listing pagination + search (response-shape change)
+
+Broad pagination/search rollout across already-SQL catalog/commerce listing endpoints
+(commit `daf59f6`). No schema/index changes; **query shape and response envelope changed**
+— flag for regression QA. All changes are on the MySQL/Prisma path.
+
+- **`catalog-course.service.ts` → `listCourseCategoriesWithCounts`**: signature was
+  `(): Promise<CourseSubjectCategoryWithCountDto[]>` (bare array, all active categories).
+  Now `(opts:{search?,skip?,limit?}) => { data, total }`. New `repo.paginateActiveCategories`
+  runs `Promise.all([findMany({where,skip,take}), count({where})])` over an identical
+  `where` (`status:true` + optional `title:{contains:search}`); per-page course counts
+  only. Default `take=20`.
+- **`client-catalog.service.ts` → `catalogVideos` / `catalogMaterials`**: per-category
+  child arrays (`list` of video docs, `materials` of shaped docs) **removed** (perf). `count`
+  is now context-dependent — a directory node reports its direct child-folder count; a leaf
+  reports the item count across its subtree. `totals` still tracks the true item count.
+- **`catalog.controller.ts`**: the `/client/catalog/:type/:id/{videos,materials,tests}`
+  responses now slice the top-level category `list` via `parseListQuery`/`buildPagination`
+  and add a `pagination` object; `totals` unchanged.
+- Same pagination/search pattern extended to catalog-ebook, package, trending (books/ebooks),
+  lecture-progress course-resume, and the admin testSeries list.
+
+## 2026-07-07 — admin Live-Course subscriptions → shared Reports contract
+
+`GET /api/v1/admin/live-courses/subscriptions` (+ `/:id/subscriptions` variant)
+(`admin-live-course.service.ts` → `listSubscriptions`) now mirrors the Course/Package
+report contract (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md), using the shared `reportFilters`
+helpers. `get`/`grant`/`update`/`delete` handlers and `hydrateSubs` are unchanged.
+
+Query-level changes on `ws_live_course_subscription`:
+- **status** filter changed semantics: was raw boolean (`status=true|false`); now
+  normalized `active|expired|inactive` via `statusWhere` (status bool + `endAt` vs now).
+- Dropped filters: `planId`, `paymentStatus` (not part of the shared contract).
+- New filters: `paymentMethod` (`online` → `razorpay_order_id IS NOT NULL`, `backend` →
+  `IS NULL`), `dateFrom/dateTo` (`createdAt` range), `search` (customer fullName / phone /
+  **emailAddress** via `customerIdsByText` id-resolver → `OR { customerId: { in } }`),
+  `sortBy` (`createdAt|startAt|endAt|amount→paidAmount`), `sortOrder`. OR-bearing fragments
+  (search OR + status "active" OR) combined via `andWhere` (single AND) — never spread.
+- New aggregation: `aggregate({ _count._all, _sum.paidAmount })` for `summary.totalCount` /
+  `totalRevenue`; two extra `count()` calls for `activeCount` / `expiredCount` over the
+  filtered where. amount/revenue = `Number(paid_amount)` (rupees, no paise). Response
+  envelope changed to hand-rolled `{ success, summary, data, pagination }` (was
+  `success(){ subscriptions, total, page, limit }`). Row shaped via `reportRow`
+  (`product.type = "liveCourse"`, plan from `ws_live_course_plan`). No schema/index change.
+
+## 2026-07-07 — admin Test-Series subscriptions → shared Reports contract
+
+`GET /api/v1/admin/test-series/subscriptions` (`admin-testseries.service.ts` →
+`listSubscriptions`) now mirrors the Course/Package report contract
+(docs/REPORTS_SUBSCRIPTIONS_ADMIN.md), using the shared `reportFilters` helpers.
+
+Query-level changes on `ws_test_series_subscription`:
+- **status** filter changed semantics: was raw boolean (`status=true|false`); now
+  normalized `active|expired|inactive` via `statusWhere` (status bool + `endAt` vs now).
+- New filters: `paymentMethod` (→ `paymentType` col `online|backend`), `dateFrom/dateTo`
+  (`createdAt` range), `search` (customer fullName/phone/**emailAddress** + testSeries
+  `title` via id-resolvers → `OR { in }`), `sortBy` (`createdAt|startAt|endAt|amount→price`),
+  `sortOrder`. All OR-bearing fragments combined via `andWhere` (single AND).
+- New aggregation: `aggregate({ _count._all, _sum.price })` for `summary.totalCount` /
+  `totalRevenue`; two extra `count()` calls for `activeCount` / `expiredCount` over the
+  filtered where. Revenue = `Number(price)` (rupees, no paise). Response envelope changed
+  to hand-rolled `{ success, summary, data, pagination }` (was `success(){data,total}`).
+  Row now hydrates `plan` from `ws_test_series_price` and `product.image` from
+  `ws_test_series.thumbnail`. No schema/index change.
+
+## 2026-07-07 — client API search + pagination sweep, BATCH 2 (free / categories / content)
+
+Continues the standing rule (every client LIST endpoint gets `?search=` + `?page=&limit=`
+via `parseListQuery`/`buildPagination`). Batch 2 domains: categories, material, exam,
+examCountdown (free tier was already covered in Batch 1).
+
+**Endpoints newly given pagination (search added where noted):**
+- **categories:** the 3 category-children drill-downs now emit a `pagination` envelope and
+  push `skip`/`take` + `count()` into the child queries for `ws_video_category`,
+  `ws_material_category`, `ws_exam_category` (`listVideoCategoryChildren`,
+  `listMaterialCategoryChildren`, `listExamCategoryChildren`). The other 9 endpoints already
+  had search + pagination. (This controller uses its local `parsePaging`, cap 500 — kept for
+  consistency with its siblings; envelope shape identical.)
+- **material:** `/categories/:id/contents` (paginates the leaf `materials` array; child
+  folders/breadcrumbs/current kept intact) and `/recent` (paginates the recent list, keeps
+  `?days=`). Search on material `name`. Prisma stays in the service (module has no repo file).
+- **exam:** `/categories/:id/exams` (slice `exams`, keep subjects/completedTests summaries),
+  `/daily` (paginate only the leaf `tests` level; aggregate year/month/week rollups stay
+  whole), `/my/attempts` + `/my/past-daily` (converted to `parseListQuery`, search on
+  `Exam.name`), `/:id/attempts` (pagination only — attempts have no searchable title).
+  `/categories` already had it. No Zod query schema governs these GETs, so nothing was stripped.
+- **examCountdown:** `/upcoming` (was limit 5, no search → now search + pagination, default 20),
+  `/` standardized onto `parseListQuery` (now caps at 100). `/categories` already had it.
+
+**Contract note:** `pagination` additive; item fields unchanged; every `count()` shares the
+`findMany` where; mixed/summary structures paginate only their primary collection and leave
+rollups page-independent.
+**FE heads-up:** `examCountdown/upcoming` default page size 5→20 (cap 20→100); other feeds
+standardized to the 20/100 convention.
+
+## 2026-07-07 — Admin Reports: shared filter + summary contract on subscription lists (Course/Package + shared util)
+
+New shared read contract across four admin subscription LIST endpoints — see
+`docs/REPORTS_SUBSCRIPTIONS_ADMIN.md`. No schema change; adds query filters + an
+aggregate summary block over already-SQL tables.
+
+- **Shared helper (new):** `src/utils/reportFilters.ts` — `dateWhere` (createdAt range),
+  `statusWhere`/`normalizeStatus` (normalized active|expired|inactive from `status` bool +
+  `endAt`), `andWhere` (nests independent OR-bearing fragments under AND — needed because
+  "active" and the search-id OR both emit `OR`), `reportRow` (canonical row DTO).
+- **Course/Package** (`admin-subscription`): query changed — `buildSubWhere` now filters
+  `payment_type` (paymentMethod) and drops the raw-boolean status (status normalized in the
+  service); new `aggCourseSubs` (`_sum.amount`,`_count`) + two `countSubs` for active/expired.
+  Response envelope changed to `{ success, summary:{totalCount,totalRevenue,activeCount,
+  expiredCount}, data, pagination }`; rows normalized (`customer/product/plan/amount/
+  paymentMethod/status/startAt/endAt/createdAt`). ⚠ BREAKING response-shape change for this
+  list endpoint (was `{ success, items, pagination }`).
+- **Test Series** (`admin-testseries`) + **Live Course** (`admin-live-course`): DONE — see the
+  two dedicated entries above.
+
+All four endpoints now share the contract. Full cross-module `yarn typecheck` green.
+
+---
+
+## 2026-07-07 — ws_material.is_paid: backfill to 1 + default 0→1
+
+**Type:** data backfill + column-default change. Materials are now PAID by default.
+
+- **Backfill:** `UPDATE ws_material SET is_paid = 1` — all 226 existing rows (were all 0) → 1.
+- **Default:** `ALTER TABLE ws_material ALTER COLUMN is_paid SET DEFAULT 1`; hand-edited
+  `prisma/schema.prisma` `Material.isPaid` → `@default(true)` + `prisma:generate`.
+  New materials are paid unless explicitly created free.
+
+DDL: `docs/migration/schema-changes/2026-07-07_material_is_paid_default.sql` (applied
+via `yarn db:migrate`; idempotent). Verified: default=1, all rows is_paid=1.
+
+---
+
+## 2026-07-07 — backfill ws_package smart/planner flags from package_type_id
+
+**Type:** one-time DATA backfill (no schema change — `is_smart_course` /
+`is_planner_course` columns already existed and are admin-editable).
+
+**Rule:** `package_type_id = 1` (Recorded Course) → `is_smart_course = 1`;
+`package_type_id = 4` (Planner Course) → `is_planner_course = 1`. Seeds historical
+rows only; flags remain a **manual admin toggle** on create/update (no write-path
+change). DDL file: `docs/migration/schema-changes/2026-07-07_package_smart_planner_backfill.sql`
+(applied via `yarn db:migrate`; idempotent). Verified: 4 type-1 packages → smart=1.
+
+---
+
 ## 2026-07-07 — client API search + pagination sweep, BATCH 1 (commerce)
 
 **Standing rule:** every client-side LIST endpoint must support `?search=` + `?page=&limit=`

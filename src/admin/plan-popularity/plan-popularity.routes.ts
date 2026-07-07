@@ -4,7 +4,7 @@ import { pinMostPopular, recomputeMostPopular } from "./plan-popularity.controll
 
 const router = Router();
 
-router.use(authenticate, requireRole("admin", "super_admin"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 router.post("/pin", pinMostPopular);            // POST /api/v1/admin/plan-popularity/pin
 router.post("/recompute", recomputeMostPopular); // POST /api/v1/admin/plan-popularity/recompute

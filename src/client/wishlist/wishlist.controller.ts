@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   parseWlId,
   isWlType,
@@ -20,14 +21,15 @@ export const listWishlist = async (req: Request, res: Response) => {
   try {
     if (!userId) { logger.warn("listWishlist unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
     const { itemType } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
 
     // ─── SQL branch (int id-space) — gated on `client-wishlist` ───
     const cidNum = parseWlId(String(userId));
     if (cidNum == null) return res.status(401).json({ success: false, message: "Unauthorized." });
     const typeFilter = itemType && isWlType(itemType) ? itemType : null;
-    const { data, count } = await listWishlistMysql(cidNum, typeFilter);
-    logger.info("listWishlist success (sql)", { traceId, customerId: userId, count });
-    return res.status(200).json({ success: true, data, count });
+    const { data, count, total } = await listWishlistMysql(cidNum, typeFilter, { search, skip, limit });
+    logger.info("listWishlist success (sql)", { traceId, customerId: userId, count, total });
+    return res.status(200).json({ success: true, data, count, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listWishlist failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

@@ -1,6 +1,7 @@
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
+import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 
 export const ADMIN_SUBSCRIPTION_MODULE = "admin-subscription";
 export const isAdminSubscriptionMysql = (): boolean => true;
@@ -17,64 +18,80 @@ const customerRef = (c: { id: number; fullName: string | null; phoneNumber: stri
   return { _id: String(c.id), firstName, lastName, phoneNumber: c.phoneNumber, ...(c.emailAddress !== undefined ? { emailAddress: c.emailAddress ?? null } : {}) };
 };
 
-// ── course/package subscription list ─────────────────────────────────────────
+// ── course/package subscription list (Reports contract) ──────────────────────
+// Shared contract across the 4 admin subscription reports — see
+// docs/REPORTS_SUBSCRIPTIONS_ADMIN.md. Returns { summary, data, pagination };
+// summary respects all filters but ignores pagination. `status` here is the
+// normalized active|expired|inactive (not the raw boolean); paymentMethod is the
+// coarse online|backend (= payment_type on this table).
 export const listCourseSubscriptions = async (q: {
   customerId?: string; courseId?: string; packageId?: string; status?: string;
-  fromDate?: string; toDate?: string; search?: string; sortBy?: string; sortOrder?: string; type?: string;
-  page: number; limit: number;
+  paymentMethod?: string; dateFrom?: string; dateTo?: string; search?: string;
+  sortBy?: string; sortOrder?: string; type?: string; page: number; limit: number;
 }) => {
+  const now = new Date();
+  const emptyPage = { summary: { totalCount: 0, totalRevenue: 0, activeCount: 0, expiredCount: 0 }, data: [], pagination: { total: 0, page: q.page, limit: q.limit, totalPages: 0 } };
+
   let customerIdsIn: number[] | undefined, courseIdsIn: number[] | undefined, packageIdsIn: number[] | undefined;
   if (q.search) {
     [customerIdsIn, courseIdsIn, packageIdsIn] = await Promise.all([
       repo.customerIdsByText(q.search), repo.courseIdsByText(q.search), repo.packageIdsByText(q.search),
     ]);
-    if (!customerIdsIn.length && !courseIdsIn.length && !packageIdsIn.length)
-      return { items: [], pagination: { page: q.page, limit: q.limit, total: 0, totalPages: 0 } };
+    if (!customerIdsIn.length && !courseIdsIn.length && !packageIdsIn.length) return emptyPage;
   }
-  const opts = {
+
+  const base = repo.buildCourseSubBaseWhere({
     customerId: q.customerId ? parseSubId(q.customerId) ?? undefined : undefined,
     courseId: q.courseId ? parseSubId(q.courseId) ?? undefined : undefined,
     packageId: q.packageId ? parseSubId(q.packageId) ?? undefined : undefined,
-    status: q.status === "true" ? true : q.status === "false" ? false : undefined,
-    fromDate: q.fromDate ? new Date(q.fromDate) : undefined,
-    toDate: q.toDate ? new Date(q.toDate) : undefined,
+    paymentType: q.paymentMethod === "online" ? "online" : q.paymentMethod === "backend" ? "backend" : undefined,
+    fromDate: q.dateFrom ? new Date(q.dateFrom) : undefined,
+    toDate: q.dateTo ? new Date(q.dateTo) : undefined,
     type: (q.type === "course" || q.type === "package" ? q.type : undefined) as "course" | "package" | undefined,
     customerIdsIn, courseIdsIn, packageIdsIn,
-    sortBy: q.sortBy ?? "createdAt", sortDir: (q.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc",
-  };
-  const [rows, total] = await Promise.all([
-    repo.listCourseSubs({ ...opts, skip: (q.page - 1) * q.limit, take: q.limit }),
-    repo.countCourseSubs(opts as any),
+  });
+  const listWhere = andWhere(base, statusWhere(q.status, now));
+  const sortBy = q.sortBy ?? "createdAt";
+  const sortDir = (q.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc";
+
+  const [rows, agg, activeCount, expiredCount] = await Promise.all([
+    repo.listCourseSubsByWhere(listWhere, sortBy, sortDir, (q.page - 1) * q.limit, q.limit),
+    repo.aggCourseSubs(listWhere),
+    repo.countSubs(andWhere(listWhere, statusWhere("active", now))),
+    repo.countSubs(andWhere(listWhere, statusWhere("expired", now))),
   ]);
+  const total = agg._count._all;
 
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
   const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.courseId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
   const packages = new Map((await repo.packagesByIds([...new Set(rows.map((r) => r.packageId).filter((x): x is number => x != null && x > 0))])).map((p) => [p.id, p]));
   const plans = new Map((await repo.plansByIds([...new Set(rows.map((r) => r.planId).filter((x): x is number => x != null && x > 0))])).map((p) => [p.id, p]));
 
-  const items = rows.map((r) => {
+  const data = rows.map((r) => {
     const course = r.courseId ? courses.get(r.courseId) : null;
     const pkg = r.packageId ? packages.get(r.packageId) : null;
     const plan = r.planId ? plans.get(r.planId) : null;
-    return {
-      _id: String(r.id),
-      customerId: customerRef(r.customerId ? custs.get(r.customerId) : undefined),
-      courseId: course ? { _id: String(course.id), name: course.name, image: course.image ?? null } : null,
-      targetPackageId: pkg ? { _id: String(pkg.id), name: pkg.name, image: pkg.image ?? null } : null,
-      planId: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: plan.price } : null,
-      paidAmount: r.amount != null ? Number(r.amount) : 0,
-      startAt: r.startAt ?? null,
-      endAt: r.endAt ?? null,
-      paymentMethod: r.payment_type ?? null,
-      paymentStatus: null, // Mongo-only (no payment_status column) — status conveys active
-      status: r.status,
-      withMaterial: r.pcMaterialId != null && r.pcMaterialId > 0,
-      remark: r.remarks ?? null,
-      createdAt: r.createdAt ?? null,
-      updatedAt: r.updatedAt ?? null,
-    };
+    const product = course
+      ? { _id: String(course.id), type: "course" as const, name: course.name, image: course.image ?? null }
+      : pkg
+        ? { _id: String(pkg.id), type: "package" as const, name: pkg.name, image: pkg.image ?? null }
+        : null;
+    return reportRow({
+      cust: r.customerId ? custs.get(r.customerId) : undefined,
+      product,
+      plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: Number(plan.price) } : null,
+      amount: r.amount != null ? Number(r.amount) : 0,
+      paymentMethod: r.payment_type === "backend" ? "backend" : "online",
+      status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
+      startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
+    });
   });
-  return { items, pagination: { page: q.page, limit: q.limit, total, totalPages: Math.ceil(total / q.limit) } };
+
+  return {
+    summary: { totalCount: total, totalRevenue: Number(agg._sum.amount ?? 0), activeCount, expiredCount },
+    data,
+    pagination: { total, page: q.page, limit: q.limit, totalPages: Math.ceil(total / q.limit) },
+  };
 };
 
 export const getCourseSubscriptionById = async (id: number): Promise<"not_found" | any> => {

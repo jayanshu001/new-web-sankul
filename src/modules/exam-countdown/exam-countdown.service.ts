@@ -280,11 +280,15 @@ export const listCountdownsClient = async (opts: {
   return { data: withCat.map((r) => clientRow(r, opts.todayUTC)), total };
 };
 
-export const upcomingCountdownsClient = async (limitNum: number, todayUTC: Date) => {
-  const rows = await prisma.examCountdown.findMany({
-    where: { status: true, examDate: { gte: todayUTC } },
-    orderBy: { examDate: "asc" }, take: limitNum,
-  });
+export const upcomingCountdownsClient = async (opts: {
+  search: string | null; skip: number; limit: number; page: number; todayUTC: Date;
+}) => {
+  const where: any = { status: true, examDate: { gte: opts.todayUTC } };
+  if (opts.search) where.title = { contains: opts.search };
+  const [rows, total] = await Promise.all([
+    prisma.examCountdown.findMany({ where, orderBy: { examDate: "asc" }, skip: opts.skip, take: opts.limit }),
+    prisma.examCountdown.count({ where }),
+  ]);
   const withCat = await attachCategories(rows);
-  return withCat.map((r) => clientRow(r, todayUTC));
+  return { data: withCat.map((r) => clientRow(r, opts.todayUTC)), total };
 };

@@ -965,7 +965,7 @@ model Material {
   fileMime           String?           @map("file_mime")
   language           String?
   isPreview          Boolean           @default(false) @map("is_preview")
-  isPaid             Boolean           @default(false) @map("is_paid")
+  isPaid             Boolean           @default(true) @map("is_paid")
   downloadCount      Int               @default(0) @map("download_count")
   created_at         DateTime?
   updated_at         DateTime?

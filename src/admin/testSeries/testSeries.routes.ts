@@ -28,7 +28,7 @@ import {
 
 const router = Router();
 
-router.use(authenticate, requireRole("admin", "super_admin"));
+router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // --- Literal-prefix routes first so they don't collide with /:id patterns ----
 router.put("/content-categories/:categoryId",       uploadS3.single("icon"), updateContentCategory);

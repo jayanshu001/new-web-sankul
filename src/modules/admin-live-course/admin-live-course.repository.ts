@@ -59,11 +59,19 @@ export const adminLiveCourseRepository = {
     prisma.liveCoursePlan.updateMany({ where: { liveCourseId, isDefault: true, ...(exceptId ? { id: { not: exceptId } } : {}) }, data: { isDefault: false } }),
   verifiedSubCountForPlan: (planId: number) => prisma.liveCourseSubscription.count({ where: { planId, paymentStatus: "verified" } }),
 
-  // ── subscriptions ──────────────────────────────────────────────────────────
-  listSubscriptions: (opts: { liveCourseId?: number; customerId?: number; planId?: number; paymentStatus?: string; status?: boolean; skip: number; take: number }) =>
-    prisma.liveCourseSubscription.findMany({ where: buildSubWhere(opts), orderBy: { id: "desc" }, skip: opts.skip, take: opts.take }),
-  countSubscriptions: (opts: { liveCourseId?: number; customerId?: number; planId?: number; paymentStatus?: string; status?: boolean }) =>
-    prisma.liveCourseSubscription.count({ where: buildSubWhere(opts) }),
+  // ── subscriptions (Reports contract — docs/REPORTS_SUBSCRIPTIONS_ADMIN.md) ────
+  // The caller composes the final `where` (base filters AND a normalized-status
+  // fragment) with reportFilters.andWhere, then passes it here. amount/revenue =
+  // paid_amount; paymentMethod derives from razorpay_order_id presence.
+  buildSubBaseWhere: (opts: SubReportFilter): Prisma.LiveCourseSubscriptionWhereInput => buildSubWhere(opts),
+  listSubsByWhere: (where: Prisma.LiveCourseSubscriptionWhereInput, sortBy: string, sortDir: "asc" | "desc", skip: number, take: number) =>
+    prisma.liveCourseSubscription.findMany({ where, orderBy: { [subSortCol(sortBy)]: sortDir }, skip, take }),
+  aggSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) =>
+    prisma.liveCourseSubscription.aggregate({ where, _sum: { paidAmount: true }, _count: { _all: true } }),
+  countSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) => prisma.liveCourseSubscription.count({ where }),
+  // Customer search resolver (name / phone / EMAIL) → id set for the OR fragment.
+  customerIdsByText: async (q: string) =>
+    (await prisma.customer.findMany({ where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] }, select: { id: true } })).map((r) => r.id),
   findSubscriptionById: (id: number) => prisma.liveCourseSubscription.findUnique({ where: { id } }),
   createSubscription: (data: Prisma.LiveCourseSubscriptionUncheckedCreateInput) => prisma.liveCourseSubscription.create({ data }),
   updateSubscription: (id: number, data: Prisma.LiveCourseSubscriptionUncheckedUpdateInput) => prisma.liveCourseSubscription.update({ where: { id }, data }),
@@ -299,13 +307,39 @@ function clientCourseWhere(opts: { search?: string; upcomingOnly?: boolean; pack
   return where;
 }
 
-function buildSubWhere(opts: { liveCourseId?: number; customerId?: number; planId?: number; paymentStatus?: string; status?: boolean }): Prisma.LiveCourseSubscriptionWhereInput {
+export interface SubReportFilter {
+  customerId?: number; liveCourseId?: number;
+  paymentMethod?: "online" | "backend";
+  fromDate?: Date; toDate?: Date;
+  customerIdsIn?: number[];
+}
+
+function subSortCol(sortBy: string): string {
+  if (sortBy === "startAt" || sortBy === "start_at") return "startAt";
+  if (sortBy === "endAt" || sortBy === "end_at") return "endAt";
+  if (sortBy === "amount") return "paidAmount";
+  return "createdAt";
+}
+
+// Base where for the reports list: everything EXCEPT the normalized status
+// (status is applied by the service via reportFilters.statusWhere + andWhere,
+// because "active" carries its own OR that must not collide with the search OR).
+// paymentMethod: online = razorpay_order_id present; backend = admin grant (null).
+function buildSubWhere(opts: SubReportFilter): Prisma.LiveCourseSubscriptionWhereInput {
   const where: Prisma.LiveCourseSubscriptionWhereInput = {};
-  if (opts.liveCourseId !== undefined) where.liveCourseId = opts.liveCourseId;
   if (opts.customerId !== undefined) where.customerId = opts.customerId;
-  if (opts.planId !== undefined) where.planId = opts.planId;
-  if (opts.paymentStatus) where.paymentStatus = opts.paymentStatus;
-  if (opts.status !== undefined) where.status = opts.status;
+  if (opts.liveCourseId !== undefined) where.liveCourseId = opts.liveCourseId;
+  if (opts.paymentMethod === "online") where.razorpayOrderId = { not: null };
+  else if (opts.paymentMethod === "backend") where.razorpayOrderId = null;
+  if (opts.fromDate || opts.toDate) {
+    where.createdAt = {};
+    if (opts.fromDate) where.createdAt.gte = opts.fromDate;
+    if (opts.toDate) where.createdAt.lte = opts.toDate;
+  }
+  // cross-table search OR (customer name/phone/email id membership).
+  const or: Prisma.LiveCourseSubscriptionWhereInput[] = [];
+  if (opts.customerIdsIn?.length) or.push({ customerId: { in: opts.customerIdsIn } });
+  if (or.length) where.OR = or;
   return where;
 }
 

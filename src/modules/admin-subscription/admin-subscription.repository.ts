@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { andWhere } from "../../utils/reportFilters";
 
 /**
  * Prisma persistence for the admin-subscription MySQL branch (Wave 7).
@@ -16,20 +17,20 @@ import type { Prisma } from "@prisma/client";
  */
 export interface CourseSubFilter {
   customerId?: number; courseId?: number; packageId?: number; status?: boolean;
+  paymentType?: "online" | "backend";
   fromDate?: Date; toDate?: Date; type?: "course" | "package";
   customerIdsIn?: number[]; courseIdsIn?: number[]; packageIdsIn?: number[];
 }
 
 export const adminSubscriptionRepository = {
   // ── course/package subscription list + detail ──────────────────────────────
-  listCourseSubs: (opts: CourseSubFilter & { sortBy: string; sortDir: "asc" | "desc"; skip: number; take: number }) =>
-    prisma.packageCourseSubscription.findMany({
-      where: buildSubWhere(opts),
-      orderBy: { [subSortCol(opts.sortBy)]: opts.sortDir },
-      skip: opts.skip, take: opts.take,
-    }),
-  countCourseSubs: (opts: CourseSubFilter) =>
-    prisma.packageCourseSubscription.count({ where: buildSubWhere(opts) }),
+  // Reports contract: the caller composes the final `where` (base filters AND a
+  // normalized-status fragment) with reportFilters.andWhere, then passes it here.
+  buildCourseSubBaseWhere: (opts: CourseSubFilter): Prisma.PackageCourseSubscriptionWhereInput => buildSubWhere(opts),
+  listCourseSubsByWhere: (where: Prisma.PackageCourseSubscriptionWhereInput, sortBy: string, sortDir: "asc" | "desc", skip: number, take: number) =>
+    prisma.packageCourseSubscription.findMany({ where, orderBy: { [subSortCol(sortBy)]: sortDir }, skip, take }),
+  aggCourseSubs: (where: Prisma.PackageCourseSubscriptionWhereInput) =>
+    prisma.packageCourseSubscription.aggregate({ where, _sum: { amount: true }, _count: { _all: true } }),
   findCourseSubById: (id: number) => prisma.packageCourseSubscription.findUnique({ where: { id } }),
 
   // ── write (admin manual grant) ──────────────────────────────────────────────
@@ -160,12 +161,15 @@ function subSortCol(sortBy: string): string {
   return "createdAt";
 }
 
+// Base where for the reports list: everything EXCEPT the normalized status
+// (status is applied by the service via reportFilters.statusWhere + andWhere,
+// because "active" carries its own OR that must not collide with the search OR).
 function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionWhereInput {
   const where: Prisma.PackageCourseSubscriptionWhereInput = {};
   if (opts.customerId !== undefined) where.customerId = opts.customerId;
   if (opts.courseId !== undefined) where.courseId = opts.courseId;
   if (opts.packageId !== undefined) where.packageId = opts.packageId;
-  if (opts.status !== undefined) where.status = opts.status;
+  if (opts.paymentType !== undefined) where.payment_type = opts.paymentType;
   if (opts.fromDate || opts.toDate) {
     where.createdAt = {};
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;
@@ -182,6 +186,8 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
   if (or.length) where.OR = or;
   return where;
 }
+// re-exported combinator used by the service to AND the status fragment on.
+export { andWhere };
 
 function buildEbookSubWhere(opts: { customerId?: number; ebookId?: number; status?: boolean; fromDate?: Date; toDate?: Date }): Prisma.EBookSubscriptionWhereInput {
   const where: Prisma.EBookSubscriptionWhereInput = {};

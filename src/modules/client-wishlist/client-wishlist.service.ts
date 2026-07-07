@@ -35,7 +35,11 @@ export const itemExists = async (type: WlType, id: number): Promise<boolean> => 
   return !!(await prisma.book.findFirst({ where: { id }, select: { id: true } }));
 };
 
-export const listWishlistMysql = async (customerId: number, itemType: WlType | null) => {
+export const listWishlistMysql = async (
+  customerId: number,
+  itemType: WlType | null,
+  opts: { search?: string; skip: number; limit: number },
+) => {
   const where: any = { customerId };
   if (itemType) where.itemType = itemType;
   const entries = await prisma.wishlist.findMany({ where, orderBy: { createdAt: "desc" } });
@@ -54,27 +58,40 @@ export const listWishlistMysql = async (customerId: number, itemType: WlType | n
   const pMap = new Map(packages.map((p) => [p.id, itemDto(p.id, p.name ?? null, p.image ?? null)]));
   const eMap = new Map(ebooks.map((e) => [e.id, itemDto(e.id, e.name ?? null, e.thumbnail ?? null)]));
   const bMap = new Map(books.map((b) => [b.id, itemDto(b.id, b.name ?? null, b.thumbnail ?? b.image ?? null)]));
+  const mapFor: Record<WlType, Map<number, ReturnType<typeof itemDto>>> = { course: cMap, package: pMap, ebook: eMap, book: bMap };
 
-  const attach = (type: WlType, m: Map<number, ReturnType<typeof itemDto>>) =>
-    entries
-      .filter((e) => e.itemType === type && m.has(e.itemId))
-      .map((e) => ({
-        _id: String(e.id),
-        customerId: String(e.customerId),
-        itemType: e.itemType,
-        itemId: String(e.itemId),
-        createdAt: e.createdAt ?? null,
-        item: m.get(e.itemId)!,
-      }));
+  // Heterogeneous list (4 entity types) → resolve every entry to its display DTO
+  // in the wishlist's own createdAt-desc order, then filter/paginate over that
+  // combined array. total = full filtered length; the window is re-grouped so
+  // the `{courses,packages,ebooks,books}` response shape stays identical.
+  let combined = entries
+    .filter((e) => isWlType(e.itemType) && mapFor[e.itemType as WlType].has(e.itemId))
+    .map((e) => ({
+      _id: String(e.id),
+      customerId: String(e.customerId),
+      itemType: e.itemType,
+      itemId: String(e.itemId),
+      createdAt: e.createdAt ?? null,
+      item: mapFor[e.itemType as WlType].get(e.itemId)!,
+    }));
+
+  if (opts.search) {
+    const q = opts.search.toLowerCase();
+    combined = combined.filter((c) => (c.item.title ?? "").toLowerCase().includes(q));
+  }
+
+  const total = combined.length;
+  const window = combined.slice(opts.skip, opts.skip + opts.limit);
+  const group = (type: WlType) => window.filter((w) => w.itemType === type);
 
   const data = {
-    courses: attach("course", cMap),
-    packages: attach("package", pMap),
-    ebooks: attach("ebook", eMap),
-    books: attach("book", bMap),
+    courses: group("course"),
+    packages: group("package"),
+    ebooks: group("ebook"),
+    books: group("book"),
   };
-  const count = data.courses.length + data.packages.length + data.ebooks.length + data.books.length;
-  return { data, count };
+  const count = window.length;
+  return { data, count, total };
 };
 
 /** Idempotent add. Returns "created" | "exists". */

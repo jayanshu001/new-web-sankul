@@ -10,6 +10,7 @@ import { lookupIfsc } from "./ifsc";
 import { createContact, createFundAccount, createPayout } from "../payment/razorpayx";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   parseBankAccountId,
   listBankAccounts as svcListBankAccounts,
@@ -64,14 +65,13 @@ export const getMyTransactions = async (req: Request, res: Response) => {
   try {
     if (!customerId) { logger.warn("getMyTransactions unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
 
-    const { page = "1", limit = "20", type } = req.query as Record<string, string>;
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const { type } = req.query as Record<string, string>;
+    const { search, page: pageNum, limit: limitNum } = parseListQuery(req.query);
 
     // ─── ws_refferal_transaction ──────────────────────────────────────────
     const cid = parseRefCustomerId(customerId);
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
-    const { items, total } = await svcListTransactions(cid, { type, page: pageNum, limit: limitNum });
+    const { items, total } = await svcListTransactions(cid, { type, search, page: pageNum, limit: limitNum });
     logger.info("getMyTransactions success (sql)", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
@@ -224,11 +224,13 @@ export const listBankAccounts = async (req: Request, res: Response) => {
   try {
     if (!customerId) { logger.warn("listBankAccounts unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized" }); }
 
+    const { search, page, limit, skip } = parseListQuery(req.query);
+
     const cid = parseBankAccountId(String(customerId));
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
-    const accounts = await svcListBankAccounts(cid);
-    logger.info("listBankAccounts success", { traceId, customerId, count: accounts.length, source: "mysql" });
-    return res.status(200).json({ success: true, data: accounts });
+    const { items, total } = await svcListBankAccounts(cid, { search, skip, take: limit });
+    logger.info("listBankAccounts success", { traceId, customerId, count: items.length, source: "mysql" });
+    return res.status(200).json({ success: true, data: items, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listBankAccounts failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

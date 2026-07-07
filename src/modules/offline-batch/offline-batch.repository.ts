@@ -17,6 +17,14 @@ const batchListWhere = (opts?: { centerId?: number; search?: string; upcomingAft
   ...(opts?.upcomingAfter ? { startAt: { gt: opts.upcomingAfter } } : {}),
 });
 
+// Client browse WHERE (center OR city→centerIds set), name search, upcoming.
+const clientBatchWhere = (opts?: { centerId?: number; centerIds?: number[]; search?: string; upcomingAfter?: Date }) => ({
+  ...(opts?.centerId != null ? { centerId: opts.centerId } : {}),
+  ...(opts?.centerIds ? { centerId: { in: opts.centerIds } } : {}),
+  ...(opts?.search ? { name: { contains: opts.search } } : {}),
+  ...(opts?.upcomingAfter ? { startAt: { gt: opts.upcomingAfter } } : {}),
+});
+
 export const offlineBatchRepository = {
   // ── centers ────────────────────────────────────────────────────────────────
   /** Single center by id, with its city. */
@@ -55,18 +63,20 @@ export const offlineBatchRepository = {
       include: { center: { include: { city: true } } },
     }),
 
-  /** Batches with optional center/name/upcoming filters, with center → city. */
-  listBatches: (opts?: { centerId?: number; centerIds?: number[]; search?: string; upcomingAfter?: Date }) =>
+  /** Batches with optional center/name/upcoming filters, with center → city.
+   *  Paginated when skip/take are provided (client browse list). */
+  listBatches: (opts?: { centerId?: number; centerIds?: number[]; search?: string; upcomingAfter?: Date; skip?: number; take?: number }) =>
     prisma.offlineBatch.findMany({
-      where: {
-        ...(opts?.centerId != null ? { centerId: opts.centerId } : {}),
-        ...(opts?.centerIds ? { centerId: { in: opts.centerIds } } : {}),
-        ...(opts?.search ? { name: { contains: opts.search } } : {}),
-        ...(opts?.upcomingAfter ? { startAt: { gt: opts.upcomingAfter } } : {}),
-      },
+      where: clientBatchWhere(opts),
       include: { center: { include: { city: true } } },
       orderBy: [{ startAt: "asc" }, { id: "asc" }],
+      skip: opts?.skip,
+      take: opts?.take,
     }),
+
+  /** Total batches matching the client browse filters (pagination count). */
+  countBatches: (opts?: { centerId?: number; centerIds?: number[]; search?: string; upcomingAfter?: Date }) =>
+    prisma.offlineBatch.count({ where: clientBatchWhere(opts) }),
 
   /** Admin batches: optional center/name/upcoming filters, with center → city,
    *  newest created first, paginated when skip/take are provided. */

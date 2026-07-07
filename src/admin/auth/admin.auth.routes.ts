@@ -6,6 +6,7 @@ import {
   adminRefreshHandler,
   adminLogoutHandler,
   adminUpdateProfileHandler,
+  adminMeHandler,
 } from "./admin.auth.controller";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
@@ -64,6 +65,15 @@ router.post("/login", adminLoginHandler);
  * @access Public for first admin only, protected afterwards
  */
 router.post("/register", bootstrapOrSuperAdminGuard, adminRegisterHandler);
+
+/**
+ * @route  GET /api/v1/admin/auth/me
+ * @desc   Rehydrate the current admin session — effective permissions, roles,
+ *         isSuperAdmin. Frontend calls this on navigation to pick up mid-session
+ *         permission changes without a token refresh.
+ * @access Protected
+ */
+router.get("/me", authenticate, adminMeHandler);
 
 /**
  * @route  POST /api/v1/admin/auth/change-password

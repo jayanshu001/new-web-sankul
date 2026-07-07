@@ -23,11 +23,12 @@ export const clientExamRepository = {
     }),
 
   /** Published exams in a category, hiding scheduled exams whose window ended. */
-  examsByCategory: (categoryId: number, now: Date) =>
+  examsByCategory: (categoryId: number, now: Date, search?: string | null) =>
     prisma.exam.findMany({
       where: {
         examCategoryId: categoryId,
         status: true,
+        ...(search ? { name: { contains: search } } : {}),
         OR: [{ type: "subject" }, { endAt: null }, { endAt: { gte: now } }],
       },
       orderBy: [{ order_by: "asc" }, { createAt: "desc" }],
@@ -83,17 +84,17 @@ export const clientExamRepository = {
       orderBy: [{ created_at: "desc" }, { id: "desc" }],
     }),
 
-  /** A customer's results, paginated (my-results). */
-  myResults: (customerId: number, skip: number, take: number) =>
+  /** A customer's results, paginated (my-results), optional exam-name search. */
+  myResults: (customerId: number, skip: number, take: number, search?: string | null) =>
     prisma.examResult.findMany({
-      where: { customerId, status: true },
+      where: { customerId, status: true, ...(search ? { Exam: { name: { contains: search } } } : {}) },
       include: { Exam: { select: { id: true, name: true } } },
       orderBy: [{ created_at: "desc" }, { id: "desc" }],
       skip,
       take,
     }),
-  countMyResults: (customerId: number) =>
-    prisma.examResult.count({ where: { customerId, status: true } }),
+  countMyResults: (customerId: number, search?: string | null) =>
+    prisma.examResult.count({ where: { customerId, status: true, ...(search ? { Exam: { name: { contains: search } } } : {}) } }),
 
   findResult: (id: number, customerId: number) =>
     prisma.examResult.findFirst({ where: { id, customerId } }),
@@ -110,10 +111,10 @@ export const clientExamRepository = {
   rateResult: (id: number, ratting: string) =>
     prisma.examResult.update({ where: { id }, data: { ratting } }),
 
-  /** Past (submitted) attempts of DAILY-type exams, paginated. */
-  pastDailyResults: (customerId: number, skip: number, take: number) =>
+  /** Past (submitted) attempts of DAILY-type exams, paginated, optional name search. */
+  pastDailyResults: (customerId: number, skip: number, take: number, search?: string | null) =>
     prisma.examResult.findMany({
-      where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily" } },
+      where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily", ...(search ? { name: { contains: search } } : {}) } },
       include: {
         Exam: {
           select: { id: true, name: true, type: true, time: true, positiveMarks: true, negativeMarks: true, startAt: true },
@@ -123,9 +124,9 @@ export const clientExamRepository = {
       skip,
       take,
     }),
-  countPastDailyResults: (customerId: number) =>
+  countPastDailyResults: (customerId: number, search?: string | null) =>
     prisma.examResult.count({
-      where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily" } },
+      where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily", ...(search ? { name: { contains: search } } : {}) } },
     }),
 
   /** Daily-exam drill-down counts by year/month/week via raw SQL date grouping. */
@@ -145,6 +146,28 @@ export const clientExamRepository = {
     prisma.exam.findMany({
       where: { type: "daily", status: true, OR: [{ startAt: { gte: from, lte: to } }, { startAt: null, createAt: { gte: from, lte: to } }] },
       orderBy: [{ startAt: "desc" }, { id: "desc" }],
+    }),
+  /** Daily exams in a window, paginated + optional name search (tests level). */
+  dailyInWindowPaged: (from: Date, to: Date, search: string | null, skip: number, take: number) =>
+    prisma.exam.findMany({
+      where: {
+        type: "daily",
+        status: true,
+        ...(search ? { name: { contains: search } } : {}),
+        OR: [{ startAt: { gte: from, lte: to } }, { startAt: null, createAt: { gte: from, lte: to } }],
+      },
+      orderBy: [{ startAt: "desc" }, { id: "desc" }],
+      skip,
+      take,
+    }),
+  countDailyInWindow: (from: Date, to: Date, search: string | null) =>
+    prisma.exam.count({
+      where: {
+        type: "daily",
+        status: true,
+        ...(search ? { name: { contains: search } } : {}),
+        OR: [{ startAt: { gte: from, lte: to } }, { startAt: null, createAt: { gte: from, lte: to } }],
+      },
     }),
 
   // ─── saveAnswers WRITE path ────────────────────────────────────────────────
@@ -316,12 +339,16 @@ export const clientExamRepository = {
       });
     }),
 
-  /** All of a customer's attempts for an exam (history, newest first). */
-  attemptsForExam: (customerId: number, examId: number) =>
+  /** All of a customer's attempts for an exam (history, newest first), paginated. */
+  attemptsForExam: (customerId: number, examId: number, skip?: number, take?: number) =>
     prisma.examResult.findMany({
       where: { customerId, examId },
       orderBy: [{ attemptNumber: "desc" }, { id: "desc" }],
+      ...(skip != null ? { skip } : {}),
+      ...(take != null ? { take } : {}),
     }),
+  countAttemptsForExam: (customerId: number, examId: number) =>
+    prisma.examResult.count({ where: { customerId, examId } }),
 
   /** Aggregate stats across a customer's SUBMITTED attempts for an exam. */
   aggregateForExam: (customerId: number, examId: number) =>
