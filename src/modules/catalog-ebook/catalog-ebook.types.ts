@@ -84,4 +84,8 @@ export interface ListEbooksOptions {
   language?: EBookLanguage;
   /** Resolved int customer id for purchase-state (C3 boundary). */
   customerId?: number;
+  /** Page window (rows to skip); omit for the full unpaginated list. */
+  skip?: number;
+  /** Page window (rows to take); omit for the full unpaginated list. */
+  take?: number;
 }

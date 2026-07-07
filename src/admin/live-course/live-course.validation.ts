@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId");
+const objectId = z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId");
 
 // A material/exam category reference, mirroring the recorded-Course schema and
 // the LiveCourse model's `{ category, order }` sub-document shape.

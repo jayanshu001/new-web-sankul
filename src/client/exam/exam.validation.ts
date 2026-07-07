@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 
-const objectIdSchema = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid id.");
+const objectIdSchema = z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid id.");
 
 export const saveAnswersSchema = z.object({
   examId: objectIdSchema,

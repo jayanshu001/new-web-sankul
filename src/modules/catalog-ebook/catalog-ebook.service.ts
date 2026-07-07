@@ -100,12 +100,14 @@ export const getEbookDetailWithPlans = async (
 export const listEbooksWithPlans = async (
   opts: ListEbooksOptions = {},
   buildShareLink: (ebookId: string) => string = (id) => id
-): Promise<EbookListItemDto[]> => {
-  const rows = await repo.listActive({
-    search: opts.search?.trim() || undefined,
-    language: opts.language,
-  });
-  if (!rows.length) return [];
+): Promise<{ ebooks: EbookListItemDto[]; total: number }> => {
+  const search = opts.search?.trim() || undefined;
+  const filter = { search, language: opts.language };
+  const [rows, total] = await Promise.all([
+    repo.listActive({ ...filter, skip: opts.skip, take: opts.take }),
+    repo.countActive(filter),
+  ]);
+  if (!rows.length) return { ebooks: [], total };
 
   const ebookIds = rows.map((r) => r.id);
 
@@ -135,7 +137,7 @@ export const listEbooksWithPlans = async (
     }
   }
 
-  return rows.map((row) => {
+  const ebooks = rows.map((row) => {
     const dto = toEbookDto(row);
     const plans = plansByEbook.get(dto._id) ?? [];
     const endAt = endAtByEbook.get(dto._id) ?? null;
@@ -156,4 +158,6 @@ export const listEbooksWithPlans = async (
       shareableLink: buildShareLink(dto._id),
     };
   });
+
+  return { ebooks, total };
 };

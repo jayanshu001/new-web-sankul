@@ -85,13 +85,14 @@ export const adminLiveCourseRepository = {
     ids.length ? prisma.liveCoursePlan.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, duration: true, price: true } }) : Promise.resolve([]),
 
   // ── sessions for a course (many-to-many join) ────────────────────────────────
-  sessionsForCourse: async (liveCourseId: number, opts: { status?: string; upcoming?: boolean; now: Date; skip: number; take: number }) => {
+  sessionsForCourse: async (liveCourseId: number, opts: { status?: string; upcoming?: boolean; search?: string; now: Date; skip: number; take: number }) => {
     const links = await prisma.liveSessionCourse.findMany({ where: { liveCourseId }, select: { liveSessionId: true } });
     const ids = links.map((l) => l.liveSessionId);
     if (!ids.length) return { rows: [], total: 0 };
     const where: Prisma.LiveSessionWhereInput = { id: { in: ids } };
     if (opts.upcoming) { where.status = "SCHEDULED"; where.scheduledAt = { gte: opts.now }; }
     else if (opts.status) where.status = opts.status;
+    if (opts.search) where.title = { contains: opts.search };
     const [rows, total] = await Promise.all([
       prisma.liveSession.findMany({ where, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], skip: opts.skip, take: opts.take }),
       prisma.liveSession.count({ where }),
@@ -124,7 +125,7 @@ export const adminLiveCourseRepository = {
       : Promise.resolve([] as { id: number; title: string; slug: string; image: string | null }[]),
 
   /** Cross-course session feeds. ids = the courses the customer can see. */
-  sessionsForCourses: async (courseIds: number[], opts: { upcoming?: boolean; liveNow?: boolean; now: Date; skip: number; take: number }) => {
+  sessionsForCourses: async (courseIds: number[], opts: { upcoming?: boolean; liveNow?: boolean; search?: string; now: Date; skip: number; take: number }) => {
     if (!courseIds.length) return { rows: [], total: 0, courseBySession: new Map<number, number[]>() };
     const links = await prisma.liveSessionCourse.findMany({ where: { liveCourseId: { in: courseIds } }, select: { liveSessionId: true, liveCourseId: true } });
     const sessionIds = [...new Set(links.map((l) => l.liveSessionId))];
@@ -134,6 +135,7 @@ export const adminLiveCourseRepository = {
     const where: Prisma.LiveSessionWhereInput = { id: { in: sessionIds } };
     if (opts.upcoming) { where.status = "SCHEDULED"; where.scheduledAt = { gte: opts.now }; }
     else if (opts.liveNow) where.status = "CREATED"; // "live now" = CREATED (mirrors Mongo)
+    if (opts.search) where.title = { contains: opts.search };
     const [rows, total] = await Promise.all([
       prisma.liveSession.findMany({ where, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], skip: opts.skip, take: opts.take }),
       prisma.liveSession.count({ where }),

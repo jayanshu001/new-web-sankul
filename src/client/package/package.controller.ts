@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   parsePackageId,
   listPackageTypes as listPackageTypesMysql,
@@ -100,10 +101,11 @@ export const listPackagesByType = async (req: Request, res: Response) => {
     const tid = parsePackageId(typeId);
     if (!tid) { logger.warn("listPackagesByType invalid id (mysql)", { traceId, typeId }); return res.status(400).json({ success: false, message: "Invalid type id." }); }
     const cid = req.user?.id ? Number(req.user.id) : null;
-    const rows = await listPackagesByTypeSql(tid);
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { rows, total } = await listPackagesByTypeSql(tid, { search, skip, take: limit });
     const enrichedSql = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
-    logger.info("listPackagesByType success (mysql)", { traceId, typeId, count: enrichedSql.length });
-    return res.status(200).json({ success: true, data: enrichedSql });
+    logger.info("listPackagesByType success (mysql)", { traceId, typeId, count: enrichedSql.length, total });
+    return res.status(200).json({ success: true, data: enrichedSql, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listPackagesByType failed", { traceId, typeId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -224,6 +226,10 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
 
     const cid = req.user?.id ? Number(req.user.id) : null;
     const base = resolveBase(req);
+    // `search` filters each group's packages by name; `skip`/`take` page each
+    // group by the same window. Top-level `pagination.total` is the sum of the
+    // per-group match counts (the response stays grouped).
+    const { search, page, limit, skip } = parseListQuery(req.query);
     const goals = await prismaPkg.customerTargetGoal.findMany({ select: { id: true, name: true, labels: true } });
     const goalById = new Map(goals.map((g) => [g.id, g]));
 
@@ -247,18 +253,21 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
       labelRefs.map(async (ref) => {
         // Prefer goal-scoped lookup (correct); fall back to unscoped for legacy bare ids.
         const goalId = ref.goalId ?? firstGoalForLabel(ref.labelId);
-        const rows = goalId != null
-          ? await listPackagesByGoalLabelScopedSql(goalId, ref.labelId)
-          : await listPackagesByGoalLabelSql(ref.labelId);
+        const { rows, total } = goalId != null
+          ? await listPackagesByGoalLabelScopedSql(goalId, ref.labelId, { search, skip, take: limit })
+          : await listPackagesByGoalLabelSql(ref.labelId, { search, skip, take: limit });
         const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, base);
         return {
-          label: {
-            _id: String(ref.labelId),
-            name: goalId != null ? labelName(goalId, ref.labelId) : null,
-            goalId: goalId != null ? String(goalId) : null,
-            goalTitle: goalId != null ? (goalById.get(goalId)?.name ?? null) : null,
-            packages: enriched,
+          entry: {
+            label: {
+              _id: String(ref.labelId),
+              name: goalId != null ? labelName(goalId, ref.labelId) : null,
+              goalId: goalId != null ? String(goalId) : null,
+              goalTitle: goalId != null ? (goalById.get(goalId)?.name ?? null) : null,
+              packages: enriched,
+            },
           },
+          total,
         };
       })
     );
@@ -266,31 +275,34 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
     // ── goal-level (individual) groups ─────────────────────────────────────────
     const goalGroups = await Promise.all(
       goalIntIds.map(async (gid) => {
-        const rows = await listPackagesByGoalIndividualSql(gid);
+        const { rows, total } = await listPackagesByGoalIndividualSql(gid, { search, skip, take: limit });
         const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, base);
-        return { goal: { _id: String(gid), title: goalById.get(gid)?.name ?? null, packages: enriched } };
+        return { entry: { goal: { _id: String(gid), title: goalById.get(gid)?.name ?? null, packages: enriched } }, total };
       })
     );
 
-    const resultSql = [...labelGroups, ...goalGroups];
-    logger.info("listPackagesByGoal success (mysql)", { traceId, labelCount: labelGroups.length, goalCount: goalGroups.length });
-    return res.status(200).json({ success: true, data: resultSql });
+    const combined = [...labelGroups, ...goalGroups];
+    const resultSql = combined.map((c) => c.entry);
+    const total = combined.reduce((acc, c) => acc + c.total, 0);
+    logger.info("listPackagesByGoal success (mysql)", { traceId, labelCount: labelGroups.length, goalCount: goalGroups.length, total });
+    return res.status(200).json({ success: true, data: resultSql, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listPackagesByGoal failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-export const listPackageTypes = async (_req: Request, res: Response) => {
-  const traceId = _req.traceId;
-  logger.info("listPackageTypes invoked", { traceId, path: _req.originalUrl });
+export const listPackageTypes = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("listPackageTypes invoked", { traceId, path: req.originalUrl });
 
   try {
+    const { search, page, limit, skip } = parseListQuery(req.query);
     // ws_package_type has no `order`/`active` cols; the service synthesizes
     // `order:0` + `active:true` so the response JSON stays shape-compatible.
-    const types = await listPackageTypesMysql();
-    logger.info("listPackageTypes success", { traceId, count: types.length, source: "mysql" });
-    return res.status(200).json({ success: true, data: types });
+    const { data: types, total } = await listPackageTypesMysql({ search, skip, take: limit });
+    logger.info("listPackageTypes success", { traceId, count: types.length, total, source: "mysql" });
+    return res.status(200).json({ success: true, data: types, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listPackageTypes failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -309,18 +321,26 @@ export const listMyPackages = async (req: Request, res: Response) => {
     // ── MySQL branch ──────────────────────────────────────────────────────────
     const cid = Number(customerId);
     if (!Number.isInteger(cid)) { logger.warn("listMyPackages invalid customer (mysql)", { traceId, customerId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+    const { search, page, limit, skip } = parseListQuery(req.query);
     const activeSubs = (await listActiveSubscriptionsByCustomer(cid)).filter((s) => s.targetPackageId);
     const pkgIds = [...new Set(activeSubs.map((s) => Number(s.targetPackageId)).filter(Number.isInteger))];
     const pkgs = pkgIds.length ? await prismaPkg.package.findMany({ where: { id: { in: pkgIds } } }) : [];
     const enriched = await enrichPackagesSql(pkgs, cid, resolveBase(req));
     const byId = new Map(enriched.map((p) => [p._id, p]));
-    const dataSql = activeSubs.map((s) => ({
+    const dataAll = activeSubs.map((s) => ({
       ...s,
       packageId: byId.get(String(s.targetPackageId)) ?? null,
       daysLeft: computeDaysLeft(s.endAt ?? null, now),
     }));
-    logger.info("listMyPackages success (mysql)", { traceId, customerId, count: dataSql.length });
-    return res.status(200).json({ success: true, data: dataSql });
+    // Non-Prisma source (subscriptions): filter by the enriched package name,
+    // then slice the resolved array. `total` reflects the post-search set.
+    const filtered = search
+      ? dataAll.filter((d) => String((d.packageId as any)?.name ?? "").toLowerCase().includes(search.toLowerCase()))
+      : dataAll;
+    const total = filtered.length;
+    const dataSql = filtered.slice(skip, skip + limit);
+    logger.info("listMyPackages success (mysql)", { traceId, customerId, count: dataSql.length, total });
+    return res.status(200).json({ success: true, data: dataSql, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listMyPackages failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

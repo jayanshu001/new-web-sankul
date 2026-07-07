@@ -3,7 +3,7 @@ import { renderShareRedirect } from "./shareRedirect";
 
 const router = Router();
 
-const OBJECT_ID = /^[a-f0-9]{24}$/i;
+const OBJECT_ID = /^([a-f0-9]{24}|[1-9]\d*)$/i;
 
 function sendShare(deepPath: string) {
   return (req: Request, res: Response) => {

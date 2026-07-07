@@ -18,7 +18,7 @@ const resolveBase = (req: Request) =>
 
 // Legacy Mongo ObjectId shape (24-hex). Retained only to keep the invoice id
 // validation identical to the pre-migration contract; SQL order ids are ints.
-const isObjectId = (v: string) => /^[a-fA-F0-9]{24}$/.test(v);
+const isObjectId = (v: string) => /^([a-fA-F0-9]{24}|[1-9]\d*)$/.test(v);
 
 // GET /api/v1/client/ebooks
 export const listEbooks = async (req: Request, res: Response) => {
@@ -34,16 +34,18 @@ export const listEbooks = async (req: Request, res: Response) => {
     // (entitlement); returns the `{ ebooks: [...] }` contract.
     const base = resolveBase(req);
     const custId = (req as any).user?.id != null ? parseEbookId(String((req as any).user.id)) : null;
-    const data = await listEbooksWithPlans(
+    const { ebooks, total } = await listEbooksWithPlans(
       {
         search: search?.trim() || undefined,
         language: (language as EBookLanguage) || undefined,
         customerId: custId ?? undefined,
+        skip,
+        take: limit,
       },
       (id) => buildShareUrl("ebooks", id, base)
     );
-    logger.info("listEbooks success", { traceId, customerId, count: data.length, source: "mysql" });
-    return res.status(200).json({ success: true, data: { ebooks: data } });
+    logger.info("listEbooks success", { traceId, customerId, count: ebooks.length, total, source: "mysql" });
+    return res.status(200).json({ success: true, data: { ebooks }, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listEbooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

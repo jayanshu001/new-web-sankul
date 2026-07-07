@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   parseLpId,
   upsertVideoProgress as sqlUpsertVideoProgress,
@@ -93,9 +94,11 @@ export const listFreeVideoResume = async (req: Request, res: Response) => {
       return res.status(401).json({ success: false, message: "Unauthorized." });
     }
 
-    const data = await sqlListFreeResume(Number(userId), 20);
-    logger.info("listFreeVideoResume(SQL) success", { traceId, userId, cardCount: data.cards.length, hasResume: !!data.resumeNext });
-    return res.status(200).json({ success: true, data });
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const { cards, resumeNext, total } = await sqlListFreeResume(Number(userId), { search, skip, limit });
+    const data = { cards, resumeNext };
+    logger.info("listFreeVideoResume(SQL) success", { traceId, userId, total, cardCount: cards.length, hasResume: !!resumeNext });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listFreeVideoResume failed", { traceId, userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

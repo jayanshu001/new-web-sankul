@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 // Accept either a Mongo ObjectId (24-hex) OR a MySQL numeric id, so the same
 // validation works on both migration backends (admin-video runs on MySQL where
 // ids are integers). Mirrors the dual-id handling in administrator.validation.ts.

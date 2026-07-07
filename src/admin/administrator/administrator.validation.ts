@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { AdminRole } from "../../shared/enums";
 
-const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 
 const roleValue = z.union(
   [

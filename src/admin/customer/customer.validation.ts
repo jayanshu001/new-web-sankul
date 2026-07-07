@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 // Accept a Mongo ObjectId (24-hex) OR a MySQL numeric id (ws_customer_* tables).
 const refIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 

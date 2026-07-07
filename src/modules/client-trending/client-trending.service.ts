@@ -16,7 +16,7 @@ import { isNewItem } from "../../utils/isNew";
 
 export const isClientTrendingMysql = (): boolean => true;
 
-type TrendingOpts = { type?: string; search?: string; language?: string; limit?: number };
+type TrendingOpts = { type?: string; search?: string; language?: string; limit?: number; skip?: number };
 const flags = (o: TrendingOpts) => ({
   wantFree: o.type === "free",
   wantPaid: o.type === "paid" || !o.type,
@@ -25,13 +25,18 @@ const flags = (o: TrendingOpts) => ({
 
 export const fetchTrendingBooksOnly = async (opts: TrendingOpts = {}) => {
   const { wantFree, wantPaid, limitNum } = flags(opts);
+  const skip = Math.max(opts.skip ?? 0, 0);
   const where: any = { active: true, isTrending: true };
   if (opts.language) where.language = opts.language;
   if (opts.search) where.OR = [{ name: { contains: opts.search } }, { author: { contains: opts.search } }];
   if (wantFree) where.discounted_price = 0;
   else if (wantPaid) where.discounted_price = { gt: 0 };
 
-  const books = await prisma.book.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "desc" }], take: limitNum });
+  // findMany + count over the IDENTICAL where — total drives the pagination envelope.
+  const [books, total] = await Promise.all([
+    prisma.book.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "desc" }], skip, take: limitNum }),
+    prisma.book.count({ where }),
+  ]);
   const items = books.map((b: any) => ({
     type: "book" as const, _id: String(b.id), name: b.name, description: b.description ?? null, author: b.author ?? null,
     language: b.language, image: b.image ?? null, thumbnail: b.thumbnail ?? null, demoUrl: b.demoUrl ?? null,
@@ -39,11 +44,12 @@ export const fetchTrendingBooksOnly = async (opts: TrendingOpts = {}) => {
     listPrice: b.list_price ?? b.listPrice ?? null, discountedPrice: b.discounted_price, shippingPrice: b.shipping_price ?? null,
     pages: b.pages ?? 0, price: b.discounted_price, isFree: b.discounted_price === 0, isNew: isNewItem(b.created_at), createdAt: b.created_at,
   }));
-  return { type: wantFree ? "free" : "paid", items };
+  return { type: wantFree ? "free" : "paid", items, total };
 };
 
 export const fetchTrendingEbooksOnly = async (opts: TrendingOpts = {}) => {
   const { wantFree, wantPaid, limitNum } = flags(opts);
+  const skip = Math.max(opts.skip ?? 0, 0);
   const where: any = { active: true, isTrending: true };
   if (opts.language) where.language = opts.language;
   if (opts.search) where.OR = [{ name: { contains: opts.search } }, { author: { contains: opts.search } }];
@@ -54,7 +60,9 @@ export const fetchTrendingEbooksOnly = async (opts: TrendingOpts = {}) => {
   const plansByEbook = new Map<number, any[]>();
   for (const p of plans) { if (p.ebookId == null) continue; (plansByEbook.get(p.ebookId) ?? plansByEbook.set(p.ebookId, []).get(p.ebookId)!).push(p); }
 
-  const items = ebooks.map((e: any) => {
+  // free/paid is a post-query (in-memory) filter over the plan price, so the
+  // total for pagination is the FULL filtered length; window it via skip/take.
+  const filtered = ebooks.map((e: any) => {
     const ePlans = plansByEbook.get(e.id) ?? [];
     const minPrice = ePlans.length ? Math.min(...ePlans.map((p) => Number(p.price) || 0)) : 0;
     const isFree = minPrice === 0;
@@ -65,8 +73,10 @@ export const fetchTrendingEbooksOnly = async (opts: TrendingOpts = {}) => {
       publisher: e.publisher ?? null, language: e.language, image: e.image ?? null, thumbnail: e.thumbnail ?? null, demoUrl: e.demoUrl ?? null,
       isTrending: e.isTrending, price: minPrice, isFree, isNew: isNewItem(e.createdAt), plans: ePlans, createdAt: e.createdAt,
     };
-  }).filter(Boolean).slice(0, limitNum) as any[];
-  return { type: wantFree ? "free" : "paid", items };
+  }).filter(Boolean) as any[];
+  const total = filtered.length;
+  const items = filtered.slice(skip, skip + limitNum);
+  return { type: wantFree ? "free" : "paid", items, total };
 };
 
 export const resolveFreeCategoryIds = async () => {

@@ -45,12 +45,22 @@ export const parseCourseId = (id: string): number | null => {
 /**
  * Active subject categories each with their active-course count — matches the
  * Mongo `listCourseCategories` contract (`{...category, courseCount}`).
+ *
+ * Supports optional `search` (title `contains`) + pagination (`skip`/`limit`);
+ * the active-course counts are computed only for the returned page. Returns
+ * `{ data, total }` where `total` is the full match count (for pagination).
  */
-export const listCourseCategoriesWithCounts = async (): Promise<
-  CourseSubjectCategoryWithCountDto[]
-> => {
-  const categories = await repo.listActiveCategories();
-  if (categories.length === 0) return [];
+export const listCourseCategoriesWithCounts = async (
+  opts: { search?: string; skip?: number; limit?: number } = {}
+): Promise<{ data: CourseSubjectCategoryWithCountDto[]; total: number }> => {
+  const skip = Math.max(opts.skip ?? 0, 0);
+  const take = Math.max(opts.limit ?? 20, 1);
+  const [categories, total] = await repo.paginateActiveCategories({
+    search: opts.search?.trim() || undefined,
+    skip,
+    take,
+  });
+  if (categories.length === 0) return { data: [], total };
 
   const counts = await repo.countActiveCoursesByCategory(categories.map((c) => c.id));
   const countById = new Map<number, number>();
@@ -59,7 +69,10 @@ export const listCourseCategoriesWithCounts = async (): Promise<
       countById.set(row.courseSubjectCategoryId, row._count._all);
     }
   }
-  return categories.map((c) => toCourseCategoryWithCountDto(c, countById.get(c.id) ?? 0));
+  return {
+    data: categories.map((c) => toCourseCategoryWithCountDto(c, countById.get(c.id) ?? 0)),
+    total,
+  };
 };
 
 // ── courses ─────────────────────────────────────────────────────────────────

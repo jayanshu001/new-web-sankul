@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+export const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 // Accepts a 24-hex Mongo ObjectId OR a numeric MySQL id. Used where the SQL
 // branch resolves ids as ints (e.g. ws_video / ws_course / ws_package).
 export const idOrObjectIdRegex = /^([0-9a-fA-F]{24}|\d+)$/;

@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import * as catSql from "../../modules/client-catalog/client-catalog.service";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -29,6 +30,19 @@ function getSearch(req: Request): string {
   return typeof req.query.search === "string" ? req.query.search.trim() : "";
 }
 
+// The catalog tabs return a category-grouped `list` + full `totals`. Pagination
+// windows that top-level category list (the unit the FE renders as sections);
+// `totals` stays the full counts and `pagination.total` = total categories.
+// Search is already applied in the service before this slice.
+function paginateCategories<T extends { list: unknown[] }>(
+  req: Request,
+  r: T
+): T & { pagination: ReturnType<typeof buildPagination> } {
+  const { page, limit, skip } = parseListQuery(req.query);
+  const list = r.list.slice(skip, skip + limit);
+  return { ...r, list, pagination: buildPagination(r.list.length, page, limit) };
+}
+
 // ─── VIDEOS ──────────────────────────────────────────────────────────────────
 // GET /api/v1/client/catalog/:type/:id/videos
 // Query: ?search=  ?categoryIds=a,b  (categoryIds is video-only)
@@ -51,7 +65,7 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
       : null;
     const userNum = catSql.parseCatId(String(req.user?.id ?? ""));
     const r = await catSql.catalogVideos({ type, id: idNum, customerId: userNum, search: search || null, categoryIds: catIds });
-    return success(res, { parent: { _id: id, type, name: sp.name }, ...r }, "Video categories fetched.");
+    return success(res, { parent: { _id: id, type, name: sp.name }, ...paginateCategories(req, r) }, "Video categories fetched.");
   } catch (err) {
     logger.error("getCatalogVideos failed", { traceId, type, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch video categories.", 500);
@@ -75,7 +89,7 @@ export const getCatalogMaterials = async (req: Request, res: Response) => {
     if (!sp) return failure(res, `${type} not found.`, 404);
     const userNum = catSql.parseCatId(String(req.user?.id ?? ""));
     const r = await catSql.catalogMaterials({ type, id: idNum, search: getSearch(req) || null, customerId: userNum });
-    return success(res, { parent: { _id: id, type, name: sp.name }, ...r }, "Material categories fetched.");
+    return success(res, { parent: { _id: id, type, name: sp.name }, ...paginateCategories(req, r) }, "Material categories fetched.");
   } catch (err) {
     logger.error("getCatalogMaterials failed", { traceId, type, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch material categories.", 500);
@@ -98,7 +112,7 @@ export const getCatalogTests = async (req: Request, res: Response) => {
     const sp = await catSql.loadParent(type, idNum);
     if (!sp) return failure(res, `${type} not found.`, 404);
     const r = await catSql.catalogTests({ type, id: idNum, search: getSearch(req) || null });
-    return success(res, { parent: { _id: id, type, name: sp.name }, ...r }, "Test categories fetched.");
+    return success(res, { parent: { _id: id, type, name: sp.name }, ...paginateCategories(req, r) }, "Test categories fetched.");
   } catch (err) {
     logger.error("getCatalogTests failed", { traceId, type, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch test categories.", 500);

@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import logger from "../../utils/logger";
 import { CRM_LEAD_TYPE } from "../../shared/enums";
 import { GenerateCRMLead } from "../../utils/crm";
@@ -20,7 +21,7 @@ import type { ListCoursesOptions } from "../../modules/catalog-course/catalog-co
 
 // Legacy Mongo ObjectId shape (24-hex). Retained only so the order-id validation
 // stays identical to the pre-migration contract; SQL order ids are ints.
-const isObjectId = (v: string) => /^[a-fA-F0-9]{24}$/.test(v);
+const isObjectId = (v: string) => /^([a-fA-F0-9]{24}|[1-9]\d*)$/.test(v);
 
 /**
  * Map the listing query string → the MySQL `listCoursesWithPlans` options.
@@ -78,9 +79,11 @@ export const listCourseCategoriesHandler = async (req: Request, res: Response) =
   logger.info("listCourseCategoriesHandler invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const data = await listCourseCategoriesWithCounts();
-    logger.info("listCourseCategoriesHandler success", { traceId, count: data.length, source: "mysql" });
-    return res.status(200).json({ success: true, data });
+    const { search, page, limit, skip } = parseListQuery(req.query as Record<string, any>);
+    const { data, total } = await listCourseCategoriesWithCounts({ search, skip, limit });
+    const pagination = buildPagination(total, page, limit);
+    logger.info("listCourseCategoriesHandler success", { traceId, count: data.length, total, source: "mysql" });
+    return res.status(200).json({ success: true, data, pagination });
   } catch (err) {
     logger.error("listCourseCategoriesHandler failed", {
       traceId,

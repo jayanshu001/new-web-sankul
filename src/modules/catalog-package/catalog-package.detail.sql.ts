@@ -233,18 +233,49 @@ export const listPackagesPaginatedSql = async (opts: {
   return { rows, total };
 };
 
-export const listPackagesByTypeSql = async (packageTypeId: number) =>
-  prisma.package.findMany({ where: { active: true, packageTypeId }, orderBy: [{ order_by: "asc" }, { id: "desc" }] });
+// Optional name search + pagination. All list variants return `{ rows, total }`
+// so callers can build a uniform pagination envelope; the `count()` mirrors the
+// exact same `where` as `findMany` (Promise.all).
+type ListOpts = { search?: string; skip?: number; take?: number };
+const withSearch = (where: any, opts?: ListOpts) =>
+  opts?.search ? { ...where, name: { contains: opts.search } } : where;
 
-export const listPackagesByGoalLabelSql = async (goalLabelId: number) =>
-  prisma.package.findMany({ where: { active: true, goalLabelId }, orderBy: [{ order_by: "asc" }, { id: "desc" }] });
+export const listPackagesByTypeSql = async (packageTypeId: number, opts: ListOpts = {}) => {
+  const where = withSearch({ active: true, packageTypeId }, opts);
+  const [rows, total] = await Promise.all([
+    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.package.count({ where }),
+  ]);
+  return { rows, total };
+};
+
+export const listPackagesByGoalLabelSql = async (goalLabelId: number, opts: ListOpts = {}) => {
+  const where = withSearch({ active: true, goalLabelId }, opts);
+  const [rows, total] = await Promise.all([
+    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.package.count({ where }),
+  ]);
+  return { rows, total };
+};
 
 // Goal-scoped label lookup. Label ids are per-goal (they restart at 1 per goal),
 // so filtering on goalLabelId alone leaks packages across goals that share the id.
 // Scope by BOTH goalId + goalLabelId to get the packages for exactly one label.
-export const listPackagesByGoalLabelScopedSql = async (goalId: number, goalLabelId: number) =>
-  prisma.package.findMany({ where: { active: true, goalId, goalLabelId }, orderBy: [{ order_by: "asc" }, { id: "desc" }] });
+export const listPackagesByGoalLabelScopedSql = async (goalId: number, goalLabelId: number, opts: ListOpts = {}) => {
+  const where = withSearch({ active: true, goalId, goalLabelId }, opts);
+  const [rows, total] = await Promise.all([
+    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.package.count({ where }),
+  ]);
+  return { rows, total };
+};
 
 // Goal-level ("individual") packages for a label-less goal: goalId set, is_individual=true.
-export const listPackagesByGoalIndividualSql = async (goalId: number) =>
-  prisma.package.findMany({ where: { active: true, goalId, isIndividual: true }, orderBy: [{ order_by: "asc" }, { id: "desc" }] });
+export const listPackagesByGoalIndividualSql = async (goalId: number, opts: ListOpts = {}) => {
+  const where = withSearch({ active: true, goalId, isIndividual: true }, opts);
+  const [rows, total] = await Promise.all([
+    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.package.count({ where }),
+  ]);
+  return { rows, total };
+};

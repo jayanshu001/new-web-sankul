@@ -18,7 +18,6 @@
  * Exam.status is Boolean → Mongo status:PUBLISHED collapses to status=true.
  */
 import { prisma } from "../../config/prisma";
-import { defaultListingQualities } from "../../utils/videoQualities";
 import { getPurchasedMaterialIds } from "../client-material/client-material.service";
 
 export const CLIENT_CATALOG_MODULE = "client-catalog";
@@ -106,28 +105,16 @@ export const catalogVideos = async (opts: {
   const { descendantsOf } = await import("../catalog-category-tree/category-tree.service");
   const list = await Promise.all(selected.map(async (cat) => {
     const subtree = await descendantsOf([cat.id]);
-    const videoWhere: any = { videoCategoryId: cat.id, status: true };
-    if (opts.search) videoWhere.title = { contains: opts.search };
-    const [count, videos, childCount] = await Promise.all([
+    // `count` is context-dependent: a directory node reports its direct child-folder
+    // count; a leaf (no child folders) reports the video count across its subtree.
+    // The per-category video list itself is no longer returned by this endpoint.
+    const [videoCount, childCount] = await Promise.all([
       prisma.video.count({ where: { videoCategoryId: { in: subtree }, status: true } }),
-      prisma.video.findMany({ where: videoWhere, orderBy: { order: "asc" } }),
       prisma.videoCategoryRelation.count({ where: { parent: cat.id } }),
     ]);
-    let progByVideo = new Map<number, any>();
-    if (opts.customerId && videos.length) {
-      const rows = await prisma.lectureProgress.findMany({ where: { customerId: opts.customerId, videoId: { in: videos.map((v) => v.id) } }, select: { videoId: true, positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true } });
-      progByVideo = new Map(rows.map((r) => [r.videoId!, r]));
-    }
-    const videoList = videos.map((v) => {
-      const p = progByVideo.get(v.id);
-      return {
-        _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, order: v.order,
-        youtube_id: v.youtube_id ?? null, aws_id: v.aws_id ?? null, vimeo_id: v.vimeo_id ?? null,
-        recordings: [], qualities: defaultListingQualities(),
-        progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
-      };
-    });
-    return { category: { _id: String(cat.id), title: cat.title, image: cat.image, havingChildDirectory: childCount > 0, count }, list: videoList, _subtree: subtree };
+    const havingChildDirectory = childCount > 0;
+    const count = havingChildDirectory ? childCount : videoCount;
+    return { category: { _id: String(cat.id), title: cat.title, image: cat.image, havingChildDirectory, count }, _subtree: subtree };
   }));
 
   const union = [...new Set(list.flatMap((g) => g._subtree))];
@@ -226,36 +213,26 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
   let ordered = catIds.map((cid) => byId.get(cid)).filter(Boolean) as any[];
   if (opts.search) ordered = ordered.filter((c) => (c.name ?? "").toLowerCase().includes(opts.search!.toLowerCase()));
 
-  // Per category: subtree count + child-folder list + the folder's OWN direct
-  // materials (inlined), mirroring the Mongo branch. Direct materials are
-  // fetched across all categories, ownership resolved once, then grouped.
-  const directByCat = new Map<number, any[]>();
-  const allDirect: any[] = [];
-  await Promise.all(ordered.map(async (cat) => {
-    const mats = await prisma.material.findMany({
-      where: { materialCategoryId: cat.id, status: true },
-      orderBy: [{ order_by: "asc" }, { created_at: "desc" }],
-    });
-    directByCat.set(cat.id, mats);
-    allDirect.push(...mats);
-  }));
-  const ownedIds = await getPurchasedMaterialIds(
-    opts.customerId ?? null,
-    allDirect.map((m) => ({ _id: m.id, materialCategoryId: m.materialCategoryId, isPaid: !!m.isPaid }))
-  );
-
+  // Per category: `count` is context-dependent — a directory node reports its
+  // direct child-folder count; a leaf reports the material count across its
+  // subtree. The per-category material list is no longer returned (perf).
+  // `totals.items` still tracks the true material count (via `_itemCount`).
   const list = await Promise.all(ordered.map(async (cat) => {
     const subtreeIds = await descendantIds("ws_material_category", "parent", cat.id);
-    const [count, children, ancestors] = await Promise.all([
+    const [itemCount, children, ancestors] = await Promise.all([
       prisma.material.count({ where: { materialCategoryId: { in: subtreeIds }, status: true } }),
       prisma.materialCategory.findMany({ where: { parent: cat.id, status: true }, select: { id: true } }),
       materialCategoryAncestors(cat.parent),
     ]);
     const childCategoryIds = children.map((c) => String(c.id));
-    const materials = (directByCat.get(cat.id) ?? []).map((m) => shapeMaterialDoc(m, ownedIds));
-    return { category: shapeMaterialCategoryDoc(cat, ancestors, childCategoryIds, count), materials };
+    const havingChildDirectory = childCategoryIds.length > 0;
+    const count = havingChildDirectory ? childCategoryIds.length : itemCount;
+    return { category: shapeMaterialCategoryDoc(cat, ancestors, childCategoryIds, count), _itemCount: itemCount };
   }));
-  return { list, totals: { categories: list.length, items: list.reduce((n, g) => n + g.category.count, 0) } };
+  return {
+    list: list.map(({ _itemCount, ...rest }) => rest),
+    totals: { categories: list.length, items: list.reduce((n, g) => n + g._itemCount, 0) },
+  };
 };
 
 // ── TESTS ──────────────────────────────────────────────────────────────────
@@ -275,14 +252,22 @@ export const catalogTests = async (opts: { type: "course" | "package" | "live-co
   let ordered = catIds.map((cid) => byId.get(cid)).filter(Boolean) as any[];
   if (opts.search) ordered = ordered.filter((c) => (c.name ?? "").toLowerCase().includes(opts.search!.toLowerCase()));
 
+  // `count` is context-dependent: a directory node reports its direct child-folder
+  // count; a leaf reports the exam count across its subtree. `totals.items` keeps
+  // tracking the true exam count (via `_itemCount`).
   const list = await Promise.all(ordered.map(async (cat) => {
     const ids = await descendantIds("ws_exam_category", "parent_id", cat.id);
-    const [count, childCount] = await Promise.all([
+    const [itemCount, childCount] = await Promise.all([
       // Mongo filtered status:PUBLISHED + non-ended window; SQL Exam.status is Boolean → status=true.
       prisma.exam.count({ where: { examCategoryId: { in: ids }, status: true } }),
       prisma.examCategory.count({ where: { parent: cat.id, status: true } }),
     ]);
-    return { category: { _id: String(cat.id), title: cat.name, name: cat.name, image: cat.image, havingChildDirectory: childCount > 0, count } };
+    const havingChildDirectory = childCount > 0;
+    const count = havingChildDirectory ? childCount : itemCount;
+    return { category: { _id: String(cat.id), title: cat.name, name: cat.name, image: cat.image, havingChildDirectory, count }, _itemCount: itemCount };
   }));
-  return { list, totals: { categories: list.length, items: list.reduce((n, g) => n + g.category.count, 0) } };
+  return {
+    list: list.map(({ _itemCount, ...rest }) => rest),
+    totals: { categories: list.length, items: list.reduce((n, g) => n + g._itemCount, 0) },
+  };
 };

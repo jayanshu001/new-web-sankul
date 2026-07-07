@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 
 export const createAddressSchema = z.object({
   name: z.string().min(1, "Name is required").max(50),

@@ -133,20 +133,26 @@ const percentOf = (pos: number, dur: number) =>
  */
 export const listFreeResume = async (
   customerId: number,
-  limit = 20
-): Promise<{ cards: any[]; resumeNext: any | null }> => {
+  opts: { search?: string | null; skip?: number; limit?: number } = {}
+): Promise<{ cards: any[]; resumeNext: any | null; total: number }> => {
+  const skip = opts.skip ?? 0;
+  const limit = opts.limit ?? 20;
+
   const rows = await prisma.lectureProgress.findMany({
     where: { customerId, source: "free", videoId: { not: null } },
     orderBy: { lastWatchedAt: "desc" },
-    take: limit,
   });
-  if (rows.length === 0) return { cards: [], resumeNext: null };
+  if (rows.length === 0) return { cards: [], resumeNext: null, total: 0 };
 
   const videoIds = rows.map((r) => r.videoId!).filter((v) => v != null);
   // Only videos still live AND still free (a flip to paid/disabled drops them,
-  // matching the Mongo feed — tapping would 403 at /courses/lecture).
+  // matching the Mongo feed — tapping would 403 at /courses/lecture). `search`
+  // (video title) is pushed into the Prisma where so non-matching videos are
+  // simply absent from `byId` and drop out of the built cards.
+  const videoWhere: any = { id: { in: videoIds }, status: true, priceType: "free" };
+  if (opts.search) videoWhere.title = { contains: opts.search };
   const videos = await prisma.video.findMany({
-    where: { id: { in: videoIds }, status: true, priceType: "free" },
+    where: videoWhere,
     select: {
       id: true, title: true, topic: true, videoCategoryId: true,
       VideoCategory: { select: { id: true, title: true, image: true } },
@@ -154,7 +160,7 @@ export const listFreeResume = async (
   });
   const byId = new Map(videos.map((v) => [v.id, v]));
 
-  const cards = rows
+  const allCards = rows
     .map((r) => {
       const v = byId.get(r.videoId!);
       if (!v) return null; // deleted / disabled / no longer free — skip
@@ -181,7 +187,11 @@ export const listFreeResume = async (
     })
     .filter(Boolean);
 
-  return { cards, resumeNext: cards[0] ?? null };
+  // Hero card is the single most-recent match regardless of the requested page;
+  // `cards` is the paginated slice. `total` counts all matching cards.
+  const total = allCards.length;
+  const cards = allCards.slice(skip, skip + limit);
+  return { cards, resumeNext: allCards[0] ?? null, total };
 };
 
 /**
@@ -467,23 +477,46 @@ export const listMyLearningProgress = async (customerId: number): Promise<{ card
  * "My Courses" resume feed (course-only), SQL mirror of
  * course/progress.controller.listMyCoursesForResume → { courses, resumeNext }.
  */
-export const listMyCoursesForResume = async (customerId: number): Promise<{ courses: any[]; resumeNext: any }> => {
+export const listMyCoursesForResume = async (
+  customerId: number,
+  opts: { search?: string; skip?: number; limit?: number } = {}
+): Promise<{ courses: any[]; resumeNext: any; total: number }> => {
   const now = new Date();
   const perCourse = (await rollupByContainer(customerId, "courseId"))
-    .sort((a, b) => new Date(b.lastWatchedAt).getTime() - new Date(a.lastWatchedAt).getTime())
-    .slice(0, 20);
-  if (!perCourse.length) return { courses: [], resumeNext: null };
+    .sort((a, b) => new Date(b.lastWatchedAt).getTime() - new Date(a.lastWatchedAt).getTime());
+  if (!perCourse.length) return { courses: [], resumeNext: null, total: 0 };
 
-  const courseIds = perCourse.map((p) => p._id);
-  const [courses, subs, totals] = await Promise.all([
-    prisma.course.findMany({ where: { id: { in: courseIds }, status: true }, select: { id: true, name: true, image: true } }),
+  // Resolve the course rows for every started course first — the names drive the
+  // optional `search` filter, and the active-status check drops orphaned rows.
+  const allCourseIds = perCourse.map((p) => p._id);
+  const activeCourses = await prisma.course.findMany({
+    where: { id: { in: allCourseIds }, status: true },
+    select: { id: true, name: true, image: true },
+  });
+  const courseById = new Map(activeCourses.map((c) => [c.id, c]));
+
+  // Candidate cards = started + active, optionally name-filtered; paginate the
+  // resolved array (total = full match count).
+  const search = opts.search?.trim().toLowerCase();
+  let candidates = perCourse.filter((p) => courseById.has(p._id));
+  if (search) {
+    candidates = candidates.filter((p) =>
+      (courseById.get(p._id)?.name ?? "").toLowerCase().includes(search)
+    );
+  }
+  const total = candidates.length;
+  const skip = Math.max(opts.skip ?? 0, 0);
+  const limit = Math.max(opts.limit ?? 20, 1);
+  const pageCourses = candidates.slice(skip, skip + limit);
+
+  const courseIds = pageCourses.map((p) => p._id);
+  const [subs, totals] = await Promise.all([
     prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: { in: courseIds }, status: true, endAt: { gt: now } }, select: { courseId: true, endAt: true } }),
     containerTotals(courseIds, [], []),
   ]);
-  const courseById = new Map(courses.map((c) => [c.id, c]));
   const subBy = new Map(subs.map((s) => [s.courseId!, s]));
 
-  const courseCards = perCourse.map((p) => {
+  const courseCards = pageCourses.map((p) => {
     const c = courseById.get(p._id); if (!c) return null;
     const sub = subBy.get(p._id); const total = totals.courseTotal.get(p._id) ?? 0;
     return {
@@ -512,7 +545,7 @@ export const listMyCoursesForResume = async (customerId: number): Promise<{ cour
       };
     }
   }
-  return { courses: courseCards, resumeNext };
+  return { courses: courseCards, resumeNext, total };
 };
 
 // ── Lecture-ref + resume-next builders (SQL) — used by the notes lists ────────

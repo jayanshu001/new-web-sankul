@@ -2,7 +2,7 @@ import { z } from "zod";
 
 // ─── Category ─────────────────────────────────────────────────────────────────
 
-const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 const objectIdSchema = z.string().regex(objectIdRegex, "Invalid id");
 
 const childCategoryIdsSchema = z

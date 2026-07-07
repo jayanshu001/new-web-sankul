@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { EBookLanguage, PackageCourseEbookOrderStatus, PackageCourseEbookPaymentType, PaymentMethod } from "../../shared/enums";
 
-const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 // On the SQL (MySQL) branch the attached countdown/category ids are numeric
 // strings, not 24-hex ObjectIds. Accept either form for the id-ARRAY fields so
 // the SQL write isn't rejected at validation; the service coerces via

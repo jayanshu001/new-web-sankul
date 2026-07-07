@@ -3,7 +3,7 @@ import { z } from "zod";
 export const GUARDS = ["web", "educator", "promoter"] as const;
 export type Guard = (typeof GUARDS)[number];
 
-const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 export const objectIdSchema = z.string().regex(objectIdRegex, "Invalid id");
 
 export const guardSchema = z.enum(GUARDS);

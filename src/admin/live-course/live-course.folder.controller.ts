@@ -4,7 +4,7 @@ import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveCourseSql from "../../modules/admin-live-course/admin-live-course.service";
 
-const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId");
+const objectId = z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId");
 
 const createFolderSchema = z
   .object({

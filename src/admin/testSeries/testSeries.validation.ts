@@ -6,7 +6,7 @@ import { ExamLanguage } from "../../shared/enums";
 // multipart/JSON clients). Accept both so neither backend rejects valid ids.
 const objectId = z
   .union([
-    z.string().regex(/^[0-9a-fA-F]{24}$/),
+    z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/),
     z.string().regex(/^[1-9][0-9]*$/),
   ])
   .or(z.number().int().positive().transform(String));

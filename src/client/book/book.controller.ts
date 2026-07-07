@@ -85,22 +85,24 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
   logger.info("listTrendingBooks invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { type, search, language, limit } = req.query as Record<string, string>;
+    const { type, language } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
     const wantFree = type === "free";
-    const wantPaid = type === "paid" || !type; // default to paid
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
 
     // ── SQL branch (client-trending) ─────────────────────────────────────────
-    // Combined trending: fetch books + ebooks from SQL, merge by createdAt desc,
-    // cap at limitNum, then attach the shareableLink.
+    // Combined trending: fetch books + ebooks from SQL (capped), merge by
+    // createdAt desc — the merge is in-memory, so paginate the resolved array
+    // via skip/take with `total` = full merged length.
     const [bookRes, ebookRes] = await Promise.all([
       fetchTrendingBooksOnlySql({ type, search, language, limit: 100 }),
       fetchTrendingEbooksOnlySql({ type, search, language, limit: 100 }),
     ]);
     const base = resolveBase(req);
-    const merged = [...bookRes.items, ...ebookRes.items]
-      .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
-      .slice(0, limitNum)
+    const mergedAll = [...bookRes.items, ...ebookRes.items]
+      .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime());
+    const total = mergedAll.length;
+    const items = mergedAll
+      .slice(skip, skip + limit)
       .map((item) => ({
         ...item,
         shareableLink: buildShareUrl(
@@ -110,10 +112,11 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
         ),
       }));
     const resType = wantFree ? "free" : "paid";
-    logger.info("listTrendingBooks success (mysql)", { traceId, type: resType, count: merged.length });
+    logger.info("listTrendingBooks success (mysql)", { traceId, type: resType, count: items.length });
     return res.status(200).json({
       success: true,
-      data: { type: resType, items: merged, total: merged.length },
+      data: { type: resType, items, total: items.length },
+      pagination: buildPagination(total, page, limit),
     });
   } catch (error: any) {
     logger.error("listTrendingBooks failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -127,9 +130,9 @@ export const listTrendingBooksOnly = async (req: Request, res: Response) => {
   logger.info("listTrendingBooksOnly invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { type, search, language, limit } = req.query as Record<string, string>;
-    const limitNum = parseInt(limit, 10) || 20;
-    const result = await fetchTrendingBooksOnlySql({ type, search, language, limit: limitNum });
+    const { type, language } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const result = await fetchTrendingBooksOnlySql({ type, search, language, limit, skip });
 
     const base = resolveBase(req);
     const items = result.items.map((item) => ({
@@ -141,6 +144,7 @@ export const listTrendingBooksOnly = async (req: Request, res: Response) => {
     return res.status(200).json({
       success: true,
       data: { type: result.type, items, total: items.length },
+      pagination: buildPagination(result.total, page, limit),
     });
   } catch (error: any) {
     logger.error("listTrendingBooksOnly failed", { traceId, error: getErrorMessage(error), stack: error.stack });
@@ -154,9 +158,9 @@ export const listTrendingEbooksOnly = async (req: Request, res: Response) => {
   logger.info("listTrendingEbooksOnly invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const { type, search, language, limit } = req.query as Record<string, string>;
-    const limitNum = parseInt(limit, 10) || 20;
-    const result = await fetchTrendingEbooksOnlySql({ type, search, language, limit: limitNum });
+    const { type, language } = req.query as Record<string, string>;
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const result = await fetchTrendingEbooksOnlySql({ type, search, language, limit, skip });
 
     const base = resolveBase(req);
     const items = result.items.map((item) => ({
@@ -168,6 +172,7 @@ export const listTrendingEbooksOnly = async (req: Request, res: Response) => {
     return res.status(200).json({
       success: true,
       data: { type: result.type, items, total: items.length },
+      pagination: buildPagination(result.total, page, limit),
     });
   } catch (error: any) {
     logger.error("listTrendingEbooksOnly failed", { traceId, error: getErrorMessage(error), stack: error.stack });

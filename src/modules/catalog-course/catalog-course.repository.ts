@@ -19,6 +19,27 @@ export const catalogCourseRepository = {
     }),
 
   /**
+   * Paginated active subject categories, with an optional title search. Same
+   * sort as `listActiveCategories`. Returns `[rows, total]` over an IDENTICAL
+   * where (Promise.all).
+   */
+  paginateActiveCategories: (args: { search?: string; skip: number; take: number }) => {
+    const where = {
+      status: true,
+      ...(args.search ? { title: { contains: args.search } } : {}),
+    };
+    return Promise.all([
+      prisma.courseSubjectCategory.findMany({
+        where,
+        orderBy: [{ order: "asc" as const }, { title: "asc" as const }],
+        skip: args.skip,
+        take: args.take,
+      }),
+      prisma.courseSubjectCategory.count({ where }),
+    ]);
+  },
+
+  /**
    * Active-course count per subject-category id. Mirrors the Mongo aggregate
    * `{$match:{status:true}}` → `{$group: _id:courseSubjectCategoryId}`.
    */

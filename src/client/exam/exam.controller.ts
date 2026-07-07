@@ -31,7 +31,7 @@ import * as catalogExam from "../../modules/catalog-exam/catalog-exam.service";
 
 // Legacy Mongo ObjectId shape (24-hex). Preserves the exact pre-migration
 // validation behaviour without pulling in mongoose.
-const isObjectId = (v: string) => /^[a-fA-F0-9]{24}$/.test(v);
+const isObjectId = (v: string) => /^([a-fA-F0-9]{24}|[1-9]\d*)$/.test(v);
 const norm = (s: string) => (s ?? "").trim().toLowerCase();
 
 // ─── Discovery ────────────────────────────────────────────────────────────────

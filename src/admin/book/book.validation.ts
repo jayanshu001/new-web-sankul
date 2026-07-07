@@ -3,7 +3,7 @@ import { BookLanguage, BookOrderStatus, BookCourier } from "../../shared/enums";
 
 // 24-char hex ObjectId shape (replaces the former mongoose.Types.ObjectId.isValid
 // check now that mongoose is no longer a dependency of this module).
-const isObjectIdLike = (id: string) => /^[a-fA-F0-9]{24}$/.test(id);
+const isObjectIdLike = (id: string) => /^([a-fA-F0-9]{24}|[1-9]\d*)$/.test(id);
 
 const zBool = z.preprocess(
   (v) => (typeof v === "string" ? v === "true" : v),

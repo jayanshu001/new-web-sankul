@@ -3,7 +3,7 @@ import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminLiveCourseRepository as repo } from "./admin-live-course.repository";
 import { adminAuthRepository } from "../admin-auth/admin-auth.repository";
 import { deriveRole } from "../admin-auth/admin-auth.transformer";
-import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession } from "@prisma/client";
+import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession, Prisma } from "@prisma/client";
 import { getVodStreamMeta } from "../../admin/live/streamos.service";
 import { redisClient } from "../../config/redis";
 
@@ -178,13 +178,14 @@ export const togglePopular = async (id: number): Promise<"not_found" | { id: str
 export const sessionCount = async (id: number) => (await repo.sessionsForCourse(id, { now: new Date(), skip: 0, take: 1 })).total;
 
 // ── sessions for a course ────────────────────────────────────────────────────
-export const listSessionsForCourse = async (id: number, q: { status?: string; upcoming?: string; page?: string; limit?: string }): Promise<"not_found" | { sessions: any[]; total: number; page: number; limit: number }> => {
+export const listSessionsForCourse = async (id: number, q: { status?: string; upcoming?: string; search?: string; page?: string; limit?: string }): Promise<"not_found" | { sessions: any[]; total: number; page: number; limit: number }> => {
   if (!(await repo.exists(id))) return "not_found";
   const page = Math.max(1, parseInt(q.page as any) || 1);
   const limit = Math.min(100, parseInt(q.limit as any) || 50);
+  const search = typeof q.search === "string" && q.search.trim() ? q.search.trim() : undefined;
   const { rows, total } = await repo.sessionsForCourse(id, {
     status: typeof q.status === "string" ? q.status : undefined,
-    upcoming: q.upcoming === "true", now: new Date(), skip: (page - 1) * limit, take: limit,
+    upcoming: q.upcoming === "true", search, now: new Date(), skip: (page - 1) * limit, take: limit,
   });
   return { sessions: rows.map(toSessionDto), total, page, limit };
 };
@@ -850,7 +851,8 @@ export const getLiveCourseDetailForClient = async (
 export const listMyLiveCoursesForClient = async (
   customerId: number,
   filterStatus: string,
-  baseUrl?: string
+  baseUrl?: string,
+  q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
 ) => {
   const now = new Date();
   const subs = await repo.myLiveCourseSubs(customerId, filterStatus, now);
@@ -919,7 +921,14 @@ export const listMyLiveCoursesForClient = async (
       },
     };
   });
-  return { liveCourses, total: liveCourses.length };
+  // Optional name search + pagination over the resolved cards (subscription rows
+  // are hydrated in-memory, so paginate the assembled array via slice).
+  const filtered = q.search
+    ? liveCourses.filter((c) => (c.liveCourse?.name ?? "").toLowerCase().includes(q.search!.toLowerCase()))
+    : liveCourses;
+  const total = filtered.length;
+  const paged = filtered.slice((q.page - 1) * q.limit, (q.page - 1) * q.limit + q.limit);
+  return { liveCourses: paged, total, page: q.page, limit: q.limit };
 };
 
 // ── purchase options (ported from entitlement.buildPurchaseOptions; SQL) ──────
@@ -987,7 +996,8 @@ const resolveVodMeta = async (streamId: string): Promise<CachedVodMeta | null> =
 
 export const getRecordingsForClient = async (
   courseId: number,
-  customerId: number | null
+  customerId: number | null,
+  q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
 ): Promise<"not_found" | any> => {
   const course = await repo.findById(courseId);
   if (!course || !course.status) return "not_found";
@@ -1085,14 +1095,28 @@ export const getRecordingsForClient = async (
     };
   };
 
-  const folderPayload = folders.map((f) => ({
+  const allFolders = folders.map((f) => ({
     folderId: String(f.id), title: f.title, image: f.image, order: f.order_by,
     lectures: (byFolder.get(f.id) ?? []).map(shapeLecture),
   }));
 
+  // Optional lecture-title search drops non-matching lectures (and now-empty
+  // folders); pagination is over the FOLDER list (the recordings screen renders
+  // folder-by-folder). totalLectures reflects the search-filtered universe.
+  const term = q.search ? q.search.toLowerCase() : null;
+  const filteredFolders = term
+    ? allFolders
+        .map((f) => ({ ...f, lectures: f.lectures.filter((l) => (l.title ?? "").toLowerCase().includes(term)) }))
+        .filter((f) => f.lectures.length > 0)
+    : allFolders;
+  const totalLectures = filteredFolders.reduce((n, f) => n + f.lectures.length, 0);
+  const totalFolders = filteredFolders.length;
+  const folderPayload = filteredFolders.slice((q.page - 1) * q.limit, (q.page - 1) * q.limit + q.limit);
+
   return {
     liveCourse: { _id: String(course.id), name: course.name, image: course.image },
-    subscribed, daysLeft, totalLectures: videos.length, folders: folderPayload,
+    subscribed, daysLeft, totalLectures, folders: folderPayload,
+    total: totalFolders, page: q.page, limit: q.limit,
     purchaseOptions: subscribed ? [] : await buildPurchaseOptionsSql([courseId]),
   };
 };
@@ -1117,14 +1141,15 @@ export const listSessionRecordingsForClient = async (
   courseId: number,
   customerId: number | null,
   page: number,
-  limit: number
+  limit: number,
+  search?: string
 ): Promise<"not_found" | { liveCourse: any; subscribed: boolean; total: number; page: number; limit: number; lectures: any[] }> => {
   const course = await repo.findById(courseId);
   if (!course || !course.status) return "not_found";
 
   const links = await prisma.liveSessionCourse.findMany({ where: { liveCourseId: courseId }, select: { liveSessionId: true } });
   const sessionIds = [...new Set(links.map((l) => l.liveSessionId).filter((n): n is number => n != null))];
-  const where = { id: { in: sessionIds.length ? sessionIds : [-1] }, status: { in: ["SCHEDULED", "CREATED"] } };
+  const where: Prisma.LiveSessionWhereInput = { id: { in: sessionIds.length ? sessionIds : [-1] }, status: { in: ["SCHEDULED", "CREATED"] }, ...(search ? { title: { contains: search } } : {}) };
   const [sessions, total, subscribed] = await Promise.all([
     prisma.liveSession.findMany({ where, orderBy: [{ scheduledAt: "asc" }, { createdAt: "asc" }], skip: (page - 1) * limit, take: limit }),
     prisma.liveSession.count({ where }),
@@ -1239,8 +1264,9 @@ export const listClient = async (customerId: number | null, q: { search?: string
 // ordered-first sort), decorated with the SAME plans / daysLeft / isPurchased
 // contract as listClient so a card here and the /client/live-courses listing
 // agree. No hero ranking (that's listing-only). Paginated.
-export const listRecentLiveCourses = async (customerId: number | null, q: { page: number; limit: number }) => {
-  const where = { status: true } as const;
+export const listRecentLiveCourses = async (customerId: number | null, q: { search?: string; page: number; limit: number }) => {
+  const where: Prisma.LiveCourseWhereInput = { status: true };
+  if (q.search) where.name = { contains: q.search };
   const [rows, total] = await Promise.all([
     prisma.liveCourse.findMany({ where, orderBy: { createdAt: "desc" }, skip: (q.page - 1) * q.limit, take: q.limit }),
     prisma.liveCourse.count({ where }),
@@ -1297,31 +1323,31 @@ export const listMyCourses = async (customerId: number | null) => {
 };
 
 // ── cross-course session feeds (all-upcoming / live-now / my-upcoming) ────────
-const sessionFeed = async (courseIds: number[], mode: "upcoming" | "liveNow", page: number, limit: number) => {
-  const { rows, total, courseBySession } = await repo.sessionsForCourses(courseIds, { upcoming: mode === "upcoming", liveNow: mode === "liveNow", now: new Date(), skip: (page - 1) * limit, take: limit });
+const sessionFeed = async (courseIds: number[], mode: "upcoming" | "liveNow", search: string | undefined, page: number, limit: number) => {
+  const { rows, total, courseBySession } = await repo.sessionsForCourses(courseIds, { upcoming: mode === "upcoming", liveNow: mode === "liveNow", search, now: new Date(), skip: (page - 1) * limit, take: limit });
   const sessions = rows.map((s) => ({ ...toSessionDto(s), liveCourseIds: (courseBySession.get(s.id) ?? []).map(String) }));
   return { sessions, total, page, limit };
 };
 
-export const listAllUpcomingSessions = async (q: { page: number; limit: number }) => {
+export const listAllUpcomingSessions = async (q: { search?: string; page: number; limit: number }) => {
   // All visible courses' upcoming sessions (discovery feed) — every active course.
   const all = await repo.listClientCourses({ now: new Date(), sort: "ordered", skip: 0, take: 1000 });
-  return sessionFeed(all.map((c) => c.id), "upcoming", q.page, q.limit);
+  return sessionFeed(all.map((c) => c.id), "upcoming", q.search, q.page, q.limit);
 };
 
-export const listLiveNowSessions = async (q: { page: number; limit: number }) => {
+export const listLiveNowSessions = async (q: { search?: string; page: number; limit: number }) => {
   const all = await repo.listClientCourses({ now: new Date(), sort: "ordered", skip: 0, take: 1000 });
-  return sessionFeed(all.map((c) => c.id), "liveNow", q.page, q.limit);
+  return sessionFeed(all.map((c) => c.id), "liveNow", q.search, q.page, q.limit);
 };
 
-export const listMyUpcomingSessions = async (customerId: number | null, q: { page: number; limit: number }) => {
+export const listMyUpcomingSessions = async (customerId: number | null, q: { search?: string; page: number; limit: number }) => {
   if (!customerId) return { sessions: [], total: 0, page: q.page, limit: q.limit };
   const owned = await repo.ownedCourseIds(customerId, new Date());
-  return sessionFeed(owned, "upcoming", q.page, q.limit);
+  return sessionFeed(owned, "upcoming", q.search, q.page, q.limit);
 };
 
 // ── sessions for one course (client) ──────────────────────────────────────────
-export const listSessionsForCourseClient = async (id: number, q: { status?: string; upcoming?: string; page?: string; limit?: string }): Promise<"not_found" | { sessions: any[]; total: number; page: number; limit: number }> => {
+export const listSessionsForCourseClient = async (id: number, q: { status?: string; upcoming?: string; search?: string; page?: string; limit?: string }): Promise<"not_found" | { sessions: any[]; total: number; page: number; limit: number }> => {
   return listSessionsForCourse(id, q); // same shape as the admin sessions-for-course
 };
 

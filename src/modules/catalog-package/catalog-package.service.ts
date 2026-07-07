@@ -38,9 +38,14 @@ export const parsePackageId = (id: string): number | null => {
  * All package types in the Mongo `listPackageTypes` order/shape. The SQL table
  * has no `order`/`active`, so all rows are returned (active) ordered by name.
  */
-export const listPackageTypes = async (): Promise<PackageTypeDto[]> => {
-  const rows = await repo.listPackageTypes();
-  return rows.map(toPackageTypeDto);
+export const listPackageTypes = async (
+  opts: { search?: string; skip?: number; take?: number } = {}
+): Promise<{ data: PackageTypeDto[]; total: number }> => {
+  const [rows, total] = await Promise.all([
+    repo.listPackageTypes(opts),
+    repo.countPackageTypes({ search: opts.search }),
+  ]);
+  return { data: rows.map(toPackageTypeDto), total };
 };
 
 // ── Phase B: package (flag OFF) ─────────────────────────────────────────────

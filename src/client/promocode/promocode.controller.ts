@@ -7,7 +7,7 @@ import { getErrorMessage } from "../../utils/httpResponse";
 
 // Legacy 24-hex ObjectId shape — tolerated alongside the SQL integer ids so a
 // stray Mongo-style id doesn't hard-fail selection (real ids parse via parsePcId).
-const isObjectId = (v?: string | null) => !!v && /^[0-9a-fA-F]{24}$/.test(v);
+const isObjectId = (v?: string | null) => !!v && /^([0-9a-fA-F]{24}|[1-9]\d*)$/.test(v);
 
 type PlanDoc = any;
 

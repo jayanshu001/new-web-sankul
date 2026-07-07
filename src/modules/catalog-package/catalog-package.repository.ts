@@ -16,9 +16,18 @@ export const catalogPackageRepository = {
    * the Mongo path sorted `{order:1, name:1}` — with no order we fall back to
    * name, then id for stability).
    */
-  listPackageTypes: () =>
+  listPackageTypes: (opts?: { search?: string; skip?: number; take?: number }) =>
     prisma.packageType.findMany({
+      where: opts?.search ? { name: { contains: opts.search } } : {},
       orderBy: [{ name: "asc" }, { id: "asc" }],
+      skip: opts?.skip,
+      take: opts?.take,
+    }),
+
+  /** Count of package types matching the (optional) name search. */
+  countPackageTypes: (opts?: { search?: string }) =>
+    prisma.packageType.count({
+      where: opts?.search ? { name: { contains: opts.search } } : {},
     }),
 
   // ── package (ws_package) — Phase B, flag OFF ─────────────────────────────

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
 export const objectIdSchema = z.string().regex(objectIdRegex, "Invalid id");
 
 const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;

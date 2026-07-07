@@ -273,6 +273,10 @@ export type SeriesPapersOpts = {
   id: number;
   customerId: number | null;
   now: Date;
+  search?: string | null;
+  page: number;
+  limit: number;
+  skip: number;
 };
 
 /** Returns null when the series is missing/inactive (→ controller 404). */
@@ -296,10 +300,27 @@ export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
     }));
   }
 
-  const links = await prisma.testSeriesExam.findMany({
-    where: { testSeriesId: opts.id, status: true },
-    orderBy: [{ orderBy: "asc" }, { id: "asc" }],
-  });
+  // Papers (exam links) are the paginated collection here. `search` filters by
+  // the linked exam title — resolve matching exam ids first so the where stays
+  // identical across findMany + count.
+  const linkWhere: any = { testSeriesId: opts.id, status: true };
+  if (opts.search) {
+    const matchedExams = await prisma.exam.findMany({
+      where: { name: { contains: opts.search } },
+      select: { id: true },
+    });
+    linkWhere.examId = { in: matchedExams.map((e) => e.id) };
+  }
+
+  const [links, papersTotal] = await Promise.all([
+    prisma.testSeriesExam.findMany({
+      where: linkWhere,
+      orderBy: [{ orderBy: "asc" }, { id: "asc" }],
+      skip: opts.skip,
+      take: opts.limit,
+    }),
+    prisma.testSeriesExam.count({ where: linkWhere }),
+  ]);
 
   // Exam DTO map keyed by exam id (parity with Mongo populate select).
   const examIds = [...new Set(links.map((l) => l.examId).filter((v): v is number => v != null))];
@@ -380,7 +401,7 @@ export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
     };
   });
 
-  return { isPaid, hasAccess, categories: grouped };
+  return { isPaid, hasAccess, categories: grouped, papersTotal };
 };
 
 // ── listMySubscriptions ───────────────────────────────────────────────────────
@@ -390,13 +411,34 @@ export type MySubsOpts = {
   now: Date;
   base: string;
   buildShareUrl: (kind: string, id: string, base: string) => string;
+  search?: string | null;
+  page: number;
+  limit: number;
+  skip: number;
 };
 
 export const listMySubscriptionsMysql = async (opts: MySubsOpts) => {
-  const subs = await prisma.testSeriesSubscription.findMany({
-    where: { customerId: opts.customerId, status: true },
-    orderBy: { endAt: "desc" },
-  });
+  const where: any = { customerId: opts.customerId, status: true };
+  // Search filters by the subscribed test-series title. Resolve matching series
+  // ids first, then constrain the subscription query — keeps the where identical
+  // for both findMany + count.
+  if (opts.search) {
+    const matched = await prisma.testSeries.findMany({
+      where: { title: { contains: opts.search } },
+      select: { id: true },
+    });
+    where.testSeriesId = { in: matched.map((m) => m.id) };
+  }
+
+  const [subs, total] = await Promise.all([
+    prisma.testSeriesSubscription.findMany({
+      where,
+      orderBy: { endAt: "desc" },
+      skip: opts.skip,
+      take: opts.limit,
+    }),
+    prisma.testSeriesSubscription.count({ where }),
+  ]);
 
   const seriesIds = [...new Set(subs.map((s) => s.testSeriesId))];
   const seriesById = new Map(
@@ -439,5 +481,5 @@ export const listMySubscriptionsMysql = async (opts: MySubsOpts) => {
     };
   });
 
-  return { data, total: data.length };
+  return { data, total };
 };

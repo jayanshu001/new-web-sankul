@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const objectIdSchema = z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId");
+const objectIdSchema = z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId");
 
 const categoryRefSchema = z.object({
   category: objectIdSchema,
@@ -20,9 +20,9 @@ export const createCourseSchema = z.object({
   status: z.boolean(),
   isPaid: z.boolean().optional(),
   isPopular: z.boolean().optional(),
-  courseEducatorId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
-  courseSubjectCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
-  videoCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
+  courseEducatorId: z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId").optional(),
+  courseSubjectCategoryId: z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId").optional(),
+  videoCategoryId: z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId").optional(),
   materialCategories: z.array(categoryRefSchema).optional(),
   examCategories: z.array(categoryRefSchema).optional(),
 });

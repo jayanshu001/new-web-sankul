@@ -39,7 +39,7 @@ export const updateMaterialSchema = createMaterialSchema.partial();
 
 // Video Validation
 export const createVideoSchema = z.object({
-  videoCategoryId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId"),
+  videoCategoryId: z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId"),
   title: z.string().min(1, "Title is required"),
   topic: z.string().optional().default(""),
   slug: z.string().min(1, "Slug is required"),
@@ -59,7 +59,7 @@ export const createVideoCategorySchema = z.object({
   title: z.string().min(1, "Title is required"),
   slug: z.string().min(1, "Slug is required"),
   image: z.string().url("Image must be a valid URL"),
-  courseId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid ObjectId").optional(),
+  courseId: z.string().regex(/^([0-9a-fA-F]{24}|[1-9]\d*)$/, "Invalid ObjectId").optional(),
   order_by: z.number().int().optional().default(0),
   status: z.boolean().optional().default(true),
 });

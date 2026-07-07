@@ -4,6 +4,7 @@ import { generateToken, generateKey, generateVector, encrypt } from "../../utils
 import { resolveVideoSource } from "../../utils/videoResolver";
 import logger from "../../utils/logger";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 
 const resolveBase = (req: Request) =>
@@ -72,14 +73,12 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
   logger.info("listLiveCoursesForClient invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(50, parseInt(req.query.limit as string) || 20);
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const { search, page, limit } = parseListQuery(req.query);
 
     const r = await liveSql.listClient(liveSql.parseLiveId(String(req.user?.id ?? "")), { search, page, limit });
     const base = resolveBase(req);
     const liveCourses = r.liveCourses.map((c: any) => ({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }));
-    return success(res, { liveCourses, total: r.total, page: r.page, limit: r.limit }, "Live courses fetched.");
+    return success(res, { liveCourses, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) }, "Live courses fetched.");
   } catch (err) {
     logger.error("listLiveCoursesForClient failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list live courses.", 500);
@@ -94,13 +93,12 @@ export const listRecentlyAddedLiveCourses = async (req: Request, res: Response) 
   const traceId = req.traceId;
   logger.info("listRecentlyAddedLiveCourses invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
   try {
-    const page = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(50, parseInt(req.query.limit as string) || 10);
-    const r = await liveSql.listRecentLiveCourses(liveSql.parseLiveId(String(req.user?.id ?? "")), { page, limit });
+    const { search, page, limit } = parseListQuery(req.query);
+    const r = await liveSql.listRecentLiveCourses(liveSql.parseLiveId(String(req.user?.id ?? "")), { search, page, limit });
     const base = resolveBase(req);
     const liveCourses = r.liveCourses.map((c: any) => ({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }));
     logger.info("listRecentlyAddedLiveCourses success", { traceId, total: r.total, returned: liveCourses.length });
-    return success(res, { liveCourses, total: r.total, page: r.page, limit: r.limit }, "Recently added live courses fetched.");
+    return success(res, { liveCourses, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) }, "Recently added live courses fetched.");
   } catch (err) {
     logger.error("listRecentlyAddedLiveCourses failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list recently added live courses.", 500);
@@ -130,16 +128,14 @@ export const listUpcomingLiveBatches = async (req: Request, res: Response) => {
   logger.info("listUpcomingLiveBatches invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
 
   try {
-    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(50, parseInt(req.query.limit as string) || 20);
-    const search = typeof req.query.search === "string" ? req.query.search.trim() : "";
+    const { search, page, limit } = parseListQuery(req.query);
     const categoryId = typeof req.query.categoryId === "string" ? req.query.categoryId.trim() : "";
 
     const catId = categoryId ? liveSql.parseLiveId(categoryId) ?? undefined : undefined;
     const r = await liveSql.listUpcomingBatches(liveSql.parseLiveId(String(req.user?.id ?? "")), { search, categoryId: catId, page, limit });
     const base = resolveBase(req);
     const liveBatches = r.liveBatches.map((c: any) => ({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }));
-    return success(res, { ...r, liveBatches }, "Upcoming live batches fetched.");
+    return success(res, { ...r, liveBatches, pagination: buildPagination(r.total, r.page, r.limit) }, "Upcoming live batches fetched.");
   } catch (err) {
     logger.error("listUpcomingLiveBatches failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch upcoming live batches.", 500);
@@ -183,9 +179,9 @@ export const listSessionsForCourseClient = async (req: Request, res: Response) =
   try {
     const cid = liveSql.parseLiveId(id);
     if (!cid) return failure(res, "Invalid live course id.", 422);
-    const r = await liveSql.listSessionsForCourseClient(cid, { status: req.query.status as string, upcoming: req.query.upcoming as string, page: req.query.page as string, limit: req.query.limit as string });
+    const r = await liveSql.listSessionsForCourseClient(cid, { status: req.query.status as string, upcoming: req.query.upcoming as string, search: req.query.search as string, page: req.query.page as string, limit: req.query.limit as string });
     if (r === "not_found") return failure(res, "Live course not found.", 404);
-    return success(res, r, "Sessions fetched.");
+    return success(res, { ...r, pagination: buildPagination(r.total, r.page, r.limit) }, "Sessions fetched.");
   } catch (err) {
     logger.error("listSessionsForCourseClient failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list sessions.", 500);
@@ -209,10 +205,11 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
     const lid = liveSql.parseLiveId(id);
     if (!lid) { logger.warn("listLiveCourseRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
     const cid = req.user?.id ? Number(req.user.id) : null;
-    const r = await liveSql.getRecordingsForClient(lid, Number.isInteger(cid) ? cid : null);
+    const { search, page, limit } = parseListQuery(req.query);
+    const r = await liveSql.getRecordingsForClient(lid, Number.isInteger(cid) ? cid : null, { search, page, limit });
     if (r === "not_found") { logger.warn("listLiveCourseRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
     logger.info("listLiveCourseRecordings success (mysql)", { traceId, id, totalLectures: r.totalLectures, folderCount: r.folders.length });
-    return success(res, r, "Recorded lectures fetched.");
+    return success(res, { ...r, pagination: buildPagination(r.total, r.page, r.limit) }, "Recorded lectures fetched.");
   } catch (err) {
     logger.error("listLiveCourseRecordings failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list recorded lectures.", 500);
@@ -277,13 +274,12 @@ export const listLiveCourseSessionRecordings = async (req: Request, res: Respons
     // Metadata only; playback via gated /live-sessions/:id.
     const lid = liveSql.parseLiveId(id);
     if (!lid) { logger.warn("listLiveCourseSessionRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
-    const pageN = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limitN = Math.min(100, parseInt(req.query.limit as string) || 50);
+    const { search, page: pageN, limit: limitN } = parseListQuery(req.query);
     const cid = req.user?.id ? Number(req.user.id) : null;
-    const r = await liveSql.listSessionRecordingsForClient(lid, Number.isInteger(cid) ? cid : null, pageN, limitN);
+    const r = await liveSql.listSessionRecordingsForClient(lid, Number.isInteger(cid) ? cid : null, pageN, limitN, search);
     if (r === "not_found") { logger.warn("listLiveCourseSessionRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
     logger.info("listLiveCourseSessionRecordings success (mysql)", { traceId, id, total: r.total, returned: r.lectures.length });
-    return success(res, r, "Live classes fetched.");
+    return success(res, { ...r, pagination: buildPagination(r.total, r.page, r.limit) }, "Live classes fetched.");
   } catch (err) {
     logger.error("listLiveCourseSessionRecordings failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list live classes.", 500);
@@ -310,9 +306,10 @@ export const listMyLiveCourses = async (req: Request, res: Response) => {
 
     const cid = Number(customerId);
     if (!Number.isInteger(cid)) { logger.warn("listMyLiveCourses invalid customer (mysql)", { traceId, customerId }); return failure(res, "Unauthorized.", 401); }
-    const r = await liveSql.listMyLiveCoursesForClient(cid, filterStatus, resolveBase(req));
+    const { search, page, limit } = parseListQuery(req.query);
+    const r = await liveSql.listMyLiveCoursesForClient(cid, filterStatus, resolveBase(req), { search, page, limit });
     logger.info("listMyLiveCourses success (mysql)", { traceId, customerId, count: r.total });
-    return success(res, r, "Your live courses fetched.");
+    return success(res, { ...r, pagination: buildPagination(r.total, r.page, r.limit) }, "Your live courses fetched.");
   } catch (err) {
     logger.error("listMyLiveCourses failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch your live courses.", 500);
@@ -336,20 +333,19 @@ export const listMyUpcomingSessions = async (req: Request, res: Response) => {
       return failure(res, "Unauthorized.", 401);
     }
 
-    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
+    const { search, page, limit } = parseListQuery(req.query);
 
     // Only currently-active subscriptions feed the "my upcoming" view —
     // the SQL twin filters to owned (active, unexpired) courses and returns the
     // same cross-course session-feed card shape as the sibling SQL handlers
     // (listAllUpcomingSessions / listLiveNowSessions).
     const cid = liveSql.parseLiveId(String(customerId));
-    const r = await liveSql.listMyUpcomingSessions(cid, { page, limit });
+    const r = await liveSql.listMyUpcomingSessions(cid, { search, page, limit });
 
     logger.info("listMyUpcomingSessions success", { traceId, customerId, total: r.total, returned: r.sessions.length });
     return success(
       res,
-      { sessions: r.sessions, total: r.total, page: r.page, limit: r.limit },
+      { sessions: r.sessions, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) },
       "Your upcoming sessions fetched."
     );
   } catch (err) {
@@ -372,13 +368,12 @@ export const listAllUpcomingSessions = async (req: Request, res: Response) => {
   logger.info("listAllUpcomingSessions invoked", { traceId, path: req.originalUrl, customerId });
 
   try {
-    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
+    const { search, page, limit } = parseListQuery(req.query);
 
     const cid = liveSql.parseLiveId(String(customerId ?? ""));
-    const r = await liveSql.listAllUpcomingSessions({ page, limit });
+    const r = await liveSql.listAllUpcomingSessions({ search, page, limit });
     const sessions = await Promise.all(r.sessions.map(async (s: any) => ({ ...s, subscribed: cid ? await liveSql.hasAccessToAnyLiveCourse(cid, (s.liveCourseIds ?? []).map(Number)) : false })));
-    return success(res, { sessions, total: r.total, page: r.page, limit: r.limit }, "Upcoming sessions fetched.");
+    return success(res, { sessions, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) }, "Upcoming sessions fetched.");
   } catch (err) {
     logger.error("listAllUpcomingSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch upcoming sessions.", 500);
@@ -398,13 +393,12 @@ export const listLiveNowSessions = async (req: Request, res: Response) => {
   logger.info("listLiveNowSessions invoked", { traceId, path: req.originalUrl, customerId });
 
   try {
-    const page  = Math.max(1, parseInt(req.query.page as string) || 1);
-    const limit = Math.min(100, parseInt(req.query.limit as string) || 50);
+    const { search, page, limit } = parseListQuery(req.query);
 
     const cid = liveSql.parseLiveId(String(customerId ?? ""));
-    const r = await liveSql.listLiveNowSessions({ page, limit });
+    const r = await liveSql.listLiveNowSessions({ search, page, limit });
     const sessions = await Promise.all(r.sessions.map(async (s: any) => ({ ...s, subscribed: cid ? await liveSql.hasAccessToAnyLiveCourse(cid, (s.liveCourseIds ?? []).map(Number)) : false })));
-    return success(res, { sessions, total: r.total, page: r.page, limit: r.limit }, "Live-now sessions fetched.");
+    return success(res, { sessions, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) }, "Live-now sessions fetched.");
   } catch (err) {
     logger.error("listLiveNowSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch live-now sessions.", 500);

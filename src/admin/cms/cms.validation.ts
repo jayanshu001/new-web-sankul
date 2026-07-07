@@ -1,9 +1,12 @@
 import { z } from "zod";
 import { UpdateType } from "../../shared/enums";
 
+// Accepts a MySQL integer id or a legacy Mongo ObjectId (migration-tolerant).
+const refIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
+
 // ─── FAQ ──
 export const faqCreateSchema = z.object({
-  typeId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid typeId"),
+  typeId: z.string().regex(refIdRegex, "Invalid typeId"),
   question: z.string().min(1).max(1000),
   answer: z.string().min(1),
 });
@@ -41,14 +44,12 @@ export const currentAffairCreateSchema = z.object({
 export const currentAffairUpdateSchema = currentAffairCreateSchema.partial();
 
 // ─── Banner ──
-const bannerObjectId = z
-  .string()
-  .regex(/^[a-fA-F0-9]{24}$/, "keyId must be a valid ObjectId");
+const bannerRefId = z.string().regex(refIdRegex, "Invalid id");
 
 export const bannerCreateSchema = z.object({
   image: z.string().min(1).max(500),
   key: z.enum(["Packages", "Courses", "Book", "EBook", "Explore"]).optional(),
-  keyId: bannerObjectId.optional(),
+  keyId: bannerRefId.optional(),
   orderBy: z.number().int().default(0),
 });
 export const bannerUpdateSchema = bannerCreateSchema.partial();
@@ -56,7 +57,7 @@ export const bannerUpdateSchema = bannerCreateSchema.partial();
 // ─── Live Banner ──
 export const liveBannerCreateSchema = z.object({
   image: z.string().min(1).max(500),
-  liveCourseId: bannerObjectId,
+  liveCourseId: bannerRefId,
   orderBy: z.number().int().default(0),
 });
 export const liveBannerUpdateSchema = liveBannerCreateSchema.partial();
@@ -100,7 +101,7 @@ export const socialLinkTypeUpdateSchema = socialLinkTypeCreateSchema.partial();
 
 // ─── Social Link ──
 export const socialLinkCreateSchema = z.object({
-  typeId: z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid typeId"),
+  typeId: z.string().regex(refIdRegex, "Invalid typeId"),
   title: z.string().min(1).max(255),
   icon: z.string().max(500).optional(),
   link: z.string().min(1).max(500).url("Invalid link URL"),

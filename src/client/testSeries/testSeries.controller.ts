@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import logger from "../../utils/logger";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import {
@@ -57,23 +58,25 @@ export const listTestSeries = async (req: Request, res: Response) => {
   logger.info("listTestSeries invoked", { traceId, path: req.originalUrl, customerId });
 
   try {
-    const { search, page = "1", limit = "20" } = req.query as Record<string, string>;
+    const { search, page, limit } = parseListQuery(req.query);
 
     // ─── SQL branch (int id-space) — gated on `client-testseries` ───
-    const p = Math.max(1, parseInt(page, 10) || 1);
-    const l = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
     const cidNum = customerId ? parseCtsId(String(customerId)) : null;
     const { data, total } = await listTestSeriesMysql({
-      search: search?.trim() || null,
-      page: p,
-      limit: l,
+      search: search ?? null,
+      page,
+      limit,
       customerId: cidNum,
       now: new Date(),
       base: resolveBase(req),
       buildShareUrl,
     });
     logger.info("listTestSeries success (sql)", { traceId, customerId, total });
-    return success(res, { data, total, page: p, limit: l }, "Fetched.");
+    return success(
+      res,
+      { data, total, page, limit, pagination: buildPagination(total, page, limit) },
+      "Fetched."
+    );
   } catch (e: any) {
     logger.error("listTestSeries failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed to fetch test series.", 500);
@@ -116,10 +119,11 @@ export const listSeriesPapers = async (req: Request, res: Response) => {
     const tsId = parseCtsId(id);
     if (tsId == null) { logger.warn("listSeriesPapers invalid id (sql)", { traceId, id }); return failure(res, "Invalid test series id.", 422); }
     const cidNum = req.user?.id ? parseCtsId(String(req.user.id)) : null;
-    const out = await listSeriesPapersMysql({ id: tsId, customerId: cidNum, now: new Date() });
+    const { search, page, limit, skip } = parseListQuery(req.query);
+    const out = await listSeriesPapersMysql({ id: tsId, customerId: cidNum, now: new Date(), search: search ?? null, page, limit, skip });
     if (!out) { logger.warn("listSeriesPapers not found (sql)", { traceId, id }); return failure(res, "Test series not found.", 404); }
     logger.info("listSeriesPapers success (sql)", { traceId, customerId, id, isPaid: out.isPaid, hasAccess: out.hasAccess, categoryCount: out.categories.length });
-    return success(res, { isPaid: out.isPaid, hasAccess: out.hasAccess, categories: out.categories }, "Fetched.");
+    return success(res, { isPaid: out.isPaid, hasAccess: out.hasAccess, categories: out.categories, pagination: buildPagination(out.papersTotal, page, limit) }, "Fetched.");
   } catch (e: any) {
     logger.error("listSeriesPapers failed", { traceId, customerId, id, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed.", 500);
@@ -215,16 +219,26 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
     if (!customerId) { logger.warn("listMySubscriptions unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
 
     // ─── SQL branch (int id-space) — gated on `client-testseries` ───
+    const { search, page, limit, skip } = parseListQuery(req.query);
     const cidNum = parseCtsId(String(customerId));
-    if (cidNum == null) return success(res, { data: [], total: 0 }, "Fetched.");
+    if (cidNum == null)
+      return success(
+        res,
+        { data: [], total: 0, pagination: buildPagination(0, page, limit) },
+        "Fetched."
+      );
     const { data, total } = await listMySubscriptionsMysql({
       customerId: cidNum,
       now: new Date(),
       base: resolveBase(req),
       buildShareUrl,
+      search: search ?? null,
+      page,
+      limit,
+      skip,
     });
     logger.info("listMySubscriptions success (sql)", { traceId, customerId, count: total });
-    return success(res, { data, total }, "Fetched.");
+    return success(res, { data, total, pagination: buildPagination(total, page, limit) }, "Fetched.");
   } catch (e: any) {
     logger.error("listMySubscriptions failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
     return failure(res, e.message ?? "Failed.", 500);

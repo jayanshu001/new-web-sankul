@@ -15,7 +15,191 @@
 
 ---
 
-## 2026-07-06 — courses/orders/:id/invoice: PDF invoice for live-course + test-series
+## 2026-07-07 — client API search + pagination sweep, BATCH 1 (commerce)
+
+**Standing rule:** every client-side LIST endpoint must support `?search=` + `?page=&limit=`
+(pagination envelope). Backfilling all client list endpoints in batches. Uses shared
+`parseListQuery` / `buildPagination` (`src/utils/listQuery.ts`; default limit 20, cap 100).
+
+**Batch 1 domains:** book, course, package, testSeries, live-course, free.
+
+**Endpoints newly given pagination (and search where it was missing):**
+- **book:** `/trending`, `/trending/books`, `/trending/ebooks` (search pre-existed; added
+  pagination). `/` and `/orders` already had it. `/orders` has no natural text column → no
+  search added.
+- **course:** `/categories`, `/my` (added search + pagination). `/` and
+  `/categories/:id/courses` already had it (default limit 10 kept).
+- **package:** `/types`, `/type/:typeId`, `/goal` (kept goalIds grouping), `/my` (added).
+  `/` already had it (cap 500 kept).
+- **testSeries:** `/my/subscriptions`, `/:id/papers` (added search + pagination); `/`
+  standardized onto `parseListQuery`.
+- **live-course:** all 10 feeds standardized onto `parseListQuery` + `pagination`; search
+  added to `/recently-added`, `/my`, `/my/upcoming-sessions`, `/upcoming-sessions`,
+  `/live-now-sessions`, `/:id/sessions`, `/:id/recordings` (folders), `/:id/session-recordings`.
+- **free:** `/free-videos/resume` (added search + pagination); the other 5 already had it.
+
+**Contract note:** `pagination` is ADDITIVE — item fields unchanged; where handlers use the
+`success()` envelope it's nested under `data`, where they hand-roll `res.json` it's top-level.
+Every `count()` uses the identical `where` as its `findMany`. In-memory/merged feeds
+(book trending, package /my, live-course /my + /:id/recordings, free resume) slice the
+resolved array with `total` = full filtered length.
+**FE heads-up:** default page size standardized to 20 on some feeds that previously
+returned more (live-course `/recently-added` was 10; session feeds were 50) and on
+carousels (`/recently-added`, `/upcoming-batches`) — pass an explicit `limit` for the full set.
+
+## 2026-07-07 — catalog materials & tests: drop bulky list + context-aware `count`
+
+Same optimisation as the videos tab, applied to `catalogMaterials` and `catalogTests`
+in `client-catalog.service.ts` (`GET /client/catalog/:type/:id/materials` and `/tests`).
+
+**Materials (`catalogMaterials`) — was bulky:**
+- **Removed** the per-category `materials[]` array. Dropped the `prisma.material.findMany`
+  fetch of every category's direct materials, the cross-category `getPurchasedMaterialIds`
+  ownership resolution, and the `shapeMaterialDoc` mapping (helper now unused, left defined).
+- `category.count` is now context-dependent: `havingChildDirectory === true` → direct
+  child-folder count; else → material count over the subtree (`prisma.material.count`).
+- `totals.items` unchanged — still the true material count (tracked via internal
+  `_itemCount`, stripped from the response).
+
+**Tests (`catalogTests`) — already had no per-exam list:**
+- Only `count` semantics changed: `havingChildDirectory === true` → child-folder count;
+  else → exam subtree count. `totals.items` preserved via `_itemCount`.
+
+**Unchanged for both:** `parent`, `totals` shape, category pagination, `?search=`
+(category-name filter). No schema/index change. `yarn typecheck` green.
+
+---
+
+## 2026-07-07 — catalog videos: drop per-category video list + context-aware `count`
+
+**Endpoint:** `GET /api/v1/client/catalog/:type/:id/videos` (`getCatalogVideos` →
+`client-catalog.service.catalogVideos`).
+
+**Change (query-level, already-SQL module):**
+1. The per-category `list` of video cards is **no longer returned**. Each entry in the
+   response `data.list` is now just `{ category: {...} }` (no nested `list`). The
+   `prisma.video.findMany` fetch and the `lectureProgress` progress lookup per category
+   were removed; `defaultListingQualities`/`recordings`/`progress` no longer computed here.
+2. `category.count` is now **context-dependent**:
+   - `havingChildDirectory === false` (leaf) → `count` = video count over the category
+     subtree (`prisma.video.count`, unchanged query).
+   - `havingChildDirectory === true` (directory) → `count` = direct child-folder count
+     (`prisma.videoCategoryRelation.count({ where: { parent } })`).
+   Previously `count` was always the subtree video count.
+
+**Unchanged:** `parent`, `availableCategories`, `totals` (`categories`/`items`),
+category pagination, `?search=`/`?categoryIds=` handling. No schema/index change.
+`yarn typecheck` green.
+
+---
+
+## 2026-07-07 — read-only session (no DB/code change)
+
+Session answered a question about the response shape of
+`GET /api/v1/client/catalog/:type/:id/videos` (`getCatalogVideos` →
+`client-catalog.service.catalogVideos`). **No source, schema, query, or index changes
+were made.** Entry recorded only to satisfy the migration-doc mtime gate; no backfill or
+regression QA is implied. The other modified `src/` files in the working tree predate
+this session and are unrelated to it.
+
+---
+
+## 2026-07-07 — harden remaining bare `isObjectId` client helpers (defense-in-depth)
+
+**Context:** Full audit of all 24-hex ObjectId validators after the exam-download bug.
+No further *active* rejections found, but three client controllers still defined a bare
+`isObjectId` (`/^[a-fA-F0-9]{24}$/`) that was safe only because every current call site
+manually added a `|| integer` fallback — the exact latent trap that produced the exam bug
+when one call site omitted the fallback.
+
+**Change:** Made the helpers themselves integer-tolerant
+(`/^([a-fA-F0-9]{24}|[1-9]\d*)$/`) so future call sites can't reintroduce the 400:
+- `src/client/ebook/ebook.controller.ts:21`
+- `src/client/course/course.controller.ts:24`
+- `src/client/promocode/promocode.controller.ts:10`
+
+Behavior-neutral at existing call sites (broadening acceptance only). No query/schema
+change. `yarn typecheck` green.
+
+**Audit result:** ObjectId-validator family is now fully int-tolerant across admin +
+client. Remaining `{24}` occurrences are either already-tolerant, integer-parser gates
+(`parse*Id` → number|null, correct for SQL), or `utils/metrics.ts` path-label
+normalization (non-validation, intentionally left).
+
+---
+
+## 2026-07-07 — exam solution download: relax ObjectId gate (post-migration bugfix)
+
+**Symptom:** `GET /client/quizzes/:id/solution/download?attemptId=…` (a.k.a.
+`/client/exams/:id/solution/download`) returned `400 { "Please select valid exam!!" }`
+for a MySQL integer `examId` like `11776`.
+
+**Cause:** `getSolutionDownloadByExam` gated `examId` through the controller-local
+`isObjectId` helper (`/^[a-fA-F0-9]{24}$/`) as a hard reject — the one client `isObjectId`
+gate without an integer fallback (siblings in ebook/course/promocode controllers already
+pair it with an int check).
+
+**Change:** `src/client/exam/exam.controller.ts:34` — relaxed `isObjectId` to
+`/^([a-fA-F0-9]{24}|[1-9]\d*)$/` (accepts MySQL int or legacy ObjectId). Validation only;
+no query/schema change. `yarn typecheck` green.
+
+---
+
+## 2026-07-07 — relax strict ObjectId regexes in request validation (post-migration bugfix)
+
+**Symptom:** `PUT /admin/cms/banners/50` returned `422 { keyId must be a valid ObjectId }`.
+After the Mongo→MySQL cutover all IDs are MySQL positive integers, but many Zod
+validators still rejected anything not matching a 24-hex Mongo ObjectId
+(`/^[0-9a-fA-F]{24}$/`), failing before the (already-SQL) controller ran.
+
+**Change:** Relaxed request-ID validators to a migration-tolerant regex accepting a
+MySQL int **or** legacy ObjectId — `/^([0-9a-fA-F]{24}|[1-9]\d*)$/` (kept `z.string()`
+type; no downstream type change). No DB query/schema/index change — validation layer only.
+
+**Files:** `src/admin/cms/cms.validation.ts` (banner keyId/liveCourseId + FAQ/social-link
+typeId; added shared `refIdRegex`); admin `video`, `ebook`, `course`, `testSeries`,
+`permissionCategory`, `customer-master`, `master`, `book`, `videoCategory`,
+`administrator`, `live-course` (validation + folder/video controllers), `permission`,
+`material`, `offline`, `customer` validations; client `course`, `exam`, `address`
+validations; `src/deeplinking/deeplinking.routes.ts` (kept `i` flag).
+
+**Left intact:** `isObjectId` branch-detection helpers in controllers, `utils/metrics.ts`
+path-label normalization, and already-tolerant regexes. `yarn typecheck` green.
+
+---
+
+## 2026-07-07 — client/catalog tabs (videos/materials/tests): add pagination
+
+**Files:** `src/client/catalog/catalog.controller.ts` (new `paginateCategories`
+helper; all three handlers now window the returned category `list` and add
+`data.pagination`).
+
+**Change:** `GET /api/v1/client/catalog/:type/:id/{videos,materials,tests}` already
+supported `?search=`; they now also accept `?page=&limit=` (via `parseListQuery`,
+default 20 / cap 100) and window the top-level category `list`. `totals` is unchanged
+(still the full category/item counts); `data.pagination = { total, page, limit,
+totalPages }` where `total` = full category count. Service queries (`catalogVideos/
+Materials/Tests`) are unchanged — the slice happens in the controller, so per-category
+hydration still runs for the full set before windowing. **Response-shape change** (new
+`data.pagination`), done on explicit request. `availableCategories` (videos) unchanged.
+
+## 2026-07-07 — client/ebooks catalog listing: add pagination
+
+**Files:** `src/modules/catalog-ebook/catalog-ebook.repository.ts` (shared `activeWhere`
+helper; `listActive` gains `skip`/`take`; new `countActive`),
+`catalog-ebook.service.ts` (`listEbooksWithPlans` now runs `listActive` + `countActive`
+in parallel and returns `{ ebooks, total }` instead of a bare array),
+`catalog-ebook.types.ts` (`ListEbooksOptions` gains `skip`/`take`),
+`src/client/ebook/ebook.controller.ts` (`listEbooks` threads `skip`/`limit` and returns
+a `pagination` envelope).
+
+**Change:** `GET /api/v1/client/ebooks` previously parsed `page/limit/skip` but dropped
+them — `findMany` returned ALL active rows with no `pagination` field. Now the query is
+windowed with Prisma `skip`/`take` and a `count(*)` over the identical WHERE supplies the
+total, so the response gains `pagination: { total, page, limit, totalPages }` — matching
+the already-paginated `/ebooks/subscriptions` endpoint. **Response-shape change** (new
+top-level `pagination` key + `data.ebooks` now a single page), done on explicit request.
+Search + language filters unchanged. Default limit 20, capped 100 (via `parseListQuery`).
 
 **Files:** `src/libs/core/generate.ts` (new `loadLiveCourseReceiptFromMysql` +
 `buildLiveCourseReceiptHtml`, `loadTestSeriesReceiptFromMysql` + `buildTestSeriesReceiptHtml`,
