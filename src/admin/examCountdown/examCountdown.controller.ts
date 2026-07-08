@@ -176,7 +176,6 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
   try {
     const title = (req.body?.title ?? "").toString().trim();
     const categoryId = (req.body?.categoryId ?? "").toString().trim();
-    const description = (req.body?.description ?? "").toString();
     const status = req.body?.status === undefined ? true : Boolean(req.body.status);
 
     if (!title) return res.status(400).json({ success: false, message: "title is required." });
@@ -196,7 +195,7 @@ export const adminCreateCountdown = async (req: Request, res: Response) => {
 
     const nid = ecSql.parseEcId(categoryId);
     if (nid == null) return res.status(400).json({ success: false, message: "Invalid categoryId." });
-    const r = await ecSql.createCountdown({ title, categoryId: nid, examDate: date, description, status, goalId, goalLabelId });
+    const r = await ecSql.createCountdown({ title, categoryId: nid, examDate: date, status, goalId, goalLabelId });
     if ((r as any).catNotFound) return res.status(404).json({ success: false, message: "Category not found." });
     if ((r as any).catDisabled) return res.status(400).json({ success: false, message: "Category is disabled; enable it before assigning." });
     if ((r as any).goalError) return res.status(400).json({ success: false, message: (r as any).goalError });
@@ -230,7 +229,6 @@ export const adminUpdateCountdown = async (req: Request, res: Response) => {
       if (error || !date) return res.status(400).json({ success: false, message: error });
       update.examDate = date;
     }
-    if (req.body?.description !== undefined) update.description = req.body.description.toString();
     if (req.body?.status !== undefined) update.status = Boolean(req.body.status);
 
     // Optional goal tagging. Only included in the update when the key is sent,

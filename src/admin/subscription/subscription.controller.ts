@@ -35,7 +35,7 @@ export const listCourseSubscriptions = async (req: Request, res: Response) => {
     const { pageNum, limitNum } = paginated(req);
     const { summary, data, pagination } = await subSql.listCourseSubscriptions({
       customerId: q.customerId, courseId: q.courseId, packageId: q.packageId, type: q.type,
-      status: q.status, paymentMethod: q.paymentMethod,
+      status: q.status, paymentMethod: q.paymentMethod, hasMaterial: q.hasMaterial === "true",
       dateFrom: q.dateFrom ?? q.fromDate, dateTo: q.dateTo ?? q.toDate,
       search: q.search, sortBy: q.sortBy, sortOrder: q.sortOrder,
       page: pageNum, limit: limitNum,

@@ -9,7 +9,7 @@
  * lowercase kebab-case, dot-separated. Once shipped, a key must never be renamed.
  */
 
-export const CATALOG_VERSION = "2026.05.25-1";
+export const CATALOG_VERSION = "2026.07.08-1";
 
 export type CatalogAction =
   | "view" | "list" | "create" | "edit" | "delete" | "toggle-status"
@@ -102,6 +102,7 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("materials", "Materials", "Master Data", {
     extras: [extra("materials", "duplicate", "Duplicate materials")],
   }),
+  mod("pc-materials", "PC Materials", "Master Data"),
   mod("subject-categories", "Course Categories", "Master Data"),
   mod("video-categories", "Video Categories", "Master Data", {
     extras: [extra("video-categories", "duplicate", "Duplicate video categories")],
@@ -278,6 +279,10 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("cms.faqs", "FAQs", "CMS"),
   mod("cms.faq-types", "FAQ Types", "CMS"),
   mod("cms.terms", "Terms", "CMS"),
+  mod("cms.current-affairs", "Current Affairs", "CMS"),
+  // Free-delivery is a single settings screen (read + Save) that reads/writes the
+  // CMS book-terms row's free-shipping threshold — view + edit only.
+  mod("cms.free-delivery", "Free Delivery", "CMS", { standard: ["view", "edit"] }),
   mod("cms.app-version", "App Version", "CMS", { standard: ["view", "edit"] }),
   mod("cms.app-update", "App Update", "CMS", { standard: ["view", "edit"] }),
   mod("cms.social-links", "Social Links", "CMS"),

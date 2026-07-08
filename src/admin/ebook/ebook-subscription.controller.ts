@@ -8,6 +8,9 @@ export const getEbookSubscriptions = async (req: Request, res: Response) => {
       customerId,
       ebookId,
       status,
+      paymentMethod,
+      dateFrom,
+      dateTo,
       search,
       sortBy,
       sortOrder,
@@ -24,10 +27,21 @@ export const getEbookSubscriptions = async (req: Request, res: Response) => {
     if (ebookId && !adminEbook.parseEbookId(ebookId)) {
       return res.status(400).json({ success: false, message: "Invalid ebookId" });
     }
+    // Computed report status (active|expired|inactive); legacy true/false still accepted.
+    const statusFilter =
+      status === "active" || status === "expired" || status === "inactive" ? status : undefined;
+    const paymentMethodEnum = adminEbook.coercePaymentMethod(paymentMethod);
+    if (paymentMethod && !paymentMethodEnum) {
+      return res.status(400).json({ success: false, message: "Invalid paymentMethod" });
+    }
     const { items, total } = await adminEbook.listSubscriptions({
       customerId: customerId ? adminEbook.parseEbookId(customerId)! : undefined,
       ebookId: ebookId ? adminEbook.parseEbookId(ebookId)! : undefined,
       status: status === "true" ? true : status === "false" ? false : undefined,
+      statusFilter,
+      paymentMethod: paymentMethodEnum,
+      dateFrom: adminEbook.parseDateBound(dateFrom, false),
+      dateTo: adminEbook.parseDateBound(dateTo, true),
       search,
       sortBy,
       sortOrder,

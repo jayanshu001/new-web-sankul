@@ -40,6 +40,7 @@ import clientLectureAudioNoteRoutes from "./lecture-audio-note/lecture-audio-not
 import clientTestSeriesRoutes from "./testSeries/testSeries.routes";
 import clientLearningRoutes from "./learning/learning.routes";
 import clientCatalogRoutes from "./catalog/catalog.routes";
+import clientAppVersionRoutes from "./app-version/app-version.routes";
 
 const router = Router();
 
@@ -95,5 +96,6 @@ router.use("/lecture-audio-notes", clientLectureAudioNoteRoutes); // -> /api/v1/
 router.use("/test-series", clientTestSeriesRoutes); // -> /api/v1/client/test-series/*
 router.use("/learning", clientLearningRoutes);      // -> /api/v1/client/learning/* (unified Resume-Learning feed + live-session progress)
 router.use("/catalog", clientCatalogRoutes);        // -> /api/v1/client/catalog/:type/:id/{videos|materials|tests}
+router.use("/app-version", clientAppVersionRoutes); // -> /api/v1/client/app-version/check (PUBLIC: store vs. installed + force-update gate, pre-login)
 
 export default router;

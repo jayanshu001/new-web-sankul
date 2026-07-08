@@ -68,3 +68,31 @@ export const listNotesQuerySchema = z
   });
 
 export const noteIdParamSchema = z.object({ id: objectId });
+
+// Bulk-delete a saved-material group (all text + audio notes). Mirrors the
+// `kind` + id fields a saved-materials row carries. Exactly one id is required,
+// matching the kind. Accepts body OR query-string (see controller).
+export const deleteSavedMaterialSchema = z
+  .object({
+    kind: z.enum(["recorded", "live", "course", "live_course"]),
+    videoId: objectId.optional(),
+    liveSessionId: objectId.optional(),
+    courseId: objectId.optional(),
+    liveCourseId: objectId.optional(),
+  })
+  .superRefine((val, ctx) => {
+    const required: Record<typeof val.kind, "videoId" | "liveSessionId" | "courseId" | "liveCourseId"> = {
+      recorded: "videoId",
+      live: "liveSessionId",
+      course: "courseId",
+      live_course: "liveCourseId",
+    };
+    const field = required[val.kind];
+    if (!val[field]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [field],
+        message: `kind and ${field} are required for ${val.kind} materials`,
+      });
+    }
+  });

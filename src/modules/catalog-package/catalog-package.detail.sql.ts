@@ -104,10 +104,10 @@ const splitPlans = async (packageId: number) => {
 
 const availablePromo = async (packageId: number) => {
   const now = new Date();
-  const rows = await prisma.promoCodeRule.findMany({
+  const rows = await prisma.promocode.findMany({
     // Single-type "package" rows + multi-type "mixed" rows; coverage resolved
     // via appliesToGroups so mixed codes covering this package are included.
-    where: { type: "public", status: true, promoStartAt: { lte: now }, promoExpireAt: { gte: now }, appliesToType: { in: ["package", "mixed"] } },
+    where: { type: "public", status: true, promo_start_at: { lte: now }, promo_expire_at: { gte: now }, appliesToType: { in: ["package", "mixed"] } },
     select: { promocode: true, title: true, description: true, appliesToType: true, appliesToIds: true },
   });
   return rows

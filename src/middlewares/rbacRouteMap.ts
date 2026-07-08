@@ -128,6 +128,9 @@ R("GET", "/master/materials", ...view("materials"));
 R("POST", "/master/materials", "materials.create");
 R("PUT", "/master/materials/:id", "materials.edit");
 R("DELETE", "/master/materials/:id", "materials.delete");
+
+// ── /pc-materials → pc-materials (Master Data) ─────────────────────────────
+crud("/pc-materials", "pc-materials");
 R("GET", "/master/video-categories", ...view("video-categories"));
 R("POST", "/master/video-categories", "video-categories.create");
 R("PUT", "/master/video-categories/:id", "video-categories.edit");
@@ -205,8 +208,11 @@ R("DELETE", "/referrals/faqs/:id", "referrals.faqs.delete");
 
 // ── /books → books (+ orders) ──────────────────────────────────────────────
 R("POST", "/books/reorder", "books.edit");
-R("GET", "/books/settings", ...view("books"));
-R("PUT", "/books/settings", "books.edit");
+// Free-delivery settings screen — the book-terms free-shipping threshold. Gated
+// by its own cms.free-delivery keys (NOT books.*) so it can be granted
+// independently. Registered before crud("/books") so :id can't shadow it.
+R("GET", "/books/settings", "cms.free-delivery.view");
+R("PUT", "/books/settings", "cms.free-delivery.edit");
 R("GET", "/books/orders/list", ...view("books.orders"));
 R("GET", "/books/orders/:id", ...view("books.orders"));
 R("PATCH", "/books/orders/:id/status", "books.orders.update-status");
@@ -323,11 +329,11 @@ for (const [seg, key] of [
   ["social-link-types", "cms.social-link-types"],
   ["social-links", "cms.social-links"],
   ["terms", "cms.terms"],
+  ["current-affairs", "cms.current-affairs"],
 ] as const) {
   R("POST", `/cms/${seg}/reorder`, `${key}.edit`);
   crud(`/cms/${seg}`, key);
 }
-// current-affairs has no catalog key yet → UNMAPPED (logged in shadow).
 R("GET", "/cms/version", "cms.app-version.view"); // module ships view/edit only
 R("PUT", "/cms/version", "cms.app-version.edit");
 R("GET", "/cms/app-update", "cms.app-update.view"); // module ships view/edit only

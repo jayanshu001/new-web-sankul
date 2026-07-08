@@ -332,8 +332,6 @@ model Customer {
   CustomerShipping          CustomerShipping[]
   bookCart                  BookCart[]
   bookOrder                 BookOrder[]
-  pendriveCourseCart        PendriveCourseCart[]
-  pendriveCourseOrder       PendriveCourseOrder[]
   examResultDetail          ExamResultDetail[]
   examResult                ExamResult[]
   examResultDetailAnalytics ExamResultDetailAnalytics[]
@@ -414,9 +412,7 @@ model CustomerShipping {
   created_at                DateTime?
   updated_at                DateTime?
   bookCart                  BookCart[]
-  pendriveCourseCart        PendriveCourseCart[]
   bookOrder                 BookOrder[]
-  pendriveCourseOrder       PendriveCourseOrder[]
   packageCourseOrder        PackageCourseOrder[]
   packageCourseSubscription PackageCourseSubscription[]
 
@@ -653,119 +649,9 @@ model BookOrderItem {
   @@map("ws_book_order_item")
 }
 
-// ****************************PENDRIVE MODULE******************************
-
-model PendriveCourse {
-  id                     Int                      @id @default(autoincrement())
-  name                   String
-  thumbnail              String
-  image                  Json?
-  orderby                Int
-  description            String
-  language               String
-  pendrive               String
-  dynamicLink            String
-  duration               Int
-  courseStorage          Int
-  courseStorageUnit      String
-  noOfSubjects           Int
-  noOfVideos             Int
-  listPrice              Int
-  discountedPrice        Int
-  shippingPrice          Int
-  withMaterial           Boolean
-  materialName           String
-  materialPrice          Int
-  examTag                Json?
-  isCombo                Boolean
-  active                 Boolean
-  createdAt              DateTime?
-  pendriveCourseCartItem PendriveCourseCartItem[]
-
-  @@map("ws_pendrive_course")
-}
-
-model PendriveCourseStorageDevice {
-  id                  Int                   @id @default(autoincrement())
-  name                String
-  note                String
-  isDefault           Boolean
-  active              Boolean
-  pendriveCourseCart  PendriveCourseCart[]
-  pendriveCourseOrder PendriveCourseOrder[]
-
-  @@map("ws_pendrive_course_storage_device")
-}
-
-model PendriveCourseCart {
-  id                          Int                          @id @default(autoincrement())
-  Customer                    Customer?                    @relation(fields: [user], references: [id])
-  user                        Int?
-  CustomerShipping            CustomerShipping?            @relation(fields: [shipping], references: [id])
-  shipping                    Int?
-  PendriveCourseStorageDevice PendriveCourseStorageDevice? @relation(fields: [storageDevice], references: [id])
-  storageDevice               Int?
-  active                      Boolean
-  PendriveCourseCartItem      PendriveCourseCartItem[]
-
-  @@map("ws_pendrive_course_cart")
-}
-
-model PendriveCourseCartItem {
-  id                 Int                 @id @default(autoincrement())
-  PendriveCourseCart PendriveCourseCart? @relation(fields: [cart], references: [id])
-  cart               Int?
-  PendriveCourse     PendriveCourse?     @relation(fields: [pendriveCourse], references: [id])
-  pendriveCourse     Int?
-
-  @@map("ws_pendrive_course_cart_item")
-}
-
-model PendriveCourseTag {
-  id       Int     @id @default(autoincrement()) @map("tag_id")
-  name     String  @map("tag_name")
-  count    Int?    @map("tag_count")
-  image    String? @map("tag_image")
-  featured Int?    @map("tag_featured")
-
-  @@map("ws_pendrive_course_tag")
-}
-
-model PendriveCourseTracking {
-  id                  Int                   @id @default(autoincrement())
-  order               Int
-  status              String
-  createdAt           DateTime?
-  updatedAt           DateTime?
-  pendriveCourseOrder PendriveCourseOrder[]
-
-  @@map("ws_pendrive_course_tracking")
-}
-
-model PendriveCourseOrder {
-  id                          Int                          @id @default(autoincrement())
-  receiptId                   String
-  Customer                    Customer?                    @relation(fields: [user], references: [id])
-  user                        Int?
-  cart                        Int
-  CustomerShipping            CustomerShipping?            @relation(fields: [shipping], references: [id])
-  shipping                    Int?
-  PendriveCourseTracking      PendriveCourseTracking?      @relation(fields: [tracking], references: [id])
-  tracking                    Int?
-  orderType                   String
-  PendriveCourseStorageDevice PendriveCourseStorageDevice? @relation(fields: [storageDevice], references: [id])
-  storageDevice               Int?
-  orderItems                  String
-  amount                      Decimal
-  paymentMethod               PaymentMethod
-  gatewayOrderId              String                       @map("gatewayOrderID")
-  gatewayPaymentId            String?                      @map("gatewayPaymentID")
-  status                      String
-  createdAt                   DateTime?
-  updatedAt                   DateTime?
-
-  @@map("ws_pendrive_course_order")
-}
+// PENDRIVE MODULE removed 2026-07-08 — product line retired; all 7
+// ws_pendrive_course* tables dropped (see
+// docs/migration/schema-changes/2026-07-08_drop_pendrive_course.sql).
 
 // ****************************EXAM MODULE******************************
 
@@ -1501,38 +1387,25 @@ model Promocode {
   promoterId                 Int?                         @map("promoter_id")
   promocode                  String?
   title                      String?
-  description                String?
+  description                String?                      @db.Text
   promo_start_at             DateTime?
   promo_expire_at            DateTime?
   type                       PromocodeType
   status                     Boolean
+  // Discount-rule columns merged in from the former ws_promo_code / PromoCodeRule
+  // model (2026-07-08). Named camelCase (with @map) so the promo-code module's
+  // appliesTo/discount code carries over unchanged.
+  discountType               String                       @default("percentage") @map("discount_type")
+  discountValue              Decimal                      @default(0) @map("discount_value") @db.Decimal(10, 2)
+  appliesToType              String?                      @map("applies_to_type")
+  appliesToIds               Json?                        @map("applies_to_ids")
   created_at                 DateTime?
   updated_at                 DateTime?
   promotedPackageCourseEbook PromotedPackageCourseEbook[]
 
+  @@index([promocode], name: "idx_ws_promocode_code")
+  @@index([type, status], name: "idx_ws_promocode_type_status")
   @@map("ws_promocode")
-}
-
-model PromoCodeRule {
-  id            Int       @id @default(autoincrement())
-  type          String
-  promocode     String
-  title         String?
-  description   String?   @db.Text
-  promoStartAt  DateTime? @map("promo_start_at")
-  promoExpireAt DateTime? @map("promo_expire_at")
-  status        Boolean   @default(true)
-  discountType  String    @default("percentage") @map("discount_type")
-  discountValue Decimal   @default(0) @map("discount_value") @db.Decimal(10, 2)
-  promoterId    Int?      @map("promoter_id")
-  appliesToType String?   @map("applies_to_type")
-  appliesToIds  Json?     @map("applies_to_ids")
-  createdAt     DateTime? @map("created_at")
-  updatedAt     DateTime? @map("updated_at")
-
-  @@index([promocode], name: "idx_promo_code_code")
-  @@index([type, status], name: "idx_promo_code_type_status")
-  @@map("ws_promo_code")
 }
 
 model PromotedPackageCourseEbook {
@@ -1870,6 +1743,7 @@ model LiveSession {
   endAt                    DateTime? @map("end_at")
   status                   String    @default("SCHEDULED")
   streamId                 String?   @map("stream_id")
+  notifiedStreamId         String?   @map("notified_stream_id")
   rtmpUrl                  String?   @map("rtmp_url")
   hlsUrl                   String?   @map("hls_url")
   hlsUrls                  Json?     @map("hls_urls")
@@ -2051,6 +1925,28 @@ model LectureProgress {
   @@unique([customerId, videoId], name: "uniq_customer_video")
   @@unique([customerId, liveSessionId], name: "uniq_customer_live_session")
   @@map("ws_lecture_progress")
+}
+
+// Layer-2 enrollment "last watched" pointer (see docs/be-dashboard-resume-scope.md).
+// LectureProgress is unique per (customer, video) — a GLOBAL video-position store —
+// so a lecture shared by a course AND a package can hold only ONE last-watched
+// timestamp, which made the two resume cards mirror each other. This table keeps a
+// SEPARATE last-watched pointer per (customer, scope_kind, scope_id) so each
+// enrollment remembers its own last lecture. Position/duration are still read from
+// LectureProgress (global); only the resume pointer is enrollment-scoped.
+model EnrollmentResume {
+  id            Int       @id @default(autoincrement())
+  customerId    Int       @map("customer_id")
+  scopeKind     String    @map("scope_kind") // "course" | "package" | "liveCourse"
+  scopeId       Int       @map("scope_id")
+  videoId       Int?      @map("video_id")
+  liveSessionId Int?      @map("live_session_id")
+  lastWatchedAt DateTime? @map("last_watched_at")
+  createdAt     DateTime? @map("created_at")
+  updatedAt     DateTime? @map("updated_at")
+
+  @@unique([customerId, scopeKind, scopeId], name: "uniq_customer_scope")
+  @@map("ws_enrollment_resume")
 }
 
 model Notification {
@@ -2359,7 +2255,6 @@ model ExamCountdown {
   goalId      Int?      @map("goal_id")
   goalLabelId Int?      @map("goal_label_id")
   examDate    DateTime  @map("exam_date")
-  description String?   @db.Text
   status      Boolean   @default(true)
   createdAt   DateTime? @map("created_at")
   updatedAt   DateTime? @map("updated_at")

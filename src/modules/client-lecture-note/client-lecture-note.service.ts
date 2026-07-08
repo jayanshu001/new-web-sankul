@@ -224,3 +224,52 @@ export const savedMaterials = async (
   const limit = opts.limit ?? 20;
   return { items: filtered.slice(skip, skip + limit), total };
 };
+
+// ── Bulk delete of a saved-material group (text + audio) ───────────────────────
+/**
+ * Target of a saved-material bulk delete — mirrors the `kind` + id fields a row
+ * in `savedMaterials` carries. `recorded`/`live` are what the listing emits today
+ * (grouped by videoId / liveSessionId); `course`/`live_course` are supported for
+ * the forward-looking course-scoped rows in the FE contract (notes carry
+ * `courseId` and the `liveCourseIds` JSON array respectively).
+ */
+export type SavedMaterialTarget =
+  | { kind: "recorded"; videoId: number }
+  | { kind: "live"; liveSessionId: number }
+  | { kind: "course"; courseId: number }
+  | { kind: "live_course"; liveCourseId: number };
+
+const whereForTarget = (customerId: number, t: SavedMaterialTarget): any => {
+  switch (t.kind) {
+    case "recorded": return { customerId, lectureType: "recorded", videoId: t.videoId };
+    case "live": return { customerId, lectureType: "live", liveSessionId: t.liveSessionId };
+    case "course": return { customerId, courseId: t.courseId };
+    // liveCourseIds is a JSON array of ints — match rows whose array contains it.
+    case "live_course": return { customerId, liveCourseIds: { array_contains: t.liveCourseId } };
+  }
+};
+
+/**
+ * Delete EVERY text + audio note for the authenticated customer under a saved-
+ * material group. Scoped to the customer. Idempotent (0 matches ⇒ counts 0, not
+ * an error). Returns the deleted audio note urls so the caller can clean the S3
+ * objects (same cleanup as single audio delete). Both deletes run in one
+ * transaction so a partial wipe can't leave one collection behind.
+ */
+export const deleteSavedMaterialNotes = async (
+  customerId: number,
+  target: SavedMaterialTarget
+): Promise<{ deletedTextNotes: number; deletedVoiceNotes: number; audioUrls: string[] }> => {
+  const where = whereForTarget(customerId, target);
+  // Capture audio urls BEFORE deleting so we can clean S3 afterwards.
+  const audioRows = await prisma.lectureAudioNote.findMany({ where, select: { audioUrl: true } });
+  const [textDel, voiceDel] = await prisma.$transaction([
+    prisma.lectureNote.deleteMany({ where }),
+    prisma.lectureAudioNote.deleteMany({ where }),
+  ]);
+  return {
+    deletedTextNotes: textDel.count,
+    deletedVoiceNotes: voiceDel.count,
+    audioUrls: audioRows.map((r) => r.audioUrl).filter((u): u is string => !!u),
+  };
+};

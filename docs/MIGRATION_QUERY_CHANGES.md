@@ -15,6 +15,373 @@
 
 ---
 
+## 2026-07-08 — New client App Version check endpoint (no schema change, no DDL)
+
+Added `GET /api/v1/client/app-version/check?platform=ios|android&currentVersion=&currentVersionName=`
+(new module `src/modules/app-version/` + client surface `src/client/app-version/`).
+Reports whether the running app build is behind the store and whether the update
+is forced. **Public route** (no Bearer) — the app must call it pre-login to honor
+a forced update; documented auth exception alongside auth/refresh/webhook/health.
+
+- **No new tables / columns / indexes.** Reuses the existing singleton reads only:
+  `versionRepository.findSingleton()` (`ws_versions`) and
+  `appUpdateRepository.findSingleton()` (`ws_app_update`) — no new queries against
+  the DB beyond these existing ones.
+- **External read (not DB):** iOS latest version is fetched **live** from Apple's
+  iTunes Lookup API (`https://itunes.apple.com/lookup`) via `callOutbound`
+  (timeout/retry/breaker) and cached in Redis (`app-version:appstore:ios`, TTL 30m).
+  Android has no official store API → latest comes from the admin config rows above.
+- **Force-update logic:** `currentVersion < ws_versions.last_supported_version_code`,
+  or (`updateType === "immediate"` while an update is available).
+- **New optional env:** `IOS_BUNDLE_ID`, `IOS_APP_STORE_ID`, `IOS_APP_STORE_URL`,
+  `ANDROID_PACKAGE_NAME`, `ANDROID_STORE_URL`, `APP_STORE_COUNTRY` (documented in
+  `.env.example`; all optional — check degrades to admin config when unset).
+- Frontend integration doc: `docs/client/APP_VERSION_CHECK_FRONTEND_INTEGRATION.md`.
+- **Follow-ups (same endpoint, no DB change):** (a) route made **public** — dropped
+  `authenticate` so the app can run the force-update gate pre-login; (b) query is now
+  parsed in the controller via `checkAppVersionQuerySchema.safeParse(req.query)` instead
+  of the `validate({ query })` middleware — Express 5 makes `req.query` getter-only, so
+  the middleware's `req.query = parsed` reassignment threw
+  `Cannot set property query of #<IncomingMessage>`. Same 422 flat-message contract.
+
+---
+
+## 2026-07-08 — Drop retired Pendrive Course module (7 tables)
+
+Removed the pendrive product line end-to-end (it was already retired — excluded
+from the `ws_termsandcondition.module` enum; no application code referenced it).
+
+- **Schema:** deleted 7 Prisma models — `PendriveCourse`, `PendriveCourseStorageDevice`,
+  `PendriveCourseCart`, `PendriveCourseCartItem`, `PendriveCourseTag`,
+  `PendriveCourseTracking`, `PendriveCourseOrder` — and their back-relation fields
+  on `Customer` (`pendriveCourseCart`, `pendriveCourseOrder`) and `CustomerShipping`
+  (same two). Regenerated the Prisma client; `yarn typecheck` green (zero code
+  depended on them).
+- **DDL:** `docs/migration/schema-changes/2026-07-08_drop_pendrive_course.sql` drops
+  all 7 `ws_pendrive_course*` tables (FK checks disabled around the drop, children
+  first). **IRREVERSIBLE — back up before applying in prod.** Not yet executed
+  against any DB; apply on deploy.
+
+---
+
+## 2026-07-08 — Subscription Material Report: `hasMaterial` filter on `GET /admin/subscriptions`
+
+Added an optional `hasMaterial=true` query param to the merged Subscription Report
+(query-shape only — no schema change). When set, restricts to with-material rows
+(`pc_material_id > 0`, i.e. `materialType: "With Material"`). Applied in the base
+`where` (`buildSubWhere` → `pcMaterialId: { gt: 0 }`), so it AND-composes with every
+existing filter and the `summary` aggregates (total/revenue/active/expired) reflect
+the filtered set — not just the page slice. Omitted/`false` → unchanged (all rows).
+Row shape unchanged (same 26 fields). Files: `admin-subscription.repository.ts`
+(`CourseSubFilter.hasMaterial`), `admin-subscription.service.ts`, `subscription.controller.ts`.
+
+---
+
+## 2026-07-08 — Merged Subscription Report: 26-column rows on `GET /admin/subscriptions`
+
+`listCourseSubscriptions` (admin-subscription module) extended for the merged
+Course+Package **Subscription Report** (query-shape / response-field only — **no
+schema change, no DDL**). The shared `reportRow` DTO (used by 4 reports) is left
+untouched; the extra columns are attached only on this endpoint's rows.
+
+- **Combined list:** omitting `type` already returns both course & package rows
+  (`buildSubWhere` adds no product constraint when `type` is absent);
+  `type=course|package` still narrow. Each row already carries `product.type`.
+- **`id`** added at row root (the real `ws_package_course_subscription.id`).
+- **New per-row columns** (all null when N/A), hydrated via batched id lookups:
+  - `educatorName` ← course `educator_id` → `ws_course_educator.name`
+  - `promoterName` ← subscription `promoter_id` → `ws_promoter.full_name`
+  - `promocode` ← linked order's `promocode` JSON snapshot (`$.promocode`)
+  - `courseAmount` / `materialAmount` ← subscription `course_amount`/`material_amount`
+  - `wsCoin` ← order `ws_coin`
+  - `materialType` ← `"With Material"` when `pc_material_id > 0`, else `"Without Material"`
+  - `razorpayOrderId` / `razorpayPaymentId` / `bankTransactionId` ← order
+    `razorpay_order_id` / `razorpay_payment_id` / `bank_transaction_id` (empty → null)
+  - `shipping` `{ address, address2, city, pincode }` ← subscription `shipping` → `ws_customer_shipping`
+  - `remarks` ← subscription `remarks`
+  - `activatedBy` ← subscription `created_by` → `ws_users` first+last name
+  - `activationType` ← **null** (no SQL column exists — pending definition from FE)
+- **`search`** now also matches customer **email** (`customerIdsByText` OR gained
+  `emailAddress contains`), alongside name/phone + course/package name.
+- **`dateFrom`/`dateTo`** now pin bare `YYYY-MM-DD` to day edges (inclusive
+  `createdAt` range; previously a bare `to` bound excluded that day).
+- New repo lookups: `ordersByIds`, `shippingsByIds`, `promotersByIds`,
+  `educatorsByIds`, `adminUsersByIds`; `coursesByIds` select gained `courseEducatorId`.
+- `summary`, envelope, pagination (per-subscription) unchanged.
+- Files: `admin-subscription.repository.ts`, `admin-subscription.service.ts`.
+
+---
+
+## 2026-07-08 — Book Orders report: extra columns + server-side filters
+
+`GET /admin/books/orders/list` extended for the rebuilt admin Book Orders report
+(query-shape / response-field only — **no schema change, no DDL**):
+
+- **Response (order level):** each row now includes `trackingId` (BIGINT AWB →
+  string, from `ws_book_order.tracking_id`), `razorpayOrderId`
+  (`gateway_order_id`; empty → `null`), `razorpayPaymentId`
+  (`gateway_transaction_id`), plus two **derived** totals — `totalWeight`
+  (Σ `book.weight × qty` over books with a known weight, else `null`) and
+  `shippingPrice` (Σ per-line `ws_book_order_item.shipping_price`; for legacy
+  JSON-snapshot orders, `shippingPrice`/`shipping_price` from the JSON; `null`
+  when the order has no line items).
+- **Response (item level):** each `items[]` entry gains `weight` (the book's unit
+  weight from `ws_book.weight`; `null` when unknown). `findBooksByIds` select now
+  includes `weight`.
+- **`search`** now also matches customer **email** (`findCustomerIdsBySearch` OR
+  gained `emailAddress contains`), alongside name/phone, book name, and receiptId.
+- **`state`** (new) — filters on the linked shipping row's numeric state id
+  (`shipping.is.state` in `buildOrderWhere`).
+- **`dateFrom`/`dateTo`** (new aliases) accepted alongside legacy `fromDate`/`toDate`;
+  bare `YYYY-MM-DD` bounds are now pinned to day edges so the `createdAt` range is
+  inclusive (previously a bare `toDate` resolved to midnight and excluded that day).
+- `status` (enum `pending|verified|shipped|delivered|cancelled|failed`), `bookId`,
+  `page`/`limit`, `sortBy`/`sortOrder` unchanged (already honored). Pagination stays
+  per-order.
+- Files: `admin-book.repository.ts` (state filter, `weight` select, email search),
+  `admin-book.service.ts` (`parseDayBound`, `OrderItemShape.shippingPrice`, item
+  `weight`, derived order totals, `state`), `book.controller.ts` (param parsing).
+
+---
+
+## 2026-07-08 — Ebook Subscriptions report: extra columns + server-side filters
+
+`GET /admin/ebooks/subscriptions/list` extended for the rebuilt admin report page
+(all changes are query-shape / response-field only — no schema change, no DDL):
+
+- **Response:** each row's `orderId` now also carries `razorpayOrderId` /
+  `razorpayPaymentId` (from `ws_ebook_order.razorpay_order_id` /
+  `razorpay_payment_id`). Empty gateway id (non-razorpay grants: `free`/`Backend`) → `null`.
+- **`search`** now also matches customer **email** (`findCustomerIdsBySearch` OR gained
+  `emailAddress contains`), in addition to name/phone and ebook name.
+- **`status`** accepts computed values `active` | `expired` | `inactive`
+  (`inactive`=`status=false`; `expired`=`status=true AND endAt<now`;
+  `active`=`status=true AND endAt>=now`). Legacy `true`/`false` still honored.
+  `pagination.total` reflects the filter (applied in the shared `buildSubWhere`).
+- **`paymentMethod`** filters the linked order (`eBookOrder.is.paymentMethod`),
+  case-insensitively coerced to the `PaymentMethod` enum
+  (`Backend|razorpay|bank|cash|free|Paykun|Paytm`). Invalid value → 400.
+- **`dateFrom`/`dateTo`** — inclusive range on `ws_ebook_subscription.created_at`
+  (day-edge bounds computed in the service).
+- `ebookId`, `page`/`limit`, `sortBy`/`sortOrder` were already honored (unchanged).
+- Files: `admin-ebook.repository.ts` (shared `SubFilter`, `buildSubWhere`, select),
+  `admin-ebook.service.ts` (`coercePaymentMethod`, `parseDateBound`, `listSubscriptions`),
+  `ebook-subscription.controller.ts` (param parsing).
+
+---
+
+## 2026-07-08 — drop `description` from Exam Countdowns (column + API)
+
+Frontend removed the Description field from the Exam Countdown admin UI (no longer
+captured or displayed). Removed it from the backend end-to-end:
+
+- **Schema:** dropped `description String? @db.Text` from model `ExamCountdown`.
+  DDL `docs/migration/schema-changes/2026-07-08_exam_countdown_drop_description.sql`
+  (`ALTER TABLE ws_exam_countdown DROP COLUMN description`). Applied to staging.
+- **API:** `GET /admin/exam-countdowns` list item DTO no longer returns
+  `description`; `POST` / `PUT /admin/exam-countdowns/:id` no longer read or
+  persist it (`examCountdown.controller.ts`, `exam-countdown.service.ts`
+  create/update input types + DTO). Client `countdownDto`
+  (`exam-countdown.client.ts`) also drops the field.
+- Non-breaking per the FE team (they no longer send/read it). Verified on staging:
+  column gone, create DTO keys no longer include `description`.
+
+---
+
+## 2026-07-08 — bulk delete of a saved-material notes group
+
+New endpoint `DELETE /api/v1/client/lecture-notes/saved-materials` — the trash
+action on a Saved Notes row deletes ALL text + audio notes for that group. No
+schema change; new query-level behavior only.
+
+- **New deletes (both collections, one `$transaction`):**
+  `client-lecture-note.service.deleteSavedMaterialNotes` runs
+  `prisma.lectureNote.deleteMany({ where })` + `prisma.lectureAudioNote.deleteMany({ where })`
+  where `where` is scoped to `customer_id` + the target:
+  - `recorded` → `{ lectureType: "recorded", videoId }`
+  - `live` → `{ lectureType: "live", liveSessionId }`
+  - `course` → `{ courseId }`
+  - `live_course` → `{ liveCourseIds: { array_contains: liveCourseId } }`
+    (JSON array containment → MySQL `JSON_CONTAINS` on `ws_lecture_note.live_course_ids`
+    / `ws_lecture_audio_note.live_course_ids`).
+- **Side effect:** audio urls are read (`findMany select audioUrl`) BEFORE the
+  delete so the controller can clean the S3 objects via `deleteFromS3FileUrl`
+  (best-effort, same as single audio delete).
+- **Idempotent:** 0 matches ⇒ `{ deletedTextNotes: 0, deletedVoiceNotes: 0 }` with
+  200 (never 404), so a stale row can be cleared.
+- Always customer-scoped (never touches another user's notes). Route mounted
+  BEFORE `DELETE /:id` so the literal path isn't captured as a note id.
+- FE contract: `docs/client/DELETE_SAVED_MATERIAL_NOTES_FRONTEND.md`.
+
+## 2026-07-08 — RBAC: add 3 previously-unmapped admin modules to the catalog
+
+Per `docs/backend-requests/rbac-add-three-unmapped-modules.md`. Three admin
+screens were ungated (no catalog module/keys); added them so they are gated
+server-side and grantable to roles.
+
+- **Catalog** (`src/admin/permission/permissions.catalog.ts`, `CATALOG_VERSION`
+  → `2026.07.08-1`): `pc-materials` (Master Data, standard 6),
+  `cms.current-affairs` (CMS, standard 6), `cms.free-delivery` (CMS, view+edit
+  only). Keys match the already-shipped frontend `modulePermissions.ts` strings.
+- **Enforcement** (`src/middlewares/rbacRouteMap.ts`): `crud("/pc-materials",
+  "pc-materials")`; added `current-affairs` to the `/cms/<seg>` crud loop
+  (→ `cms.current-affairs.*`); re-pointed `GET|PUT /books/settings` from
+  `books.*` to `cms.free-delivery.view|edit` (registered before `crud("/books")`
+  so `:id` can't shadow it — `/books/:id` CRUD verified still intact).
+- **Seed:** `syncPermissionCatalog()` (boot-time, idempotent) now emits these
+  keys into `ws_permissions` across all 3 guards (web/educator/promoter) — 14
+  keys × 3 = 42 rows. Ran against staging: `inserted: 0` on re-run (idempotent).
+- **Decision (doc Q2):** used a new `cms.free-delivery` module (view+edit) rather
+  than reusing `cms.terms.edit`, to match the shipped FE keys with zero remap.
+- Effective-permissions at login are unchanged in shape — the new keys flow into
+  `admin.permissions[]` automatically for any role granted them. Super-admin
+  (`["*"]`) already bypasses. No schema/DDL change.
+
+---
+
+## 2026-07-08 — enrollment-scoped resume pointer (dashboard/resume + progress/my)
+
+Fixes resume cards mirroring each other for a lecture shared by a course AND a
+package (see docs/be-dashboard-resume-scope.md). Root cause: `ws_lecture_progress`
+is `@@unique([customer_id, video_id])` — a GLOBAL per-video store — so a shared
+video can hold only one `last_watched_at`, and both the course card and package
+card read that one row. Watching a new video in one product moved the other
+product's card too.
+
+- **Schema (DDL):** `docs/migration/schema-changes/2026-07-08_enrollment_resume.sql`
+  adds new table `ws_enrollment_resume` (Prisma model `EnrollmentResume`,
+  `prisma.enrollmentResume`). Columns: `customer_id, scope_kind
+  ("course"|"package"|"liveCourse"), scope_id, video_id?, live_session_id?,
+  last_watched_at, created_at, updated_at`. `UNIQUE (customer_id, scope_kind,
+  scope_id)` = one last-watched pointer per enrollment. `created_at`/`updated_at`
+  have NO DB default (set explicitly in code, matching the ws_* convention).
+- **Two layers now:** Layer-1 = `ws_lecture_progress` (global video/session
+  position, UNCHANGED — red bars stay consistent across products). Layer-2 =
+  `ws_enrollment_resume` (per-enrollment "last watched" pointer).
+- **New writes:** `client-lecture-progress.service.upsertEnrollmentResume` — an
+  `upsert` on `uniq_customer_scope` stamping `{video_id|live_session_id,
+  last_watched_at}`. Called (failure-isolated) at the end of
+  `reportContainerProgress` (scope kind/id) and `reportLiveSessionProgress`
+  (kind="liveCourse", resolved liveCourseId + liveSessionId).
+- **New reads (replaces the contaminated per-container rollup for the pointer):**
+  `listMyLearningProgress` now sources the container set + last-watched pointer
+  from `ws_enrollment_resume` (`resumePointers`), the pointer video/session
+  position from `ws_lecture_progress` (`videoPositions`/`sessionPositions`, still
+  global), and per-container completed counts via one `groupBy` each
+  (`completedCounts`). Card assembly + purchased-only subscription join unchanged.
+  `rollupByContainer` is retained only for `listMyCoursesForResume` (courses/my),
+  which is out of scope for this doc.
+- **Backfill:** `scripts/backfill-enrollment-resume.ts` seeds one pointer per
+  `(customer, scope_kind, scope_id)` from the most-recent existing progress row
+  carrying that container (best-effort; going-forward scoped writes self-correct).
+  Run on deploy after the DDL so returning users keep their cards.
+- API response shape of `/dashboard/resume` and `/learning/progress/my` is
+  unchanged; only which lecture each card points to is now enrollment-correct.
+
+## 2026-07-08 — merge ws_promo_code into ws_promocode (drop the duplicate table)
+
+Consolidated the two overlapping promocode tables onto **`ws_promocode`** and
+retired **`ws_promo_code`**:
+
+- **`ws_promocode`** (Prisma `Promocode`) — promoter promo codes + per-plan
+  promoter/customer % links (`ws_promoted_package_course_ebook`).
+- **`ws_promo_code`** (Prisma `PromoCodeRule`) — admin discount rules
+  (percentage/flat + appliesTo targeting); the `promo-code` module.
+
+**Schema (`Promocode`):** added `discount_type VARCHAR(32) NOT NULL DEFAULT
+'percentage'`, `discount_value DECIMAL(10,2) NOT NULL DEFAULT 0`,
+`applies_to_type VARCHAR(32) NULL`, `applies_to_ids JSON NULL`; widened
+`description` to `TEXT`; added indexes `idx_ws_promocode_code` and
+`idx_ws_promocode_type_status`. The four new discount/appliesTo fields keep
+camelCase Prisma names via `@map` so the module's code carries over unchanged.
+Removed model `PromoCodeRule`. DDL:
+`docs/migration/schema-changes/2026-07-08_merge_promo_code_into_promocode.sql`
+(+ `2026-07-08_drop_ws_promo_code.sql`).
+
+**Code re-point (`prisma.promoCodeRule` → `prisma.promocode`):**
+`src/modules/promo-code/promo-code.service.ts` (all CRUD/apply/public-list),
+`src/modules/admin-promoter/admin-promoter.service.ts` (`getPromoterPromocodes`),
+`src/modules/catalog-package/catalog-package.detail.sql.ts` (`availablePromo`).
+Window/timestamp fields remapped to the `Promocode` snake-case columns
+(`promo_start_at` / `promo_expire_at` / `created_at` / `updated_at`); DTO output
+keys unchanged, so admin/client response contracts are byte-identical. `type`
+values (`public`/`private`) already match the `ws_promocode` ENUM.
+
+**Backfill:** `scripts/backfill-merge-promo-code.ts` copies every `ws_promo_code`
+row into `ws_promocode` (dedup by `promocode` string) and remaps
+`ws_promoted_package_course_ebook.promocode_id` old→new via a two-phase offset
+update so the plan-link %/split stays attached. Safe because
+`promo-code.service` is the sole SQL writer of that table. `commerce-promocode`
+SQL path is still flag-OFF, so no live read depends on the old ids.
+
+**Deploy:** apply merge DDL → `prisma:generate` → deploy code → run backfill →
+verify → apply drop DDL.
+
+**Follow-up (same day):** `ws_promocode.promoter_id` was `INT NOT NULL` (the
+promoter flow always has a promoter), which broke admin discount-rule creates
+that pass `promoterId: null`. Made it nullable to match the Prisma model
+(`promoterId Int?`) — DDL
+`2026-07-08_promocode_promoter_id_nullable.sql`. Applied to staging; verified
+`createPromocode({ promoterId: null })` now succeeds. Also applied to staging:
+merge DDL + drop of `ws_promo_code` (was empty, 0 rows — backfill was a no-op).
+
+---
+
+## 2026-07-08 — entitlement gate on category-video playback (list + single)
+
+Closed an entitlement leak: `GET /client/video-categories/:id/videos`
+(`listVideosByCategory`) and `GET /client/video-categories/:id/videos/:videoId`
+(`getVideoByCategory`) returned a decryptable playback envelope (`request.files`
+token/HLS/progressive) for **paid** videos with **no subscription check**, while the
+sibling lecture-detail (`GET /client/courses/lecture`) and progress heartbeat
+(`POST /client/courses/lectures/:videoId/progress`) both correctly 403 without an
+active subscription. All three now agree.
+
+- **New query (helper):** `client-category-video.service.isEntitledForScope(customerId, scope)`.
+  For a category's resolved owning scope (`resolveVideoScope` → `{kind,id}`) it mirrors
+  the exact gates already used elsewhere:
+  - `course` → `prisma.packageCourseSubscription.findFirst({ customerId, courseId, status:true, endAt:{gt:now} })`
+  - `package` → `prisma.packageCourseSubscription.findFirst({ customerId, packageId, status:true, endAt:{gt:now} })`
+  - `liveCourse` → `prisma.liveCourseSubscription.findFirst({ customerId, liveCourseId, status:true, paymentStatus:"verified", endAt:{gt:now} })`
+- **List behavior change:** paid rows now get `request: null` (no envelope) unless
+  entitled; metadata, `isPaid`, and `progress` are unchanged, so the FE renders a
+  locked card. Free videos (`priceType!=="paid"`) are unaffected — envelope still built.
+- **Single-video behavior change:** paid video for an unentitled caller now returns
+  **403** `"Active subscription required to access this lecture"` (same message/shape as
+  lecture-detail) instead of a playable envelope. Free videos unaffected.
+- No schema/index change. Parity note: `ws_package_course_subscription` has no
+  `payment_status` → course/package gate collapses to `status=true`; live keeps `verified`.
+
+## 2026-07-08 — notify live-course buyers when a session starts
+
+New side effect on `POST /admin/live-sessions/:id/start`: push a `general`
+notification ("<title> is live now") to every customer with an active subscription
+to any of the session's live courses.
+
+- **Schema (DDL):** `docs/migration/schema-changes/2026-07-08_live_session_notified_stream_id.sql`
+  adds `ws_live_session.notified_stream_id VARCHAR(191) NULL`. Prisma model
+  `LiveSession.notifiedStreamId`. Existing rows are NULL (never notified) → backfill
+  not required; the first start after deploy notifies once.
+- **Idempotency claim (new query):** `prisma.liveSession.updateMany({ where: { id,
+  OR: [{ notifiedStreamId: null }, { notifiedStreamId: { not: streamId } }] }, data: {
+  notifiedStreamId: streamId } })`. ⚠ Prisma `{ not: x }` does NOT match NULL rows in
+  MySQL (`NULL <> x` → NULL), so the explicit `notifiedStreamId: null` branch is
+  required — otherwise a first-ever start (NULL column) silently no-ops (this bit us:
+  the initial version omitted it and no push fired). With it: the first start of a
+  stream run wins the claim; a retried /start or a stop→restart reusing the same
+  StreamOS stream is a no-op; a new stream (new streamId) re-notifies.
+- **Audience (new query):** `adminLiveCourseRepository.activeSubscribersForCourses(
+  liveCourseIds, now)` — `liveCourseSubscription.findMany` over `liveCourseId IN (...)`,
+  `status=true`, `paymentStatus="verified"`, `endAt` null/future; selects
+  `{customerId, liveCourseId}`. Reverse of the existing per-customer `activeSubsForCourses`.
+  Deduped per customer (first course wins) and grouped per course so each user's deep
+  link (`buildNotificationRouting({kind:"content",entity:"live-course",id})`) points to
+  a course they bought.
+- **Delivery:** reuses `dispatchAudience` (FCM + `ws_notification` feed fan-out) with a
+  `userIds` audience filter; non-blocking (fired fire-and-forget from the controller).
+  FCM `data` carries `deepLink` + `sessionId`, `streamId`, `liveCourseId` (all strings)
+  so the app can route straight into the running class.
+
 ## 2026-07-07 — client CMS lists search + pagination sweep, BATCH 4 (CMS reads)
 
 Continues the standing rule (every client LIST endpoint gets `?search=` +

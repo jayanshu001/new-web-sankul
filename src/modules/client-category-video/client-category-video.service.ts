@@ -71,3 +71,46 @@ export const scopeForCategory = async (categoryId: number) => {
   const { resolveVideoScope } = await import("../catalog-category-tree/category-tree.service");
   return resolveVideoScope(categoryId);
 };
+
+/**
+ * Is the customer entitled to PAID content under this resolved category scope?
+ *
+ * Mirrors the exact gates used by lecture-detail (client-lecture.hasActive*Sub)
+ * and the progress heartbeat (client-lecture-progress.reportContainerProgress)
+ * so all three package/course-scoped video endpoints agree. Free videos never
+ * reach here — the caller only gates paid rows. Returns false for a missing
+ * user, a null/unknown scope, or no active subscription.
+ *
+ * Parity note: ws_package_course_subscription has no payment_status column, so
+ * the course/package gate collapses to status=true; ws_live_course_subscription
+ * keeps the verified check.
+ */
+export const isEntitledForScope = async (
+  customerId: number | null,
+  scope: { kind: string; id: string } | null,
+): Promise<boolean> => {
+  if (customerId == null || !scope) return false;
+  const id = Number(scope.id);
+  if (!Number.isInteger(id) || id <= 0) return false;
+  const now = new Date();
+
+  if (scope.kind === "course") {
+    const sub = await prisma.packageCourseSubscription.findFirst({
+      where: { customerId, courseId: id, status: true, endAt: { gt: now } }, select: { id: true },
+    });
+    return sub !== null;
+  }
+  if (scope.kind === "package") {
+    const sub = await prisma.packageCourseSubscription.findFirst({
+      where: { customerId, packageId: id, status: true, endAt: { gt: now } }, select: { id: true },
+    });
+    return sub !== null;
+  }
+  if (scope.kind === "liveCourse") {
+    const sub = await prisma.liveCourseSubscription.findFirst({
+      where: { customerId, liveCourseId: id, status: true, paymentStatus: "verified", endAt: { gt: now } }, select: { id: true },
+    });
+    return sub !== null;
+  }
+  return false;
+};

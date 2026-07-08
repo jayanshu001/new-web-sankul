@@ -560,6 +560,16 @@ export const startScheduledLiveSession = async (req: Request, res: Response) => 
         adminLiveSql.getLinkedCourseFolders(updatedSql.id),
       ]);
       logger.info("startScheduledLiveSession success (sql)", { traceId, sessionId: updatedSql.id, streamId: updatedSql.streamId });
+      // Side effect: push "class is live now" to buyers of the session's live
+      // courses. Non-blocking + idempotent per stream run — must not delay or
+      // fail the /start response, so fire-and-forget (errors logged, not thrown).
+      void adminLiveSql
+        .notifyBuyersOnStart({ sessionId: updatedSql.id, streamId: updatedSql.streamId, title: updatedSql.title })
+        .catch((err) =>
+          logger.error("startScheduledLiveSession buyer notification failed", {
+            traceId, sessionId: updatedSql.id, error: getErrorMessage(err),
+          })
+        );
       return success(
         res,
         { session: adminLiveSql.toPublicView(updatedSql, coursesSql.map((c) => Number(c._id)), coursesSql, courseFoldersSql) },

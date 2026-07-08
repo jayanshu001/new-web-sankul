@@ -1,4 +1,6 @@
 import { prisma } from "../../config/prisma";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 /**
  * Lecture-progress heartbeat + rollup reads on SQL (Wave 7 — net-new
@@ -97,6 +99,37 @@ export const upsertLiveSessionProgress = async (input: {
   if (completedNow) { set.completed = true; set.completedAt = now; }
   if (existing) return prisma.lectureProgress.update({ where: { id: existing.id }, data: set });
   return prisma.lectureProgress.create({ data: { customerId: input.customerId, liveSessionId: input.liveSessionId, ...set, createdAt: now, completed: !!completedNow } });
+};
+
+/**
+ * Layer-2 enrollment "last watched" pointer upsert (see
+ * docs/be-dashboard-resume-scope.md). LectureProgress is a GLOBAL per-(customer,
+ * video) position store, so a lecture shared by a course AND a package can hold
+ * only ONE last_watched_at — which made the two resume cards mirror each other.
+ * This stamps a SEPARATE last-watched pointer per (customer, scopeKind, scopeId)
+ * so each enrollment remembers its own last lecture. Called on every scoped
+ * heartbeat; failure-isolated (never breaks the progress save).
+ */
+export const upsertEnrollmentResume = async (input: {
+  customerId: number;
+  scopeKind: "course" | "package" | "liveCourse";
+  scopeId: number;
+  videoId?: number | null;
+  liveSessionId?: number | null;
+  now: Date;
+}): Promise<void> => {
+  await prisma.enrollmentResume.upsert({
+    where: { uniq_customer_scope: { customerId: input.customerId, scopeKind: input.scopeKind, scopeId: input.scopeId } },
+    create: {
+      customerId: input.customerId, scopeKind: input.scopeKind, scopeId: input.scopeId,
+      videoId: input.videoId ?? null, liveSessionId: input.liveSessionId ?? null,
+      lastWatchedAt: input.now, createdAt: input.now, updatedAt: input.now,
+    },
+    update: {
+      videoId: input.videoId ?? null, liveSessionId: input.liveSessionId ?? null,
+      lastWatchedAt: input.now, updatedAt: input.now,
+    },
+  });
 };
 
 /** Per-container rollups for the "Resume Learning" feed (course/package/liveCourse). */
@@ -281,6 +314,22 @@ export const reportContainerProgress = async (input: {
     positionSec: input.positionSec,
     durationSec: input.durationSec,
   });
+
+  // Layer-2: stamp THIS enrollment's last-watched pointer so the resume card for
+  // this scope tracks the video the user watched *here*, independent of the same
+  // video's pointer in any other product. Failure-isolated — a pointer write must
+  // never fail the heartbeat (the global position in `row` is already saved).
+  try {
+    await upsertEnrollmentResume({
+      customerId: input.customerId, scopeKind: input.scope.kind, scopeId: input.scope.id,
+      videoId: input.videoId, liveSessionId: null, now,
+    });
+  } catch (err) {
+    logger.warn("reportContainerProgress: enrollment-resume upsert failed", {
+      customerId: input.customerId, scope: input.scope, videoId: input.videoId, error: getErrorMessage(err),
+    });
+  }
+
   return { ok: true, row };
 };
 
@@ -320,6 +369,19 @@ export const reportLiveSessionProgress = async (input: {
     positionSec: input.positionSec,
     durationSec: input.durationSec,
   });
+
+  // Layer-2: stamp the live-course enrollment's last-watched pointer (session-based).
+  try {
+    await upsertEnrollmentResume({
+      customerId: input.customerId, scopeKind: "liveCourse", scopeId: sub.liveCourseId,
+      videoId: null, liveSessionId: input.liveSessionId, now,
+    });
+  } catch (err) {
+    logger.warn("reportLiveSessionProgress: enrollment-resume upsert failed", {
+      customerId: input.customerId, liveCourseId: sub.liveCourseId, liveSessionId: input.liveSessionId, error: getErrorMessage(err),
+    });
+  }
+
   return { ok: true, row };
 };
 
@@ -401,22 +463,70 @@ const resolveSessions = async (sessionIds: number[]) => {
  * filtering. See docs/client/DASHBOARD_RESUME_PROGRESS.md + the FE purchased-only
  * request (home-my-courses-subject-progress).
  */
+// Layer-2 read helpers — the per-enrollment last-watched pointer + the Layer-1
+// (global) position of the video/session that pointer names. See
+// docs/be-dashboard-resume-scope.md.
+
+type ResumePtr = { scopeId: number; videoId: number | null; liveSessionId: number | null; lastWatchedAt: Date | null };
+
+/** Per-enrollment last-watched pointers for one scope kind, newest first. */
+const resumePointers = async (customerId: number, kind: "course" | "package" | "liveCourse"): Promise<ResumePtr[]> => {
+  const rows = await prisma.enrollmentResume.findMany({
+    where: { customerId, scopeKind: kind },
+    orderBy: { lastWatchedAt: "desc" },
+    select: { scopeId: true, videoId: true, liveSessionId: true, lastWatchedAt: true },
+  });
+  return rows.map((r) => ({ scopeId: r.scopeId, videoId: r.videoId, liveSessionId: r.liveSessionId, lastWatchedAt: r.lastWatchedAt }));
+};
+
+type Pos = { positionSec: number; durationSec: number };
+
+/** Global (Layer-1) playback position keyed by videoId. */
+const videoPositions = async (customerId: number, videoIds: number[]): Promise<Map<number, Pos>> => {
+  const ids = [...new Set(videoIds)];
+  if (!ids.length) return new Map();
+  const rows = await prisma.lectureProgress.findMany({ where: { customerId, videoId: { in: ids } }, select: { videoId: true, positionSec: true, durationSec: true } });
+  return new Map(rows.map((r) => [r.videoId!, { positionSec: r.positionSec, durationSec: r.durationSec }]));
+};
+
+/** Global (Layer-1) playback position keyed by liveSessionId. */
+const sessionPositions = async (customerId: number, sessionIds: number[]): Promise<Map<number, Pos>> => {
+  const ids = [...new Set(sessionIds)];
+  if (!ids.length) return new Map();
+  const rows = await prisma.lectureProgress.findMany({ where: { customerId, liveSessionId: { in: ids } }, select: { liveSessionId: true, positionSec: true, durationSec: true } });
+  return new Map(rows.map((r) => [r.liveSessionId!, { positionSec: r.positionSec, durationSec: r.durationSec }]));
+};
+
+/** Completed-lecture count per container (the % bar numerator), one grouped query. */
+const completedCounts = async (customerId: number, field: "courseId" | "packageId" | "liveCourseId", ids: number[]): Promise<Map<number, number>> => {
+  if (!ids.length) return new Map();
+  const grp = await prisma.lectureProgress.groupBy({ by: [field], where: { customerId, completed: true, [field]: { in: ids } }, _count: { _all: true } });
+  return new Map(grp.map((g: any) => [g[field] as number, g._count._all as number]));
+};
+
 export const listMyLearningProgress = async (
   customerId: number,
   opts: { search?: string; skip?: number; limit?: number } = {}
 ): Promise<{ cards: any[]; resumeNext: any; total: number }> => {
   const now = new Date();
-  const [perCourse, perPackage, perLive] = await Promise.all([
-    rollupByContainer(customerId, "courseId"),
-    rollupByContainer(customerId, "packageId"),
-    rollupByContainer(customerId, "liveCourseId"),
+  // Container set + last-watched pointer come from the enrollment-scoped Layer-2
+  // table (NOT LectureProgress, which is global-per-video and would leak one
+  // product's last video onto another's card for a shared lecture).
+  const [coursePtrs, packagePtrs, livePtrs] = await Promise.all([
+    resumePointers(customerId, "course"),
+    resumePointers(customerId, "package"),
+    resumePointers(customerId, "liveCourse"),
   ]);
 
-  const courseIds = perCourse.map((r) => r._id);
-  const packageIds = perPackage.map((r) => r._id);
-  const liveIds = perLive.map((r) => r._id);
+  const courseIds = coursePtrs.map((r) => r.scopeId);
+  const packageIds = packagePtrs.map((r) => r.scopeId);
+  const liveIds = livePtrs.map((r) => r.scopeId);
 
-  const [courses, packages, liveCourses, courseSubs, packageSubs, liveSubs, totals] = await Promise.all([
+  const ptrVideoIds = [...coursePtrs, ...packagePtrs, ...livePtrs].map((p) => p.videoId).filter((v): v is number => v != null);
+  const ptrSessionIds = livePtrs.map((p) => p.liveSessionId).filter((v): v is number => v != null);
+
+  const [courses, packages, liveCourses, courseSubs, packageSubs, liveSubs, totals,
+         courseDone, packageDone, liveDone, videoPos, sessionPos] = await Promise.all([
     courseIds.length ? prisma.course.findMany({ where: { id: { in: courseIds }, status: true }, select: { id: true, name: true, image: true, educator: { select: { id: true, name: true, image: true } } } }) : [],
     packageIds.length ? prisma.package.findMany({ where: { id: { in: packageIds }, active: true }, select: { id: true, name: true, image: true, educator_id: true } }) : [],
     liveIds.length ? prisma.liveCourse.findMany({ where: { id: { in: liveIds }, status: true }, select: { id: true, name: true, image: true, educatorId: true } }) : [],
@@ -424,7 +534,34 @@ export const listMyLearningProgress = async (
     packageIds.length ? prisma.packageCourseSubscription.findMany({ where: { customerId, packageId: { in: packageIds }, status: true, endAt: { gt: now } }, select: { packageId: true, endAt: true } }) : [],
     liveIds.length ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: liveIds }, status: true, paymentStatus: "verified", endAt: { gt: now } }, select: { liveCourseId: true, endAt: true } }) : [],
     containerTotals(courseIds, packageIds, liveIds),
+    completedCounts(customerId, "courseId", courseIds),
+    completedCounts(customerId, "packageId", packageIds),
+    completedCounts(customerId, "liveCourseId", liveIds),
+    videoPositions(customerId, ptrVideoIds),
+    sessionPositions(customerId, ptrSessionIds),
   ]);
+
+  // Assemble per-scope rollup rows in the shape the card builders below consume,
+  // sourcing the pointer (video/session + timestamp) from Layer-2 and the
+  // position from Layer-1. `lastCourseId` is intentionally null — a package's
+  // resume pointer is package-scoped, not tied to a specific inner course.
+  const posOf = (videoId: number | null, liveSessionId: number | null): Pos => {
+    if (videoId != null && videoPos.has(videoId)) return videoPos.get(videoId)!;
+    if (liveSessionId != null && sessionPos.has(liveSessionId)) return sessionPos.get(liveSessionId)!;
+    return { positionSec: 0, durationSec: 0 };
+  };
+  const perCourse = coursePtrs.map((p) => {
+    const pos = posOf(p.videoId, null);
+    return { _id: p.scopeId, lastWatchedAt: p.lastWatchedAt, lastVideoId: p.videoId, lastLiveSessionId: null, lastCourseId: null, lastPositionSec: pos.positionSec, lastDurationSec: pos.durationSec, completedCount: courseDone.get(p.scopeId) ?? 0 };
+  });
+  const perPackage = packagePtrs.map((p) => {
+    const pos = posOf(p.videoId, null);
+    return { _id: p.scopeId, lastWatchedAt: p.lastWatchedAt, lastVideoId: p.videoId, lastLiveSessionId: null, lastCourseId: null, lastPositionSec: pos.positionSec, lastDurationSec: pos.durationSec, completedCount: packageDone.get(p.scopeId) ?? 0 };
+  });
+  const perLive = livePtrs.map((p) => {
+    const pos = posOf(p.videoId, p.liveSessionId);
+    return { _id: p.scopeId, lastWatchedAt: p.lastWatchedAt, lastVideoId: p.videoId, lastLiveSessionId: p.liveSessionId, lastCourseId: null, lastPositionSec: pos.positionSec, lastDurationSec: pos.durationSec, completedCount: liveDone.get(p.scopeId) ?? 0 };
+  });
 
   // Educators for packages + live courses (Course has its relation inline).
   const eduIds = [...new Set([...packages.map((p) => p.educator_id), ...liveCourses.map((l) => l.educatorId)].filter((x) => x != null))] as number[];
@@ -438,8 +575,8 @@ export const listMyLearningProgress = async (
   const packageSubBy = new Map(packageSubs.map((s) => [s.packageId!, s]));
   const liveSubBy = new Map(liveSubs.map((s) => [s.liveCourseId, s]));
 
-  const lectureMap = await resolveLectures([...perCourse, ...perPackage, ...perLive].map((p) => p.lastVideoId).filter(Boolean));
-  const sessionMap = await resolveSessions(perLive.map((p: any) => p.lastLiveSessionId).filter(Boolean));
+  const lectureMap = await resolveLectures([...perCourse, ...perPackage, ...perLive].map((p) => p.lastVideoId).filter((v): v is number => v != null));
+  const sessionMap = await resolveSessions(perLive.map((p) => p.lastLiveSessionId).filter((v): v is number => v != null));
 
   const cards: any[] = [];
   for (const p of perCourse) {

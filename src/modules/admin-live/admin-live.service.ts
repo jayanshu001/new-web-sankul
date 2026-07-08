@@ -27,6 +27,10 @@
  */
 import { prisma } from "../../config/prisma";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
+import { adminLiveCourseRepository } from "../admin-live-course/admin-live-course.repository";
+import { dispatchAudience } from "../admin-notification/admin-notification.service";
+import { buildNotificationRouting } from "../../utils/notificationTarget";
+import logger from "../../utils/logger";
 import type { LiveSession as SqlLiveSession } from "@prisma/client";
 
 export const ADMIN_LIVE_MODULE = "admin-live";
@@ -372,6 +376,92 @@ export const updateByStreamId = async (
     where: { id: found.id },
     data: { ...data, updatedAt: new Date() },
   });
+};
+
+// ── "session went live" buyer push (POST /:id/start side effect) ─────────────
+/**
+ * Notify every active buyer of a started session's live courses that the class
+ * is live now. Idempotent per stream run and non-blocking (the caller fires it
+ * fire-and-forget). Returns { notified, notifiedCount }.
+ *
+ *  - Idempotency: `claimStartNotification` atomically stamps `notified_stream_id`.
+ *    A retried /start, or a stop→restart that reuses the same StreamOS stream,
+ *    has the same streamId → the claim loses → no-op. A genuinely NEW stream
+ *    (new streamId) re-notifies.
+ *  - Audience: active+verified subscribers across the session's live courses,
+ *    deduped per customer (first course wins → the deep link points to a course
+ *    the user actually bought). Grouped per course so each user's link is right.
+ *  - Delivery: reuses dispatchAudience (FCM + in-app feed). `general` type, so
+ *    offers-muted users still receive it. Zero eligible buyers → clean no-op.
+ */
+export const notifyBuyersOnStart = async (params: {
+  sessionId: number;
+  streamId: string | null;
+  title: string | null;
+}): Promise<{ notified: boolean; notifiedCount: number }> => {
+  if (!params.streamId) return { notified: false, notifiedCount: 0 };
+
+  const liveCourseIds = await getLinkedCourseIds(params.sessionId);
+  if (liveCourseIds.length === 0) return { notified: false, notifiedCount: 0 };
+
+  // Atomic claim: only the first start of THIS stream run proceeds. Match rows
+  // never notified (NULL) OR notified for a DIFFERENT stream — but NOT rows
+  // already stamped with this streamId (that's the retry / restart-same-stream
+  // no-op). NB: Prisma `{ not: x }` excludes NULL in MySQL, so the explicit
+  // `notifiedStreamId: null` branch is required for the first-ever start.
+  const claim = await prisma.liveSession.updateMany({
+    where: {
+      id: params.sessionId,
+      OR: [{ notifiedStreamId: null }, { notifiedStreamId: { not: params.streamId } }],
+    },
+    data: { notifiedStreamId: params.streamId, updatedAt: new Date() },
+  });
+  if (claim.count === 0) return { notified: false, notifiedCount: 0 };
+
+  const now = new Date();
+  const subs = await adminLiveCourseRepository.activeSubscribersForCourses(liveCourseIds, now);
+  // Dedup per customer; group by the (first) course they bought for a correct link.
+  const courseByCustomer = new Map<number, number>();
+  for (const s of subs) if (!courseByCustomer.has(s.customerId)) courseByCustomer.set(s.customerId, s.liveCourseId);
+  if (courseByCustomer.size === 0) return { notified: true, notifiedCount: 0 };
+
+  const customersByCourse = new Map<number, number[]>();
+  for (const [customerId, liveCourseId] of courseByCustomer) {
+    const arr = customersByCourse.get(liveCourseId) ?? [];
+    arr.push(customerId);
+    customersByCourse.set(liveCourseId, arr);
+  }
+
+  // Backend-owned template; keep within the existing 100-char title cap.
+  const title = `${params.title ?? "Live class"} is live now`.slice(0, 100);
+  let notifiedCount = 0;
+  for (const [liveCourseId, customerIds] of customersByCourse) {
+    const routing = buildNotificationRouting({ kind: "content", entity: "live-course", id: liveCourseId });
+    const result = await dispatchAudience(
+      {
+        title,
+        body: "Tap to join the live class.",
+        type: "general",
+        deepLink: routing.deepLink ?? null,
+        // Also carry the live session + stream ids so the app can route
+        // straight into the running class (FCM data values are strings).
+        data: {
+          ...routing.data,
+          sessionId: String(params.sessionId),
+          streamId: params.streamId,
+          liveCourseId: String(liveCourseId),
+        },
+      },
+      { userIds: customerIds.map(String) }
+    );
+    notifiedCount += result.recipientCount;
+  }
+
+  logger.info("live-start buyer notification sent", {
+    sessionId: params.sessionId, streamId: params.streamId,
+    liveCourseIds, targeted: courseByCustomer.size, notifiedCount,
+  });
+  return { notified: true, notifiedCount };
 };
 
 /** Delete a session and its course links. */

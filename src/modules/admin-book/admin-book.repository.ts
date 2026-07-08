@@ -46,6 +46,7 @@ export const adminBookRepository = {
   listOrders: (opts: {
     customerId?: number;
     status?: string;
+    state?: number;
     fromDate?: Date;
     toDate?: Date;
     orderIdsIn?: string[]; // VARCHAR business keys (search match on items)
@@ -67,7 +68,7 @@ export const adminBookRepository = {
       skip: opts.skip,
       take: opts.take,
     }),
-  countOrders: (opts: { customerId?: number; status?: string; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string; bookOrderKeysIn?: string[] }) =>
+  countOrders: (opts: { customerId?: number; status?: string; state?: number; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string; bookOrderKeysIn?: string[] }) =>
     prisma.bookOrder.count({ where: buildOrderWhere(opts) }),
 
   findOrderById: (id: number) =>
@@ -91,13 +92,13 @@ export const adminBookRepository = {
   /** Books by id (hydrate the order_items JSON snapshot's `item` book id). */
   findBooksByIds: (ids: number[]) =>
     ids.length
-      ? prisma.book.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, thumbnail: true, author: true } })
+      ? prisma.book.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, thumbnail: true, author: true, weight: true } })
       : Promise.resolve([]),
 
   /** Customer ids whose name/phone matches the search (for order search). */
   findCustomerIdsBySearch: async (q: string): Promise<number[]> => {
     const rows = await prisma.customer.findMany({
-      where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }] },
+      where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] },
       select: { id: true },
     });
     return rows.map((r) => r.id);
@@ -170,10 +171,12 @@ function orderSortCol(sortBy: string): string {
   return "createdAt";
 }
 
-function buildOrderWhere(opts: { customerId?: number; status?: string; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string; bookOrderKeysIn?: string[] }): Prisma.BookOrderWhereInput {
+function buildOrderWhere(opts: { customerId?: number; status?: string; state?: number; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string; bookOrderKeysIn?: string[] }): Prisma.BookOrderWhereInput {
   const where: Prisma.BookOrderWhereInput = {};
   if (opts.customerId !== undefined) where.userId = opts.customerId;
   if (opts.status) where.status = opts.status;
+  // Delivery-state filter lives on the linked shipping row (numeric state id).
+  if (opts.state !== undefined) where.shipping = { is: { state: opts.state } };
   if (opts.fromDate || opts.toDate) {
     where.createdAt = {};
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;

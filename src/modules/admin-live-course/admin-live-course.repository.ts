@@ -168,6 +168,18 @@ export const adminLiveCourseRepository = {
     });
     return [...new Set(rows.map((r) => r.liveCourseId))];
   },
+  /**
+   * Active+verified subscribers across a set of live courses — the reverse of
+   * activeSubsForCourses (all buyers, not one customer). Powers the "session went
+   * live" push fan-out. Returns one row per (customer, course); the caller dedups.
+   */
+  activeSubscribersForCourses: (liveCourseIds: number[], now: Date): Promise<{ customerId: number; liveCourseId: number }[]> =>
+    liveCourseIds.length
+      ? prisma.liveCourseSubscription.findMany({
+          where: { liveCourseId: { in: liveCourseIds }, status: true, paymentStatus: "verified", OR: [{ endAt: null }, { endAt: { gte: now } }] },
+          select: { customerId: true, liveCourseId: true },
+        })
+      : Promise.resolve([]),
   /** Verified-subscription count per course (popularity ranking). */
   purchaseCounts: async (liveCourseIds: number[]): Promise<Map<number, number>> => {
     if (!liveCourseIds.length) return new Map();

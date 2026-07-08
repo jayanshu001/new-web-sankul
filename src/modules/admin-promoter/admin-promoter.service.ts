@@ -358,9 +358,9 @@ const resolvePromoRefs = async (
 };
 
 export const getPromoterPromocodes = async (promoterId: number): Promise<any[]> => {
-  const rows = await prisma.promoCodeRule.findMany({
+  const rows = await prisma.promocode.findMany({
     where: { promoterId },
-    orderBy: { createdAt: "desc" },
+    orderBy: { created_at: "desc" },
   });
   return Promise.all(
     rows.map(async (r) => {
@@ -377,15 +377,15 @@ export const getPromoterPromocodes = async (promoterId: number): Promise<any[]> 
         promocode: r.promocode,
         title: r.title ?? "",
         description: r.description ?? "",
-        promo_start_at: r.promoStartAt ?? null,
-        promo_expire_at: r.promoExpireAt ?? null,
+        promo_start_at: r.promo_start_at ?? null,
+        promo_expire_at: r.promo_expire_at ?? null,
         status: r.status,
         discountType: r.discountType,
         discountValue: numOf(r.discountValue),
         promoterId: r.promoterId != null ? String(r.promoterId) : null,
         appliesTo,
-        createdAt: r.createdAt ?? null,
-        updatedAt: r.updatedAt ?? null,
+        createdAt: r.created_at ?? null,
+        updatedAt: r.updated_at ?? null,
       };
     })
   );

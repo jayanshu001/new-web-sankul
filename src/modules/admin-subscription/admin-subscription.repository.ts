@@ -17,7 +17,7 @@ import { andWhere } from "../../utils/reportFilters";
  */
 export interface CourseSubFilter {
   customerId?: number; courseId?: number; packageId?: number; status?: boolean;
-  paymentType?: "online" | "backend";
+  paymentType?: "online" | "backend"; hasMaterial?: boolean;
   fromDate?: Date; toDate?: Date; type?: "course" | "package";
   customerIdsIn?: number[]; courseIdsIn?: number[]; packageIdsIn?: number[];
 }
@@ -109,16 +109,32 @@ export const adminSubscriptionRepository = {
   customersByIds: (ids: number[]) =>
     ids.length ? prisma.customer.findMany({ where: { id: { in: ids } }, select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } }) : Promise.resolve([]),
   coursesByIds: (ids: number[]) =>
-    ids.length ? prisma.course.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
+    ids.length ? prisma.course.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, courseEducatorId: true } }) : Promise.resolve([]),
   packagesByIds: (ids: number[]) =>
     ids.length ? prisma.package.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
   plansByIds: (ids: number[]) =>
     ids.length ? prisma.packageCourseEbookPrice.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, duration: true, price: true } }) : Promise.resolve([]),
   ebooksByIds: (ids: number[]) =>
     ids.length ? prisma.eBook.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, author: true } }) : Promise.resolve([]),
+  // Report-column hydration (merged Subscription Report):
+  //  order → razorpay/bank ids, ws coin, promocode json snapshot
+  ordersByIds: (ids: number[]) =>
+    ids.length ? prisma.packageCourseOrder.findMany({ where: { id: { in: ids } }, select: { id: true, gatewayOrderId: true, gatewayPaymentId: true, bankTransactionId: true, wsCoin: true, promocode: true } }) : Promise.resolve([]),
+  //  shipping → Address / City / Pincode
+  shippingsByIds: (ids: number[]) =>
+    ids.length ? prisma.customerShipping.findMany({ where: { id: { in: ids } }, select: { id: true, address: true, address_2: true, city: true, pincode: true } }) : Promise.resolve([]),
+  //  promoter → Promoter name
+  promotersByIds: (ids: number[]) =>
+    ids.length ? prisma.promoter.findMany({ where: { id: { in: ids } }, select: { id: true, full_name: true } }) : Promise.resolve([]),
+  //  course educator → Educator name
+  educatorsByIds: (ids: number[]) =>
+    ids.length ? prisma.courseEducator.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } }) : Promise.resolve([]),
+  //  created_by → admin/staff name (Activated By); ws_users PK is BigInt.
+  adminUsersByIds: (ids: number[]) =>
+    ids.length ? prisma.adminUser.findMany({ where: { id: { in: ids.map((i) => BigInt(i)) } }, select: { id: true, firstName: true, lastName: true } }) : Promise.resolve([]),
 
   // ── search-id resolvers (cross-table search) ────────────────────────────────
-  customerIdsByText: async (q: string) => (await prisma.customer.findMany({ where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }] }, select: { id: true } })).map((r) => r.id),
+  customerIdsByText: async (q: string) => (await prisma.customer.findMany({ where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] }, select: { id: true } })).map((r) => r.id),
   courseIdsByText: async (q: string) => (await prisma.course.findMany({ where: { name: { contains: q } }, select: { id: true } })).map((r) => r.id),
   packageIdsByText: async (q: string) => (await prisma.package.findMany({ where: { name: { contains: q } }, select: { id: true } })).map((r) => r.id),
 
@@ -170,6 +186,8 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
   if (opts.courseId !== undefined) where.courseId = opts.courseId;
   if (opts.packageId !== undefined) where.packageId = opts.packageId;
   if (opts.paymentType !== undefined) where.payment_type = opts.paymentType;
+  // Subscription Material Report: only with-material rows (pc_material_id > 0).
+  if (opts.hasMaterial) where.pcMaterialId = { gt: 0 };
   if (opts.fromDate || opts.toDate) {
     where.createdAt = {};
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;

@@ -12,6 +12,18 @@ export const parseBookId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
+// Parse a date-range bound. A bare "YYYY-MM-DD" is pinned to the day edge so the
+// range is inclusive (from → 00:00:00.000, to → 23:59:59.999); full timestamps
+// pass through unchanged. Invalid input → undefined (no bound).
+const parseDayBound = (v: string | undefined, end: boolean): Date | undefined => {
+  if (!v) return undefined;
+  const s = v.trim();
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s)
+    ? new Date(`${s}${end ? "T23:59:59.999" : "T00:00:00.000"}`)
+    : new Date(s);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+};
+
 // The Mongo defaults for the SQL-absent publication / deliveryEta fields
 // (mirror catalog-book.transformer).
 const DEFAULT_PUBLICATION = "WebSankul Publication";
@@ -250,10 +262,10 @@ export const reorderBooks = async (orders: Array<{ id: string; orderBy: number }
 // ws_book_order_item rows. So we PREFER child rows and fall back to the JSON
 // snapshot (the authoritative source for legacy orders) — matching the Mongo
 // embedded items[] contract.
-type OrderItemShape = { bookId: number | null; name: string | null; qty: number; price: number };
+type OrderItemShape = { bookId: number | null; name: string | null; qty: number; price: number; shippingPrice: number };
 
 const itemsFromChildRows = (rows: any[]): OrderItemShape[] =>
-  rows.map((it) => ({ bookId: it.bookId ?? null, name: it.Book?.name ?? null, qty: it.qty, price: it.price }));
+  rows.map((it) => ({ bookId: it.bookId ?? null, name: it.Book?.name ?? null, qty: it.qty, price: it.price, shippingPrice: it.shipping_price ?? 0 }));
 
 const itemsFromJson = (json: string | null): OrderItemShape[] => {
   if (!json) return [];
@@ -265,6 +277,7 @@ const itemsFromJson = (json: string | null): OrderItemShape[] => {
       name: it.name ?? null,
       qty: Number(it.qty) || 0,
       price: Number(it.price) || 0,
+      shippingPrice: Number(it.shippingPrice ?? it.shipping_price ?? 0) || 0,
     }));
   } catch {
     return [];
@@ -283,6 +296,8 @@ const toOrderItemDto = (it: OrderItemShape, books: Map<number, any>) => {
     name: it.name ?? book?.name ?? null,
     qty: it.qty,
     price: it.price,
+    // Per-book unit weight (from the hydrated book row); null when unknown.
+    weight: book?.weight ?? null,
   };
 };
 
@@ -290,6 +305,7 @@ export const listOrders = async (q: {
   customerId?: string;
   bookId?: string;
   status?: string;
+  state?: string;
   fromDate?: string;
   toDate?: string;
   search?: string;
@@ -299,8 +315,9 @@ export const listOrders = async (q: {
   limit: number;
 }) => {
   const customerId = q.customerId ? parseBookId(q.customerId) ?? undefined : undefined;
-  const fromDate = q.fromDate ? new Date(q.fromDate) : undefined;
-  const toDate = q.toDate ? new Date(q.toDate) : undefined;
+  const state = q.state ? parseBookId(q.state) ?? undefined : undefined;
+  const fromDate = parseDayBound(q.fromDate, false);
+  const toDate = parseDayBound(q.toDate, true);
 
   // Optional server-side bookId filter: restrict to orders containing that book.
   // Resolve the matching order keys up front; none → no orders, short-circuit.
@@ -328,6 +345,7 @@ export const listOrders = async (q: {
   const opts = {
     customerId,
     status: q.status,
+    state,
     fromDate,
     toDate,
     customerIdsIn,
@@ -360,17 +378,40 @@ export const listOrders = async (q: {
   // Hydrate all referenced book ids in one query.
   const books = await loadBooks([...itemsByOrder.values()].flat());
 
-  const items = rows.map((r) => ({
-    _id: String(r.id),
-    receiptId: r.receiptId,
-    customerId: toCustomerDto(r.user),
-    shippingId: toShippingDto(r.shipping),
-    amount: Number(r.amount),
-    status: r.status,
-    items: (itemsByOrder.get(r.id) ?? []).map((it) => toOrderItemDto(it, books)),
-    createdAt: r.createdAt ?? null,
-    updatedAt: r.updatedAt ?? null,
-  }));
+  const items = rows.map((r) => {
+    const lineItems = itemsByOrder.get(r.id) ?? [];
+    // Derive report totals from the line items: total weight = Σ(unit weight × qty)
+    // over books with a known weight; shipping price = Σ per-line shipping charge.
+    let totalWeight = 0;
+    let anyWeight = false;
+    let shippingPrice = 0;
+    for (const it of lineItems) {
+      const bk = it.bookId != null ? books.get(it.bookId) : undefined;
+      if (bk?.weight != null) {
+        totalWeight += bk.weight * it.qty;
+        anyWeight = true;
+      }
+      shippingPrice += it.shippingPrice ?? 0;
+    }
+    return {
+      _id: String(r.id),
+      receiptId: r.receiptId,
+      customerId: toCustomerDto(r.user),
+      shippingId: toShippingDto(r.shipping),
+      amount: Number(r.amount),
+      status: r.status,
+      // Courier AWB set via the /tracking PATCH; null until fulfilled.
+      trackingId: r.trackingId != null ? String(r.trackingId) : null,
+      totalWeight: anyWeight ? totalWeight : null,
+      shippingPrice: lineItems.length ? shippingPrice : null,
+      // Razorpay identifiers; empty gateway id (non-razorpay order) → null.
+      razorpayOrderId: r.gatewayOrderId ? r.gatewayOrderId : null,
+      razorpayPaymentId: r.gatewayPaymentId ?? null,
+      items: lineItems.map((it) => toOrderItemDto(it, books)),
+      createdAt: r.createdAt ?? null,
+      updatedAt: r.updatedAt ?? null,
+    };
+  });
 
   return { items, total };
 };

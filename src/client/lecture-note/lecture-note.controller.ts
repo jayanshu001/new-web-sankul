@@ -1,12 +1,15 @@
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
+import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import {
   createNoteSchema,
   updateNoteSchema,
   listNotesQuerySchema,
   noteIdParamSchema,
+  deleteSavedMaterialSchema,
 } from "./lecture-note.validation";
+import type { SavedMaterialTarget } from "../../modules/client-lecture-note/client-lecture-note.service";
 import { buildResumeNextCard } from "../learning/resumeCard";
 import { buildLectureRef } from "../learning/lectureRef";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
@@ -113,6 +116,63 @@ export const listSavedMaterialNotes = async (req: Request, res: Response) => {
     return success(res, { items, pagination: buildPagination(total, page, limit) }, "Saved materials fetched.", 200);
   } catch (err) {
     logger.error("listSavedMaterialNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Something went wrong. Please try again later.", 500);
+  }
+};
+
+// DELETE /api/v1/client/lecture-notes/saved-materials
+// Bulk-delete EVERY text + audio note for one saved-material group (the trash
+// action on a Saved Notes row). Target mirrors the `kind` + id fields the
+// saved-materials listing returns. Accepts the target in the JSON body OR the
+// query string (body wins on conflict). Scoped to the authenticated user and
+// idempotent — deleting a group with no notes returns success with zero counts
+// so the app can clear a stale row.
+export const deleteSavedMaterialNotes = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("deleteSavedMaterialNotes invoked", { traceId, path: req.originalUrl, userId });
+
+  try {
+    if (!userId) { logger.warn("deleteSavedMaterialNotes unauthorized", { traceId }); return failure(res, "Unauthorized.", 401); }
+
+    const raw = { ...(req.query as Record<string, unknown>), ...(req.body as Record<string, unknown>) };
+    const parsed = deleteSavedMaterialSchema.safeParse(raw);
+    if (!parsed.success) { logger.warn("deleteSavedMaterialNotes validation failed", { traceId, userId, issues: parsed.error.issues }); return failure(res, parsed.error.issues[0]?.message ?? "Invalid request", 400); }
+
+    const cid = lnSql.parseLnId(String(userId));
+    if (cid == null) return failure(res, "Unauthorized.", 401);
+
+    const d = parsed.data;
+    // Resolve exactly one id → int, matching the kind. Validation already
+    // guaranteed the required field is present.
+    let target: SavedMaterialTarget;
+    if (d.kind === "recorded") {
+      const id = lnSql.parseLnId(String(d.videoId)); if (id == null) return failure(res, "kind and videoId are required for recorded materials", 400);
+      target = { kind: "recorded", videoId: id };
+    } else if (d.kind === "live") {
+      const id = lnSql.parseLnId(String(d.liveSessionId)); if (id == null) return failure(res, "kind and liveSessionId are required for live materials", 400);
+      target = { kind: "live", liveSessionId: id };
+    } else if (d.kind === "course") {
+      const id = lnSql.parseLnId(String(d.courseId)); if (id == null) return failure(res, "kind and courseId are required for course materials", 400);
+      target = { kind: "course", courseId: id };
+    } else {
+      const id = lnSql.parseLnId(String(d.liveCourseId)); if (id == null) return failure(res, "kind and liveCourseId are required for live_course materials", 400);
+      target = { kind: "live_course", liveCourseId: id };
+    }
+
+    const { deletedTextNotes, deletedVoiceNotes, audioUrls } = await lnSql.deleteSavedMaterialNotes(cid, target);
+
+    // Best-effort S3 cleanup for the deleted audio notes — mirror single audio
+    // delete: a failed object delete must not fail the request (rows are gone).
+    for (const url of audioUrls) {
+      try { await deleteFromS3FileUrl(url); }
+      catch (s3err) { logger.warn("deleteSavedMaterialNotes S3 delete failed", { traceId, userId, url, error: getErrorMessage(s3err) }); }
+    }
+
+    logger.info("deleteSavedMaterialNotes success", { traceId, userId, kind: d.kind, deletedTextNotes, deletedVoiceNotes });
+    return success(res, { deletedTextNotes, deletedVoiceNotes }, "Saved material notes deleted.", 200);
+  } catch (err) {
+    logger.error("deleteSavedMaterialNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };

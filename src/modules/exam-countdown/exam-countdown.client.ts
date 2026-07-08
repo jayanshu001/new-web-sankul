@@ -228,7 +228,7 @@ const findCountdown = async (id: number) => {
     : null;
   return { ...e, category };
 };
-const countdownDto = (e: any) => ({ _id: String(e.id), title: e.title, categoryId: e.category ? { _id: String(e.category.id), name: e.category.name, colorHex: e.category.colorHex } : null, examDate: e.examDate, description: e.description ?? "", status: e.status, createdAt: e.createdAt ?? null, updatedAt: e.updatedAt ?? null });
+const countdownDto = (e: any) => ({ _id: String(e.id), title: e.title, categoryId: e.category ? { _id: String(e.category.id), name: e.category.name, colorHex: e.category.colorHex } : null, examDate: e.examDate, status: e.status, createdAt: e.createdAt ?? null, updatedAt: e.updatedAt ?? null });
 
 /** GET /client/exam-countdown-categories/:id/packages */
 export const listPackagesByCountdownCategory = async (

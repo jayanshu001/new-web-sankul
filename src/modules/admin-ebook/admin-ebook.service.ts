@@ -2,6 +2,7 @@ import { computeEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminEbookRepository as repo } from "./admin-ebook.repository";
 import { populateExamCountdowns, parseIdArray } from "../exam-countdown/exam-countdown.service";
+import { PaymentMethod } from "@prisma/client";
 import type { EBook, PackageCourseEbookPrice } from "@prisma/client";
 
 export const ADMIN_EBOOK_MODULE = "admin-ebook";
@@ -10,6 +11,20 @@ export const isAdminEbookMysql = (): boolean => true;
 export const parseEbookId = (id: string): number | null => {
   const n = Number(id);
   return Number.isInteger(n) && n > 0 ? n : null;
+};
+
+// Case-insensitive map to the PaymentMethod enum so the UI can send "backend"/"Backend".
+const PAYMENT_METHOD_BY_LOWER: Record<string, PaymentMethod> = Object.fromEntries(
+  Object.values(PaymentMethod).map((v) => [v.toLowerCase(), v])
+);
+export const coercePaymentMethod = (v?: string): PaymentMethod | undefined =>
+  v ? PAYMENT_METHOD_BY_LOWER[v.trim().toLowerCase()] : undefined;
+
+// "YYYY-MM-DD" → inclusive day bounds; `end` extends to the end of that day.
+export const parseDateBound = (v: string | undefined, end: boolean): Date | undefined => {
+  if (!v) return undefined;
+  const d = new Date(`${v.trim()}${end ? "T23:59:59.999" : "T00:00:00.000"}`);
+  return Number.isNaN(d.getTime()) ? undefined : d;
 };
 
 // ── transformers ─────────────────────────────────────────────────────────────
@@ -250,7 +265,16 @@ const toSubListItem = (r: any) => ({
   planId: r.eBookOrder?.PackageCourseEbookPrice
     ? { _id: String(r.eBookOrder.PackageCourseEbookPrice.id), name: r.eBookOrder.PackageCourseEbookPrice.name ?? null, duration: r.eBookOrder.PackageCourseEbookPrice.duration, price: r.eBookOrder.PackageCourseEbookPrice.price }
     : null,
-  orderId: r.eBookOrder ? { _id: String(r.eBookOrder.id), paymentMethod: r.eBookOrder.paymentMethod, status: r.eBookOrder.status } : null,
+  orderId: r.eBookOrder
+    ? {
+        _id: String(r.eBookOrder.id),
+        paymentMethod: r.eBookOrder.paymentMethod,
+        status: r.eBookOrder.status,
+        // Razorpay identifiers for the report; empty gateway id (non-razorpay grant) → null.
+        razorpayOrderId: r.eBookOrder.gatewayOrderId ? r.eBookOrder.gatewayOrderId : null,
+        razorpayPaymentId: r.eBookOrder.gatewayPaymentId ?? null,
+      }
+    : null,
   paidAmount: r.eBookOrder?.orderPrice ?? (r.price != null ? Number(r.price) : 0),
   startAt: r.startAt ?? null,
   endAt: r.endAt ?? null,
@@ -260,7 +284,20 @@ const toSubListItem = (r: any) => ({
   updatedAt: r.updatedAt ?? null,
 });
 
-export const listSubscriptions = async (q: { customerId?: number; ebookId?: number; status?: boolean; search?: string; sortBy?: string; sortOrder?: string; page: number; limit: number }) => {
+export const listSubscriptions = async (q: {
+  customerId?: number;
+  ebookId?: number;
+  status?: boolean;
+  statusFilter?: "active" | "expired" | "inactive";
+  paymentMethod?: PaymentMethod;
+  dateFrom?: Date;
+  dateTo?: Date;
+  search?: string;
+  sortBy?: string;
+  sortOrder?: string;
+  page: number;
+  limit: number;
+}) => {
   let customerIdsIn: number[] | undefined;
   let ebookIdsIn: number[] | undefined;
   if (q.search) {
@@ -270,6 +307,8 @@ export const listSubscriptions = async (q: { customerId?: number; ebookId?: numb
   }
   const opts = {
     customerId: q.customerId, ebookId: q.ebookId, status: q.status,
+    statusFilter: q.statusFilter, paymentMethod: q.paymentMethod,
+    dateFrom: q.dateFrom, dateTo: q.dateTo, now: new Date(),
     customerIdsIn, ebookIdsIn,
     sortBy: q.sortBy ?? "createdAt", sortDir: (q.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc",
   };

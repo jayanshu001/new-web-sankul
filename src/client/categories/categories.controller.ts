@@ -119,8 +119,16 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
     const progMap = uid != null ? await cvSql.progressByVideo(uid, rows.map((v) => v.id)) : new Map<number, any>();
 
+    // Entitlement gate: paid videos only ship a decryptable playback envelope
+    // when the caller holds an active subscription for this category's owning
+    // container. This keeps the list consistent with the lecture-detail and
+    // progress endpoints (both 403 without a sub) — without it the list leaked
+    // playable URLs for paid content to unentitled users. Free videos are open.
+    const entitled = await cvSql.isEntitledForScope(uid, scope);
+
     const envByVideo = new Map<number, any>();
     await Promise.all(rows.map(async (v) => {
+      if (v.priceType === "paid" && !entitled) { envByVideo.set(v.id, null); return; }
       try { const env = await encryptVideoEnvelope(v as any); envByVideo.set(v.id, env.request); }
       catch (err: any) { logger.warn("listVideosByCategory (sql) envelope failed", { traceId, videoId: v.id, error: err?.message }); envByVideo.set(v.id, null); }
     }));
@@ -166,9 +174,21 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
     if (catId == null || vidId == null) return res.status(422).json({ success: false, message: "Invalid category or video id." });
     const v = await cvSql.findVideoInCategory(catId, vidId);
     if (!v) return res.status(404).json({ success: false, message: "Video not found in this category." });
-    let env, sc;
+
+    // Resolve scope up front, then gate paid videos on an active subscription
+    // for the owning container — same rule (and 403) as the lecture-detail and
+    // progress endpoints, so this playback source can't hand out decryptable
+    // URLs the other two would refuse. Free videos skip the gate.
+    const sc = await cvSql.scopeForCategory(v.videoCategoryId ?? catId);
+    if (v.priceType === "paid") {
+      const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
+      const entitled = await cvSql.isEntitledForScope(uid, sc);
+      if (!entitled) return res.status(403).json({ success: false, message: "Active subscription required to access this lecture" });
+    }
+
+    let env;
     try {
-      [env, sc] = await Promise.all([encryptVideoEnvelope(v as any), cvSql.scopeForCategory(v.videoCategoryId ?? catId)]);
+      env = await encryptVideoEnvelope(v as any);
     } catch (err: any) {
       logger.error("getVideoByCategory (sql) resolve/encrypt failed", { traceId, videoId, error: err?.message });
       return res.status(502).json({ success: false, message: "Failed to resolve playable URLs for this video." });

@@ -1,13 +1,13 @@
 /**
- * PromoCode (appliesTo) — dual-path SQL/Mongo. Net-new SQL table ws_promo_code /
- * Prisma model PromoCodeRule (appliesToType + appliesToIds JSON int[]).
- * Gated behind `isMysqlModule("promo-code")`.
+ * PromoCode (appliesTo) — SQL. Backed by ws_promocode / Prisma model `Promocode`
+ * (appliesToType + appliesToIds JSON int[], discountType/discountValue). As of
+ * 2026-07-08 this is the SAME table the promoter promocode flow uses — the former
+ * standalone ws_promo_code / `PromoCodeRule` model was merged in and dropped.
  *
  * Scope: the appliesTo-driven admin CRUD (list/get/create/update/delete/toggle/
- * bulk) + the client apply-promo coverage/discount check. The per-plan
+ * bulk) + the client apply-promo coverage/discount check + the per-plan
  * promoter/customer % "plan links" (PromotedPackageCourseEbook /
- * ws_promoted_package_course_ebook) and the `getPromocodePlans` picker stay on
- * Mongo — they overlap the legacy commission table and are out of scope here.
+ * ws_promoted_package_course_ebook), keyed by this table's id.
  *
  * All ids are SQL ints at runtime; DTOs restringify (`_id = String(id)`) to the
  * Mongo doc shape so the admin/client response contracts are unchanged. Note the
@@ -15,6 +15,11 @@
  */
 import { prisma } from "../../config/prisma";
 
+// 2026-07-08: the discount-rule promocode was merged into ws_promocode (Prisma
+// model `Promocode`); the former ws_promo_code / `PromoCodeRule` model is gone.
+// Row timestamp/window fields are snake-cased on `Promocode`
+// (promo_start_at / promo_expire_at / created_at / updated_at); the
+// discount/appliesTo columns keep their camelCase Prisma names via @map.
 export const PROMO_CODE_MODULE = "promo-code";
 export const isPromoCodeMysql = (): boolean => true;
 
@@ -75,7 +80,7 @@ export const assertAppliesToGroupsExistSql = async (groups: AppliesGroup[]): Pro
 
 /** Raw appliesTo groups for a promo id (effective value when updating plans). */
 export const getAppliesToGroupsById = async (id: number): Promise<AppliesGroup[]> => {
-  const row = await prisma.promoCodeRule.findUnique({
+  const row = await prisma.promocode.findUnique({
     where: { id },
     select: { appliesToType: true, appliesToIds: true },
   });
@@ -194,14 +199,14 @@ const baseDto = (r: any) => ({
   promocode: r.promocode,
   title: r.title ?? "",
   description: r.description ?? "",
-  promo_start_at: r.promoStartAt ?? null,
-  promo_expire_at: r.promoExpireAt ?? null,
+  promo_start_at: r.promo_start_at ?? null,
+  promo_expire_at: r.promo_expire_at ?? null,
   status: r.status,
   discountType: r.discountType,
   discountValue: Number(r.discountValue ?? 0),
   promoterId: r.promoterId != null ? String(r.promoterId) : null,
-  createdAt: r.createdAt ?? null,
-  updatedAt: r.updatedAt ?? null,
+  createdAt: r.created_at ?? null,
+  updatedAt: r.updated_at ?? null,
 });
 
 /** List DTO — appliesTo summarised to `{ type, count }` (type="mixed" for multi). */
@@ -250,19 +255,19 @@ export const listPromocodes = async (opts: {
   if (opts.status !== null) where.status = opts.status;
   if (opts.type) where.type = opts.type;
   if (opts.fromDate || opts.toDate) {
-    where.promoStartAt = {};
-    if (opts.fromDate) where.promoStartAt.gte = opts.fromDate;
-    if (opts.toDate) where.promoStartAt.lte = opts.toDate;
+    where.promo_start_at = {};
+    if (opts.fromDate) where.promo_start_at.gte = opts.fromDate;
+    if (opts.toDate) where.promo_start_at.lte = opts.toDate;
   }
 
   const [rows, total] = await Promise.all([
-    prisma.promoCodeRule.findMany({
+    prisma.promocode.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: { created_at: "desc" },
       skip: opts.skip,
       take: opts.limitNum,
     }),
-    prisma.promoCodeRule.count({ where }),
+    prisma.promocode.count({ where }),
   ]);
 
   return {
@@ -286,9 +291,9 @@ export const listPromocodes = async (opts: {
 export const listPromocodesForPackage = async (packageId: number) => {
   // Include both single-type "package" rows and multi-type "mixed" rows; the
   // package match is resolved via appliesToGroups so mixed codes are not missed.
-  const rows = await prisma.promoCodeRule.findMany({
+  const rows = await prisma.promocode.findMany({
     where: { appliesToType: { in: ["package", "mixed"] } },
-    orderBy: { createdAt: "desc" },
+    orderBy: { created_at: "desc" },
   });
   return rows
     .filter((r) => appliesToGroups(r).some((g) => g.type === "package" && g.ids.includes(packageId)))
@@ -297,7 +302,7 @@ export const listPromocodesForPackage = async (packageId: number) => {
 
 /** getById — populates appliesTo; the OUT-OF-SCOPE plan links return []. */
 export const getPromocodeById = async (id: number) => {
-  const row = await prisma.promoCodeRule.findUnique({ where: { id } });
+  const row = await prisma.promocode.findUnique({ where: { id } });
   if (!row) return { notFound: true as const };
   const promocode = await detailDto(row);
   return { data: { promocode, plans: [] as any[] } };
@@ -317,29 +322,29 @@ export const createPromocode = async (input: {
   appliesTo: AppliesGroup[];
 }) => {
   const code = input.promocode.toUpperCase();
-  const dup = await prisma.promoCodeRule.findFirst({ where: { promocode: code } });
+  const dup = await prisma.promocode.findFirst({ where: { promocode: code } });
   if (dup) return { conflict: true as const };
 
   await assertAppliesToGroupsExistSql(input.appliesTo);
   const storage = toAppliesToStorage(input.appliesTo);
 
   const now = new Date();
-  const row = await prisma.promoCodeRule.create({
+  const row = await prisma.promocode.create({
     data: {
       type: input.type,
       promocode: code,
       title: input.title,
       description: input.description,
-      promoStartAt: input.promo_start_at,
-      promoExpireAt: input.promo_expire_at,
+      promo_start_at: input.promo_start_at,
+      promo_expire_at: input.promo_expire_at,
       status: input.status,
       discountType: input.discountType,
       discountValue: input.discountValue,
       promoterId: input.promoterId,
       appliesToType: storage.appliesToType,
       appliesToIds: storage.appliesToIds,
-      createdAt: now,
-      updatedAt: now,
+      created_at: now,
+      updated_at: now,
     },
   });
   return { data: baseDto(row) };
@@ -361,13 +366,13 @@ export const updatePromocode = async (
     appliesTo: AppliesGroup[];
   }>
 ) => {
-  const existing = await prisma.promoCodeRule.findUnique({ where: { id }, select: { id: true } });
+  const existing = await prisma.promocode.findUnique({ where: { id }, select: { id: true } });
   if (!existing) return { notFound: true as const };
 
-  const data: any = { updatedAt: new Date() };
+  const data: any = { updated_at: new Date() };
   if (input.promocode !== undefined) {
     const code = input.promocode.toUpperCase();
-    const dup = await prisma.promoCodeRule.findFirst({
+    const dup = await prisma.promocode.findFirst({
       where: { promocode: code, id: { not: id } },
     });
     if (dup) return { conflict: true as const };
@@ -375,8 +380,8 @@ export const updatePromocode = async (
   }
   if (input.title !== undefined) data.title = input.title;
   if (input.description !== undefined) data.description = input.description;
-  if (input.promo_start_at !== undefined) data.promoStartAt = input.promo_start_at;
-  if (input.promo_expire_at !== undefined) data.promoExpireAt = input.promo_expire_at;
+  if (input.promo_start_at !== undefined) data.promo_start_at = input.promo_start_at;
+  if (input.promo_expire_at !== undefined) data.promo_expire_at = input.promo_expire_at;
   if (input.type !== undefined) data.type = input.type;
   if (input.status !== undefined) data.status = input.status;
   if (input.discountType !== undefined) data.discountType = input.discountType;
@@ -389,38 +394,38 @@ export const updatePromocode = async (
     data.appliesToIds = storage.appliesToIds;
   }
 
-  const row = await prisma.promoCodeRule.update({ where: { id }, data });
+  const row = await prisma.promocode.update({ where: { id }, data });
   return { data: baseDto(row) };
 };
 
 export const deletePromocode = async (id: number) => {
-  const existing = await prisma.promoCodeRule.findUnique({ where: { id }, select: { id: true } });
+  const existing = await prisma.promocode.findUnique({ where: { id }, select: { id: true } });
   if (!existing) return { notFound: true as const };
-  await prisma.promoCodeRule.delete({ where: { id } });
+  await prisma.promocode.delete({ where: { id } });
   return { ok: true as const };
 };
 
 export const toggleStatus = async (id: number, nextStatus: boolean | null) => {
-  const existing = await prisma.promoCodeRule.findUnique({ where: { id }, select: { status: true } });
+  const existing = await prisma.promocode.findUnique({ where: { id }, select: { status: true } });
   if (!existing) return { notFound: true as const };
   const status = nextStatus === null ? !existing.status : nextStatus;
-  const row = await prisma.promoCodeRule.update({
+  const row = await prisma.promocode.update({
     where: { id },
-    data: { status, updatedAt: new Date() },
+    data: { status, updated_at: new Date() },
   });
   return { data: { status: row.status } };
 };
 
 export const bulkStatus = async (ids: number[], status: boolean) => {
-  const result = await prisma.promoCodeRule.updateMany({
+  const result = await prisma.promocode.updateMany({
     where: { id: { in: ids } },
-    data: { status, updatedAt: new Date() },
+    data: { status, updated_at: new Date() },
   });
   return { matched: result.count, modified: result.count };
 };
 
 export const bulkDelete = async (ids: number[]) => {
-  await prisma.promoCodeRule.deleteMany({ where: { id: { in: ids } } });
+  await prisma.promocode.deleteMany({ where: { id: { in: ids } } });
   return { ok: true as const };
 };
 
@@ -438,8 +443,8 @@ const toPublicPromoDto = (r: any) => ({
   description: r.description ?? "",
   discountType: r.discountType,
   discountValue: Number(r.discountValue ?? 0),
-  promo_start_at: r.promoStartAt ?? null,
-  promo_expire_at: r.promoExpireAt ?? null,
+  promo_start_at: r.promo_start_at ?? null,
+  promo_expire_at: r.promo_expire_at ?? null,
 });
 
 export const listPublicPromocodes = async (opts: {
@@ -453,8 +458,8 @@ export const listPublicPromocodes = async (opts: {
   const baseWhere: any = {
     status: true,
     type: "public",
-    promoStartAt: { lt: now },
-    promoExpireAt: { gt: now },
+    promo_start_at: { lt: now },
+    promo_expire_at: { gt: now },
   };
 
   // Entity-scoped: narrow to the module type at the DB, then keep only codes
@@ -466,9 +471,9 @@ export const listPublicPromocodes = async (opts: {
     // coverage match is resolved via appliesToGroups so mixed codes that cover
     // this entity are not missed (they were before — type "mixed" + the
     // [{type,ids}] JSON failed both the type filter and parseIdArray).
-    const rows = await prisma.promoCodeRule.findMany({
+    const rows = await prisma.promocode.findMany({
       where: { ...baseWhere, appliesToType: { in: [opts.appliesTo.type, "mixed"] } },
-      orderBy: { promoExpireAt: "asc" },
+      orderBy: { promo_expire_at: "asc" },
     });
     const covered = rows.filter((r) =>
       appliesToGroups(r).some((g) => g.type === opts.appliesTo!.type && g.ids.includes(opts.appliesTo!.id))
@@ -482,13 +487,13 @@ export const listPublicPromocodes = async (opts: {
   }
 
   const [rows, total] = await Promise.all([
-    prisma.promoCodeRule.findMany({
+    prisma.promocode.findMany({
       where: baseWhere,
-      orderBy: { promoExpireAt: "asc" },
+      orderBy: { promo_expire_at: "asc" },
       skip: opts.skip,
       take: opts.limitNum,
     }),
-    prisma.promoCodeRule.count({ where: baseWhere }),
+    prisma.promocode.count({ where: baseWhere }),
   ]);
 
   return {
@@ -525,12 +530,12 @@ export const normalizeAppliesToType = (raw: string): AppliesToType | null => {
 /** Find an active (status + window) promocode by (upper-cased) code. */
 export const findActiveByCode = async (code: string) => {
   const now = new Date();
-  return prisma.promoCodeRule.findFirst({
+  return prisma.promocode.findFirst({
     where: {
       promocode: code.toUpperCase(),
       status: true,
-      promoStartAt: { lt: now },
-      promoExpireAt: { gt: now },
+      promo_start_at: { lt: now },
+      promo_expire_at: { gt: now },
     },
   });
 };
@@ -1059,7 +1064,7 @@ export const resolvePromoForPlanSql = async (
 
   return {
     result: {
-      promo: { _id: String(promo.id), promocode: promo.promocode },
+      promo: { _id: String(promo.id), promocode: promo.promocode ?? "" },
       discountType,
       discountValue,
       originalAmount: baseAmount,

@@ -1,5 +1,19 @@
 import { prisma } from "../../config/prisma";
-import type { Prisma } from "@prisma/client";
+import type { Prisma, PaymentMethod } from "@prisma/client";
+
+// Filters shared by list + count so `pagination.total` matches the page slice.
+export type SubFilter = {
+  customerId?: number;
+  ebookId?: number;
+  status?: boolean;
+  statusFilter?: "active" | "expired" | "inactive";
+  paymentMethod?: PaymentMethod;
+  dateFrom?: Date;
+  dateTo?: Date;
+  now?: Date;
+  customerIdsIn?: number[];
+  ebookIdsIn?: number[];
+};
 
 /**
  * Prisma persistence for the admin-ebook MySQL branch.
@@ -55,12 +69,7 @@ export const adminEbookRepository = {
   deletePlan: (id: number) => prisma.packageCourseEbookPrice.delete({ where: { id } }),
 
   // ── subscriptions ──────────────────────────────────────────────────────────────
-  listSubscriptions: (opts: {
-    customerId?: number;
-    ebookId?: number;
-    status?: boolean;
-    customerIdsIn?: number[];
-    ebookIdsIn?: number[];
+  listSubscriptions: (opts: SubFilter & {
     sortBy: string;
     sortDir: "asc" | "desc";
     skip: number;
@@ -73,6 +82,7 @@ export const adminEbookRepository = {
         eBook: { select: { id: true, name: true, image: true, thumbnail: true, author: true } },
         eBookOrder: {
           select: { id: true, paymentMethod: true, orderPrice: true, status: true, planId: true,
+            gatewayOrderId: true, gatewayPaymentId: true,
             PackageCourseEbookPrice: { select: { id: true, name: true, duration: true, price: true } } },
         },
       },
@@ -80,7 +90,7 @@ export const adminEbookRepository = {
       skip: opts.skip,
       take: opts.take,
     }),
-  countSubscriptions: (opts: { customerId?: number; ebookId?: number; status?: boolean; customerIdsIn?: number[]; ebookIdsIn?: number[] }) =>
+  countSubscriptions: (opts: SubFilter) =>
     prisma.eBookSubscription.count({ where: buildSubWhere(opts) }),
 
   findSubscriptionById: (id: number) =>
@@ -156,7 +166,7 @@ export const adminEbookRepository = {
   // ── search helpers (cross-table, for subscription search) ───────────────────────
   findCustomerIdsBySearch: async (q: string): Promise<number[]> => {
     const rows = await prisma.customer.findMany({
-      where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }] },
+      where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] },
       select: { id: true },
     });
     return rows.map((r) => r.id);
@@ -187,12 +197,29 @@ function subSortCol(sortBy: string): string {
   return "createdAt";
 }
 
-function buildSubWhere(opts: { customerId?: number; ebookId?: number; status?: boolean; customerIdsIn?: number[]; ebookIdsIn?: number[] }): Prisma.EBookSubscriptionWhereInput {
+function buildSubWhere(opts: SubFilter): Prisma.EBookSubscriptionWhereInput {
   const where: Prisma.EBookSubscriptionWhereInput = {};
   if (opts.customerId !== undefined) where.customerId = opts.customerId;
   if (opts.ebookId !== undefined) where.ebookId = opts.ebookId;
-  if (opts.status !== undefined) where.status = opts.status;
-  // search OR (customer-name/phone match | ebook-name match), AND-ed with filters.
+  // Computed status: inactive = not active; expired = active but endAt in the past;
+  // active = active and not expired. `statusFilter` wins over the legacy boolean.
+  if (opts.statusFilter) {
+    const now = opts.now ?? new Date();
+    if (opts.statusFilter === "inactive") where.status = false;
+    else if (opts.statusFilter === "expired") { where.status = true; where.endAt = { lt: now }; }
+    else { where.status = true; where.endAt = { gte: now }; } // active
+  } else if (opts.status !== undefined) {
+    where.status = opts.status;
+  }
+  // Payment method lives on the linked order.
+  if (opts.paymentMethod) where.eBookOrder = { is: { paymentMethod: opts.paymentMethod } };
+  // Inclusive createdAt range (bounds pre-computed to day edges by the service).
+  if (opts.dateFrom || opts.dateTo) {
+    where.createdAt = {};
+    if (opts.dateFrom) where.createdAt.gte = opts.dateFrom;
+    if (opts.dateTo) where.createdAt.lte = opts.dateTo;
+  }
+  // search OR (customer-name/phone/email match | ebook-name match), AND-ed with filters.
   const or: Prisma.EBookSubscriptionWhereInput[] = [];
   if (opts.customerIdsIn?.length) or.push({ customerId: { in: opts.customerIdsIn } });
   if (opts.ebookIdsIn?.length) or.push({ ebookId: { in: opts.ebookIdsIn } });

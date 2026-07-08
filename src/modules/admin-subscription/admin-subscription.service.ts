@@ -12,6 +12,27 @@ export const parseSubId = (id: string): number | null => {
 };
 
 const idStr = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
+
+// Bare "YYYY-MM-DD" → inclusive day edge (from → 00:00:00.000, to → 23:59:59.999);
+// full timestamps pass through. Invalid → undefined (no bound).
+const parseDayBound = (v: string | undefined, end: boolean): Date | undefined => {
+  if (!v) return undefined;
+  const s = v.trim();
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}${end ? "T23:59:59.999" : "T00:00:00.000"}`) : new Date(s);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+};
+
+// The order's `promocode` column is a JSON snapshot of the applied code at
+// purchase (see promoter-data); pull the human code string out of it.
+const promoCodeOf = (j: any): string | null => {
+  if (!j) return null;
+  if (typeof j === "string") return j || null;
+  if (typeof j === "object" && typeof j.promocode === "string") return j.promocode || null;
+  return null;
+};
+
+const blankStrToNull = (v: string | null | undefined): string | null => (v ? v : null);
+const decToNum = (v: any): number | null => (v != null ? Number(v) : null);
 const customerRef = (c: { id: number; fullName: string | null; phoneNumber: string; emailAddress?: string | null } | undefined) => {
   if (!c) return null;
   const { firstName, lastName } = splitFullName(c.fullName);
@@ -26,7 +47,7 @@ const customerRef = (c: { id: number; fullName: string | null; phoneNumber: stri
 // coarse online|backend (= payment_type on this table).
 export const listCourseSubscriptions = async (q: {
   customerId?: string; courseId?: string; packageId?: string; status?: string;
-  paymentMethod?: string; dateFrom?: string; dateTo?: string; search?: string;
+  paymentMethod?: string; hasMaterial?: boolean; dateFrom?: string; dateTo?: string; search?: string;
   sortBy?: string; sortOrder?: string; type?: string; page: number; limit: number;
 }) => {
   const now = new Date();
@@ -45,8 +66,9 @@ export const listCourseSubscriptions = async (q: {
     courseId: q.courseId ? parseSubId(q.courseId) ?? undefined : undefined,
     packageId: q.packageId ? parseSubId(q.packageId) ?? undefined : undefined,
     paymentType: q.paymentMethod === "online" ? "online" : q.paymentMethod === "backend" ? "backend" : undefined,
-    fromDate: q.dateFrom ? new Date(q.dateFrom) : undefined,
-    toDate: q.dateTo ? new Date(q.dateTo) : undefined,
+    hasMaterial: q.hasMaterial,
+    fromDate: parseDayBound(q.dateFrom, false),
+    toDate: parseDayBound(q.dateTo, true),
     type: (q.type === "course" || q.type === "package" ? q.type : undefined) as "course" | "package" | undefined,
     customerIdsIn, courseIdsIn, packageIdsIn,
   });
@@ -62,21 +84,37 @@ export const listCourseSubscriptions = async (q: {
   ]);
   const total = agg._count._all;
 
-  const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
-  const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.courseId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
-  const packages = new Map((await repo.packagesByIds([...new Set(rows.map((r) => r.packageId).filter((x): x is number => x != null && x > 0))])).map((p) => [p.id, p]));
-  const plans = new Map((await repo.plansByIds([...new Set(rows.map((r) => r.planId).filter((x): x is number => x != null && x > 0))])).map((p) => [p.id, p]));
+  const uniq = (xs: (number | null | undefined)[]) => [...new Set(xs.filter((x): x is number => x != null && x > 0))];
+  const [custs, courses, packages, plans, orders, shippings, promoters, admins] = await Promise.all([
+    repo.customersByIds(uniq(rows.map((r) => r.customerId))).then((xs) => new Map(xs.map((c) => [c.id, c]))),
+    repo.coursesByIds(uniq(rows.map((r) => r.courseId))).then((xs) => new Map(xs.map((c) => [c.id, c]))),
+    repo.packagesByIds(uniq(rows.map((r) => r.packageId))).then((xs) => new Map(xs.map((p) => [p.id, p]))),
+    repo.plansByIds(uniq(rows.map((r) => r.planId))).then((xs) => new Map(xs.map((p) => [p.id, p]))),
+    repo.ordersByIds(uniq(rows.map((r) => r.orderId))).then((xs) => new Map(xs.map((o) => [o.id, o]))),
+    repo.shippingsByIds(uniq(rows.map((r) => r.shippingId))).then((xs) => new Map(xs.map((s) => [s.id, s]))),
+    repo.promotersByIds(uniq(rows.map((r) => r.promoterId))).then((xs) => new Map(xs.map((p) => [p.id, p]))),
+    repo.adminUsersByIds(uniq(rows.map((r) => r.created_by))).then((xs) => new Map(xs.map((u) => [Number(u.id), u]))),
+  ]);
+  // Educators are reached through the hydrated courses (course → educator_id).
+  const educators = new Map(
+    (await repo.educatorsByIds(uniq([...courses.values()].map((c: any) => c.courseEducatorId)))).map((e) => [e.id, e])
+  );
 
   const data = rows.map((r) => {
     const course = r.courseId ? courses.get(r.courseId) : null;
     const pkg = r.packageId ? packages.get(r.packageId) : null;
     const plan = r.planId ? plans.get(r.planId) : null;
+    const order = r.orderId ? orders.get(r.orderId) : null;
+    const ship = r.shippingId ? shippings.get(r.shippingId) : null;
+    const promoter = r.promoterId ? promoters.get(r.promoterId) : null;
+    const educator = course?.courseEducatorId ? educators.get(course.courseEducatorId) : null;
+    const admin = r.created_by != null ? admins.get(r.created_by) : null;
     const product = course
       ? { _id: String(course.id), type: "course" as const, name: course.name, image: course.image ?? null }
       : pkg
         ? { _id: String(pkg.id), type: "package" as const, name: pkg.name, image: pkg.image ?? null }
         : null;
-    return reportRow({
+    const base = reportRow({
       cust: r.customerId ? custs.get(r.customerId) : undefined,
       product,
       plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: Number(plan.price) } : null,
@@ -85,6 +123,32 @@ export const listCourseSubscriptions = async (q: {
       status: normalizeStatus({ status: r.status, endAt: r.endAt }, now),
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
     });
+    const adminName = admin ? `${admin.firstName ?? ""} ${admin.lastName ?? ""}`.trim() : "";
+    return {
+      id: r.id,
+      ...base,
+      // people
+      educatorName: educator?.name ?? null,
+      promoterName: promoter?.full_name ?? null,
+      promocode: order ? promoCodeOf(order.promocode) : null,
+      // amounts / coins
+      courseAmount: decToNum(r.courseAmount),
+      materialAmount: decToNum(r.materialAmount),
+      wsCoin: order?.wsCoin ?? null,
+      materialType: r.pcMaterialId != null && r.pcMaterialId > 0 ? "With Material" : "Without Material",
+      // NOTE: no SQL source for "Activation Type" — see backend-request open item.
+      activationType: null as string | null,
+      // gateway / payment ids
+      razorpayOrderId: order ? blankStrToNull(order.gatewayOrderId) : null,
+      razorpayPaymentId: order ? blankStrToNull(order.gatewayPaymentId) : null,
+      bankTransactionId: order ? blankStrToNull(order.bankTransactionId) : null,
+      // shipping (report only needs address/city/pincode)
+      shipping: ship
+        ? { address: ship.address ?? null, address2: ship.address_2 ?? null, city: ship.city ?? null, pincode: ship.pincode ?? null }
+        : null,
+      remarks: r.remarks ?? null,
+      activatedBy: adminName || null,
+    };
   });
 
   return {

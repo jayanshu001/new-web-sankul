@@ -40,7 +40,6 @@ const countdownAdminDto = (r: any) => ({
   goalId: r.goalId != null ? String(r.goalId) : null,
   goalLabelId: r.goalLabelId != null ? r.goalLabelId : null,
   examDate: r.examDate,
-  description: r.description ?? "",
   status: r.status,
   createdAt: r.createdAt ?? null,
   updatedAt: r.updatedAt ?? null,
@@ -195,7 +194,7 @@ const attachCategories = async (rows: any[]) => {
 };
 
 /** Returns {notFound} if category missing, {disabled} if category status=false. */
-export const createCountdown = async (input: { title: string; categoryId: number; examDate: Date; description: string; status: boolean; goalId?: number | null; goalLabelId?: number | null }) => {
+export const createCountdown = async (input: { title: string; categoryId: number; examDate: Date; status: boolean; goalId?: number | null; goalLabelId?: number | null }) => {
   const cat = await prisma.examCountdownCategory.findUnique({ where: { id: input.categoryId }, select: { id: true, status: true } });
   if (!cat) return { catNotFound: true as const };
   if (!cat.status) return { catDisabled: true as const };
@@ -204,7 +203,7 @@ export const createCountdown = async (input: { title: string; categoryId: number
   const row = await prisma.examCountdown.create({
     data: {
       title: input.title, categoryId: input.categoryId, examDate: input.examDate,
-      description: input.description, status: input.status,
+      status: input.status,
       goalId: input.goalId ?? null, goalLabelId: input.goalLabelId ?? null,
     },
   });
@@ -212,7 +211,7 @@ export const createCountdown = async (input: { title: string; categoryId: number
   return { data: countdownAdminDto(withCat) };
 };
 
-export const updateCountdown = async (id: number, update: Partial<{ title: string; categoryId: number; examDate: Date; description: string; status: boolean; goalId: number | null; goalLabelId: number | null }>) => {
+export const updateCountdown = async (id: number, update: Partial<{ title: string; categoryId: number; examDate: Date; status: boolean; goalId: number | null; goalLabelId: number | null }>) => {
   const existing = await prisma.examCountdown.findUnique({ where: { id }, select: { id: true, goalId: true, goalLabelId: true } });
   if (!existing) return { notFound: true as const };
   if (update.categoryId !== undefined) {
