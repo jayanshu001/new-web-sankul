@@ -1,3 +1,4 @@
+import ExcelJS from "exceljs";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
@@ -33,34 +34,46 @@ const promoCodeOf = (j: any): string | null => {
 
 const blankStrToNull = (v: string | null | undefined): string | null => (v ? v : null);
 const decToNum = (v: any): number | null => (v != null ? Number(v) : null);
+// bigint `tracking` (courier AWB, ~1.19e11) → number, matching the Subscriptions
+// management list (commerce-subscription transformer). Guard the >2^53 case → null.
+const trackingToNumber = (v: bigint | null | undefined): number | null =>
+  v == null ? null : v <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(v) : null;
 const customerRef = (c: { id: number; fullName: string | null; phoneNumber: string; emailAddress?: string | null } | undefined) => {
   if (!c) return null;
   const { firstName, lastName } = splitFullName(c.fullName);
   return { _id: String(c.id), firstName, lastName, phoneNumber: c.phoneNumber, ...(c.emailAddress !== undefined ? { emailAddress: c.emailAddress ?? null } : {}) };
 };
 
-// ── course/package subscription list (Reports contract) ──────────────────────
+// ── course/package subscription list + export (Reports contract) ─────────────
 // Shared contract across the 4 admin subscription reports — see
-// docs/REPORTS_SUBSCRIPTIONS_ADMIN.md. Returns { summary, data, pagination };
-// summary respects all filters but ignores pagination. `status` here is the
-// normalized active|expired|inactive (not the raw boolean); paymentMethod is the
-// coarse online|backend (= payment_type on this table).
-export const listCourseSubscriptions = async (q: {
+// docs/REPORTS_SUBSCRIPTIONS_ADMIN.md. list() returns { summary, data,
+// pagination } (summary respects all filters, ignores pagination); the SAME
+// filters drive the CSV/Excel export (which ignores pagination entirely).
+// `status` is the normalized active|expired|inactive; paymentMethod is the
+// coarse online|backend (= payment_type). Date ranges are independent:
+// dateFrom/dateTo → createdAt, startFrom/startTo → startAt, endFrom/endTo → endAt.
+export interface CourseSubReportQuery {
   customerId?: string; courseId?: string; packageId?: string; status?: string;
-  paymentMethod?: string; hasMaterial?: boolean; dateFrom?: string; dateTo?: string; search?: string;
-  sortBy?: string; sortOrder?: string; type?: string; page: number; limit: number;
-}) => {
-  const now = new Date();
-  const emptyPage = { summary: { totalCount: 0, totalRevenue: 0, activeCount: 0, expiredCount: 0 }, data: [], pagination: { total: 0, page: q.page, limit: q.limit, totalPages: 0 } };
+  paymentMethod?: string; hasMaterial?: boolean;
+  dateFrom?: string; dateTo?: string;
+  startFrom?: string; startTo?: string;
+  endFrom?: string; endTo?: string;
+  // Accepted so the FE param is honored once a source exists; there is no SQL
+  // column for Activation Type yet (see backend-request), so it is a no-op today.
+  activationType?: string;
+  search?: string; sortBy?: string; sortOrder?: string; type?: string;
+}
 
+// Resolve the composed Prisma where (base filters AND normalized status) for a
+// report query. Returns null when a search matched nothing (→ empty result).
+const resolveCourseSubWhere = async (q: CourseSubReportQuery, now: Date) => {
   let customerIdsIn: number[] | undefined, courseIdsIn: number[] | undefined, packageIdsIn: number[] | undefined;
   if (q.search) {
     [customerIdsIn, courseIdsIn, packageIdsIn] = await Promise.all([
       repo.customerIdsByText(q.search), repo.courseIdsByText(q.search), repo.packageIdsByText(q.search),
     ]);
-    if (!customerIdsIn.length && !courseIdsIn.length && !packageIdsIn.length) return emptyPage;
+    if (!customerIdsIn.length && !courseIdsIn.length && !packageIdsIn.length) return null;
   }
-
   const base = repo.buildCourseSubBaseWhere({
     customerId: q.customerId ? parseSubId(q.customerId) ?? undefined : undefined,
     courseId: q.courseId ? parseSubId(q.courseId) ?? undefined : undefined,
@@ -69,21 +82,21 @@ export const listCourseSubscriptions = async (q: {
     hasMaterial: q.hasMaterial,
     fromDate: parseDayBound(q.dateFrom, false),
     toDate: parseDayBound(q.dateTo, true),
+    startFrom: parseDayBound(q.startFrom, false),
+    startTo: parseDayBound(q.startTo, true),
+    endFrom: parseDayBound(q.endFrom, false),
+    endTo: parseDayBound(q.endTo, true),
     type: (q.type === "course" || q.type === "package" ? q.type : undefined) as "course" | "package" | undefined,
     customerIdsIn, courseIdsIn, packageIdsIn,
   });
   const listWhere = andWhere(base, statusWhere(q.status, now));
   const sortBy = q.sortBy ?? "createdAt";
   const sortDir = (q.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc";
+  return { listWhere, sortBy, sortDir };
+};
 
-  const [rows, agg, activeCount, expiredCount] = await Promise.all([
-    repo.listCourseSubsByWhere(listWhere, sortBy, sortDir, (q.page - 1) * q.limit, q.limit),
-    repo.aggCourseSubs(listWhere),
-    repo.countSubs(andWhere(listWhere, statusWhere("active", now))),
-    repo.countSubs(andWhere(listWhere, statusWhere("expired", now))),
-  ]);
-  const total = agg._count._all;
-
+// Hydrate raw subscription rows into the report DTO (shared by list + export).
+const hydrateCourseSubRows = async (rows: Awaited<ReturnType<typeof repo.listCourseSubsByWhere>>, now: Date) => {
   const uniq = (xs: (number | null | undefined)[]) => [...new Set(xs.filter((x): x is number => x != null && x > 0))];
   const [custs, courses, packages, plans, orders, shippings, promoters, admins] = await Promise.all([
     repo.customersByIds(uniq(rows.map((r) => r.customerId))).then((xs) => new Map(xs.map((c) => [c.id, c]))),
@@ -99,8 +112,11 @@ export const listCourseSubscriptions = async (q: {
   const educators = new Map(
     (await repo.educatorsByIds(uniq([...courses.values()].map((c: any) => c.courseEducatorId)))).map((e) => [e.id, e])
   );
+  // Promocode ids are resolved from the order snapshot's code string (no live FK).
+  const promoCodes = [...new Set([...orders.values()].map((o) => promoCodeOf(o.promocode)).filter((c): c is string => !!c))];
+  const promocodeIds = new Map((await repo.promocodesByCodes(promoCodes)).map((p) => [p.promocode, p.id]));
 
-  const data = rows.map((r) => {
+  return rows.map((r) => {
     const course = r.courseId ? courses.get(r.courseId) : null;
     const pkg = r.packageId ? packages.get(r.packageId) : null;
     const plan = r.planId ? plans.get(r.planId) : null;
@@ -124,13 +140,19 @@ export const listCourseSubscriptions = async (q: {
       startAt: r.startAt ?? null, endAt: r.endAt ?? null, createdAt: r.createdAt ?? null,
     });
     const adminName = admin ? `${admin.firstName ?? ""} ${admin.lastName ?? ""}`.trim() : "";
+    const promocode = order ? promoCodeOf(order.promocode) : null;
     return {
       id: r.id,
       ...base,
-      // people
+      // courier tracking (set via subscriptions /tracking PATCH); null until assigned
+      trackingId: trackingToNumber(r.trackingId),
+      // people (+ ids so the report can link to each detail page)
       educatorName: educator?.name ?? null,
+      educatorId: educator?.id ?? null,
       promoterName: promoter?.full_name ?? null,
-      promocode: order ? promoCodeOf(order.promocode) : null,
+      promoterId: promoter?.id ?? null,
+      promocode,
+      promocodeId: promocode ? promocodeIds.get(promocode) ?? null : null,
       // amounts / coins
       courseAmount: decToNum(r.courseAmount),
       materialAmount: decToNum(r.materialAmount),
@@ -142,20 +164,115 @@ export const listCourseSubscriptions = async (q: {
       razorpayOrderId: order ? blankStrToNull(order.gatewayOrderId) : null,
       razorpayPaymentId: order ? blankStrToNull(order.gatewayPaymentId) : null,
       bankTransactionId: order ? blankStrToNull(order.bankTransactionId) : null,
-      // shipping (report only needs address/city/pincode)
+      // shipping (report only needs address/city/pincode + alternate phone)
       shipping: ship
-        ? { address: ship.address ?? null, address2: ship.address_2 ?? null, city: ship.city ?? null, pincode: ship.pincode ?? null }
+        ? {
+            address: ship.address ?? null,
+            address2: ship.address_2 ?? null,
+            city: ship.city ?? null,
+            pincode: ship.pincode ?? null,
+            alternatePhone: ship.alternate_phone != null ? String(ship.alternate_phone) : null,
+          }
         : null,
       remarks: r.remarks ?? null,
       activatedBy: adminName || null,
     };
   });
+};
+
+export const listCourseSubscriptions = async (q: CourseSubReportQuery & { page: number; limit: number }) => {
+  const now = new Date();
+  const emptyPage = { summary: { totalCount: 0, totalRevenue: 0, activeCount: 0, expiredCount: 0 }, data: [], pagination: { total: 0, page: q.page, limit: q.limit, totalPages: 0 } };
+
+  const resolved = await resolveCourseSubWhere(q, now);
+  if (!resolved) return emptyPage;
+  const { listWhere, sortBy, sortDir } = resolved;
+
+  const [rows, agg, activeCount, expiredCount] = await Promise.all([
+    repo.listCourseSubsByWhere(listWhere, sortBy, sortDir, (q.page - 1) * q.limit, q.limit),
+    repo.aggCourseSubs(listWhere),
+    repo.countSubs(andWhere(listWhere, statusWhere("active", now))),
+    repo.countSubs(andWhere(listWhere, statusWhere("expired", now))),
+  ]);
+  const total = agg._count._all;
+  const data = await hydrateCourseSubRows(rows, now);
 
   return {
     summary: { totalCount: total, totalRevenue: Number(agg._sum.amount ?? 0), activeCount, expiredCount },
     data,
     pagination: { total, page: q.page, limit: q.limit, totalPages: Math.ceil(total / q.limit) },
   };
+};
+
+// ── report export (CSV / Excel) ──────────────────────────────────────────────
+// Same filters as the list, but the ENTIRE filtered set (no pagination), capped
+// to bound memory. Both formats share one column spec so they stay in lockstep.
+const EXPORT_MAX = 100_000;
+
+export const exportCourseSubscriptionRows = async (q: CourseSubReportQuery) => {
+  const now = new Date();
+  const resolved = await resolveCourseSubWhere(q, now);
+  if (!resolved) return [];
+  const { listWhere, sortBy, sortDir } = resolved;
+  const rows = await repo.listCourseSubsByWhere(listWhere, sortBy, sortDir, 0, EXPORT_MAX);
+  return hydrateCourseSubRows(rows, now);
+};
+
+const fmtExportDate = (d: Date | null | undefined): string => (d ? new Date(d).toISOString() : "");
+// Column order: the client's Subscription-WithMaterial-Report.csv set first, then
+// the extra columns the on-screen report shows. A row is either a course OR a
+// package, so only the matching name column is filled.
+const REPORT_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number }[] = [
+  { header: "Created At", get: (r) => fmtExportDate(r.createdAt) },
+  { header: "Tracking ID", get: (r) => r.trackingId ?? "" },
+  { header: "Payment Type", get: (r) => r.paymentMethod ?? "" },
+  { header: "Customer Name", get: (r) => r.customer?.name ?? "" },
+  { header: "Email", get: (r) => r.customer?.email ?? "" },
+  { header: "Phone", get: (r) => r.customer?.phone ?? "" },
+  { header: "Alternate Phone", get: (r) => r.shipping?.alternatePhone ?? "" },
+  { header: "Address", get: (r) => [r.shipping?.address, r.shipping?.address2].filter(Boolean).join(", ") },
+  { header: "City", get: (r) => r.shipping?.city ?? "" },
+  { header: "Pincode", get: (r) => r.shipping?.pincode ?? "" },
+  { header: "Package Name", get: (r) => (r.product?.type === "package" ? r.product?.name : "") ?? "" },
+  { header: "Course Name", get: (r) => (r.product?.type === "course" ? r.product?.name : "") ?? "" },
+  { header: "Educator Name", get: (r) => r.educatorName ?? "" },
+  { header: "Plan", get: (r) => r.plan?.name ?? "" },
+  { header: "Start At", get: (r) => fmtExportDate(r.startAt) },
+  { header: "End At", get: (r) => fmtExportDate(r.endAt) },
+  { header: "Status", get: (r) => r.status ?? "" },
+  { header: "Material Type", get: (r) => r.materialType ?? "" },
+  { header: "Activation Type", get: (r) => r.activationType ?? "" },
+  { header: "Promoter Name", get: (r) => r.promoterName ?? "" },
+  { header: "Promocode", get: (r) => r.promocode ?? "" },
+  { header: "Remarks", get: (r) => r.remarks ?? "" },
+  { header: "Payment Id", get: (r) => r.razorpayPaymentId ?? "" },
+  { header: "Order ID", get: (r) => r.razorpayOrderId ?? "" },
+  { header: "Bank Transaction Id", get: (r) => r.bankTransactionId ?? "" },
+  { header: "WS Coin", get: (r) => r.wsCoin ?? "" },
+  { header: "Course Amount", get: (r) => r.courseAmount ?? "" },
+  { header: "Material Amount", get: (r) => r.materialAmount ?? "" },
+  { header: "Amount", get: (r) => r.amount ?? "" },
+  { header: "Activated By", get: (r) => r.activatedBy ?? "" },
+];
+
+export const buildCourseSubscriptionsCsv = async (q: CourseSubReportQuery): Promise<string> => {
+  const rows = await exportCourseSubscriptionRows(q);
+  const esc = (v: string | number) => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [REPORT_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
+  for (const r of rows) lines.push(REPORT_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  return lines.join("\n");
+};
+
+export const buildCourseSubscriptionsXlsx = async (q: CourseSubReportQuery): Promise<Buffer> => {
+  const rows = await exportCourseSubscriptionRows(q);
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Subscriptions");
+  ws.columns = REPORT_EXPORT_COLUMNS.map((c) => ({ header: c.header, key: c.header, width: 22 }));
+  for (const r of rows) ws.addRow(REPORT_EXPORT_COLUMNS.map((c) => c.get(r)));
+  return Buffer.from(await wb.xlsx.writeBuffer());
 };
 
 export const getCourseSubscriptionById = async (id: number): Promise<"not_found" | any> => {

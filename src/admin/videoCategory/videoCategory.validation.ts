@@ -10,6 +10,22 @@ const objectIdSchema = z.coerce.string().refine(
   { message: "Invalid id" }
 );
 
+// Multipart form-data sends every field as a string, so an "empty" optional id
+// (no educator selected) arrives as "" — or the literal "null"/"undefined" —
+// rather than JS null/undefined. Those slip past .optional()/.nullable() and
+// then fail the id regex ("Invalid id"). Normalize them BEFORE validation:
+//   - body (create/update): -> null, which the service stores as 0 (clears the
+//     educator); .nullable() accepts it.
+const bodyOptionalId = z.preprocess(
+  (v) => (v === "" || v === "null" || v === "undefined" ? null : v),
+  objectIdSchema.nullable().optional()
+);
+//   - list filters: -> undefined, i.e. "no filter".
+const filterOptionalId = z.preprocess(
+  (v) => (v === "" || v === "null" || v === "undefined" ? undefined : v),
+  objectIdSchema.optional()
+);
+
 const parseChildIds = z
   .union([
     z.array(objectIdSchema),
@@ -28,7 +44,7 @@ export const createVideoCategorySchema = z.object({
   slug: z.string().min(1, "Slug is required").max(255),
   order: z.coerce.number().int().min(0).optional().default(0),
   childCategoryIds: parseChildIds.optional().default([]),
-  educatorId: objectIdSchema.optional().nullable(),
+  educatorId: bodyOptionalId,
   status: z.coerce.boolean().optional().default(true),
   image: z.string().max(1000).optional().nullable(),
 });
@@ -38,7 +54,7 @@ export const updateVideoCategorySchema = z.object({
   slug: z.string().min(1).max(255).optional(),
   order: z.coerce.number().int().min(0).optional(),
   childCategoryIds: parseChildIds.optional(),
-  educatorId: objectIdSchema.optional().nullable(),
+  educatorId: bodyOptionalId,
   status: z.coerce.boolean().optional(),
   image: z.string().max(1000).optional().nullable(),
 });
@@ -46,8 +62,8 @@ export const updateVideoCategorySchema = z.object({
 export const listQuerySchema = z.object({
   search: z.string().trim().optional(),
   status: z.enum(["active", "inactive"]).optional(),
-  educatorId: objectIdSchema.optional(),
-  childCategoryId: objectIdSchema.optional(),
+  educatorId: filterOptionalId,
+  childCategoryId: filterOptionalId,
   page: z.coerce.number().int().min(1).optional().default(1),
   per_page: z.coerce.number().int().min(1).max(200).optional().default(20),
   sort_by: z.enum(["name", "order", "created_at", "updated_at"]).optional().default("order"),

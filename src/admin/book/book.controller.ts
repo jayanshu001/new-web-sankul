@@ -266,41 +266,32 @@ export const reorderBooks = async (req: Request, res: Response) => {
 
 // ─── Orders ───────────────────────────────────────────────────────────────────
 
+// Shared filter mapping for the orders report list + its CSV/Excel exports, so all
+// three honor the identical param contract (minus page/limit on the exports).
+const parseOrderReportQuery = (q: Record<string, string>): adminBook.OrderReportQuery => ({
+  customerId: q.customerId,
+  bookId: q.bookId,
+  status: q.status && Object.values(BookOrderStatus).includes(q.status as BookOrderStatus) ? q.status : undefined,
+  state: q.state,
+  // Accept both dateFrom/dateTo (report contract) and legacy fromDate/toDate.
+  fromDate: q.dateFrom ?? q.fromDate,
+  toDate: q.dateTo ?? q.toDate,
+  search: q.search,
+  sortBy: q.sortBy,
+  sortOrder: q.sortOrder,
+});
+
 export const getOrders = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("getOrders invoked", { traceId, path: req.originalUrl });
 
   try {
-    const {
-      customerId,
-      bookId,
-      status,
-      state,
-      fromDate,
-      toDate,
-      dateFrom,
-      dateTo,
-      search,
-      sortBy,
-      sortOrder,
-      page = "1",
-      limit = "20",
-    } = req.query as Record<string, string>;
-
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const q = req.query as Record<string, string>;
+    const pageNum = Math.max(parseInt(q.page || "1", 10) || 1, 1);
+    const limitNum = Math.max(parseInt(q.limit || "20", 10) || 20, 1);
 
     const { items, total } = await adminBook.listOrders({
-      customerId,
-      bookId,
-      status: status && Object.values(BookOrderStatus).includes(status as BookOrderStatus) ? status : undefined,
-      state,
-      // Accept both dateFrom/dateTo (report contract) and legacy fromDate/toDate.
-      fromDate: dateFrom ?? fromDate,
-      toDate: dateTo ?? toDate,
-      search,
-      sortBy,
-      sortOrder,
+      ...parseOrderReportQuery(q),
       page: pageNum,
       limit: limitNum,
     });
@@ -312,6 +303,42 @@ export const getOrders = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     logger.error("getOrders failed", { traceId, error: getErrorMessage(error), stack: error.stack });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /admin/books/orders/export/csv — entire filtered set, one row per book line.
+export const exportOrdersCsv = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("exportOrdersCsv invoked", { traceId, path: req.originalUrl });
+
+  try {
+    const csv = await adminBook.buildOrdersCsv(parseOrderReportQuery(req.query as Record<string, string>));
+    const filename = `book-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    logger.info("exportOrdersCsv success (mysql)", { traceId });
+    return res.status(200).send(csv);
+  } catch (error: any) {
+    logger.error("exportOrdersCsv failed", { traceId, error: getErrorMessage(error), stack: error.stack });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /admin/books/orders/export/excel — entire filtered set, one row per book line.
+export const exportOrdersExcel = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("exportOrdersExcel invoked", { traceId, path: req.originalUrl });
+
+  try {
+    const buf = await adminBook.buildOrdersXlsx(parseOrderReportQuery(req.query as Record<string, string>));
+    const filename = `book-orders-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    logger.info("exportOrdersExcel success (mysql)", { traceId });
+    return res.status(200).send(buf);
+  } catch (error: any) {
+    logger.error("exportOrdersExcel failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
   }
 };

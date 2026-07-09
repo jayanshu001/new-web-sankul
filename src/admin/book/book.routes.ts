@@ -11,6 +11,8 @@ import {
   toggleBookTrending,
   reorderBooks,
   getOrders,
+  exportOrdersCsv,
+  exportOrdersExcel,
   getOrderById,
   updateOrderStatus,
   setOrderTracking,
@@ -43,6 +45,10 @@ router.patch("/:id/trending", toggleBookTrending);
 
 // Orders
 router.get("/orders/list", getOrders);
+// Export routes registered BEFORE the `/orders/:id` param route so "export" is
+// never captured as an :id.
+router.get("/orders/export/csv", exportOrdersCsv);
+router.get("/orders/export/excel", exportOrdersExcel);
 router.get("/orders/:id", getOrderById);
 router.patch("/orders/:id/status", updateOrderStatus);
 router.patch("/orders/:id/tracking", setOrderTracking);

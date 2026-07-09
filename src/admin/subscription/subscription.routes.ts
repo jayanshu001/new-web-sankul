@@ -7,6 +7,8 @@ import {
   updateCourseSubscription,
   deleteCourseSubscription,
   listEbookSubscriptions,
+  exportCourseSubscriptionsCsv,
+  exportCourseSubscriptionsExcel,
   reportSummary,
   reportByCourse,
   reportByEbook,
@@ -27,6 +29,11 @@ router.get("/reports/summary", reportSummary);
 router.get("/reports/by-course", reportByCourse);
 router.get("/reports/by-ebook", reportByEbook);
 router.get("/reports/book-orders", reportBookOrders);
+
+// Report export (entire filtered set — no pagination). Two segments, so these
+// are matched before the single-segment "/:id" route below.
+router.get("/export/csv", exportCourseSubscriptionsCsv);
+router.get("/export/excel", exportCourseSubscriptionsExcel);
 
 // Ebook subscriptions (listing)
 router.get("/ebook", listEbookSubscriptions);

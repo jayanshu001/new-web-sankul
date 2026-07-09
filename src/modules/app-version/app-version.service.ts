@@ -62,7 +62,9 @@ export const checkAppVersion = async (
     platform === "android" ? androidStoreUrl() : process.env.IOS_APP_STORE_URL?.trim() || null;
   let source: VersionSource = "config";
   let releaseNotes: string | null = null;
-  let isUpdateAvailable = false;
+
+  // Whether the CALLING build is actually behind the latest known version.
+  let clientIsBehind = false;
 
   if (platform === "ios") {
     const store = await fetchAppStoreVersion();
@@ -72,24 +74,29 @@ export const checkAppVersion = async (
       releaseNotes = store.releaseNotes;
       if (store.storeUrl) storeUrl = store.storeUrl;
       // Prefer the authoritative store version-name comparison for iOS.
-      isUpdateAvailable = currentVersionName
+      clientIsBehind = currentVersionName
         ? compareVersionNames(store.version, currentVersionName) > 0
         : currentVersion > 0 && currentVersion < configLatestCode;
     } else {
       // Store unreachable/unconfigured — fall back to numeric config compare.
-      isUpdateAvailable = currentVersion > 0 && currentVersion < configLatestCode;
+      clientIsBehind = currentVersion > 0 && currentVersion < configLatestCode;
     }
   } else {
     // Android — numeric version-code compare against admin config.
-    isUpdateAvailable = currentVersion > 0 && currentVersion < configLatestCode;
+    clientIsBehind = currentVersion > 0 && currentVersion < configLatestCode;
   }
 
-  const belowFloor =
-    currentVersion > 0 &&
-    minSupportedVersion > 0 &&
-    currentVersion < minSupportedVersion;
-  const isForceUpdate =
-    belowFloor || (isUpdateAvailable && updateType === "immediate");
+  // The admin DB flag (ws_app_update.is_update_availble) is the MASTER switch:
+  // when it's false, no update is offered regardless of version numbers. When
+  // it's true, we still only prompt clients that are genuinely behind.
+  const isUpdateAvailable = appUpdate.isUpdateAvailable && clientIsBehind;
+
+  // Force-update is driven purely by updateType, and only when an update is
+  // actually available:
+  //   - isUpdateAvailable === false -> false (incl. DB flag off)
+  //   - updateType === "flexible"   -> false (soft/optional prompt)
+  //   - updateType === "immediate"  -> true  (must update before continuing)
+  const isForceUpdate = isUpdateAvailable && updateType === "immediate";
 
   return {
     platform,

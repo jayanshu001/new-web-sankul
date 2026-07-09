@@ -12,8 +12,19 @@ subscription list endpoints. Rows mostly existed already; this adds a consistent
 | Package  | `GET /api/v1/admin/subscriptions?type=package`  | `ws_package_course_subscription` | `packageId` |
 | Live Course | `GET /api/v1/admin/live-courses/subscriptions` | `ws_live_course_subscription` | `liveCourseId` |
 | Test Series | `GET /api/v1/admin/test-series/subscriptions` | `ws_test_series_subscription` (+ `ws_test_series_order` for method) | `testSeriesId` |
+| Course/Package export (CSV) | `GET /api/v1/admin/subscriptions/export/csv` | same as Course/Package | — |
+| Course/Package export (Excel) | `GET /api/v1/admin/subscriptions/export/excel` | same as Course/Package | — |
 
 All require an admin / super_admin Bearer token (unchanged).
+
+**Export endpoints** accept the *same* filter params as the list (everything in
+"Shared query params" + `type`/`hasMaterial`/`activationType`) but **ignore
+`page`/`limit`** — they stream the entire filtered set (capped at 100k rows).
+CSV → `text/csv`; Excel → `.xlsx` via `exceljs`. Both send
+`Content-Disposition: attachment; filename="subscription-report-<YYYY-MM-DD>.<ext>"`.
+Columns = the client's `Subscription-WithMaterial-Report.csv` set, then the extra
+on-screen columns. `activationType` is accepted but has **no SQL source yet**
+(column returns/exports blank until a source is defined — pending FE definition).
 
 ## Shared query params (all optional)
 
@@ -21,6 +32,8 @@ All require an admin / super_admin Bearer token (unchanged).
 |---|---|
 | `search` | customer name / phone / **email** (SQL id-resolver + `OR { in }`) |
 | `dateFrom`, `dateTo` | range on `createdAt` (`gte` / `lte`) |
+| `startFrom`, `startTo` | range on `startAt` (course/package report only) — inclusive, ANDs with all other filters |
+| `endFrom`, `endTo` | range on `endAt` (course/package report only) — inclusive, ANDs with all other filters |
 | `status` | `active` \| `expired` \| `inactive` (normalized, see below) |
 | `paymentMethod` | `online` \| `backend` (normalized, see below) |
 | `courseId`/`packageId`/`liveCourseId`/`testSeriesId` | product filter (per endpoint) |

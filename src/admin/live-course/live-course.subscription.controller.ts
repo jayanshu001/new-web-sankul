@@ -29,6 +29,24 @@ const updateSubscriptionSchema = z
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "Provide at least one field to update." });
 
+// Shared filter mapping for the report list + its CSV/Excel exports, so all three
+// honor an identical param contract (docs/backend-requests/live-course-report-
+// detailed-export.md). `:id` (when present) pins the liveCourseId filter.
+const buildSubReportQuery = (q: Record<string, string>, paramsId?: string | string[]): liveSql.SubReportQuery => ({
+  liveCourseId: paramsId ? String(paramsId) : (q.liveCourseId ? String(q.liveCourseId) : undefined),
+  customerId: q.customerId ? String(q.customerId) : undefined,
+  status: q.status,
+  paymentMethod: q.paymentMethod,
+  activationType: q.activationType,
+  dateFrom: q.dateFrom ?? q.fromDate,
+  dateTo: q.dateTo ?? q.toDate,
+  startFrom: q.startFrom,
+  endTo: q.endTo,
+  search: q.search,
+  sortBy: q.sortBy,
+  sortOrder: q.sortOrder,
+});
+
 // GET /api/v1/admin/live-courses/subscriptions
 // GET /api/v1/admin/live-courses/:id/subscriptions   (:id → liveCourseId filter)
 // Reports contract (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md): filters customerId,
@@ -44,24 +62,49 @@ export const listLiveCourseSubscriptions = async (req: Request, res: Response) =
     const q = req.query as Record<string, string>;
     const page = Math.max(1, parseInt(q.page, 10) || 1);
     const limit = Math.min(100, Math.max(1, parseInt(q.limit, 10) || 20));
-    const r = await liveSql.listSubscriptions({
-      liveCourseId: req.params.id ? String(req.params.id) : (q.liveCourseId ? String(q.liveCourseId) : undefined),
-      customerId: q.customerId ? String(q.customerId) : undefined,
-      status: q.status,
-      paymentMethod: q.paymentMethod,
-      dateFrom: q.dateFrom ?? q.fromDate,
-      dateTo: q.dateTo ?? q.toDate,
-      search: q.search,
-      sortBy: q.sortBy,
-      sortOrder: q.sortOrder,
-      page, limit,
-    });
+    const r = await liveSql.listSubscriptions({ ...buildSubReportQuery(q, req.params.id), page, limit });
     if (r === "bad_course") return failure(res, "Invalid live course id.", 422);
     if (r === "bad_customer") return failure(res, "Invalid customer id.", 422);
     return res.status(200).json({ success: true, summary: r.summary, data: r.data, pagination: r.pagination });
   } catch (err) {
     logger.error("listLiveCourseSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list subscriptions.", 500);
+  }
+};
+
+// GET /api/v1/admin/live-courses/subscriptions/export/csv — full filtered set, no pagination.
+export const exportLiveCourseSubscriptionsCsv = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("exportLiveCourseSubscriptionsCsv invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+  try {
+    const r = await liveSql.buildSubscriptionsCsv(buildSubReportQuery(req.query as Record<string, string>, req.params.id));
+    if (r === "bad_course") return failure(res, "Invalid live course id.", 422);
+    if (r === "bad_customer") return failure(res, "Invalid customer id.", 422);
+    const filename = `live-course-subscriptions-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(r);
+  } catch (err) {
+    logger.error("exportLiveCourseSubscriptionsCsv failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to export subscriptions.", 500);
+  }
+};
+
+// GET /api/v1/admin/live-courses/subscriptions/export/excel — full filtered set, no pagination.
+export const exportLiveCourseSubscriptionsExcel = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("exportLiveCourseSubscriptionsExcel invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+  try {
+    const r = await liveSql.buildSubscriptionsXlsx(buildSubReportQuery(req.query as Record<string, string>, req.params.id));
+    if (r === "bad_course") return failure(res, "Invalid live course id.", 422);
+    if (r === "bad_customer") return failure(res, "Invalid customer id.", 422);
+    const filename = `live-course-subscriptions-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(r);
+  } catch (err) {
+    logger.error("exportLiveCourseSubscriptionsExcel failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to export subscriptions.", 500);
   }
 };
 

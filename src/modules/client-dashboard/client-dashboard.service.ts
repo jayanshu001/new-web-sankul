@@ -20,6 +20,9 @@ import { fetchTrendingBooksOnly, fetchTrendingEbooksOnly } from "../client-trend
 const RECENTLY_ADDED_LIMIT = 10;
 const COURSE_CATEGORY_LIMIT = 20;
 const EXAM_COUNTDOWN_LIMIT = 2;
+// Home dashboard trims every non-banner section to its latest N items (response
+// size + client perf). The banner carousel keeps its full set.
+const DASHBOARD_SECTION_LIMIT = 5;
 const todayUTC = () => { const n = new Date(); return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate())); };
 const daysLeftFor = (examDate: Date) => Math.ceil((new Date(examDate).getTime() - todayUTC().getTime()) / 86_400_000);
 
@@ -94,10 +97,10 @@ export const buildHomeDashboard = async (customerId: number | null) => {
   const [banners, recentPackages, courses, trendingBooks, trendingEbooks, testimonials, courseCategories, examCountdownsRaw, dailyTest, unreadNotifications] = await Promise.all([
     prisma.bannerSlider.findMany({ orderBy: { orderBy: "asc" } }),
     prisma.package.findMany({ where: { active: true }, orderBy: { created_at: "desc" }, take: RECENTLY_ADDED_LIMIT, include: { packageType: { select: { id: true, name: true } } } }),
-    prisma.course.findMany({ where: { status: true }, orderBy: { createdAt: "desc" } }),
+    prisma.course.findMany({ where: { status: true }, orderBy: { createdAt: "desc" }, take: DASHBOARD_SECTION_LIMIT }),
     fetchTrendingBooksOnly({ type: "paid" }),
     fetchTrendingEbooksOnly({ type: "paid" }),
-    prisma.testimonial.findMany({ orderBy: { rating: "desc" } }),
+    prisma.testimonial.findMany({ orderBy: { rating: "desc" }, take: DASHBOARD_SECTION_LIMIT }),
     prisma.courseSubjectCategory.findMany({ where: { status: true }, orderBy: { id: "asc" }, take: COURSE_CATEGORY_LIMIT }),
     fetchPrioritizedCountdowns(customerId, EXAM_COUNTDOWN_LIMIT),
     prisma.exam.findFirst({ where: { type: "daily" as any, status: true, startAt: { lte: now }, endAt: { gte: now } }, orderBy: { startAt: "desc" } }),
@@ -119,12 +122,15 @@ export const buildHomeDashboard = async (customerId: number | null) => {
   // course + package plans
   const courseIds = courses.map((c) => c.id);
   const packageIds = recentPackages.map((p) => p.id);
-  const [coursePlans, { courseDaysLeft, packageDaysLeft }] = await Promise.all([
+  const [coursePlans, packagePlans, { courseDaysLeft, packageDaysLeft }] = await Promise.all([
     courseIds.length ? prisma.packageCourseEbookPrice.findMany({ where: { courseId: { in: courseIds }, status: true }, orderBy: { duration: "asc" } }) : [],
+    packageIds.length ? prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packageIds }, status: true }, orderBy: { duration: "asc" } }) : [],
     resolveOwnedEndAt(customerId, courseIds, packageIds),
   ]);
   const plansByCourse = new Map<number, { withMaterial: any[]; withoutMaterial: any[] }>();
   for (const p of coursePlans) { if (p.courseId == null) continue; const b = plansByCourse.get(p.courseId) ?? plansByCourse.set(p.courseId, { withMaterial: [], withoutMaterial: [] }).get(p.courseId)!; (p.withMaterial ? b.withMaterial : b.withoutMaterial).push(p); }
+  const plansByPackage = new Map<number, { withMaterial: any[]; withoutMaterial: any[] }>();
+  for (const p of packagePlans) { if (p.packageId == null) continue; const b = plansByPackage.get(p.packageId) ?? plansByPackage.set(p.packageId, { withMaterial: [], withoutMaterial: [] }).get(p.packageId)!; (p.withMaterial ? b.withMaterial : b.withoutMaterial).push(p); }
 
   const coursesWithPlans = courses.map((c: any) => ({
     ...c, _id: String(c.id),
@@ -133,7 +139,7 @@ export const buildHomeDashboard = async (customerId: number | null) => {
     isPurchased: courseDaysLeft.has(c.id),
     daysLeft: courseDaysLeft.get(c.id) ?? null,
   }));
-  const recentlyAdded = recentPackages.map((p: any) => ({ ...p, _id: String(p.id), isPaid: true, isPurchased: packageDaysLeft.has(p.id), daysLeft: packageDaysLeft.get(p.id) ?? null }));
+  const recentlyAdded = recentPackages.map((p: any) => ({ ...p, _id: String(p.id), plans: plansByPackage.get(p.id) ?? { withMaterial: [], withoutMaterial: [] }, isPaid: true, isPurchased: packageDaysLeft.has(p.id), daysLeft: packageDaysLeft.get(p.id) ?? null }));
 
   // trending decoration (ownership)
   const bookIds = trendingBooks.items.map((b: any) => Number(b._id));
@@ -177,5 +183,14 @@ export const buildHomeDashboard = async (customerId: number | null) => {
     { title: "Trending Ebooks", type: "trending-ebook", data: trendingEbookData },
   ];
 
-  return { unreadNotifications, dashboard, testimonial: testimonials };
+  // Cap every section EXCEPT the banner carousel to the latest N items. Each
+  // section's data is already ordered (most-recent / nearest-upcoming first),
+  // so slicing the head yields the latest N and keeps the response lean.
+  const cappedDashboard = dashboard.map((section) =>
+    section.type === "banner" || !Array.isArray(section.data)
+      ? section
+      : { ...section, data: section.data.slice(0, DASHBOARD_SECTION_LIMIT) }
+  );
+
+  return { unreadNotifications, dashboard: cappedDashboard, testimonial: testimonials };
 };

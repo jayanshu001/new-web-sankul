@@ -1,3 +1,4 @@
+import ExcelJS from "exceljs";
 import { computeEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminEbookRepository as repo } from "./admin-ebook.repository";
@@ -284,7 +285,7 @@ const toSubListItem = (r: any) => ({
   updatedAt: r.updatedAt ?? null,
 });
 
-export const listSubscriptions = async (q: {
+export interface SubReportQuery {
   customerId?: number;
   ebookId?: number;
   status?: boolean;
@@ -295,28 +296,92 @@ export const listSubscriptions = async (q: {
   search?: string;
   sortBy?: string;
   sortOrder?: string;
-  page: number;
-  limit: number;
-}) => {
+}
+
+// Shared filter resolution for the subscriptions list + its CSV/Excel exports, so
+// all three honor the identical param contract. Returns null when a search matched
+// nothing (force empty result, mirrors Mongo's $or over empty sets).
+const resolveSubOpts = async (q: SubReportQuery) => {
   let customerIdsIn: number[] | undefined;
   let ebookIdsIn: number[] | undefined;
   if (q.search) {
     [customerIdsIn, ebookIdsIn] = await Promise.all([repo.findCustomerIdsBySearch(q.search), repo.findEbookIdsBySearch(q.search)]);
-    // No match at all → force an empty result (mirrors Mongo's $or over empty sets).
-    if (!customerIdsIn.length && !ebookIdsIn.length) return { items: [], total: 0 };
+    if (!customerIdsIn.length && !ebookIdsIn.length) return null;
   }
-  const opts = {
+  return {
     customerId: q.customerId, ebookId: q.ebookId, status: q.status,
     statusFilter: q.statusFilter, paymentMethod: q.paymentMethod,
     dateFrom: q.dateFrom, dateTo: q.dateTo, now: new Date(),
     customerIdsIn, ebookIdsIn,
     sortBy: q.sortBy ?? "createdAt", sortDir: (q.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc",
   };
+};
+
+export const listSubscriptions = async (q: SubReportQuery & { page: number; limit: number }) => {
+  const opts = await resolveSubOpts(q);
+  if (!opts) return { items: [], total: 0 };
   const [rows, total] = await Promise.all([
     repo.listSubscriptions({ ...opts, skip: (q.page - 1) * q.limit, take: q.limit }),
     repo.countSubscriptions(opts),
   ]);
   return { items: rows.map(toSubListItem), total };
+};
+
+// Full filtered set (no pagination) for the report exports. Capped defensively.
+const EBOOK_SUB_EXPORT_MAX = 100000;
+
+export const exportSubscriptionRows = async (q: SubReportQuery) => {
+  const opts = await resolveSubOpts(q);
+  if (!opts) return [];
+  const rows = await repo.listSubscriptions({ ...opts, skip: 0, take: EBOOK_SUB_EXPORT_MAX });
+  return rows.map(toSubListItem);
+};
+
+const fmtExportDate = (d: Date | string | null | undefined): string => (d ? new Date(d).toISOString() : "");
+// Display status shown by the report table: mirrors the statusFilter semantics
+// (inactive = not active; expired = active but endAt past; active = active & current).
+const displaySubStatus = (i: ReturnType<typeof toSubListItem>, now: Date): string => {
+  if (!i.status) return "inactive";
+  if (i.endAt && new Date(i.endAt) < now) return "expired";
+  return "active";
+};
+
+// Column order matches the report table (and the client's export).
+const EBOOK_SUB_EXPORT_COLUMNS: { header: string; get: (i: any, now: Date) => string | number }[] = [
+  { header: "Subscription ID", get: (i) => i._id ?? "" },
+  { header: "Phone", get: (i) => i.customerId?.phoneNumber ?? "" },
+  { header: "Customer Name", get: (i) => [i.customerId?.firstName, i.customerId?.lastName].filter(Boolean).join(" ") },
+  { header: "Email", get: (i) => i.customerId?.emailAddress ?? "" },
+  { header: "Ebook Name", get: (i) => i.ebookId?.name ?? "" },
+  { header: "Razorpay Order Id", get: (i) => i.orderId?.razorpayOrderId ?? "" },
+  { header: "Razorpay Payment Id", get: (i) => i.orderId?.razorpayPaymentId ?? "" },
+  { header: "Start Date", get: (i) => fmtExportDate(i.startAt) },
+  { header: "End Date", get: (i) => fmtExportDate(i.endAt) },
+  { header: "Remarks", get: (i) => i.remarks ?? "" },
+  { header: "Price", get: (i) => i.paidAmount ?? "" },
+  { header: "Status", get: (i, now) => displaySubStatus(i, now) },
+];
+
+export const buildSubscriptionsCsv = async (q: SubReportQuery): Promise<string> => {
+  const rows = await exportSubscriptionRows(q);
+  const now = new Date();
+  const esc = (v: string | number) => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [EBOOK_SUB_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
+  for (const r of rows) lines.push(EBOOK_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r, now))).join(","));
+  return lines.join("\n");
+};
+
+export const buildSubscriptionsXlsx = async (q: SubReportQuery): Promise<Buffer> => {
+  const rows = await exportSubscriptionRows(q);
+  const now = new Date();
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Ebook Subscriptions");
+  ws.columns = EBOOK_SUB_EXPORT_COLUMNS.map((c) => ({ header: c.header, key: c.header, width: 22 }));
+  for (const r of rows) ws.addRow(EBOOK_SUB_EXPORT_COLUMNS.map((c) => c.get(r, now)));
+  return Buffer.from(await wb.xlsx.writeBuffer());
 };
 
 export const getSubscriptionById = async (id: number) => {

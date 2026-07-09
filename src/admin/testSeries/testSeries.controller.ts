@@ -491,6 +491,21 @@ export const deletePrice = async (req: Request, res: Response) => {
 
 // ─── Subscriptions / Orders (admin) ──────────────────────────────────────────
 
+// Shared filter mapping for the subscription report list + its CSV/Excel
+// exports, so all three honor the identical param contract (page/limit only
+// apply to the paginated list). Reused across the three handlers below.
+const parseSubReportQuery = (q: Record<string, string>): tsSql.SubReportOpts => ({
+  testSeriesId: q.testSeriesId ? tsSql.parseAtsId(q.testSeriesId) : null,
+  customerId: q.customerId ? tsSql.parseAtsId(q.customerId) : null,
+  status: q.status,
+  paymentMethod: q.paymentMethod,
+  dateFrom: q.dateFrom ?? q.fromDate,
+  dateTo: q.dateTo ?? q.toDate,
+  search: q.search,
+  sortBy: q.sortBy,
+  sortOrder: q.sortOrder,
+});
+
 // GET /api/v1/admin/test-series/subscriptions
 export const listSubscriptions = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -505,15 +520,7 @@ export const listSubscriptions = async (req: Request, res: Response) => {
     const l = Math.min(100, Math.max(1, parseInt(q.limit ?? "20", 10) || 20));
 
     const { summary, data, pagination } = await tsSql.listSubscriptions({
-      testSeriesId: q.testSeriesId ? tsSql.parseAtsId(q.testSeriesId) : null,
-      customerId: q.customerId ? tsSql.parseAtsId(q.customerId) : null,
-      status: q.status,
-      paymentMethod: q.paymentMethod,
-      dateFrom: q.dateFrom ?? q.fromDate,
-      dateTo: q.dateTo ?? q.toDate,
-      search: q.search,
-      sortBy: q.sortBy,
-      sortOrder: q.sortOrder,
+      ...parseSubReportQuery(q),
       page: p,
       limit: l,
     });
@@ -522,6 +529,38 @@ export const listSubscriptions = async (req: Request, res: Response) => {
   } catch (err) {
     logger.error("listSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list subscriptions.", 500);
+  }
+};
+
+// GET /api/v1/admin/test-series/subscriptions/export/csv — entire filtered set.
+export const exportSubscriptionsCsv = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("exportSubscriptionsCsv invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+  try {
+    const csv = await tsSql.buildSubscriptionsCsv(parseSubReportQuery(req.query as Record<string, string>));
+    const filename = `test-series-subscriptions-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(csv);
+  } catch (err) {
+    logger.error("exportSubscriptionsCsv failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to export subscriptions.", 500);
+  }
+};
+
+// GET /api/v1/admin/test-series/subscriptions/export/excel — entire filtered set.
+export const exportSubscriptionsExcel = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  logger.info("exportSubscriptionsExcel invoked", { traceId, path: req.originalUrl, userId: req.user?.id });
+  try {
+    const buf = await tsSql.buildSubscriptionsXlsx(parseSubReportQuery(req.query as Record<string, string>));
+    const filename = `test-series-subscriptions-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(buf);
+  } catch (err) {
+    logger.error("exportSubscriptionsExcel failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to export subscriptions.", 500);
   }
 };
 

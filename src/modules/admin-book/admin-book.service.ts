@@ -1,3 +1,4 @@
+import ExcelJS from "exceljs";
 import { prisma } from "../../config/prisma";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminBookRepository as repo } from "./admin-book.repository";
@@ -301,7 +302,9 @@ const toOrderItemDto = (it: OrderItemShape, books: Map<number, any>) => {
   };
 };
 
-export const listOrders = async (q: {
+// Shared query contract for the orders list + its CSV/Excel exports, so all three
+// honor the identical param mapping (minus page/limit on the exports).
+export interface OrderReportQuery {
   customerId?: string;
   bookId?: string;
   status?: string;
@@ -311,9 +314,13 @@ export const listOrders = async (q: {
   search?: string;
   sortBy?: string;
   sortOrder?: string;
-  page: number;
-  limit: number;
-}) => {
+}
+
+// Shared filter resolution for the orders list + its exports. Returns null when a
+// bookId filter matched no orders (force empty result, short-circuit before the
+// expensive read). `search` is resolved cross-table (customer name/phone/email +
+// book name on items) up front; receiptId is matched in-query (LIKE).
+const resolveOrderOpts = async (q: OrderReportQuery) => {
   const customerId = q.customerId ? parseBookId(q.customerId) ?? undefined : undefined;
   const state = q.state ? parseBookId(q.state) ?? undefined : undefined;
   const fromDate = parseDayBound(q.fromDate, false);
@@ -324,13 +331,11 @@ export const listOrders = async (q: {
   let bookOrderKeysIn: string[] | undefined;
   if (q.bookId) {
     const bookId = parseBookId(q.bookId);
-    if (!bookId) return { items: [], total: 0 };
+    if (!bookId) return null;
     bookOrderKeysIn = await repo.findOrderKeysByBookId(bookId);
-    if (!bookOrderKeysIn.length) return { items: [], total: 0 };
+    if (!bookOrderKeysIn.length) return null;
   }
 
-  // Resolve the cross-table search (customer name/phone + book name on items)
-  // up front; receiptId is matched in-query (LIKE).
   let customerIdsIn: number[] | undefined;
   let orderIdsIn: string[] | undefined;
   let receiptSearch: string | undefined;
@@ -342,7 +347,7 @@ export const listOrders = async (q: {
     ]);
   }
 
-  const opts = {
+  return {
     customerId,
     status: q.status,
     state,
@@ -355,13 +360,21 @@ export const listOrders = async (q: {
     sortBy: q.sortBy ?? "createdAt",
     sortDir: (q.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc",
   };
+};
 
-  const [rows, total] = await Promise.all([
-    repo.listOrders({ ...opts, skip: (q.page - 1) * q.limit, take: q.limit }),
-    repo.countOrders(opts),
-  ]);
+// An order row hydrated with its resolved line items, the referenced book map and
+// the derived report totals. Shared intermediate for the list DTO + the export.
+type EnrichedOrder = {
+  row: any;
+  lineItems: OrderItemShape[];
+  books: Map<number, any>;
+  totalWeight: number | null;
+  shippingPrice: number | null;
+};
 
-  // Resolve each order's line items (child rows preferred, else order_items JSON).
+// Resolve each order's line items (child rows preferred, else order_items JSON),
+// hydrate the referenced books in one query, and derive the report totals.
+const enrichOrders = async (rows: any[]): Promise<EnrichedOrder[]> => {
   const childRows = await repo.findOrderItems(rows.map((r) => r.receiptId));
   const childByKey = new Map<string, any[]>();
   for (const it of childRows) {
@@ -378,7 +391,7 @@ export const listOrders = async (q: {
   // Hydrate all referenced book ids in one query.
   const books = await loadBooks([...itemsByOrder.values()].flat());
 
-  const items = rows.map((r) => {
+  return rows.map((r) => {
     const lineItems = itemsByOrder.get(r.id) ?? [];
     // Derive report totals from the line items: total weight = Σ(unit weight × qty)
     // over books with a known weight; shipping price = Σ per-line shipping charge.
@@ -393,27 +406,161 @@ export const listOrders = async (q: {
       }
       shippingPrice += it.shippingPrice ?? 0;
     }
-    return {
-      _id: String(r.id),
-      receiptId: r.receiptId,
-      customerId: toCustomerDto(r.user),
-      shippingId: toShippingDto(r.shipping),
-      amount: Number(r.amount),
-      status: r.status,
-      // Courier AWB set via the /tracking PATCH; null until fulfilled.
-      trackingId: r.trackingId != null ? String(r.trackingId) : null,
-      totalWeight: anyWeight ? totalWeight : null,
-      shippingPrice: lineItems.length ? shippingPrice : null,
-      // Razorpay identifiers; empty gateway id (non-razorpay order) → null.
-      razorpayOrderId: r.gatewayOrderId ? r.gatewayOrderId : null,
-      razorpayPaymentId: r.gatewayPaymentId ?? null,
-      items: lineItems.map((it) => toOrderItemDto(it, books)),
-      createdAt: r.createdAt ?? null,
-      updatedAt: r.updatedAt ?? null,
-    };
+    return { row: r, lineItems, books, totalWeight: anyWeight ? totalWeight : null, shippingPrice: lineItems.length ? shippingPrice : null };
   });
+};
 
-  return { items, total };
+const toOrderListDto = ({ row: r, lineItems, books, totalWeight, shippingPrice }: EnrichedOrder) => ({
+  _id: String(r.id),
+  receiptId: r.receiptId,
+  customerId: toCustomerDto(r.user),
+  shippingId: toShippingDto(r.shipping),
+  amount: Number(r.amount),
+  status: r.status,
+  // Courier AWB set via the /tracking PATCH; null until fulfilled.
+  trackingId: r.trackingId != null ? String(r.trackingId) : null,
+  totalWeight,
+  shippingPrice,
+  // Razorpay identifiers; empty gateway id (non-razorpay order) → null.
+  razorpayOrderId: r.gatewayOrderId ? r.gatewayOrderId : null,
+  razorpayPaymentId: r.gatewayPaymentId ?? null,
+  items: lineItems.map((it) => toOrderItemDto(it, books)),
+  createdAt: r.createdAt ?? null,
+  updatedAt: r.updatedAt ?? null,
+});
+
+export const listOrders = async (q: OrderReportQuery & { page: number; limit: number }) => {
+  const opts = await resolveOrderOpts(q);
+  if (!opts) return { items: [], total: 0 };
+
+  const [rows, total] = await Promise.all([
+    repo.listOrders({ ...opts, skip: (q.page - 1) * q.limit, take: q.limit }),
+    repo.countOrders(opts),
+  ]);
+
+  const enriched = await enrichOrders(rows);
+  return { items: enriched.map(toOrderListDto), total };
+};
+
+// ── orders: CSV / Excel export ───────────────────────────────────────────────
+// Full filtered set (no pagination). Capped defensively. One export ROW per book
+// LINE — each order's items[] is flattened, repeating the order-level fields, to
+// mirror the on-screen table.
+const ORDERS_EXPORT_MAX = 100000;
+
+const fmtExportDate = (d: Date | string | null | undefined): string => (d ? new Date(d).toISOString() : "");
+
+type OrderExportRow = {
+  orderDate: string;
+  trackingId: string;
+  bookName: string;
+  totalWeight: number | string;
+  phone: string;
+  altPhone: string;
+  customerName: string;
+  address: string;
+  city: string;
+  pincode: string;
+  state: string;
+  price: number | string;
+  shippingPrice: number | string;
+  qty: number | string;
+  totalPrice: number | string;
+  weight: number | string;
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+  status: string;
+};
+
+export const exportOrderRows = async (q: OrderReportQuery): Promise<OrderExportRow[]> => {
+  const opts = await resolveOrderOpts(q);
+  if (!opts) return [];
+  const rows = await repo.listOrders({ ...opts, skip: 0, take: ORDERS_EXPORT_MAX });
+  const enriched = await enrichOrders(rows);
+
+  const out: OrderExportRow[] = [];
+  for (const e of enriched) {
+    const r = e.row;
+    const cust = toCustomerDto(r.user);
+    const ship = toShippingDto(r.shipping);
+    // Delivery details prefer the shipping address; fall back to the customer.
+    const base = {
+      orderDate: fmtExportDate(r.createdAt),
+      trackingId: r.trackingId != null ? String(r.trackingId) : "",
+      totalWeight: e.totalWeight ?? "",
+      phone: ship?.phone ?? cust?.phoneNumber ?? "",
+      altPhone: ship?.alternatePhone ?? "",
+      customerName: ship?.name ?? [cust?.firstName, cust?.lastName].filter(Boolean).join(" "),
+      address: [ship?.address, ship?.address2].filter(Boolean).join(", "),
+      city: ship?.city ?? "",
+      pincode: ship?.pincode != null ? String(ship.pincode) : "",
+      state: ship?.state != null ? String(ship.state) : "",
+      razorpayOrderId: r.gatewayOrderId ? r.gatewayOrderId : "",
+      razorpayPaymentId: r.gatewayPaymentId ?? "",
+      status: r.status ?? "",
+    };
+    if (!e.lineItems.length) {
+      // Orders with no resolvable line items still export one row (book cols blank).
+      out.push({ ...base, bookName: "", price: "", shippingPrice: "", qty: "", totalPrice: "", weight: "" });
+      continue;
+    }
+    for (const it of e.lineItems) {
+      const bk = it.bookId != null ? e.books.get(it.bookId) : undefined;
+      out.push({
+        ...base,
+        bookName: it.name ?? bk?.name ?? "",
+        price: it.price,
+        shippingPrice: it.shippingPrice ?? "",
+        qty: it.qty,
+        totalPrice: it.price * it.qty,
+        weight: bk?.weight ?? "",
+      });
+    }
+  }
+  return out;
+};
+
+// Column order matches the on-screen orders table (19 cols, one row per book line).
+const ORDER_EXPORT_COLUMNS: { header: string; get: (r: OrderExportRow) => string | number }[] = [
+  { header: "Order Date", get: (r) => r.orderDate },
+  { header: "Tracking ID", get: (r) => r.trackingId },
+  { header: "Book Name", get: (r) => r.bookName },
+  { header: "Total Weight", get: (r) => r.totalWeight },
+  { header: "Phone", get: (r) => r.phone },
+  { header: "ALT Phone", get: (r) => r.altPhone },
+  { header: "Customer Name", get: (r) => r.customerName },
+  { header: "Address", get: (r) => r.address },
+  { header: "City", get: (r) => r.city },
+  { header: "Pincode", get: (r) => r.pincode },
+  { header: "State", get: (r) => r.state },
+  { header: "Price", get: (r) => r.price },
+  { header: "Shipping Price", get: (r) => r.shippingPrice },
+  { header: "Qty", get: (r) => r.qty },
+  { header: "Total Price", get: (r) => r.totalPrice },
+  { header: "Weight", get: (r) => r.weight },
+  { header: "Order ID", get: (r) => r.razorpayOrderId },
+  { header: "Payment ID", get: (r) => r.razorpayPaymentId },
+  { header: "Status", get: (r) => r.status },
+];
+
+export const buildOrdersCsv = async (q: OrderReportQuery): Promise<string> => {
+  const rows = await exportOrderRows(q);
+  const esc = (v: string | number) => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [ORDER_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
+  for (const r of rows) lines.push(ORDER_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  return lines.join("\n");
+};
+
+export const buildOrdersXlsx = async (q: OrderReportQuery): Promise<Buffer> => {
+  const rows = await exportOrderRows(q);
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Book Orders");
+  ws.columns = ORDER_EXPORT_COLUMNS.map((c) => ({ header: c.header, key: c.header, width: 20 }));
+  for (const r of rows) ws.addRow(ORDER_EXPORT_COLUMNS.map((c) => c.get(r)));
+  return Buffer.from(await wb.xlsx.writeBuffer());
 };
 
 /** Batch-load the books referenced by a set of line items, keyed by id. */

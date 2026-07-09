@@ -49,6 +49,8 @@ import {
   grantLiveCourseSubscription,
   updateLiveCourseSubscription,
   deleteLiveCourseSubscription,
+  exportLiveCourseSubscriptionsCsv,
+  exportLiveCourseSubscriptionsExcel,
 } from "./live-course.subscription.controller";
 
 const router = Router();
@@ -62,6 +64,10 @@ router.delete("/plans/:planId",              deleteLiveCoursePlan);
 
 // --- Subscriptions (literal prefix — also declared before /:id patterns) ----
 router.get("/subscriptions",                 listLiveCourseSubscriptions);
+// Report exports — full filtered set, no pagination. Static paths registered
+// before `/subscriptions/:subscriptionId` so they aren't matched as an id.
+router.get("/subscriptions/export/csv",      exportLiveCourseSubscriptionsCsv);
+router.get("/subscriptions/export/excel",    exportLiveCourseSubscriptionsExcel);
 router.get("/subscriptions/:subscriptionId", getLiveCourseSubscription);
 router.put("/subscriptions/:subscriptionId", updateLiveCourseSubscription);
 router.delete("/subscriptions/:subscriptionId", deleteLiveCourseSubscription);

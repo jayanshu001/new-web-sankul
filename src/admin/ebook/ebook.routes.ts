@@ -22,6 +22,8 @@ import {
   updateEbookSubscription,
   deleteEbookSubscription,
   getEbookPricesForSubscription,
+  exportEbookSubscriptionsCsv,
+  exportEbookSubscriptionsExcel,
 } from "./ebook-subscription.controller";
 import {
   uploadEbookPdf,
@@ -68,6 +70,10 @@ router.delete("/plans/:planId", deleteEbookPlan);
 
 // Subscriptions
 router.get("/subscriptions/list", getEbookSubscriptions);
+// Report exports — full filtered set, no pagination. Static paths registered
+// before `/subscriptions/:subscriptionId` so they aren't matched as an id.
+router.get("/subscriptions/export/csv", exportEbookSubscriptionsCsv);
+router.get("/subscriptions/export/excel", exportEbookSubscriptionsExcel);
 router.post("/subscriptions", createEbookSubscription);
 router.get("/subscriptions/:subscriptionId", getEbookSubscriptionById);
 router.put("/subscriptions/:subscriptionId", updateEbookSubscription);

@@ -2,49 +2,46 @@ import { Request, Response } from "express";
 import { createEbookSubscriptionSqlSchema, updateEbookSubscriptionSchema } from "./ebook.validation";
 import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
 
-export const getEbookSubscriptions = async (req: Request, res: Response) => {
-  try {
-    const {
-      customerId,
-      ebookId,
-      status,
-      paymentMethod,
-      dateFrom,
-      dateTo,
-      search,
-      sortBy,
-      sortOrder,
-      page = "1",
-      limit = "20",
-    } = req.query as Record<string, string>;
-
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
-
-    if (customerId && !adminEbook.parseEbookId(customerId)) {
-      return res.status(400).json({ success: false, message: "Invalid customerId" });
-    }
-    if (ebookId && !adminEbook.parseEbookId(ebookId)) {
-      return res.status(400).json({ success: false, message: "Invalid ebookId" });
-    }
-    // Computed report status (active|expired|inactive); legacy true/false still accepted.
-    const statusFilter =
-      status === "active" || status === "expired" || status === "inactive" ? status : undefined;
-    const paymentMethodEnum = adminEbook.coercePaymentMethod(paymentMethod);
-    if (paymentMethod && !paymentMethodEnum) {
-      return res.status(400).json({ success: false, message: "Invalid paymentMethod" });
-    }
-    const { items, total } = await adminEbook.listSubscriptions({
-      customerId: customerId ? adminEbook.parseEbookId(customerId)! : undefined,
-      ebookId: ebookId ? adminEbook.parseEbookId(ebookId)! : undefined,
-      status: status === "true" ? true : status === "false" ? false : undefined,
+// Shared filter mapping for the report list + its CSV/Excel exports, so all three
+// honor the identical param contract. Returns a 400 message on invalid ids/method.
+const parseSubReportQuery = (
+  q: Record<string, string>,
+): { ok: false; message: string } | { ok: true; query: adminEbook.SubReportQuery } => {
+  if (q.customerId && !adminEbook.parseEbookId(q.customerId)) return { ok: false, message: "Invalid customerId" };
+  if (q.ebookId && !adminEbook.parseEbookId(q.ebookId)) return { ok: false, message: "Invalid ebookId" };
+  const paymentMethodEnum = adminEbook.coercePaymentMethod(q.paymentMethod);
+  if (q.paymentMethod && !paymentMethodEnum) return { ok: false, message: "Invalid paymentMethod" };
+  // Computed report status (active|expired|inactive); legacy true/false still accepted.
+  const statusFilter =
+    q.status === "active" || q.status === "expired" || q.status === "inactive" ? q.status : undefined;
+  return {
+    ok: true,
+    query: {
+      customerId: q.customerId ? adminEbook.parseEbookId(q.customerId)! : undefined,
+      ebookId: q.ebookId ? adminEbook.parseEbookId(q.ebookId)! : undefined,
+      status: q.status === "true" ? true : q.status === "false" ? false : undefined,
       statusFilter,
       paymentMethod: paymentMethodEnum,
-      dateFrom: adminEbook.parseDateBound(dateFrom, false),
-      dateTo: adminEbook.parseDateBound(dateTo, true),
-      search,
-      sortBy,
-      sortOrder,
+      dateFrom: adminEbook.parseDateBound(q.dateFrom, false),
+      dateTo: adminEbook.parseDateBound(q.dateTo, true),
+      search: q.search,
+      sortBy: q.sortBy,
+      sortOrder: q.sortOrder,
+    },
+  };
+};
+
+export const getEbookSubscriptions = async (req: Request, res: Response) => {
+  try {
+    const q = req.query as Record<string, string>;
+    const pageNum = Math.max(parseInt(q.page || "1", 10) || 1, 1);
+    const limitNum = Math.max(parseInt(q.limit || "20", 10) || 20, 1);
+
+    const parsed = parseSubReportQuery(q);
+    if (!parsed.ok) return res.status(400).json({ success: false, message: parsed.message });
+
+    const { items, total } = await adminEbook.listSubscriptions({
+      ...parsed.query,
       page: pageNum,
       limit: limitNum,
     });
@@ -53,6 +50,36 @@ export const getEbookSubscriptions = async (req: Request, res: Response) => {
       items,
       pagination: { page: pageNum, limit: limitNum, total, totalPages: Math.ceil(total / limitNum) },
     });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /admin/ebooks/subscriptions/export/csv — entire filtered set, no pagination.
+export const exportEbookSubscriptionsCsv = async (req: Request, res: Response) => {
+  try {
+    const parsed = parseSubReportQuery(req.query as Record<string, string>);
+    if (!parsed.ok) return res.status(400).json({ success: false, message: parsed.message });
+    const csv = await adminEbook.buildSubscriptionsCsv(parsed.query);
+    const filename = `ebook-subscriptions-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(csv);
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /admin/ebooks/subscriptions/export/excel — entire filtered set, no pagination.
+export const exportEbookSubscriptionsExcel = async (req: Request, res: Response) => {
+  try {
+    const parsed = parseSubReportQuery(req.query as Record<string, string>);
+    if (!parsed.ok) return res.status(400).json({ success: false, message: parsed.message });
+    const buf = await adminEbook.buildSubscriptionsXlsx(parsed.query);
+    const filename = `ebook-subscriptions-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(buf);
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

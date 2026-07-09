@@ -23,6 +23,7 @@
  *     `{ _id, name, phone, email }` from the Customer table where available.
  *   - TestSeriesOrder is read-only here (listOrders).
  */
+import ExcelJS from "exceljs";
 import { prisma } from "../../config/prisma";
 import { andWhere, dateWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 
@@ -673,14 +674,13 @@ const SUB_SORT_FIELDS: Record<string, "createdAt" | "startAt" | "endAt" | "price
   amount: "price",
 };
 
-export const listSubscriptions = async (opts: ListSubsOpts) => {
-  const now = new Date();
-  const emptyPage = {
-    summary: { totalCount: 0, totalRevenue: 0, activeCount: 0, expiredCount: 0 },
-    data: [] as any[],
-    pagination: { total: 0, page: opts.page, limit: opts.limit, totalPages: 0 },
-  };
+// Shared subscription filter/query params for the list + its CSV/Excel exports
+// (page/limit only apply to the paginated list).
+export type SubReportOpts = Omit<ListSubsOpts, "page" | "limit">;
 
+// Shared where-fragment builder for the list + exports. Returns null when a
+// search matched nothing (force an empty result, mirroring the list contract).
+const buildSubsWhere = async (opts: SubReportOpts, now: Date): Promise<Record<string, any> | null> => {
   const base: any = {};
   if (opts.testSeriesId != null) base.testSeriesId = opts.testSeriesId;
   if (opts.customerId != null) base.customerId = opts.customerId;
@@ -693,7 +693,7 @@ export const listSubscriptions = async (opts: ListSubsOpts) => {
       customerIdsByText(opts.search),
       testSeriesIdsByText(opts.search),
     ]);
-    if (!customerIdsIn.length && !seriesIdsIn.length) return emptyPage;
+    if (!customerIdsIn.length && !seriesIdsIn.length) return null;
     const or: any[] = [];
     if (customerIdsIn.length) or.push({ customerId: { in: customerIdsIn } });
     if (seriesIdsIn.length) or.push({ testSeriesId: { in: seriesIdsIn } });
@@ -702,23 +702,17 @@ export const listSubscriptions = async (opts: ListSubsOpts) => {
 
   // andWhere combines the OR-bearing search + status fragments safely.
   const baseWhere = andWhere(base, dw, searchWhere);
-  const listWhere = andWhere(baseWhere, statusWhere(opts.status, now));
-  const sortField = SUB_SORT_FIELDS[opts.sortBy ?? ""] ?? "createdAt";
-  const sortDir = (opts.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc";
+  return andWhere(baseWhere, statusWhere(opts.status, now));
+};
 
-  const [rows, agg, activeCount, expiredCount] = await Promise.all([
-    prisma.testSeriesSubscription.findMany({
-      where: listWhere,
-      orderBy: { [sortField]: sortDir },
-      skip: (opts.page - 1) * opts.limit,
-      take: opts.limit,
-    }),
-    prisma.testSeriesSubscription.aggregate({ where: listWhere, _count: { _all: true }, _sum: { price: true } }),
-    prisma.testSeriesSubscription.count({ where: andWhere(listWhere, statusWhere("active", now)) }),
-    prisma.testSeriesSubscription.count({ where: andWhere(listWhere, statusWhere("expired", now)) }),
-  ]);
-  const total = agg._count._all;
+const subSortSpec = (opts: SubReportOpts) => ({
+  sortField: SUB_SORT_FIELDS[opts.sortBy ?? ""] ?? "createdAt",
+  sortDir: (opts.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc",
+});
 
+// Enrich raw subscription rows into the canonical Reports DTO (customer/product/
+// plan populated). Shared by the list + exports so the row shape stays identical.
+const enrichSubRows = async (rows: any[], now: Date) => {
   const seriesIds = [...new Set(rows.map((r) => r.testSeriesId).filter((v): v is number => v != null))];
   const customerIds = [...new Set(rows.map((r) => r.customerId).filter((v): v is number => v != null))];
   const planIds = [...new Set(rows.map((r) => r.planId).filter((v): v is number => v != null))];
@@ -743,7 +737,7 @@ export const listSubscriptions = async (opts: ListSubsOpts) => {
   const custById = new Map(customerRows.map((c) => [c.id, c]));
   const planById = new Map(planRows.map((p) => [p.id, p]));
 
-  const data = rows.map((r) => {
+  return rows.map((r) => {
     const series = r.testSeriesId != null ? seriesById.get(r.testSeriesId) : null;
     const plan = r.planId != null ? planById.get(r.planId) : null;
     const product = series
@@ -761,12 +755,93 @@ export const listSubscriptions = async (opts: ListSubsOpts) => {
       createdAt: r.createdAt ?? null,
     });
   });
+};
+
+export const listSubscriptions = async (opts: ListSubsOpts) => {
+  const now = new Date();
+  const listWhere = await buildSubsWhere(opts, now);
+  if (listWhere === null) {
+    return {
+      summary: { totalCount: 0, totalRevenue: 0, activeCount: 0, expiredCount: 0 },
+      data: [] as any[],
+      pagination: { total: 0, page: opts.page, limit: opts.limit, totalPages: 0 },
+    };
+  }
+  const { sortField, sortDir } = subSortSpec(opts);
+
+  const [rows, agg, activeCount, expiredCount] = await Promise.all([
+    prisma.testSeriesSubscription.findMany({
+      where: listWhere,
+      orderBy: { [sortField]: sortDir },
+      skip: (opts.page - 1) * opts.limit,
+      take: opts.limit,
+    }),
+    prisma.testSeriesSubscription.aggregate({ where: listWhere, _count: { _all: true }, _sum: { price: true } }),
+    prisma.testSeriesSubscription.count({ where: andWhere(listWhere, statusWhere("active", now)) }),
+    prisma.testSeriesSubscription.count({ where: andWhere(listWhere, statusWhere("expired", now)) }),
+  ]);
+  const total = agg._count._all;
+  const data = await enrichSubRows(rows, now);
 
   return {
     summary: { totalCount: total, totalRevenue: num(agg._sum.price ?? 0), activeCount, expiredCount },
     data,
     pagination: { total, page: opts.page, limit: opts.limit, totalPages: Math.ceil(total / opts.limit) },
   };
+};
+
+// ── subscription report exports (CSV / Excel) ─────────────────────────────────
+// Full filtered set (no pagination) for the report exports. Capped defensively.
+const TS_SUB_EXPORT_MAX = 100000;
+
+export const exportSubscriptionRows = async (opts: SubReportOpts) => {
+  const now = new Date();
+  const listWhere = await buildSubsWhere(opts, now);
+  if (listWhere === null) return [];
+  const { sortField, sortDir } = subSortSpec(opts);
+  const rows = await prisma.testSeriesSubscription.findMany({
+    where: listWhere,
+    orderBy: { [sortField]: sortDir },
+    skip: 0,
+    take: TS_SUB_EXPORT_MAX,
+  });
+  return enrichSubRows(rows, now);
+};
+
+const fmtExportDate = (d: Date | string | null | undefined): string => (d ? new Date(d).toISOString() : "");
+
+// Column order matches the report table (one row per subscription). Export rows
+// also carry customer._id / product._id (via the DTO) to power detail links,
+// though the visible columns are just these 8.
+const TS_SUB_EXPORT_COLUMNS: { header: string; get: (i: any) => string | number }[] = [
+  { header: "Customer", get: (i) => i.customer?.name ?? "" },
+  { header: "Test Series", get: (i) => i.product?.name ?? "" },
+  { header: "Plan", get: (i) => i.plan?.name ?? "" },
+  { header: "Amount", get: (i) => (i.amount ?? "") as string | number },
+  { header: "Payment", get: (i) => i.paymentMethod ?? "" },
+  { header: "Status", get: (i) => i.status ?? "" },
+  { header: "Start", get: (i) => fmtExportDate(i.startAt) },
+  { header: "End", get: (i) => fmtExportDate(i.endAt) },
+];
+
+export const buildSubscriptionsCsv = async (opts: SubReportOpts): Promise<string> => {
+  const rows = await exportSubscriptionRows(opts);
+  const esc = (v: string | number) => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines = [TS_SUB_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
+  for (const r of rows) lines.push(TS_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  return lines.join("\n");
+};
+
+export const buildSubscriptionsXlsx = async (opts: SubReportOpts): Promise<Buffer> => {
+  const rows = await exportSubscriptionRows(opts);
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet("Test Series Subscriptions");
+  ws.columns = TS_SUB_EXPORT_COLUMNS.map((c) => ({ header: c.header, key: c.header, width: 22 }));
+  for (const r of rows) ws.addRow(TS_SUB_EXPORT_COLUMNS.map((c) => c.get(r)));
+  return Buffer.from(await wb.xlsx.writeBuffer());
 };
 
 export type GrantWrite = {

@@ -15,6 +15,211 @@
 
 ---
 
+## 2026-07-09 — Live-course subscriptions report: CSV/Excel export
+
+`GET /api/v1/admin/live-courses/subscriptions` (`admin-live-course` module) gains two
+export endpoints. No schema change (no DDL/backfill).
+
+- **New endpoints:** `GET admin/live-courses/subscriptions/export/{csv,excel}` — full
+  filtered set (no pagination, cap 100000), streamed with dated attachment filenames.
+- **Repository `buildSubWhere`:** added `startFrom` (`start_at >=`) / `endTo` (`end_at <=`)
+  bounds to `SubReportFilter`; distinct from the `createdAt` `fromDate`/`toDate` range.
+- **Service:** extracted shared `resolveSubFilter` (reused by `listSubscriptions` + new
+  `exportSubscriptionRows`/`buildSubscriptionsCsv`/`buildSubscriptionsXlsx`); added
+  `activationType` param (coalesced with `paymentMethod` → razorpay-order presence). No new
+  Prisma joins; list response shape unchanged.
+- Columns populated: Subscription ID, Customer Name/Phone/Email, Course Name, Start/End,
+  Amount, Activation Type, Order Method, Order Id, Payment Id, Status. Left blank (not
+  exposed on a live-course subscription without new joins): Package/Educator/Promocode/
+  Promoter names, Course/Material amounts, Ws Coin, Material Type, Bank Txn Id,
+  Address/City/Pincode, Remarks, Activated By.
+
+---
+
+## 2026-07-09 — Book Orders report: CSV/Excel export
+
+`GET /api/v1/admin/books/orders/list` (`admin-book` module) gains two export endpoints.
+No schema change (no DDL/backfill).
+
+- **New endpoints:** `GET admin/books/orders/export/{csv,excel}` — full filtered set, no
+  pagination, **one row per book LINE** (`items[]` flattened, order-level fields repeated);
+  19-column contract matching the on-screen table.
+- No schema/query change: exports reuse the exact list reads
+  (`repo.listOrders`/`findOrderItems`/`findBooksByIds`) via new shared `resolveOrderOpts`
+  + `enrichOrders`; export runs `skip:0 take:100000`. `listOrders` refactored onto the
+  same helpers (`resolveOrderOpts`/`enrichOrders`/`toOrderListDto`) — list shape unchanged.
+- `search` still matches customer name/phone/email + book name; `status`/`bookId`/`state`/
+  `dateFrom`/`dateTo`(createdAt) narrow list and export identically. No new index; exceljs
+  already a dependency.
+- Columns: Order Date, Tracking ID, Book Name, Total Weight, Phone, ALT Phone, Customer
+  Name, Address, City, Pincode, State, Price, Shipping Price, Qty, Total Price, Weight,
+  Order ID, Payment ID, Status.
+
+---
+
+## 2026-07-09 — Test Series subscriptions report: CSV/Excel export
+
+`GET /api/v1/admin/test-series/subscriptions` (`admin-testseries` module) gains two
+export endpoints. No schema change (no DDL/backfill).
+
+- **New endpoints:** `GET admin/test-series/subscriptions/export/{csv,excel}` — full
+  filtered set (no pagination), same params as the list minus `page`/`limit`.
+- Refactored `admin-testseries.service.ts` `listSubscriptions` into shared
+  `buildSubsWhere`/`subSortSpec`/`enrichSubRows`; added `exportSubscriptionRows`
+  (Prisma `findMany` where=listWhere, `skip:0 take:100000`) + `buildSubscriptionsCsv`
+  + `buildSubscriptionsXlsx` (exceljs). List response shape unchanged.
+- **Query shape unchanged** — same `ws_test_series_subscription` where-clause as the
+  list; `search` matches customer name/phone/email + series title; `dateFrom`/`dateTo`
+  bind to `createdAt`; status computed active|expired|inactive. No new index.
+- Columns: Customer, Test Series, Plan, Amount, Payment, Status, Start, End (rows also
+  carry `customer._id`/`product._id` for the report detail links).
+
+---
+
+## 2026-07-09 — Admin ebook subscriptions report: CSV/Excel export
+
+`GET /api/v1/admin/ebooks/subscriptions/list` (`admin-ebook` module) gains two export
+endpoints. No schema change (no DDL/backfill).
+
+- **New endpoints:** `GET /admin/ebooks/subscriptions/export/csv` (streams `text/csv`)
+  and `GET /admin/ebooks/subscriptions/export/excel` (streams `.xlsx`, via `exceljs`).
+- Both accept the **exact same query params as the list** (`search`, `status`,
+  `paymentMethod`, `ebookId`, `customerId`, `dateFrom`/`dateTo`, `sortBy`/`sortOrder`)
+  and cover the **full filtered set** — the frontend drops `page`/`limit`. Filter
+  resolution is now shared (`resolveSubOpts` in `admin-ebook.service`), so list + both
+  exports honor an identical contract; the report reads (`repo.listSubscriptions`) run
+  once with `skip:0, take:100000` for the export path.
+- **Query shape unchanged** — same `buildSubWhere` on `ws_ebook_subscription`
+  (+ `ws_ebook`/`ws_customer`/`ws_ebook_order` includes) as the list. No new index.
+- Columns (one row per subscription): Subscription ID, Phone, Customer Name, Email,
+  Ebook Name, Razorpay Order Id, Razorpay Payment Id, Start Date, End Date, Remarks,
+  Price, Status (computed active|expired|inactive, matching the list's statusFilter).
+
+---
+
+## 2026-07-09 — Admin subscriptions report: Start/End date filters + CSV/Excel export
+
+`GET /api/v1/admin/subscriptions` (`admin-subscription` module) gains two independent
+date-range filters and two export endpoints. No schema change (no DDL/backfill).
+
+- **New filters** on `ws_package_course_subscription`: `startFrom`/`startTo` → `startAt`
+  range, `endFrom`/`endTo` → `endAt` range (inclusive day-edge bounds via the existing
+  `parseDayBound`). Added as plain `where.startAt` / `where.endAt` fragments in
+  `buildSubWhere`; they AND with `createdAt` (`dateFrom`/`dateTo`), the normalized `status`
+  fragment, search, and every other filter. `summary` + `pagination.total` reflect them
+  (they run through the same composed `where`).
+- **New endpoints:** `GET /export/csv` and `GET /export/excel` (registered before `/:id`).
+  Both accept the identical filter contract as the list but **ignore `page`/`limit`** —
+  they fetch the whole filtered set via `listCourseSubsByWhere(..., 0, EXPORT_MAX=100000)`
+  (one bounded `findMany`, no aggregate/count) and reuse the shared `hydrateCourseSubRows`
+  (same per-page hydration + `promocodesByCodes` lookup as the list). CSV is hand-rolled;
+  Excel uses the new `exceljs` dependency. Column set = the client CSV columns + on-screen
+  extras; `activationType` column is blank (no SQL source yet).
+- **Refactor (no behavior change to the list):** extracted `resolveCourseSubWhere` +
+  `hydrateCourseSubRows` from `listCourseSubscriptions` so list and export share one
+  query/hydration path. `activationType` query param is now accepted (no-op filter today).
+
+## 2026-07-09 — Admin subscriptions report: add `educatorId` / `promoterId` / `promocodeId`
+
+`GET /api/v1/admin/subscriptions` (merged Subscription/Material Report, `admin-subscription`)
+now returns the record id alongside each of Educator Name / Promoter Name / Promocode so the
+report can link to the detail pages. Additive ids only — no envelope or existing-field change.
+
+- **`educatorId`** / **`promoterId`**: taken from the already-hydrated `courseEducator` /
+  `promoter` rows (`educatorsByIds` / `promotersByIds` both already select `id`) — no new
+  query. `null` when the relation is absent.
+- **`promocodeId`**: the order's `promocode` column is a purchase-time JSON snapshot with no
+  live FK (its embedded id is a legacy Mongo ObjectId, not `ws_promocode.id`), so the current
+  record id is resolved by the code string. New repo query `promocodesByCodes` does one batched
+  `ws_promocode.findMany({ where: { promocode: { in: [...] } } })` per page (indexed
+  `idx_ws_promocode_code`), mapped code→id. `null` when no code / no matching record.
+
+No schema/index change (no DDL/backfill); one added batched lookup query per report page.
+
+## 2026-07-09 — Admin subscriptions report: add `trackingId` + `shipping.alternatePhone`
+
+`GET /api/v1/admin/subscriptions` (merged Subscription/Material Report, `admin-subscription`
+module) was missing two CSV report columns. Two additive fields only — no envelope or
+existing-field change.
+
+- **`trackingId`** (courier AWB, set via the subscriptions `/tracking` PATCH): the list row
+  already carried `r.trackingId` (`ws_package_course_subscription.tracking`, BigInt) since
+  `listCourseSubsByWhere` selects `*`; now surfaced per row as `number | null` via a local
+  `trackingToNumber` (matches the `commerce-subscription` transformer; >2^53 → null).
+- **`shipping.alternatePhone`**: added `alternate_phone` to the `shippingsByIds`
+  (`ws_customer_shipping`) select and to the report row's `shipping` block as
+  `String(alternate_phone)` (BigInt → string; `null` when absent) — same convention as
+  `book-order` / `admin-book`.
+
+No index, filter, or aggregation change; both columns already exist (no DDL/backfill).
+
+## 2026-07-09 — Global search: `name` columns → utf8mb4 (multilingual fix) — DDL
+
+`GET /api/v1/client/search` crashed with MySQL error 3988
+(`Conversion from collation utf8mb4_general_ci into latin1_swedish_ci impossible
+for parameter`) on Gujarati/Hindi terms, because `ws_course.name` was
+`latin1_swedish_ci`. Prisma sends the term as utf8mb4; ASCII coerces to latin1
+(English worked) but Gujarati/Hindi characters have no latin1 representation, so
+`course` searches threw. Verified collations before/after via information_schema.
+
+- **DDL:** `docs/migration/schema-changes/2026-07-09_search_name_columns_utf8mb4.sql`
+  converts the searched `name` columns to `utf8mb4 / utf8mb4_0900_ai_ci`:
+  `ws_course` (was latin1), `ws_package` / `ws_book` / `ws_ebook` (were utf8mb3).
+  `ws_live_course.name` was already utf8mb4 — untouched. latin1→utf8mb4 transcodes
+  the bytes (Latin data, lossless); utf8mb3→utf8mb4 is a lossless superset.
+- **No code / schema.prisma change:** collation isn't tracked by Prisma, so the
+  client and introspection are unaffected (no prisma:generate). The search service
+  (`modules/client-search`) is unchanged — it already does `name: { contains }`.
+- **Verified locally:** applied the ALTERs, then ran the exact Gujarati term
+  (`છેલ્લી`) contains-search on course/package/book/ebook — all execute with no
+  collation error. **Apply on deploy via `yarn db:migrate`.**
+
+---
+
+## 2026-07-09 — Client home dashboard: populate `plans` on Recently Added packages
+
+`GET /api/v1/client/dashboard` "Recently Added" (`type: package`) items were
+missing the `plans` object that the `course` section already carried. Added a
+`packageCourseEbookPrice` fetch keyed on `packageId` (status=true, ordered by
+duration asc), grouped into `{ withMaterial, withoutMaterial }` — same shape as
+courses and the client-search package plans. `recentlyAdded` now includes
+`plans` (empty buckets when a package has no price rows). Verified locally: dev
+packages return real plan buckets. No schema change.
+
+---
+
+## 2026-07-09 — Client home dashboard: cap every non-banner section to latest 5
+
+`GET /api/v1/client/dashboard` (`buildHomeDashboard`) now returns at most **5**
+items per section for all sections **except** `banner` (carousel keeps its full
+set), for response-size / client perf. Sections are already ordered
+most-recent / nearest-upcoming first, so the cap takes the head. Implementation:
+- **Query-level (over-fetch fixes):** `course` findMany was **unbounded** — added
+  `take: 5` (also shrinks the downstream plan + ownership joins that key off
+  `courseIds`). `testimonial` findMany was **unbounded** — added `take: 5`.
+- **Output-level guarantee:** final `dashboard` array is mapped so every section
+  with `type !== "banner"` has its `data` sliced to 5 (covers `package`, `course`,
+  `courseCategory`, `trending-book`, `trending-ebook`; `exam-countdown` (≤2) and
+  `daily-test` (≤1) are unaffected).
+Response shape unchanged (same sections, same fields — just fewer rows). No
+schema/DDL change.
+
+---
+
+## 2026-07-09 — Admin video-category: empty `educatorId` no longer 422s (validation-only)
+
+`POST`/`PUT /admin/video-categories[/:id]` are multipart, so an unselected
+educator arrives as the string `""` (or `"null"`/`"undefined"`), which slipped
+past `.optional().nullable()` and then failed the id regex → 422
+`{ educatorId: "Invalid id" }` (blocked saving any category without an educator).
+Added a `z.preprocess` in `videoCategory.validation.ts` normalizing those
+empty-ish strings **before** the id check: create/update body → `null` (service
+already stores falsy educatorId as `0`, i.e. clears it); list filters →
+`undefined` (no filter). Valid ids and genuinely invalid ids (`"abc"`) are
+unaffected. **No schema/DDL/query change** — validation coercion only.
+
+---
+
 ## 2026-07-08 — New client App Version check endpoint (no schema change, no DDL)
 
 Added `GET /api/v1/client/app-version/check?platform=ios|android&currentVersion=&currentVersionName=`
@@ -43,6 +248,15 @@ a forced update; documented auth exception alongside auth/refresh/webhook/health
   of the `validate({ query })` middleware — Express 5 makes `req.query` getter-only, so
   the middleware's `req.query = parsed` reassignment threw
   `Cannot set property query of #<IncomingMessage>`. Same 422 flat-message contract.
+- **`isForceUpdate` logic simplified** — now driven purely by `updateType`:
+  `isForceUpdate = isUpdateAvailable && updateType === "immediate"`. Dropped the
+  `minSupportedVersion` floor as a force trigger (still returned, info-only). So
+  `flexible` and `isUpdateAvailable=false` always yield `false`.
+- **DB `is_update_availble` flag now honored** — previously `isUpdateAvailable` was
+  computed only from version-number comparison, so the `ws_app_update.is_update_availble`
+  column had no effect. Now it's the master switch: `isUpdateAvailable = adminFlag &&
+  clientIsBehind`. Setting the column to `0` makes both `isUpdateAvailable` and
+  `isForceUpdate` false regardless of versions/updateType.
 
 ---
 

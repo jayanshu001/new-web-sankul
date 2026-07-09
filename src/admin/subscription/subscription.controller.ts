@@ -27,20 +27,53 @@ const paginated = (req: Request) => {
 
 // ─── Course/Package subscriptions ──────────────────────────────────────────────
 
+// Shared filter mapping for the report list + its CSV/Excel exports, so all
+// three honor the identical param contract (dateFrom/dateTo → createdAt with
+// fromDate/toDate legacy aliases; startFrom/startTo → startAt; endFrom/endTo →
+// endAt; activationType accepted, see service note).
+const reportQueryFrom = (q: Record<string, string>): subSql.CourseSubReportQuery => ({
+  customerId: q.customerId, courseId: q.courseId, packageId: q.packageId, type: q.type,
+  status: q.status, paymentMethod: q.paymentMethod, hasMaterial: q.hasMaterial === "true",
+  dateFrom: q.dateFrom ?? q.fromDate, dateTo: q.dateTo ?? q.toDate,
+  startFrom: q.startFrom, startTo: q.startTo, endFrom: q.endFrom, endTo: q.endTo,
+  activationType: q.activationType,
+  search: q.search, sortBy: q.sortBy, sortOrder: q.sortOrder,
+});
+
 export const listCourseSubscriptions = async (req: Request, res: Response) => {
   try {
     const q = req.query as Record<string, string>;
-    // Reports contract (docs/REPORTS_SUBSCRIPTIONS_ADMIN.md). dateFrom/dateTo are
-    // the shared names; fromDate/toDate accepted as legacy aliases.
     const { pageNum, limitNum } = paginated(req);
     const { summary, data, pagination } = await subSql.listCourseSubscriptions({
-      customerId: q.customerId, courseId: q.courseId, packageId: q.packageId, type: q.type,
-      status: q.status, paymentMethod: q.paymentMethod, hasMaterial: q.hasMaterial === "true",
-      dateFrom: q.dateFrom ?? q.fromDate, dateTo: q.dateTo ?? q.toDate,
-      search: q.search, sortBy: q.sortBy, sortOrder: q.sortOrder,
-      page: pageNum, limit: limitNum,
+      ...reportQueryFrom(q), page: pageNum, limit: limitNum,
     });
     return res.status(200).json({ success: true, summary, data, pagination });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /admin/subscriptions/export/csv — entire filtered set, no pagination.
+export const exportCourseSubscriptionsCsv = async (req: Request, res: Response) => {
+  try {
+    const csv = await subSql.buildCourseSubscriptionsCsv(reportQueryFrom(req.query as Record<string, string>));
+    const filename = `subscription-report-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(csv);
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /admin/subscriptions/export/excel — entire filtered set, no pagination.
+export const exportCourseSubscriptionsExcel = async (req: Request, res: Response) => {
+  try {
+    const buf = await subSql.buildCourseSubscriptionsXlsx(reportQueryFrom(req.query as Record<string, string>));
+    const filename = `subscription-report-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.status(200).send(buf);
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

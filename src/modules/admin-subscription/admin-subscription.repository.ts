@@ -19,6 +19,8 @@ export interface CourseSubFilter {
   customerId?: number; courseId?: number; packageId?: number; status?: boolean;
   paymentType?: "online" | "backend"; hasMaterial?: boolean;
   fromDate?: Date; toDate?: Date; type?: "course" | "package";
+  // independent ranges on the subscription's own start/end columns (createdAt is fromDate/toDate)
+  startFrom?: Date; startTo?: Date; endFrom?: Date; endTo?: Date;
   customerIdsIn?: number[]; courseIdsIn?: number[]; packageIdsIn?: number[];
 }
 
@@ -122,7 +124,7 @@ export const adminSubscriptionRepository = {
     ids.length ? prisma.packageCourseOrder.findMany({ where: { id: { in: ids } }, select: { id: true, gatewayOrderId: true, gatewayPaymentId: true, bankTransactionId: true, wsCoin: true, promocode: true } }) : Promise.resolve([]),
   //  shipping → Address / City / Pincode
   shippingsByIds: (ids: number[]) =>
-    ids.length ? prisma.customerShipping.findMany({ where: { id: { in: ids } }, select: { id: true, address: true, address_2: true, city: true, pincode: true } }) : Promise.resolve([]),
+    ids.length ? prisma.customerShipping.findMany({ where: { id: { in: ids } }, select: { id: true, address: true, address_2: true, city: true, pincode: true, alternate_phone: true } }) : Promise.resolve([]),
   //  promoter → Promoter name
   promotersByIds: (ids: number[]) =>
     ids.length ? prisma.promoter.findMany({ where: { id: { in: ids } }, select: { id: true, full_name: true } }) : Promise.resolve([]),
@@ -132,6 +134,11 @@ export const adminSubscriptionRepository = {
   //  created_by → admin/staff name (Activated By); ws_users PK is BigInt.
   adminUsersByIds: (ids: number[]) =>
     ids.length ? prisma.adminUser.findMany({ where: { id: { in: ids.map((i) => BigInt(i)) } }, select: { id: true, firstName: true, lastName: true } }) : Promise.resolve([]),
+  //  promocode code string → current ws_promocode record id (for the report link).
+  //  The order's `promocode` column is a purchase-time JSON snapshot with no live
+  //  FK, so resolve the id by the code string (indexed: idx_ws_promocode_code).
+  promocodesByCodes: (codes: string[]) =>
+    codes.length ? prisma.promocode.findMany({ where: { promocode: { in: codes } }, select: { id: true, promocode: true } }) : Promise.resolve([]),
 
   // ── search-id resolvers (cross-table search) ────────────────────────────────
   customerIdsByText: async (q: string) => (await prisma.customer.findMany({ where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] }, select: { id: true } })).map((r) => r.id),
@@ -192,6 +199,17 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
     where.createdAt = {};
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;
     if (opts.toDate) where.createdAt.lte = opts.toDate;
+  }
+  // independent Start / End date ranges (own columns; AND with createdAt & all else)
+  if (opts.startFrom || opts.startTo) {
+    where.startAt = {};
+    if (opts.startFrom) where.startAt.gte = opts.startFrom;
+    if (opts.startTo) where.startAt.lte = opts.startTo;
+  }
+  if (opts.endFrom || opts.endTo) {
+    where.endAt = {};
+    if (opts.endFrom) where.endAt.gte = opts.endFrom;
+    if (opts.endTo) where.endAt.lte = opts.endTo;
   }
   // type: course = courseId>0; package = courseId null/0 AND package_id>0
   if (opts.type === "course") where.courseId = { gt: 0 };

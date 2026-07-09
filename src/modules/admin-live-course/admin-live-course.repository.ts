@@ -323,6 +323,9 @@ export interface SubReportFilter {
   customerId?: number; liveCourseId?: number;
   paymentMethod?: "online" | "backend";
   fromDate?: Date; toDate?: Date;
+  // Report export bounds: startAt >= startFrom, endAt <= endTo (distinct from the
+  // createdAt fromDate/toDate range used by the list's default date filter).
+  startFrom?: Date; endTo?: Date;
   customerIdsIn?: number[];
 }
 
@@ -348,6 +351,8 @@ function buildSubWhere(opts: SubReportFilter): Prisma.LiveCourseSubscriptionWher
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;
     if (opts.toDate) where.createdAt.lte = opts.toDate;
   }
+  if (opts.startFrom) where.startAt = { gte: opts.startFrom };
+  if (opts.endTo) where.endAt = { lte: opts.endTo };
   // cross-table search OR (customer name/phone/email id membership).
   const or: Prisma.LiveCourseSubscriptionWhereInput[] = [];
   if (opts.customerIdsIn?.length) or.push({ customerId: { in: opts.customerIdsIn } });

@@ -20,6 +20,8 @@ import {
   updatePrice,
   deletePrice,
   listSubscriptions,
+  exportSubscriptionsCsv,
+  exportSubscriptionsExcel,
   grantSubscription,
   updateSubscription,
   deleteSubscription,
@@ -41,6 +43,9 @@ router.put("/prices/:priceId",                      updatePrice);
 router.delete("/prices/:priceId",                   deletePrice);
 
 router.get("/subscriptions",                        listSubscriptions);
+// Export routes before `/subscriptions/:subscriptionId` so they aren't matched as an id.
+router.get("/subscriptions/export/csv",             exportSubscriptionsCsv);
+router.get("/subscriptions/export/excel",           exportSubscriptionsExcel);
 router.put("/subscriptions/:subscriptionId",        updateSubscription);
 router.delete("/subscriptions/:subscriptionId",     deleteSubscription);
 
