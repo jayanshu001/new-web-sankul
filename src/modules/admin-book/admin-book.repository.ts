@@ -5,11 +5,11 @@ import type { Prisma } from "@prisma/client";
  * Prisma persistence for the admin-book MySQL branch (ws_book + ws_book_order /
  * ws_book_order_item / ws_book_tracking). Books CRUD + order reads.
  *
- * ⚠ Schema-drift (ws_book has NO column for): isTrending, publication,
- * deliveryEta, termsAndConditions, demoFileName/bookFileName, bookUrl,
- * examCountdown* / packageIds. Those Mongo fields are synthesized (defaults) or
- * dropped by the transformer; the handlers that depend solely on them
- * (toggleBookTrending, getBookById countdown populates) STAY Mongo.
+ * ⚠ Schema-drift (ws_book has NO column for): publication, deliveryEta,
+ * termsAndConditions, demoFileName/bookFileName, bookUrl, packageIds. Those
+ * Mongo fields are synthesized (defaults) or dropped by the transformer.
+ * (isTrending DOES exist → ws_book.is_trending, written by create/update + the
+ * trending toggle; examCountdown* are stored as JSON int-arrays.)
  * NOT-NULL no-default cols (name, pages, dynamic_link) get write-time sentinels.
  */
 export const adminBookRepository = {

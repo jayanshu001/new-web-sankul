@@ -136,9 +136,9 @@ export const createBook = async (req: Request, res: Response) => {
     }
     // C6: examCountdownIds/examCountdownCategoryIds NOW persist to ws_book JSON
     // columns (parseIdArray-normalised in the service). demoFileName now persists
-    // too (ws_book.demo_file_name). Still dropped on SQL: packageIds/
-    // termsAndConditions/bookFileName/bookUrl/isTrending — books have no
-    // full-book PDF and those fields have no SQL columns (documented gap).
+    // too (ws_book.demo_file_name); isTrending persists to ws_book.is_trending.
+    // Still dropped on SQL: packageIds/termsAndConditions/bookFileName/bookUrl —
+    // books have no full-book PDF and those fields have no SQL columns.
     const created = await adminBook.createBook(data as any);
     logger.info("createBook success (mysql)", { traceId, bookId: created._id });
     return res.status(201).json({ success: true, data: created });

@@ -149,6 +149,7 @@ export const createEbook = async (d: any) => {
     bookUrl: d.bookUrl ?? "",
     shareableLink: d.link ?? "",
     active: d.status ?? true,
+    isTrending: d.isTrending ?? false,
     // C6: persist attached countdown/category ids (SQL ints) as JSON arrays.
     examCountdownIds: parseIdArray(d.examCountdownIds),
     examCountdownCategoryIds: parseIdArray(d.examCountdownCategoryIds),
@@ -174,6 +175,7 @@ export const updateEbook = async (id: number, d: any): Promise<ReturnType<typeof
   if (d.bookUrl !== undefined) data.bookUrl = d.bookUrl ?? "";
   if (d.link !== undefined) data.shareableLink = d.link ?? "";
   if (d.status !== undefined) data.active = d.status;
+  if (d.isTrending !== undefined) data.isTrending = d.isTrending;
   // C6: only touch the JSON arrays when the payload carries them (an update that
   // omits countdowns must not wipe the stored ids).
   if (d.examCountdownIds !== undefined) data.examCountdownIds = parseIdArray(d.examCountdownIds);

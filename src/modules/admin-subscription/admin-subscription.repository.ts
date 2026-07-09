@@ -193,8 +193,11 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
   if (opts.courseId !== undefined) where.courseId = opts.courseId;
   if (opts.packageId !== undefined) where.packageId = opts.packageId;
   if (opts.paymentType !== undefined) where.payment_type = opts.paymentType;
-  // Subscription Material Report: only with-material rows (pc_material_id > 0).
-  if (opts.hasMaterial) where.pcMaterialId = { gt: 0 };
+  // Subscription Material Report: only with-material rows. Mirrors the report
+  // label's single source of truth (service rowHasMaterial): legacy rows carry a
+  // pc_material_id, SQL-created grants carry only a material_amount — either counts.
+  // AND-ed (not a 2nd top-level OR) so it doesn't collide with the search OR below.
+  if (opts.hasMaterial) where.AND = [{ OR: [{ pcMaterialId: { gt: 0 } }, { materialAmount: { gt: 0 } }] }];
   if (opts.fromDate || opts.toDate) {
     where.createdAt = {};
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;

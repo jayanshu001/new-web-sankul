@@ -219,7 +219,7 @@ export const remove = async (id: number): Promise<boolean> => {
 };
 
 // ── Client listing ──────────────────────────────────────────────────────────────
-/** Active-package count per category id (mirrors the Mongo aggregation). */
+/** Active recorded-package count per category id. */
 const packageCountFor = async (catIds: number[]): Promise<Map<number, number>> => {
   if (!catIds.length) return new Map();
   const rows = await prisma.package.groupBy({
@@ -230,21 +230,27 @@ const packageCountFor = async (catIds: number[]): Promise<Map<number, number>> =
   return new Map(rows.map((r: any) => [r.packageCategoryId as number, r._count._all as number]));
 };
 
-/** Category ids that have ≥1 active LiveCourse (the ?live=true filter). */
-const liveCategoryIdSet = async (catIds: number[]): Promise<Set<number>> => {
-  if (!catIds.length) return new Set();
-  const rows = await prisma.liveCourse.findMany({
+/** Active live-course count per category id (the `live[]` side of the detail). */
+const liveCourseCountFor = async (catIds: number[]): Promise<Map<number, number>> => {
+  if (!catIds.length) return new Map();
+  const rows = await prisma.liveCourse.groupBy({
+    by: ["packageCategoryId"],
     where: { status: true, packageCategoryId: { in: catIds } },
-    select: { packageCategoryId: true },
-    distinct: ["packageCategoryId"],
+    _count: { _all: true },
   });
-  return new Set(rows.map((r) => r.packageCategoryId!).filter((x) => x != null));
+  return new Map(
+    rows
+      .filter((r: any) => r.packageCategoryId != null)
+      .map((r: any) => [r.packageCategoryId as number, r._count._all as number])
+  );
 };
 
 /**
- * Client category listing with per-category active-package count, optional
- * title search + the ?live=true filter. Returns { data, pagination } matching
- * the Mongo handler exactly.
+ * Client category listing with per-category count, optional title search + the
+ * ?live=true filter. `packageCount` semantics mirror the category detail's two
+ * arrays ({ recorded, live }):
+ *   - live=false → recorded packages + live courses (the full category contents)
+ *   - live=true  → live courses only (and only categories with ≥1 live course)
  */
 export const listClientPackageCategories = async (opts: {
   liveOnly: boolean; search: string | null; skip: number; limitNum: number; pageNum: number;
@@ -257,18 +263,21 @@ export const listClientPackageCategories = async (opts: {
       prisma.packageCategory.findMany({ where, orderBy: { order: "asc" }, skip: opts.skip, take: opts.limitNum }),
       prisma.packageCategory.count({ where }),
     ]);
-    const countMap = await packageCountFor(rawList.map((c) => c.id));
-    const data = rawList.map((c) => ({ ...toPkgCatDto(c), packageCount: countMap.get(c.id) ?? 0 }));
+    const ids = rawList.map((c) => c.id);
+    const [pkgMap, liveMap] = await Promise.all([packageCountFor(ids), liveCourseCountFor(ids)]);
+    const data = rawList.map((c) => ({
+      ...toPkgCatDto(c),
+      packageCount: (pkgMap.get(c.id) ?? 0) + (liveMap.get(c.id) ?? 0),
+    }));
     return { data, pagination: { total, page: opts.pageNum, limit: opts.limitNum, totalPages: Math.ceil(total / opts.limitNum) } };
   }
 
-  // live filter: compute across the full matching set, then page.
+  // live filter: keep only categories with ≥1 active live course, count = live count.
   const categories = await prisma.packageCategory.findMany({ where, orderBy: { order: "asc" } });
-  const liveSet = await liveCategoryIdSet(categories.map((c) => c.id));
-  const filtered = categories.filter((c) => liveSet.has(c.id));
+  const liveMap = await liveCourseCountFor(categories.map((c) => c.id));
+  const filtered = categories.filter((c) => (liveMap.get(c.id) ?? 0) > 0);
   const total = filtered.length;
   const paged = filtered.slice(opts.skip, opts.skip + opts.limitNum);
-  const countMap = await packageCountFor(paged.map((c) => c.id));
-  const data = paged.map((c) => ({ ...toPkgCatDto(c), packageCount: countMap.get(c.id) ?? 0 }));
+  const data = paged.map((c) => ({ ...toPkgCatDto(c), packageCount: liveMap.get(c.id) ?? 0 }));
   return { data, pagination: { total, page: opts.pageNum, limit: opts.limitNum, totalPages: Math.ceil(total / opts.limitNum) } };
 };

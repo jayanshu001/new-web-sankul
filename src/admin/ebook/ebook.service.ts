@@ -55,8 +55,9 @@ export const getEbookById = async (id: string) => {
 
 export const createEbook = async (validated: any) => {
   // SQL ws_ebook now stores examCountdownIds/examCountdownCategoryIds as JSON
-  // int-arrays (C6, persisted in adminEbook.createEbook). isTrending/PDF-status
-  // remain Mongo-only (no SQL columns).
+  // int-arrays (C6, persisted in adminEbook.createEbook) and isTrending
+  // (ws_ebook.is_trending). Only the PDF-upload status fields remain SQL-managed
+  // by the upload pipeline, not this write path.
   return adminEbook.createEbook(validated);
 };
 
@@ -68,8 +69,9 @@ export const createEbook = async (validated: any) => {
 export const updateEbook = async (id: string, validated: any) => {
   // NOTE: the Mongo path best-effort-deletes replaced S3 files; on SQL we skip
   // that orphan cleanup (not part of the API contract). examCountdownIds/
-  // examCountdownCategoryIds ARE persisted as JSON on SQL (C6); PDF-status
-  // fields are still dropped (no SQL columns).
+  // examCountdownCategoryIds ARE persisted as JSON on SQL (C6) and isTrending
+  // persists to ws_ebook.is_trending; PDF-status fields are managed by the
+  // upload pipeline, not this write path.
   const data = await adminEbook.updateEbook(assertEbookSqlId(id, "Ebook"), validated);
   if (!data) throw new HttpError(404, "Ebook not found");
   return data;

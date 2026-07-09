@@ -34,6 +34,17 @@ const promoCodeOf = (j: any): string | null => {
 
 const blankStrToNull = (v: string | null | undefined): string | null => (v ? v : null);
 const decToNum = (v: any): number | null => (v != null ? Number(v) : null);
+
+// Single source of truth for "with material" on a subscription row. Two signals
+// exist and must never disagree: legacy Mongo-migrated rows carry a `pc_material_id`
+// FK, while SQL-created admin grants carry only a `material_amount` (the create path
+// deliberately writes material_amount and never pc_material_id — see
+// createCourseSubscription). Either signal means the buyer took the physical
+// material, so the "With Material" label can never contradict a nonzero
+// materialAmount. Used by the report label, the single-detail flag, AND the
+// hasMaterial report filter (repository) so all three agree.
+const rowHasMaterial = (r: { pcMaterialId?: number | null; materialAmount?: any }): boolean =>
+  (r.pcMaterialId != null && r.pcMaterialId > 0) || Number(r.materialAmount ?? 0) > 0;
 // bigint `tracking` (courier AWB, ~1.19e11) → number, matching the Subscriptions
 // management list (commerce-subscription transformer). Guard the >2^53 case → null.
 const trackingToNumber = (v: bigint | null | undefined): number | null =>
@@ -157,7 +168,7 @@ const hydrateCourseSubRows = async (rows: Awaited<ReturnType<typeof repo.listCou
       courseAmount: decToNum(r.courseAmount),
       materialAmount: decToNum(r.materialAmount),
       wsCoin: order?.wsCoin ?? null,
-      materialType: r.pcMaterialId != null && r.pcMaterialId > 0 ? "With Material" : "Without Material",
+      materialType: rowHasMaterial(r) ? "With Material" : "Without Material",
       // NOTE: no SQL source for "Activation Type" — see backend-request open item.
       activationType: null as string | null,
       // gateway / payment ids
@@ -290,7 +301,7 @@ export const getCourseSubscriptionById = async (id: number): Promise<"not_found"
     paidAmount: r.amount != null ? Number(r.amount) : 0,
     startAt: r.startAt ?? null, endAt: r.endAt ?? null,
     status: r.status, paymentMethod: r.payment_type ?? null, remark: r.remarks ?? null,
-    withMaterial: r.pcMaterialId != null && r.pcMaterialId > 0,
+    withMaterial: rowHasMaterial(r),
     createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
   };
 };

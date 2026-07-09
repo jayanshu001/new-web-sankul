@@ -32,7 +32,8 @@ const DEFAULT_DELIVERY_ETA = "5-7 days";
 
 /**
  * `ws_book` row → admin Book DTO, shape-compatible with the Mongo `Book`
- * document. SQL-absent fields are synthesized: isTrending=false,
+ * document. isTrending is read from ws_book.is_trending (settable on
+ * create/update + the trending toggle). Other SQL-absent fields are synthesized:
  * publication/deliveryEta defaults, termsAndConditions=null, demoFileName/
  * bookFileName=null, bookUrl=null (only demo_url exists), and packageIds = []
  * (no SQL column/table).
@@ -78,7 +79,7 @@ export const toBookDto = (row: Book) => ({
   isCombo: row.isCombo,
   publication: DEFAULT_PUBLICATION,
   deliveryEta: DEFAULT_DELIVERY_ETA,
-  isTrending: false,
+  isTrending: row.isTrending,
   status: row.active,
   createdAt: row.created_at ?? null,
   updatedAt: row.updated_at ?? null,
@@ -157,6 +158,7 @@ export interface BookWriteInput {
   language?: string;
   isMagazine?: boolean;
   isCombo?: boolean;
+  isTrending?: boolean;
   status?: boolean;
   examCountdownIds?: any;
   examCountdownCategoryIds?: any;
@@ -185,6 +187,7 @@ export const createBook = async (d: BookWriteInput) => {
     language: d.language ?? "Gujarati",
     is_magazine: d.isMagazine ?? false,
     isCombo: d.isCombo ?? false,
+    isTrending: d.isTrending ?? false,
     active: d.status ?? true,
     // C6: store the attached countdown/category SQL ids as JSON int-arrays.
     examCountdownIds: parseIdArray(d.examCountdownIds),
@@ -219,6 +222,7 @@ export const updateBook = async (id: number, d: BookWriteInput): Promise<ReturnT
   if (d.language !== undefined) data.language = d.language;
   if (d.isMagazine !== undefined) data.is_magazine = d.isMagazine;
   if (d.isCombo !== undefined) data.isCombo = d.isCombo;
+  if (d.isTrending !== undefined) data.isTrending = d.isTrending;
   if (d.status !== undefined) data.active = d.status;
   // C6: only persist the JSON int-arrays when the payload includes them, so an
   // unrelated update doesn't wipe the stored countdown attachments.

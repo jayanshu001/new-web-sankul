@@ -15,6 +15,69 @@
 
 ---
 
+## 2026-07-09 — Books & EBooks: persist `isTrending` on create/update (was dropped)
+
+`PUT /admin/books/:id`, `PUT /admin/ebooks/:id` (and the create paths) silently
+dropped `isTrending` — the column `ws_book.is_trending` / `ws_ebook.is_trending`
+(Prisma `Book.isTrending` / `EBook.isTrending`) exists and the dedicated trending
+toggle wrote it, but the CRUD write paths never included it in the Prisma `data`.
+
+- **Book** (`modules/admin-book/admin-book.service.ts`): added `isTrending` to
+  `BookWriteInput`; `createBook` writes `isTrending: d.isTrending ?? false`;
+  `updateBook` writes it when present (`if (d.isTrending !== undefined) …`). Also
+  fixed `toBookDto`, which **hardcoded `isTrending: false`** — it now reads
+  `row.isTrending`, so the value round-trips on GET (previously the toggle wrote
+  the column but the DTO always reported false).
+- **EBook** (`modules/admin-ebook/admin-ebook.service.ts`): `createEbook` /
+  `updateEbook` now write `isTrending` (DTO already read `row.isTrending`).
+- Validation was already correct: `isTrending: zBool` coerces multipart
+  `"true"`/`"false"` → boolean; `updateSchema = createSchema.partial()` yields
+  `undefined` when the key is absent (verified), so the guarded write never
+  un-trends on unrelated edits. Stale "no SQL column"/"synthesized false" comments
+  in the book repo/DTO/controller + ebook wrapper were corrected.
+
+No schema change (columns already existed) — no DDL/backfill.
+
+## 2026-07-09 — Client package-categories: fix `packageCount` (live vs recorded)
+
+`GET /client/package-categories` (`package-category` module, `listClientPackageCategories`).
+Bug: `packageCount` counted only active recorded `ws_package` rows on BOTH the `live=true`
+and `live=false` paths, so it ignored live courses entirely. No schema change.
+
+- **`live=false`** now returns recorded packages **+** active live courses (the full
+  category contents — same two arrays the detail `{ recorded, live }` returns).
+- **`live=true`** now returns the **live-course count only** (was wrongly showing the
+  recorded-package count). Category filter unchanged: still only categories with ≥1
+  active live course qualify.
+- New `liveCourseCountFor(catIds)` groupBy on `ws_live_course` (`status:true`,
+  `package_category_id in …`); replaces the old `liveCategoryIdSet` distinct-scan
+  (count subsumes the "has ≥1 live" test). No new index.
+
+---
+
+## 2026-07-09 — Subscription report: fix Material Type ↔ Material Amount contradiction
+
+`admin-subscription` module. Bug: the report labelled rows "Without Material" while
+`materialAmount` was nonzero (e.g. sub ids 18, 7 → materialAmount 7600). No schema change.
+
+- **Root cause — two sources of truth.** The report/detail derived material from
+  `pc_material_id` only, but `createCourseSubscription` (SQL admin grant) writes
+  `material_amount` and **never** `pc_material_id`. So every SQL-created with-material
+  subscription (which also requires a shipping address) read back as "Without Material".
+  The *amount* was correct; the *label* was wrong.
+- **Fix — one predicate.** New `rowHasMaterial(r) = pcMaterialId>0 || materialAmount>0`,
+  now the single source of truth for: the report `materialType` label
+  (`hydrateCourseSubRows`), the single-detail `withMaterial` flag
+  (`getCourseSubscriptionById`), and the `hasMaterial` **filter** in
+  `buildSubWhere` (was `pcMaterialId>0`, now `OR pcMaterialId>0 / materialAmount>0`,
+  AND-ed so it doesn't collide with the search OR). Label can no longer contradict the
+  amount. Also fixes the "Subscription Material Report" filter silently excluding
+  SQL-created with-material rows.
+- Semantic chosen: **Material Type = "the subscription has a material component"**
+  (derived from the same signal as the amount), not a separate flag.
+
+---
+
 ## 2026-07-09 — Live-course subscriptions report: CSV/Excel export
 
 `GET /api/v1/admin/live-courses/subscriptions` (`admin-live-course` module) gains two
