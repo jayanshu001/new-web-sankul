@@ -5,6 +5,7 @@ import { adminEbookRepository as repo } from "./admin-ebook.repository";
 import { populateExamCountdowns, parseIdArray } from "../exam-countdown/exam-countdown.service";
 import { PaymentMethod } from "@prisma/client";
 import type { EBook, PackageCourseEbookPrice } from "@prisma/client";
+import { buildPagination } from "../../utils/listQuery";
 
 export const ADMIN_EBOOK_MODULE = "admin-ebook";
 export const isAdminEbookMysql = (): boolean => true;
@@ -206,10 +207,16 @@ export const reorderEbooks = async (orders: Array<{ id: string; order: number }>
 };
 
 // ── plans ──────────────────────────────────────────────────────────────────────
-export const listEbookPlans = async (ebookId: number): Promise<"not_found" | any[]> => {
+export const listEbookPlans = async (
+  ebookId: number,
+  opts: { skip: number; take: number; page: number; limit: number }
+): Promise<"not_found" | { data: any[]; pagination: ReturnType<typeof buildPagination> }> => {
   if (!(await repo.exists(ebookId))) return "not_found";
-  const plans = await repo.listPlans(ebookId);
-  return plans.map(toPlanDto);
+  const [plans, total] = await Promise.all([
+    repo.listPlans(ebookId, { skip: opts.skip, take: opts.take }),
+    repo.countPlans(ebookId),
+  ]);
+  return { data: plans.map(toPlanDto), pagination: buildPagination(total, opts.page, opts.limit) };
 };
 
 export const createEbookPlan = async (ebookId: number, d: { name?: string | null; duration: number; price: number; isDefault?: boolean; status?: boolean }): Promise<"not_found" | any> => {
@@ -420,6 +427,9 @@ export interface CreateSubInput {
   ipAddress?: string | null;
   remarks?: string | null;
   status?: boolean;
+  // extend=true → top up the customer's existing active subscription for this
+  // ebook instead of creating a fresh row (falls back to create if none).
+  extend?: boolean;
 }
 
 export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false; reason: "ebook" | "plan" } | { ok: true; data: any }> => {
@@ -442,7 +452,7 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
   // unique_id business key (mirrors the client ebook-order key shape).
   const uniqueId = `ebook-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
 
-  const { order, subscription } = await repo.createBackendSubscription({
+  const orderInput = {
     uniqueId,
     customerId: d.customerId,
     ebookId: resolvedEbookId,
@@ -458,7 +468,20 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
     endAt,
     remarks: d.remarks ?? null,
     status: d.status ?? true,
-  });
+  };
+
+  // Subscription Type = Extend: append the plan's duration onto the customer's
+  // existing active subscription for this ebook. A fresh order row is still
+  // written (an extend is a paid txn); fall back to a fresh grant when none.
+  const existing = d.extend ? await repo.findActiveSubscription(d.customerId, resolvedEbookId, startAt) : null;
+  if (existing) {
+    const base = existing.endAt && existing.endAt > startAt ? new Date(existing.endAt) : new Date(startAt);
+    const newEnd = computeEndAt({ startAt: base, durationMonths: durationDays ?? 0, asDays: true });
+    const { order, subscription } = await repo.extendBackendSubscription(existing.id, { ...orderInput, endAt: newEnd });
+    return { ok: true, data: { order: { ...order, orderPrice: order.orderPrice }, subscription } };
+  }
+
+  const { order, subscription } = await repo.createBackendSubscription(orderInput);
 
   return { ok: true, data: { order: { ...order, orderPrice: order.orderPrice }, subscription } };
 };

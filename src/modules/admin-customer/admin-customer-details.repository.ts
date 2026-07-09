@@ -51,4 +51,42 @@ export const adminCustomerDetailsRepository = {
     ids.length ? prisma.book.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
   statesByIds: (ids: number[]) =>
     ids.length ? prisma.customerState.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, state_code: true } }) : Promise.resolve([]),
+
+  // ── per-tab paginated lists (server-side page/limit for the admin detail view) ─
+  // The combined ws_package_course_subscription is split into courses (rows with a
+  // course_id) vs packages (course_id NULL, package_id set), mirroring the aggregate.
+  countCourseSubs: (customerId: number, status?: boolean) =>
+    prisma.packageCourseSubscription.count({ where: { customerId, courseId: { not: null }, ...(status !== undefined ? { status } : {}) } }),
+  pageCourseSubs: (customerId: number, skip: number, take: number, status?: boolean) =>
+    prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: { not: null }, ...(status !== undefined ? { status } : {}) }, orderBy: { createdAt: "desc" }, skip, take }),
+
+  countPackageSubs: (customerId: number, status?: boolean) =>
+    prisma.packageCourseSubscription.count({ where: { customerId, courseId: null, packageId: { not: null }, ...(status !== undefined ? { status } : {}) } }),
+  pagePackageSubs: (customerId: number, skip: number, take: number, status?: boolean) =>
+    prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: null, packageId: { not: null }, ...(status !== undefined ? { status } : {}) }, orderBy: { createdAt: "desc" }, skip, take }),
+
+  countLiveCourseSubs: (customerId: number, status?: boolean) =>
+    prisma.liveCourseSubscription.count({ where: { customerId, ...(status !== undefined ? { status } : {}) } }),
+  pageLiveCourseSubs: (customerId: number, skip: number, take: number, status?: boolean) =>
+    prisma.liveCourseSubscription.findMany({ where: { customerId, ...(status !== undefined ? { status } : {}) }, orderBy: { createdAt: "desc" }, skip, take }),
+
+  countTestSeriesSubs: (customerId: number, status?: boolean) =>
+    prisma.testSeriesSubscription.count({ where: { customerId, ...(status !== undefined ? { status } : {}) } }),
+  pageTestSeriesSubs: (customerId: number, skip: number, take: number, status?: boolean) =>
+    prisma.testSeriesSubscription.findMany({ where: { customerId, ...(status !== undefined ? { status } : {}) }, orderBy: { createdAt: "desc" }, skip, take }),
+
+  countEbookSubs: (customerId: number) =>
+    prisma.eBookSubscription.count({ where: { customerId } }),
+  pageEbookSubs: (customerId: number, skip: number, take: number) =>
+    prisma.eBookSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" }, skip, take }),
+
+  countBookOrders: (customerId: number) =>
+    prisma.bookOrder.count({ where: { userId: customerId } }),
+  pageBookOrders: (customerId: number, skip: number, take: number) =>
+    prisma.bookOrder.findMany({ where: { userId: customerId }, orderBy: { createdAt: "desc" }, skip, take }),
+
+  countAddresses: (customerId: number) =>
+    prisma.customerAddress.count({ where: { userId: customerId } }),
+  pageAddresses: (customerId: number, skip: number, take: number) =>
+    prisma.customerAddress.findMany({ where: { userId: customerId }, orderBy: { created_at: "desc" }, skip, take }),
 };

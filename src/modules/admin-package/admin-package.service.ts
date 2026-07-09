@@ -161,6 +161,41 @@ const loadEmbeds = async (packageId: number) => {
   return { specificSubjects: ss.map(subjectRef), materialCategories: mc.map(materialRef), examCategories: ec.map(examRef) };
 };
 
+// Paginated-tab rows = the embedded ref shape + a flattened `categoryName` so the
+// admin UI can render/sort without re-resolving the ref.
+const subjectRowDto = (r: any) => ({ ...subjectRef(r), categoryName: r.VideoCategory?.title ?? null });
+const materialRowDto = (r: any) => ({ ...materialRef(r), categoryName: r.MaterialCategory?.name ?? null });
+const examRowDto = (r: any) => ({ ...examRef(r), categoryName: r.ExamCategory?.name ?? null });
+
+// Shared page/limit parse, mirroring listSubscribers (default 20, cap 100).
+const pageArgs = (q: { page?: string; limit?: string }) => {
+  const page = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
+  const limit = Math.min(Math.max(parseInt(q.limit ?? "20", 10) || 20, 1), 100);
+  return { page, limit, skip: (page - 1) * limit };
+};
+const pageMeta = (total: number, page: number, limit: number) => ({ total, page, limit, totalPages: Math.ceil(total / limit) });
+
+export const listSpecificSubjects = async (packageId: number, q: { page?: string; limit?: string }): Promise<"not_found" | { data: any[]; pagination: any }> => {
+  if (!(await repo.exists(packageId))) return "not_found";
+  const { page, limit, skip } = pageArgs(q);
+  const [rows, total] = await Promise.all([repo.specificSubjectsForPaged(packageId, skip, limit), repo.countSpecificSubjectsFor(packageId)]);
+  return { data: rows.map(subjectRowDto), pagination: pageMeta(total, page, limit) };
+};
+
+export const listMaterialCategories = async (packageId: number, q: { page?: string; limit?: string }): Promise<"not_found" | { data: any[]; pagination: any }> => {
+  if (!(await repo.exists(packageId))) return "not_found";
+  const { page, limit, skip } = pageArgs(q);
+  const [rows, total] = await Promise.all([repo.materialCategoriesForPaged(packageId, skip, limit), repo.countMaterialCategoriesFor(packageId)]);
+  return { data: rows.map(materialRowDto), pagination: pageMeta(total, page, limit) };
+};
+
+export const listExamCategories = async (packageId: number, q: { page?: string; limit?: string }): Promise<"not_found" | { data: any[]; pagination: any }> => {
+  if (!(await repo.exists(packageId))) return "not_found";
+  const { page, limit, skip } = pageArgs(q);
+  const [rows, total] = await Promise.all([repo.examCategoriesForPaged(packageId, skip, limit), repo.countExamCategoriesFor(packageId)]);
+  return { data: rows.map(examRowDto), pagination: pageMeta(total, page, limit) };
+};
+
 // ── package types ──────────────────────────────────────────────────────────────
 export const listPackageTypes = async () => (await repo.listTypes()).map(toTypeDto);
 
@@ -378,9 +413,18 @@ export const reorderEmbedded = async (
 };
 
 // ── plans ──────────────────────────────────────────────────────────────────────
-export const listPackagePlans = async (packageId: number): Promise<"not_found" | any[]> => {
+export const listPackagePlans = async (packageId: number, q: { page?: string; limit?: string }): Promise<"not_found" | { data: any[]; pagination: any }> => {
   if (!(await repo.exists(packageId))) return "not_found";
-  return (await repo.listPlans(packageId)).map(toPlanDto);
+  const pageNum = Math.max(parseInt(q.page ?? "1", 10) || 1, 1);
+  const limitNum = Math.min(Math.max(parseInt(q.limit ?? "10", 10) || 10, 1), 500);
+  const [rows, total] = await Promise.all([
+    repo.listPlans(packageId, (pageNum - 1) * limitNum, limitNum),
+    repo.countPlans(packageId),
+  ]);
+  return {
+    data: rows.map(toPlanDto),
+    pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
+  };
 };
 
 export const attachPlansToPackage = async (packageId: number, planIds: string[]): Promise<"not_found" | "no_valid" | { modified: number }> => {

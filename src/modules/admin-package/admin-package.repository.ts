@@ -59,6 +59,21 @@ export const adminPackageRepository = {
   examCategoriesFor: (packageId: number) =>
     prisma.examCategoryPackage.findMany({ where: { packageId }, include: { ExamCategory: { select: { id: true, name: true, image: true } } }, orderBy: { order: "asc" } }),
 
+  // Paginated variants of the three category pivots for the package-detail tabs
+  // (same include/orderBy as the embedded-array loaders above; add skip/take + count).
+  specificSubjectsForPaged: (packageId: number, skip: number, take: number) =>
+    prisma.packageSpecificSubject.findMany({ where: { packageId }, include: { VideoCategory: { select: { id: true, title: true, image: true } } }, orderBy: { order_by: "asc" }, skip, take }),
+  countSpecificSubjectsFor: (packageId: number) =>
+    prisma.packageSpecificSubject.count({ where: { packageId } }),
+  materialCategoriesForPaged: (packageId: number, skip: number, take: number) =>
+    prisma.materialCategoryPackage.findMany({ where: { packageId }, include: { MaterialCategory: { select: { id: true, name: true, image: true } } }, orderBy: { order: "asc" }, skip, take }),
+  countMaterialCategoriesFor: (packageId: number) =>
+    prisma.materialCategoryPackage.count({ where: { packageId } }),
+  examCategoriesForPaged: (packageId: number, skip: number, take: number) =>
+    prisma.examCategoryPackage.findMany({ where: { packageId }, include: { ExamCategory: { select: { id: true, name: true, image: true } } }, orderBy: { order: "asc" }, skip, take }),
+  countExamCategoriesFor: (packageId: number) =>
+    prisma.examCategoryPackage.count({ where: { packageId } }),
+
   // ── packages: write ───────────────────────────────────────────────────────────
   createPackage: (input: {
     data: Prisma.PackageUncheckedCreateInput;
@@ -126,7 +141,8 @@ export const adminPackageRepository = {
     prisma.examCategoryPackage.updateMany({ where: { packageId, examCategoryId }, data: { order } }),
 
   // ── plans ────────────────────────────────────────────────────────────────────
-  listPlans: (packageId: number) => prisma.packageCourseEbookPrice.findMany({ where: { packageId, status: true }, orderBy: { duration: "asc" } }),
+  listPlans: (packageId: number, skip?: number, take?: number) => prisma.packageCourseEbookPrice.findMany({ where: { packageId, status: true }, orderBy: { duration: "asc" }, skip, take }),
+  countPlans: (packageId: number) => prisma.packageCourseEbookPrice.count({ where: { packageId, status: true } }),
   attachPlans: (packageId: number, planIds: number[]) =>
     prisma.packageCourseEbookPrice.updateMany({ where: { id: { in: planIds } }, data: { packageId, courseId: 0, ebookId: 0 } }),
   detachPlan: (packageId: number, planId: number) =>

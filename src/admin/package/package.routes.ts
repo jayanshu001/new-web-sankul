@@ -20,6 +20,9 @@ import {
   attachPlans,
   detachPlan,
   listSubscribers,
+  listExamCategories,
+  listMaterialCategories,
+  listSpecificSubjects,
   listPromotedCodes,
   listBooks,
   listVideoRelations,
@@ -61,6 +64,9 @@ router.delete("/:id/plans/:planId", detachPlan);
 
 // Subscribers + promoted codes + linked physical books (material tab)
 router.get("/:id/subscribers", listSubscribers);
+router.get("/:id/exam-categories", listExamCategories);
+router.get("/:id/material-categories", listMaterialCategories);
+router.get("/:id/specific-subjects", listSpecificSubjects);
 router.get("/:id/promoted-codes", listPromotedCodes);
 router.get("/:id/books", listBooks);
 

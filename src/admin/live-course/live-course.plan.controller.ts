@@ -3,6 +3,7 @@ import { z } from "zod";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
+import { parseListQuery } from "../../utils/listQuery";
 
 const createPlanSchema = z
   .object({
@@ -52,8 +53,9 @@ export const listLiveCoursePlans = async (req: Request, res: Response) => {
   try {
     const cid = liveSql.parseLiveId(liveCourseId);
     if (!cid) return failure(res, "Invalid live course id.", 422);
-    const plans = await liveSql.listPlans(cid);
-    return success(res, { plans, total: plans.length }, "Plans fetched.");
+    const { page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+    const { data, pagination } = await liveSql.listPlans(cid, { skip, take: limit, page, limit });
+    return res.status(200).json({ success: true, data, pagination });
   } catch (err) {
     logger.error("listLiveCoursePlans failed", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list plans.", 500);

@@ -65,7 +65,7 @@ export const listQuerySchema = z.object({
   educatorId: filterOptionalId,
   childCategoryId: filterOptionalId,
   page: z.coerce.number().int().min(1).optional().default(1),
-  per_page: z.coerce.number().int().min(1).max(200).optional().default(20),
+  per_page: z.coerce.number().int().min(1).max(500).optional().default(20),
   sort_by: z.enum(["name", "order", "created_at", "updated_at"]).optional().default("order"),
   sort_dir: z.enum(["asc", "desc"]).optional().default("asc"),
 });
@@ -82,7 +82,7 @@ export const categoryCoursesQuerySchema = z.object({
   search: z.string().trim().optional(),
   status: z.enum(["active", "inactive"]).optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
-  per_page: z.coerce.number().int().min(1).max(200).optional().default(20),
+  per_page: z.coerce.number().int().min(1).max(500).optional().default(20),
 });
 
 // Query schema for the category-scoped Videos tab list.
@@ -91,5 +91,5 @@ export const categoryVideosQuerySchema = z.object({
   status: z.enum(["active", "inactive"]).optional(),
   platform: z.enum(["youtube", "vimeo", "aws"]).optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
-  per_page: z.coerce.number().int().min(1).max(200).optional().default(20),
+  per_page: z.coerce.number().int().min(1).max(500).optional().default(20),
 });

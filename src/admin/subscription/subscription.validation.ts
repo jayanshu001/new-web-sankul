@@ -30,6 +30,11 @@ export const createSubscriptionSchema = z
       ])
       .default(PaymentMethod.CASH),
     amount: z.number().nonnegative().optional(),
+    // Standardized payment section: reference ids arrive only for their method
+    // (bank → bankTransactionId; razorpay → the two ids), else absent.
+    bankTransactionId: z.string().max(191).optional().nullable(),
+    razorpayOrderId: z.string().max(191).optional().nullable(),
+    razorpayPaymentId: z.string().max(191).optional().nullable(),
     // Optional override; if omitted, endAt is computed from the plan's
     // duration (months) per project convention.
     durationDays: z.number().int().positive().optional(),
@@ -37,6 +42,10 @@ export const createSubscriptionSchema = z
     customerShippingId: objectIdSchema.optional().nullable(),
     remark: z.string().max(1000).optional(),
     status: z.boolean().optional().default(true),
+    // Subscription Type control: extend=true tops up the customer's existing
+    // subscription for this product (append plan duration onto endAt) instead of
+    // creating a fresh row. No existing sub → falls back to a fresh create.
+    extend: z.boolean().optional().default(false),
   })
   .refine((d) => !!(d.courseId || d.packageId), {
     message: "Provide either courseId or packageId.",

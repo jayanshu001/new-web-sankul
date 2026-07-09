@@ -74,7 +74,13 @@ export const vcUpdate = async (id: number, d: any) => {
   if (d.educatorId !== undefined) data.educatorId = d.educatorId ? toInt(d.educatorId) : 0;
   return toVcDto(await repo.vcUpdate(id, data));
 };
-export const vcDelete = async (id: number) => { if (!(await repo.vcFind(id))) return false; await repo.vcDelete(id); return true; };
+export const vcDelete = async (id: number): Promise<{ ok: boolean; deletedRelations: number }> => {
+  if (!(await repo.vcFind(id))) return { ok: false, deletedRelations: 0 };
+  // Keep the relation DAG consistent: drop this category's edges, then the row.
+  const { count } = await repo.vcDeleteRelations(id);
+  await repo.vcDelete(id);
+  return { ok: true, deletedRelations: count };
+};
 
 // ════════════════════════════════════════════════════════════════════════════
 // FULL admin videoCategory controller (src/admin/videoCategory) — parent-FK based.
@@ -201,6 +207,8 @@ export const fullVcDelete = async (id: number): Promise<"not_found" | "in_use" |
   if (!(await repo.vcFind(id))) return "not_found";
   const [vid, child] = await Promise.all([repo.videoInCategory(id), repo.hasChildren(id)]);
   if (vid || child) return "in_use";
+  // Drop any relation-DAG edges before the row so no dangling edge survives.
+  await repo.vcDeleteRelations(id);
   await repo.vcDelete(id);
   return "ok";
 };

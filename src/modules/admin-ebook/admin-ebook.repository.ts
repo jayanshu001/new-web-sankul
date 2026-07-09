@@ -56,11 +56,15 @@ export const adminEbookRepository = {
     prisma.eBook.update({ where: { id }, data: { orderby: order, updatedAt: new Date() } }),
 
   // ── plans (ebook-owned price rows) ─────────────────────────────────────────────
-  listPlans: (ebookId: number, opts?: { activeOnly?: boolean }) =>
+  listPlans: (ebookId: number, opts?: { activeOnly?: boolean; skip?: number; take?: number }) =>
     prisma.packageCourseEbookPrice.findMany({
       where: { ebookId, ...(opts?.activeOnly ? { status: true } : {}) },
       orderBy: [{ price: "asc" }, { id: "asc" }],
+      ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts?.take !== undefined ? { take: opts.take } : {}),
     }),
+  countPlans: (ebookId: number) =>
+    prisma.packageCourseEbookPrice.count({ where: { ebookId } }),
   findPlanById: (id: number) =>
     prisma.packageCourseEbookPrice.findUnique({ where: { id }, include: { EBook: { select: { id: true, name: true } } } }),
   findPlanBare: (id: number) => prisma.packageCourseEbookPrice.findUnique({ where: { id } }),
@@ -152,6 +156,60 @@ export const adminEbookRepository = {
           remarks: input.remarks,
           payment_type: "backend",
           status: input.status,
+        },
+      });
+      return { order, subscription };
+    }),
+
+  /** Latest active subscription for a customer's ebook (Subscription Type = Extend). */
+  findActiveSubscription: (customerId: number, ebookId: number, now: Date) =>
+    prisma.eBookSubscription.findFirst({
+      where: { customerId, ebookId, status: true, endAt: { gte: now } },
+      orderBy: { endAt: "desc" },
+    }),
+
+  /** Extend grant: write a fresh COMPLETE order + push out the existing sub's endAt, in one txn. */
+  extendBackendSubscription: (
+    subscriptionId: number,
+    input: {
+      uniqueId: string;
+      customerId: number;
+      ebookId: number;
+      planId: number | null;
+      paymentMethod: string;
+      orderPrice: number;
+      razorpayOrderId: string | null;
+      razorpayPaymentId: string | null;
+      transactionId: string | null;
+      ipAddress: string | null;
+      price: number;
+      endAt: Date;
+      remarks: string | null;
+    }
+  ) =>
+    prisma.$transaction(async (tx) => {
+      const order = await tx.eBookOrder.create({
+        data: {
+          uniqueId: input.uniqueId,
+          userId: input.customerId,
+          orderType: "purchase",
+          planId: input.planId ?? 0,
+          orderPrice: input.orderPrice,
+          paymentMethod: input.paymentMethod as any,
+          gatewayOrderId: input.razorpayOrderId ?? "",
+          gatewayPaymentId: input.razorpayPaymentId ?? null,
+          bankTransactionId: input.transactionId ?? null,
+          ip_address: input.ipAddress,
+          status: "complete",
+        },
+      });
+      const subscription = await tx.eBookSubscription.update({
+        where: { id: subscriptionId },
+        data: {
+          orderId: order.id,
+          price: input.price,
+          endAt: input.endAt,
+          ...(input.remarks !== null ? { remarks: input.remarks } : {}),
         },
       });
       return { order, subscription };

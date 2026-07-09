@@ -143,8 +143,10 @@ export const reorderScheduleFolders = async (id: string, folderIds: string[]) =>
 
 // Entries ─────────────────────────────────────────────────────────────────────
 
-export const listScheduleEntries = async (id: string, folderId: string) => {
-  const r = await sql.listScheduleEntries(assertLiveSqlId(id, "live course"), folderId);
+export const listScheduleEntries = async (
+  id: string, folderId: string, opts?: { skip?: number; take?: number }
+) => {
+  const r = await sql.listScheduleEntries(assertLiveSqlId(id, "live course"), folderId, opts);
   if (r === "not_found") throw new HttpError(404, "Live course not found.");
   if (r === "folder_not_found") throw new HttpError(404, "Schedule folder not found.");
   return r;

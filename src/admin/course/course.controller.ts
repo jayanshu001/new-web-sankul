@@ -13,10 +13,15 @@
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";
+import { HttpError } from "../../middlewares/errorHandler";
+import { parseListQuery } from "../../utils/listQuery";
+import { listPromocodesForScope } from "../../modules/promo-code/promo-code.service";
 import {
   createCourseSqlSchema,
   createCoursePlanSchema,
   updateCoursePlanSchema,
+  linkCourseBooksSchema,
+  reorderCourseBooksSchema,
 } from "./course.validation";
 import {
   createMaterialSchema,
@@ -204,8 +209,80 @@ export const createCoursePlan = asyncHandler(async (req: Request, res: Response)
 });
 
 export const getCoursePlans = asyncHandler(async (req: Request, res: Response) => {
-  const data = await courseService.listCoursePlans(req.params.id as string);
-  return res.status(200).json({ success: true, data });
+  const { page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { data, pagination } = await courseService.listCoursePlans(req.params.id as string, {
+    skip,
+    take: limit,
+    page,
+    limit,
+  });
+  return res.status(200).json({ success: true, data, pagination });
+});
+
+export const getCoursePromocodes = asyncHandler(async (req: Request, res: Response) => {
+  const courseId = courseService.parseCourseSqlId(req.params.id as string);
+  if (!courseId) throw new HttpError(400, "Invalid Course ID");
+  const q = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { data, pagination } = await listPromocodesForScope("course", courseId, q);
+  return res.status(200).json({ success: true, data, pagination });
+});
+
+export const getCourseExamCategories = asyncHandler(async (req: Request, res: Response) => {
+  const { search, page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { data, pagination } = await courseService.listCourseExamCategories(req.params.id as string, {
+    search,
+    skip,
+    take: limit,
+    page,
+    limit,
+  });
+  return res.status(200).json({ success: true, data, pagination });
+});
+
+export const getCourseMaterialCategories = asyncHandler(async (req: Request, res: Response) => {
+  const { search, page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { data, pagination } = await courseService.listCourseMaterialCategories(req.params.id as string, {
+    search,
+    skip,
+    take: limit,
+    page,
+    limit,
+  });
+  return res.status(200).json({ success: true, data, pagination });
+});
+
+// GET /admin/courses/:id/books — physical books linked to the course, paginated,
+// optional book-name search, ordered by the per-course pivot order.
+export const getCourseBooks = asyncHandler(async (req: Request, res: Response) => {
+  const { search, page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { data, pagination } = await courseService.listCourseBooks(req.params.id as string, {
+    search,
+    skip,
+    take: limit,
+    page,
+    limit,
+  });
+  return res.status(200).json({ success: true, data, pagination });
+});
+
+// POST /admin/courses/:id/books — attach books to the course (idempotent).
+export const linkCourseBooks = asyncHandler(async (req: Request, res: Response) => {
+  const { bookIds } = linkCourseBooksSchema.parse(req.body);
+  const data = await courseService.linkCourseBooks(req.params.id as string, bookIds);
+  return res.status(201).json({ success: true, message: "Books linked to course.", data });
+});
+
+// PUT /admin/courses/:id/books/reorder — set the per-course display order.
+export const reorderCourseBooks = asyncHandler(async (req: Request, res: Response) => {
+  const { order } = reorderCourseBooksSchema.parse(req.body);
+  const data = await courseService.reorderCourseBooks(req.params.id as string, order);
+  return res.status(200).json({ success: true, message: "Book order updated.", data });
+});
+
+// DELETE /admin/courses/:id/books/:bookId — unlink a book from the course.
+export const unlinkCourseBook = asyncHandler(async (req: Request, res: Response) => {
+  const data = await courseService.unlinkCourseBook(req.params.id as string, req.params.bookId as string);
+  return res.status(200).json({ success: true, message: "Book unlinked from course.", data });
 });
 
 export const getCoursePlanById = asyncHandler(async (req: Request, res: Response) => {

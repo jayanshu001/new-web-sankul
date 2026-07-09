@@ -1,4 +1,5 @@
 import { adminMaterialRepository as repo, ROOT } from "./admin-material.repository";
+import { buildPagination } from "../../utils/listQuery";
 import type { MaterialCategory, Material } from "@prisma/client";
 
 export const ADMIN_MATERIAL_MODULE = "admin-material";
@@ -181,11 +182,18 @@ export const duplicateCategory = async (id: number): Promise<"not_found" | {
 };
 
 // category sub-resources
-export const getCategoryCourses = async (id: number) => {
-  const rows = await repo.coursesForCategory(id);
-  return rows
+export const getCategoryCourses = async (
+  id: number,
+  q: { search?: string; skip: number; take: number; page: number; limit: number },
+) => {
+  const [rows, total] = await Promise.all([
+    repo.coursesForCategory(id, { search: q.search, skip: q.skip, take: q.take }),
+    repo.countCoursesForCategory(id, q.search),
+  ]);
+  const data = rows
     .filter((r) => r.Course)
     .map((r) => ({ _id: String(r.Course!.id), name: r.Course!.name ?? null, image: r.Course!.image ?? null, level: r.Course!.level, status: r.Course!.status }));
+  return { data, pagination: buildPagination(total, q.page, q.limit) };
 };
 
 export const getCategoryMaterials = async (id: number, page: number, limit: number) => {

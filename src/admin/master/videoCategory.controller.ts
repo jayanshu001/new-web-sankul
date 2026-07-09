@@ -51,9 +51,10 @@ export const deleteVideoCategory = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     const numId = master.parseMasterId(id);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
-    if (!(await master.vcDelete(numId))) return res.status(404).json({ success: false, message: "Video Category not found" });
-    // D2 relation cleanup (ws_video_category_relation) is deferred; not migrated.
-    return res.status(200).json({ success: true, message: "Video Category deleted successfully", data: { deletedRelations: 0 } });
+    const result = await master.vcDelete(numId);
+    if (!result.ok) return res.status(404).json({ success: false, message: "Video Category not found" });
+    // Relation edges (ws_video_category_relation) are cleaned alongside the row.
+    return res.status(200).json({ success: true, message: "Video Category deleted successfully", data: { deletedRelations: result.deletedRelations } });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

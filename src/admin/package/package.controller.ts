@@ -19,6 +19,7 @@ import {
   setRelationsSchema,
 } from "./package.validation";
 import * as packageService from "./package.service";
+import { parseListQuery } from "../../utils/listQuery";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Multipart coercion helper
@@ -184,8 +185,11 @@ export const reorderExamCategories = asyncHandler(async (req: Request, res: Resp
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const listPackagePlans = asyncHandler(async (req: Request, res: Response) => {
-  const data = await packageService.listPackagePlans(req.params.id as string);
-  return res.status(200).json({ success: true, data });
+  const { data, pagination } = await packageService.listPackagePlans(
+    req.params.id as string,
+    req.query as packageService.PaginationQuery
+  );
+  return res.status(200).json({ success: true, data, pagination });
 });
 
 export const attachPlans = asyncHandler(async (req: Request, res: Response) => {
@@ -217,9 +221,37 @@ export const listSubscribers = asyncHandler(async (req: Request, res: Response) 
   return res.status(200).json({ success: true, data, pagination });
 });
 
+export const listExamCategories = asyncHandler(async (req: Request, res: Response) => {
+  const { data, pagination } = await packageService.listExamCategories(
+    req.params.id as string,
+    req.query as packageService.PaginationQuery
+  );
+  return res.status(200).json({ success: true, data, pagination });
+});
+
+export const listMaterialCategories = asyncHandler(async (req: Request, res: Response) => {
+  const { data, pagination } = await packageService.listMaterialCategories(
+    req.params.id as string,
+    req.query as packageService.PaginationQuery
+  );
+  return res.status(200).json({ success: true, data, pagination });
+});
+
+export const listSpecificSubjects = asyncHandler(async (req: Request, res: Response) => {
+  const { data, pagination } = await packageService.listSpecificSubjects(
+    req.params.id as string,
+    req.query as packageService.PaginationQuery
+  );
+  return res.status(200).json({ success: true, data, pagination });
+});
+
 export const listPromotedCodes = asyncHandler(async (req: Request, res: Response) => {
-  const data = await packageService.listPromotedCodes(req.params.id as string);
-  return res.status(200).json({ success: true, data });
+  const q = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { data, pagination } = await packageService.listPromotedCodes(
+    req.params.id as string,
+    q
+  );
+  return res.status(200).json({ success: true, data, pagination });
 });
 
 export const listBooks = asyncHandler(async (req: Request, res: Response) => {

@@ -3,7 +3,14 @@ import { createEducatorSchema, updateEducatorSchema } from "./master.validation"
 import bcrypt from "bcryptjs";
 import { educatorAuthRepository as eduRepo } from "../../modules/educator-auth/educator-auth.repository";
 import { toEducatorListDto } from "../../modules/educator-auth/educator-auth.transformer";
-import { getEducatorAssociations } from "../../modules/educator-auth/educator-details.service";
+import {
+  getEducatorAssociations,
+  listEducatorCourses,
+  listEducatorLiveCourses,
+  listEducatorPackages,
+  listEducatorVideoCategories,
+  listEducatorLiveSessions,
+} from "../../modules/educator-auth/educator-details.service";
 
 const EDUCATOR_SORT_FIELDS = new Set(["createdAt", "updatedAt", "name", "email"]);
 
@@ -144,6 +151,41 @@ export const getEducatorDetails = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ─── Educator per-association paginated lists (admin detail page) ─────────────
+
+const parseEducatorPaging = (req: Request) => {
+  const { page = "1", limit = "20" } = req.query as Record<string, string>;
+  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+  const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
+  return { pageNum, limitNum, skip: (pageNum - 1) * limitNum, take: limitNum };
+};
+const educatorPageMeta = (total: number, pageNum: number, limitNum: number) => ({
+  total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum),
+});
+
+type EducatorListFn = (educatorId: number, args: { skip: number; take: number }) => Promise<{ data: unknown[]; total: number }>;
+
+const educatorListHandler = (fn: EducatorListFn) => async (req: Request, res: Response) => {
+  try {
+    const numId = parseEducatorIntId(req.params.id as string);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Educator ID" });
+    const existing = await eduRepo.findById(numId);
+    if (!existing) return res.status(404).json({ success: false, message: "Educator not found" });
+
+    const { pageNum, limitNum, skip, take } = parseEducatorPaging(req);
+    const { data, total } = await fn(numId, { skip, take });
+    return res.status(200).json({ success: true, data, pagination: educatorPageMeta(total, pageNum, limitNum) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getEducatorCourses = educatorListHandler(listEducatorCourses);
+export const getEducatorLiveCourses = educatorListHandler(listEducatorLiveCourses);
+export const getEducatorPackages = educatorListHandler(listEducatorPackages);
+export const getEducatorVideoCategories = educatorListHandler(listEducatorVideoCategories);
+export const getEducatorLiveSessions = educatorListHandler(listEducatorLiveSessions);
 
 export const deleteEducator = async (req: Request, res: Response) => {
   try {

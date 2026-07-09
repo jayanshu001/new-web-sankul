@@ -31,9 +31,13 @@ const paginated = (req: Request) => {
 // three honor the identical param contract (dateFrom/dateTo → createdAt with
 // fromDate/toDate legacy aliases; startFrom/startTo → startAt; endFrom/endTo →
 // endAt; activationType accepted, see service note).
-const reportQueryFrom = (q: Record<string, string>): subSql.CourseSubReportQuery => ({
+export const reportQueryFrom = (q: Record<string, string>): subSql.CourseSubReportQuery => ({
   customerId: q.customerId, courseId: q.courseId, packageId: q.packageId, type: q.type,
-  status: q.status, paymentMethod: q.paymentMethod, hasMaterial: q.hasMaterial === "true",
+  status: q.status, paymentMethod: q.paymentMethod,
+  // tri-state: absent = no filter, "true" = with material, "false" = without.
+  hasMaterial: q.hasMaterial === "true" ? true : q.hasMaterial === "false" ? false : undefined,
+  // promoter / promocode filters + orderMethod (payment gateway, ≠ paymentMethod).
+  promoterId: q.promoterId, promocodeId: q.promocodeId, orderMethod: q.orderMethod,
   dateFrom: q.dateFrom ?? q.fromDate, dateTo: q.dateTo ?? q.toDate,
   startFrom: q.startFrom, startTo: q.startTo, endFrom: q.endFrom, endTo: q.endTo,
   activationType: q.activationType,
@@ -117,12 +121,18 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
       planId,
       withMaterial: !!data.withMaterial,
       paymentType: ONLINE_METHODS.includes(data.paymentMethod) ? "online" : "backend",
+      // Granular method + reference ids are persisted on the linked order row.
+      paymentMethod: data.paymentMethod,
+      bankTransactionId: data.bankTransactionId ?? null,
+      razorpayOrderId: data.razorpayOrderId ?? null,
+      razorpayPaymentId: data.razorpayPaymentId ?? null,
       amount: data.amount,
       durationDays: data.durationDays,
       startAt: data.startAt,
       customerShippingId: data.customerShippingId ? subSql.parseSubId(String(data.customerShippingId)) ?? null : null,
       remark: data.remark,
       status: data.status,
+      extend: data.extend,
     });
     if (!r.ok) {
       if (r.reason === "plan_not_found") return res.status(404).json({ success: false, message: "Plan not found." });

@@ -26,6 +26,7 @@
 import ExcelJS from "exceljs";
 import { prisma } from "../../config/prisma";
 import { andWhere, dateWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
+import { buildPagination } from "../../utils/listQuery";
 
 export const ADMIN_TESTSERIES_MODULE = "admin-testseries";
 export const isAdminTestSeriesMysql = (): boolean => true;
@@ -399,13 +400,21 @@ export const deleteTestSeries = async (id: number): Promise<boolean> => {
 export const seriesExists = async (id: number): Promise<boolean> =>
   !!(await prisma.testSeries.findUnique({ where: { id }, select: { id: true } }));
 
-export const listContentCategories = async (testSeriesId: number) => {
-  const rows = await prisma.testSeriesContentCategory.findMany({
-    where: { testSeriesId },
-    orderBy: [{ orderBy: "asc" }, { name: "asc" }],
-  });
+export const listContentCategories = async (
+  testSeriesId: number,
+  opts: { skip: number; take: number; page: number; limit: number }
+) => {
+  const [rows, total] = await Promise.all([
+    prisma.testSeriesContentCategory.findMany({
+      where: { testSeriesId },
+      orderBy: [{ orderBy: "asc" }, { name: "asc" }],
+      skip: opts.skip,
+      take: opts.take,
+    }),
+    prisma.testSeriesContentCategory.count({ where: { testSeriesId } }),
+  ]);
   const data = rows.map(contentCategoryDto);
-  return { data, total: data.length };
+  return { data, pagination: buildPagination(total, opts.page, opts.limit) };
 };
 
 export type ContentCategoryWrite = {
@@ -461,7 +470,14 @@ export const recomputePaperCount = async (testSeriesId: number): Promise<void> =
   await prisma.testSeries.update({ where: { id: testSeriesId }, data: { paperCount: count } });
 };
 
-export const listPapers = async (testSeriesId: number) => {
+export const listPapers = async (
+  testSeriesId: number,
+  opts: { search?: string; skip: number; take: number; page: number; limit: number }
+) => {
+  // The searchable paper display-name is NOT a DB column — it is derived by
+  // hydrating each link's examId through buildExamMap. So we cannot filter or
+  // paginate `name` at the DB level. Fetch ALL links for the series (paper
+  // counts per series are small), hydrate names, then filter/slice in memory.
   const links = await prisma.testSeriesExam.findMany({
     where: { testSeriesId },
     orderBy: [{ orderBy: "asc" }, { id: "asc" }],
@@ -475,8 +491,20 @@ export const listPapers = async (testSeriesId: number) => {
       })
     : [];
   const catMap = new Map(cats.map((c) => [c.id, { _id: String(c.id), name: c.name }]));
-  const data = links.map((l) => paperDto(l, examMap, catMap));
-  return { data, total: data.length };
+  let all = links.map((l) => paperDto(l, examMap, catMap));
+  if (opts.search) {
+    // Paper display-name is the hydrated exam title (paperDto sets
+    // `examId` to the exam DTO { _id, title, ... } when hydrated; falls back
+    // to the id string otherwise). Match case-insensitively against it.
+    const needle = opts.search.toLowerCase();
+    all = all.filter((p) => {
+      const nm = typeof p.examId === "object" && p.examId ? (p.examId as any).title : p.examId;
+      return String(nm ?? "").toLowerCase().includes(needle);
+    });
+  }
+  const total = all.length;
+  const data = all.slice(opts.skip, opts.skip + opts.take);
+  return { data, pagination: buildPagination(total, opts.page, opts.limit) };
 };
 
 export const contentCategoryBelongsTo = async (
@@ -551,13 +579,21 @@ export const unlinkPaper = async (linkId: number): Promise<number | null> => {
 
 // ── Prices ────────────────────────────────────────────────────────────────────
 
-export const listPrices = async (testSeriesId: number) => {
-  const rows = await prisma.testSeriesPrice.findMany({
-    where: { testSeriesId },
-    orderBy: [{ isDefault: "desc" }, { price: "asc" }, { createdAt: "asc" }],
-  });
+export const listPrices = async (
+  testSeriesId: number,
+  opts: { skip: number; take: number; page: number; limit: number }
+) => {
+  const [rows, total] = await Promise.all([
+    prisma.testSeriesPrice.findMany({
+      where: { testSeriesId },
+      orderBy: [{ isDefault: "desc" }, { price: "asc" }, { createdAt: "asc" }],
+      skip: opts.skip,
+      take: opts.take,
+    }),
+    prisma.testSeriesPrice.count({ where: { testSeriesId } }),
+  ]);
   const data = rows.map(priceDto);
-  return { data, total: data.length };
+  return { data, pagination: buildPagination(total, opts.page, opts.limit) };
 };
 
 export type PriceWrite = {
@@ -851,6 +887,14 @@ export type GrantWrite = {
   price?: number;
   startAt?: string;
   remarks?: string;
+  // Standardized payment section — persisted on the linked ws_test_series_order row.
+  paymentMethod?: string;
+  bankTransactionId?: string | null;
+  razorpayOrderId?: string | null;
+  razorpayPaymentId?: string | null;
+  // extend=true → top up the customer's existing active subscription for this test
+  // series instead of creating a fresh row (falls back to create if none).
+  extend?: boolean;
 };
 
 /** Returns { planNotFound: true } | { missingDuration: true } | { subscription }. */
@@ -868,22 +912,74 @@ export const grantSubscription = async (
   }
   if (!durationDays || durationDays <= 0) return { missingDuration: true };
 
-  const startAt = data.startAt ? new Date(data.startAt) : new Date();
-  const endAt = new Date(startAt);
-  endAt.setDate(endAt.getDate() + durationDays);
+  const now = new Date();
+  const startAt = data.startAt ? new Date(data.startAt) : now;
 
-  const sub = await prisma.testSeriesSubscription.create({
-    data: {
-      customerId: data.customerId,
-      testSeriesId,
-      planId: data.planId ?? null,
-      price,
-      startAt,
-      endAt,
-      paymentType: "backend", // PackageCourseEbookPaymentType.BACKEND
-      remarks: data.remarks ?? null,
-      status: true,
-    },
+  // Record an order row carrying the granular payment method + reference ids +
+  // amount, then link it via the subscription's order_id (matches the report /
+  // paid-purchase shape where payment data lives on ws_test_series_order). Written
+  // for both fresh grants and extends — an extend is still a paid transaction.
+  const { subscription: sub } = await prisma.$transaction(async (tx) => {
+    const order = await tx.testSeriesOrder.create({
+      data: {
+        customerId: data.customerId,
+        testSeriesId,
+        planId: data.planId ?? null,
+        paymentMethod: data.paymentMethod ?? "cash",
+        orderType: "purchase",
+        orderPrice: price,
+        razorpayOrderId: data.razorpayOrderId ?? null,
+        razorpayPaymentId: data.razorpayPaymentId ?? null,
+        transactionId: data.bankTransactionId ?? null,
+        status: "complete",
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+
+    // Subscription Type = Extend: append the plan's duration onto the customer's
+    // existing active subscription; fall back to a fresh row when none exists.
+    const existing = data.extend
+      ? await tx.testSeriesSubscription.findFirst({
+          where: { customerId: data.customerId, testSeriesId, status: true, endAt: { gte: now } },
+          orderBy: { endAt: "desc" },
+        })
+      : null;
+
+    if (existing) {
+      const base = existing.endAt && existing.endAt > now ? new Date(existing.endAt) : new Date(now);
+      base.setDate(base.getDate() + durationDays!);
+      const subscription = await tx.testSeriesSubscription.update({
+        where: { id: existing.id },
+        data: {
+          orderId: order.id,
+          planId: data.planId ?? existing.planId,
+          price,
+          endAt: base,
+          ...(data.remarks !== undefined ? { remarks: data.remarks } : {}),
+          updatedAt: now,
+        },
+      });
+      return { subscription };
+    }
+
+    const endAt = new Date(startAt);
+    endAt.setDate(endAt.getDate() + durationDays!);
+    const subscription = await tx.testSeriesSubscription.create({
+      data: {
+        orderId: order.id,
+        customerId: data.customerId,
+        testSeriesId,
+        planId: data.planId ?? null,
+        price,
+        startAt,
+        endAt,
+        paymentType: "backend", // PackageCourseEbookPaymentType.BACKEND
+        remarks: data.remarks ?? null,
+        status: true,
+      },
+    });
+    return { subscription };
   });
   return { subscription: subscriptionDto(sub) };
 };

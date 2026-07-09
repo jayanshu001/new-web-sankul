@@ -3,15 +3,29 @@ import { z } from "zod";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
+import { PaymentMethod } from "../../shared/enums";
 
-// SQL grant: numeric ids (the Mongo schema enforces ObjectId).
+// SQL grant: numeric ids (the Mongo schema enforces ObjectId). Extended from the
+// original free-grant to a full paid grant via the standardized payment section:
+// method + amount + reference ids persist inline on ws_live_course_subscription
+// (this table has no sibling order table). Ref ids arrive only for their method.
 const grantSqlSchema = z.object({
-  customerId:     z.coerce.string().min(1),
-  planId:         z.coerce.string().min(1),
-  durationDays:   z.number().int().positive().optional(),
-  durationMonths: z.number().int().positive().optional(),
-  startAt:        z.string().trim().optional(),
-  endAt:          z.string().trim().optional(),
+  customerId:        z.coerce.string().min(1),
+  planId:            z.coerce.string().min(1),
+  durationDays:      z.number().int().positive().optional(),
+  durationMonths:    z.number().int().positive().optional(),
+  startAt:           z.string().trim().optional(),
+  endAt:             z.string().trim().optional(),
+  amount:            z.number().nonnegative().optional(),
+  withMaterial:      z.boolean().optional(),
+  customerShippingId: z.coerce.string().min(1).optional().nullable(),
+  remarks:           z.string().max(1000).optional().nullable(),
+  paymentMethod:     z.enum(Object.values(PaymentMethod) as [string, ...string[]]).optional(),
+  bankTransactionId: z.string().optional().nullable(),
+  razorpayOrderId:   z.string().optional().nullable(),
+  razorpayPaymentId: z.string().optional().nullable(),
+  // Subscription Type = Extend: top up the existing sub instead of a fresh row.
+  extend:            z.boolean().optional(),
 }).strict();
 
 function zodIssueResponse(res: Response, err: z.ZodError) {
@@ -32,7 +46,7 @@ const updateSubscriptionSchema = z
 // Shared filter mapping for the report list + its CSV/Excel exports, so all three
 // honor an identical param contract (docs/backend-requests/live-course-report-
 // detailed-export.md). `:id` (when present) pins the liveCourseId filter.
-const buildSubReportQuery = (q: Record<string, string>, paramsId?: string | string[]): liveSql.SubReportQuery => ({
+export const buildSubReportQuery = (q: Record<string, string>, paramsId?: string | string[]): liveSql.SubReportQuery => ({
   liveCourseId: paramsId ? String(paramsId) : (q.liveCourseId ? String(q.liveCourseId) : undefined),
   customerId: q.customerId ? String(q.customerId) : undefined,
   status: q.status,

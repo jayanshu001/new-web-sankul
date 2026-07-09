@@ -461,6 +461,32 @@ model PdfUploadJob {
   @@map("ws_pdf_upload_job")
 }
 
+// Async report-export jobs (generic). A BullMQ worker builds the CSV/XLSX
+// off-request and uploads it to Spaces (private); poll endpoint signs a GET URL.
+model ExportJob {
+  id          Int       @id @default(autoincrement())
+  jobRef      String    @unique(map: "uq_export_job_ref") @map("job_ref") @db.VarChar(40)
+  type        String    @db.VarChar(40)
+  format      String    @default("excel") @db.VarChar(10)
+  params      Json?
+  status      String    @default("pending") @db.VarChar(20)
+  progress    Int       @default(0)
+  rowCount    Int?      @map("row_count")
+  fileKey     String?   @map("file_key") @db.VarChar(512)
+  fileName    String?   @map("file_name") @db.VarChar(255)
+  error       String?   @db.VarChar(1000)
+  requestedBy Int?      @map("requested_by")
+  expiresAt   DateTime? @map("expires_at")
+  startedAt   DateTime? @map("started_at")
+  finishedAt  DateTime? @map("finished_at")
+  createdAt   DateTime? @map("created_at")
+  updatedAt   DateTime? @map("updated_at")
+
+  @@index([status], name: "idx_export_job_status")
+  @@index([requestedBy, createdAt], name: "idx_export_job_requester")
+  @@map("ws_export_job")
+}
+
 model RefferalTerm {
   id        Int       @id @default(autoincrement())
   text      String    @db.VarChar(1000)
@@ -547,6 +573,7 @@ model Book {
   updated_at       DateTime?
   bookCartItem     BookCartItem[]
   bookOrderItem    BookOrderItem[]
+  courseBook       CourseBook[]
   examCountdownIds         Json? @map("exam_countdown_ids")
   examCountdownCategoryIds Json? @map("exam_countdown_category_ids")
 
@@ -814,6 +841,21 @@ model ExamCategoryCourse {
   updated_at     DateTime?
 
   @@map("ws_exam_category_course")
+}
+
+// Course ↔ physical Book pivot (admin Course-Detail "Material (Book)" tab). Mirrors
+// ExamCategoryCourse; `order` is the per-course display order for the linked book.
+model CourseBook {
+  id         Int       @id @default(autoincrement())
+  Course     Course?   @relation(fields: [courseId], references: [id])
+  courseId   Int?      @map("course_id")
+  Book       Book?     @relation(fields: [bookId], references: [id])
+  bookId     Int?      @map("book_id")
+  order      Int
+  created_at DateTime?
+  updated_at DateTime?
+
+  @@map("ws_course_book")
 }
 
 // ****************************MATERIAL MODULE******************************
@@ -1141,6 +1183,7 @@ model Course {
   updatedAt                 DateTime?                   @map("updated_at")
   examCategoryCourse        ExamCategoryCourse[]
   materialCategoryCourse    MaterialCategoryCourse[]
+  courseBook                CourseBook[]
   plans                     PackageCourseEbookPrice[]
   packageCourseSubscription PackageCourseSubscription[]
   examCountdownIds          Json? @map("exam_countdown_ids")
@@ -1720,8 +1763,11 @@ model LiveCourseSubscription {
   discountAmount    Int?      @map("discount_amount")
   paidAmount        Int?      @map("paid_amount")
   paymentStatus     String?   @map("payment_status")
+  paymentMethod     String?   @map("payment_method")
   razorpayOrderId   String?   @map("razorpay_order_id")
   razorpayPaymentId String?   @map("razorpay_payment_id")
+  bankTransactionId String?   @map("bank_transaction_id")
+  remarks           String?
   paidAt            DateTime? @map("paid_at")
   // Material fulfillment (lightweight, mirrors Mongo LiveCourseSubscription):
   // withMaterial marks a shipping order; customerShippingId is the chosen

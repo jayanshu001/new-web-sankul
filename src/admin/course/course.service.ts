@@ -161,9 +161,58 @@ export const createCoursePlan = async (
   return res;
 };
 
-export const listCoursePlans = async (courseId: string) => {
-  const res = await adminCourse.listCoursePlans(assertCourseSqlId(courseId, "Course"));
+export const listCoursePlans = async (
+  courseId: string,
+  pagination: { skip: number; take: number; page: number; limit: number }
+) => {
+  const res = await adminCourse.listCoursePlans(assertCourseSqlId(courseId, "Course"), pagination);
   if (res === "not_found") throw new HttpError(404, "Course not found");
+  return res;
+};
+
+export const listCourseExamCategories = async (
+  courseId: string,
+  pagination: { skip: number; take: number; page: number; limit: number; search?: string }
+) => {
+  const res = await adminCourse.listCourseExamCategories(assertCourseSqlId(courseId, "Course"), pagination);
+  if (res === "not_found") throw new HttpError(404, "Course not found");
+  return res;
+};
+
+export const listCourseMaterialCategories = async (
+  courseId: string,
+  pagination: { skip: number; take: number; page: number; limit: number; search?: string }
+) => {
+  const res = await adminCourse.listCourseMaterialCategories(assertCourseSqlId(courseId, "Course"), pagination);
+  if (res === "not_found") throw new HttpError(404, "Course not found");
+  return res;
+};
+
+export const listCourseBooks = async (
+  courseId: string,
+  pagination: { skip: number; take: number; page: number; limit: number; search?: string }
+) => {
+  const res = await adminCourse.listCourseBooks(assertCourseSqlId(courseId, "Course"), pagination);
+  if (res === "not_found") throw new HttpError(404, "Course not found");
+  return res;
+};
+
+export const linkCourseBooks = async (courseId: string, bookIds: number[]) => {
+  const res = await adminCourse.linkCourseBooks(assertCourseSqlId(courseId, "Course"), bookIds);
+  if (res === "not_found") throw new HttpError(404, "Course not found");
+  return res;
+};
+
+export const reorderCourseBooks = async (courseId: string, items: { bookId: number; order: number }[]) => {
+  const res = await adminCourse.reorderCourseBooks(assertCourseSqlId(courseId, "Course"), items);
+  if (res === "not_found") throw new HttpError(404, "Course not found");
+  return res;
+};
+
+export const unlinkCourseBook = async (courseId: string, bookId: string) => {
+  const res = await adminCourse.unlinkCourseBook(assertCourseSqlId(courseId, "Course"), assertCourseSqlId(bookId, "Book"));
+  if (res === "not_found") throw new HttpError(404, "Course not found");
+  if (res === "link_not_found") throw new HttpError(404, "Book is not linked to this course");
   return res;
 };
 

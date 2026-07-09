@@ -123,16 +123,34 @@ export const reorderEbooksSqlSchema = z.object({
 });
 
 // SQL-side subscription create (numeric ids; the Mongo schema enforces ObjectId).
-export const createEbookSubscriptionSqlSchema = z.object({
-  customerId: z.coerce.number().int().positive(),
-  ebookId: z.coerce.number().int().positive(),
-  planId: z.coerce.number().int().positive().optional().nullable(),
-  durationInDays: z.coerce.number().int().positive().optional(),
-  paymentMethod: z.enum(Object.values(PaymentMethod) as [string, ...string[]]),
-  orderPrice: z.coerce.number().nonnegative(),
-  razorpayOrderId: z.string().optional().nullable(),
-  razorpayPaymentId: z.string().optional().nullable(),
-  transactionId: z.string().optional().nullable(),
-  remarks: z.string().optional().nullable(),
-  status: z.boolean().optional().default(true),
-}).refine((d) => d.planId || d.durationInDays, { message: "Either planId or durationInDays is required", path: ["planId"] });
+// The standardized Add-Subscription form sends `amount` / `bankTransactionId` /
+// `durationDays`; the original SQL contract used `orderPrice` / `transactionId` /
+// `durationInDays`. Both are accepted and coalesced to the canonical keys so
+// existing callers keep working while the form needs no change.
+export const createEbookSubscriptionSqlSchema = z
+  .object({
+    customerId: z.coerce.number().int().positive(),
+    ebookId: z.coerce.number().int().positive(),
+    planId: z.coerce.number().int().positive().optional().nullable(),
+    durationInDays: z.coerce.number().int().positive().optional(),
+    durationDays: z.coerce.number().int().positive().optional(), // Add-Subscription alias
+    paymentMethod: z.enum(Object.values(PaymentMethod) as [string, ...string[]]),
+    orderPrice: z.coerce.number().nonnegative().optional(),
+    amount: z.coerce.number().nonnegative().optional(), // Add-Subscription alias
+    razorpayOrderId: z.string().optional().nullable(),
+    razorpayPaymentId: z.string().optional().nullable(),
+    transactionId: z.string().optional().nullable(),
+    bankTransactionId: z.string().optional().nullable(), // Add-Subscription alias
+    remarks: z.string().optional().nullable(),
+    status: z.boolean().optional().default(true),
+    // Subscription Type = Extend: top up the existing sub instead of a fresh row.
+    extend: z.boolean().optional(),
+  })
+  .transform((d) => ({
+    ...d,
+    orderPrice: d.orderPrice ?? d.amount,
+    durationInDays: d.durationInDays ?? d.durationDays,
+    transactionId: d.transactionId ?? d.bankTransactionId ?? null,
+  }))
+  .refine((d) => d.orderPrice != null, { message: "amount is required", path: ["amount"] })
+  .refine((d) => d.planId || d.durationInDays, { message: "Either planId or durationInDays is required", path: ["planId"] });

@@ -1,5 +1,6 @@
 import { adminCourseRepository as repo } from "./admin-course.repository";
 import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
+import { buildPagination } from "../../utils/listQuery";
 import type { Course } from "@prisma/client";
 
 export const ADMIN_COURSE_MODULE = "admin-course";
@@ -234,9 +235,147 @@ export const toggleCoursePopular = async (id: number, requested?: boolean | stri
 };
 
 // ── plans ──────────────────────────────────────────────────────────────────────
-export const listCoursePlans = async (courseId: number): Promise<"not_found" | any[]> => {
+export const listCoursePlans = async (
+  courseId: number,
+  opts: { skip: number; take: number; page: number; limit: number }
+): Promise<"not_found" | { data: any[]; pagination: ReturnType<typeof buildPagination> }> => {
   if (!(await repo.exists(courseId))) return "not_found";
-  return (await repo.listPlans(courseId)).map(toPlanDto);
+  const [rows, total] = await Promise.all([
+    repo.listPlans(courseId, opts.skip, opts.take),
+    repo.countPlans(courseId),
+  ]);
+  return {
+    data: rows.map(toPlanDto),
+    pagination: buildPagination(total, opts.page, opts.limit),
+  };
+};
+
+// ── course-detail category tabs (paginated, resolved rows) ──────────────────────
+// Flatten each pivot row to { _id, name, image, status, order }, resolving the
+// linked category so the admin UI drops its client-side name lookup. `_id` is the
+// category id; `order` is the course-specific pivot order.
+const examCatRowDto = (e: {
+  order: number; examCategoryId: number | null;
+  ExamCategory: { id: number; name: string | null; image: string | null; status: boolean } | null;
+}) => ({
+  _id: e.ExamCategory ? String(e.ExamCategory.id) : e.examCategoryId != null ? String(e.examCategoryId) : null,
+  name: e.ExamCategory?.name ?? null,
+  image: e.ExamCategory?.image ?? null,
+  status: e.ExamCategory?.status ?? null,
+  order: e.order,
+});
+const materialCatRowDto = (m: {
+  order: number; materialCategoryId: number | null;
+  MaterialCategory: { id: number; name: string | null; image: string | null; status: boolean } | null;
+}) => ({
+  _id: m.MaterialCategory ? String(m.MaterialCategory.id) : m.materialCategoryId != null ? String(m.materialCategoryId) : null,
+  name: m.MaterialCategory?.name ?? null,
+  image: m.MaterialCategory?.image ?? null,
+  status: m.MaterialCategory?.status ?? null,
+  order: m.order,
+});
+
+export const listCourseExamCategories = async (
+  courseId: number,
+  opts: { skip: number; take: number; page: number; limit: number; search?: string }
+): Promise<"not_found" | { data: any[]; pagination: ReturnType<typeof buildPagination> }> => {
+  if (!(await repo.exists(courseId))) return "not_found";
+  const [rows, total] = await Promise.all([
+    repo.examCategoriesForPaged(courseId, { skip: opts.skip, take: opts.take, search: opts.search }),
+    repo.countExamCategoriesFor(courseId, opts.search),
+  ]);
+  return { data: rows.map(examCatRowDto), pagination: buildPagination(total, opts.page, opts.limit) };
+};
+
+export const listCourseMaterialCategories = async (
+  courseId: number,
+  opts: { skip: number; take: number; page: number; limit: number; search?: string }
+): Promise<"not_found" | { data: any[]; pagination: ReturnType<typeof buildPagination> }> => {
+  if (!(await repo.exists(courseId))) return "not_found";
+  const [rows, total] = await Promise.all([
+    repo.materialCategoriesForPaged(courseId, { skip: opts.skip, take: opts.take, search: opts.search }),
+    repo.countMaterialCategoriesFor(courseId, opts.search),
+  ]);
+  return { data: rows.map(materialCatRowDto), pagination: buildPagination(total, opts.page, opts.limit) };
+};
+
+// Course-Detail "Material (Book)" row. Shape matches the admin book-row renderer
+// (same as the Package → Books tab). `orderBy` is the per-course pivot order.
+const courseBookRowDto = (r: {
+  order: number; bookId: number | null;
+  Book: {
+    id: number; name: string; author: string | null; image: string | null; thumbnail: string | null;
+    list_price: number; discounted_price: number; language: string;
+    is_magazine: boolean; isCombo: boolean; isTrending: boolean; active: boolean;
+  } | null;
+}) => ({
+  _id: r.Book ? String(r.Book.id) : r.bookId != null ? String(r.bookId) : null,
+  name: r.Book?.name ?? null,
+  author: r.Book?.author ?? null,
+  image: r.Book?.image ?? null,
+  thumbnail: r.Book?.thumbnail ?? null,
+  listPrice: r.Book?.list_price ?? null,
+  discountedPrice: r.Book?.discounted_price ?? null,
+  language: r.Book?.language ?? null,
+  isMagazine: r.Book?.is_magazine ?? null,
+  isCombo: r.Book?.isCombo ?? null,
+  isTrending: r.Book?.isTrending ?? null,
+  status: r.Book?.active ?? null,
+  orderBy: r.order,
+});
+
+export const listCourseBooks = async (
+  courseId: number,
+  opts: { skip: number; take: number; page: number; limit: number; search?: string }
+): Promise<"not_found" | { data: any[]; pagination: ReturnType<typeof buildPagination> }> => {
+  if (!(await repo.exists(courseId))) return "not_found";
+  const [rows, total] = await Promise.all([
+    repo.booksForPaged(courseId, { skip: opts.skip, take: opts.take, search: opts.search }),
+    repo.countBooksFor(courseId, opts.search),
+  ]);
+  return { data: rows.map(courseBookRowDto), pagination: buildPagination(total, opts.page, opts.limit) };
+};
+
+// Attach books to a course. Skips ids already linked and ids that don't exist;
+// new links append after the current max per-course order. Idempotent.
+export const linkCourseBooks = async (
+  courseId: number,
+  bookIds: number[]
+): Promise<"not_found" | { added: number; skipped: number; invalid: number[] }> => {
+  if (!(await repo.exists(courseId))) return "not_found";
+  const uniqueIds = [...new Set(bookIds)];
+  const existing = new Set((await repo.existingBookIds(uniqueIds)).map((b) => b.id));
+  const invalid = uniqueIds.filter((id) => !existing.has(id));
+  const validIds = uniqueIds.filter((id) => existing.has(id));
+  const alreadyLinked = new Set((await repo.linkedBookIds(courseId, validIds)).map((r) => r.bookId));
+  const toAdd = validIds.filter((id) => !alreadyLinked.has(id));
+
+  if (toAdd.length) {
+    const now = new Date();
+    let order = await repo.maxBookOrder(courseId);
+    const rows = toAdd.map((bookId) => ({ courseId, bookId, order: ++order, created_at: now, updated_at: now }));
+    await repo.createBookLinks(rows);
+  }
+  return { added: toAdd.length, skipped: validIds.length - toAdd.length, invalid };
+};
+
+export const reorderCourseBooks = async (
+  courseId: number,
+  items: { bookId: number; order: number }[]
+): Promise<"not_found" | { updated: number }> => {
+  if (!(await repo.exists(courseId))) return "not_found";
+  await repo.reorderBookLinks(courseId, items, new Date());
+  return { updated: items.length };
+};
+
+export const unlinkCourseBook = async (
+  courseId: number,
+  bookId: number
+): Promise<"not_found" | "link_not_found" | { removed: true }> => {
+  if (!(await repo.exists(courseId))) return "not_found";
+  const res = await repo.unlinkBook(courseId, bookId);
+  if (res.count === 0) return "link_not_found";
+  return { removed: true };
 };
 
 export const createCoursePlan = async (courseId: number, validated: any): Promise<"not_found" | any> => {

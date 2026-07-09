@@ -1,7 +1,11 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
-import { getEducators, createEducator, updateEducator, deleteEducator, getEducatorDetails } from "./educator.controller";
+import {
+  getEducators, createEducator, updateEducator, deleteEducator, getEducatorDetails,
+  getEducatorCourses, getEducatorLiveCourses, getEducatorPackages,
+  getEducatorVideoCategories, getEducatorLiveSessions,
+} from "./educator.controller";
 import { getSubjectCategories, createSubjectCategory, updateSubjectCategory, deleteSubjectCategory } from "./subjectCategory.controller";
 import { getMaterials, createMaterial, updateMaterial, deleteMaterial } from "./material.controller";
 import { getVideoCategories, createVideoCategory, updateVideoCategory, deleteVideoCategory } from "./videoCategory.controller";
@@ -15,6 +19,11 @@ router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level st
 // Educator Master
 router.get("/educators", getEducators);
 router.get("/educators/:id/details", getEducatorDetails);
+router.get("/educators/:id/courses", getEducatorCourses);
+router.get("/educators/:id/live-courses", getEducatorLiveCourses);
+router.get("/educators/:id/video-categories", getEducatorVideoCategories);
+router.get("/educators/:id/live-sessions", getEducatorLiveSessions);
+router.get("/educators/:id/packages", getEducatorPackages);
 router.post("/educators", uploadS3.single("image"), createEducator);
 router.put("/educators/:id", uploadS3.single("image"), updateEducator);
 router.delete("/educators/:id", deleteEducator);

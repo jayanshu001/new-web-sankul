@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import logger from "../../utils/logger";
 import * as liveCourseSql from "../../modules/admin-live-course/admin-live-course.service";
 
@@ -85,9 +86,10 @@ export const listVideosInFolder = async (req: Request, res: Response) => {
       logger.warn("listVideosInFolder folder not found (sql)", { traceId, liveCourseId, folderId });
       return failure(res, "Folder not found in this live course.", 404);
     }
-    const videos = await liveCourseSql.lcListVideosInFolder(fid);
-    logger.info("listVideosInFolder success (sql)", { traceId, liveCourseId, folderId, count: videos.length });
-    return success(res, { videos, total: videos.length }, "Videos fetched.");
+    const { page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+    const { data, total } = await liveCourseSql.lcListVideosInFolder(fid, { skip, take: limit });
+    logger.info("listVideosInFolder success (sql)", { traceId, liveCourseId, folderId, count: data.length, total });
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (err) {
     logger.error("listVideosInFolder failed (sql)", { traceId, liveCourseId, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list videos.", 500);

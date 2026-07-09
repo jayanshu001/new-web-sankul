@@ -3,6 +3,15 @@ import { splitFullName } from "../customer-profile/customer-profile.name";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
 import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
+import { PaymentMethod } from "../../shared/enums";
+
+// Report `orderMethod` filter = the payment GATEWAY (order.payment_method), distinct
+// from `paymentMethod` (= payment_type online|backend, the activation channel). FE
+// sends lowercase; map to the canonical enum value (Paykun/Paytm are capitalized).
+const GATEWAY_BY_INPUT: Record<string, string> = {
+  razorpay: PaymentMethod.RAZORPAY, bank: PaymentMethod.BANK, cash: PaymentMethod.CASH,
+  free: PaymentMethod.FREE, paykun: PaymentMethod.PAYKUN, paytm: PaymentMethod.PAYTM,
+};
 
 export const ADMIN_SUBSCRIPTION_MODULE = "admin-subscription";
 export const isAdminSubscriptionMysql = (): boolean => true;
@@ -66,6 +75,9 @@ const customerRef = (c: { id: number; fullName: string | null; phoneNumber: stri
 export interface CourseSubReportQuery {
   customerId?: string; courseId?: string; packageId?: string; status?: string;
   paymentMethod?: string; hasMaterial?: boolean;
+  // promoterId/promocodeId → filter to subs by that promoter / promocode; orderMethod
+  // → payment gateway (order.payment_method), distinct from paymentMethod (activation).
+  promoterId?: string; promocodeId?: string; orderMethod?: string;
   dateFrom?: string; dateTo?: string;
   startFrom?: string; startTo?: string;
   endFrom?: string; endTo?: string;
@@ -85,12 +97,25 @@ const resolveCourseSubWhere = async (q: CourseSubReportQuery, now: Date) => {
     ]);
     if (!customerIdsIn.length && !courseIdsIn.length && !packageIdsIn.length) return null;
   }
+  // promocodeId → code → set of matching order ids (JSON snapshot, no live FK).
+  // Unknown code or no matching orders ⇒ empty result (null).
+  let orderIdsIn: number[] | undefined;
+  if (q.promocodeId) {
+    const pid = parseSubId(q.promocodeId);
+    const code = pid ? (await repo.promocodeCodeById(pid))?.promocode ?? null : null;
+    if (!code) return null;
+    orderIdsIn = await repo.orderIdsByPromocode(code);
+    if (!orderIdsIn.length) return null;
+  }
   const base = repo.buildCourseSubBaseWhere({
     customerId: q.customerId ? parseSubId(q.customerId) ?? undefined : undefined,
     courseId: q.courseId ? parseSubId(q.courseId) ?? undefined : undefined,
     packageId: q.packageId ? parseSubId(q.packageId) ?? undefined : undefined,
     paymentType: q.paymentMethod === "online" ? "online" : q.paymentMethod === "backend" ? "backend" : undefined,
     hasMaterial: q.hasMaterial,
+    promoterId: q.promoterId ? parseSubId(q.promoterId) ?? undefined : undefined,
+    orderMethod: q.orderMethod ? GATEWAY_BY_INPUT[q.orderMethod.trim().toLowerCase()] : undefined,
+    orderIdsIn,
     fromDate: parseDayBound(q.dateFrom, false),
     toDate: parseDayBound(q.dateTo, true),
     startFrom: parseDayBound(q.startFrom, false),
@@ -168,6 +193,9 @@ const hydrateCourseSubRows = async (rows: Awaited<ReturnType<typeof repo.listCou
       courseAmount: decToNum(r.courseAmount),
       materialAmount: decToNum(r.materialAmount),
       wsCoin: order?.wsCoin ?? null,
+      // Payment gateway from the linked order (razorpay|bank|cash|free|paykun|paytm),
+      // lowercased to match the orderMethod filter values; null when there's no order.
+      orderMethod: order?.paymentMethod ? String(order.paymentMethod).toLowerCase() : null,
       materialType: rowHasMaterial(r) ? "With Material" : "Without Material",
       // NOTE: no SQL source for "Activation Type" — see backend-request open item.
       activationType: null as string | null,
@@ -237,6 +265,7 @@ const REPORT_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number 
   { header: "Created At", get: (r) => fmtExportDate(r.createdAt) },
   { header: "Tracking ID", get: (r) => r.trackingId ?? "" },
   { header: "Payment Type", get: (r) => r.paymentMethod ?? "" },
+  { header: "Order Method", get: (r) => r.orderMethod ?? "" },
   { header: "Customer Name", get: (r) => r.customer?.name ?? "" },
   { header: "Email", get: (r) => r.customer?.email ?? "" },
   { header: "Phone", get: (r) => r.customer?.phone ?? "" },
@@ -348,12 +377,21 @@ export interface CreateCourseSubInput {
   planId: number;
   withMaterial: boolean;
   paymentType: "backend" | "online";
+  // Granular payment method (cash/bank/razorpay/free/…) + reference ids, persisted
+  // on the linked ws_package_course_order row (the report reads ids from there).
+  paymentMethod?: string;
+  bankTransactionId?: string | null;
+  razorpayOrderId?: string | null;
+  razorpayPaymentId?: string | null;
   amount?: number;
   durationDays?: number;
   startAt?: string;
   customerShippingId?: number | null;
   remark?: string | null;
   status: boolean;
+  // extend=true → top up the customer's existing active subscription for this
+  // target instead of creating a fresh row (falls back to create if none).
+  extend?: boolean;
 }
 
 export type CreateCourseSubResult =
@@ -373,10 +411,27 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
     input.amount != null ? input.amount : (plan.price || 0) + (input.withMaterial ? (plan.materialPrice || 0) : 0);
   const now = new Date();
 
-  // Upsert-extend: with no explicit startAt, extend the customer's existing active
-  // subscription for this same target instead of inserting a duplicate row.
+  // The order row carrying the granular payment method + reference ids + amount.
+  // Written for both fresh grants and extends (an extend is still a paid txn); the
+  // Subscription Report reads these ids back via the subscription's order_id.
+  const makeOrder = () =>
+    repo.createPaymentOrder({
+      customerId: input.customerId,
+      planId: plan.id,
+      shippingId: input.customerShippingId ?? null,
+      amount: Math.round(computedAmount),
+      paymentMethod: input.paymentMethod ?? "cash",
+      razorpayOrderId: input.razorpayOrderId ?? null,
+      razorpayPaymentId: input.razorpayPaymentId ?? null,
+      bankTransactionId: input.bankTransactionId ?? null,
+      now,
+    });
+
+  // Subscription Type = Extend: top up the customer's existing active subscription
+  // for this same target instead of inserting a duplicate row. Falls back to a
+  // fresh create when no active subscription exists.
   const existing =
-    !input.startAt && (resolvedCourseId || resolvedPackageId)
+    input.extend && (resolvedCourseId || resolvedPackageId)
       ? await repo.findActiveSubForTarget({ customerId: input.customerId, courseId: resolvedCourseId, packageId: resolvedPackageId })
       : null;
 
@@ -385,8 +440,10 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
       input.durationDays && input.durationDays > 0
         ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: input.durationDays, asDays: true, now })
         : extendEndAt({ currentEndAt: existing.endAt, durationMonths: plan.duration || 0, now });
+    const extendOrder = await makeOrder();
     await repo.extendSub(existing.id, {
       endAt: newEndAt,
+      orderId: extendOrder.id,
       planId: plan.id,
       amount: (existing.amount != null ? Number(existing.amount) : 0) + computedAmount,
       shippingId: input.customerShippingId ?? undefined,
@@ -402,8 +459,11 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
       ? computeEndAt({ startAt, durationMonths: input.durationDays, asDays: true })
       : computeEndAt({ startAt, durationMonths: plan.duration || 0 });
 
+  const order = await makeOrder();
+
   const created = await repo.createSub({
     customerId: input.customerId,
+    orderId: order.id,
     courseId: resolvedCourseId,
     packageId: resolvedPackageId,
     planId: plan.id,

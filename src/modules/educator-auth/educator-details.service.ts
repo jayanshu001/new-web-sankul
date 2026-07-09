@@ -81,3 +81,57 @@ export const getEducatorAssociations = async (educatorId: number) => {
 
   return { associations, summary };
 };
+
+// ─── Per-association paginated lists ──────────────────────────────────────────
+// Each returns { data, total } for one table of the admin educator-detail page,
+// paging the DB query server-side. DTO shapes match the aggregate's associations.
+
+type ListArgs = { skip: number; take: number };
+
+export const listEducatorCourses = async (educatorId: number, { skip, take }: ListArgs) => {
+  const [rows, total] = await Promise.all([
+    repo.pageCoursesByEducator(educatorId, skip, take),
+    repo.countCoursesByEducator(educatorId),
+  ]);
+  const countRows = await repo.courseSubCounts(rows.map((c) => c.id));
+  const counts = new Map(countRows.map((r) => [r.courseId as number, r._count._all]));
+  return { data: rows.map((c) => toCourseDto(c, counts)), total };
+};
+
+export const listEducatorLiveCourses = async (educatorId: number, { skip, take }: ListArgs) => {
+  const [rows, total] = await Promise.all([
+    repo.pageLiveCoursesByEducator(educatorId, skip, take),
+    repo.countLiveCoursesByEducator(educatorId),
+  ]);
+  const countRows = await repo.liveCourseSubCounts(rows.map((lc) => lc.id));
+  const counts = new Map(countRows.map((r) => [r.liveCourseId as number, r._count._all]));
+  return { data: rows.map((lc) => toLiveCourseDto(lc, counts)), total };
+};
+
+export const listEducatorPackages = async (educatorId: number, { skip, take }: ListArgs) => {
+  const [rows, total] = await Promise.all([
+    repo.pagePackagesByEducator(educatorId, skip, take),
+    repo.countPackagesByEducator(educatorId),
+  ]);
+  const countRows = await repo.packageSubCounts(rows.map((p) => p.id));
+  const counts = new Map(countRows.map((r) => [r.packageId as number, r._count._all]));
+  return { data: rows.map((p) => toPackageDto(p, counts)), total };
+};
+
+export const listEducatorVideoCategories = async (educatorId: number, { skip, take }: ListArgs) => {
+  const [rows, total] = await Promise.all([
+    repo.pageVideoCategoriesByEducator(educatorId, skip, take),
+    repo.countVideoCategoriesByEducator(educatorId),
+  ]);
+  // Root video categories carry no liveCourseId → the name map stays empty.
+  const liveCourseNames = new Map<number, { name: string | null }>();
+  return { data: rows.map((v) => toVideoCategoryDto(v, liveCourseNames)), total };
+};
+
+export const listEducatorLiveSessions = async (educatorId: number, { skip, take }: ListArgs) => {
+  const [rows, total] = await Promise.all([
+    repo.pageLiveSessionsByEducator(educatorId, skip, take),
+    repo.countLiveSessionsByEducator(educatorId),
+  ]);
+  return { data: rows.map(toLiveSessionDto), total };
+};

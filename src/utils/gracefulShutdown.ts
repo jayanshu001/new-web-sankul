@@ -22,6 +22,7 @@ import { disconnectPrisma } from "../config/prisma";
 import { redisClient } from "../config/redis";
 import { shutdownNotificationScheduler } from "../admin/notification/scheduler";
 import { shutdownPdfUploadScheduler } from "../admin/pdfUpload/pdfUpload.scheduler";
+import { shutdownExportScheduler } from "../admin/exports/export.scheduler";
 import logger from "./logger";
 
 const DRAIN_MS = Number(process.env.SHUTDOWN_DRAIN_MS) || 25_000;
@@ -103,6 +104,17 @@ export const installGracefulShutdown = (hooks: ShutdownHooks): void => {
         await shutdownPdfUploadScheduler();
       } catch (err) {
         logger.warn("PDF upload scheduler shutdown error", {
+          err: (err as Error).message,
+        });
+      }
+
+      // Drain the report-export worker too — close() waits for the active
+      // export generation to finish so an in-flight file isn't lost.
+      try {
+        logger.info("Draining report-export scheduler.");
+        await shutdownExportScheduler();
+      } catch (err) {
+        logger.warn("Report-export scheduler shutdown error", {
           err: (err as Error).message,
         });
       }

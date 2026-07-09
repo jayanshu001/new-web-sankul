@@ -49,8 +49,9 @@ export const adminLiveCourseRepository = {
     prisma.liveCourse.update({ where: { id }, data: { [field]: value, updatedAt: new Date() } as any }),
 
   // ── plans ────────────────────────────────────────────────────────────────────
-  listPlans: (liveCourseId: number) =>
-    prisma.liveCoursePlan.findMany({ where: { liveCourseId }, orderBy: [{ isDefault: "desc" }, { price: "asc" }, { id: "asc" }] }),
+  listPlans: (liveCourseId: number, skip?: number, take?: number) =>
+    prisma.liveCoursePlan.findMany({ where: { liveCourseId }, orderBy: [{ isDefault: "desc" }, { price: "asc" }, { id: "asc" }], skip, take }),
+  countPlans: (liveCourseId: number) => prisma.liveCoursePlan.count({ where: { liveCourseId } }),
   findPlanById: (id: number) => prisma.liveCoursePlan.findUnique({ where: { id } }),
   createPlan: (data: Prisma.LiveCoursePlanUncheckedCreateInput) => prisma.liveCoursePlan.create({ data }),
   updatePlan: (id: number, data: Prisma.LiveCoursePlanUncheckedUpdateInput) => prisma.liveCoursePlan.update({ where: { id }, data }),

@@ -18,6 +18,9 @@ import { andWhere } from "../../utils/reportFilters";
 export interface CourseSubFilter {
   customerId?: number; courseId?: number; packageId?: number; status?: boolean;
   paymentType?: "online" | "backend"; hasMaterial?: boolean;
+  // promoterId → own column; orderMethod → gateway on the linked order (payment_method);
+  // orderIdsIn → subscriptions whose order matched a promocode (resolved upstream).
+  promoterId?: number; orderMethod?: string; orderIdsIn?: number[];
   fromDate?: Date; toDate?: Date; type?: "course" | "package";
   // independent ranges on the subscription's own start/end columns (createdAt is fromDate/toDate)
   startFrom?: Date; startTo?: Date; endFrom?: Date; endTo?: Date;
@@ -49,8 +52,33 @@ export const adminSubscriptionRepository = {
     else if (opts.packageId) { where.courseId = null; where.packageId = opts.packageId; }
     return prisma.packageCourseSubscription.findFirst({ where, orderBy: { endAt: "desc" } });
   },
+  // Admin-grant order row: carries the granular payment_method + reference ids +
+  // amount so the Subscription Report (ordersByIds) reads them back via order_id.
+  createPaymentOrder: (d: {
+    customerId: number; planId: number; shippingId: number | null; amount: number;
+    paymentMethod: string; razorpayOrderId: string | null; razorpayPaymentId: string | null;
+    bankTransactionId: string | null; now: Date;
+  }) =>
+    prisma.packageCourseOrder.create({
+      data: {
+        uniqueId: `pcsub-${d.customerId}-${d.now.getTime().toString(36)}`,
+        userId: d.customerId,
+        orderType: "purchase",
+        planId: d.planId,
+        shipping: d.shippingId,
+        OrigianalPrice: d.amount,
+        amount: d.amount,
+        paymentMethod: d.paymentMethod as any,
+        gatewayOrderId: d.razorpayOrderId,
+        gatewayPaymentId: d.razorpayPaymentId,
+        bankTransactionId: d.bankTransactionId,
+        status: "complete",
+        createdAt: d.now,
+        updatedAt: d.now,
+      },
+    }),
   createSub: (d: {
-    customerId: number; courseId: number | null; packageId: number | null; planId: number;
+    customerId: number; orderId?: number | null; courseId: number | null; packageId: number | null; planId: number;
     shippingId: number | null; startAt: Date; endAt: Date; status: boolean; amount: number;
     courseAmount: number | null; materialAmount: number | null;
     payment_type: "backend" | "online"; remarks: string | null; now: Date;
@@ -58,6 +86,7 @@ export const adminSubscriptionRepository = {
     prisma.packageCourseSubscription.create({
       data: {
         customerId: d.customerId,
+        orderId: d.orderId ?? null,
         courseId: d.courseId,
         packageId: d.packageId,
         planId: d.planId,
@@ -74,13 +103,14 @@ export const adminSubscriptionRepository = {
         updatedAt: d.now,
       },
     }),
-  extendSub: (id: number, d: { endAt: Date; planId: number; amount: number; shippingId?: number | null; remarks?: string | null; now: Date }) =>
+  extendSub: (id: number, d: { endAt: Date; orderId?: number | null; planId: number; amount: number; shippingId?: number | null; remarks?: string | null; now: Date }) =>
     prisma.packageCourseSubscription.update({
       where: { id },
       data: {
         endAt: d.endAt,
         planId: d.planId,
         amount: d.amount,
+        ...(d.orderId !== undefined ? { orderId: d.orderId } : {}),
         ...(d.shippingId !== undefined ? { shippingId: d.shippingId } : {}),
         ...(d.remarks !== undefined ? { remarks: d.remarks } : {}),
         updatedAt: d.now,
@@ -121,7 +151,7 @@ export const adminSubscriptionRepository = {
   // Report-column hydration (merged Subscription Report):
   //  order → razorpay/bank ids, ws coin, promocode json snapshot
   ordersByIds: (ids: number[]) =>
-    ids.length ? prisma.packageCourseOrder.findMany({ where: { id: { in: ids } }, select: { id: true, gatewayOrderId: true, gatewayPaymentId: true, bankTransactionId: true, wsCoin: true, promocode: true } }) : Promise.resolve([]),
+    ids.length ? prisma.packageCourseOrder.findMany({ where: { id: { in: ids } }, select: { id: true, gatewayOrderId: true, gatewayPaymentId: true, bankTransactionId: true, wsCoin: true, promocode: true, paymentMethod: true } }) : Promise.resolve([]),
   //  shipping → Address / City / Pincode
   shippingsByIds: (ids: number[]) =>
     ids.length ? prisma.customerShipping.findMany({ where: { id: { in: ids } }, select: { id: true, address: true, address_2: true, city: true, pincode: true, alternate_phone: true } }) : Promise.resolve([]),
@@ -139,6 +169,19 @@ export const adminSubscriptionRepository = {
   //  FK, so resolve the id by the code string (indexed: idx_ws_promocode_code).
   promocodesByCodes: (codes: string[]) =>
     codes.length ? prisma.promocode.findMany({ where: { promocode: { in: codes } }, select: { id: true, promocode: true } }) : Promise.resolve([]),
+  //  promocodeId → its code string (report filter resolves id→code→matching orders).
+  promocodeCodeById: (id: number) =>
+    prisma.promocode.findUnique({ where: { id }, select: { promocode: true } }),
+  //  Order ids whose purchase-time promocode JSON snapshot matches `code`. The column
+  //  is JSON in two shapes — a bare string "CODE" or an object { promocode: "CODE" } —
+  //  so match both via JSON functions (mirrors service promoCodeOf).
+  orderIdsByPromocode: async (code: string): Promise<number[]> => {
+    const rows = await prisma.$queryRaw<{ id: bigint | number }[]>`
+      SELECT id FROM ws_package_course_order
+      WHERE JSON_UNQUOTE(JSON_EXTRACT(promocode, '$.promocode')) = ${code}
+         OR JSON_UNQUOTE(promocode) = ${code}`;
+    return rows.map((r) => Number(r.id));
+  },
 
   // ── search-id resolvers (cross-table search) ────────────────────────────────
   customerIdsByText: async (q: string) => (await prisma.customer.findMany({ where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] }, select: { id: true } })).map((r) => r.id),
@@ -193,11 +236,19 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
   if (opts.courseId !== undefined) where.courseId = opts.courseId;
   if (opts.packageId !== undefined) where.packageId = opts.packageId;
   if (opts.paymentType !== undefined) where.payment_type = opts.paymentType;
-  // Subscription Material Report: only with-material rows. Mirrors the report
-  // label's single source of truth (service rowHasMaterial): legacy rows carry a
-  // pc_material_id, SQL-created grants carry only a material_amount — either counts.
-  // AND-ed (not a 2nd top-level OR) so it doesn't collide with the search OR below.
-  if (opts.hasMaterial) where.AND = [{ OR: [{ pcMaterialId: { gt: 0 } }, { materialAmount: { gt: 0 } }] }];
+  if (opts.promoterId !== undefined) where.promoterId = opts.promoterId;
+  // orderMethod = payment gateway, stored on the linked order (ws_package_course_order
+  // .payment_method). Relation filter; subs with no order are naturally excluded.
+  if (opts.orderMethod) where.packageCourseOrder = { is: { paymentMethod: opts.orderMethod as any } };
+  // promocodeId was resolved upstream to the set of matching order ids (the code is a
+  // JSON snapshot on the order, no live FK). Empty set is handled upstream (→ no rows).
+  if (opts.orderIdsIn) where.orderId = { in: opts.orderIdsIn };
+  // Subscription Material Report: material=true → only with-material rows; material=false
+  // → only without. Mirrors the report label's single source of truth (service
+  // rowHasMaterial): legacy rows carry a pc_material_id, SQL-created grants carry only a
+  // material_amount — either counts. AND-ed so it doesn't collide with the search OR below.
+  if (opts.hasMaterial === true) where.AND = [{ OR: [{ pcMaterialId: { gt: 0 } }, { materialAmount: { gt: 0 } }] }];
+  else if (opts.hasMaterial === false) where.AND = [{ OR: [{ pcMaterialId: null }, { pcMaterialId: 0 }] }, { OR: [{ materialAmount: null }, { materialAmount: 0 }] }];
   if (opts.fromDate || opts.toDate) {
     where.createdAt = {};
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;

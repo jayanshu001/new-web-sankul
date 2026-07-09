@@ -10,6 +10,7 @@ import {
   reorderEbooks,
   toggleEbookTrending,
   getEbookPlans,
+  getEbookPromocodes,
   createEbookPlan,
   getEbookPlanById,
   updateEbookPlan,
@@ -64,6 +65,9 @@ router.post("/:ebookId/pdf", uploadSinglePdfToDisk, uploadEbookPdf);
 // Pricing Plans
 router.get("/:id/plans", getEbookPlans);
 router.post("/:id/plans", createEbookPlan);
+
+// Promocodes applicable to this ebook (paginated).
+router.get("/:id/promocodes", getEbookPromocodes);
 router.get("/plans/:planId", getEbookPlanById);
 router.put("/plans/:planId", updateEbookPlan);
 router.delete("/plans/:planId", deleteEbookPlan);

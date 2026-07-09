@@ -10,6 +10,7 @@ import {
   bulkDeleteSchema,
 } from "./material.validation";
 import * as adminMaterial from "../../modules/admin-material/admin-material.service";
+import { parseListQuery } from "../../utils/listQuery";
 
 // ─── Categories ───────────────────────────────────────────────────────────────
 
@@ -141,8 +142,9 @@ export const getCategoryCourses = async (req: Request, res: Response) => {
     const id = req.params.id as string;
     const numId = adminMaterial.parseMaterialId(id);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
-    const data = await adminMaterial.getCategoryCourses(numId);
-    return res.status(200).json({ success: true, data });
+    const { search, page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+    const { data, pagination } = await adminMaterial.getCategoryCourses(numId, { search, page, limit, skip, take: limit });
+    return res.status(200).json({ success: true, data, pagination });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

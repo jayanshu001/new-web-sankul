@@ -88,3 +88,21 @@ export const createCoursePlanSchema = coursePlanBaseSchema.refine(
 });
 
 export const updateCoursePlanSchema = coursePlanBaseSchema.partial();
+
+// ── Course ↔ Book links (Course-Detail "Material (Book)" tab) ──────────────────
+// Attach one or more physical books to a course. Numeric SQL ids.
+export const linkCourseBooksSchema = z.object({
+  bookIds: z.array(z.coerce.number().int().positive()).min(1, "bookIds must not be empty"),
+});
+
+// Reorder the per-course display order of already-linked books.
+export const reorderCourseBooksSchema = z.object({
+  order: z
+    .array(
+      z.object({
+        bookId: z.coerce.number().int().positive(),
+        order: z.coerce.number().int().nonnegative(),
+      })
+    )
+    .min(1, "order must not be empty"),
+});

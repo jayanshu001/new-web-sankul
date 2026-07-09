@@ -8,6 +8,7 @@ import { deriveRole } from "../admin-auth/admin-auth.transformer";
 import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession, Prisma } from "@prisma/client";
 import { getVodStreamMeta } from "../../admin/live/streamos.service";
 import { redisClient } from "../../config/redis";
+import { buildPagination } from "../../utils/listQuery";
 
 export const LIVE_COURSE_MODULE = "live-course";
 export const isLiveCourseMysql = (): boolean => true;
@@ -193,7 +194,16 @@ export const listSessionsForCourse = async (id: number, q: { status?: string; up
 };
 
 // ── plans ──────────────────────────────────────────────────────────────────────
-export const listPlans = async (liveCourseId: number): Promise<any[]> => (await repo.listPlans(liveCourseId)).map(toPlanDto);
+export const listPlans = async (
+  liveCourseId: number,
+  opts: { skip: number; take: number; page: number; limit: number }
+): Promise<{ data: any[]; pagination: ReturnType<typeof buildPagination> }> => {
+  const [plans, total] = await Promise.all([
+    repo.listPlans(liveCourseId, opts.skip, opts.take),
+    repo.countPlans(liveCourseId),
+  ]);
+  return { data: plans.map(toPlanDto), pagination: buildPagination(total, opts.page, opts.limit) };
+};
 
 export const createPlan = async (liveCourseId: number, v: any): Promise<"not_found" | any> => {
   if (!(await repo.exists(liveCourseId))) return "not_found";
@@ -468,7 +478,7 @@ export const getSubscription = async (id: number): Promise<"not_found" | any> =>
   return (await hydrateSubs([row]))[0];
 };
 
-export const grantSubscription = async (liveCourseId: number, v: { customerId: string; planId: string; durationDays?: number; durationMonths?: number; startAt?: string; endAt?: string }): Promise<{ ok: false; code: string; msg: string } | { ok: true; created: boolean; data: any }> => {
+export const grantSubscription = async (liveCourseId: number, v: { customerId: string; planId: string; durationDays?: number; durationMonths?: number; startAt?: string; endAt?: string; amount?: number; withMaterial?: boolean; customerShippingId?: string | null; remarks?: string | null; paymentMethod?: string; bankTransactionId?: string | null; razorpayOrderId?: string | null; razorpayPaymentId?: string | null; extend?: boolean }): Promise<{ ok: false; code: string; msg: string } | { ok: true; created: boolean; data: any }> => {
   if (!(await repo.exists(liveCourseId))) return { ok: false, code: "course", msg: "Live course not found." };
   const customerId = parseLiveId(v.customerId);
   const planId = parseLiveId(v.planId);
@@ -488,18 +498,44 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
   else endAt = computeEndAt({ startAt, durationMonths: plan.duration, asDays: true });
   if (endAt.getTime() <= startAt.getTime()) return { ok: false, code: "window", msg: "endAt must be after startAt." };
 
-  const existing = (v.startAt || v.endAt) ? null : await repo.findActiveSubscription(customerId, liveCourseId, now);
+  // Subscription Type = Extend: top up the customer's existing active subscription
+  // for this live course. The payment is still recorded (an extend is a paid txn),
+  // so the method + reference ids + paid amount are written onto the row too.
+  const existing = v.extend === true ? await repo.findActiveSubscription(customerId, liveCourseId, now) : null;
   if (existing) {
     const newEnd = v.durationDays != null
       ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: v.durationDays, asDays: true, now })
       : v.durationMonths != null
         ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: v.durationMonths, now })
         : extendEndAt({ currentEndAt: existing.endAt, durationMonths: plan.duration, asDays: true, now });
-    const updated = await repo.updateSubscription(existing.id, { endAt: newEnd, planId, paidAt: now });
+    const updated = await repo.updateSubscription(existing.id, {
+      endAt: newEnd,
+      planId,
+      paidAt: now,
+      paidAmount: v.amount ?? existing.paidAmount ?? 0,
+      paymentMethod: v.paymentMethod ?? "cash",
+      razorpayOrderId: v.razorpayOrderId ?? null,
+      razorpayPaymentId: v.razorpayPaymentId ?? null,
+      bankTransactionId: v.bankTransactionId ?? null,
+      ...(v.remarks !== undefined ? { remarks: v.remarks } : {}),
+    });
     return { ok: true, created: false, data: (await hydrateSubs([updated]))[0] };
   }
+  // Standardized payment section: amount → paid_amount; granular method +
+  // reference ids persist inline (no sibling order table for live courses).
+  const shippingId = v.customerShippingId != null ? parseLiveId(v.customerShippingId) : null;
   const sub = await repo.createSubscription({
-    customerId, liveCourseId, planId, startAt, endAt, status: true, paidAmount: 0, paymentStatus: "verified", paidAt: now,
+    customerId, liveCourseId, planId, startAt, endAt, status: true,
+    paidAmount: v.amount ?? 0,
+    paymentStatus: "verified",
+    paymentMethod: v.paymentMethod ?? "cash",
+    razorpayOrderId: v.razorpayOrderId ?? null,
+    razorpayPaymentId: v.razorpayPaymentId ?? null,
+    bankTransactionId: v.bankTransactionId ?? null,
+    withMaterial: !!v.withMaterial,
+    customerShippingId: shippingId,
+    remarks: v.remarks ?? null,
+    paidAt: now,
     createdAt: now, updatedAt: now,
   });
   return { ok: true, created: true, data: (await hydrateSubs([sub]))[0] };
@@ -585,10 +621,17 @@ const loadFolder = async (id: number, folderId: string) => {
   return { row: r.row, folders: r.folders, folder };
 };
 
-export const listScheduleEntries = async (id: number, folderId: string): Promise<"not_found" | "folder_not_found" | { entries: any[] }> => {
+// Schedule entries live in the live-course JSON column (not a table), so pagination
+// is an in-memory slice of the order-sorted array; `total` is the full count.
+export const listScheduleEntries = async (
+  id: number, folderId: string, opts?: { skip?: number; take?: number }
+): Promise<"not_found" | "folder_not_found" | { data: any[]; total: number }> => {
   const r = await loadFolder(id, folderId);
   if (typeof r === "string") return r;
-  return { entries: [...(r.folder.entries ?? [])].sort(sortByOrder) };
+  const sorted = [...(r.folder.entries ?? [])].sort(sortByOrder);
+  const paginate = opts != null && (opts.skip != null || opts.take != null);
+  const data = paginate ? sorted.slice(opts!.skip ?? 0, (opts!.skip ?? 0) + (opts!.take ?? sorted.length)) : sorted;
+  return { data, total: sorted.length };
 };
 
 export const createScheduleEntry = async (id: number, folderId: string, input: { date: Date; subject: string; time: string; order?: number }): Promise<"not_found" | "folder_not_found" | "max" | { entry: any }> => {
@@ -1862,14 +1905,23 @@ export const lcDeleteFolder = async (
 };
 
 // ── video handlers ────────────────────────────────────────────────────────────
-/** listVideosInFolder: all videos in a folder, ordered. */
-export const lcListVideosInFolder = async (folderId: number): Promise<any[]> => {
-  const rows = await prisma.video.findMany({
-    where: { videoCategoryId: folderId },
-    orderBy: [{ order: "asc" }, { created_at: "asc" }],
-    select: lcVideoSelect,
-  });
-  return rows.map(videoDto);
+/** listVideosInFolder: videos in a folder ordered by order asc; DB-paginated.
+ *  Each row carries its global `order` (reorder stays page-independent). */
+export const lcListVideosInFolder = async (
+  folderId: number,
+  opts?: { skip?: number; take?: number }
+): Promise<{ data: any[]; total: number }> => {
+  const [rows, total] = await Promise.all([
+    prisma.video.findMany({
+      where: { videoCategoryId: folderId },
+      orderBy: [{ order: "asc" }, { created_at: "asc" }],
+      select: lcVideoSelect,
+      skip: opts?.skip,
+      take: opts?.take,
+    }),
+    prisma.video.count({ where: { videoCategoryId: folderId } }),
+  ]);
+  return { data: rows.map(videoDto), total };
 };
 
 /** createVideoInFolder: add a manual video (youtube/aws/vimeo). */

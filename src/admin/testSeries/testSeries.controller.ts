@@ -4,6 +4,7 @@ import { PaymentMethod, PackageCourseEbookOrderStatus, PackageCourseEbookOrderTy
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as tsSql from "../../modules/admin-testseries/admin-testseries.service";
+import { parseListQuery } from "../../utils/listQuery";
 import {
   createTestSeriesSchema,
   updateTestSeriesSchema,
@@ -182,9 +183,10 @@ export const listContentCategories = async (req: Request, res: Response) => {
   try {
     const nid = tsSql.parseAtsId(testSeriesId);
     if (nid == null) { logger.warn("listContentCategories invalid id", { traceId, testSeriesId }); return failure(res, "Invalid test series id.", 422); }
-    const r = await tsSql.listContentCategories(nid);
-    logger.info("listContentCategories success", { traceId, testSeriesId, count: r.total });
-    return success(res, r, "Fetched.");
+    const { page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+    const r = await tsSql.listContentCategories(nid, { skip, take: limit, page, limit });
+    logger.info("listContentCategories success", { traceId, testSeriesId, count: r.pagination.total });
+    return res.status(200).json({ success: true, data: r.data, pagination: r.pagination });
   } catch (err) {
     logger.error("listContentCategories failed", { traceId, testSeriesId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list content categories.", 500);
@@ -283,9 +285,10 @@ export const listPapers = async (req: Request, res: Response) => {
   try {
     const nid = tsSql.parseAtsId(testSeriesId);
     if (nid == null) { logger.warn("listPapers invalid id", { traceId, testSeriesId }); return failure(res, "Invalid test series id.", 422); }
-    const r = await tsSql.listPapers(nid);
-    logger.info("listPapers success", { traceId, testSeriesId, count: r.total });
-    return success(res, r, "Fetched.");
+    const { search, page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+    const r = await tsSql.listPapers(nid, { search, skip, take: limit, page, limit });
+    logger.info("listPapers success", { traceId, testSeriesId, count: r.pagination.total });
+    return res.status(200).json({ success: true, data: r.data, pagination: r.pagination });
   } catch (err) {
     logger.error("listPapers failed", { traceId, testSeriesId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list papers.", 500);
@@ -404,9 +407,10 @@ export const listPrices = async (req: Request, res: Response) => {
   try {
     const nid = tsSql.parseAtsId(testSeriesId);
     if (nid == null) { logger.warn("listPrices invalid id", { traceId, testSeriesId }); return failure(res, "Invalid test series id.", 422); }
-    const r = await tsSql.listPrices(nid);
-    logger.info("listPrices success", { traceId, testSeriesId, count: r.total });
-    return success(res, r, "Fetched.");
+    const { page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+    const r = await tsSql.listPrices(nid, { skip, take: limit, page, limit });
+    logger.info("listPrices success", { traceId, testSeriesId, count: r.pagination.total });
+    return res.status(200).json({ success: true, data: r.data, pagination: r.pagination });
   } catch (err) {
     logger.error("listPrices failed", { traceId, testSeriesId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list prices.", 500);
@@ -494,7 +498,7 @@ export const deletePrice = async (req: Request, res: Response) => {
 // Shared filter mapping for the subscription report list + its CSV/Excel
 // exports, so all three honor the identical param contract (page/limit only
 // apply to the paginated list). Reused across the three handlers below.
-const parseSubReportQuery = (q: Record<string, string>): tsSql.SubReportOpts => ({
+export const parseSubReportQuery = (q: Record<string, string>): tsSql.SubReportOpts => ({
   testSeriesId: q.testSeriesId ? tsSql.parseAtsId(q.testSeriesId) : null,
   customerId: q.customerId ? tsSql.parseAtsId(q.customerId) : null,
   status: q.status,
@@ -595,6 +599,11 @@ export const grantSubscription = async (req: Request, res: Response) => {
       price: data.price,
       startAt: data.startAt,
       remarks: data.remarks,
+      paymentMethod: data.paymentMethod,
+      bankTransactionId: data.bankTransactionId ?? null,
+      razorpayOrderId: data.razorpayOrderId ?? null,
+      razorpayPaymentId: data.razorpayPaymentId ?? null,
+      extend: data.extend,
     });
     if ("planNotFound" in r) { logger.warn("grantSubscription plan not found", { traceId, planId: data.planId }); return failure(res, "Plan not found.", 404); }
     if ("missingDuration" in r) { logger.warn("grantSubscription missing duration", { traceId, testSeriesId }); return failure(res, "durationDays is required (or supply planId).", 422); }

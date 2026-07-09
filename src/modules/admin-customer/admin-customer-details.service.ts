@@ -116,3 +116,120 @@ export const getCustomerPurchaseDetails = async (customerId: number, now: Date) 
 
   return { addresses, purchases, summary };
 };
+
+// ─── Per-tab paginated lists ─────────────────────────────────────────────────
+// Each returns { data, total } for one tab of the admin customer-detail page,
+// paging the DB query server-side (skip/take) and hydrating only the page's
+// referenced entities. DTO shapes are identical to the aggregate's `purchases`.
+
+type ListArgs = { skip: number; take: number; status?: boolean };
+
+export const listCustomerCourseSubscriptions = async (
+  customerId: number, { skip, take, status }: ListArgs, now: Date
+) => {
+  const [rows, total] = await Promise.all([
+    repo.pageCourseSubs(customerId, skip, take, status),
+    repo.countCourseSubs(customerId, status),
+  ]);
+  const [courseArr, planArr] = await Promise.all([
+    repo.coursesByIds(uniqIds(rows.map((s) => s.courseId))),
+    repo.plansByIds(uniqIds(rows.map((s) => s.planId))),
+  ]);
+  const courses = mapById(courseArr);
+  const plans = mapById(planArr);
+  return { data: rows.map((s) => toCourseDto(s, courses, plans, now)), total };
+};
+
+export const listCustomerPackageSubscriptions = async (
+  customerId: number, { skip, take, status }: ListArgs, now: Date
+) => {
+  const [rows, total] = await Promise.all([
+    repo.pagePackageSubs(customerId, skip, take, status),
+    repo.countPackageSubs(customerId, status),
+  ]);
+  const [packageArr, planArr] = await Promise.all([
+    repo.packagesByIds(uniqIds(rows.map((s) => s.packageId))),
+    repo.plansByIds(uniqIds(rows.map((s) => s.planId))),
+  ]);
+  const packages = mapById(packageArr);
+  const plans = mapById(planArr);
+  return { data: rows.map((s) => toPackageDto(s, packages, plans, now)), total };
+};
+
+export const listCustomerLiveCourseSubscriptions = async (
+  customerId: number, { skip, take, status }: ListArgs, now: Date
+) => {
+  const [rows, total] = await Promise.all([
+    repo.pageLiveCourseSubs(customerId, skip, take, status),
+    repo.countLiveCourseSubs(customerId, status),
+  ]);
+  const [liveArr, livePlanArr] = await Promise.all([
+    repo.liveCoursesByIds(uniqIds(rows.map((s) => s.liveCourseId))),
+    repo.liveCoursePlansByIds(uniqIds(rows.map((s) => s.planId))),
+  ]);
+  const liveCourses = mapById(liveArr);
+  const livePlans = mapById(livePlanArr);
+  return { data: rows.map((s) => toLiveCourseDto(s, liveCourses, livePlans, now)), total };
+};
+
+export const listCustomerTestSeriesSubscriptions = async (
+  customerId: number, { skip, take, status }: ListArgs, now: Date
+) => {
+  const [rows, total] = await Promise.all([
+    repo.pageTestSeriesSubs(customerId, skip, take, status),
+    repo.countTestSeriesSubs(customerId, status),
+  ]);
+  const [tsArr, tsPriceArr] = await Promise.all([
+    repo.testSeriesByIds(uniqIds(rows.map((s) => s.testSeriesId))),
+    repo.testSeriesPricesByIds(uniqIds(rows.map((s) => s.planId))),
+  ]);
+  const testSeries = mapById(tsArr);
+  const testPrices = mapById(tsPriceArr);
+  return { data: rows.map((s) => toTestSeriesDto(s, testSeries, testPrices, now)), total };
+};
+
+export const listCustomerEbookSubscriptions = async (
+  customerId: number, { skip, take }: ListArgs, now: Date
+) => {
+  const [rows, total] = await Promise.all([
+    repo.pageEbookSubs(customerId, skip, take),
+    repo.countEbookSubs(customerId),
+  ]);
+  const [ebookArr, ebookOrderArr] = await Promise.all([
+    repo.ebooksByIds(uniqIds(rows.map((s) => s.ebookId))),
+    repo.ebookOrdersByIds(uniqIds(rows.map((s) => s.orderId))),
+  ]);
+  const ebooks = mapById(ebookArr);
+  const ebookOrders = mapById(ebookOrderArr);
+  return { data: rows.map((s) => toEbookDto(s, ebooks, ebookOrders, now)), total };
+};
+
+export const listCustomerBookOrders = async (
+  customerId: number, { skip, take }: ListArgs
+) => {
+  const [rows, total] = await Promise.all([
+    repo.pageBookOrders(customerId, skip, take),
+    repo.countBookOrders(customerId),
+  ]);
+  const receiptIds = [...new Set(rows.map((o) => o.receiptId))];
+  const bookItems = await repo.bookOrderItemsByReceipts(receiptIds);
+  const books = mapById(await repo.booksByIds(uniqIds(bookItems.map((it) => it.bookId))));
+  const itemsByReceipt = new Map<string, typeof bookItems>();
+  for (const it of bookItems) {
+    const list = itemsByReceipt.get(it.order_id) ?? [];
+    list.push(it);
+    itemsByReceipt.set(it.order_id, list);
+  }
+  return { data: rows.map((o) => toPhysicalBookDto(o, itemsByReceipt, books)), total };
+};
+
+export const listCustomerAddresses = async (
+  customerId: number, { skip, take }: ListArgs
+) => {
+  const [rows, total] = await Promise.all([
+    repo.pageAddresses(customerId, skip, take),
+    repo.countAddresses(customerId),
+  ]);
+  const states = mapById(await repo.statesByIds(uniqIds(rows.map((a) => a.state))));
+  return { data: rows.map((a) => toAddressDto(a, states)), total };
+};

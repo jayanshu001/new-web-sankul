@@ -110,6 +110,9 @@ R("PUT", "/courses/plans/:id", "courses.plans.edit");
 R("DELETE", "/courses/plans/:id", "courses.plans.delete");
 R("GET", "/courses/:id/plans", ...view("courses.plans"));
 R("POST", "/courses/:id/plans", "courses.plans.create");
+R("GET", "/courses/:id/promocodes", ...view("courses"));
+R("GET", "/courses/:id/exam-categories", ...view("courses"));
+R("GET", "/courses/:id/material-categories", ...view("courses"));
 R("PATCH", "/courses/:id/popular", "courses.edit");
 crud("/courses", "courses");
 
@@ -156,6 +159,7 @@ R("DELETE", "/ebooks/plans/:id", "ebooks.plans.delete");
 R("GET", "/ebooks/:id/plans", ...view("ebooks.plans"));
 R("POST", "/ebooks/:id/plans", "ebooks.plans.create");
 R("GET", "/ebooks/:id/prices", ...view("ebooks.plans"));
+R("GET", "/ebooks/:id/promocodes", ...view("ebooks"));
 crud("/ebooks", "ebooks");
 
 // ── /customers → customers (+ addresses, course/ebook subscriptions) ───────
@@ -276,6 +280,9 @@ R("PATCH", "/packages/:id/specific-subjects/reorder", "packages.edit");
 R("PATCH", "/packages/:id/material-categories/reorder", "packages.edit");
 R("PATCH", "/packages/:id/exam-categories/reorder", "packages.edit");
 R("GET", "/packages/:id/subscribers", ...view("packages"));
+R("GET", "/packages/:id/exam-categories", ...view("packages"));
+R("GET", "/packages/:id/material-categories", ...view("packages"));
+R("GET", "/packages/:id/specific-subjects", ...view("packages"));
 R("GET", "/packages/:id/promoted-codes", ...view("packages"));
 R("GET", "/packages/:id/books", ...view("packages"));
 R("GET", "/packages/:id/video-relations", ...view("packages"));

@@ -132,8 +132,8 @@ export const reorderEmbedded = async (
 // Plans
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const listPackagePlans = async (packageId: string) => {
-  const res = await adminPackage.listPackagePlans(assertPkgSqlId(packageId, "package"));
+export const listPackagePlans = async (packageId: string, query: PaginationQuery) => {
+  const res = await adminPackage.listPackagePlans(assertPkgSqlId(packageId, "package"), query);
   if (res === "not_found") throw new HttpError(404, "Package not found.");
   return res;
 };
@@ -164,9 +164,31 @@ export const listSubscribers = async (packageId: string, query: PaginationQuery)
   return res;
 };
 
-// MySQL promo-code read. On SQL the package id is numeric.
-export const listPromotedCodes = async (packageId: string) => {
-  return promoCode.listPromocodesForPackage(assertPkgSqlId(packageId, "package"));
+export const listExamCategories = async (packageId: string, query: PaginationQuery) => {
+  const res = await adminPackage.listExamCategories(assertPkgSqlId(packageId, "package"), query);
+  if (res === "not_found") throw new HttpError(404, "Package not found.");
+  return res;
+};
+
+export const listMaterialCategories = async (packageId: string, query: PaginationQuery) => {
+  const res = await adminPackage.listMaterialCategories(assertPkgSqlId(packageId, "package"), query);
+  if (res === "not_found") throw new HttpError(404, "Package not found.");
+  return res;
+};
+
+export const listSpecificSubjects = async (packageId: string, query: PaginationQuery) => {
+  const res = await adminPackage.listSpecificSubjects(assertPkgSqlId(packageId, "package"), query);
+  if (res === "not_found") throw new HttpError(404, "Package not found.");
+  return res;
+};
+
+// MySQL promo-code read. On SQL the package id is numeric. Paginated via the
+// shared scope helper (supports optional `search` on the promocode).
+export const listPromotedCodes = async (
+  packageId: string,
+  query: { search?: string; page: number; limit: number; skip: number }
+) => {
+  return promoCode.listPromocodesForScope("package", assertPkgSqlId(packageId, "package"), query);
 };
 
 // The Book↔Package many-to-many link (`Book.packageIds`) was Mongo-only — ws_book

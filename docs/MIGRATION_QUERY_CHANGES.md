@@ -15,6 +15,366 @@
 
 ---
 
+## 2026-07-09 — Async report-export jobs (NEW table `ws_export_job`)
+
+> **Schema change** (net-new feature table, not a Mongo→SQL migration). DDL:
+> `docs/migration/schema-changes/2026-07-09_export_job.sql` — **apply before deploy**,
+> then `prisma:generate` (schema.prisma `ExportJob` model added by hand, not db:pull).
+> `yarn typecheck` green.
+
+New generic async-export subsystem so large report exports never hit the request/LB
+timeout: `POST /admin/exports` creates a job + enqueues a BullMQ worker (queue
+`report-export`, modeled on the pdf-upload pipeline) that runs the SAME filtered query
+as the sync export, uploads the CSV/XLSX to Spaces **private**, and marks the row ready;
+`GET /admin/exports/:jobId` polls the authoritative DB row and signs a short-lived GET
+URL when ready; a delayed queue job GC's the object after the retention window.
+
+- **Table `ws_export_job`** (model `ExportJob`): `job_ref` (unique public id), `type`,
+  `format`, `params` JSON (filters), `status` (pending|processing|ready|failed),
+  `progress`, `row_count`, `file_key`, `file_name`, `error`, `requested_by` (owner),
+  `expires_at`, timestamps. Indexes: unique(job_ref), (status), (requested_by, created_at).
+- **Reuses each report's existing exporter** — the registry (`modules/export-job/
+  export-job.registry.ts`) maps `type` → that report's exact param parser (now exported:
+  `reportQueryFrom`, `buildSubReportQuery`, testSeries/ebook `parseSubReportQuery`) +
+  `build*Csv`/`build*Xlsx`. v1 types: `subscription`, `liveCourseSub`, `testSeriesSub`,
+  `ebookSubscription`. `bookOrder`/`referral` → 422 unsupported until their sync
+  exporters exist. Output is byte-identical to the sync `/export` endpoints.
+- **Storage**: new `utils/exportStorage.ts` — private PUT + `getSignedDownloadUrl` (GET
+  presign, the codebase's first) + delete. Objects keyed `admin/exports/<type>/<ref>.<ext>`.
+- **Worker boot** in `index.ts startWorkers()` (`initExportScheduler`), drain in
+  `gracefulShutdown`. Rehydrate resets crashed `processing` jobs on boot (guarded so a
+  not-yet-migrated table can't crash boot). Optional env `EXPORT_RETENTION_MINUTES` (45),
+  `EXPORT_SIGNED_URL_TTL_SECONDS` (900). Route `/exports` UNMAPPED in RBAC like `/uploads`
+  (router staff gate + per-job ownership check in the controller).
+- **v1 note**: reuses the existing capped row-builders (`EXPORT_MAX`=100k) in the worker —
+  generation is off-request (kills timeouts) but not yet keyset-streamed; the result
+  buffer is held transiently in the worker. True keyset streaming = follow-up per report.
+
+## 2026-07-09 — Subscription Report: new filters (promoter/promocode/orderMethod/hasMaterial=false)
+
+> Post-migration read-only change on already-SQL `admin-subscription`; no schema/DDL,
+> no wave change. `yarn typecheck` green. Applies to `GET /admin/subscriptions` list +
+> `/export/csv` + `/export/excel` (all three share `reportQueryFrom` → `resolveCourseSubWhere`,
+> so filters stay identical; export just drops page/limit).
+
+- **promoterId** — direct column `ws_package_course_subscription.promoter_id` (indexed
+  `idx_pcs_promoter`). `buildSubWhere`: `where.promoterId`.
+- **promocodeId** — the code is a purchase-time JSON snapshot on the ORDER
+  (`ws_package_course_order.promocode`, no live FK), so resolve id→code
+  (`promocodeCodeById`) → matching order ids (`orderIdsByPromocode`, `$queryRaw` matching
+  both JSON shapes: bare `"CODE"` and `{ promocode: "CODE" }`) → `where.orderId IN (…)`.
+  Unknown code / no matching orders ⇒ empty result. Caveat: a promocode with a very large
+  order set produces a large `IN` list.
+- **orderMethod** (NEW, payment GATEWAY) — `ws_package_course_order.payment_method` enum
+  via relation filter `where.packageCourseOrder = { is: { paymentMethod } }`. FE sends
+  lowercase (`razorpay|bank|cash|free|paykun|paytm`); mapped to the canonical enum
+  (`Paykun`/`Paytm` capitalized) via `GATEWAY_BY_INPUT`. **Decision (a):** `orderMethod` is
+  the gateway; the pre-existing `paymentMethod` filter stays `online|backend`
+  (= subscription `payment_type`, the activation channel) — the two are distinct columns.
+- **hasMaterial** — now tri-state: absent = no filter, `true` = with-material (unchanged),
+  `false` = without-material (`pcMaterialId` null/0 AND `materialAmount` null/0). Controller
+  `reportQueryFrom` no longer coerces absent→false.
+- **courseId / packageId** — confirmed already filtering the list (`buildSubWhere`); unchanged.
+- **`orderMethod` row field (output)** — each report row (list DTO + CSV/Excel "Order Method"
+  column) now carries the gateway, same source as the filter (`order.payment_method`),
+  lowercased to the filter's value set, null when there's no order. `ordersByIds` select
+  gained `paymentMethod`. `paymentMethod` (online/backend) is unchanged and now feeds the
+  FE's Activation Type column.
+
+## 2026-07-09 — Live Course Detail: paginate videos-in-folder + schedule-entries
+
+> Post-migration read-only change on already-SQL `admin-live-course`; no schema/DDL,
+> no wave change. `yarn typecheck` green.
+
+Two flat Live-Course-Detail sub-lists moved to `page`/`limit` (standard envelope
+`{ success, data, pagination }`, default 10, max 500, via `parseListQuery`/`buildPagination`).
+Rows unchanged; reorder endpoints untouched (order values are global, so adjacent-swap
+reorder works per-page).
+
+- `GET /admin/live-courses/:liveCourseId/folders/:folderId/videos` — `lcListVideosInFolder`
+  now takes `{ skip, take }` and returns `{ data, total }` via DB `skip`/`take` + `count`
+  on `ws_video` (where `videoCategoryId=folder`, `orderBy order asc, created_at asc`).
+  Was `success(res,{videos,total})` → now the standard sibling envelope.
+- `GET /admin/live-courses/:id/schedule-folders/:folderId/entries` — schedule entries live
+  in the live-course JSON column (not a table), so pagination is an in-memory slice of the
+  order-sorted array; `total` is the full count. `listScheduleEntries` gains optional
+  `{ skip, take }` and returns `{ data, total }`.
+- Folder tree (`GET .../folders`) left **unpaginated** by decision — small admin-created
+  recording trees; keeps returning the full `{ folders, relations }` for client tree-build.
+
+## 2026-07-09 — Course ↔ Book relation + `GET /admin/courses/:id/books`
+
+New Course-Detail "Material (Book)" tab — the course analogue of the Package → Books
+tab (which is a deliberate empty stub because no SQL book-link existed). This adds a
+**real** relation and read endpoint.
+
+- **New table / model:** `ws_course_book` (`model CourseBook`) — `id`, `course_id`,
+  `book_id`, `order` (per-course display order), `created_at`, `updated_at`. Mirrors
+  `ws_exam_category_course`. Back-relations added: `Course.courseBook`, `Book.courseBook`.
+  DDL: `docs/migration/schema-changes/2026-07-09_course_book_pivot.sql` (`CREATE TABLE`,
+  applied to local `websankul_staging_1`; **must be applied on deploy**). Prisma client
+  regenerated.
+- **New endpoint:** `GET /admin/courses/:id/books?page=&limit=&search=` — auth via the
+  course router's `authenticate`. `page` default 1; `limit` default 10, max 500 (via
+  `parseListQuery`); optional `search` = case-insensitive `contains` on the linked
+  `ws_book.name`; ordered by the pivot `order` asc. Envelope
+  `{ success, data, pagination: { total, page, limit, totalPages } }` (via
+  `buildPagination`).
+- **Query:** `prisma.courseBook.findMany({ where: { courseId, Book?: { name: contains } },
+  include: { Book: true }, orderBy: { order: "asc" }, skip, take })` + a matching
+  `courseBook.count`. New repo methods `booksForPaged` / `countBooksFor` in
+  `modules/admin-course/admin-course.repository.ts`; service `listCourseBooks` +
+  `courseBookRowDto` in `admin-course.service.ts`; thin wrapper in
+  `src/admin/course/course.service.ts`; handler `getCourseBooks` +
+  route `GET /:id/books` in `src/admin/course/`.
+- **Row DTO** (matches the admin book-row renderer): `{ _id, name, author, image,
+  thumbnail, listPrice (list_price), discountedPrice (discounted_price), language,
+  isMagazine (is_magazine), isCombo (is_combo), isTrending (is_trending),
+  status (active), orderBy (pivot order) }`.
+
+Verified end-to-end against the local DB (insert pivot row → correct DTO + search
+hit/miss → cleanup).
+
+**Write flow (link/reorder/unlink) — added same day** so the tab can be populated:
+- `POST /admin/courses/:id/books` `{ bookIds: number[] }` — attach; idempotent
+  (skips ids already linked), validates each id exists in `ws_book` (returns them
+  under `invalid`), appends after the current max per-course `order`. Returns
+  `{ added, skipped, invalid }`.
+- `PUT /admin/courses/:id/books/reorder` `{ order: [{ bookId, order }] }` — sets the
+  per-course display order (one `updateMany` per item scoped to `courseId+bookId`,
+  in a `$transaction`).
+- `DELETE /admin/courses/:id/books/:bookId` — unlink (404 `link_not_found` if the
+  book isn't linked).
+Repo: `existingBookIds`, `linkedBookIds`, `maxBookOrder`, `createBookLinks`,
+`reorderBookLinks`, `unlinkBook`. Service: `linkCourseBooks` / `reorderCourseBooks`
+/ `unlinkCourseBook`. Zod: `linkCourseBooksSchema`, `reorderCourseBooksSchema`.
+Verified end-to-end (link dedupe + invalid-id reject → reorder → unlink → cleanup).
+
+## 2026-07-09 — Package Detail: exam/material/specific-subject paginated tabs
+
+> Post-migration read-only addition on already-SQL `admin-package`; no schema/DDL,
+> no wave change. `yarn typecheck` green.
+
+Three Package-Detail tabs previously read arrays embedded on `GET admin/packages/:id`
+(`examCategories[]`/`materialCategories[]`/`specificSubjects[]`). Exposed each as its own
+paginated list, mirroring the `/subscribers` contract (default 20, cap 100), standard
+envelope `{ success, data, pagination:{ total, page, limit, totalPages } }`.
+
+- New endpoints (`admin/package`): `GET /admin/packages/:id/exam-categories`,
+  `/material-categories`, `/specific-subjects` (backs the "Video Category" tab →
+  `specificSubjects`). RBAC-mapped to `packages` view.
+- Repo (`admin-package.repository.ts`): `specificSubjectsForPaged`/`materialCategoriesForPaged`
+  /`examCategoriesForPaged` (+ `count*`) over the pivots `ws_package_specific_subject`
+  (`subject_id`→VideoCategory, order `order_by`, has pivot `status`), `ws_material_category_package`
+  (`mcategory_id`→MaterialCategory, order `order`), `ws_exam_category_package`
+  (`exam_category_id`→ExamCategory, order `order`) — DB `skip`/`take`/`count`, `orderBy`
+  the pivot order asc (same include/order as the existing embedded-array loaders).
+- Rows reuse the existing embedded `subjectRef`/`materialRef`/`examRef` shape
+  `{ category:{_id,title,image}|idStr, order, status }` **plus** a flattened `categoryName`.
+  status: real pivot status for specific-subjects; `true` for material/exam (unchanged from
+  the embedded arrays). Embedded arrays on `GET admin/packages/:id` left intact.
+
+## 2026-07-09 — Video-categories admin list: raise `per_page` cap 200 → 500
+
+Validation-only. The three `admin/video-categories` list query schemas
+(`listQuerySchema`, `categoryCoursesQuerySchema`, `categoryVideosQuerySchema` in
+`src/admin/videoCategory/videoCategory.validation.ts`) capped `per_page` at 200,
+which 422'd `?per_page=500`. Raised the max to 500 to match the project-wide admin
+list `limit` cap. Default (20) and `min(1)` unchanged; no query/DB behavior change.
+
+## 2026-07-09 — Course Detail: exam-category + material-category paginated tabs
+
+> Post-migration read-only addition on already-SQL `admin-course`; no schema/DDL,
+> no wave change. `yarn typecheck` green.
+
+Two Course-Detail tabs previously read ID-ref arrays embedded on the course-detail
+response (`examCategories[]`/`materialCategories[]`, resolved client-side). Exposed
+each as its own paginated list with **resolved** rows, standard envelope
+`{ success, data, pagination }` (`page` default 1, `limit` default 10 max 500, optional
+`search` on category name), via `parseListQuery`/`buildPagination`.
+
+- New endpoints (`admin/course`): `GET /admin/courses/:id/exam-categories`,
+  `GET /admin/courses/:id/material-categories`. RBAC-mapped to `courses` view.
+- Repo (`admin-course.repository.ts`): `examCategoriesForPaged`/`materialCategoriesForPaged`
+  (+ `countExamCategoriesFor`/`countMaterialCategoriesFor`) over the pivot tables
+  `ws_exam_category_course` / `ws_material_category_course` — DB `skip`/`take`/`count`,
+  `orderBy` the course-specific pivot `order` asc, optional search on the joined
+  category `name` (`{ ExamCategory|MaterialCategory: { name: { contains } } }`), include
+  now also selects the category `status`.
+- Service returns flattened resolved rows `{ _id, name, image, status, order }` (`_id` =
+  category id; `order` = pivot order) so the admin UI drops its client-side name lookup.
+  Existing `examCategoriesFor`/`materialCategoriesFor` (course-detail aggregate) untouched.
+
+## 2026-07-09 — Admin detail-tab list endpoints: server-side pagination sweep
+
+> Post-migration read-only change on already-SQL modules (promo-code, admin-course,
+> admin-ebook, admin-package, admin-live-course, admin-testseries, admin-material);
+> no schema/DDL, no wave change. `yarn typecheck` green.
+
+Second-pass to finish server-side pagination across the admin detail pages. Each of
+these list endpoints previously returned the **full result set**; they now accept
+`page` (default 1) + `limit` (default 10, max 500) and return the standard sibling
+envelope `{ success, data, pagination:{ total, page, limit, totalPages } }` via the
+shared `parseListQuery`/`buildPagination` helpers (`src/utils/listQuery.ts`). Row
+shapes are unchanged — only the wrapper + DB-level `skip`/`take`/`count` are new.
+
+- **Plans** (all `packageCourseEbookPrice` / `liveCoursePlan` reads gain `skip`/`take`
+  + a matching `count`, same `where`/`orderBy` as before):
+  `GET /admin/courses/:id/plans`, `/admin/ebooks/:id/plans`, `/admin/packages/:id/plans`,
+  `/admin/live-courses/:id/plans` (the last previously returned `{plans,total}` inside
+  `success()` → now the standard envelope).
+- **Test series** (`admin-testseries`): `GET /admin/test-series/:id/content-categories`,
+  `/prices` — DB `skip`/`take`/`count`. `/papers` — adds a `search` filter; paper display
+  names are hydrated (not a column), so search filters post-hydration and totals reflect
+  the filtered set.
+- **Material** (`admin-material`): `GET /admin/materials/categories/:id/courses` — DB
+  `skip`/`take`/`count` + `search` on the joined course name.
+- **Promocodes by scope** (`promo-code`): new shared `listPromocodesForScope(type, id, q)`
+  narrows to `appliesToType IN [type,"mixed"]` (+ optional code search) in SQL, resolves
+  the exact `appliesToIds` JSON match in-memory, then slices the page (`total` = matched
+  set). Backs `GET /admin/packages/:id/promoted-codes` (was array→paginated) and the two
+  NEW endpoints `GET /admin/courses/:id/promocodes` + `GET /admin/ebooks/:id/promocodes`
+  (`ebook` was already a valid promocode scope). Old `listPromocodesForPackage` retained.
+
+## 2026-07-09 — Video-category relation DAG: cleanup on delete + orphan-safe child count
+
+Deleting a video category previously left its `ws_video_category_relation` edges behind
+(the D2 cleanup was deferred). Those dangling edges — child rows pointing at categories
+that no longer exist — inflated `havingChildDirectory` / `count` in the client catalog
+(e.g. package 3, category 121 "Environment" reported `count: 13` for 13 non-existent
+sub-folders, ids 695–707).
+
+- **Delete now cleans edges** (`modules/admin-master`): both delete paths
+  (`vcDelete` via `admin/master/videoCategory`, and `fullVcDelete` via
+  `admin/videoCategory`) call the new `repo.vcDeleteRelations(id)` →
+  `deleteMany({ OR: [{ parent: id }, { child: id }] })` before removing the row. The
+  admin/master delete response now reports the real `deletedRelations` count (was
+  hard-coded `0`).
+- **Read-side hardening** (`modules/client-catalog` `catalogVideos`): the child-directory
+  count now filters `childVideoCategory: { is: { status: true } }`, so edges whose child
+  category is missing or inactive no longer count. This fixes existing orphaned data
+  without a destructive DELETE (category 121 childCount 13 → 0). Count semantics for a
+  directory node change from "raw child edges" to "active existing child categories".
+- **Pre-existing orphaned edges** (child row already gone) are now harmless to the read
+  path, but remain in the table. Optional one-time cleanup:
+  `DELETE r FROM ws_video_category_relation r LEFT JOIN ws_video_category c ON c.id = r.child WHERE c.id IS NULL;`
+
+## 2026-07-09 — Add Subscription: `Subscription Type = Active | Extend` on all 4 grants
+
+Follow-up to the standardized-payment work below. The form's Subscription Type control
+sends a boolean **`extend`** on all four create/grant endpoints. `extend !== true`
+(Active) = current fresh-create behaviour. `extend: true` (Extend) = append the plan's
+duration onto the customer's existing **active** subscription for that product (latest
+row with `status=true` and `endAt >= now`) instead of inserting a new row; **falls back
+to a fresh create when none exists**. A payment **order row is still written on an
+extend** (an extend is a paid txn) and the subscription's `order_id` is repointed to it,
+so the latest payment shows in reports.
+
+- **Course/Package** (`modules/admin-subscription`): the pre-existing implicit
+  upsert-extend (which triggered on *absent* `startAt`) is now gated on the explicit
+  `extend` flag — Active always creates a fresh row even when an active sub exists.
+  `extendSub` gained `orderId`; the extend branch now mints an order via the shared
+  `createPaymentOrder` and links it.
+- **Test Series** (`modules/admin-testseries`): `grantSubscription` now, inside its
+  txn, looks up the active sub when `extend` and either UPDATEs its `endAt`/`order_id`/
+  `price`/`plan_id` or creates fresh. New `GrantWrite.extend`.
+- **Live Course** (`modules/admin-live-course`): the implicit extend (gated on absent
+  start/end dates) is now gated on `extend`. The extend UPDATE now also persists the
+  payment fields (`paid_amount`, `payment_method`, `razorpay_*`, `bank_transaction_id`,
+  `paid_at`), not just `end_at`/`plan_id`.
+- **EBook** (`modules/admin-ebook`): new repo `findActiveSubscription` +
+  `extendBackendSubscription` (txn: fresh COMPLETE `ws_ebook_order` + push out the
+  existing sub's `end_at`/`order_id`/`price`). `createSubscription` branches on
+  `d.extend`.
+
+No schema change (all reuse existing columns). Zod: `extend` added to
+`createSubscriptionSchema`, `grantSubscriptionSchema` (test series, via `boolish`),
+`grantSqlSchema` (live course), `createEbookSubscriptionSqlSchema`.
+
+## 2026-07-09 — Admin Customer/Educator Detail: per-tab paginated list endpoints
+
+> Post-migration read-only addition on already-SQL modules (admin-customer,
+> educator-auth); no schema/DDL, no wave change.
+
+The admin **Customer Detail** and **Educator Detail** pages moved each tab/table off the
+single fetch-all `…/details` aggregate onto its own **server-side paginated** endpoint
+(`page`/`limit`, standard `{ success, data, pagination:{ total, page, limit, totalPages } }`
+envelope). The `…/details` aggregate is unchanged and still serves profile + summary.
+All new queries are **read-only** over already-migrated tables — **no schema/DDL change**.
+
+- **Customer** (`modules/admin-customer/admin-customer-details.repository.ts` +
+  `…-details.service.ts`, `admin/customer/customer.controller.ts` + routes):
+  - New paginated repo pairs (`count*`/`page*`) with `skip`/`take` + `orderBy` newest-first:
+    - `CourseSubs` — `ws_package_course_subscription` where `courseId IS NOT NULL`
+      (`{ courseId: { not: null } }`) + optional `status` filter.
+    - `PackageSubs` — same table where `courseId IS NULL AND packageId IS NOT NULL`
+      + optional `status` (mirrors the aggregate's course-vs-package split).
+    - `LiveCourseSubs` / `TestSeriesSubs` — `ws_live_course_subscription` /
+      `ws_test_series_subscription` by `customerId` + optional `status`.
+    - `EbookSubs` — `ws_ebook_subscription` by `customerId` (no status filter).
+    - `BookOrders` — `ws_book_order` by `userId` (one row per order).
+    - `Addresses` — `ws_customer_address` by `userId`.
+  - Per-page hydration reuses the existing `…ByIds` lookups (only the page's referenced
+    entities are fetched); DTOs reuse the existing `admin-customer-details.transformer`,
+    so row shapes are **identical** to the aggregate's `purchases`/`addresses`.
+  - Endpoints: `GET /admin/customers/:id/{course-subscriptions, package-subscriptions,
+    live-course-subscriptions, test-series-subscriptions, ebook-subscriptions,
+    book-orders, addresses}`. `course-/ebook-subscriptions` + `addresses` **replace prior
+    empty-stub handlers** with real paginated data; `addresses` now returns the
+    pagination envelope (was a bare `{ data:[] }`).
+- **Educator** (`modules/educator-auth/educator-details.repository.ts` +
+  `…-details.service.ts`, `admin/master/educator.controller.ts` + `master.routes.ts`):
+  - New `count*`/`page*` pairs by `educator_id`: courses (`ws_course`), live courses
+    (`ws_live_course`), packages (`ws_package`), live sessions (`ws_live_session`), and
+    **root** video categories (`ws_video_category` where `liveCourseId IS NULL` — folders
+    stay on the aggregate). Subscriber counts reuse the existing `*SubCounts` `groupBy`,
+    now scoped to the current page's ids. DTOs reuse `educator-details.transformer`.
+  - Endpoints: `GET /admin/master/educators/:id/{courses, live-courses, video-categories,
+    live-sessions, packages}`.
+
+## 2026-07-09 — Add Subscription: standardized payment section across product types
+
+The admin **Add Subscription** form now sends one payment section (`paymentMethod ∈
+cash|bank|razorpay|free`, editable `amount`, and per-method reference ids) for all 5
+product types. Each grant/create endpoint now **accepts + persists** the method + ref
+ids. Persistence follows each table's existing grain — payment data lives on the
+sibling **order** table where one exists (report reads from there), inline on the
+subscription only for Live Course (no order table).
+
+- **Course/Package** `POST /admin/subscriptions` → `createCourseSubscription`
+  (`modules/admin-subscription`): now writes a **`ws_package_course_order`** row per
+  grant carrying `payment_method` + `razorpay_order_id` + `razorpay_payment_id` +
+  `bank_transaction_id` + `discount_price`/`price` (= amount, `status=complete`,
+  `order_type=purchase`), and links it via the new subscription `order_id`. New repo
+  method `createPaymentOrder`; `createSub` gained `orderId`. Zod
+  `createSubscriptionSchema` + controller thread `bankTransactionId`,
+  `razorpayOrderId`, `razorpayPaymentId`. **No schema change** (columns pre-existed).
+  Note: the upsert-**extend** branch is unchanged (extends don't mint a new order).
+- **Test Series** `POST /admin/test-series/:id/grant` → `tsSql.grantSubscription`
+  (`modules/admin-testseries`): now writes a **`ws_test_series_order`** row
+  (`payment_method`, `order_price` = price, `razorpay_order_id`, `razorpay_payment_id`,
+  `transaction_id` = bankTransactionId, `status=complete`) inside a `$transaction`
+  and links `order_id` on the subscription. `GrantWrite` + controller + Zod
+  (`grantSubscriptionSchema`) gained `paymentMethod` + the 3 ref ids. **No schema
+  change** (amount stays under `price`).
+- **Live Course** `POST /admin/live-courses/:id/grant` → `grantSubscription`
+  (`modules/admin-live-course`): extended from free-grant to a full **paid** grant.
+  `amount` → `paid_amount` (was hardcoded 0); `razorpay_order_id`/`razorpay_payment_id`
+  pre-existed inline. **Schema change** — `ws_live_course_subscription` +
+  `payment_method`, `bank_transaction_id`, `remarks` (DDL
+  `docs/migration/schema-changes/2026-07-09_live_course_subscription_payment_fields.sql`;
+  Prisma model updated + `prisma:generate`). Inline `grantSqlSchema` (`.strict()`)
+  widened to accept `amount`, `withMaterial`, `customerShippingId`, `remarks`,
+  `paymentMethod`, `bankTransactionId`, `razorpayOrderId`, `razorpayPaymentId`.
+- **EBook** `POST /admin/ebooks/subscriptions`: already persisted all payment fields
+  to `ws_ebook_order`. Only reconciled the contract — `createEbookSubscriptionSqlSchema`
+  now also accepts the form's `amount` (→ `orderPrice`), `bankTransactionId`
+  (→ `transactionId`), `durationDays` (→ `durationInDays`) as aliases; existing keys
+  still work. **No schema/query change.**
+
+Deploy: apply the one Live Course DDL. All four methods (`cash|bank|razorpay|free`)
+are valid `PaymentMethod` enum members; no enum change needed.
+
 ## 2026-07-09 — Books & EBooks: persist `isTrending` on create/update (was dropped)
 
 `PUT /admin/books/:id`, `PUT /admin/ebooks/:id` (and the create paths) silently

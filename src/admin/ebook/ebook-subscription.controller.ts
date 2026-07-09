@@ -4,7 +4,7 @@ import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
 
 // Shared filter mapping for the report list + its CSV/Excel exports, so all three
 // honor the identical param contract. Returns a 400 message on invalid ids/method.
-const parseSubReportQuery = (
+export const parseSubReportQuery = (
   q: Record<string, string>,
 ): { ok: false; message: string } | { ok: true; query: adminEbook.SubReportQuery } => {
   if (q.customerId && !adminEbook.parseEbookId(q.customerId)) return { ok: false, message: "Invalid customerId" };
@@ -107,13 +107,14 @@ export const createEbookSubscription = async (req: Request, res: Response) => {
       planId: d.planId ?? null,
       durationInDays: d.durationInDays,
       paymentMethod: d.paymentMethod,
-      orderPrice: d.orderPrice,
+      orderPrice: d.orderPrice ?? 0, // guaranteed present by schema refine (amount|orderPrice)
       razorpayOrderId: d.razorpayOrderId ?? null,
       razorpayPaymentId: d.razorpayPaymentId ?? null,
       transactionId: d.transactionId ?? null,
       ipAddress: req.ip ?? null,
       remarks: d.remarks ?? null,
       status: d.status,
+      extend: d.extend,
     });
     if (!result.ok) {
       const msg = result.reason === "ebook" ? "Ebook not found" : "Plan not found";

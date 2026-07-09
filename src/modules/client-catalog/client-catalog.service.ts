@@ -112,7 +112,9 @@ export const catalogVideos = async (opts: {
     const subtree = await descendantsOf([cat.id]);
     const [videoCount, childCount] = await Promise.all([
       prisma.video.count({ where: { videoCategoryId: { in: subtree }, status: true } }),
-      prisma.videoCategoryRelation.count({ where: { parent: cat.id } }),
+      // Only count edges whose child category still exists AND is active — dangling
+      // edges (child row deleted) must not inflate havingChildDirectory / count.
+      prisma.videoCategoryRelation.count({ where: { parent: cat.id, childVideoCategory: { is: { status: true } } } }),
     ]);
     const havingChildDirectory = childCount > 0;
 

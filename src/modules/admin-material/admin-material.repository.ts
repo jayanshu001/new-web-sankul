@@ -43,8 +43,15 @@ export const adminMaterialRepository = {
   setCategoryOrder: (id: number, order: number) => prisma.materialCategory.update({ where: { id }, data: { order_by: order, updated_at: new Date() } }),
 
   /** Courses that reference this material category (via the pivot ws_material_category_course). */
-  coursesForCategory: (categoryId: number) =>
-    prisma.materialCategoryCourse.findMany({ where: { materialCategoryId: categoryId }, include: { Course: { select: { id: true, name: true, image: true, level: true, status: true } } } }),
+  coursesForCategory: (categoryId: number, opts: { search?: string; skip?: number; take?: number } = {}) =>
+    prisma.materialCategoryCourse.findMany({
+      where: buildCategoryCourseWhere(categoryId, opts.search),
+      include: { Course: { select: { id: true, name: true, image: true, level: true, status: true } } },
+      skip: opts.skip,
+      take: opts.take,
+    }),
+  countCoursesForCategory: (categoryId: number, search?: string) =>
+    prisma.materialCategoryCourse.count({ where: buildCategoryCourseWhere(categoryId, search) }),
 
   // ── materials (leaf) ──────────────────────────────────────────────────────
   listMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean; skip: number; take: number }) =>
@@ -207,6 +214,13 @@ function buildCatWhere(opts: { parent?: number | "root"; search?: string; status
   else if (typeof opts.parent === "number") where.parent = opts.parent;
   if (opts.search) where.name = { contains: opts.search.trim() };
   if (opts.status !== undefined) where.status = opts.status;
+  return where;
+}
+
+function buildCategoryCourseWhere(categoryId: number, search?: string): Prisma.MaterialCategoryCourseWhereInput {
+  const where: Prisma.MaterialCategoryCourseWhereInput = { materialCategoryId: categoryId };
+  const s = search?.trim();
+  if (s) where.Course = { name: { contains: s } };
   return where;
 }
 

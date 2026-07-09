@@ -12,7 +12,11 @@ import {
   toggleCustomerStatus,
   getCustomerAddresses,
   getCustomerCourseSubscriptions,
+  getCustomerPackageSubscriptions,
+  getCustomerLiveCourseSubscriptions,
+  getCustomerTestSeriesSubscriptions,
   getCustomerEbookSubscriptions,
+  getCustomerBookOrders,
   updateCourseSubscriptionDates,
   getCustomerDetails,
 } from "./customer.controller";
@@ -35,6 +39,10 @@ router.patch("/:id/status", toggleCustomerStatus);
 router.get("/:id/addresses", getCustomerAddresses);
 router.get("/:id/course-subscriptions", getCustomerCourseSubscriptions);
 router.put("/:id/course-subscriptions/:subscriptionId", updateCourseSubscriptionDates);
+router.get("/:id/package-subscriptions", getCustomerPackageSubscriptions);
+router.get("/:id/live-course-subscriptions", getCustomerLiveCourseSubscriptions);
+router.get("/:id/test-series-subscriptions", getCustomerTestSeriesSubscriptions);
 router.get("/:id/ebook-subscriptions", getCustomerEbookSubscriptions);
+router.get("/:id/book-orders", getCustomerBookOrders);
 
 export default router;

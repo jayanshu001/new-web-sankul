@@ -104,8 +104,11 @@ export const reorderEbooks = async (orders: Array<{ id: string; order: number }>
 // Ebook plans
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const listEbookPlans = async (ebookId: string) => {
-  const res = await adminEbook.listEbookPlans(assertEbookSqlId(ebookId, "Ebook"));
+export const listEbookPlans = async (
+  ebookId: string,
+  opts: { skip: number; take: number; page: number; limit: number }
+) => {
+  const res = await adminEbook.listEbookPlans(assertEbookSqlId(ebookId, "Ebook"), opts);
   if (res === "not_found") throw new HttpError(404, "Ebook not found");
   return res;
 };

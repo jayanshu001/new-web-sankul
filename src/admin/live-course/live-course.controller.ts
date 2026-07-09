@@ -8,6 +8,7 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success, failure } from "../../utils/httpResponse";
+import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   createLiveCourseSqlSchema,
   updateLiveCourseSqlSchema,
@@ -227,11 +228,13 @@ export const reorderScheduleFolders = asyncHandler(async (req: Request, res: Res
 });
 
 export const listScheduleEntries = asyncHandler(async (req: Request, res: Response) => {
-  const data = await liveCourseService.listScheduleEntries(
+  const { page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { data, total } = await liveCourseService.listScheduleEntries(
     req.params.id as string,
-    req.params.folderId as string
+    req.params.folderId as string,
+    { skip, take: limit }
   );
-  return success(res, data, "Schedule entries fetched.");
+  return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
 });
 
 export const createScheduleEntry = asyncHandler(async (req: Request, res: Response) => {

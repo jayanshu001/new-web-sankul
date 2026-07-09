@@ -5,6 +5,9 @@
 import { Request, Response } from "express";
 import { asyncHandler } from "../../middlewares/asyncHandler";
 import { success } from "../../utils/httpResponse";
+import { HttpError } from "../../middlewares/errorHandler";
+import { parseListQuery } from "../../utils/listQuery";
+import { listPromocodesForScope } from "../../modules/promo-code/promo-code.service";
 import {
   createEbookSchema,
   updateEbookSchema,
@@ -115,8 +118,22 @@ export const reorderEbooks = asyncHandler(async (req: Request, res: Response) =>
 // ──────────────────────────────────────────────────────────────────────────────
 
 export const getEbookPlans = asyncHandler(async (req: Request, res: Response) => {
-  const data = await ebookService.listEbookPlans(req.params.id as string);
-  return res.status(200).json({ success: true, data });
+  const q = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { data, pagination } = await ebookService.listEbookPlans(req.params.id as string, {
+    skip: q.skip,
+    take: q.limit,
+    page: q.page,
+    limit: q.limit,
+  });
+  return res.status(200).json({ success: true, data, pagination });
+});
+
+export const getEbookPromocodes = asyncHandler(async (req: Request, res: Response) => {
+  const ebookId = ebookService.parseEbookId(req.params.id as string);
+  if (!ebookId) throw new HttpError(400, "Invalid Ebook ID");
+  const q = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+  const { data, pagination } = await listPromocodesForScope("ebook", ebookId, q);
+  return res.status(200).json({ success: true, data, pagination });
 });
 
 export const createEbookPlan = asyncHandler(async (req: Request, res: Response) => {

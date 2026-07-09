@@ -44,6 +44,11 @@ export const adminMasterRepository = {
   vcUpdate: (id: number, data: Record<string, unknown>) =>
     prisma.videoCategory.update({ where: { id }, data: { ...data, updated_at: new Date() } }),
   vcDelete: (id: number) => prisma.videoCategory.delete({ where: { id } }),
+  // Remove every ws_video_category_relation edge that references this category on
+  // either side (parent → child DAG). Deleting a category without this leaves
+  // dangling edges that later inflate havingChildDirectory / child counts.
+  vcDeleteRelations: (id: number) =>
+    prisma.videoCategoryRelation.deleteMany({ where: { OR: [{ parent: id }, { child: id }] } }),
 
   // ── full videoCategory controller support (admin/videoCategory) ─────────────
   vcListFiltered: (opts: { search?: string; status?: boolean; educatorId?: number; sortBy: string; sortDir: "asc" | "desc"; skip: number; take: number }) => {

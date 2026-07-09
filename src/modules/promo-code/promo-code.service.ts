@@ -14,6 +14,7 @@
  * Mongo doc casing: `promo_start_at` / `promo_expire_at`.
  */
 import { prisma } from "../../config/prisma";
+import { buildPagination } from "../../utils/listQuery";
 
 // 2026-07-08: the discount-rule promocode was merged into ws_promocode (Prisma
 // model `Promocode`); the former ws_promo_code / `PromoCodeRule` model is gone.
@@ -298,6 +299,32 @@ export const listPromocodesForPackage = async (packageId: number) => {
   return rows
     .filter((r) => appliesToGroups(r).some((g) => g.type === "package" && g.ids.includes(packageId)))
     .map(listDto);
+};
+
+/**
+ * Paginated promocodes scoped to a single entity (package/course/ebook/liveCourse/
+ * testSeries). The scope match lives in `appliesToIds` JSON (int[] or mixed
+ * [{type,ids}]), which SQL cannot LIMIT/OFFSET on directly, so we narrow to
+ * `[type,"mixed"]` rows (+ optional code search) in SQL, resolve the exact match
+ * in-memory via appliesToGroups, then slice the page. `total` reflects the matched
+ * set (not the pre-filter fetch), so pagination stays correct. Used by the admin
+ * package/course/ebook promocode tabs. Newest-first, mirroring the other lists.
+ */
+export const listPromocodesForScope = async (
+  type: AppliesToType,
+  id: number,
+  q: { search?: string; page: number; limit: number; skip: number }
+) => {
+  const rows = await prisma.promocode.findMany({
+    where: {
+      appliesToType: { in: [type, "mixed"] },
+      ...(q.search ? { promocode: { contains: q.search.toUpperCase() } } : {}),
+    },
+    orderBy: { created_at: "desc" },
+  });
+  const matched = rows.filter((r) => appliesToGroups(r).some((g) => g.type === type && g.ids.includes(id)));
+  const data = matched.slice(q.skip, q.skip + q.limit).map(listDto);
+  return { data, pagination: buildPagination(matched.length, q.page, q.limit) };
 };
 
 /** getById — populates appliesTo; the OUT-OF-SCOPE plan links return []. */

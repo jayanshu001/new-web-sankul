@@ -3,7 +3,27 @@ import { createCustomerSchema, updateCustomerSchema, updateSubscriptionDatesSche
 import { invalidateCustomerGate } from "../../middlewares/authenticate";
 import * as customerSql from "../../modules/admin-customer/admin-customer.service";
 import { parseSubscriptionId, updateSubscriptionEndAt } from "../../modules/commerce-subscription/commerce-subscription.service";
-import { getCustomerPurchaseDetails } from "../../modules/admin-customer/admin-customer-details.service";
+import {
+  getCustomerPurchaseDetails,
+  listCustomerCourseSubscriptions,
+  listCustomerPackageSubscriptions,
+  listCustomerLiveCourseSubscriptions,
+  listCustomerTestSeriesSubscriptions,
+  listCustomerEbookSubscriptions,
+  listCustomerBookOrders,
+  listCustomerAddresses,
+} from "../../modules/admin-customer/admin-customer-details.service";
+
+// Shared page/limit parsing for the customer-detail per-tab lists.
+const parsePaging = (req: Request) => {
+  const { page = "1", limit = "20" } = req.query as Record<string, string>;
+  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+  const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
+  return { pageNum, limitNum, skip: (pageNum - 1) * limitNum, take: limitNum };
+};
+const pageMeta = (total: number, pageNum: number, limitNum: number) => ({
+  total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum),
+});
 
 const parseStatusFilter = (status?: string): boolean | undefined => {
   if (status === "true" || status === "active") return true;
@@ -180,22 +200,55 @@ export const toggleCustomerStatus = async (req: Request, res: Response) => {
 
 export const getCustomerCourseSubscriptions = async (req: Request, res: Response) => {
   try {
-    const id = req.params.id as string;
-    if (!customerSql.parseCustomerId(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-    }
+    const numId = customerSql.parseCustomerId(req.params.id as string);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
 
-    const { page = "1", limit = "20" } = req.query as Record<string, string>;
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
+    const { pageNum, limitNum, skip, take } = parsePaging(req);
+    const status = parseStatusFilter((req.query as Record<string, string>).status);
+    const { data, total } = await listCustomerCourseSubscriptions(numId, { skip, take, status }, new Date());
+    return res.status(200).json({ success: true, data, pagination: pageMeta(total, pageNum, limitNum) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
 
-    // Subscription models are not yet on SQL — return an empty page on the
-    // ws_customer branch so the admin detail view degrades gracefully.
-    return res.status(200).json({
-      success: true,
-      data: [],
-      pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
-    });
+export const getCustomerPackageSubscriptions = async (req: Request, res: Response) => {
+  try {
+    const numId = customerSql.parseCustomerId(req.params.id as string);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+
+    const { pageNum, limitNum, skip, take } = parsePaging(req);
+    const status = parseStatusFilter((req.query as Record<string, string>).status);
+    const { data, total } = await listCustomerPackageSubscriptions(numId, { skip, take, status }, new Date());
+    return res.status(200).json({ success: true, data, pagination: pageMeta(total, pageNum, limitNum) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getCustomerLiveCourseSubscriptions = async (req: Request, res: Response) => {
+  try {
+    const numId = customerSql.parseCustomerId(req.params.id as string);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+
+    const { pageNum, limitNum, skip, take } = parsePaging(req);
+    const status = parseStatusFilter((req.query as Record<string, string>).status);
+    const { data, total } = await listCustomerLiveCourseSubscriptions(numId, { skip, take, status }, new Date());
+    return res.status(200).json({ success: true, data, pagination: pageMeta(total, pageNum, limitNum) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getCustomerTestSeriesSubscriptions = async (req: Request, res: Response) => {
+  try {
+    const numId = customerSql.parseCustomerId(req.params.id as string);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+
+    const { pageNum, limitNum, skip, take } = parsePaging(req);
+    const status = parseStatusFilter((req.query as Record<string, string>).status);
+    const { data, total } = await listCustomerTestSeriesSubscriptions(numId, { skip, take, status }, new Date());
+    return res.status(200).json({ success: true, data, pagination: pageMeta(total, pageNum, limitNum) });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
@@ -203,30 +256,38 @@ export const getCustomerCourseSubscriptions = async (req: Request, res: Response
 
 export const getCustomerEbookSubscriptions = async (req: Request, res: Response) => {
   try {
-    const id = req.params.id as string;
-    if (!customerSql.parseCustomerId(id)) {
-      return res.status(400).json({ success: false, message: "Invalid Customer ID" });
-    }
+    const numId = customerSql.parseCustomerId(req.params.id as string);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
 
-    const { page = "1", limit = "20" } = req.query as Record<string, string>;
-    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
-    const limitNum = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 500);
-
-    // Ebook-subscription model not yet on SQL — empty page on ws_customer branch.
-    return res.status(200).json({
-      success: true,
-      data: [],
-      pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 },
-    });
+    const { pageNum, limitNum, skip, take } = parsePaging(req);
+    const { data, total } = await listCustomerEbookSubscriptions(numId, { skip, take }, new Date());
+    return res.status(200).json({ success: true, data, pagination: pageMeta(total, pageNum, limitNum) });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-export const getCustomerAddresses = async (_req: Request, res: Response) => {
+export const getCustomerBookOrders = async (req: Request, res: Response) => {
   try {
-    // Address admin view not yet on SQL — empty list on ws_customer branch.
-    return res.status(200).json({ success: true, data: [] });
+    const numId = customerSql.parseCustomerId(req.params.id as string);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+
+    const { pageNum, limitNum, skip, take } = parsePaging(req);
+    const { data, total } = await listCustomerBookOrders(numId, { skip, take });
+    return res.status(200).json({ success: true, data, pagination: pageMeta(total, pageNum, limitNum) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getCustomerAddresses = async (req: Request, res: Response) => {
+  try {
+    const numId = customerSql.parseCustomerId(req.params.id as string);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Customer ID" });
+
+    const { pageNum, limitNum, skip, take } = parsePaging(req);
+    const { data, total } = await listCustomerAddresses(numId, { skip, take });
+    return res.status(200).json({ success: true, data, pagination: pageMeta(total, pageNum, limitNum) });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

@@ -56,6 +56,78 @@ export const adminCourseRepository = {
       orderBy: { order: "asc" },
     }),
 
+  // Paginated category-pivot lists for the admin course-detail tabs. Resolved rows
+  // (category meta incl. status) ordered by the course-specific `order`; optional
+  // case-insensitive search on the linked category name.
+  examCategoriesForPaged: (courseId: number, opts: { skip: number; take: number; search?: string }) =>
+    prisma.examCategoryCourse.findMany({
+      where: { courseId, ...(opts.search ? { ExamCategory: { name: { contains: opts.search } } } : {}) },
+      include: { ExamCategory: { select: { id: true, name: true, image: true, status: true } } },
+      orderBy: { order: "asc" },
+      skip: opts.skip,
+      take: opts.take,
+    }),
+  countExamCategoriesFor: (courseId: number, search?: string) =>
+    prisma.examCategoryCourse.count({
+      where: { courseId, ...(search ? { ExamCategory: { name: { contains: search } } } : {}) },
+    }),
+  materialCategoriesForPaged: (courseId: number, opts: { skip: number; take: number; search?: string }) =>
+    prisma.materialCategoryCourse.findMany({
+      where: { courseId, ...(opts.search ? { MaterialCategory: { name: { contains: opts.search } } } : {}) },
+      include: { MaterialCategory: { select: { id: true, name: true, image: true, status: true } } },
+      orderBy: { order: "asc" },
+      skip: opts.skip,
+      take: opts.take,
+    }),
+  countMaterialCategoriesFor: (courseId: number, search?: string) =>
+    prisma.materialCategoryCourse.count({
+      where: { courseId, ...(search ? { MaterialCategory: { name: { contains: search } } } : {}) },
+    }),
+
+  // Physical books linked to a course (Course-Detail "Material (Book)" tab), with
+  // the joined ws_book meta, ordered by the per-course pivot `order`; optional
+  // case-insensitive search on the linked book name.
+  booksForPaged: (courseId: number, opts: { skip: number; take: number; search?: string }) =>
+    prisma.courseBook.findMany({
+      where: { courseId, ...(opts.search ? { Book: { name: { contains: opts.search } } } : {}) },
+      include: { Book: true },
+      orderBy: { order: "asc" },
+      skip: opts.skip,
+      take: opts.take,
+    }),
+  countBooksFor: (courseId: number, search?: string) =>
+    prisma.courseBook.count({
+      where: { courseId, ...(search ? { Book: { name: { contains: search } } } : {}) },
+    }),
+
+  // ── course ↔ book link write ─────────────────────────────────────────────────
+  /** Which of the given book ids actually exist in ws_book. */
+  existingBookIds: (bookIds: number[]) =>
+    bookIds.length
+      ? prisma.book.findMany({ where: { id: { in: bookIds } }, select: { id: true } })
+      : Promise.resolve([] as { id: number }[]),
+  /** Book ids already linked to this course (to skip duplicates on attach). */
+  linkedBookIds: (courseId: number, bookIds: number[]) =>
+    bookIds.length
+      ? prisma.courseBook.findMany({ where: { courseId, bookId: { in: bookIds } }, select: { bookId: true } })
+      : Promise.resolve([] as { bookId: number | null }[]),
+  /** Current highest per-course order (new links append after it). */
+  maxBookOrder: async (courseId: number): Promise<number> => {
+    const top = await prisma.courseBook.findFirst({ where: { courseId }, orderBy: { order: "desc" }, select: { order: true } });
+    return top?.order ?? 0;
+  },
+  createBookLinks: (rows: { courseId: number; bookId: number; order: number; created_at: Date; updated_at: Date }[]) =>
+    prisma.courseBook.createMany({ data: rows }),
+  /** Reorder already-linked books; each update scoped to (courseId, bookId). */
+  reorderBookLinks: (courseId: number, items: { bookId: number; order: number }[], now: Date) =>
+    prisma.$transaction(
+      items.map((it) =>
+        prisma.courseBook.updateMany({ where: { courseId, bookId: it.bookId }, data: { order: it.order, updated_at: now } })
+      )
+    ),
+  unlinkBook: (courseId: number, bookId: number) =>
+    prisma.courseBook.deleteMany({ where: { courseId, bookId } }),
+
   // ── courses: write ──────────────────────────────────────────────────────────
   /** Create course + its material/exam-category pivot rows in one txn. */
   createCourse: (input: {
@@ -109,8 +181,15 @@ export const adminCourseRepository = {
   // ws_package_course_ebook_price is shared (package/course/ebook). A course-OWNED
   // plan has packageId=0 AND ebookId=0 (createPlan writes exactly that), so scope to
   // those — never surface package/ebook (or course+ebook combo) rows under a course.
-  listPlans: (courseId: number) =>
-    prisma.packageCourseEbookPrice.findMany({ where: { courseId, packageId: 0, ebookId: 0 }, orderBy: [{ isDefault: "desc" }, { created_at: "desc" }] }),
+  listPlans: (courseId: number, skip?: number, take?: number) =>
+    prisma.packageCourseEbookPrice.findMany({
+      where: { courseId, packageId: 0, ebookId: 0 },
+      orderBy: [{ isDefault: "desc" }, { created_at: "desc" }],
+      ...(skip !== undefined ? { skip } : {}),
+      ...(take !== undefined ? { take } : {}),
+    }),
+  countPlans: (courseId: number) =>
+    prisma.packageCourseEbookPrice.count({ where: { courseId, packageId: 0, ebookId: 0 } }),
   findPlanById: (id: number) => prisma.packageCourseEbookPrice.findUnique({ where: { id } }),
   createPlan: (data: Prisma.PackageCourseEbookPriceUncheckedCreateInput) => prisma.packageCourseEbookPrice.create({ data }),
   updatePlan: (id: number, data: Prisma.PackageCourseEbookPriceUncheckedUpdateInput) => prisma.packageCourseEbookPrice.update({ where: { id }, data }),

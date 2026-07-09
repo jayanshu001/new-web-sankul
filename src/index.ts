@@ -29,6 +29,7 @@ import { initLiveChatSocket } from "./socket/livechat.socket";
 import { initCameraIngest } from "./socket/camera-ingest";
 import { initPdfProgressSocket } from "./socket/pdf-progress.socket";
 import { initPdfUploadScheduler } from "./admin/pdfUpload/pdfUpload.scheduler";
+import { initExportScheduler } from "./admin/exports/export.scheduler";
 import {
   initPlanPopularityScheduler,
   stopPlanPopularityScheduler,
@@ -116,6 +117,10 @@ const startWorkers = async (): Promise<void> => {
   const t2 = Date.now();
   initPlanPopularityScheduler();
   bootMs("plan popularity scheduler", t2);
+
+  const t3 = Date.now();
+  await initExportScheduler();
+  bootMs("report-export scheduler", t3);
 };
 
 const startServer = async () => {

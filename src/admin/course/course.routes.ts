@@ -22,6 +22,13 @@ import {
   deleteCourse,
   toggleCoursePopular,
   getCoursePlans,
+  getCoursePromocodes,
+  getCourseExamCategories,
+  getCourseMaterialCategories,
+  getCourseBooks,
+  linkCourseBooks,
+  reorderCourseBooks,
+  unlinkCourseBook,
   createCoursePlan,
   getCoursePlanById,
   updateCoursePlan,
@@ -74,6 +81,13 @@ router.patch("/:id/popular", toggleCoursePopular);
 
 // Pricing Plans
 router.get("/:id/plans", getCoursePlans);
+router.get("/:id/promocodes", getCoursePromocodes);
+router.get("/:id/exam-categories", getCourseExamCategories);
+router.get("/:id/material-categories", getCourseMaterialCategories);
+router.get("/:id/books", getCourseBooks);
+router.post("/:id/books", linkCourseBooks);
+router.put("/:id/books/reorder", reorderCourseBooks);
+router.delete("/:id/books/:bookId", unlinkCourseBook);
 router.post("/:id/plans", createCoursePlan);
 router.get("/plans/:planId", getCoursePlanById);
 router.put("/plans/:planId", updateCoursePlan);

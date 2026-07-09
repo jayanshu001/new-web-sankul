@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ExamLanguage } from "../../shared/enums";
+import { ExamLanguage, PaymentMethod } from "../../shared/enums";
 
 // During the Mongo→SQL migration window an id may be either a 24-hex Mongo
 // ObjectId OR a positive integer (SQL autoincrement id, sent as a string by
@@ -121,6 +121,14 @@ export const grantSubscriptionSchema = z.object({
   price: numish.optional(),
   startAt: z.string().optional(),
   remarks: z.string().optional(),
+  // Standardized payment section: method + reference ids recorded on the linked
+  // ws_test_series_order row. Ref ids arrive only for their method.
+  paymentMethod: z.enum(Object.values(PaymentMethod) as [string, ...string[]]).optional(),
+  bankTransactionId: z.string().optional().nullable(),
+  razorpayOrderId: z.string().optional().nullable(),
+  razorpayPaymentId: z.string().optional().nullable(),
+  // Subscription Type = Extend: top up the existing sub instead of a fresh row.
+  extend: boolish.optional(),
 });
 
 export const updateSubscriptionSchema = z.object({
