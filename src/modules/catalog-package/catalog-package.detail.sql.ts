@@ -23,6 +23,7 @@ import { descendantsOf } from "../catalog-category-tree/category-tree.service";
 import { listActivePricesByPackage } from "../commerce-price/commerce-price.service";
 import { getActivePackageSubscription } from "../commerce-subscription/commerce-subscription.service";
 import { appliesToGroups } from "../promo-code/promo-code.service";
+import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
 
 const descendantIds = async (table: string, parentCol: string, rootId: number): Promise<number[]> => {
   const rows = await prisma.$queryRawUnsafe<{ id: number }[]>(
@@ -85,7 +86,9 @@ const examGroups = async (packageId: number) => {
     ordered.map(async (cat) => {
       const sub = await descendantIds("ws_exam_category", "parent_id", cat.id);
       const [count, childCount] = await Promise.all([
-        prisma.exam.count({ where: { examCategoryId: { in: sub }, status: true } }),
+        prisma.exam.count({
+          where: { AND: [examInCategoriesWhere(sub), { status: true }] },
+        }),
         prisma.examCategory.count({ where: { parent: cat.id, status: true } }),
       ]);
       return { category: { _id: String(cat.id), title: cat.name, name: cat.name, image: cat.image, havingChildDirectory: childCount > 0, count } };

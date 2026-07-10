@@ -70,7 +70,13 @@
       "createdAt": "2023-02-27T08:44:10.000Z",
       "updatedAt": "2023-02-27T08:44:10.000Z"
     }
-  ]
+  ],
+  "pagination": {
+    "total": 6,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
 }
 ```
 
@@ -105,7 +111,13 @@ _(2 calls captured for this endpoint; first shown.)_
       "updatedAt": "2025-08-01T11:49:16.000Z",
       "courseCount": 1
     }
-  ]
+  ],
+  "pagination": {
+    "total": 1,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
 }
 ```
 

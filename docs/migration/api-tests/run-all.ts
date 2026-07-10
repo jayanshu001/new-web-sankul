@@ -41,6 +41,7 @@ import { runEbookOrderClientApiTests } from "./ebook-order/client.api.test.js";
 import { runBookOrderClientApiTests } from "./book-order/client.api.test.js";
 import { runOfflineEnquiryClientApiTests } from "./offline-enquiry/client.api.test.js";
 import { runPackageChatClientApiTests } from "./package-chat/client.api.test.js";
+import { runExamCategoryPivotApiTests } from "./exam-category-pivot/pivot.api.test.js";
 
 async function main() {
   console.log("Migrated modules:", MIGRATED_API_MODULES.map((m) => m.key).join(", "));
@@ -85,6 +86,7 @@ async function main() {
     runBookOrderClientApiTests,
     runOfflineEnquiryClientApiTests,
     runPackageChatClientApiTests,
+    runExamCategoryPivotApiTests,
   ];
 
   let ok = true;

@@ -695,6 +695,7 @@ model ExamCategory {
   exam                Exam[]
   examCategoryPackage ExamCategoryPackage[]
   examCategoryCourse  ExamCategoryCourse[]
+  examCategoryPivot   ExamCategoryPivot[]
 
   @@map("ws_exam_category")
 }
@@ -723,8 +724,23 @@ model Exam {
   examQuestion      ExamQuestion[]
   examResultDetail  ExamResultDetail[]
   examResult        ExamResult[]
+  examCategoryPivot ExamCategoryPivot[]
 
   @@map("ws_exam")
+}
+
+model ExamCategoryPivot {
+  id         BigInt       @id @default(autoincrement()) @db.UnsignedBigInt
+  examId     Int          @map("exam_id")
+  categoryId Int          @map("category_id")
+  created_at DateTime?
+  updated_at DateTime?
+  Exam       Exam         @relation(fields: [examId], references: [id], onDelete: Cascade)
+  Category   ExamCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, categoryId], map: "ws_exam_category_pivot_exam_id_category_id_unique")
+  @@index([categoryId, examId], map: "ws_exam_category_pivot_category_id_exam_id_index")
+  @@map("ws_exam_category_pivot")
 }
 
 model ExamQuestion {

@@ -1,4 +1,5 @@
 import { adminExamRepository as repo } from "./admin-exam.repository";
+import { replaceExamCategoryPivot } from "../catalog-exam/exam-category-pivot.where";
 
 export const ADMIN_EXAM_MODULE = "admin-exam";
 export const isAdminExamMysql = (): boolean => true;
@@ -155,6 +156,7 @@ export const createExam = async (input: ExamWriteInput): Promise<"category_requi
     createAt: now,
     updatedAt: now,
   });
+  await replaceExamCategoryPivot(row.id, catId);
   // Unpopulated categoryId (string id) — matches the Mongo create response.
   return toExamDto(row);
 };
@@ -202,6 +204,7 @@ export const updateExam = async (id: number, input: ExamWriteInput): Promise<"no
   }
 
   const row = await repo.updateExam(id, data);
+  if (row.examCategoryId != null) await replaceExamCategoryPivot(id, row.examCategoryId);
   return { data: toExamDto(row), orphanPdfUrl };
 };
 
