@@ -52,8 +52,11 @@ export const buildSubReportQuery = (q: Record<string, string>, paramsId?: string
   status: q.status,
   paymentMethod: q.paymentMethod,
   activationType: q.activationType,
-  dateFrom: q.dateFrom ?? q.fromDate,
-  dateTo: q.dateTo ?? q.toDate,
+  // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is the
+  // unified cross-report name (reports-date-filter-created-at.md); dateFrom/dateTo +
+  // fromDate/toDate kept as legacy aliases.
+  dateFrom: q.createdFrom ?? q.dateFrom ?? q.fromDate,
+  dateTo: q.createdTo ?? q.dateTo ?? q.toDate,
   startFrom: q.startFrom,
   endTo: q.endTo,
   search: q.search,

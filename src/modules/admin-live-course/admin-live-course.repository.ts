@@ -67,6 +67,15 @@ export const adminLiveCourseRepository = {
   buildSubBaseWhere: (opts: SubReportFilter): Prisma.LiveCourseSubscriptionWhereInput => buildSubWhere(opts),
   listSubsByWhere: (where: Prisma.LiveCourseSubscriptionWhereInput, sortBy: string, sortDir: "asc" | "desc", skip: number, take: number) =>
     prisma.liveCourseSubscription.findMany({ where, orderBy: { [subSortCol(sortBy)]: sortDir }, skip, take }),
+  // Keyset page for the UNBOUNDED export: id DESC, rows strictly older than the last
+  // id seen — no deep OFFSET, so the caller can walk the full filtered set (lakhs) in
+  // O(take) pages with no row cap. See the service export iterator.
+  listSubsPageKeyset: (where: Prisma.LiveCourseSubscriptionWhereInput, beforeId: number | undefined, take: number) =>
+    prisma.liveCourseSubscription.findMany({
+      where: beforeId ? { AND: [where, { id: { lt: beforeId } }] } : where,
+      orderBy: { id: "desc" },
+      take,
+    }),
   aggSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) =>
     prisma.liveCourseSubscription.aggregate({ where, _sum: { paidAmount: true }, _count: { _all: true } }),
   countSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) => prisma.liveCourseSubscription.count({ where }),

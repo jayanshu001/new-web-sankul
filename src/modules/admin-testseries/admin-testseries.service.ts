@@ -932,11 +932,12 @@ const fmtExportDate = (d: Date | string | null | undefined): string => {
 };
 
 // Column set follows the Subscription export order so the reports line up, minus the
-// columns that don't apply to a digital test series (Address/City/Pincode, Material
-// Type, Course/Material Amount — dropped per FE request). Test series is a course-type
-// product, so its name sits in "Course Name" (mirrors the FE productCell for
-// testSeries); Package Name + the null-source columns (Promoter/Educator/WS Coin/
-// Activated By) have no test-series source and stay blank.
+// columns that don't apply to a digital test series and were dropped per FE request:
+// Address/City/Pincode, Material Type, Course/Material Amount, plus the four with no
+// test-series data source (Promoter Name, Educator Name, WS Coin, Activated By) — the
+// FE hides all of these on the Test Series screen, so the export matches. Test series
+// is a course-type product, so its name sits in "Course Name" (mirrors the FE
+// productCell for testSeries); Package Name + Alternate Phone stay (blank) for now.
 const TS_SUB_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number }[] = [
   { header: "Created At", get: (r) => fmtExportDate(r.createdAt) },
   { header: "Order Method", get: (r) => r.orderMethod ?? "" },
@@ -946,19 +947,16 @@ const TS_SUB_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number 
   { header: "Alternate Phone", get: () => "" },
   { header: "Package Name", get: () => "" },
   { header: "Course Name", get: (r) => r.product?.name ?? "" },
-  { header: "Educator Name", get: () => "" },
   { header: "Plan", get: (r) => r.plan?.name ?? "" },
   { header: "Start At", get: (r) => fmtExportDate(r.startAt) },
   { header: "End At", get: (r) => fmtExportDate(r.endAt) },
   { header: "Status", get: (r) => r.status ?? "" },
   { header: "Activation Type", get: (r) => r.paymentMethod ?? "" },
-  { header: "Promoter Name", get: (r) => r.promoterName ?? "" },
   { header: "Promocode", get: (r) => r.promocode ?? "" },
   { header: "Remarks", get: (r) => r.remarks ?? "" },
   { header: "Payment Id", get: (r) => r.razorpayPaymentId ?? "" },
   { header: "Order ID", get: (r) => r.razorpayOrderId ?? "" },
   { header: "Bank Transaction Id", get: (r) => r.bankTransactionId ?? "" },
-  { header: "WS Coin", get: (r) => r.wsCoin ?? "" },
   { header: "Amount", get: (r) => r.amount ?? "" },
   { header: "Activated By", get: (r) => r.activatedBy ?? "" },
 ];

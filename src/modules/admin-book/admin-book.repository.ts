@@ -68,6 +68,21 @@ export const adminBookRepository = {
       skip: opts.skip,
       take: opts.take,
     }),
+  // Keyset page for the UNBOUNDED export: same filter + includes as listOrders,
+  // ordered id DESC, rows strictly older than the last id seen — no deep OFFSET, no row
+  // cap, so the caller can walk the full filtered set (lakhs) in O(take) pages.
+  listOrdersPageKeyset: (opts: Parameters<typeof buildOrderWhere>[0], beforeId: number | undefined, take: number) => {
+    const base = buildOrderWhere(opts);
+    return prisma.bookOrder.findMany({
+      where: beforeId ? { AND: [base, { id: { lt: beforeId } }] } : base,
+      include: {
+        user: { select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } },
+        shipping: true,
+      },
+      orderBy: { id: "desc" },
+      take,
+    });
+  },
   countOrders: (opts: { customerId?: number; status?: string; state?: number; fromDate?: Date; toDate?: Date; orderIdsIn?: string[]; customerIdsIn?: number[]; receiptSearch?: string; bookOrderKeysIn?: string[] }) =>
     prisma.bookOrder.count({ where: buildOrderWhere(opts) }),
 

@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { PassThrough } from "node:stream";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminLiveCourseRepository as repo } from "./admin-live-course.repository";
@@ -280,6 +281,18 @@ export interface SubReportQuery {
 const coercePayMethod = (v?: string): "online" | "backend" | undefined =>
   v === "online" ? "online" : v === "backend" ? "backend" : undefined;
 
+// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to →
+// 23:59:59.999 at Asia/Kolkata, +05:30); full timestamps pass through. The
+// createdAt date filter honors IST day boundaries (a naive UTC parse would drop
+// the last 5.5h of the day). Invalid → undefined (no bound). Mirrors the
+// Subscription + Test Series reports.
+const parseDayBoundIst = (v: string | undefined, end: boolean): Date | undefined => {
+  if (!v) return undefined;
+  const s = v.trim();
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`) : new Date(s);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+};
+
 // Shared filter resolution for the subscriptions list + its CSV/Excel exports, so
 // all three honor an identical param contract. Returns the composed `where` (base
 // filters AND normalized-status fragment) + sort, or a discriminated string for a
@@ -308,8 +321,8 @@ const resolveSubFilter = async (
     // activationType shares the online|backend semantics (razorpay_order_id
     // presence); paymentMethod wins when both are sent.
     paymentMethod: coercePayMethod(q.paymentMethod) ?? coercePayMethod(q.activationType),
-    fromDate: q.dateFrom ? new Date(q.dateFrom) : undefined,
-    toDate: q.dateTo ? new Date(q.dateTo) : undefined,
+    fromDate: parseDayBoundIst(q.dateFrom, false),
+    toDate: parseDayBoundIst(q.dateTo, true),
     startFrom: q.startFrom ? new Date(q.startFrom) : undefined,
     endTo: q.endTo ? new Date(q.endTo) : undefined,
     customerIdsIn,
@@ -369,8 +382,9 @@ export const listSubscriptions = async (q: SubReportQuery & {
 };
 
 // ── subscription report export (CSV / Excel) ──────────────────────────────────
-// Full filtered set (no pagination) for the report exports. Capped defensively.
-const LIVE_SUB_EXPORT_MAX = 100000;
+// Entire filtered set (no pagination) and NO row cap — paged in keyset batches
+// (id DESC, no deep OFFSET) and mapped per batch so memory stays bounded (lakhs OK).
+const LIVE_SUB_EXPORT_BATCH = 5000;
 
 // One flat export row per subscription. Only fields the list already fetches (raw
 // ws_live_course_subscription row + customer/course maps) are populated; columns
@@ -401,22 +415,38 @@ const buildSubExportRow = (
   };
 };
 
-// Resolve the full filtered set to export rows (or a bad-id discriminator).
-export const exportSubscriptionRows = async (
-  q: SubReportQuery
-): Promise<"bad_course" | "bad_customer" | ReturnType<typeof buildSubExportRow>[]> => {
-  const now = new Date();
-  const filter = await resolveSubFilter(q, now);
-  if (filter === "bad_course" || filter === "bad_customer") return filter;
-  if (filter === "empty") return [];
-
-  const rows = await repo.listSubsByWhere(filter.listWhere, filter.sortBy, filter.sortDir, 0, LIVE_SUB_EXPORT_MAX);
+// Map one keyset batch of raw subscription rows to export rows (resolve the
+// customer/course maps for just that batch).
+const mapSubExportBatch = async (rows: LiveCourseSubscription[], now: Date) => {
   const custs = new Map((await repo.customersByIds([...new Set(rows.map((r) => r.customerId).filter((x) => x > 0))])).map((c) => [c.id, c]));
   const courses = new Map((await repo.coursesByIds([...new Set(rows.map((r) => r.liveCourseId))])).map((c) => [c.id, c]));
   return rows.map((r) => buildSubExportRow(r, r.customerId ? custs.get(r.customerId) : undefined, courses.get(r.liveCourseId), now));
 };
 
-const fmtExportDate = (d: Date | string | null | undefined): string => (d ? new Date(d).toISOString() : "");
+// Walk the entire filtered set in keyset batches (no cap). `filter` is the resolved
+// where+sort from resolveSubFilter (the caller handles bad-id/empty first).
+async function* iterateSubExportRows(filter: { listWhere: any }, now: Date) {
+  let beforeId: number | undefined;
+  for (;;) {
+    const rows = await repo.listSubsPageKeyset(filter.listWhere, beforeId, LIVE_SUB_EXPORT_BATCH);
+    if (!rows.length) break;
+    yield await mapSubExportBatch(rows, now);
+    if (rows.length < LIVE_SUB_EXPORT_BATCH) break;
+    beforeId = rows[rows.length - 1].id;
+  }
+}
+
+// IST (Asia/Kolkata, +5:30, no DST) `YYYY-MM-DD HH:mm:ss`, e.g. "2026-10-06 00:01:21"
+// — unified with the Subscription / Test Series exports (was raw UTC ISO).
+const IST_OFFSET_MS = 330 * 60_000;
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+const fmtExportDate = (d: Date | string | null | undefined): string => {
+  if (!d) return "";
+  const t = new Date(d);
+  if (Number.isNaN(t.getTime())) return "";
+  const s = new Date(t.getTime() + IST_OFFSET_MS);
+  return `${s.getUTCFullYear()}-${pad2(s.getUTCMonth() + 1)}-${pad2(s.getUTCDate())} ${pad2(s.getUTCHours())}:${pad2(s.getUTCMinutes())}:${pad2(s.getUTCSeconds())}`;
+};
 
 // Column order mirrors the detailed subscription report table. Values not exposed
 // by a live-course subscription render as an empty string (per the request doc).
@@ -451,25 +481,45 @@ const LIVE_SUB_EXPORT_COLUMNS: { header: string; get: (i: ReturnType<typeof buil
 ];
 
 export const buildSubscriptionsCsv = async (q: SubReportQuery): Promise<"bad_course" | "bad_customer" | string> => {
-  const rows = await exportSubscriptionRows(q);
-  if (rows === "bad_course" || rows === "bad_customer") return rows;
+  const now = new Date();
+  const filter = await resolveSubFilter(q, now);
+  if (filter === "bad_course" || filter === "bad_customer") return filter;
   const esc = (v: string | number) => {
     const s = v === null || v === undefined ? "" : String(v);
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [LIVE_SUB_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
-  for (const r of rows) lines.push(LIVE_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  if (filter !== "empty") {
+    for await (const batch of iterateSubExportRows(filter, now)) {
+      for (const r of batch) lines.push(LIVE_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+    }
+  }
   return lines.join("\n");
 };
 
 export const buildSubscriptionsXlsx = async (q: SubReportQuery): Promise<"bad_course" | "bad_customer" | Buffer> => {
-  const rows = await exportSubscriptionRows(q);
-  if (rows === "bad_course" || rows === "bad_customer") return rows;
-  const wb = new ExcelJS.Workbook();
+  const now = new Date();
+  const filter = await resolveSubFilter(q, now);
+  if (filter === "bad_course" || filter === "bad_customer") return filter;
+  const pass = new PassThrough();
+  const chunks: Buffer[] = [];
+  pass.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+  const finished = new Promise<void>((resolve, reject) => {
+    pass.once("end", resolve);
+    pass.once("error", reject);
+  });
+  const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: pass, useStyles: false, useSharedStrings: false });
   const ws = wb.addWorksheet("Live Course Subscriptions");
   ws.columns = LIVE_SUB_EXPORT_COLUMNS.map((c) => ({ header: c.header, key: c.header, width: 22 }));
-  for (const r of rows) ws.addRow(LIVE_SUB_EXPORT_COLUMNS.map((c) => c.get(r)));
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  if (filter !== "empty") {
+    for await (const batch of iterateSubExportRows(filter, now)) {
+      for (const r of batch) ws.addRow(LIVE_SUB_EXPORT_COLUMNS.map((c) => c.get(r))).commit();
+    }
+  }
+  ws.commit();
+  await wb.commit();
+  await finished;
+  return Buffer.concat(chunks);
 };
 
 export const getSubscription = async (id: number): Promise<"not_found" | any> => {

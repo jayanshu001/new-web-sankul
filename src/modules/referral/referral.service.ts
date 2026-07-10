@@ -343,11 +343,30 @@ export const adminRejectWithdrawal = async (id: number) => {
 };
 
 // ─── Reports + CSV ─────────────────────────────────────────────────────────
-const parseReportWindow = (fromDate?: string, toDate?: string) => {
-  const from = fromDate ? new Date(fromDate) : undefined;
-  let to: Date | undefined;
-  if (toDate) { to = new Date(toDate); to.setHours(23, 59, 59, 999); }
-  return { from, to };
+// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to →
+// 23:59:59.999 at Asia/Kolkata, +05:30) so the admin's calendar pick includes the
+// full IST day (a naive UTC/local parse dropped the last 5.5h). Bounds created_at.
+const parseIstDayBound = (v: string | undefined, end: boolean): Date | undefined => {
+  if (!v) return undefined;
+  const s = v.trim();
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`) : new Date(s);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+};
+const parseReportWindow = (fromDate?: string, toDate?: string) => ({
+  from: parseIstDayBound(fromDate, false),
+  to: parseIstDayBound(toDate, true),
+});
+
+// IST (Asia/Kolkata, +5:30, no DST) `YYYY-MM-DD HH:mm:ss` — unified with the other
+// report exports (was raw UTC ISO).
+const IST_OFFSET_MS = 330 * 60_000;
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+const fmtExportDate = (d: Date | string | null | undefined): string => {
+  if (!d) return "";
+  const t = new Date(d);
+  if (Number.isNaN(t.getTime())) return "";
+  const s = new Date(t.getTime() + IST_OFFSET_MS);
+  return `${s.getUTCFullYear()}-${pad2(s.getUTCMonth() + 1)}-${pad2(s.getUTCDate())} ${pad2(s.getUTCHours())}:${pad2(s.getUTCMinutes())}:${pad2(s.getUTCSeconds())}`;
 };
 
 export const adminWithdrawalsReport = async (q: {
@@ -391,7 +410,7 @@ export const adminWithdrawalsCsv = async (q: { status?: string; fromDate?: strin
   const header = ["Bank Account Holder Name", "Bank Account Number", "IFSC Code", "Amount", "Status", "Date"];
   const lines = [header.join(",")];
   for (const r of rows) {
-    lines.push([esc(r.accountHolderName), esc(r.accountNumber), esc(r.ifscCode), esc(num(r.coin)), esc(r.status), esc(r.date ? new Date(r.date).toISOString() : "")].join(","));
+    lines.push([esc(r.accountHolderName), esc(r.accountNumber), esc(r.ifscCode), esc(num(r.coin)), esc(r.status), esc(fmtExportDate(r.date))].join(","));
   }
   return lines.join("\n");
 };

@@ -15,6 +15,78 @@
 
 ---
 
+## 2026-07-10 — Unify export dates (IST) + createdAt filter across remaining reports
+
+> **Query-shape + export-format change. No schema/DDL.** `yarn typecheck` green.
+> Closes the two consistency gaps so ALL six reports match on date TZ + filter contract.
+
+- **IST export timestamps** `YYYY-MM-DD HH:mm:ss` now on **Live Course, Ebook, Book Orders**
+  exporters too (their `fmtExportDate` was raw UTC ISO) — matching Subscription + Test
+  Series. Referral CSV's Date column likewise (+ a new `fmtExportDate` there).
+- **Date filter → `createdAt` at IST day edges** for **Ebook, Book Orders, Referral**
+  (all three already bound `createdAt`; the bounds were parsed at UTC/local, dropping the
+  last 5.5h). Fixed the day-edge parsers to `+05:30`:
+  - Ebook: `parseDateBound` (admin-ebook.service) + controller accepts `createdFrom`/`createdTo`.
+  - Book: `parseDayBound` (admin-book.service) + controller `parseOrderReportQuery` accepts them.
+  - Referral: new `parseIstDayBound` replacing `parseReportWindow`'s UTC/local edges; the
+    admin wrapper's `WithdrawalsReportQuery`/`WithdrawalsCsvQuery` accept `createdFrom`/`createdTo`.
+  All keep their legacy `dateFrom`/`dateTo` (+ `fromDate`/`toDate`) aliases.
+
+Net: every report now (a) exports IST `YYYY-MM-DD HH:mm:ss` dates and (b) accepts
+`createdFrom`/`createdTo` → `createdAt` at IST day boundaries.
+
+## 2026-07-10 — All report exports uncapped + streamed (lakhs-safe) + book/referral async
+
+> **Query-shape + async-registry change. No schema/DDL.** `yarn typecheck` green.
+> Goal: every report export handles lakhs of rows without truncation or the gateway 504.
+
+Applied the Subscription/Test-Series export approach (keyset id-DESC batches of 5,000 +
+streaming `ExcelJS.stream.xlsx.WorkbookWriter` → memory-bounded, no cap) to the remaining
+report exporters, and registered the two that weren't async-capable:
+
+- **Live Course** (`modules/admin-live-course`): dropped `LIVE_SUB_EXPORT_MAX` (100k);
+  builders resolve the bad-id/empty discriminator first, then stream via
+  new repo `listSubsPageKeyset`. Removed the old `exportSubscriptionRows`.
+- **Ebook** (`modules/admin-ebook`): dropped `EBOOK_SUB_EXPORT_MAX`; new repo
+  `listSubscriptionsPageKeyset` (same includes), streamed builders.
+- **Book Orders** (`modules/admin-book`): dropped `ORDERS_EXPORT_MAX`; new repo
+  `listOrdersPageKeyset`; extracted `flattenOrdersToExportRows` (one row per book line)
+  so batches flatten + stream. Exported `parseOrderReportQuery` from the controller.
+- **Async registry** (`modules/export-job/export-job.registry`): added `bookOrder`
+  (reuses `buildOrdersCsv`/`Xlsx` + `parseOrderReportQuery`) and `referral` (reuses the
+  already-uncapped `buildWithdrawalsCsv`; CSV-only — throws on Excel, matching the FE).
+  Both were previously absent (fell back to the sync endpoint → 504 on large data).
+
+Keyset ordering is `id DESC` for all exports (≈ createdAt DESC default; a custom `sortBy`
+no longer reorders the export file, only the on-screen list). Referral withdrawals are
+low-volume + already uncapped, so left buffered (not keyset-streamed); async registration
+removes its 504 risk. Date formats on live-course/ebook/book exports are unchanged
+(only Subscription + Test Series use the IST `YYYY-MM-DD HH:mm:ss` format so far).
+
+## 2026-07-10 — Live Course report: createdFrom/createdTo → createdAt at IST edges
+
+> **Query-shape change only. No schema/DDL.** `admin/live-courses/.../subscriptions`
+> list + `/export/csv` + `/export/excel` + async `type:"liveCourseSub"`
+> (`modules/admin-live-course`, `admin/live-course/live-course.subscription.controller`).
+> `yarn typecheck` green. Request: `reports-date-filter-created-at.md` (Live Course action item).
+
+The merged FE report now sends `createdFrom`/`createdTo` for Live Course too. Controller
+`buildSubReportQuery` accepts them (with `dateFrom`/`dateTo` + `fromDate`/`toDate` legacy
+aliases) → the service's `fromDate`/`toDate` which already bind `createdAt`. Added
+`parseDayBoundIst` so a bare `YYYY-MM-DD` is bounded at IST day edges (`+05:30`) instead
+of naive UTC (was dropping the last 5.5h). `startFrom`/`endTo` (→ startAt/endAt export
+bounds) are unchanged.
+
+## 2026-07-10 — Test Series export: drop 4 more null-source columns
+
+> **Export column change only.** `modules/admin-testseries` `TS_SUB_EXPORT_COLUMNS`.
+> `/export/csv` + `/export/excel` + async `type:"testSeriesSub"`. `yarn typecheck` green.
+
+Per FE confirmation, also removed the 4 columns with no test-series data source —
+`Promoter Name`, `Educator Name`, `WS Coin`, `Activated By` — so the export matches the
+trimmed Test Series screen (which hides them). Row DTO still returns those fields (null).
+`Package Name` + `Alternate Phone` remain (blank).
+
 ## 2026-07-10 — Test Series export: drop non-applicable columns
 
 > **Export column change only. No query/schema change.** `modules/admin-testseries`

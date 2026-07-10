@@ -94,6 +94,26 @@ export const adminEbookRepository = {
       skip: opts.skip,
       take: opts.take,
     }),
+  // Keyset page for the UNBOUNDED export: same filter + includes as listSubscriptions,
+  // ordered id DESC, rows strictly older than the last id seen — no deep OFFSET, no row
+  // cap, so the caller can walk the full filtered set (lakhs) in O(take) pages.
+  listSubscriptionsPageKeyset: (opts: SubFilter, beforeId: number | undefined, take: number) => {
+    const base = buildSubWhere(opts);
+    return prisma.eBookSubscription.findMany({
+      where: beforeId ? { AND: [base, { id: { lt: beforeId } }] } : base,
+      include: {
+        customer: { select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } },
+        eBook: { select: { id: true, name: true, image: true, thumbnail: true, author: true } },
+        eBookOrder: {
+          select: { id: true, paymentMethod: true, orderPrice: true, status: true, planId: true,
+            gatewayOrderId: true, gatewayPaymentId: true,
+            PackageCourseEbookPrice: { select: { id: true, name: true, duration: true, price: true } } },
+        },
+      },
+      orderBy: { id: "desc" },
+      take,
+    });
+  },
   countSubscriptions: (opts: SubFilter) =>
     prisma.eBookSubscription.count({ where: buildSubWhere(opts) }),
 

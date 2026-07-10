@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { PassThrough } from "node:stream";
 import { prisma } from "../../config/prisma";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminBookRepository as repo } from "./admin-book.repository";
@@ -13,14 +14,15 @@ export const parseBookId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-// Parse a date-range bound. A bare "YYYY-MM-DD" is pinned to the day edge so the
-// range is inclusive (from → 00:00:00.000, to → 23:59:59.999); full timestamps
-// pass through unchanged. Invalid input → undefined (no bound).
+// Parse a date-range bound. A bare "YYYY-MM-DD" is pinned to the IST day edge
+// (from → 00:00:00.000, to → 23:59:59.999 at Asia/Kolkata, +05:30) so the admin's
+// calendar-date pick includes the full IST day (a naive UTC parse drops the last
+// 5.5h); full timestamps pass through unchanged. Invalid input → undefined.
 const parseDayBound = (v: string | undefined, end: boolean): Date | undefined => {
   if (!v) return undefined;
   const s = v.trim();
   const d = /^\d{4}-\d{2}-\d{2}$/.test(s)
-    ? new Date(`${s}${end ? "T23:59:59.999" : "T00:00:00.000"}`)
+    ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`)
     : new Date(s);
   return Number.isNaN(d.getTime()) ? undefined : d;
 };
@@ -447,12 +449,22 @@ export const listOrders = async (q: OrderReportQuery & { page: number; limit: nu
 };
 
 // ── orders: CSV / Excel export ───────────────────────────────────────────────
-// Full filtered set (no pagination). Capped defensively. One export ROW per book
-// LINE — each order's items[] is flattened, repeating the order-level fields, to
-// mirror the on-screen table.
-const ORDERS_EXPORT_MAX = 100000;
+// Entire filtered set (no pagination) and NO row cap — keyset-paged (id DESC, no deep
+// OFFSET), enriched per batch (lakhs OK). One export ROW per book LINE — each order's
+// items[] is flattened, repeating the order-level fields, to mirror the on-screen table.
+const ORDERS_EXPORT_BATCH = 5000;
 
-const fmtExportDate = (d: Date | string | null | undefined): string => (d ? new Date(d).toISOString() : "");
+// IST (Asia/Kolkata, +5:30, no DST) `YYYY-MM-DD HH:mm:ss`, e.g. "2026-10-06 00:01:21"
+// — unified with the Subscription / Test Series exports (was raw UTC ISO).
+const IST_OFFSET_MS = 330 * 60_000;
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+const fmtExportDate = (d: Date | string | null | undefined): string => {
+  if (!d) return "";
+  const t = new Date(d);
+  if (Number.isNaN(t.getTime())) return "";
+  const s = new Date(t.getTime() + IST_OFFSET_MS);
+  return `${s.getUTCFullYear()}-${pad2(s.getUTCMonth() + 1)}-${pad2(s.getUTCDate())} ${pad2(s.getUTCHours())}:${pad2(s.getUTCMinutes())}:${pad2(s.getUTCSeconds())}`;
+};
 
 type OrderExportRow = {
   orderDate: string;
@@ -476,12 +488,8 @@ type OrderExportRow = {
   status: string;
 };
 
-export const exportOrderRows = async (q: OrderReportQuery): Promise<OrderExportRow[]> => {
-  const opts = await resolveOrderOpts(q);
-  if (!opts) return [];
-  const rows = await repo.listOrders({ ...opts, skip: 0, take: ORDERS_EXPORT_MAX });
-  const enriched = await enrichOrders(rows);
-
+// Flatten one enriched batch of orders into export ROWS (one per book line).
+const flattenOrdersToExportRows = (enriched: Awaited<ReturnType<typeof enrichOrders>>): OrderExportRow[] => {
   const out: OrderExportRow[] = [];
   for (const e of enriched) {
     const r = e.row;
@@ -524,6 +532,19 @@ export const exportOrderRows = async (q: OrderReportQuery): Promise<OrderExportR
   return out;
 };
 
+// Walk the whole filtered set in keyset batches (no cap); yields flattened export
+// rows per batch. `opts` is the resolved order filter (caller handles the empty case).
+async function* iterateOrderExportRows(opts: NonNullable<Awaited<ReturnType<typeof resolveOrderOpts>>>) {
+  let beforeId: number | undefined;
+  for (;;) {
+    const rows = await repo.listOrdersPageKeyset(opts, beforeId, ORDERS_EXPORT_BATCH);
+    if (!rows.length) break;
+    yield flattenOrdersToExportRows(await enrichOrders(rows));
+    if (rows.length < ORDERS_EXPORT_BATCH) break;
+    beforeId = rows[rows.length - 1].id;
+  }
+}
+
 // Column order matches the on-screen orders table (19 cols, one row per book line).
 const ORDER_EXPORT_COLUMNS: { header: string; get: (r: OrderExportRow) => string | number }[] = [
   { header: "Order Date", get: (r) => r.orderDate },
@@ -548,23 +569,41 @@ const ORDER_EXPORT_COLUMNS: { header: string; get: (r: OrderExportRow) => string
 ];
 
 export const buildOrdersCsv = async (q: OrderReportQuery): Promise<string> => {
-  const rows = await exportOrderRows(q);
+  const opts = await resolveOrderOpts(q);
   const esc = (v: string | number) => {
     const s = v === null || v === undefined ? "" : String(v);
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [ORDER_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
-  for (const r of rows) lines.push(ORDER_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  if (opts) {
+    for await (const batch of iterateOrderExportRows(opts)) {
+      for (const r of batch) lines.push(ORDER_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+    }
+  }
   return lines.join("\n");
 };
 
 export const buildOrdersXlsx = async (q: OrderReportQuery): Promise<Buffer> => {
-  const rows = await exportOrderRows(q);
-  const wb = new ExcelJS.Workbook();
+  const opts = await resolveOrderOpts(q);
+  const pass = new PassThrough();
+  const chunks: Buffer[] = [];
+  pass.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+  const finished = new Promise<void>((resolve, reject) => {
+    pass.once("end", resolve);
+    pass.once("error", reject);
+  });
+  const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: pass, useStyles: false, useSharedStrings: false });
   const ws = wb.addWorksheet("Book Orders");
   ws.columns = ORDER_EXPORT_COLUMNS.map((c) => ({ header: c.header, key: c.header, width: 20 }));
-  for (const r of rows) ws.addRow(ORDER_EXPORT_COLUMNS.map((c) => c.get(r)));
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  if (opts) {
+    for await (const batch of iterateOrderExportRows(opts)) {
+      for (const r of batch) ws.addRow(ORDER_EXPORT_COLUMNS.map((c) => c.get(r))).commit();
+    }
+  }
+  ws.commit();
+  await wb.commit();
+  await finished;
+  return Buffer.concat(chunks);
 };
 
 /** Batch-load the books referenced by a set of line items, keyed by id. */

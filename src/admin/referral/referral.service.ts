@@ -129,6 +129,10 @@ export const rejectWithdrawal = async (id: string) => {
 export interface WithdrawalsReportQuery {
   fromDate?: string;
   toDate?: string;
+  // Unified cross-report name for the createdAt window (reports-date-filter-created-at.md);
+  // fromDate/toDate kept as legacy aliases. Bounds `ws_refferal_transaction.created_at`.
+  createdFrom?: string;
+  createdTo?: string;
   status?: string;
   search?: string;
   page?: string;
@@ -136,11 +140,11 @@ export interface WithdrawalsReportQuery {
 }
 
 export const getWithdrawalsReport = async (query: WithdrawalsReportQuery) => {
-  const { fromDate, toDate, status, search, page = "1", limit = "10" } = query;
+  const { fromDate, toDate, createdFrom, createdTo, status, search, page = "1", limit = "10" } = query;
 
   const pageNum = Math.max(parseInt(page, 10) || 1, 1);
   const limitNum = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 200);
-  const { data, total } = await refSql.adminWithdrawalsReport({ status, fromDate, toDate, search, page: pageNum, limit: limitNum });
+  const { data, total } = await refSql.adminWithdrawalsReport({ status, fromDate: createdFrom ?? fromDate, toDate: createdTo ?? toDate, search, page: pageNum, limit: limitNum });
   return { data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
 
@@ -151,12 +155,15 @@ export const getWithdrawalsReport = async (query: WithdrawalsReportQuery) => {
 export interface WithdrawalsCsvQuery {
   fromDate?: string;
   toDate?: string;
+  // Unified createdAt-window name; fromDate/toDate kept as legacy aliases.
+  createdFrom?: string;
+  createdTo?: string;
   status?: string;
 }
 
 export const buildWithdrawalsCsv = async (query: WithdrawalsCsvQuery): Promise<string> => {
-  const { fromDate, toDate, status } = query;
-  return refSql.adminWithdrawalsCsv({ status, fromDate, toDate });
+  const { fromDate, toDate, createdFrom, createdTo, status } = query;
+  return refSql.adminWithdrawalsCsv({ status, fromDate: createdFrom ?? fromDate, toDate: createdTo ?? toDate });
 };
 
 // ──────────────────────────────────────────────────────────────────────────────

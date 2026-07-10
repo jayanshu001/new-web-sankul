@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { PassThrough } from "node:stream";
 import { computeEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminEbookRepository as repo } from "./admin-ebook.repository";
@@ -22,10 +23,13 @@ const PAYMENT_METHOD_BY_LOWER: Record<string, PaymentMethod> = Object.fromEntrie
 export const coercePaymentMethod = (v?: string): PaymentMethod | undefined =>
   v ? PAYMENT_METHOD_BY_LOWER[v.trim().toLowerCase()] : undefined;
 
-// "YYYY-MM-DD" → inclusive day bounds; `end` extends to the end of that day.
+// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to →
+// 23:59:59.999 at Asia/Kolkata, +05:30) so the admin's calendar pick includes the
+// full IST day (a naive UTC parse drops the last 5.5h); full timestamps pass through.
 export const parseDateBound = (v: string | undefined, end: boolean): Date | undefined => {
   if (!v) return undefined;
-  const d = new Date(`${v.trim()}${end ? "T23:59:59.999" : "T00:00:00.000"}`);
+  const s = v.trim();
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`) : new Date(s);
   return Number.isNaN(d.getTime()) ? undefined : d;
 };
 
@@ -336,17 +340,33 @@ export const listSubscriptions = async (q: SubReportQuery & { page: number; limi
   return { items: rows.map(toSubListItem), total };
 };
 
-// Full filtered set (no pagination) for the report exports. Capped defensively.
-const EBOOK_SUB_EXPORT_MAX = 100000;
+// Entire filtered set (no pagination) and NO row cap — keyset-paged (id DESC, no deep
+// OFFSET) and mapped per batch so memory stays bounded (lakhs OK).
+const EBOOK_SUB_EXPORT_BATCH = 5000;
 
-export const exportSubscriptionRows = async (q: SubReportQuery) => {
-  const opts = await resolveSubOpts(q);
-  if (!opts) return [];
-  const rows = await repo.listSubscriptions({ ...opts, skip: 0, take: EBOOK_SUB_EXPORT_MAX });
-  return rows.map(toSubListItem);
+// Walk the whole filtered set in keyset batches; yields mapped export items per batch.
+async function* iterateSubExportRows(opts: any) {
+  let beforeId: number | undefined;
+  for (;;) {
+    const rows = await repo.listSubscriptionsPageKeyset(opts, beforeId, EBOOK_SUB_EXPORT_BATCH);
+    if (!rows.length) break;
+    yield rows.map(toSubListItem);
+    if (rows.length < EBOOK_SUB_EXPORT_BATCH) break;
+    beforeId = rows[rows.length - 1].id;
+  }
+}
+
+// IST (Asia/Kolkata, +5:30, no DST) `YYYY-MM-DD HH:mm:ss`, e.g. "2026-10-06 00:01:21"
+// — unified with the Subscription / Test Series exports (was raw UTC ISO).
+const IST_OFFSET_MS = 330 * 60_000;
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+const fmtExportDate = (d: Date | string | null | undefined): string => {
+  if (!d) return "";
+  const t = new Date(d);
+  if (Number.isNaN(t.getTime())) return "";
+  const s = new Date(t.getTime() + IST_OFFSET_MS);
+  return `${s.getUTCFullYear()}-${pad2(s.getUTCMonth() + 1)}-${pad2(s.getUTCDate())} ${pad2(s.getUTCHours())}:${pad2(s.getUTCMinutes())}:${pad2(s.getUTCSeconds())}`;
 };
-
-const fmtExportDate = (d: Date | string | null | undefined): string => (d ? new Date(d).toISOString() : "");
 // Display status shown by the report table: mirrors the statusFilter semantics
 // (inactive = not active; expired = active but endAt past; active = active & current).
 const displaySubStatus = (i: ReturnType<typeof toSubListItem>, now: Date): string => {
@@ -372,25 +392,43 @@ const EBOOK_SUB_EXPORT_COLUMNS: { header: string; get: (i: any, now: Date) => st
 ];
 
 export const buildSubscriptionsCsv = async (q: SubReportQuery): Promise<string> => {
-  const rows = await exportSubscriptionRows(q);
   const now = new Date();
+  const opts = await resolveSubOpts(q);
   const esc = (v: string | number) => {
     const s = v === null || v === undefined ? "" : String(v);
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [EBOOK_SUB_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
-  for (const r of rows) lines.push(EBOOK_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r, now))).join(","));
+  if (opts) {
+    for await (const batch of iterateSubExportRows(opts)) {
+      for (const r of batch) lines.push(EBOOK_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r, now))).join(","));
+    }
+  }
   return lines.join("\n");
 };
 
 export const buildSubscriptionsXlsx = async (q: SubReportQuery): Promise<Buffer> => {
-  const rows = await exportSubscriptionRows(q);
   const now = new Date();
-  const wb = new ExcelJS.Workbook();
+  const opts = await resolveSubOpts(q);
+  const pass = new PassThrough();
+  const chunks: Buffer[] = [];
+  pass.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+  const finished = new Promise<void>((resolve, reject) => {
+    pass.once("end", resolve);
+    pass.once("error", reject);
+  });
+  const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: pass, useStyles: false, useSharedStrings: false });
   const ws = wb.addWorksheet("Ebook Subscriptions");
   ws.columns = EBOOK_SUB_EXPORT_COLUMNS.map((c) => ({ header: c.header, key: c.header, width: 22 }));
-  for (const r of rows) ws.addRow(EBOOK_SUB_EXPORT_COLUMNS.map((c) => c.get(r, now)));
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  if (opts) {
+    for await (const batch of iterateSubExportRows(opts)) {
+      for (const r of batch) ws.addRow(EBOOK_SUB_EXPORT_COLUMNS.map((c) => c.get(r, now))).commit();
+    }
+  }
+  ws.commit();
+  await wb.commit();
+  await finished;
+  return Buffer.concat(chunks);
 };
 
 export const getSubscriptionById = async (id: number) => {

@@ -22,8 +22,11 @@ export const parseSubReportQuery = (
       status: q.status === "true" ? true : q.status === "false" ? false : undefined,
       statusFilter,
       paymentMethod: paymentMethodEnum,
-      dateFrom: adminEbook.parseDateBound(q.dateFrom, false),
-      dateTo: adminEbook.parseDateBound(q.dateTo, true),
+      // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is
+      // the unified cross-report name (reports-date-filter-created-at.md); dateFrom/
+      // dateTo kept as legacy aliases.
+      dateFrom: adminEbook.parseDateBound(q.createdFrom ?? q.dateFrom, false),
+      dateTo: adminEbook.parseDateBound(q.createdTo ?? q.dateTo, true),
       search: q.search,
       sortBy: q.sortBy,
       sortOrder: q.sortOrder,

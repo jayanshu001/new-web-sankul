@@ -268,14 +268,16 @@ export const reorderBooks = async (req: Request, res: Response) => {
 
 // Shared filter mapping for the orders report list + its CSV/Excel exports, so all
 // three honor the identical param contract (minus page/limit on the exports).
-const parseOrderReportQuery = (q: Record<string, string>): adminBook.OrderReportQuery => ({
+export const parseOrderReportQuery = (q: Record<string, string>): adminBook.OrderReportQuery => ({
   customerId: q.customerId,
   bookId: q.bookId,
   status: q.status && Object.values(BookOrderStatus).includes(q.status as BookOrderStatus) ? q.status : undefined,
   state: q.state,
-  // Accept both dateFrom/dateTo (report contract) and legacy fromDate/toDate.
-  fromDate: q.dateFrom ?? q.fromDate,
-  toDate: q.dateTo ?? q.toDate,
+  // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is the
+  // unified cross-report name (reports-date-filter-created-at.md); dateFrom/dateTo +
+  // fromDate/toDate kept as legacy aliases.
+  fromDate: q.createdFrom ?? q.dateFrom ?? q.fromDate,
+  toDate: q.createdTo ?? q.dateTo ?? q.toDate,
   search: q.search,
   sortBy: q.sortBy,
   sortOrder: q.sortOrder,
