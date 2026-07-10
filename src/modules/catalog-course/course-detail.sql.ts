@@ -24,6 +24,7 @@ import { computeDaysLeft } from "../../utils/planDuration";
 import { listActivePricesByCourses } from "../commerce-price/commerce-price.service";
 import { listActiveForCoursesOrPlans } from "../commerce-subscription/commerce-subscription.service";
 import { populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
+import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
 
 const sid = (n: number | null | undefined) => (n == null ? null : String(n));
 
@@ -127,7 +128,9 @@ export const buildCourseDetailsSql = async (
     const ids = await descendantCategoryIds("ws_exam_category", "parent_id", cat.id);
     const [count, childCount] = await Promise.all([
       // Mongo filtered status:PUBLISHED; SQL Exam.status is Boolean → status=true.
-      prisma.exam.count({ where: { examCategoryId: { in: ids }, status: true } }),
+      prisma.exam.count({
+        where: { AND: [examInCategoriesWhere(ids), { status: true }] },
+      }),
       prisma.examCategory.count({ where: { parent: cat.id, status: true } }),
     ]);
     tests.push({ category: { ...cat, _id: String(cat.id), title: cat.name, havingChildDirectory: childCount > 0, count } });

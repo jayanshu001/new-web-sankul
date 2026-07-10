@@ -36,6 +36,7 @@ import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { isNewItem } from "../../utils/isNew";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
+import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
 
 export const CLIENT_FREE_MODULE = "client-free";
 export const isClientFreeMysql = (): boolean => true;
@@ -124,13 +125,12 @@ export const freeTests = async (opts: {
   const endOfDay = new Date(now); endOfDay.setHours(23, 59, 59, 999);
 
   const baseWhere: any = {
-    status: true,
-    isPaid: false,
-    type: "subject" as any,
-    examCategoryId: { in: examCategoryIds },
-    startAt: { lte: endOfDay },
+    AND: [
+      examInCategoriesWhere(examCategoryIds),
+      { status: true, isPaid: false, type: "subject" as const, startAt: { lte: endOfDay } },
+    ],
   };
-  if (opts.search) baseWhere.name = { contains: opts.search };
+  if (opts.search) baseWhere.AND.push({ name: { contains: opts.search } });
 
   const { year, month, week } = opts;
 

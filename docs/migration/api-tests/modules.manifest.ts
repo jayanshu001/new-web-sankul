@@ -155,6 +155,18 @@ export const MIGRATED_API_MODULES = [
     yarnScript: "migration:api:catalog-exam",
   },
   {
+    // ws_exam_category_pivot — pivot-aware exam category queries (read + admin write).
+    key: "exam-category-pivot",
+    testFiles: ["exam-category-pivot/pivot.api.test.ts"],
+    endpoints: [
+      "GET client/quizzes/categories/:id/exams — pivot OR exam_category_id",
+      "GET client/exam-categories/:id/exams — paged pivot-aware listing",
+      "GET admin/quizzes?categoryId= — admin list filter",
+      "PUT admin/quizzes/:id — re-sync pivot on update",
+    ],
+    yarnScript: "migration:api:exam-category-pivot",
+  },
+  {
     // Catalog · Book (catalog-book) — flag OFF, WIRED 2026-06-13 (unblocked by
     // book-order). GET /client/books + /books/:id branch on isBookMysql(); the
     // controller composes book DATA (catalog-book) + per-customer cart qty/cartId

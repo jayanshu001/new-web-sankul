@@ -42,6 +42,7 @@ import { runEbookOrderClientApiTests } from "./ebook-order/client.api.test.js";
 import { runBookOrderClientApiTests } from "./book-order/client.api.test.js";
 import { runOfflineEnquiryClientApiTests } from "./offline-enquiry/client.api.test.js";
 import { runPackageChatClientApiTests } from "./package-chat/client.api.test.js";
+import { runExamCategoryPivotApiTests } from "./exam-category-pivot/pivot.api.test.js";
 
 const moduleKey = process.argv[2]?.trim().toLowerCase();
 
@@ -74,6 +75,7 @@ const runners: Record<string, (() => Promise<boolean>)[]> = {
   "book-order": [runBookOrderClientApiTests],
   "offline-enquiry": [runOfflineEnquiryClientApiTests],
   "package-chat": [runPackageChatClientApiTests],
+  "exam-category-pivot": [runExamCategoryPivotApiTests],
 };
 
 async function main() {

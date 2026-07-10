@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { examInCategoryWhere } from "./exam-category-pivot.where";
 
 /**
  * Prisma persistence for the catalog · exam READ branch (flag OFF). Scoped to
@@ -23,9 +24,9 @@ export const catalogExamRepository = {
   /** Active (not soft-deleted) direct children of a category. */
   childCount: (id: number) =>
     prisma.examCategory.count({ where: { parent: id, deleted: false } }),
-  /** Exams referencing this category (any status). */
+  /** Exams referencing this category (any status), incl. ws_exam_category_pivot. */
   examCountForCategory: (id: number) =>
-    prisma.exam.count({ where: { examCategoryId: id } }),
+    prisma.exam.count({ where: examInCategoryWhere(id) }),
 
   /**
    * List exam categories with optional parent / name-search / status filters.
@@ -179,7 +180,7 @@ export const catalogExamRepository = {
 
   /** UNCONDITIONAL count of exams in a category (no status filter — Mongo parity). */
   countExams: (categoryId: number) =>
-    prisma.exam.count({ where: { examCategoryId: categoryId } }),
+    prisma.exam.count({ where: examInCategoryWhere(categoryId) }),
 
   /**
    * Of the given category ids, which have ≥1 active child (parent_id in ids).

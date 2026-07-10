@@ -20,6 +20,7 @@
 import { prisma } from "../../config/prisma";
 import { defaultListingQualities } from "../../utils/videoQualities";
 import { getPurchasedMaterialIds } from "../client-material/client-material.service";
+import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
 
 export const CLIENT_CATALOG_MODULE = "client-catalog";
 export const isClientCatalogMysql = (): boolean => true;
@@ -316,7 +317,9 @@ export const catalogTests = async (opts: { type: "course" | "package" | "live-co
     const ids = await descendantIds("ws_exam_category", "parent_id", cat.id);
     const [itemCount, childCount] = await Promise.all([
       // Mongo filtered status:PUBLISHED + non-ended window; SQL Exam.status is Boolean → status=true.
-      prisma.exam.count({ where: { examCategoryId: { in: ids }, status: true } }),
+      prisma.exam.count({
+        where: { AND: [examInCategoriesWhere(ids), { status: true }] },
+      }),
       prisma.examCategory.count({ where: { parent: cat.id, status: true } }),
     ]);
     const havingChildDirectory = childCount > 0;

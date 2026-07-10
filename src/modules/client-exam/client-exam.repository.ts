@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { examInCategoryWhere } from "../catalog-exam/exam-category-pivot.where";
 
 /**
  * Prisma READ persistence for the client-exam MySQL branch.
@@ -22,14 +23,16 @@ export const clientExamRepository = {
       orderBy: [{ order_by: "asc" }, { name: "asc" }],
     }),
 
-  /** Published exams in a category, hiding scheduled exams whose window ended. */
+  /** Published exams in a category (pivot-aware), hiding scheduled exams whose window ended. */
   examsByCategory: (categoryId: number, now: Date, search?: string | null) =>
     prisma.exam.findMany({
       where: {
-        examCategoryId: categoryId,
-        status: true,
-        ...(search ? { name: { contains: search } } : {}),
-        OR: [{ type: "subject" }, { endAt: null }, { endAt: { gte: now } }],
+        AND: [
+          examInCategoryWhere(categoryId),
+          { status: true },
+          ...(search ? [{ name: { contains: search } }] : []),
+          { OR: [{ type: "subject" }, { endAt: null }, { endAt: { gte: now } }] },
+        ],
       },
       orderBy: [{ order_by: "asc" }, { createAt: "desc" }],
     }),
@@ -42,11 +45,12 @@ export const clientExamRepository = {
   examsByCategoryPaged: (categoryId: number, now: Date, search: string | null, skip: number, take: number) =>
     prisma.exam.findMany({
       where: {
-        examCategoryId: categoryId,
-        status: true,
-        type: "subject",
-        ...(search ? { name: { contains: search } } : {}),
-        OR: [{ endAt: null }, { endAt: { gte: now } }],
+        AND: [
+          examInCategoryWhere(categoryId),
+          { status: true, type: "subject" },
+          ...(search ? [{ name: { contains: search } }] : []),
+          { OR: [{ endAt: null }, { endAt: { gte: now } }] },
+        ],
       },
       orderBy: [{ order_by: "asc" }, { createAt: "desc" }],
       skip,
@@ -55,11 +59,12 @@ export const clientExamRepository = {
   countExamsByCategoryPaged: (categoryId: number, now: Date, search: string | null) =>
     prisma.exam.count({
       where: {
-        examCategoryId: categoryId,
-        status: true,
-        type: "subject",
-        ...(search ? { name: { contains: search } } : {}),
-        OR: [{ endAt: null }, { endAt: { gte: now } }],
+        AND: [
+          examInCategoryWhere(categoryId),
+          { status: true, type: "subject" },
+          ...(search ? [{ name: { contains: search } }] : []),
+          { OR: [{ endAt: null }, { endAt: { gte: now } }] },
+        ],
       },
     }),
 

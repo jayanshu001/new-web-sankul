@@ -67,6 +67,12 @@ yarn prisma:generate
 >
 > Do **not** `yarn db:pull` to evolve the schema — it rewrites the curated `schema.prisma`.
 
+> **`ws_exam_category_pivot` (2026-07-10).** `2026-07-10_exam_category_pivot.sql` creates an
+> empty many-to-many pivot (`exam_id` ↔ `category_id`). Prisma model: `ExamCategoryPivot`.
+> Seed: `yarn seed:exam-category-pivot` (from `old_db/ws_exam_category_pivot.sql`). API/query
+> changes: see [`EXAM_CATEGORY_PIVOT_API_HANDOFF.md`](./EXAM_CATEGORY_PIVOT_API_HANDOFF.md).
+> **Local testing after pull:** [`EXAM_CATEGORY_PIVOT_CHANGELOG_AND_TESTING.md`](./EXAM_CATEGORY_PIVOT_CHANGELOG_AND_TESTING.md).
+
 ## 5. Run backfills
 
 DDL adds columns/tables; existing rows need populating. Run the `tsx scripts/backfill-*.ts` matching the DDL you applied (full set on a fresh dump; only the new ones on an already-migrated DB). They're re-runnable, but **review on production** first. Several read from a Mongo source — skip those on a server that never had Mongo.

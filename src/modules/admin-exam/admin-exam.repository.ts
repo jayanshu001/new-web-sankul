@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { examInCategoryWhere } from "../catalog-exam/exam-category-pivot.where";
 
 /** Shape used by question create/bulk inserts (option image/order dropped — no columns). */
 export interface QuestionWrite {
@@ -28,12 +29,7 @@ async function recomputeCount(tx: Prisma.TransactionClient, examId: number) {
 export const adminExamRepository = {
   // ── exams ──────────────────────────────────────────────────────────────────
   listExams: (opts: { search?: string; categoryId?: number; type?: "subject" | "daily"; status?: boolean; isPaid?: boolean; skip: number; take: number }) => {
-    const where: Prisma.ExamWhereInput = {};
-    if (opts.search) where.name = { contains: opts.search.trim() };
-    if (opts.categoryId !== undefined) where.examCategoryId = opts.categoryId;
-    if (opts.type) where.type = opts.type;
-    if (opts.status !== undefined) where.status = opts.status;
-    if (opts.isPaid !== undefined) where.isPaid = opts.isPaid;
+    const where = adminExamRepository.examListWhere(opts);
     return prisma.exam.findMany({
       where,
       include: { ExamCategory: { select: { id: true, name: true } } },
@@ -42,14 +38,23 @@ export const adminExamRepository = {
       take: opts.take,
     });
   },
-  countExams: (opts: { search?: string; categoryId?: number; type?: "subject" | "daily"; status?: boolean; isPaid?: boolean }) => {
-    const where: Prisma.ExamWhereInput = {};
-    if (opts.search) where.name = { contains: opts.search.trim() };
-    if (opts.categoryId !== undefined) where.examCategoryId = opts.categoryId;
-    if (opts.type) where.type = opts.type;
-    if (opts.status !== undefined) where.status = opts.status;
-    if (opts.isPaid !== undefined) where.isPaid = opts.isPaid;
-    return prisma.exam.count({ where });
+  countExams: (opts: { search?: string; categoryId?: number; type?: "subject" | "daily"; status?: boolean; isPaid?: boolean }) =>
+    prisma.exam.count({ where: adminExamRepository.examListWhere(opts) }),
+
+  examListWhere: (opts: {
+    search?: string;
+    categoryId?: number;
+    type?: "subject" | "daily";
+    status?: boolean;
+    isPaid?: boolean;
+  }): Prisma.ExamWhereInput => {
+    const parts: Prisma.ExamWhereInput[] = [];
+    if (opts.search) parts.push({ name: { contains: opts.search.trim() } });
+    if (opts.categoryId !== undefined) parts.push(examInCategoryWhere(opts.categoryId));
+    if (opts.type) parts.push({ type: opts.type });
+    if (opts.status !== undefined) parts.push({ status: opts.status });
+    if (opts.isPaid !== undefined) parts.push({ isPaid: opts.isPaid });
+    return parts.length ? { AND: parts } : {};
   },
   findExam: (id: number) =>
     prisma.exam.findUnique({ where: { id }, include: { ExamCategory: { select: { id: true, name: true } } } }),
