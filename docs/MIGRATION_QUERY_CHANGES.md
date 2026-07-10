@@ -15,6 +15,49 @@
 
 ---
 
+## 2026-07-10 — Test Series export: drop non-applicable columns
+
+> **Export column change only. No query/schema change.** `modules/admin-testseries`
+> `TS_SUB_EXPORT_COLUMNS`. Applies to `/export/csv` + `/export/excel` + async
+> `type:"testSeriesSub"`. `yarn typecheck` green.
+
+Per FE request, removed 6 columns that have no meaning for a digital test series:
+`Address`, `City`, `Pincode`, `Material Type`, `Course Amount`, `Material Amount`.
+The row DTO still returns those fields (as `null`) for the shared list component; only
+the CSV/Excel column spec was trimmed. Still-blank null-source columns (Promoter Name,
+Educator Name, WS Coin, Activated By, Package Name, Alternate Phone) were left in place.
+
+## 2026-07-10 — Test Series report: enrich rows to Subscription column set
+
+> **Query-shape change only. No schema/DDL.** Applies to `admin/test-series/subscriptions`
+> (list) + `/export/csv` + `/export/excel` **and** the async `type:"testSeriesSub"` job
+> (reuses `buildSubscriptionsCsv`/`Xlsx` in `modules/admin-testseries`). `yarn typecheck` green.
+> Request: `docs/backend-requests/test-series-report-enrich-columns.md`.
+
+The Test Series report now shares `MergedSubscriptionReport` (FE), so its rows must carry
+the same fields as `admin/subscriptions`. Changes to `enrichSubRows` + the export:
+
+- **Row DTO enriched** with the order relation (`ws_test_series_order`): `orderMethod`
+  (= `payment_method`, lowercased), `razorpayOrderId`, `razorpayPaymentId`,
+  `bankTransactionId` (← the order's `transaction_id`, where the grant path stores it),
+  plus `promocode`/`promocodeId` (direct FK on the sub row → `ws_promocode.promocode`)
+  and `remarks`. `Activation Type` = the row's `paymentMethod` (online|backend).
+- **No SQL source on test series → surfaced as `null` (render blank):** `promoterName`
+  (no `promoter_id` on `ws_test_series_subscription`), `activatedBy` (no `created_by`),
+  `educatorName` (no educator link on `ws_test_series`), `wsCoin` (no column on the TS
+  order). Also N/A by design: `courseAmount`/`materialAmount`/`materialType`/`trackingId`
+  and `shipping` (digital product).
+- **Export column set replaced** (was 8 columns) with the **same set/order as the
+  Subscription export**; the test-series name sits in `Course Name` (mirrors the FE
+  `productCell` for testSeries), Package Name + the null-source columns stay blank.
+- **IST timestamps** `YYYY-MM-DD HH:mm:ss` (was raw UTC ISO); **100k cap removed**
+  (keyset id-DESC batches of 5,000, streaming XLSX writer) — same approach as the
+  Subscription export.
+- **Date filter bounds `createdAt` at IST day edges** (new local `parseDayBoundIst` +
+  `istCreatedWhere`, replacing the shared UTC `dateWhere`). Controller
+  `parseSubReportQuery` accepts `createdFrom`/`createdTo` (with `dateFrom`/`dateTo` +
+  `fromDate`/`toDate` legacy aliases).
+
 ## 2026-07-10 — Subscription report export: IST dates, column fixes, uncapped rows
 
 > **Query-shape change only. No schema/DDL.** Applies to `admin/subscriptions/export/csv`
@@ -34,14 +77,39 @@ Fixes from `docs/backend-requests/subscription-report-export-csv-defects.md`:
 - **XLSX now uses `ExcelJS.stream.xlsx.WorkbookWriter`** (rows flushed per-batch to a
   `PassThrough` → Buffer) so an uncapped export doesn't hold the whole worksheet model
   in memory. CSV builds line-by-line over the same batches.
-- **Timestamps now IST (Asia/Kolkata, +05:30), not UTC.** `fmtExportDate` shifts by
-  +330 min and emits ISO-8601 with a `+05:30` offset (format unchanged, only TZ).
+- **Timestamps now IST (Asia/Kolkata, +5:30, no DST) in `YYYY-MM-DD HH:mm:ss` 24-hour
+  form**, e.g. `2026-10-06 00:01:21` (was raw UTC ISO). `fmtExportDate` shifts the
+  instant by +5:30 and reads the wall-clock parts off the shifted value.
 - **Column set trimmed to match the on-screen report:** dropped `Tracking ID` (removed
   from the report) and the redundant `Payment Type` (duplicated the online/backend
   value). `Activation Type` now populated from the row's `paymentMethod`
   (= `payment_type` online|backend) instead of the no-op `activationType` field —
   matching how the FE maps that column (see `subscription-report-filters.md`).
   `Promoter Name` was already present/populated (repo selects `promoter.full_name`).
+
+### Same-day follow-ups (extend write-flow + created-at filter)
+
+- **Extend now inserts a NEW subscription row, not an in-place `endAt` bump.**
+  `createCourseSubscription` with `extend:true` used to `findActiveSubForTarget` then
+  `extendSub` (UPDATE the existing `ws_package_course_subscription` row's endAt/amount).
+  Per business rule it now always **INSERTs a fresh row** tied to its own new order
+  (so each extension is its own report line, based on its order id). The new row
+  **continues from the prior plan's end date** (floored at now if that date already
+  lapsed; an explicit `startAt` still wins) for the plan duration, so coverage is
+  seamless with no overlap/gap; the prior subscription row is left untouched. The
+  existing-active lookup now supplies both the `extended:true` response flag AND the
+  continuation start date (never mutates the old row). Removed the now-dead
+  `repo.extendSub` + `extendEndAt` import.
+  ⚠ Behavior change: a customer can now hold **multiple** active rows for one target
+  (access = union of their windows); revenue is unchanged (each row carries its own
+  order's amount instead of a cumulative sum on one row).
+- **Report date-range filter bounds `createdAt` at IST day edges.** `parseDayBound` now
+  parses a bare `YYYY-MM-DD` as `…T00:00:00.000+05:30` / `…T23:59:59.999+05:30` (was
+  server-local, dropping the last 5.5h). Controller `reportQueryFrom` accepts
+  `createdFrom`/`createdTo` (the unified cross-report name from
+  `reports-date-filter-created-at.md`) as the createdAt window, with `dateFrom`/`dateTo`
+  + `fromDate`/`toDate` as legacy aliases. `startFrom`/`endFrom` (→ startAt/endAt) still
+  work for back-compat, but the merged report's two date boxes now map to createdAt.
 
 ## 2026-07-09 — Async report-export jobs (NEW table `ws_export_job`)
 

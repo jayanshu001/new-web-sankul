@@ -503,8 +503,11 @@ export const parseSubReportQuery = (q: Record<string, string>): tsSql.SubReportO
   customerId: q.customerId ? tsSql.parseAtsId(q.customerId) : null,
   status: q.status,
   paymentMethod: q.paymentMethod,
-  dateFrom: q.dateFrom ?? q.fromDate,
-  dateTo: q.dateTo ?? q.toDate,
+  // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is the
+  // unified cross-report name (reports-date-filter-created-at.md); dateFrom/dateTo +
+  // fromDate/toDate kept as legacy aliases.
+  dateFrom: q.createdFrom ?? q.dateFrom ?? q.fromDate,
+  dateTo: q.createdTo ?? q.dateTo ?? q.toDate,
   search: q.search,
   sortBy: q.sortBy,
   sortOrder: q.sortOrder,

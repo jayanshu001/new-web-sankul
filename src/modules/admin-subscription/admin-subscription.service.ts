@@ -1,7 +1,7 @@
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
 import { splitFullName } from "../customer-profile/customer-profile.name";
-import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { computeEndAt } from "../../utils/planDuration";
 import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
 import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 import { PaymentMethod } from "../../shared/enums";
@@ -24,12 +24,14 @@ export const parseSubId = (id: string): number | null => {
 
 const idStr = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
 
-// Bare "YYYY-MM-DD" → inclusive day edge (from → 00:00:00.000, to → 23:59:59.999);
-// full timestamps pass through. Invalid → undefined (no bound).
+// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to →
+// 23:59:59.999 at Asia/Kolkata, +05:30). The admin picks a calendar date in IST, so
+// a naive local/UTC parse would drop the last 5.5h of the day — pin the offset.
+// Full timestamps pass through as-is. Invalid → undefined (no bound).
 const parseDayBound = (v: string | undefined, end: boolean): Date | undefined => {
   if (!v) return undefined;
   const s = v.trim();
-  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}${end ? "T23:59:59.999" : "T00:00:00.000"}`) : new Date(s);
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`) : new Date(s);
   return Number.isNaN(d.getTime()) ? undefined : d;
 };
 
@@ -267,15 +269,17 @@ async function* iterateCourseSubExportRows(q: CourseSubReportQuery, now: Date) {
   }
 }
 
-// IST (Asia/Kolkata, UTC+5:30, no DST) ISO-8601 timestamp. The export keeps the
-// ISO format it always used; only the timezone was wrong (was UTC `Z`), so a row
-// shown as 6:30 PM IST on screen no longer exports as 13:00 UTC.
+// Timestamps render as IST (Asia/Kolkata, UTC+5:30, no DST) in `YYYY-MM-DD HH:mm:ss`
+// 24-hour form, e.g. "2026-10-06 00:01:21" (was a raw UTC ISO string). Shift the
+// instant by +5:30 and read the wall-clock parts off the shifted value.
 const IST_OFFSET_MS = 330 * 60_000;
+const pad2 = (n: number): string => String(n).padStart(2, "0");
 const fmtExportDate = (d: Date | null | undefined): string => {
   if (!d) return "";
   const t = new Date(d);
   if (Number.isNaN(t.getTime())) return "";
-  return new Date(t.getTime() + IST_OFFSET_MS).toISOString().replace("Z", "+05:30");
+  const s = new Date(t.getTime() + IST_OFFSET_MS);
+  return `${s.getUTCFullYear()}-${pad2(s.getUTCMonth() + 1)}-${pad2(s.getUTCDate())} ${pad2(s.getUTCHours())}:${pad2(s.getUTCMinutes())}:${pad2(s.getUTCSeconds())}`;
 };
 // Column order: the client's Subscription-WithMaterial-Report.csv set first, then
 // the extra columns the on-screen report shows. A row is either a course OR a
@@ -427,8 +431,10 @@ export interface CreateCourseSubInput {
   customerShippingId?: number | null;
   remark?: string | null;
   status: boolean;
-  // extend=true → top up the customer's existing active subscription for this
-  // target instead of creating a fresh row (falls back to create if none).
+  // extend=true → record a new subscription row that CONTINUES from the customer's
+  // existing active subscription for this target (new row starts at the prior plan's
+  // end date, floored at now); the prior row is left untouched. No existing active
+  // sub → behaves as a fresh grant starting now.
   extend?: boolean;
 }
 
@@ -465,33 +471,24 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
       now,
     });
 
-  // Subscription Type = Extend: top up the customer's existing active subscription
-  // for this same target instead of inserting a duplicate row. Falls back to a
-  // fresh create when no active subscription exists.
+  // Subscription Type = Extend: business rule — an extension is recorded as a NEW
+  // subscription row tied to its own order (so each extension is its own line in the
+  // Subscription Report, based on its order id) instead of bumping the existing
+  // row's endAt in place. The prior subscription row is left untouched; the new row
+  // CONTINUES from the prior plan's end date so coverage is seamless (no overlap, no
+  // gap). If that end date is already in the past (the prior plan lapsed) — or the
+  // admin passed an explicit startAt — we fall back to that/now instead of backdating.
   const existing =
     input.extend && (resolvedCourseId || resolvedPackageId)
       ? await repo.findActiveSubForTarget({ customerId: input.customerId, courseId: resolvedCourseId, packageId: resolvedPackageId })
       : null;
+  const wasExtension = !!existing;
 
-  if (existing) {
-    const newEndAt =
-      input.durationDays && input.durationDays > 0
-        ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: input.durationDays, asDays: true, now })
-        : extendEndAt({ currentEndAt: existing.endAt, durationMonths: plan.duration || 0, now });
-    const extendOrder = await makeOrder();
-    await repo.extendSub(existing.id, {
-      endAt: newEndAt,
-      orderId: extendOrder.id,
-      planId: plan.id,
-      amount: (existing.amount != null ? Number(existing.amount) : 0) + computedAmount,
-      shippingId: input.customerShippingId ?? undefined,
-      remarks: input.remark ?? undefined,
-      now,
-    });
-    return { ok: true, extended: true, data: await getCourseSubscriptionById(existing.id) };
-  }
-
-  const startAt = input.startAt ? new Date(input.startAt) : now;
+  const startAt = input.startAt
+    ? new Date(input.startAt)
+    : existing?.endAt && existing.endAt > now
+      ? existing.endAt
+      : now;
   const endAt =
     input.durationDays && input.durationDays > 0
       ? computeEndAt({ startAt, durationMonths: input.durationDays, asDays: true })
@@ -516,7 +513,7 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
     remarks: input.remark ?? null,
     now,
   });
-  return { ok: true, extended: false, data: await getCourseSubscriptionById(created.id) };
+  return { ok: true, extended: wasExtension, data: await getCourseSubscriptionById(created.id) };
 };
 
 export const listPlansForTarget = async (courseId?: number, packageId?: number) => {

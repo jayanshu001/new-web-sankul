@@ -24,8 +24,9 @@
  *   - TestSeriesOrder is read-only here (listOrders).
  */
 import ExcelJS from "exceljs";
+import { PassThrough } from "node:stream";
 import { prisma } from "../../config/prisma";
-import { andWhere, dateWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
+import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 import { buildPagination } from "../../utils/listQuery";
 
 export const ADMIN_TESTSERIES_MODULE = "admin-testseries";
@@ -714,6 +715,27 @@ const SUB_SORT_FIELDS: Record<string, "createdAt" | "startAt" | "endAt" | "price
 // (page/limit only apply to the paginated list).
 export type SubReportOpts = Omit<ListSubsOpts, "page" | "limit">;
 
+// Bare "YYYY-MM-DD" → inclusive IST day edge (from → 00:00:00.000, to →
+// 23:59:59.999 at Asia/Kolkata, +05:30); full timestamps pass through. Mirrors the
+// Subscription report so the created-at filter honors IST day boundaries (a naive
+// UTC parse would drop the last 5.5h of the day). Invalid → undefined (no bound).
+const parseDayBoundIst = (v: string | undefined, end: boolean): Date | undefined => {
+  if (!v) return undefined;
+  const s = v.trim();
+  const d = /^\d{4}-\d{2}-\d{2}$/.test(s) ? new Date(`${s}T${end ? "23:59:59.999" : "00:00:00.000"}+05:30`) : new Date(s);
+  return Number.isNaN(d.getTime()) ? undefined : d;
+};
+// Date-range filter bounds `createdAt` (records created between X and Y) at IST edges.
+const istCreatedWhere = (dateFrom?: string, dateTo?: string): Record<string, any> => {
+  const gte = parseDayBoundIst(dateFrom, false);
+  const lte = parseDayBoundIst(dateTo, true);
+  if (!gte && !lte) return {};
+  const createdAt: any = {};
+  if (gte) createdAt.gte = gte;
+  if (lte) createdAt.lte = lte;
+  return { createdAt };
+};
+
 // Shared where-fragment builder for the list + exports. Returns null when a
 // search matched nothing (force an empty result, mirroring the list contract).
 const buildSubsWhere = async (opts: SubReportOpts, now: Date): Promise<Record<string, any> | null> => {
@@ -721,7 +743,7 @@ const buildSubsWhere = async (opts: SubReportOpts, now: Date): Promise<Record<st
   if (opts.testSeriesId != null) base.testSeriesId = opts.testSeriesId;
   if (opts.customerId != null) base.customerId = opts.customerId;
   if (opts.paymentMethod === "online" || opts.paymentMethod === "backend") base.paymentType = opts.paymentMethod;
-  const dw = dateWhere(opts.dateFrom, opts.dateTo);
+  const dw = istCreatedWhere(opts.dateFrom, opts.dateTo);
 
   let searchWhere: Record<string, any> | undefined;
   if (opts.search) {
@@ -746,13 +768,22 @@ const subSortSpec = (opts: SubReportOpts) => ({
   sortDir: (opts.sortOrder === "asc" ? "asc" : "desc") as "asc" | "desc",
 });
 
-// Enrich raw subscription rows into the canonical Reports DTO (customer/product/
-// plan populated). Shared by the list + exports so the row shape stays identical.
+// Enrich raw subscription rows into the canonical Reports DTO — mirrors the
+// Subscription report row shape (admin-subscription hydrateCourseSubRows) so the
+// shared MergedSubscriptionReport component + the CSV/Excel columns line up. Fields
+// with no SQL source on test series are surfaced as null (they render blank): test
+// series has no promoter attribution (no promoter_id), no activated-by (no created_by),
+// no educator link, no ws_coin, and no material/course split or shipping — see
+// docs/backend-requests/test-series-report-enrich-columns.md.
+const blankToNull = (v: string | null | undefined): string | null => (v ? v : null);
 const enrichSubRows = async (rows: any[], now: Date) => {
-  const seriesIds = [...new Set(rows.map((r) => r.testSeriesId).filter((v): v is number => v != null))];
-  const customerIds = [...new Set(rows.map((r) => r.customerId).filter((v): v is number => v != null))];
-  const planIds = [...new Set(rows.map((r) => r.planId).filter((v): v is number => v != null))];
-  const [seriesRows, customerRows, planRows] = await Promise.all([
+  const uniq = (xs: (number | null | undefined)[]) => [...new Set(xs.filter((v): v is number => v != null))];
+  const seriesIds = uniq(rows.map((r) => r.testSeriesId));
+  const customerIds = uniq(rows.map((r) => r.customerId));
+  const planIds = uniq(rows.map((r) => r.planId));
+  const orderIds = uniq(rows.map((r) => r.orderId));
+  const promocodeIds = uniq(rows.map((r) => r.promocodeId));
+  const [seriesRows, customerRows, planRows, orderRows, promoRows] = await Promise.all([
     seriesIds.length
       ? prisma.testSeries.findMany({ where: { id: { in: seriesIds } }, select: { id: true, title: true, thumbnail: true } })
       : [],
@@ -768,18 +799,35 @@ const enrichSubRows = async (rows: any[], now: Date) => {
           select: { id: true, name: true, durationDays: true, price: true },
         })
       : [],
+    // Order relation → Order Method (gateway), gateway order/payment ids, and the
+    // bank reference (the grant path stores bankTransactionId in `transaction_id`).
+    orderIds.length
+      ? prisma.testSeriesOrder.findMany({
+          where: { id: { in: orderIds } },
+          select: { id: true, paymentMethod: true, razorpayOrderId: true, razorpayPaymentId: true, transactionId: true },
+        })
+      : [],
+    // Promocode is a direct FK on the subscription row (unlike the subscription
+    // report's JSON snapshot) → resolve id → code string.
+    promocodeIds.length
+      ? prisma.promocode.findMany({ where: { id: { in: promocodeIds } }, select: { id: true, promocode: true } })
+      : [],
   ]);
   const seriesById = new Map(seriesRows.map((t) => [t.id, t]));
   const custById = new Map(customerRows.map((c) => [c.id, c]));
   const planById = new Map(planRows.map((p) => [p.id, p]));
+  const orderById = new Map(orderRows.map((o) => [o.id, o]));
+  const promoById = new Map(promoRows.map((p) => [p.id, p]));
 
   return rows.map((r) => {
     const series = r.testSeriesId != null ? seriesById.get(r.testSeriesId) : null;
     const plan = r.planId != null ? planById.get(r.planId) : null;
+    const order = r.orderId != null ? orderById.get(r.orderId) : null;
+    const promo = r.promocodeId != null ? promoById.get(r.promocodeId) : null;
     const product = series
       ? { _id: String(series.id), type: "testSeries" as const, name: series.title ?? null, image: series.thumbnail ?? null }
       : null;
-    return reportRow({
+    const base = reportRow({
       cust: r.customerId != null ? custById.get(r.customerId) : undefined,
       product,
       plan: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.durationDays ?? null, price: num(plan.price) } : null,
@@ -790,6 +838,31 @@ const enrichSubRows = async (rows: any[], now: Date) => {
       endAt: r.endAt ?? null,
       createdAt: r.createdAt ?? null,
     });
+    return {
+      id: r.id,
+      ...base,
+      // Gateway from the linked order (razorpay|bank|cash|…), lowercased; null if none.
+      orderMethod: order?.paymentMethod ? String(order.paymentMethod).toLowerCase() : null,
+      razorpayOrderId: blankToNull(order?.razorpayOrderId),
+      razorpayPaymentId: blankToNull(order?.razorpayPaymentId),
+      bankTransactionId: blankToNull(order?.transactionId),
+      promocode: promo?.promocode ?? null,
+      promocodeId: r.promocodeId ?? null,
+      remarks: r.remarks ?? null,
+      // No SQL source on test series → null (render blank).
+      promoterName: null as string | null,
+      promoterId: null as number | null,
+      educatorName: null as string | null,
+      educatorId: null as number | null,
+      activatedBy: null as string | null,
+      wsCoin: null as number | null,
+      // N/A for test series (digital, no material/course split).
+      courseAmount: null as number | null,
+      materialAmount: null as number | null,
+      materialType: null as string | null,
+      trackingId: null as number | null,
+      shipping: null as null,
+    };
   });
 };
 
@@ -827,57 +900,101 @@ export const listSubscriptions = async (opts: ListSubsOpts) => {
 };
 
 // ── subscription report exports (CSV / Excel) ─────────────────────────────────
-// Full filtered set (no pagination) for the report exports. Capped defensively.
-const TS_SUB_EXPORT_MAX = 100000;
+// Entire filtered set (no pagination) and NO row cap — matches the Subscription
+// export. Paged in keyset batches (id DESC, no deep OFFSET) and enriched per batch
+// so memory stays bounded; both formats + the async job share one column spec.
+const TS_SUB_EXPORT_BATCH = 5000;
 
-export const exportSubscriptionRows = async (opts: SubReportOpts) => {
-  const now = new Date();
+async function* iterateSubExportRows(opts: SubReportOpts, now: Date) {
   const listWhere = await buildSubsWhere(opts, now);
-  if (listWhere === null) return [];
-  const { sortField, sortDir } = subSortSpec(opts);
-  const rows = await prisma.testSeriesSubscription.findMany({
-    where: listWhere,
-    orderBy: { [sortField]: sortDir },
-    skip: 0,
-    take: TS_SUB_EXPORT_MAX,
-  });
-  return enrichSubRows(rows, now);
+  if (listWhere === null) return;
+  let beforeId: number | undefined;
+  for (;;) {
+    const where = beforeId ? andWhere(listWhere, { id: { lt: beforeId } }) : listWhere;
+    const rows = await prisma.testSeriesSubscription.findMany({ where, orderBy: { id: "desc" }, take: TS_SUB_EXPORT_BATCH });
+    if (!rows.length) break;
+    yield await enrichSubRows(rows, now);
+    if (rows.length < TS_SUB_EXPORT_BATCH) break;
+    beforeId = rows[rows.length - 1].id;
+  }
+}
+
+// IST (Asia/Kolkata, +5:30, no DST) `YYYY-MM-DD HH:mm:ss`, e.g. "2026-10-06 00:01:21"
+// — same format as the Subscription export (was a raw UTC ISO string).
+const IST_OFFSET_MS = 330 * 60_000;
+const pad2 = (n: number): string => String(n).padStart(2, "0");
+const fmtExportDate = (d: Date | string | null | undefined): string => {
+  if (!d) return "";
+  const t = new Date(d);
+  if (Number.isNaN(t.getTime())) return "";
+  const s = new Date(t.getTime() + IST_OFFSET_MS);
+  return `${s.getUTCFullYear()}-${pad2(s.getUTCMonth() + 1)}-${pad2(s.getUTCDate())} ${pad2(s.getUTCHours())}:${pad2(s.getUTCMinutes())}:${pad2(s.getUTCSeconds())}`;
 };
 
-const fmtExportDate = (d: Date | string | null | undefined): string => (d ? new Date(d).toISOString() : "");
-
-// Column order matches the report table (one row per subscription). Export rows
-// also carry customer._id / product._id (via the DTO) to power detail links,
-// though the visible columns are just these 8.
-const TS_SUB_EXPORT_COLUMNS: { header: string; get: (i: any) => string | number }[] = [
-  { header: "Customer", get: (i) => i.customer?.name ?? "" },
-  { header: "Test Series", get: (i) => i.product?.name ?? "" },
-  { header: "Plan", get: (i) => i.plan?.name ?? "" },
-  { header: "Amount", get: (i) => (i.amount ?? "") as string | number },
-  { header: "Payment", get: (i) => i.paymentMethod ?? "" },
-  { header: "Status", get: (i) => i.status ?? "" },
-  { header: "Start", get: (i) => fmtExportDate(i.startAt) },
-  { header: "End", get: (i) => fmtExportDate(i.endAt) },
+// Column set follows the Subscription export order so the reports line up, minus the
+// columns that don't apply to a digital test series (Address/City/Pincode, Material
+// Type, Course/Material Amount — dropped per FE request). Test series is a course-type
+// product, so its name sits in "Course Name" (mirrors the FE productCell for
+// testSeries); Package Name + the null-source columns (Promoter/Educator/WS Coin/
+// Activated By) have no test-series source and stay blank.
+const TS_SUB_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number }[] = [
+  { header: "Created At", get: (r) => fmtExportDate(r.createdAt) },
+  { header: "Order Method", get: (r) => r.orderMethod ?? "" },
+  { header: "Customer Name", get: (r) => r.customer?.name ?? "" },
+  { header: "Email", get: (r) => r.customer?.email ?? "" },
+  { header: "Phone", get: (r) => r.customer?.phone ?? "" },
+  { header: "Alternate Phone", get: () => "" },
+  { header: "Package Name", get: () => "" },
+  { header: "Course Name", get: (r) => r.product?.name ?? "" },
+  { header: "Educator Name", get: () => "" },
+  { header: "Plan", get: (r) => r.plan?.name ?? "" },
+  { header: "Start At", get: (r) => fmtExportDate(r.startAt) },
+  { header: "End At", get: (r) => fmtExportDate(r.endAt) },
+  { header: "Status", get: (r) => r.status ?? "" },
+  { header: "Activation Type", get: (r) => r.paymentMethod ?? "" },
+  { header: "Promoter Name", get: (r) => r.promoterName ?? "" },
+  { header: "Promocode", get: (r) => r.promocode ?? "" },
+  { header: "Remarks", get: (r) => r.remarks ?? "" },
+  { header: "Payment Id", get: (r) => r.razorpayPaymentId ?? "" },
+  { header: "Order ID", get: (r) => r.razorpayOrderId ?? "" },
+  { header: "Bank Transaction Id", get: (r) => r.bankTransactionId ?? "" },
+  { header: "WS Coin", get: (r) => r.wsCoin ?? "" },
+  { header: "Amount", get: (r) => r.amount ?? "" },
+  { header: "Activated By", get: (r) => r.activatedBy ?? "" },
 ];
 
 export const buildSubscriptionsCsv = async (opts: SubReportOpts): Promise<string> => {
-  const rows = await exportSubscriptionRows(opts);
+  const now = new Date();
   const esc = (v: string | number) => {
     const s = v === null || v === undefined ? "" : String(v);
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [TS_SUB_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
-  for (const r of rows) lines.push(TS_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  for await (const batch of iterateSubExportRows(opts, now)) {
+    for (const r of batch) lines.push(TS_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  }
   return lines.join("\n");
 };
 
 export const buildSubscriptionsXlsx = async (opts: SubReportOpts): Promise<Buffer> => {
-  const rows = await exportSubscriptionRows(opts);
-  const wb = new ExcelJS.Workbook();
+  const now = new Date();
+  const pass = new PassThrough();
+  const chunks: Buffer[] = [];
+  pass.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+  const finished = new Promise<void>((resolve, reject) => {
+    pass.once("end", resolve);
+    pass.once("error", reject);
+  });
+  const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: pass, useStyles: false, useSharedStrings: false });
   const ws = wb.addWorksheet("Test Series Subscriptions");
   ws.columns = TS_SUB_EXPORT_COLUMNS.map((c) => ({ header: c.header, key: c.header, width: 22 }));
-  for (const r of rows) ws.addRow(TS_SUB_EXPORT_COLUMNS.map((c) => c.get(r)));
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  for await (const batch of iterateSubExportRows(opts, now)) {
+    for (const r of batch) ws.addRow(TS_SUB_EXPORT_COLUMNS.map((c) => c.get(r))).commit();
+  }
+  ws.commit();
+  await wb.commit();
+  await finished;
+  return Buffer.concat(chunks);
 };
 
 export type GrantWrite = {

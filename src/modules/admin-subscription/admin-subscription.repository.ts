@@ -113,19 +113,6 @@ export const adminSubscriptionRepository = {
         updatedAt: d.now,
       },
     }),
-  extendSub: (id: number, d: { endAt: Date; orderId?: number | null; planId: number; amount: number; shippingId?: number | null; remarks?: string | null; now: Date }) =>
-    prisma.packageCourseSubscription.update({
-      where: { id },
-      data: {
-        endAt: d.endAt,
-        planId: d.planId,
-        amount: d.amount,
-        ...(d.orderId !== undefined ? { orderId: d.orderId } : {}),
-        ...(d.shippingId !== undefined ? { shippingId: d.shippingId } : {}),
-        ...(d.remarks !== undefined ? { remarks: d.remarks } : {}),
-        updatedAt: d.now,
-      },
-    }),
   patchSub: (
     id: number,
     d: {

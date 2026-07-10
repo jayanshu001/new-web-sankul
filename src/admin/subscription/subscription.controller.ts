@@ -28,9 +28,13 @@ const paginated = (req: Request) => {
 // ─── Course/Package subscriptions ──────────────────────────────────────────────
 
 // Shared filter mapping for the report list + its CSV/Excel exports, so all
-// three honor the identical param contract (dateFrom/dateTo → createdAt with
-// fromDate/toDate legacy aliases; startFrom/startTo → startAt; endFrom/endTo →
-// endAt; activationType accepted, see service note).
+// three honor the identical param contract. The date-range filter bounds
+// `createdAt` (records created between X and Y) at IST day boundaries — accepted
+// as `createdFrom`/`createdTo` (the unified cross-report name, see
+// reports-date-filter-created-at.md) with `dateFrom`/`dateTo` + `fromDate`/`toDate`
+// as legacy aliases. startFrom/startTo → startAt & endFrom/endTo → endAt remain
+// supported for back-compat but the merged report's date boxes now use createdAt.
+// activationType accepted, see service note.
 export const reportQueryFrom = (q: Record<string, string>): subSql.CourseSubReportQuery => ({
   customerId: q.customerId, courseId: q.courseId, packageId: q.packageId, type: q.type,
   status: q.status, paymentMethod: q.paymentMethod,
@@ -38,7 +42,7 @@ export const reportQueryFrom = (q: Record<string, string>): subSql.CourseSubRepo
   hasMaterial: q.hasMaterial === "true" ? true : q.hasMaterial === "false" ? false : undefined,
   // promoter / promocode filters + orderMethod (payment gateway, ≠ paymentMethod).
   promoterId: q.promoterId, promocodeId: q.promocodeId, orderMethod: q.orderMethod,
-  dateFrom: q.dateFrom ?? q.fromDate, dateTo: q.dateTo ?? q.toDate,
+  dateFrom: q.createdFrom ?? q.dateFrom ?? q.fromDate, dateTo: q.createdTo ?? q.dateTo ?? q.toDate,
   startFrom: q.startFrom, startTo: q.startTo, endFrom: q.endFrom, endTo: q.endTo,
   activationType: q.activationType,
   search: q.search, sortBy: q.sortBy, sortOrder: q.sortOrder,
