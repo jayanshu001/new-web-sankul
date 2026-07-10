@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { PassThrough } from "node:stream";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
@@ -244,27 +245,43 @@ export const listCourseSubscriptions = async (q: CourseSubReportQuery & { page: 
 };
 
 // ── report export (CSV / Excel) ──────────────────────────────────────────────
-// Same filters as the list, but the ENTIRE filtered set (no pagination), capped
-// to bound memory. Both formats share one column spec so they stay in lockstep.
-const EXPORT_MAX = 100_000;
+// Same filters as the list, but the ENTIRE filtered set (no pagination) and NO
+// row cap — a 300k-row filter must export every matching row. We page the result
+// set in keyset batches (id DESC ≈ the createdAt-DESC default, no deep OFFSET) and
+// hydrate one batch at a time, so memory stays bounded per batch instead of
+// loading the whole result set at once. Both formats share one column spec so
+// they stay in lockstep, and the async export job reuses these same builders.
+const EXPORT_BATCH = 5_000;
 
-export const exportCourseSubscriptionRows = async (q: CourseSubReportQuery) => {
-  const now = new Date();
+async function* iterateCourseSubExportRows(q: CourseSubReportQuery, now: Date) {
   const resolved = await resolveCourseSubWhere(q, now);
-  if (!resolved) return [];
-  const { listWhere, sortBy, sortDir } = resolved;
-  const rows = await repo.listCourseSubsByWhere(listWhere, sortBy, sortDir, 0, EXPORT_MAX);
-  return hydrateCourseSubRows(rows, now);
-};
+  if (!resolved) return;
+  const { listWhere } = resolved;
+  let beforeId: number | undefined;
+  for (;;) {
+    const rows = await repo.listCourseSubsPageKeyset(listWhere, beforeId, EXPORT_BATCH);
+    if (!rows.length) break;
+    yield await hydrateCourseSubRows(rows, now);
+    if (rows.length < EXPORT_BATCH) break;
+    beforeId = rows[rows.length - 1].id;
+  }
+}
 
-const fmtExportDate = (d: Date | null | undefined): string => (d ? new Date(d).toISOString() : "");
+// IST (Asia/Kolkata, UTC+5:30, no DST) ISO-8601 timestamp. The export keeps the
+// ISO format it always used; only the timezone was wrong (was UTC `Z`), so a row
+// shown as 6:30 PM IST on screen no longer exports as 13:00 UTC.
+const IST_OFFSET_MS = 330 * 60_000;
+const fmtExportDate = (d: Date | null | undefined): string => {
+  if (!d) return "";
+  const t = new Date(d);
+  if (Number.isNaN(t.getTime())) return "";
+  return new Date(t.getTime() + IST_OFFSET_MS).toISOString().replace("Z", "+05:30");
+};
 // Column order: the client's Subscription-WithMaterial-Report.csv set first, then
 // the extra columns the on-screen report shows. A row is either a course OR a
 // package, so only the matching name column is filled.
 const REPORT_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number }[] = [
   { header: "Created At", get: (r) => fmtExportDate(r.createdAt) },
-  { header: "Tracking ID", get: (r) => r.trackingId ?? "" },
-  { header: "Payment Type", get: (r) => r.paymentMethod ?? "" },
   { header: "Order Method", get: (r) => r.orderMethod ?? "" },
   { header: "Customer Name", get: (r) => r.customer?.name ?? "" },
   { header: "Email", get: (r) => r.customer?.email ?? "" },
@@ -281,7 +298,12 @@ const REPORT_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number 
   { header: "End At", get: (r) => fmtExportDate(r.endAt) },
   { header: "Status", get: (r) => r.status ?? "" },
   { header: "Material Type", get: (r) => r.materialType ?? "" },
-  { header: "Activation Type", get: (r) => r.activationType ?? "" },
+  // Activation Type = how the sub was activated (online | backend). Sourced from
+  // the row's `paymentMethod` (= ws_package_course_subscription.payment_type), the
+  // same field the on-screen report maps to its Activation Type column — NOT the
+  // no-op `activationType` (which has no SQL source). Distinct from Order Method
+  // (the payment gateway). See docs/backend-requests/subscription-report-filters.md.
+  { header: "Activation Type", get: (r) => r.paymentMethod ?? "" },
   { header: "Promoter Name", get: (r) => r.promoterName ?? "" },
   { header: "Promocode", get: (r) => r.promocode ?? "" },
   { header: "Remarks", get: (r) => r.remarks ?? "" },
@@ -296,23 +318,39 @@ const REPORT_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number 
 ];
 
 export const buildCourseSubscriptionsCsv = async (q: CourseSubReportQuery): Promise<string> => {
-  const rows = await exportCourseSubscriptionRows(q);
+  const now = new Date();
   const esc = (v: string | number) => {
     const s = v === null || v === undefined ? "" : String(v);
     return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   const lines = [REPORT_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
-  for (const r of rows) lines.push(REPORT_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  for await (const batch of iterateCourseSubExportRows(q, now)) {
+    for (const r of batch) lines.push(REPORT_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  }
   return lines.join("\n");
 };
 
 export const buildCourseSubscriptionsXlsx = async (q: CourseSubReportQuery): Promise<Buffer> => {
-  const rows = await exportCourseSubscriptionRows(q);
-  const wb = new ExcelJS.Workbook();
+  const now = new Date();
+  // Streaming workbook writer: rows are flushed to the stream as they are added
+  // (worksheet model isn't kept in memory), so a 300k-row export stays bounded.
+  const pass = new PassThrough();
+  const chunks: Buffer[] = [];
+  pass.on("data", (c: Buffer) => chunks.push(Buffer.from(c)));
+  const finished = new Promise<void>((resolve, reject) => {
+    pass.once("end", resolve);
+    pass.once("error", reject);
+  });
+  const wb = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: pass, useStyles: false, useSharedStrings: false });
   const ws = wb.addWorksheet("Subscriptions");
   ws.columns = REPORT_EXPORT_COLUMNS.map((c) => ({ header: c.header, key: c.header, width: 22 }));
-  for (const r of rows) ws.addRow(REPORT_EXPORT_COLUMNS.map((c) => c.get(r)));
-  return Buffer.from(await wb.xlsx.writeBuffer());
+  for await (const batch of iterateCourseSubExportRows(q, now)) {
+    for (const r of batch) ws.addRow(REPORT_EXPORT_COLUMNS.map((c) => c.get(r))).commit();
+  }
+  ws.commit();
+  await wb.commit();
+  await finished;
+  return Buffer.concat(chunks);
 };
 
 export const getCourseSubscriptionById = async (id: number): Promise<"not_found" | any> => {

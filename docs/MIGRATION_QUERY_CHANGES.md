@@ -15,6 +15,34 @@
 
 ---
 
+## 2026-07-10 — Subscription report export: IST dates, column fixes, uncapped rows
+
+> **Query-shape change only. No schema/DDL.** Applies to `admin/subscriptions/export/csv`
+> + `/export/excel` **and** the async `POST /admin/exports {type:"subscription"}` job
+> (both reuse `buildCourseSubscriptionsCsv` / `Xlsx` in `modules/admin-subscription`).
+> `yarn typecheck` green.
+
+Fixes from `docs/backend-requests/subscription-report-export-csv-defects.md`:
+
+- **No more 100k cap.** The export previously ran one `SELECT … LIMIT 100000`
+  (`EXPORT_MAX`), silently truncating filters that match 300k+ rows. Replaced with
+  **keyset pagination** — new repo query `listCourseSubsPageKeyset(where, beforeId, take)`
+  = `ORDER BY id DESC WHERE id < :beforeId LIMIT :take` (PK-index, no deep OFFSET),
+  walked in 5,000-row batches by the service until exhausted. Every matching row is now
+  exported. Export order is now strictly `id DESC` (≈ the old `createdAt DESC` default;
+  a custom `sortBy` no longer reorders the *export* — it still orders the on-screen list).
+- **XLSX now uses `ExcelJS.stream.xlsx.WorkbookWriter`** (rows flushed per-batch to a
+  `PassThrough` → Buffer) so an uncapped export doesn't hold the whole worksheet model
+  in memory. CSV builds line-by-line over the same batches.
+- **Timestamps now IST (Asia/Kolkata, +05:30), not UTC.** `fmtExportDate` shifts by
+  +330 min and emits ISO-8601 with a `+05:30` offset (format unchanged, only TZ).
+- **Column set trimmed to match the on-screen report:** dropped `Tracking ID` (removed
+  from the report) and the redundant `Payment Type` (duplicated the online/backend
+  value). `Activation Type` now populated from the row's `paymentMethod`
+  (= `payment_type` online|backend) instead of the no-op `activationType` field —
+  matching how the FE maps that column (see `subscription-report-filters.md`).
+  `Promoter Name` was already present/populated (repo selects `promoter.full_name`).
+
 ## 2026-07-09 — Async report-export jobs (NEW table `ws_export_job`)
 
 > **Schema change** (net-new feature table, not a Mongo→SQL migration). DDL:

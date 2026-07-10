@@ -34,6 +34,16 @@ export const adminSubscriptionRepository = {
   buildCourseSubBaseWhere: (opts: CourseSubFilter): Prisma.PackageCourseSubscriptionWhereInput => buildSubWhere(opts),
   listCourseSubsByWhere: (where: Prisma.PackageCourseSubscriptionWhereInput, sortBy: string, sortDir: "asc" | "desc", skip: number, take: number) =>
     prisma.packageCourseSubscription.findMany({ where, orderBy: { [subSortCol(sortBy)]: sortDir }, skip, take }),
+  // Keyset page for the UNBOUNDED report export: id DESC (≈ the createdAt-DESC
+  // default) fetching rows strictly older than the last id seen — no deep OFFSET,
+  // so each page is O(take) on the PK index and the caller can walk the entire
+  // filtered set (300k+) without a row cap. See the service export iterator.
+  listCourseSubsPageKeyset: (where: Prisma.PackageCourseSubscriptionWhereInput, beforeId: number | undefined, take: number) =>
+    prisma.packageCourseSubscription.findMany({
+      where: beforeId ? andWhere(where, { id: { lt: beforeId } }) : where,
+      orderBy: { id: "desc" },
+      take,
+    }),
   aggCourseSubs: (where: Prisma.PackageCourseSubscriptionWhereInput) =>
     prisma.packageCourseSubscription.aggregate({ where, _sum: { amount: true }, _count: { _all: true } }),
   findCourseSubById: (id: number) => prisma.packageCourseSubscription.findUnique({ where: { id } }),
