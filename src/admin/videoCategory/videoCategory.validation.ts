@@ -66,6 +66,9 @@ export const listQuerySchema = z.object({
   childCategoryId: filterOptionalId,
   page: z.coerce.number().int().min(1).optional().default(1),
   per_page: z.coerce.number().int().min(1).max(500).optional().default(20),
+  // `limit` is the unified category-picker page-size param (FE sends limit=50); it
+  // aliases per_page, which the controller resolves with limit taking precedence.
+  limit: z.coerce.number().int().min(1).max(500).optional(),
   sort_by: z.enum(["name", "order", "created_at", "updated_at"]).optional().default("order"),
   sort_dir: z.enum(["asc", "desc"]).optional().default("asc"),
 });

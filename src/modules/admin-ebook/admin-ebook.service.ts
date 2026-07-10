@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
+import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { computeEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminEbookRepository as repo } from "./admin-ebook.repository";
@@ -394,17 +395,14 @@ const EBOOK_SUB_EXPORT_COLUMNS: { header: string; get: (i: any, now: Date) => st
 export const buildSubscriptionsCsv = async (q: SubReportQuery): Promise<string> => {
   const now = new Date();
   const opts = await resolveSubOpts(q);
-  const esc = (v: string | number) => {
-    const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [EBOOK_SUB_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
-  if (opts) {
-    for await (const batch of iterateSubExportRows(opts)) {
-      for (const r of batch) lines.push(EBOOK_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r, now))).join(","));
+  async function* rowBatches() {
+    if (opts) {
+      for await (const batch of iterateSubExportRows(opts)) {
+        yield batch.map((r) => EBOOK_SUB_EXPORT_COLUMNS.map((c) => c.get(r, now)));
+      }
     }
   }
-  return lines.join("\n");
+  return buildCsvFromRowBatches(EBOOK_SUB_EXPORT_COLUMNS.map((c) => c.header), rowBatches());
 };
 
 export const buildSubscriptionsXlsx = async (q: SubReportQuery): Promise<Buffer> => {

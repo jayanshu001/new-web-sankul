@@ -6,7 +6,7 @@
  * (`listPackageCategories`, with per-category active-package count + the
  * ?live=true filter) + the client `listPackagesByCategory` detail join
  * (`listPackagesAndLiveByCategory`). The detail join is now SQL-backed:
- * ws_package carries is_paid/is_smart_course/is_planner_course and
+ * ws_package carries is_paid and
  * ws_live_course carries package_category_id, so packages + live courses for a
  * category resolve entirely on MySQL.
  */
@@ -63,8 +63,6 @@ const toCategoryPackageDto = (p: any, allPlans: any[]) => {
     shareableLink: p.shareable_link ?? null,
     order: p.order_by,
     isPaid: p.isPaid,
-    isSmartCourse: p.isSmartCourse,
-    isPlannerCourse: p.isPlannerCourse,
     withMaterialText: p.withMaterial,
     withoutMaterialText: p.withoutMaterial,
     packageTypeId: idStr(p.packageTypeId),

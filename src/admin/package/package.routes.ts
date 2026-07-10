@@ -1,6 +1,8 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
+import { validate } from "../../middlewares/validate";
+import { createPackageTypeSchema, updatePackageTypeSchema } from "./package.validation";
 import {
   listPackageTypes,
   createPackageType,
@@ -39,8 +41,8 @@ router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level st
 
 // Package Types (small master)
 router.get("/types", listPackageTypes);
-router.post("/types", createPackageType);
-router.put("/types/:id", updatePackageType);
+router.post("/types", validate({ body: createPackageTypeSchema }), createPackageType);
+router.put("/types/:id", validate({ body: updatePackageTypeSchema }), updatePackageType);
 router.delete("/types/:id", deletePackageType);
 
 // Packages

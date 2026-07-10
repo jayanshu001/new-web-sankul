@@ -68,6 +68,12 @@ export const adminMasterRepository = {
   },
   vcChildren: (parentId: number) =>
     prisma.videoCategory.findMany({ where: { parent: parentId }, select: { id: true, title: true, slug: true, status: true, order_by: true }, orderBy: { order_by: "asc" } }),
+  // Batched {id, name, parent} loader for ancestor-chain resolution (title→name; one
+  // query per tree level).
+  vcCategoriesByIds: async (ids: number[]) =>
+    ids.length
+      ? (await prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, parent: true } })).map((r) => ({ id: r.id, name: r.title, parent: r.parent }))
+      : [],
   // Existing ids among the given set — used to validate childCategoryIds before binding.
   vcExistingIds: (ids: number[]) =>
     prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true } }),

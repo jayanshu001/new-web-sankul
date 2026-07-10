@@ -13,8 +13,6 @@ import {
   reorderPackagesSchema,
   reorderEmbeddedSchema,
   attachPlansSchema,
-  createPackageTypeSchema,
-  updatePackageTypeSchema,
   createChatMessageSchema,
   setRelationsSchema,
 } from "./package.validation";
@@ -64,10 +62,6 @@ const coercePackageBody = (req: Request) => {
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
   if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
   if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
-  if (typeof req.body.isSmartCourse === "string")
-    req.body.isSmartCourse = req.body.isSmartCourse === "true";
-  if (typeof req.body.isPlannerCourse === "string")
-    req.body.isPlannerCourse = req.body.isPlannerCourse === "true";
   coerceIdArrayField(req, "examCountdownCategoryIds");
   coerceIdArrayField(req, "examCountdownIds");
 };
@@ -82,14 +76,13 @@ export const listPackageTypes = asyncHandler(async (_req: Request, res: Response
 });
 
 export const createPackageType = asyncHandler(async (req: Request, res: Response) => {
-  const validated = createPackageTypeSchema.parse(req.body);
-  const data = await packageService.createPackageType(validated);
+  // Body already validated + coerced by validate({ body: createPackageTypeSchema }).
+  const data = await packageService.createPackageType(req.body);
   return res.status(201).json({ success: true, data });
 });
 
 export const updatePackageType = asyncHandler(async (req: Request, res: Response) => {
-  const validated = updatePackageTypeSchema.parse(req.body);
-  const data = await packageService.updatePackageType(req.params.id as string, validated);
+  const data = await packageService.updatePackageType(req.params.id as string, req.body);
   return success(res, data as any);
 });
 

@@ -1,4 +1,5 @@
 import { referralRepository as repo } from "./referral.repository";
+import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import type { Prisma, RefferalProgram, RefferalTransaction } from "@prisma/client";
 
 export const REFERRAL_MODULE = "referral";
@@ -403,16 +404,12 @@ export const adminWithdrawalsCsv = async (q: { status?: string; fromDate?: strin
   const status = ["pending", "successful", "failed"].includes(q.status ?? "") ? q.status : undefined;
   const { from, to } = parseReportWindow(q.fromDate, q.toDate);
   const rows = await repo.withdrawalRows({ status, from, to });
-  const esc = (v: any) => {
-    const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
   const header = ["Bank Account Holder Name", "Bank Account Number", "IFSC Code", "Amount", "Status", "Date"];
-  const lines = [header.join(",")];
-  for (const r of rows) {
-    lines.push([esc(r.accountHolderName), esc(r.accountNumber), esc(r.ifscCode), esc(num(r.coin)), esc(r.status), esc(fmtExportDate(r.date))].join(","));
+  // Low-volume report → a single batch is fine (withdrawalRows is already uncapped).
+  async function* rowBatches() {
+    yield rows.map((r) => [r.accountHolderName ?? "", r.accountNumber ?? "", r.ifscCode ?? "", num(r.coin), r.status ?? "", fmtExportDate(r.date)]);
   }
-  return lines.join("\n");
+  return buildCsvFromRowBatches(header, rowBatches());
 };
 
 // ─── Manual reward adjustment ────────────────────────────────────────────────

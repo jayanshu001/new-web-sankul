@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
+import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { prisma } from "../../config/prisma";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminBookRepository as repo } from "./admin-book.repository";
@@ -570,17 +571,14 @@ const ORDER_EXPORT_COLUMNS: { header: string; get: (r: OrderExportRow) => string
 
 export const buildOrdersCsv = async (q: OrderReportQuery): Promise<string> => {
   const opts = await resolveOrderOpts(q);
-  const esc = (v: string | number) => {
-    const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [ORDER_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
-  if (opts) {
-    for await (const batch of iterateOrderExportRows(opts)) {
-      for (const r of batch) lines.push(ORDER_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  async function* rowBatches() {
+    if (opts) {
+      for await (const batch of iterateOrderExportRows(opts)) {
+        yield batch.map((r) => ORDER_EXPORT_COLUMNS.map((c) => c.get(r)));
+      }
     }
   }
-  return lines.join("\n");
+  return buildCsvFromRowBatches(ORDER_EXPORT_COLUMNS.map((c) => c.header), rowBatches());
 };
 
 export const buildOrdersXlsx = async (q: OrderReportQuery): Promise<Buffer> => {

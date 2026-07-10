@@ -25,6 +25,7 @@
  */
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
+import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { prisma } from "../../config/prisma";
 import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 import { buildPagination } from "../../utils/listQuery";
@@ -963,15 +964,12 @@ const TS_SUB_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number 
 
 export const buildSubscriptionsCsv = async (opts: SubReportOpts): Promise<string> => {
   const now = new Date();
-  const esc = (v: string | number) => {
-    const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [TS_SUB_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
-  for await (const batch of iterateSubExportRows(opts, now)) {
-    for (const r of batch) lines.push(TS_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  async function* rowBatches() {
+    for await (const batch of iterateSubExportRows(opts, now)) {
+      yield batch.map((r) => TS_SUB_EXPORT_COLUMNS.map((c) => c.get(r)));
+    }
   }
-  return lines.join("\n");
+  return buildCsvFromRowBatches(TS_SUB_EXPORT_COLUMNS.map((c) => c.header), rowBatches());
 };
 
 export const buildSubscriptionsXlsx = async (opts: SubReportOpts): Promise<Buffer> => {

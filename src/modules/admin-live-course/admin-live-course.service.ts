@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
+import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminLiveCourseRepository as repo } from "./admin-live-course.repository";
@@ -484,17 +485,15 @@ export const buildSubscriptionsCsv = async (q: SubReportQuery): Promise<"bad_cou
   const now = new Date();
   const filter = await resolveSubFilter(q, now);
   if (filter === "bad_course" || filter === "bad_customer") return filter;
-  const esc = (v: string | number) => {
-    const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [LIVE_SUB_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
-  if (filter !== "empty") {
-    for await (const batch of iterateSubExportRows(filter, now)) {
-      for (const r of batch) lines.push(LIVE_SUB_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  const resolved = filter === "empty" ? null : filter;
+  async function* rowBatches() {
+    if (resolved) {
+      for await (const batch of iterateSubExportRows(resolved, now)) {
+        yield batch.map((r) => LIVE_SUB_EXPORT_COLUMNS.map((c) => c.get(r)));
+      }
     }
   }
-  return lines.join("\n");
+  return buildCsvFromRowBatches(LIVE_SUB_EXPORT_COLUMNS.map((c) => c.header), rowBatches());
 };
 
 export const buildSubscriptionsXlsx = async (q: SubReportQuery): Promise<"bad_course" | "bad_customer" | Buffer> => {

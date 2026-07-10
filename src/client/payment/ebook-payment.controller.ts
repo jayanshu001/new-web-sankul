@@ -92,7 +92,7 @@ const createEbookOrderMysqlPath = async (
   let originalAmount: number | null = null;
   let discountAmount: number | null = null;
   if (promocode) {
-    const { result, error } = await resolvePromoForPlanSql(promocode, plan.price, { type: "ebook", id: plan.ebookId }, planId);
+    const { result, error } = await resolvePromoForPlanSql(promocode, plan.price, { type: "ebook", id: plan.ebookId }, planId, Number(customerId));
     if (error || !result) {
       logger.warn("createEbookOrderPayment[mysql] promo rejected", { traceId, customerId, promocode, error });
       return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });

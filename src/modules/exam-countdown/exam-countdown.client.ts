@@ -69,8 +69,6 @@ const packageDto = (p: any, plans: any[], subCount: number) => {
     shareableLink: p.shareable_link ?? null,
     order: p.order_by,
     isPaid: p.isPaid,
-    isSmartCourse: p.isSmartCourse,
-    isPlannerCourse: p.isPlannerCourse,
     withMaterialText: p.withMaterial,
     withoutMaterialText: p.withoutMaterial,
     packageTypeId: idStr(p.packageTypeId),

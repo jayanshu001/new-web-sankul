@@ -27,13 +27,25 @@ export const adminVideoRepository = {
 
   categoryExists: (id: number) => prisma.videoCategory.findUnique({ where: { id }, select: { id: true } }),
 
-  /** Active categories for the pre-requisites dropdown (+ children via parent FK). */
-  listActiveCategories: () =>
-    prisma.videoCategory.findMany({ where: { status: true }, orderBy: [{ order_by: "asc" }, { title: "asc" }], select: { id: true, title: true, slug: true } }),
+  /** Active categories for the pre-requisites dropdown (+ children via parent FK).
+   *  `search` = title contains-match; `limit` caps the page (omit → all, back-compat). */
+  listActiveCategories: (opts: { search?: string; limit?: number } = {}) =>
+    prisma.videoCategory.findMany({
+      where: { status: true, ...(opts.search ? { title: { contains: opts.search } } : {}) },
+      orderBy: [{ order_by: "asc" }, { title: "asc" }],
+      select: { id: true, title: true, slug: true, parent: true },
+      ...(opts.limit && opts.limit > 0 ? { take: opts.limit } : {}),
+    }),
   childParentIds: async () => {
     const rows = await prisma.videoCategory.findMany({ where: { parent: { gt: 0 } }, select: { parent: true } });
     return new Set(rows.map((r) => r.parent!));
   },
+  // Batched {id, name, parent} loader for ancestor-chain resolution — status-agnostic
+  // so a disabled parent still resolves (it renders as a greyed row). One query/level.
+  categoriesByIds: async (ids: number[]) =>
+    ids.length
+      ? (await prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, parent: true } })).map((r) => ({ id: r.id, name: r.title, parent: r.parent }))
+      : [],
 
   slugTaken: (slug: string, exceptId?: number) =>
     prisma.video.findFirst({ where: { slug, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true } }),

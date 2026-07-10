@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { z } from "zod";
-import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadLivePlanDiscountsSql } from "../../modules/promo-code/promo-code.service";
+import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadLivePlanDiscountsSql, resolveReferralCode, referralCovers } from "../../modules/promo-code/promo-code.service";
 import { computePromoDiscount } from "../promocode/applies-to";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
@@ -49,7 +49,58 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
       const liveCourseId = plan.liveCourseId;
 
       const promo = await findActiveByCode(body.promocode);
-      if (!promo) return res.status(400).json({ success: false, message: "Invalid or expired promo code." });
+      if (!promo) {
+        // Not a promocode — try it as a referral code (global % on live course).
+        const referral = await resolveReferralCode(body.promocode);
+        if (referral && referralCovers("liveCourse")) {
+          if (referral.referrerId === Number(customerId)) {
+            return res.status(400).json({ success: false, message: "You can't use your own referral code." });
+          }
+          const rows = await listPlansForLiveCourse(liveCourseId);
+          const plans = rows.map((p: any) => {
+            const basePrice = Number(p.price);
+            const discount = computePromoDiscount({ discountType: referral.discountType, discountValue: referral.discountValue }, basePrice);
+            return {
+              id: p.id,
+              liveCourseId: p.liveCourseId,
+              name: p.name ?? null,
+              duration: p.duration,
+              price: Math.max(0, basePrice - discount),
+              originalPrice: p.originalPrice != null ? Number(p.originalPrice) : null,
+              withMaterial: !!p.withMaterial,
+              materialPrice: p.materialPrice != null ? Number(p.materialPrice) : null,
+              isDefault: p.isDefault,
+              status: p.status,
+              isMostPopular: p.isMostPopular ?? false,
+              created_at: p.createdAt ?? null,
+              updated_at: p.updatedAt ?? null,
+              orginalPrice: basePrice,
+              offerAvailable: referral.discountValue > 0,
+              discountType: referral.discountType,
+              discountValue: referral.discountValue,
+              offerPercentage: referral.discountValue,
+            };
+          });
+          logger.info("applyLiveCoursePromo success (referral)", { traceId, customerId, liveCourseId, promocode: body.promocode });
+          return res.status(200).json({
+            success: true,
+            data: {
+              _id: "",
+              promocode: body.promocode.toUpperCase(),
+              codeType: "referral",
+              discountType: referral.discountType,
+              discountValue: referral.discountValue,
+              id: liveCourseId,
+              key: "liveCourse",
+              plans: {
+                withMaterial: plans.filter((p: any) => p.withMaterial),
+                withoutMaterial: plans.filter((p: any) => !p.withMaterial),
+              },
+            },
+          });
+        }
+        return res.status(400).json({ success: false, message: "Invalid or expired promo code." });
+      }
       if (!promoCovers(promo, { type: "liveCourse", id: liveCourseId })) {
         return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
       }
@@ -117,6 +168,7 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
         data: {
           _id: String(promo.id),
           promocode: promo.promocode,
+          codeType: "promocode",
           discountType: promoDiscountType,
           discountValue: promoDiscountValue,
           id: liveCourseId,
@@ -191,7 +243,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       let originalAmount: number | null = null;
       let discountAmount: number | null = null;
       if (body.promocode) {
-        const { result, error } = await resolvePromoForPlanSql(body.promocode, planSql.price, { type: "liveCourse", id: planSql.liveCourseId }, body.planId);
+        const { result, error } = await resolvePromoForPlanSql(body.promocode, planSql.price, { type: "liveCourse", id: planSql.liveCourseId }, body.planId, customerIdInt);
         if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
         if (result.finalAmount < 1) return res.status(400).json({ success: false, message: "This promo code reduces the price below the minimum payable amount. Please contact support." });
         chargeAmount = result.finalAmount;

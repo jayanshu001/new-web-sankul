@@ -1,5 +1,6 @@
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
+import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { computeEndAt } from "../../utils/planDuration";
 import { adminSubscriptionRepository as repo } from "./admin-subscription.repository";
@@ -323,15 +324,12 @@ const REPORT_EXPORT_COLUMNS: { header: string; get: (r: any) => string | number 
 
 export const buildCourseSubscriptionsCsv = async (q: CourseSubReportQuery): Promise<string> => {
   const now = new Date();
-  const esc = (v: string | number) => {
-    const s = v === null || v === undefined ? "" : String(v);
-    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  };
-  const lines = [REPORT_EXPORT_COLUMNS.map((c) => esc(c.header)).join(",")];
-  for await (const batch of iterateCourseSubExportRows(q, now)) {
-    for (const r of batch) lines.push(REPORT_EXPORT_COLUMNS.map((c) => esc(c.get(r))).join(","));
+  async function* rowBatches() {
+    for await (const batch of iterateCourseSubExportRows(q, now)) {
+      yield batch.map((r) => REPORT_EXPORT_COLUMNS.map((c) => c.get(r)));
+    }
   }
-  return lines.join("\n");
+  return buildCsvFromRowBatches(REPORT_EXPORT_COLUMNS.map((c) => c.header), rowBatches());
 };
 
 export const buildCourseSubscriptionsXlsx = async (q: CourseSubReportQuery): Promise<Buffer> => {

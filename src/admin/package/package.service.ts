@@ -80,7 +80,7 @@ export const getPackageById = async (id: string) => {
 };
 
 export const createPackage = async (validated: any) => {
-  // isPaid/isSmartCourse/isPlannerCourse/packageCategoryId/examCountdown* DO
+  // isPaid/packageCategoryId/examCountdown* DO
   // persist on SQL (ws_package columns), as do goalId/goalLabelId. Embedded
   // arrays → pivot tables. Goal-label validation runs inside adminPackage.
   return adminPackage.createPackage(validated);

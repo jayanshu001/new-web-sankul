@@ -1,4 +1,5 @@
 import { adminVideoRepository as repo } from "./admin-video.repository";
+import { resolveAncestors } from "../../utils/categoryAncestors";
 
 export const ADMIN_VIDEO_MODULE = "admin-video";
 export const isAdminVideoMysql = (): boolean => true;
@@ -62,10 +63,23 @@ export const listVideos = async (q: { search?: string; status?: string; type?: s
   return { items: rows.map(toItem), total };
 };
 
-export const getPreRequisites = async () => {
-  const [cats, parentIds] = await Promise.all([repo.listActiveCategories(), repo.childParentIds()]);
+export const getPreRequisites = async (opts: { search?: string; limit?: number } = {}) => {
+  // `search` (title contains) + `limit` power the picker's server-side search. Note
+  // `childParentIds()` scans ALL categories, so `has_children` stays correct even when
+  // the returned rows are a search/limit slice (a parent may be off-page).
+  const [cats, parentIds] = await Promise.all([repo.listActiveCategories(opts), repo.childParentIds()]);
+  // parentId + ancestors[{id,name}] (root→immediate-parent) so the videos-list modal
+  // can render the greyed parent rows for a match (the feed was flat with no parent link).
+  const ancestorsFor = await resolveAncestors(cats.map((c) => c.parent), repo.categoriesByIds);
   return {
-    categories: cats.map((c) => ({ id: String(c.id), name: c.title, slug: c.slug, has_children: parentIds.has(c.id) })),
+    categories: cats.map((c) => ({
+      id: String(c.id),
+      name: c.title,
+      slug: c.slug,
+      parentId: c.parent && c.parent > 0 ? String(c.parent) : null,
+      ancestors: ancestorsFor(c.parent),
+      has_children: parentIds.has(c.id),
+    })),
     types: [{ value: "free", label: "Free" }, { value: "paid", label: "Paid" }],
     platforms: ["youtube", "vimeo", "aws"],
   };

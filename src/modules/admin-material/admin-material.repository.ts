@@ -34,6 +34,11 @@ export const adminMaterialRepository = {
     categoryIds.length
       ? prisma.materialCategory.findMany({ where: { parent: { in: categoryIds } }, distinct: ["parent"], select: { parent: true } })
       : Promise.resolve([]),
+  // Batched {id, name, parent} loader for ancestor-chain resolution (one query/level).
+  categoriesByIds: (ids: number[]) =>
+    ids.length
+      ? prisma.materialCategory.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, parent: true } })
+      : Promise.resolve([]),
   materialCountForCategory: (id: number) => prisma.material.count({ where: { materialCategoryId: id } }),
 
   createCategory: (data: Prisma.MaterialCategoryUncheckedCreateInput) => prisma.materialCategory.create({ data }),

@@ -15,6 +15,139 @@
 
 ---
 
+## 2026-07-10 — Drop Smart/Planner package flags + tighten packageTypeId + package-type validation
+
+> **Schema DROP (staged) + query/DTO change + validation fix.** `yarn typecheck` green,
+> `prisma:generate` run. DDL: `schema-changes/2026-07-10_drop_package_course_flags.sql`
+> (apply at deploy — Prisma ignores the still-present columns until then).
+
+- **#1 Removed `is_smart_course` / `is_planner_course`** from `ws_package`:
+  - Dropped both columns from the Prisma `Package` model (DDL staged).
+  - Removed `isSmartCourse` / `isPlannerCourse` from the admin create/update schema,
+    the multipart coercion, and the admin package DTO.
+  - Removed them from **client read paths** too: `catalog-package.detail.sql.ts` (DTO +
+    `listPackagesPaginatedSql` filter + input type), `package-category.service.ts` DTO,
+    `exam-countdown.client.ts` DTO, and the `client/package` list query filters
+    (`isSmartCourse` / `isPlannerCourse` query params no longer read).
+- **#2 `packageTypeId` write path tightened** (`admin-package.service.ts`):
+  - New `resolvePackageTypeId(raw)` — empty/null now persists **NULL** (truly clears)
+    instead of silently coercing to sentinel `1`.
+  - **DB drift fixed:** `package_type_id` was `NOT NULL` in the DB despite the Prisma
+    model saying `Int?`. DDL `schema-changes/2026-07-10_package_type_id_nullable.sql`
+    (`MODIFY … INT NULL`) makes the null-clear actually work — **apply at deploy**.
+  - A non-numeric or **non-existent** `packageTypeId` now throws **400 / 404** (was a
+    silent fallback to `1`, or an FK 500). Applies to POST + PUT `/admin/packages`.
+  - DTO still returns `packageTypeId` (populated `{_id,name}` when joined, else id string).
+- **#3 `ws_package_type` stays name-only** — removed `order` / `active` from
+  `createPackageTypeSchema` (they were accepted-but-ignored). No DDL.
+- **#4 Package-type create/update now return 422** — routed `POST/PUT /admin/packages/types`
+  through `validate({ body })` (was `schema.parse()` in-controller → global 500).
+
+## 2026-07-10 — Video pre-requisites feed: server-side `search` + `limit`
+
+> **Query-shape change only. No schema/DDL.** `yarn typecheck` green. Follow-up to the
+> category-pickers work below.
+
+`GET admin/videos/pre-requisites` (`admin-video.getPreRequisites`) now accepts `search`
+(title contains-match) + `limit` (page size, clamped 1–500; omitted → all rows,
+back-compat), so the Videos-list category picker can go fully server-side like Exam/
+Material. `repo.listActiveCategories(opts)` applies `where.title.contains` + `take`.
+`has_children` still scans ALL categories (`childParentIds()`), so it stays correct even
+when the returned rows are a search/limit slice. `parentId`/`ancestors` already present.
+
+## 2026-07-10 — Category pickers: `ancestors[{id,name}]` + hasChildren/parentId on rows
+
+> **Query-shape change only. No schema/DDL.** All three category types already have a
+> single-parent `parent` self-FK. `yarn typecheck` green. Request:
+> `docs/backend-requests/category-pickers-hierarchy.md`.
+
+Category picker list endpoints now return **`ancestors: [{id, name}]`** (ordered
+root→immediate-parent) on each row, so the FE can render greyed parent rows for a
+server-side-search match without holding the whole tree. New shared resolver
+`src/utils/categoryAncestors.ts` (`resolveAncestors`) walks the `parent` chain by
+**tree level** — one batched `categoriesByIds` query per level (2–4 total), cycle-guarded.
+
+- **Exam** (`admin/quizzes/categories`, `modules/catalog-exam`): added `ancestors` (was
+  absent) + repo `categoriesByIds`. `search`/`limit`/`hasChildren` already existed.
+- **Material** (`admin/materials/categories`, `modules/admin-material`): `ancestors` was a
+  hardcoded `[]`, now computed + repo `categoriesByIds`.
+- **Video — Package** (`admin/video-categories`, `admin-master.fullVcList`): added
+  `parentId` + `hasChildren` + `ancestors` to the row (was only `child_categories`);
+  controller now accepts `limit` (aliases `per_page`). Repo `vcCategoriesByIds`.
+- **Video — Course** (`admin/master/video-categories`, `admin-master.vcList`): added
+  `ancestors` (already had `parent` + `hasChildren`); resolved against the in-memory full set.
+- **Video — pre-requisites** (`admin/videos/pre-requisites`, `admin-video.getPreRequisites`):
+  added `parentId` + `ancestors` to each category (already had `has_children`); repo
+  `categoriesByIds` + `parent` added to `listActiveCategories` select. Ancestor loader is
+  status-agnostic so a disabled parent still resolves (renders greyed).
+
+All additive — no existing field renamed/removed; the tree endpoints
+(`/categories/tree`, `?tree=true`) are unchanged and remain uncapped.
+
+## 2026-07-10 — Referral codes now cover live course too (all 5 entities)
+
+> **Scope extension, no schema/DDL.** All referral files typecheck clean (a pre-existing
+> unrelated error in admin-video.service.ts `resolveAncestors` is someone else's WIP).
+
+- `REFERRAL_COVERED_TYPES` extended to include `liveCourse` → now package/course/ebook/
+  testSeries/liveCourse (all five commerce entities).
+- `POST /client/payment/apply-promo/live-course` (`applyLiveCoursePromo`) gained the
+  referral fallback (mirrors test series): global % across all live-course plans, material
+  split preserved, `codeType:"referral"`, `_id:""`, self-referral rejected.
+- `POST /client/payment/create-order/live-course` now passes `buyerId` into
+  `resolvePromoForPlanSql`.
+- Live-course promo success payload gained `codeType:"promocode"`.
+
+## 2026-07-10 — Referral codes now cover test series too
+
+> **Scope extension, no schema/DDL.** `yarn typecheck` green.
+
+- `REFERRAL_COVERED_TYPES` in `promo-code.service.ts` extended to include `testSeries`
+  (was package/course/ebook). liveCourse still excluded.
+- `POST /client/payment/apply-promo/test-series` (`applyTestSeriesPromo`) gained the
+  referral fallback: when `findActiveByCode` misses, it tries `resolveReferralCode` and
+  applies the global % to every test-series plan (same response shape, `codeType:"referral"`,
+  `_id:""`). Self-referral rejected.
+- `POST /client/payment/create-order/test-series` now passes `buyerId` (customerId) into
+  `resolvePromoForPlanSql` so the self-referral guard applies at checkout.
+- Test-series promo success payload also gained `codeType:"promocode"` (additive).
+- Ebook already supported referral (via `/promocodes/apply` + ebook create-order) — no change.
+
+## 2026-07-10 — Referral codes redeemable through the promocode apply/checkout flow
+
+> **New query paths, no schema/DDL.** `yarn typecheck` green. One apply endpoint now
+> serves both promocodes and referral codes; referral data stays solely on
+> `ws_customer.referral_code` (no duplication into `ws_promocode`).
+
+- **New** `resolveReferralCode(code)` in `promo-code.service.ts`: looks up
+  `ws_customer` by `referral_code` (`{ referralCode, isAccountDeleted:false, status:true }`)
+  + the active `ws_refferal_program` named `student` (`refferalDiscount` %). Returns
+  `{ referrerId, discountType:"percentage", discountValue }` or `null`.
+- **`resolvePromoForPlanSql`** (checkout, used by course/ebook/package payment
+  controllers) gained an optional 5th arg `buyerId` and a **referral fallback**: when
+  `findActiveByCode` misses, it tries the code as a referral (`resolveReferralForPlanSql`).
+  Referral scope = **package/course/ebook only** (`referralCovers`); liveCourse/testSeries
+  rejected. Self-referral (buyer === code owner) rejected. Returns `promo._id:""` so the
+  controllers persist **no `promocodeId`** while still charging the discounted amount.
+- **Client `POST /client/promocodes/apply`** mirrors the same fallback for the preview.
+  Response gains a `codeType: "promocode" | "referral"` field (additive).
+- Payment controllers now pass `Number(customerId)` as `buyerId` to
+  `resolvePromoForPlanSql` (course/ebook/package).
+
+## 2026-07-10 — CSV export generation moved to `fast-csv`
+
+> **Library swap only. No query/schema/contract change.** `yarn typecheck` green.
+
+Replaced the hand-rolled CSV escaper (`/[",\n\r]/` quote + `.join(",")`) in all 6 report
+CSV builders with the `fast-csv` package (added dep `fast-csv@5`), behind a new shared
+helper `src/utils/csvExport.ts` → `buildCsvFromRowBatches(headers, asyncRowBatches)`. It
+streams the keyset batches through `fast-csv`'s `format()` transform into the CSV string,
+so nothing new is materialized. Verified **byte-identical** output to the old escaper
+(RFC-4180 quoting, doubled `"`, `\n` rows, no trailing newline, UTF-8 unicode). Builders
+updated: admin-subscription, admin-testseries, admin-live-course, admin-ebook, admin-book
+(`buildOrdersCsv`), referral (`adminWithdrawalsCsv`). **XLSX is unchanged** — still
+`ExcelJS` (fast-csv is CSV-only).
+
 ## 2026-07-10 — Unify export dates (IST) + createdAt filter across remaining reports
 
 > **Query-shape + export-format change. No schema/DDL.** `yarn typecheck` green.

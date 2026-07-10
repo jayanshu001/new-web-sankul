@@ -1,5 +1,6 @@
 import { adminMaterialRepository as repo, ROOT } from "./admin-material.repository";
 import { buildPagination } from "../../utils/listQuery";
+import { resolveAncestors } from "../../utils/categoryAncestors";
 import type { MaterialCategory, Material } from "@prisma/client";
 
 export const ADMIN_MATERIAL_MODULE = "admin-material";
@@ -87,7 +88,17 @@ export const listCategories = async (q: { parent?: string; search?: string; stat
   // from this page).
   const parents = await repo.parentIdsWithChildren(rows.map((r) => r.id));
   const withChildren = new Set(parents.map((p) => p.parent));
-  return { data: rows.map((row) => ({ ...toCategoryDto(row), hasChildren: withChildren.has(row.id) })), total };
+  // ancestors[{id,name}] root→immediate-parent, so a search-filtered picker can render
+  // the greyed parent rows for each match. Overrides toCategoryDto's empty placeholder.
+  const ancestorsFor = await resolveAncestors(rows.map((r) => r.parent), repo.categoriesByIds);
+  return {
+    data: rows.map((row) => ({
+      ...toCategoryDto(row),
+      hasChildren: withChildren.has(row.id),
+      ancestors: ancestorsFor(row.parent),
+    })),
+    total,
+  };
 };
 
 export const getCategoryById = async (id: number) => {

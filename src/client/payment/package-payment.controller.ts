@@ -64,7 +64,7 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       let originalAmount: number | null = null;
       let discountAmount: number | null = null;
       if (body.promocode) {
-        const { result, error } = await resolvePromoForPlanSql(body.promocode, planSql.price, { type: "package", id: planSql.packageId }, body.packageId);
+        const { result, error } = await resolvePromoForPlanSql(body.promocode, planSql.price, { type: "package", id: planSql.packageId }, body.packageId, Number(customerId));
         if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
         if (result.finalAmount < 1) return res.status(400).json({ success: false, message: "This promo code reduces the price below the minimum payable amount. Please contact support." });
         chargeAmount = result.finalAmount;

@@ -14,7 +14,7 @@
  *
  *  - `ws_package` is a STRUCTURAL SUBSET of the Mongo `ws_packages` document.
  *    The Mongo model carries catalog fields that DO NOT EXIST in the SQL table:
- *    `subtitle, isPaid, isSmartCourse, isPlannerCourse, goalId, goalLabelId,
+ *    `subtitle, isPaid, goalId, goalLabelId,
  *    examCountdown*, packageCategoryId, specificSubjects[], materialCategories[],
  *    examCategories[], withMaterialText/withoutMaterialText`. Additionally every
  *    client package endpoint joins commerce-wave tables (PackageCourseEbookPrice

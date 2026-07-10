@@ -197,8 +197,6 @@ export const enrichPackagesSql = async (rows: Package[], customerId: number | nu
         goalId,
         goalLabelId: p.goalLabelId != null ? String(p.goalLabelId) : null,
         isPaid: p.isPaid,
-        isSmartCourse: p.isSmartCourse,
-        isPlannerCourse: p.isPlannerCourse,
         order: p.order_by,
         active: p.active,
         pcMaterialId: p.pcMaterialId != null ? String(p.pcMaterialId) : null,
@@ -217,15 +215,13 @@ export const enrichPackagesSql = async (rows: Package[], customerId: number | nu
 
 // ── list queries (filters mirror the Mongo controller) ───────────────────────
 export const listPackagesPaginatedSql = async (opts: {
-  search?: string; packageTypeId?: number; goalId?: number; isSmartCourse?: boolean; isPlannerCourse?: boolean; isPaid?: boolean; skip: number; take: number;
+  search?: string; packageTypeId?: number; goalId?: number; isPaid?: boolean; skip: number; take: number;
 }) => {
   const where: any = { active: true };
   if (opts.search) where.name = { contains: opts.search };
   if (opts.isPaid !== undefined) where.isPaid = opts.isPaid;
   if (opts.packageTypeId != null) where.packageTypeId = opts.packageTypeId;
   if (opts.goalId != null) where.goalId = opts.goalId;
-  if (opts.isSmartCourse !== undefined) where.isSmartCourse = opts.isSmartCourse;
-  if (opts.isPlannerCourse !== undefined) where.isPlannerCourse = opts.isPlannerCourse;
   const [rows, total] = await Promise.all([
     prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
     prisma.package.count({ where }),

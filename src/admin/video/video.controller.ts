@@ -34,10 +34,14 @@ export const listVideos = async (req: Request, res: Response) => {
   }
 };
 
-// GET /pre-requisites
-export const getVideoPreRequisites = async (_req: Request, res: Response) => {
+// GET /pre-requisites?search=&limit=  (category picker: server-side search + page size)
+export const getVideoPreRequisites = async (req: Request, res: Response) => {
   try {
-    return res.status(200).json({ success: true, data: await videoSql.getPreRequisites() });
+    const q = req.query as Record<string, string>;
+    const search = q.search?.trim() || undefined;
+    const parsedLimit = q.limit ? parseInt(q.limit, 10) : NaN;
+    const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : undefined;
+    return res.status(200).json({ success: true, data: await videoSql.getPreRequisites({ search, limit }) });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

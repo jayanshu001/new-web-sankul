@@ -82,8 +82,8 @@ const toTypeDto = (t: PackageType) => ({ _id: String(t.id), name: t.name, create
 type PkgRow = Package & { packageType?: { id: number; name: string } | null };
 
 /**
- * `ws_package` row → Mongo-shaped Package doc. isPaid/isSmartCourse/
- * isPlannerCourse/packageCategoryId now persist on real ws_package columns and
+ * `ws_package` row → Mongo-shaped Package doc. isPaid/packageCategoryId persist
+ * on real ws_package columns and
  * are read straight from the row (packageCategoryId surfaced as a bare id string,
  * not the populated {_id,title,slug,image} object the Mongo getById returns).
  * examCountdownCategoryIds/examCountdownIds now persist on ws_package JSON
@@ -109,8 +109,6 @@ const toPackageDto = (
   order: row.order_by,
   active: row.active,
   isPaid: row.isPaid,
-  isSmartCourse: row.isSmartCourse,
-  isPlannerCourse: row.isPlannerCourse,
   packageTypeId: row.packageType ? { _id: String(row.packageType.id), name: row.packageType.name } : idStrOrNull(row.packageTypeId),
   goalId: idStrOrNull(row.goalId),
   goalLabelId: goalLabelName ?? null,
@@ -267,7 +265,7 @@ export interface PackageWriteInput {
   withMaterialText?: string; withoutMaterialText?: string; order?: number; active?: boolean;
   packageTypeId?: string | null; educatorId?: string | null;
   goalId?: string | null; goalLabelId?: string | null; // goalLabelId = label NAME
-  isPaid?: boolean; isSmartCourse?: boolean; isPlannerCourse?: boolean;
+  isPaid?: boolean;
   packageCategoryId?: string | null;
   // Physical-material kit id (ws_package.pc_material_id). null detaches.
   pcMaterialId?: string | null;
@@ -276,6 +274,18 @@ export interface PackageWriteInput {
   materialCategories?: Array<{ category: string; order?: number }>;
   examCategories?: Array<{ category: string; order?: number }>;
 }
+
+// Resolve an incoming packageTypeId (string id, or null/"" to clear) to the int
+// column value. Empty/null → null (clears package_type_id, which is nullable).
+// A non-numeric or non-existent id throws a 4xx so callers never silently fall
+// back to a wrong type (or hit an FK 500).
+const resolvePackageTypeId = async (raw?: string | null): Promise<number | null> => {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const n = parsePackageId(raw);
+  if (!n) throw Object.assign(new Error("Invalid package type id."), { statusCode: 400 });
+  if (!(await repo.findTypeBare(n))) throw Object.assign(new Error("Package type not found."), { statusCode: 404 });
+  return n;
+};
 
 const subjectRows = (refs?: Array<{ category: string; order?: number; status?: boolean }>) =>
   (refs ?? []).map((r) => ({ id: Number(r.category), order: r.order ?? 0, status: r.status ?? true })).filter((r) => Number.isInteger(r.id) && r.id > 0);
@@ -295,16 +305,14 @@ export const createPackage = async (d: PackageWriteInput) => {
       withoutMaterial: d.withoutMaterialText ?? "",
       order_by: d.order ?? 0,
       active: d.active ?? true,
-      // package_type_id / exam_id are NOT NULL → sentinels (1 = first type; goal 0).
-      packageTypeId: d.packageTypeId ? parsePackageId(d.packageTypeId) ?? 1 : 1,
+      // package_type_id is nullable; null clears it. exam_id NOT NULL → sentinel 0.
+      packageTypeId: await resolvePackageTypeId(d.packageTypeId),
       examId: 0,
       educator_id: d.educatorId ? parsePackageId(d.educatorId) : null,
       goalId: gf.goalId,
       goalLabelId: gf.goalLabelId,
       isIndividual: gf.isIndividual,
       isPaid: d.isPaid ?? true,
-      isSmartCourse: d.isSmartCourse ?? false,
-      isPlannerCourse: d.isPlannerCourse ?? false,
       packageCategoryId: d.packageCategoryId ? parsePackageId(d.packageCategoryId) : null,
       pcMaterialId: d.pcMaterialId ? parsePackageId(d.pcMaterialId) ?? null : null,
       examCountdownCategoryIds: toIntIdArray(d.examCountdownCategoryIds),
@@ -330,11 +338,9 @@ export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"
   if (d.withoutMaterialText !== undefined) data.withoutMaterial = d.withoutMaterialText ?? "";
   if (d.order !== undefined) data.order_by = d.order;
   if (d.active !== undefined) data.active = d.active;
-  if (d.packageTypeId !== undefined) data.packageTypeId = d.packageTypeId ? parsePackageId(d.packageTypeId) ?? 1 : 1;
+  if (d.packageTypeId !== undefined) data.packageTypeId = await resolvePackageTypeId(d.packageTypeId);
   if (d.educatorId !== undefined) data.educator_id = d.educatorId ? parsePackageId(d.educatorId) : null;
   if (d.isPaid !== undefined) data.isPaid = d.isPaid;
-  if (d.isSmartCourse !== undefined) data.isSmartCourse = d.isSmartCourse;
-  if (d.isPlannerCourse !== undefined) data.isPlannerCourse = d.isPlannerCourse;
   if (d.packageCategoryId !== undefined) data.packageCategoryId = d.packageCategoryId ? parsePackageId(d.packageCategoryId) : null;
   if (d.pcMaterialId !== undefined) data.pcMaterialId = d.pcMaterialId ? parsePackageId(d.pcMaterialId) ?? null : null;
   if (d.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = toIntIdArray(d.examCountdownCategoryIds);

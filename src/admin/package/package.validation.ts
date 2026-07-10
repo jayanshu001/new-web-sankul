@@ -29,8 +29,6 @@ export const createPackageSchema = z.object({
   order: z.number().int().optional(),
   active: z.boolean().optional(),
   isPaid: z.boolean().optional(),
-  isSmartCourse: z.boolean().optional(),
-  isPlannerCourse: z.boolean().optional(),
   packageTypeId: optIdString,
   goalId: optIdString,
   goalLabelId: optIdString,
@@ -63,10 +61,10 @@ export const attachPlansSchema = z.object({
   planIds: z.array(z.string().min(1)).min(1),
 });
 
+// ws_package_type is a name-only master (id + name + timestamps). order/active
+// are intentionally NOT supported — see docs/admin/PACKAGE_TYPE_ADMIN.md.
 export const createPackageTypeSchema = z.object({
   name: z.string().min(1).max(255),
-  order: z.number().int().optional(),
-  active: z.boolean().optional(),
 });
 
 export const updatePackageTypeSchema = createPackageTypeSchema.partial();

@@ -567,6 +567,36 @@ export const findActiveByCode = async (code: string) => {
   });
 };
 
+// Referral codes (ws_customer.referral_code) double as a global discount code so
+// the app can use ONE apply/checkout flow for both. When a code isn't a
+// promocode, callers fall back to this: it resolves the code to its owning
+// customer + the active "student" referral program's refferalDiscount (%).
+// Referral codes cover ALL five commerce entities: package/course/ebook (served by
+// /promocodes/apply) plus testSeries + liveCourse (each served by its own plan-based
+// preview endpoint). Referral discounts are always a global percentage.
+export const REFERRAL_COVERED_TYPES: readonly AppliesToType[] = ["package", "course", "ebook", "testSeries", "liveCourse"];
+export const referralCovers = (type: AppliesToType): boolean =>
+  REFERRAL_COVERED_TYPES.includes(type);
+
+export const resolveReferralCode = async (
+  rawCode: string
+): Promise<{ referrerId: number; discountType: "percentage"; discountValue: number } | null> => {
+  const code = typeof rawCode === "string" ? rawCode.trim().toUpperCase() : "";
+  if (!code) return null;
+  const owner = await prisma.customer.findFirst({
+    where: { referralCode: code, isAccountDeleted: false, status: true },
+    select: { id: true },
+  });
+  if (!owner) return null;
+  const program = await prisma.refferalProgram.findFirst({
+    where: { name: "student", status: true },
+    select: { refferalDiscount: true },
+  });
+  const discountValue = program ? Number(program.refferalDiscount) || 0 : 0;
+  if (!(discountValue > 0)) return null;
+  return { referrerId: owner.id, discountType: "percentage", discountValue };
+};
+
 /** SQL coverage check: appliesToType===type && appliesToIds.includes(id). */
 export const promoCovers = (
   promo: { appliesToType: string | null; appliesToIds: any },
@@ -1042,7 +1072,8 @@ export const resolvePromoForPlanSql = async (
   rawCode: string,
   baseAmount: number,
   entity: { type: AppliesToType; id: number },
-  planId: number
+  planId: number,
+  buyerId?: number
 ): Promise<{ result?: PromoResolveResultSql; error?: string }> => {
   const code = typeof rawCode === "string" ? rawCode.trim().toUpperCase() : "";
   if (!code) return { error: "Promo code is required." };
@@ -1050,7 +1081,10 @@ export const resolvePromoForPlanSql = async (
   if (!entity?.id) return { error: "Entity context is required." };
 
   const promo = await findActiveByCode(code);
-  if (!promo) return { error: "Invalid or expired promo code." };
+  if (!promo) {
+    // Not a promocode — try it as a referral code (single apply flow for both).
+    return resolveReferralForPlanSql(code, baseAmount, entity, buyerId);
+  }
   if (!promoCovers(promo, entity)) return { error: "This promo code is not valid for this item." };
 
   // Per-plan scope: a code with link rows is valid only for linked plans.
@@ -1099,6 +1133,46 @@ export const resolvePromoForPlanSql = async (
       finalAmount,
       promoterPercentage,
       promoterCommission,
+    },
+  };
+};
+
+/**
+ * Referral-code branch of resolvePromoForPlanSql. A referral code has no
+ * promocode row and no per-plan links: it's a flat global percentage on any
+ * package/course/ebook. `promo._id` is returned EMPTY so the payment controllers
+ * store no promocodeId (the discount is still applied to the charged amount).
+ * A customer can't redeem their own referral code (self-referral is rejected).
+ */
+const resolveReferralForPlanSql = async (
+  code: string,
+  baseAmount: number,
+  entity: { type: AppliesToType; id: number },
+  buyerId?: number
+): Promise<{ result?: PromoResolveResultSql; error?: string }> => {
+  const referral = await resolveReferralCode(code);
+  if (!referral) return { error: "Invalid or expired promo code." };
+  if (!referralCovers(entity.type)) return { error: "This promo code is not valid for this item." };
+  if (buyerId && referral.referrerId === buyerId) {
+    return { error: "You can't use your own referral code." };
+  }
+
+  const discountAmount = Math.min(
+    baseAmount,
+    Math.max(0, Math.round((baseAmount * referral.discountValue) / 100))
+  );
+  if (!(discountAmount > 0)) return { error: "This promo code has no discount configured." };
+
+  return {
+    result: {
+      promo: { _id: "", promocode: code },
+      discountType: referral.discountType,
+      discountValue: referral.discountValue,
+      originalAmount: baseAmount,
+      discountAmount,
+      finalAmount: baseAmount - discountAmount,
+      promoterPercentage: 0,
+      promoterCommission: 0,
     },
   };
 };

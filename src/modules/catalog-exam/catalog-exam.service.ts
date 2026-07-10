@@ -10,6 +10,7 @@
  */
 import { catalogExamRepository as repo } from "./catalog-exam.repository";
 import { toExamCategoryDto } from "./catalog-exam.transformer";
+import { resolveAncestors } from "../../utils/categoryAncestors";
 import type {
   ExamCategoryChildrenResult,
   ExamCategoryDto,
@@ -134,7 +135,14 @@ export const listCategories = async (input: ListCategoriesInput) => {
   // from this page).
   const parents = await repo.childParentIds(rows.map((r) => r.id));
   const withChildren = new Set(parents.map((p) => p.parent));
-  return rows.map((row) => ({ ...toExamCategoryDoc(row), hasChildren: withChildren.has(row.id) }));
+  // ancestors[{id,name}] root→immediate-parent, so a search-filtered picker can render
+  // the greyed parent rows for each match without holding the whole tree.
+  const ancestorsFor = await resolveAncestors(rows.map((r) => r.parent), repo.categoriesByIds);
+  return rows.map((row) => ({
+    ...toExamCategoryDoc(row),
+    hasChildren: withChildren.has(row.id),
+    ancestors: ancestorsFor(row.parent),
+  }));
 };
 
 /** Count for client pagination (same filter as listCategories). */

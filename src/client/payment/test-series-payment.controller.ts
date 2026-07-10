@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { z } from "zod";
-import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadTestSeriesPlanDiscountsSql } from "../../modules/promo-code/promo-code.service";
+import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadTestSeriesPlanDiscountsSql, resolveReferralCode, referralCovers } from "../../modules/promo-code/promo-code.service";
 import { computePromoDiscount } from "../promocode/applies-to";
 import { _shared } from "../testSeries/testSeries.controller";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
@@ -33,7 +33,53 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
       const testSeriesId = plan.testSeriesId;
 
       const promo = await findActiveByCode(body.promocode);
-      if (!promo) return res.status(400).json({ success: false, message: "Invalid or expired promo code." });
+      if (!promo) {
+        // Not a promocode — try it as a referral code (global % on test series).
+        const referral = await resolveReferralCode(body.promocode);
+        if (referral && referralCovers("testSeries")) {
+          if (referral.referrerId === Number(customerId)) {
+            return res.status(400).json({ success: false, message: "You can't use your own referral code." });
+          }
+          const rows = await tsSql.listPlansForSeries(testSeriesId);
+          const plans = rows.map((p: any) => {
+            const basePrice = Number(p.price);
+            const discount = computePromoDiscount({ discountType: referral.discountType, discountValue: referral.discountValue }, basePrice);
+            return {
+              id: p.id,
+              testSeriesId: p.testSeriesId,
+              name: p.name ?? null,
+              duration: p.durationDays,
+              price: Math.max(0, basePrice - discount),
+              originalPrice: p.originalPrice != null ? Number(p.originalPrice) : null,
+              isDefault: p.isDefault,
+              status: p.status,
+              isMostPopular: p.isMostPopular ?? false,
+              created_at: p.createdAt ?? null,
+              updated_at: p.updatedAt ?? null,
+              orginalPrice: basePrice,
+              offerAvailable: referral.discountValue > 0,
+              discountType: referral.discountType,
+              discountValue: referral.discountValue,
+              offerPercentage: referral.discountValue,
+            };
+          });
+          logger.info("applyTestSeriesPromo success (referral)", { traceId, customerId, testSeriesId, promocode: body.promocode });
+          return res.status(200).json({
+            success: true,
+            data: {
+              _id: "",
+              promocode: body.promocode.toUpperCase(),
+              codeType: "referral",
+              discountType: referral.discountType,
+              discountValue: referral.discountValue,
+              id: testSeriesId,
+              key: "testSeries",
+              plans: { withMaterial: [], withoutMaterial: plans },
+            },
+          });
+        }
+        return res.status(400).json({ success: false, message: "Invalid or expired promo code." });
+      }
       if (!promoCovers(promo, { type: "testSeries", id: testSeriesId })) {
         return res.status(404).json({ success: false, message: "This promocode is not applicable for this item." });
       }
@@ -101,6 +147,7 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
         data: {
           _id: String(promo.id),
           promocode: promo.promocode,
+          codeType: "promocode",
           discountType: promoDiscountType,
           discountValue: promoDiscountValue,
           id: testSeriesId,
@@ -148,7 +195,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
 
       let discountAmount = 0; let promocodeIdNum: number | null = null;
       if (body.promocode) {
-        const { result, error } = await resolvePromoForPlanSql(body.promocode, plan.price, { type: "testSeries", id: plan.testSeriesId }, body.planId);
+        const { result, error } = await resolvePromoForPlanSql(body.promocode, plan.price, { type: "testSeries", id: plan.testSeriesId }, body.planId, customerIdInt);
         if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
         discountAmount = result.discountAmount;
         const pid = Number(String(result.promo._id)); promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;

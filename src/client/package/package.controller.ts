@@ -57,8 +57,6 @@ export const listPackages = async (req: Request, res: Response) => {
       search,
       packageTypeId,
       goalId,
-      isSmartCourse,
-      isPlannerCourse,
       type,
       page = "1",
       limit = "20",
@@ -74,8 +72,6 @@ export const listPackages = async (req: Request, res: Response) => {
       isPaid: type === "paid" ? true : type === "free" ? false : undefined,
       packageTypeId: packageTypeId && /^\d+$/.test(packageTypeId) ? Number(packageTypeId) : undefined,
       goalId: goalId && /^\d+$/.test(goalId) ? Number(goalId) : undefined,
-      isSmartCourse: isSmartCourse === "true" ? true : isSmartCourse === "false" ? false : undefined,
-      isPlannerCourse: isPlannerCourse === "true" ? true : isPlannerCourse === "false" ? false : undefined,
       skip,
       take: limitNum,
     });

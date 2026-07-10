@@ -207,4 +207,14 @@ export const catalogExamRepository = {
           select: { parent: true },
         })
       : Promise.resolve([]),
+
+  // Batched {id, name, parent} loader for ancestor-chain resolution (one query per
+  // tree level). deleted rows excluded so a stale parent id resolves to nothing.
+  categoriesByIds: (ids: number[]) =>
+    ids.length
+      ? prisma.examCategory.findMany({
+          where: { id: { in: ids }, deleted: false },
+          select: { id: true, name: true, parent: true },
+        })
+      : Promise.resolve([]),
 };

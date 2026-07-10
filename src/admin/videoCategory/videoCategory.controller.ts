@@ -32,10 +32,11 @@ export const listVideoCategories = async (req: Request, res: Response) => {
         errors: formatZodErrors(parsed.error.issues),
       });
     }
-    const { search, status, educatorId, page, per_page, sort_by, sort_dir } = parsed.data;
+    const { search, status, educatorId, page, per_page, limit, sort_by, sort_dir } = parsed.data;
+    const pageSize = limit ?? per_page; // `limit` (picker page-size) takes precedence
 
-    const { items, total } = await vcat.fullVcList({ search, status, educatorId, page, per_page, sort_by, sort_dir });
-    return res.status(200).json({ success: true, data: { items, pagination: { page, per_page, total } } });
+    const { items, total } = await vcat.fullVcList({ search, status, educatorId, page, per_page: pageSize, sort_by, sort_dir });
+    return res.status(200).json({ success: true, data: { items, pagination: { page, per_page: pageSize, total } } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

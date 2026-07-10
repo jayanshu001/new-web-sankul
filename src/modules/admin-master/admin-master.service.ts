@@ -1,4 +1,5 @@
 import { adminMasterRepository as repo } from "./admin-master.repository";
+import { resolveAncestors } from "../../utils/categoryAncestors";
 
 export const ADMIN_MASTER_MODULE = "admin-master";
 export const isAdminMasterMysql = (): boolean => true;
@@ -55,9 +56,15 @@ export const vcList = async (opts: { search?: string; limit?: number } = {}) => 
       );
     }
   }
+  // ancestors[{id,name}] root→immediate-parent for greyed parent rows. The full set is
+  // already in memory, so resolve against it (no extra query).
+  const ancestorsFor = await resolveAncestors(
+    all.map((c) => c.parent),
+    async (ids) => all.filter((c) => ids.includes(c.id)).map((c) => ({ id: c.id, name: c.title, parent: c.parent })),
+  );
   let rows = all.map((c) => {
     const children = childrenByParent.get(c.id) ?? [];
-    return { ...toVcDto(c), child_categories: children, hasChildren: children.length > 0 };
+    return { ...toVcDto(c), child_categories: children, hasChildren: children.length > 0, ancestors: ancestorsFor(c.parent) };
   });
   const q = opts.search?.trim().toLowerCase();
   if (q) rows = rows.filter((r) => (r.title ?? "").toLowerCase().includes(q));
@@ -92,12 +99,17 @@ export const vcDelete = async (id: number): Promise<{ ok: boolean; deletedRelati
 // `duplicate` clones along the single-parent tree (the Mongo DAG collapses to a
 // tree on SQL) — see fullVcDuplicate.
 // ════════════════════════════════════════════════════════════════════════════
-const toFullVcDto = (c: any, children: any[], educator: any | null) => ({
+const toFullVcDto = (c: any, children: any[], educator: any | null, ancestors: { id: string; name: string }[] = []) => ({
   id: String(c.id),
   name: c.title,
   slug: c.slug,
   order: c.order_by,
   image: c.image,
+  // parent link + ancestor chain (root→immediate-parent) + hasChildren so the picker
+  // can render the greyed parent rows for a search match without the whole tree.
+  parentId: c.parent && c.parent > 0 ? String(c.parent) : null,
+  ancestors,
+  hasChildren: children.length > 0,
   child_categories: children.map((cc) => ({ id: String(cc.id), name: cc.title, slug: cc.slug ?? null, status: cc.status, order: cc.order_by ?? 0 })),
   educator: educator ? { id: String(educator.id), name: educator.name } : null,
   status: c.status,
@@ -105,12 +117,12 @@ const toFullVcDto = (c: any, children: any[], educator: any | null) => ({
   updated_at: c.updated_at ?? null,
 });
 
-const loadFullVc = async (c: any) => {
+const loadFullVc = async (c: any, ancestors: { id: string; name: string }[] = []) => {
   const [children, educator] = await Promise.all([
     repo.vcChildren(c.id),
     c.educatorId && c.educatorId > 0 ? repo.educator(c.educatorId) : Promise.resolve(null),
   ]);
-  return toFullVcDto(c, children, educator);
+  return toFullVcDto(c, children, educator, ancestors);
 };
 
 export const fullVcList = async (q: { search?: string; status?: string; educatorId?: string; page: number; per_page: number; sort_by: string; sort_dir: string }) => {
@@ -124,7 +136,9 @@ export const fullVcList = async (q: { search?: string; status?: string; educator
     repo.vcListFiltered({ ...opts, skip: (q.page - 1) * q.per_page, take: q.per_page }),
     repo.vcCountFiltered(opts),
   ]);
-  const items = await Promise.all(rows.map(loadFullVc));
+  // Paginated page → resolve ancestors via a batched DB loader (one query per level).
+  const ancestorsFor = await resolveAncestors(rows.map((r) => r.parent), repo.vcCategoriesByIds);
+  const items = await Promise.all(rows.map((c) => loadFullVc(c, ancestorsFor(c.parent))));
   return { items, total };
 };
 

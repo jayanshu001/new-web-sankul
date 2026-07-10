@@ -131,6 +131,41 @@ export const applyPromocode = async (req: Request, res: Response) => {
     const code = promocode.toUpperCase();
     const promo = await pcSql.findActiveByCode(code);
     if (!promo) {
+      // Not a promocode — try it as a referral code so this ONE endpoint serves
+      // both. The app never needs to know the code type up front; the response's
+      // `codeType` tells it after the fact.
+      const referral = await pcSql.resolveReferralCode(code);
+      if (referral && pcSql.referralCovers(sqlEntity.type)) {
+        if (referral.referrerId === Number(userId)) {
+          return res.status(400).json({ success: false, message: "You can't use your own referral code." });
+        }
+        pricingPlans.forEach((plan) => {
+          plan.orginalPrice = plan.price;
+          plan.offerAvailable = referral.discountValue > 0;
+          plan.discountType = referral.discountType;
+          plan.discountValue = referral.discountValue;
+          plan.offerPercentage = referral.discountValue;
+          const discount = computePromoDiscount(
+            { discountType: referral.discountType, discountValue: referral.discountValue },
+            plan.price
+          );
+          plan.price = Math.max(0, plan.price - discount);
+        });
+        logger.info("applyPromocode success (referral)", { traceId, customerId: userId, promocode: code, sqlEntity });
+        return res.status(200).json({
+          success: true,
+          data: {
+            _id: "",
+            promocode: code,
+            codeType: "referral",
+            discountType: referral.discountType,
+            discountValue: referral.discountValue,
+            id: sqlEntity.id,
+            key: sqlEntity.type,
+            plans: splitByMaterial(pricingPlans),
+          },
+        });
+      }
       logger.warn("applyPromocode invalid code (sql)", { traceId, customerId: userId, promocode: code });
       return res.status(400).json({ success: false, message: "Invalid promocode!" });
     }
@@ -199,6 +234,7 @@ export const applyPromocode = async (req: Request, res: Response) => {
       data: {
         _id: String(promo.id),
         promocode: promo.promocode,
+        codeType: "promocode",
         discountType: promoDiscountType,
         discountValue: promoDiscountValue,
         id: sqlEntity.id,
