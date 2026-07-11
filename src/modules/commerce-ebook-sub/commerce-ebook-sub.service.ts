@@ -139,7 +139,8 @@ export const listMyEbookSubscriptions = async (
   const subscriptions = rows
     .filter((s) => s.eBook)
     .map((s) => {
-      const dto = toEbookDto(s.eBook!);
+      // Active subscription ⇒ entitled → issue the book media token.
+      const dto = toEbookDto(s.eBook!, { customerId, entitled: true });
       return {
         ...dto,
         startAt: s.startAt ?? null,

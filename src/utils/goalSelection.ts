@@ -36,6 +36,51 @@ export const parseLabels = (raw: unknown): { id: number; name: string }[] => {
     .filter((l) => Number.isInteger(l.id) && l.id > 0);
 };
 
+/** A goal as it currently exists in the catalog, for reconciliation. */
+export interface CatalogGoal {
+  /** Ids of the labels that currently exist on the goal. */
+  labelIds: Set<number>;
+  /** Whether the catalog goal is a labelled (accordion) goal. */
+  hasLabels: boolean;
+}
+
+/**
+ * Reconcile a parsed selection against the current catalog so every returned
+ * entry matches one of the two valid FE shapes and can never disagree with
+ * `GET /client/goals`:
+ *
+ *   - labelless goal → `labelIds: []`            (catalog goal has NO labels)
+ *   - labelled goal  → `labelIds: [non-empty subset of the catalog's labels]`
+ *
+ * Drops any selection that would otherwise crash the Select-Goals bottom sheet:
+ *   - goal id not in the (active) catalog                     → unknown/inactive
+ *   - labelled catalog goal whose chosen labels all vanished  → stale (would
+ *     otherwise be emitted as an empty-labels shape that FE reads as a
+ *     *labelless* selection, conflicting with the catalog's accordion shape —
+ *     the exact goal-moved-under-another-goal migration bug).
+ *
+ * `validGoals` must contain ONLY goals that still exist and are active; callers
+ * build it from the same catalog read they render from.
+ */
+export const reconcileGoalSelection = (
+  selections: GoalSelection[],
+  validGoals: Map<number, CatalogGoal>
+): GoalSelection[] => {
+  const out: GoalSelection[] = [];
+  for (const sel of selections) {
+    const g = validGoals.get(sel.goalId);
+    if (!g) continue; // unknown / inactive goal — drop
+    if (g.hasLabels) {
+      const kept = sel.labelIds.filter((id) => g.labelIds.has(id));
+      if (kept.length === 0) continue; // labelled goal, no surviving chosen label — drop
+      out.push({ goalId: sel.goalId, labelIds: kept });
+    } else {
+      out.push({ goalId: sel.goalId, labelIds: [] }); // genuinely labelless
+    }
+  }
+  return out;
+};
+
 /**
  * Parse the stored/incoming selection into normalized `{ goalId, labelIds }[]`.
  * Tolerant of the legacy flat id array; drops invalid ids; dedupes by goalId

@@ -1,7 +1,6 @@
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
-import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
-import { resolveVideoSource } from "../../utils/videoResolver";
+import { signMediaToken } from "../../utils/mediaToken";
 import logger from "../../utils/logger";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
@@ -9,63 +8,6 @@ import * as liveSql from "../../modules/admin-live-course/admin-live-course.serv
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
-
-// Builds the multi-resolution playback envelope a lecture detail endpoint
-// returns. The shape mirrors the legacy "encryptLecture" contract:
-//   { files: {
-//       hls:         { default_cdn, cdns: { primary: { url } } },
-//       progressive: [{ qualityLabel, quality, height, url }],
-//       token,
-//     } }
-// Every URL is AES-encrypted using the same {token, ciphertext} pattern as
-// /v1/lecture, so the FE decryption helper is unchanged.
-async function encryptLecture(v: {
-  platform: string;
-  youtube_id?: string | null;
-  aws_id?: string | null;
-  vimeo_id?: string | null;
-}) {
-  const resolved = await resolveVideoSource(v);
-  const token = generateToken(16);
-  const key = generateKey(token);
-  const vector = generateVector(token);
-
-  const encryptedProgressive = resolved.progressive.map((p) => ({
-    qualityLabel: p.qualityLabel,
-    quality: p.quality,
-    height: p.height,
-    bitrate: p.bitrate,
-    hasAudio: p.hasAudio,
-    hasVideo: p.hasVideo,
-    url: encrypt(p.url, key, vector),
-  }));
-
-  // hlsUrl can be null (e.g. YouTube path has no real master playlist) — the
-  // FE picks the first progressive entry in that case. Keep the structure
-  // present either way so the FE doesn't branch on its existence.
-  const encryptedHls = resolved.hlsUrl ? encrypt(resolved.hlsUrl, key, vector) : "";
-
-  // Wrapped under `request.files` per the FE contract (mapLessonItem reads
-  // request.files.progressive / request.files.token). The extra nesting is
-  // load-bearing — don't flatten it.
-  return {
-    request: {
-      files: {
-        token,
-        hls: {
-          default_cdn: "primary",
-          cdns: {
-            primary: {
-              url: encryptedHls,
-              allow720: resolved.allow720,
-            },
-          },
-        },
-        progressive: encryptedProgressive,
-      },
-    },
-  };
-}
 
 // GET /api/v1/client/live-courses
 export const listLiveCoursesForClient = async (req: Request, res: Response) => {
@@ -242,15 +184,13 @@ export const getLiveCourseLecture = async (req: Request, res: Response) => {
       logger.warn("getLiveCourseLecture not subscribed (mysql)", { traceId, userId, id, videoId });
       return failure(res, "Subscribe to this live course to watch this lecture.", 403, {}, { purchaseOptions: await liveSql.buildPurchaseOptionsSql([lid]) });
     }
-    let envelopeSql;
-    try {
-      envelopeSql = await encryptLecture(r);
-    } catch (err) {
-      logger.error("getLiveCourseLecture resolve/encrypt failed (mysql)", { traceId, videoId: String(r._id), platform: r.platform, error: getErrorMessage(err) });
-      return failure(res, "Failed to resolve playable URLs for this lecture.", 502);
-    }
+    // No inline media: mint a customer-bound media token the client exchanges at
+    // /media/resolve. Free lectures → free token; paid → scoped to the live course.
+    const mediaToken = r.priceType === "free"
+      ? signMediaToken({ k: "video", id: Number(r._id), free: true, cust: cid! })
+      : signMediaToken({ k: "video", id: Number(r._id), scope: { kind: "liveCourse", id: lid }, cust: cid! });
     logger.info("getLiveCourseLecture success (mysql)", { traceId, userId, id, videoId, platform: r.platform });
-    return success(res, { _id: String(r._id), title: r.title, topic: r.topic, platform: r.platform, priceType: r.priceType, ...envelopeSql }, "Lecture fetched.");
+    return success(res, { _id: String(r._id), title: r.title, topic: r.topic, platform: r.platform, priceType: r.priceType, mediaToken }, "Lecture fetched.");
   } catch (err) {
     logger.error("getLiveCourseLecture failed", { traceId, userId, id, videoId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch lecture.", 500);

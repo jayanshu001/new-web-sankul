@@ -13,6 +13,7 @@
  *    customer holds an active verified LiveCourseSubscription to one of them.
  */
 import { prisma } from "../../config/prisma";
+import { signMediaToken } from "../../utils/mediaToken";
 
 export const LECTURE_NOTE_MODULE = "client-lecture-note";
 export const isLectureNoteMysql = (): boolean => true;
@@ -76,14 +77,35 @@ export const noteDto = (r: any) => ({
   timestampSec: r.timestampSec, content: r.content,
   createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
 });
-export const audioNoteDto = (r: any) => ({
+export const audioNoteDto = (r: any) => {
+  // No raw audio URL/key. A media token (bound to the owning customer) is
+  // exchanged at /media/resolve, which re-fetches the note scoped to that
+  // customer (ownership check) and returns a freshly PRESIGNED short-lived URL.
+  const mediaToken = r.customerId != null ? signMediaToken({ k: "audioNote", id: r.id, cust: Number(r.customerId) }) : null;
+  return {
   _id: String(r.id), customerId: r.customerId, lectureType: r.lectureType,
   videoId: sid(r.videoId), liveSessionId: sid(r.liveSessionId), courseId: sid(r.courseId),
   liveCourseIds: Array.isArray(r.liveCourseIds) ? r.liveCourseIds.map(String) : [],
-  timestampSec: r.timestampSec, title: r.title ?? "", audioUrl: r.audioUrl, audioKey: r.audioKey,
+  timestampSec: r.timestampSec, title: r.title ?? "", mediaToken,
   mimeType: r.mimeType ?? null, sizeBytes: r.sizeBytes ?? null, durationSec: r.durationSec ?? null,
   createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
-});
+  };
+};
+
+/**
+ * Fill each note's `liveCourseIds` with `[liveCourseId]` when the stored row had
+ * none. Live-course recorded notes are created with an empty `liveCourseIds`, so
+ * the notes-list → player flow had no live-course scope to open with (fell back
+ * to the catalog category rail, which 403s). The scoped `liveCourseId` comes
+ * from the lecture ref (VideoCategory.liveCourseId). No-op when null or already set.
+ */
+export const enrichNotesWithLiveCourse = <T extends { liveCourseIds?: string[] }>(
+  notes: T[],
+  liveCourseId: string | null,
+): T[] =>
+  liveCourseId
+    ? notes.map((n) => (Array.isArray(n.liveCourseIds) && n.liveCourseIds.length ? n : { ...n, liveCourseIds: [liveCourseId] }))
+    : notes;
 
 // ── Text notes CRUD ───────────────────────────────────────────────────────────
 export const createNote = async (data: {

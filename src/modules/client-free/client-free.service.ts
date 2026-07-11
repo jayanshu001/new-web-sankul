@@ -35,6 +35,7 @@
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { isNewItem } from "../../utils/isNew";
+import { signMediaToken } from "../../utils/mediaToken";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
 import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
 
@@ -327,7 +328,7 @@ export const freeMaterials = async (opts: { customerId: number | null; search: s
 
 // ── FREE-VIDEOS ─────────────────────────────────────────────────────────────
 // Recursive tree TOP-grouped by product; only FREE (priceType="free") videos.
-export const freeVideos = async (opts: { search: string | null; page: number; limit: number; skip: number }) => {
+export const freeVideos = async (opts: { search: string | null; page: number; limit: number; skip: number; customerId?: number | null }) => {
   const [courses, liveCourses, packages, pkgRels] = await Promise.all([
     prisma.course.findMany({ where: { status: true }, select: { id: true, name: true, image: true, videoCategoryId: true } }),
     prisma.liveCourse.findMany({ where: { status: true }, select: { id: true, name: true, image: true, videoCategoryId: true } }),
@@ -379,7 +380,7 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
   const videosByCat = new Map<number, any[]>();
   for (const v of videos) {
     if (v.videoCategoryId == null) continue;
-    (videosByCat.get(v.videoCategoryId) ?? videosByCat.set(v.videoCategoryId, []).get(v.videoCategoryId)!).push(shapeVideo(v));
+    (videosByCat.get(v.videoCategoryId) ?? videosByCat.set(v.videoCategoryId, []).get(v.videoCategoryId)!).push(shapeVideo(v, opts.customerId ?? null));
   }
 
   // Cycle-safe recursive node build (DAG may contain shared/multi-parent nodes).
@@ -630,18 +631,21 @@ const shapeMaterial = (m: any, base: string) => {
   };
 };
 
-const shapeVideo = (v: any) => ({
+const shapeVideo = (v: any, customerId: number | null) => {
+  // Free videos: no raw id/url. A `free` media token (bound to the customer) is
+  // exchanged at /media/resolve for the real URL. Null when unauthenticated.
+  const mediaToken = customerId != null ? signMediaToken({ k: "video", id: v.id, free: true, cust: customerId }) : null;
+  return {
   _id: String(v.id),
   title: v.title,
   topic: v.topic,
   platform: v.platform,
   priceType: v.priceType,
-  vimeo_id: v.vimeo_id ?? null,
-  aws_id: v.aws_id ?? null,
-  youtube_id: v.youtube_id ?? null,
+  mediaToken,
   slug: v.slug,
   order: v.order,
   status: v.status,
   videoCategoryId: v.videoCategoryId != null ? String(v.videoCategoryId) : null,
   createdAt: v.created_at ?? null,
-});
+  };
+};

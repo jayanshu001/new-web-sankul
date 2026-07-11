@@ -1,6 +1,7 @@
 import type { EBook } from "@prisma/client";
 import type { EbookDto, EbookPlanDto } from "./catalog-ebook.types";
 import type { PriceDto } from "../commerce-price/commerce-price.types";
+import { signMediaToken } from "../../utils/mediaToken";
 
 /**
  * `ws_ebook` row → DTO, shape-compatible with the Mongo `Ebook` document.
@@ -8,7 +9,17 @@ import type { PriceDto } from "../commerce-price/commerce-price.types";
  * demo_url→demoUrl, book_url→bookUrl, link→link (kept; the handler overrides
  * shareableLink per-request). `isTrending` is synthesized false (no SQL column).
  */
-export const toEbookDto = (row: EBook): EbookDto => ({
+export const toEbookDto = (
+  row: EBook,
+  opts: { customerId?: number | null; entitled?: boolean } = {}
+): EbookDto => {
+  // No raw PDF URL. The FREE sample gets a media token for any logged-in user;
+  // the BOOK PDF gets one only when the customer has purchased it (else null).
+  // Both are exchanged at /media/resolve for a short-lived presigned URL.
+  const cust = opts.customerId ?? null;
+  const demoMediaToken = cust != null && row.bookDemoUrl ? signMediaToken({ k: "ebookDemo", id: row.id, free: true, cust }) : null;
+  const bookMediaToken = cust != null && opts.entitled && row.bookUrl ? signMediaToken({ k: "ebook", id: row.id, scope: { kind: "ebook", id: row.id }, cust }) : null;
+  return {
   _id: String(row.id),
   name: row.name,
   thumbnail: row.thumbnail,
@@ -19,14 +30,15 @@ export const toEbookDto = (row: EBook): EbookDto => ({
   publisher: row.publisher ?? null,
   language: row.language,
   order: row.orderby,
-  demoUrl: row.bookDemoUrl,
-  bookUrl: row.bookUrl,
+  demoMediaToken,
+  bookMediaToken,
   link: row.shareableLink,
   status: row.active,
   isTrending: false,
   createdAt: row.createdAt ?? null,
   updatedAt: row.updatedAt ?? null,
-});
+  };
+};
 
 /**
  * A shared-price row (PriceDto, ebook-owned) → the Mongo `EbookPrice` subset.

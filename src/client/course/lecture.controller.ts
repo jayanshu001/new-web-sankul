@@ -1,31 +1,9 @@
 import { Request, Response } from "express";
-import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { lectureQuerySchema } from "./course.validation";
 import * as lecSql from "../../modules/client-lecture/client-lecture.service";
-
-function encryptVideoSource(video: {
-  platform: "youtube" | "aws" | "vimeo";
-  youtube_id?: string;
-  aws_id?: string;
-  vimeo_id?: string;
-}) {
-  const token = generateToken(16);
-  const key = generateKey(token);
-  const vector = generateVector(token);
-
-  const sourceId =
-    video.platform === "youtube"
-      ? video.youtube_id
-      : video.platform === "aws"
-      ? video.aws_id
-      : video.vimeo_id;
-
-  const videoURL = sourceId ? encrypt(sourceId, key, vector) : "";
-
-  return { token, videoURL };
-}
+import { signMediaToken, MediaScope } from "../../utils/mediaToken";
 
 export const getLectureHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -71,9 +49,18 @@ export const getLectureHandler = async (req: Request, res: Response) => {
       }
     }
 
+    // Media is never returned inline. We mint a short-lived, customer-bound
+    // media token; the client exchanges it at POST /media/resolve. Free videos
+    // get a `free` token; paid videos require an active subscription (403 for
+    // unpurchased — no raw id/url ever leaves the server).
+    const buildScope = (): MediaScope => {
+      if (type === "package" && packageId) return { kind: "package", id: lecSql.parseLecId(packageId)! };
+      return { kind: "course", id: lecSql.parseLecId(courseId ?? "")! };
+    };
+
     if (v.priceType === "free") {
-      const { token, videoURL } = encryptVideoSource(v as any);
-      return success(res, { _id: String(v.id), title: v.title, platform: v.platform, token, videoURL }, "Lecture fetched successfully.", 200);
+      const mediaToken = signMediaToken({ k: "video", id: v.id, free: true, cust: cid });
+      return success(res, { _id: String(v.id), title: v.title, platform: v.platform, mediaToken }, "Lecture fetched successfully.", 200);
     }
 
     let subscribed = false;
@@ -86,8 +73,8 @@ export const getLectureHandler = async (req: Request, res: Response) => {
     }
     if (!subscribed) return failure(res, "Active subscription required to access this lecture", 403);
 
-    const { token, videoURL } = encryptVideoSource(v as any);
-    return success(res, { _id: String(v.id), title: v.title, platform: v.platform, token, videoURL }, "Lecture fetched successfully.", 200);
+    const mediaToken = signMediaToken({ k: "video", id: v.id, scope: buildScope(), cust: cid });
+    return success(res, { _id: String(v.id), title: v.title, platform: v.platform, mediaToken }, "Lecture fetched successfully.", 200);
   } catch (err) {
     logger.error("getLectureHandler failed", {
       traceId,

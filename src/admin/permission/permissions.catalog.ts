@@ -7,9 +7,17 @@
  *
  * Key naming: `{module}.{action}` or `{module}.{subResource}.{action}`,
  * lowercase kebab-case, dot-separated. Once shipped, a key must never be renamed.
+ *
+ * Guard scoping: every module belongs to exactly one guard (`web` | `educator` |
+ * `promoter`). A Spatie permission row is guard-scoped and a role can only be
+ * granted permissions of its OWN guard, so the catalog endpoint filters modules
+ * by `?guard=` and the seeder seeds each module ONLY under its own guard. Most
+ * admin modules are `web`; the promoter/educator portals get their own modules.
  */
 
-export const CATALOG_VERSION = "2026.07.08-1";
+import type { Guard } from "./permission.validation";
+
+export const CATALOG_VERSION = "2026.07.11-1";
 
 export type CatalogAction =
   | "view" | "list" | "create" | "edit" | "delete" | "toggle-status"
@@ -32,6 +40,8 @@ export interface CatalogModule {
   key: string;
   label: string;
   group: string;
+  /** Guard this module's permissions live under. Defaults to "web" via `mod()`. */
+  guard: Guard;
   description?: string;
   permissions: CatalogPermission[];
 }
@@ -57,6 +67,7 @@ const mod = (
     description?: string;
     standard?: boolean | string[]; // true (default), false, or subset of action ids
     extras?: CatalogPermission[];
+    guard?: Guard; // defaults to "web"
   } = {}
 ): CatalogModule => {
   const standard = opts.standard ?? true;
@@ -78,10 +89,26 @@ const mod = (
     key,
     label,
     group,
+    guard: opts.guard ?? "web",
     description: opts.description,
     permissions: [...base, ...(opts.extras ?? [])],
   };
 };
+
+/**
+ * Define a module with an explicit, hand-listed permission set (keys that don't
+ * follow the STANDARD_6 `{key}.{view|list|create|...}` shape). Used for the
+ * promoter/educator portal permissions, whose historical keys are e.g.
+ * `promoter`, `promoter.customers.read`.
+ */
+const rawMod = (
+  key: string,
+  label: string,
+  group: string,
+  guard: Guard,
+  permissions: CatalogPermission[],
+  description?: string
+): CatalogModule => ({ key, label, group, guard, description, permissions });
 
 const extra = (
   moduleKey: string,
@@ -323,8 +350,55 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
 
   // ── Dashboard ────────────────────────────────────────────────────────────
   mod("dashboard", "Dashboard", "Dashboard", { standard: ["view"] }),
+
+  // ── Promoter Portal (guard: promoter) ────────────────────────────────────
+  // The "Success Partner" promoter role is built from these keys. They gate the
+  // /api/v1/promoter/* portal (dashboard, customers, promocodes). Enforcement is
+  // currently role-based (requireRole("promoter")); these permissions exist so
+  // promoter-guard roles render/manage them in the RBAC tree. Keys are the
+  // historical ones (guard=promoter) and must never be renamed.
+  rawMod("promoter", "Promoter Portal", "Promoter Portal", "promoter", [
+    { key: "promoter", label: "Access promoter portal", action: "access" },
+    { key: "promoter.dashboard", label: "View promoter dashboard", action: "view-dashboard" },
+    { key: "promoter.customers", label: "Promoter customers", action: "view", subResource: "customers" },
+    { key: "promoter.customers.read", label: "Read promoter customers", action: "read", subResource: "customers" },
+    { key: "promoter.promocodes", label: "Promoter promocodes", action: "view", subResource: "promocodes" },
+    { key: "promoter.promocodes.read", label: "Read promoter promocodes", action: "read", subResource: "promocodes" },
+  ]),
+
+  // ── Educator Portal (guard: educator) ────────────────────────────────────
+  // Educator-guard roles (e.g. "WebSankul Educator") are built from this key; it
+  // gates the educator dashboard. Same latent-orphan fix as the promoter portal.
+  rawMod("educator", "Educator Portal", "Educator Portal", "educator", [
+    { key: "educator.dashboard", label: "View educator dashboard", action: "view-dashboard" },
+  ]),
 ];
 
 export const ALL_CATALOG_KEYS: Set<string> = new Set(
   PERMISSION_CATALOG.flatMap((m) => m.permissions.map((p) => p.key))
 );
+
+/**
+ * Catalog keys grouped by guard — the source of truth for guard-scoped catalog
+ * responses and for the seeder (each key seeds ONLY under its module's guard).
+ */
+export const CATALOG_KEYS_BY_GUARD: Map<Guard, Set<string>> = (() => {
+  const byGuard = new Map<Guard, Set<string>>();
+  for (const m of PERMISSION_CATALOG) {
+    let set = byGuard.get(m.guard);
+    if (!set) {
+      set = new Set<string>();
+      byGuard.set(m.guard, set);
+    }
+    for (const p of m.permissions) set.add(p.key);
+  }
+  return byGuard;
+})();
+
+/** Modules for a guard (used by the catalog endpoint's `?guard=` filter). */
+export const modulesForGuard = (guard: Guard): CatalogModule[] =>
+  PERMISSION_CATALOG.filter((m) => m.guard === guard);
+
+/** Catalog keys for a guard (used to compute the guard-scoped deprecated set). */
+export const catalogKeysForGuard = (guard: Guard): Set<string> =>
+  CATALOG_KEYS_BY_GUARD.get(guard) ?? new Set<string>();

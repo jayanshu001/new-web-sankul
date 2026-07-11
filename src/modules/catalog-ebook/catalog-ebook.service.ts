@@ -55,10 +55,8 @@ export const getEbookDetailWithPlans = async (
 ): Promise<EbookListItemDto | null> => {
   const row = await repo.findActiveById(id);
   if (!row) return null;
-  const dto = toEbookDto(row);
 
   const prices = await listActivePricesByEbooks([row.id]);
-  const plans = prices.filter((p) => p.ebookId === dto._id).map(toEbookPlanDto);
 
   const now = new Date();
   let endAt: Date | null = null;
@@ -70,6 +68,9 @@ export const getEbookDetailWithPlans = async (
     }
   }
 
+  // Entitlement known → gate the book media token (sample token is always issued).
+  const dto = toEbookDto(row, { customerId: opts.customerId ?? null, entitled: !!endAt });
+  const plans = prices.filter((p) => p.ebookId === dto._id).map(toEbookPlanDto);
   const isPaid = plans.some((p) => (p.price ?? 0) > 0);
   return {
     ...dto,
@@ -138,9 +139,9 @@ export const listEbooksWithPlans = async (
   }
 
   const ebooks = rows.map((row) => {
-    const dto = toEbookDto(row);
+    const endAt = endAtByEbook.get(String(row.id)) ?? null;
+    const dto = toEbookDto(row, { customerId: opts.customerId ?? null, entitled: !!endAt });
     const plans = plansByEbook.get(dto._id) ?? [];
-    const endAt = endAtByEbook.get(dto._id) ?? null;
     const isPaid = plans.some((p) => (p.price ?? 0) > 0);
     return {
       ...dto,

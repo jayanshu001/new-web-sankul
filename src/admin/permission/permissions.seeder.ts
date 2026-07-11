@@ -1,5 +1,5 @@
 import logger from "../../utils/logger";
-import { PERMISSION_CATALOG, ALL_CATALOG_KEYS } from "./permissions.catalog";
+import { PERMISSION_CATALOG, ALL_CATALOG_KEYS, catalogKeysForGuard } from "./permissions.catalog";
 import { GUARDS } from "./permission.validation";
 import { prisma } from "../../config/prisma";
 
@@ -35,9 +35,10 @@ async function syncPermissionCatalogSql(): Promise<void> {
     categoryIdByGroup.set(title, cat.id);
   }
 
-  // Batched per guard: read existing names once, createMany the missing ones
-  // (skipDuplicates guards against races under a PM2 cluster). Avoids the old
-  // per-key sequential findFirst (~250 × N guards) at boot.
+  // Guard-aware: each module seeds ONLY under its own guard (a role can only hold
+  // permissions of its own guard, so web keys don't belong under promoter/educator
+  // and vice-versa). Batched per guard: read existing names once, createMany the
+  // missing ones (skipDuplicates guards against races under a PM2 cluster).
   let inserted = 0;
   for (const guard of SEED_GUARDS) {
     const existing = await prisma.adminPermissionRow.findMany({
@@ -47,6 +48,7 @@ async function syncPermissionCatalogSql(): Promise<void> {
     const existingNames = new Set(existing.map((r) => r.name));
     const toCreate: { name: string; guardName: string; categoryId: number | null }[] = [];
     for (const m of PERMISSION_CATALOG) {
+      if (m.guard !== guard) continue; // seed under the module's own guard only
       const categoryId = categoryIdByGroup.get(m.group) ?? null;
       for (const p of m.permissions) {
         if (!existingNames.has(p.key)) toCreate.push({ name: p.key, guardName: guard, categoryId });
@@ -58,15 +60,24 @@ async function syncPermissionCatalogSql(): Promise<void> {
     }
   }
 
-  const dbKeys = await prisma.adminPermissionRow.findMany({
-    where: { guardName: { in: [...SEED_GUARDS] } },
-    select: { name: true },
-  });
-  const deprecated = [...new Set(dbKeys.map((r) => r.name).filter((k) => !ALL_CATALOG_KEYS.has(k)))];
+  // Deprecated = DB rows whose (guard, name) pair isn't a live catalog entry for
+  // that guard. Computed per guard so a cross-seeded web key under the promoter
+  // guard is correctly reported (and can be cleaned up via the deploy DDL).
+  let deprecated: string[] = [];
+  for (const guard of SEED_GUARDS) {
+    const liveKeys = catalogKeysForGuard(guard);
+    const rows = await prisma.adminPermissionRow.findMany({
+      where: { guardName: guard },
+      select: { name: true },
+    });
+    for (const name of new Set(rows.map((r) => r.name))) {
+      if (!liveKeys.has(name)) deprecated.push(`${guard}:${name}`);
+    }
+  }
   logger.info(
-    `[permissions] catalog sync complete (sql) — guards: [${SEED_GUARDS.join(", ")}], inserted: ${inserted}, catalog keys/guard: ${ALL_CATALOG_KEYS.size}, deprecated names: ${deprecated.length}`
+    `[permissions] catalog sync complete (sql) — guards: [${SEED_GUARDS.join(", ")}], inserted: ${inserted}, catalog keys total: ${ALL_CATALOG_KEYS.size}, deprecated (guard:name) pairs: ${deprecated.length}`
   );
-  if (deprecated.length > 0) logger.warn(`[permissions] deprecated (non-catalog) names still in DB (sql): ${deprecated.join(", ")}`);
+  if (deprecated.length > 0) logger.warn(`[permissions] deprecated (non-catalog for their guard) names still in DB (sql): ${deprecated.join(", ")}`);
 }
 
 const slugify = (s: string) =>

@@ -1003,6 +1003,7 @@ export const deletePoll = async (pollId: number): Promise<boolean> => {
 import { computeDaysLeft } from "../../utils/planDuration";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { qualitiesFromSessionRecordings } from "../../utils/videoQualities";
+import { signMediaToken } from "../../utils/mediaToken";
 import { formatScheduledAt } from "../../utils/displayTime";
 
 // Streamos sometimes appends stray quote chars to recording paths — strip them
@@ -1352,30 +1353,27 @@ export const getRecordingsForClient = async (
   const shapeLecture = (v: (typeof videos)[number]) => {
     const canPlay = subscribed || v.priceType === "free";
     const p = progByVideo.get(v.id);
-    // Prefer StreamOS VOD-meta-resolved URLs (actually playable); fall back to the
-    // stored webhook recordings when the meta resolution is empty/unavailable.
+    // Keep only the CLEARTEXT metadata the list screen needs (qualities picker,
+    // preferred stream hint). No playable URL / source id is emitted — the client
+    // exchanges `mediaToken` at /media/resolve for the real (short-lived) URLs.
     const vod = v.liveSessionId ? vodBySession.get(v.liveSessionId) ?? null : null;
     const storedHls = v.liveSessionId ? recBySession.get(v.liveSessionId) ?? [] : [];
-    const storedMp4 = v.liveSessionId ? mp4BySession.get(v.liveSessionId) ?? [] : [];
     const hlsList = vod?.hls?.length ? vod.hls : storedHls;
-    const mp4List = vod?.mp4?.length ? vod.mp4 : storedMp4;
-    const hlsMasterUrl = vod?.hlsUrl ?? null;
-    const mp4Url = pickBestMp4(mp4List);
-    // `recordings` is the PRIMARY playback array = plain MP4 (un-DRM'd, simple
-    // <video>/MP4). The DRM-HLS m3u8 ladder lives in `hlsRecordings`. `qualities`
-    // is still derived from the HLS ladder (the true per-quality set). When a
-    // session has no MP4, `recordings` is empty — the client falls back to
-    // `hlsRecordings`. `mp4Recordings`/`mp4Url` are kept as explicit aliases.
+    const hasHls = !!(vod?.hlsUrl || hlsList.length);
+    // Locked (unpurchased paid) → no token at all. Free → free token; purchased →
+    // scoped to the live course so resolve can re-check entitlement.
+    const mediaToken =
+      !canPlay || customerId == null
+        ? null
+        : v.priceType === "free"
+        ? signMediaToken({ k: "liveRecording", id: v.id, free: true, cust: customerId })
+        : signMediaToken({ k: "liveRecording", id: v.id, scope: { kind: "liveCourse", id: courseId }, cust: customerId });
     return {
       _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, order: v.order,
-      locked: !canPlay, youtube_id: v.youtube_id ?? null, aws_id: sanitizeRecPath(v.aws_id ?? null), vimeo_id: v.vimeo_id ?? null,
-      recordings: mp4List,
-      hlsRecordings: hlsList,
-      // Master adaptive HLS playlist (from VOD meta) — a single URL a player can
-      // load directly; null when only the stored webhook ladder is available.
-      hlsUrl: hlsMasterUrl,
+      locked: !canPlay,
+      preferredStream: (hasHls ? "hls" : "mp4") as "hls" | "mp4",
       qualities: qualitiesFromSessionRecordings(hlsList),
-      mp4Recordings: mp4List, mp4Url,
+      mediaToken,
       progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
     };
   };

@@ -40,8 +40,12 @@ export interface EbookDto {
   publisher: string | null;
   language: EBookLanguage;
   order: number;
-  demoUrl: string;
-  bookUrl: string;
+  /** Media token for the FREE sample PDF — resolve at /media/resolve. null when
+   *  absent or unauthenticated. Always available to logged-in users (sample is free). */
+  demoMediaToken: string | null;
+  /** Media token for the BOOK PDF — resolve at /media/resolve. null unless the
+   *  customer has purchased the ebook (unpurchased users get null — no URL). */
+  bookMediaToken: string | null;
   /** SQL `link` — usually overridden by a per-request deep link in the handler. */
   link: string;
   status: boolean;

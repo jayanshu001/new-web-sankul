@@ -734,7 +734,11 @@ export const buildLectureRefSql = async (input:
   if (input.lectureType === "recorded") {
     const video = await prisma.video.findFirst({
       where: { id: input.videoId },
-      select: { id: true, title: true, topic: true, videoCategoryId: true, VideoCategory: { select: { title: true } } },
+      // VideoCategory.liveCourseId is set on live-course "folder" categories (the
+      // recordings tab groups by it). Recorded lectures that live under such a
+      // folder must expose that liveCourseId so the FE opens the live player
+      // (getLiveLectureAPI) instead of the catalog category rail (which 403s).
+      select: { id: true, title: true, topic: true, videoCategoryId: true, VideoCategory: { select: { title: true, liveCourseId: true } } },
     });
     if (!video) return null;
     const { resolveVideoCourseId } = await import("../catalog-category-tree/category-tree.service");
@@ -743,22 +747,28 @@ export const buildLectureRefSql = async (input:
       prisma.lectureProgress.findMany({ where: { customerId: input.customerId, videoId: input.videoId }, select: { positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true } }),
     ]);
     const p = collapseRows(rows);
+    const liveCourseId = video.VideoCategory?.liveCourseId ?? null;
     return {
       kind: "recorded", videoId: String(video.id), liveSessionId: null,
       title: video.title ?? null, topic: video.topic ?? null,
       lessonTitle: video.VideoCategory?.title ?? null,
       videoCategoryId: video.videoCategoryId ? String(video.videoCategoryId) : null,
       courseId: courseId ? String(courseId) : null,
+      liveCourseId: liveCourseId ? String(liveCourseId) : null,
       resume: { positionSec: p?.positionSec ?? 0, durationSec: p?.durationSec ?? 0, completed: !!p?.completed, lastWatchedAt: p?.lastWatchedAt ?? null },
     };
   }
   const session = await prisma.liveSession.findFirst({ where: { id: input.liveSessionId }, select: { id: true, title: true, subject: true } });
   if (!session) return null;
+  // Live note: resolve the owning live course from the session→course link so
+  // the shape carries liveCourseId on both branches.
+  const link = await prisma.liveSessionCourse.findFirst({ where: { liveSessionId: input.liveSessionId }, select: { liveCourseId: true } });
   const rows = await prisma.lectureProgress.findMany({ where: { customerId: input.customerId, liveSessionId: input.liveSessionId }, select: { positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true } });
   const p = collapseRows(rows);
   return {
     kind: "live", videoId: null, liveSessionId: String(session.id),
     title: session.title ?? null, topic: session.subject ?? null, lessonTitle: null, videoCategoryId: null, courseId: null,
+    liveCourseId: link?.liveCourseId != null ? String(link.liveCourseId) : null,
     resume: { positionSec: p?.positionSec ?? 0, durationSec: p?.durationSec ?? 0, completed: !!p?.completed, lastWatchedAt: p?.lastWatchedAt ?? null },
   };
 };

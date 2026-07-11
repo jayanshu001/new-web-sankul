@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { signMediaToken } from "../../utils/mediaToken";
 
 /**
  * Ebook-download write+read path on SQL (Wave 7 — net-new ws_ebook_download).
@@ -54,7 +55,10 @@ export const listDownloads = async (customerId: number, now = new Date()) => {
     .filter((r) => activeIds.has(String(r.ebookId)) && byId.has(r.ebookId))
     .map((r) => {
       const e = byId.get(r.ebookId)!;
-      return { _id: String(r.id), ebookId: String(e.id), name: e.name, author: e.author ?? null, image: e.image ?? null, thumbnail: e.thumbnail ?? null, language: e.language ?? null, bookUrl: e.bookUrl ?? null, downloadedAt: r.downloadedAt };
+      // Rows are already filtered to active subscriptions ⇒ entitled. No raw PDF
+      // URL: a book media token is exchanged at /media/resolve for a presigned URL.
+      const mediaToken = e.bookUrl ? signMediaToken({ k: "ebook", id: e.id, scope: { kind: "ebook", id: e.id }, cust: customerId }) : null;
+      return { _id: String(r.id), ebookId: String(e.id), name: e.name, author: e.author ?? null, image: e.image ?? null, thumbnail: e.thumbnail ?? null, language: e.language ?? null, mediaToken, downloadedAt: r.downloadedAt };
     });
 };
 

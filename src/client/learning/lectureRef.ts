@@ -27,6 +27,11 @@ export interface LectureRef {
   lessonTitle: string | null;
   videoCategoryId: string | null;
   courseId: string | null;
+  // Owning live course when this recorded lecture lives under a live-course
+  // folder (VideoCategory.liveCourseId). null for catalog-course videos. The FE
+  // opens the live player (getLiveLectureAPI) when this is set, skipping the
+  // category rail that 403s for live recordings.
+  liveCourseId: string | null;
   resume: {
     // Last watched position + the duration the player has observed, both from
     // the customer's LectureProgress row for this lecture.

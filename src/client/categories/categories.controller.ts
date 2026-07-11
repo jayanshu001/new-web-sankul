@@ -4,8 +4,7 @@ import * as clientMatSql from "../../modules/client-material/client-material.ser
 import * as clientExamSql from "../../modules/client-exam/client-exam.service";
 import { parseEcId } from "../../modules/exam-countdown/exam-countdown.service";
 import * as ecClientSql from "../../modules/exam-countdown/exam-countdown.client";
-import { generateToken, generateKey, generateVector, encrypt } from "../../utils/videoEncryption";
-import { resolveVideoSource } from "../../utils/videoResolver";
+import { signMediaToken, MediaScope } from "../../utils/mediaToken";
 import { defaultListingQualities } from "../../utils/videoQualities";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -22,70 +21,27 @@ import {
   parseVideoCategoryId,
 } from "../../modules/catalog-video/catalog-video.service";
 
-// Row passthrough. The list now also embeds the encrypted playback envelope
-// (`request.files`, see listVideosByCategory) so the FE can download/play
-// straight from the list. Resolution is Redis-cached and failure-isolated per
-// row, so the page stays resilient even when an individual video can't resolve.
-// We also keep youtube_id / aws_id / vimeo_id on each row for thumbnail/label
-// and native-player flows — these are identifiers, not directly-playable URLs.
-function shapeVideoForList(v: any) {
-  return v;
+// Media is never returned inline. Each playable row carries a short-lived,
+// customer-bound `mediaToken` (utils/mediaToken) that the client exchanges at
+// POST /client/media/resolve for the real URL. Unpurchased paid rows get
+// `mediaToken: null` — no id/url of any kind. Free rows get a `free` token.
+// Map the resolved category scope to a re-checkable media scope so /media/resolve
+// can re-verify the subscription live. course/package/liveCourse are all handled
+// by the resolver's entitlement switch; anything else falls back to `trusted`.
+function toMediaScope(scope: { kind: string; id: string } | null | undefined): MediaScope {
+  if (scope && (scope.kind === "course" || scope.kind === "package" || scope.kind === "liveCourse")) {
+    return { kind: scope.kind, id: Number(scope.id) } as MediaScope;
+  }
+  return { kind: "trusted" };
 }
 
-// Streamos historically delivered some recording paths with stray quote
-// characters (raw `"`, URL-encoded `%22`, or `%2522`) tacked onto the end of
-// the URL — an upstream JSON-quoting bug. Strip defensively so the client
-// never sees an unplayable URL. Mirrors the helper in live-course.controller.
-function sanitizeRecordingPath<T extends string | null | undefined>(p: T): T {
-  if (typeof p !== "string") return p;
-  return p.replace(/(?:"|%22|%2522)+$/i, "") as T;
-}
-
-// Same envelope encryptLecture (live-course) produces, ported here so this
-// endpoint family also returns the shared {files:{token,hls,progressive}}
-// contract. Centralising this in a util later would be ideal, but the duplicated
-// copy keeps the two flows independent for now.
-async function encryptVideoEnvelope(v: {
-  platform: string;
-  youtube_id?: string | null;
-  aws_id?: string | null;
-  vimeo_id?: string | null;
-}) {
-  const resolved = await resolveVideoSource(v);
-  const token = generateToken(16);
-  const key = generateKey(token);
-  const vector = generateVector(token);
-
-  const progressive = resolved.progressive.map((p) => ({
-    qualityLabel: p.qualityLabel,
-    quality: p.quality,
-    height: p.height,
-    bitrate: p.bitrate,
-    hasAudio: p.hasAudio,
-    hasVideo: p.hasVideo,
-    url: encrypt(p.url, key, vector),
-  }));
-
-  // Wrapped under `request.files` per the FE contract (mapLessonItem reads
-  // request.files.progressive / request.files.token). The extra nesting is
-  // load-bearing — don't flatten it.
-  return {
-    request: {
-      files: {
-        token,
-        hls: {
-          default_cdn: "primary",
-          cdns: {
-            primary: {
-              url: resolved.hlsUrl ? encrypt(resolved.hlsUrl, key, vector) : "",
-              allow720: resolved.allow720,
-            },
-          },
-        },
-        progressive,
-      },
-    },
-  };
+function mediaTokenForVideo(v: { id: number; priceType: string }, entitled: boolean, customerId: number | null, scope: { kind: string; id: string } | null | undefined): string | null {
+  if (customerId == null) return null;
+  const isPaid = v.priceType === "paid";
+  if (isPaid && !entitled) return null;
+  return isPaid
+    ? signMediaToken({ k: "video", id: v.id, scope: toMediaScope(scope), cust: customerId })
+    : signMediaToken({ k: "video", id: v.id, free: true, cust: customerId });
 }
 
 function parsePaging(req: Request) {
@@ -119,19 +75,12 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
     const progMap = uid != null ? await cvSql.progressByVideo(uid, rows.map((v) => v.id)) : new Map<number, any>();
 
-    // Entitlement gate: paid videos only ship a decryptable playback envelope
-    // when the caller holds an active subscription for this category's owning
-    // container. This keeps the list consistent with the lecture-detail and
-    // progress endpoints (both 403 without a sub) — without it the list leaked
-    // playable URLs for paid content to unentitled users. Free videos are open.
+    // Entitlement gate: paid videos only get a (playable) media token when the
+    // caller holds an active subscription for this category's owning container.
+    // Unpurchased paid rows get `mediaToken: null` — no id/url at all. Free rows
+    // get a free token. Resolution happens later at /media/resolve, so the list
+    // no longer pays a per-row resolve cost.
     const entitled = await cvSql.isEntitledForScope(uid, scope);
-
-    const envByVideo = new Map<number, any>();
-    await Promise.all(rows.map(async (v) => {
-      if (v.priceType === "paid" && !entitled) { envByVideo.set(v.id, null); return; }
-      try { const env = await encryptVideoEnvelope(v as any); envByVideo.set(v.id, env.request); }
-      catch (err: any) { logger.warn("listVideosByCategory (sql) envelope failed", { traceId, videoId: v.id, error: err?.message }); envByVideo.set(v.id, null); }
-    }));
 
     const list = rows.map((v) => {
       const isPaid = v.priceType === "paid";
@@ -142,7 +91,7 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
         progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
         recordings: [], // SQL videos carry no live-session back-link
         qualities: defaultListingQualities(),
-        request: envByVideo.get(v.id) ?? null,
+        mediaToken: mediaTokenForVideo(v, entitled, uid, scope),
       };
     });
 
@@ -180,22 +129,20 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
     // progress endpoints, so this playback source can't hand out decryptable
     // URLs the other two would refuse. Free videos skip the gate.
     const sc = await cvSql.scopeForCategory(v.videoCategoryId ?? catId);
+    const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
+    if (uid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
     if (v.priceType === "paid") {
-      const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
       const entitled = await cvSql.isEntitledForScope(uid, sc);
       if (!entitled) return res.status(403).json({ success: false, message: "Active subscription required to access this lecture" });
     }
 
-    let env;
-    try {
-      env = await encryptVideoEnvelope(v as any);
-    } catch (err: any) {
-      logger.error("getVideoByCategory (sql) resolve/encrypt failed", { traceId, videoId, error: err?.message });
-      return res.status(502).json({ success: false, message: "Failed to resolve playable URLs for this video." });
-    }
+    // No inline media — mint a media token the client resolves at /media/resolve.
+    const mediaToken = v.priceType === "paid"
+      ? signMediaToken({ k: "video", id: v.id, scope: toMediaScope(sc), cust: uid })
+      : signMediaToken({ k: "video", id: v.id, free: true, cust: uid });
     return res.status(200).json({
       success: true,
-      data: { _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, scope: sc, ...env },
+      data: { _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, scope: sc, mediaToken },
       message: "Video fetched.",
     });
   } catch (error: any) {

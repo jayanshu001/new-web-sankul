@@ -15,6 +15,259 @@
 
 ---
 
+## 2026-07-11 — Fix PUT /admin/courses/:id "courseEducatorId nan" (GET↔PUT ref asymmetry)
+
+> **Controller coercion fix only — no schema/query change.** `yarn typecheck` green.
+
+- **Bug:** editing a course failed with
+  `{"success":false,"message":"[... courseEducatorId: Expected number, received nan ...]"}`.
+- **Root cause:** the admin **detail GET** (`admin-course.service.ts` `toCourseDto`, line 48)
+  returns `courseEducatorId` (and `courseSubjectCategoryId` / `videoCategoryId`) *populated*
+  as `{_id,name}` / `{_id,title}` objects to match the Mongo `.populate()` shape. The admin
+  edit form round-trips those objects back on **PUT `/admin/courses/:id`**, but
+  `updateCourse` runs `createCourseSqlSchema.partial().required({courseEducatorId:true})`
+  where the field is `z.coerce.number()`. `Number({_id,name})` → `NaN` → the error.
+- **Fix:** `coerceCourseBodySql` (`src/admin/course/course.controller.ts`) now flattens these
+  three scalar id refs before Zod — object → `_id`/`id` string, and empty-string/null → drop
+  the key (so a genuinely-missing required educator reports a clean "Required" instead of the
+  `nan` type error). Mirrors the existing category-ref array flattening in the same helper.
+  Because the route is `multipart/form-data` (`uploadS3.single("image")`), nested values
+  arrive as **strings**, so the helper also parses a JSON-stringified ref (`'{"_id":..}'`) and
+  discards junk (`"[object Object]"`, `"null"`, `"undefined"`). A temporary `console.log` in
+  `updateCourse` captures the raw/coerced value while the frontend report is being confirmed
+  (to be removed once verified).
+- **Contract:** unchanged. GET response shape identical; PUT now additionally accepts the
+  populated object form it already emits (backward compatible with plain numeric-string ids).
+
+## 2026-07-11 — Media tokens + entitlement gating + resolve endpoint (replaces AES obfuscation)
+
+> **Response-contract change (client media) + new endpoint — no DB schema change.**
+> `yarn typecheck` green. Supersedes the AES `{token, ciphertext}` scheme on all client media.
+
+- **New infra:**
+  - `utils/mediaToken.ts` — sign/verify short-lived (5 min) JWT media tokens. Dedicated
+    secret (never the auth key ring), `audience: ws-media`, customer-bound (`cust`).
+  - `modules/client-media/client-media.service.ts` + `client/media/*` — `POST
+    /client/media/resolve`: verifies token, binds caller, **re-checks entitlement live**,
+    then resolves the actual media — presigned short-lived URLs for S3/Spaces objects
+    (audio notes, ebook PDFs), StreamOS/VideoCrypt/YouTube native-TTL URLs for video/live.
+    Mounted behind the master `authenticate`.
+- **Gating rule enforced everywhere:** unpurchased paid media → all media fields `null`
+  (no id/url/token); free → a `free` token; purchased → a scoped token. Raw AWS keys /
+  YouTube / Vimeo ids / `.m3u8`/`.mp4` / PDF / audio URLs are never emitted.
+- **Live entitlement re-check wired for every scope (no blind `trusted`):** category-video
+  tokens encode the resolved `course`/`package`/`liveCourse` scope; the live-session resolve
+  branch re-runs `resolveLivePreviewStateSql` (full-OR-preview; rejects preview-ended); audio
+  notes re-check ownership; ebook re-checks the active sub. `trusted` survives only as a
+  fallback when a category scope can't be resolved (short-TTL guarded).
+- **Endpoints converted (AES envelope → `mediaToken`):** `/v1/lecture`; category videos
+  list + detail; live-course lecture + `/recordings`; `/live-sessions/:id`; catalog course
+  inline videos (now entitlement-gated via `hasActiveCourseSub`); free videos; lecture
+  audio notes; ebook catalog list/detail (`demoMediaToken` always + `bookMediaToken` only
+  when purchased) + `/ebooks/subscriptions` + `/ebooks/downloads` + `POST
+  /ebooks/:id/download`.
+- **DTO/type changes:** `EbookDto` — dropped `demoUrl`/`bookUrl`/`token`, added
+  `demoMediaToken`/`bookMediaToken`. Category/catalog/free video rows now carry `mediaToken`
+  instead of encrypted ids/envelope. Live-session drops `token`/`hlsUrl`/`hlsUrls`/
+  `recordings`, carries `mediaToken`.
+- **Perf win:** list endpoints no longer resolve/encrypt every row up front — resolution is
+  deferred to the on-tap resolve call.
+- **Env (all OPTIONAL, defaults):** `MEDIA_TOKEN_SECRET`, `MEDIA_TOKEN_TTL_SECONDS`,
+  `MEDIA_SIGNED_URL_TTL_SECONDS` (added to `.env.example`).
+- FE contract: `docs/client/CLIENT_MEDIA_ACCESS.md` (supersedes `VIDEO_URL_DECRYPTION.md`).
+
+---
+
+## 2026-07-11 — Encrypt ebook PDF URLs (`bookUrl` / `demoUrl`) across client APIs
+
+> **Response-contract change only — no DB change.** `yarn typecheck` green.
+
+- **What:** ebook PDF + sample URLs shipped raw on the client. Now encrypted in place with
+  the shared `{token, ciphertext}` scheme at every emission point:
+  - `catalog-ebook.transformer.ts` `toEbookDto` — `bookUrl` + `demoUrl` encrypted, per-ebook
+    `token` added (feeds ebook catalog list/detail + `GET /ebooks/subscriptions` via
+    `commerce-ebook-sub`). `EbookDto` gains a `token` field.
+  - `client-ebook-download.service.ts` `listDownloads` (`GET /ebooks/downloads`) — `bookUrl`
+    encrypted, per-row `token`.
+  - `ebook-downloads.controller.ts` `recordEbookDownload` (`POST /ebooks/:id/download`) —
+    `data.bookUrl` encrypted, `data.token` added.
+- Admin `toEbookDto` (admin-ebook / admin-customer) is a **different** function — untouched.
+- Physical **books** (book-order/catalog-book) have no downloadable file URL — only cover
+  images + streamed PDF receipts — so nothing there to encrypt.
+- FE decryption documented in `docs/client/VIDEO_URL_DECRYPTION.md`.
+- **No backfill / no DDL / no flag** — pure response encryption on already-SQL handlers.
+
+---
+
+## 2026-07-11 — Expose `liveCourseId` on lecture-notes (open correct player for live recordings)
+
+> **Query + DTO change — no schema DDL.** `yarn typecheck` green.
+
+- **Why:** live-course folder recordings resolved to `courseId: null` / `liveCourseIds: []`
+  on the notes + audio-notes endpoints, so the FE opened VideoScreen with only a categoryId
+  → playback hit the catalog category-detail API → 403 → paywall. Live recordings need the
+  owning `liveCourseId` to open `getLiveLectureAPI`.
+- **Fix (`client-lecture-progress.service.ts`, `buildLectureRefSql`):** now resolves the
+  owning live course from `VideoCategory.liveCourseId` (recorded) / `liveSessionCourse`
+  (live) and returns a new **`liveCourseId`** field on the `lecture` object (both branches).
+  Added `liveCourseId` to the `LectureRef` interface.
+- **Notes enrichment (`client-lecture-note.service.ts` + both list controllers):** new
+  `enrichNotesWithLiveCourse()` fills each note's `liveCourseIds` with `[liveCourseId]` when
+  the stored row had none — so `GET /lecture-notes` and `GET /lecture-audio-notes` carry the
+  live-course scope on every note.
+- Additive; no field removed. `courseId` stays null for live-course videos (complements
+  the new `liveCourseId`).
+
+---
+
+## 2026-07-11 — Encrypt audio-note S3 URLs (`/lecture-audio-notes`)
+
+> **Response-contract change only — no DB change.** `yarn typecheck` green.
+
+- **What:** `audioNoteDto` (`client-lecture-note.service.ts`) shipped raw `audioUrl`
+  (DigitalOcean Spaces URL) and `audioKey` (S3 object key). Both now encrypted in place with
+  the shared `{token, ciphertext}` scheme; a **per-note `token`** added. Covers list +
+  create + update responses (all route through this one DTO).
+- **`/lecture-notes` (text) left unchanged** — `noteDto` has no file URL (`content` is
+  user text). The `lecture`/`resumeNext` objects both endpoints embed carry only
+  titles/ids/thumbnail images — no encrypted fields.
+- FE decryption added to `docs/client/VIDEO_URL_DECRYPTION.md`.
+- **No backfill / no DDL / no flag** — pure response encryption on an already-SQL handler.
+
+---
+
+## 2026-07-11 — Cleartext stream-type markers on live-course recordings (fix HLS→MP4 regression)
+
+> **Additive response-contract change — no DB change.** `yarn typecheck` green.
+
+- **Why:** after encrypting the recordings URLs, the FE (which selected HLS vs MP4 by
+  string-matching `.m3u8`/`.mp4` in the URL) silently fell through to MP4 — the ciphertext
+  no longer contains those markers.
+- **Fix (`admin-live-course.service.ts`, `shapeLecture`):** added cleartext fields the FE
+  keys off instead of sniffing the (now opaque) URL:
+  - `type: "hls" | "mp4"` on every `recordings[]` / `hlsRecordings[]` / `mp4Recordings[]` entry.
+  - lecture-level `preferredStream: "hls" | "mp4"` — `"hls"` whenever an HLS ladder exists
+    (restores pre-encryption default), else `"mp4"`.
+- FE guidance ("never decide stream type from the URL; decrypt last, only the chosen URL")
+  added to `docs/client/VIDEO_URL_DECRYPTION.md`.
+
+---
+
+## 2026-07-11 — Reconcile customer goal selection against catalog (fix FE bottom-sheet crash)
+
+> **Query-shape + write-normalization change. No schema DDL.** `yarn typecheck` green.
+
+- **Bug:** when a labelless top-level goal that a customer had already selected was later
+  converted (in admin/CMS) into a **label under another goal** — or when a selected label
+  was renamed/removed so its id changed — the stored selection on `ws_customer.goal`
+  (`[{ goalId, labelIds }]`) no longer matched the catalog. `GET /client/goals/my-goals`
+  then returned a goal whose shape disagreed with `GET /client/goals`, crashing the FE
+  Select-Goals bottom sheet. Worst case: a **labelled** catalog goal was emitted with
+  `labels: []`, which FE reads as a *labelless* selection (conflicting with the accordion
+  shape the catalog renders).
+- **Root cause:** there is no admin operation that "moves a goal into another goal's label"
+  with a mapping trail — the only link between an old goal and a new label is its name — so
+  true remapping is impossible. Selections were previously shaped/persisted without
+  validating the *shape* against the current catalog.
+- **Fix (read + write, both paths use one helper):**
+  - New `reconcileGoalSelection(selections, validGoals)` in `src/utils/goalSelection.ts`:
+    forces every entry to a valid FE shape — labelless goal → `labelIds: []`, labelled goal
+    → non-empty subset of the catalog's labels — and **drops** (a) unknown/inactive goals and
+    (b) labelled goals whose chosen labels all vanished (never emits an empty-labels shape for
+    an accordion goal). Matches the doc's "remap or clear if remapping is impossible".
+  - `getMySelectedGoals` (`GET /client/goals/my-goals`): builds `validGoals` from the same
+    `active:true` catalog read it shapes from, reconciles, then shapes. Guarantees my-goals
+    and `/client/goals` always agree on ids/shape. Transitively fixes
+    `GET /client/packages/goal` (FE derives its `goalIds`/`labelIds` from my-goals).
+  - `updateMyGoals` (`PUT /client/goals`): catalog lookup now filters `active:true` (was
+    unfiltered) and reuses `reconcileGoalSelection`, so a labelled goal sent with empty
+    `labelIds` is dropped instead of persisted as a crash-inducing labelless selection.
+- **Query change:** `updateMyGoals` goal lookup `where: { id: { in } }` → `where: { id: { in }, active: true }`.
+- **Data:** no backfill required — stale selections self-heal on the next `PUT`, and the
+  read path already returns a safe shape. Response envelopes unchanged.
+- Files: `src/utils/goalSelection.ts`, `src/client/goal/goal.client.service.ts`.
+
+---
+
+## 2026-07-11 — Guard-scope the permission catalog (fix orphaned promoter permissions)
+
+> **Response-contract change (additive) + seeder behavior change. No schema DDL.** `yarn typecheck` green.
+
+- **Bug:** the "Success Partner" (promoter-guard) role's 6 permissions
+  (`promoter`, `promoter.dashboard`, `promoter.customers`, `promoter.customers.read`,
+  `promoter.promocodes`, `promoter.promocodes.read`) rendered as *deprecated/orphaned* in
+  the RBAC "Manage Permissions" tree. Root cause: `permissions.catalog.ts` only ever
+  enumerated **web-guard** admin modules, while `GET /admin/permissions/catalog` returned
+  one global (guard-agnostic) tree. The promoter keys (real, guard=`promoter`, present in
+  `old_db/websankul_staging.sql` ids 249–254) were never live catalog entries, so the
+  endpoint dumped them into `deprecated[]`.
+- **Fix (Case 1 — keys are valid, not renamed/removed):**
+  - Added a `guard` field to every `CatalogModule` (defaults `web`), plus a **Promoter
+    Portal** module (the 6 keys, guard `promoter`) and an **Educator Portal** module
+    (`educator.dashboard`, guard `educator`), all marked live (not deprecated).
+  - `GET /admin/permissions/catalog` now accepts **`?guard=web|educator|promoter`**
+    (validated via `guardOnlyQuerySchema`; **defaults to `web`** → backward compatible).
+    It returns only that guard's `modules` and a **guard-scoped** `deprecated[]`, and adds
+    a `guard` field to the response envelope. Consistent with `/admin/roles*` which are
+    already `?guard=`-scoped. **Frontend:** call the catalog with the role's guard
+    (`?guard=promoter` for the Success Partner role).
+  - `getStoredPermissionNames(guard?)` now filters `ws_permissions` by `guard_name`.
+- **Seeder change (`permissions.seeder.ts`):** previously seeded every catalog key under
+  ALL guards; now seeds each module **only under its own guard**. Deprecated logging is
+  per-guard (`guard:name`). No hard-deletes — legacy rows are left in place.
+- **Query-shape change:** `SELECT name FROM ws_permissions WHERE guard_name = ?`
+  (was unfiltered) in the catalog read path.
+- **Optional deploy cleanup:** `docs/migration/schema-changes/2026-07-11_permission_guard_cross_seed_cleanup.sql`
+  removes pre-existing web-key rows cross-seeded under the promoter/educator guards (only
+  rows unreferenced by any role/model assignment). Cosmetic — reduces `deprecated[]` noise;
+  the bug fix does not depend on it.
+
+## 2026-07-11 — Encrypt live-course recordings list (`GET /live-courses/:id/recordings`)
+
+> **Response-contract change only — no DB schema/query change.** `yarn typecheck` green.
+
+- **What:** `getRecordingsForClient` (`admin-live-course.service.ts`, `shapeLecture`) — the
+  handler behind `GET /api/v1/client/live-courses/:id/recordings` — shipped, per lecture,
+  raw `youtube_id/aws_id/vimeo_id` **and** resolved playback URLs (`hlsUrl`, `mp4Url`,
+  `recordings[].path`, `hlsRecordings[].path`, `mp4Recordings[].path`). All now encrypted
+  in place with the shared `{token, ciphertext}` scheme; a **per-lecture `token`** is added
+  to each `folders[].lectures[]` entry.
+- `qualities` left as-is (labels + bitrate only, no URL). `/session-recordings` confirmed
+  metadata-only (streamId/subject/scheduling — no playback URL), left unchanged.
+- FE decryption (per-lecture-token recordings shape) added to `docs/client/VIDEO_URL_DECRYPTION.md`.
+- **No backfill / no DDL / no flag** — pure response encryption on an already-SQL handler.
+
+---
+
+## 2026-07-11 — Encrypt live-session playback URLs (close the last plaintext leak)
+
+> **Response-contract change only — no DB schema/query change.** `yarn typecheck` green.
+
+- **What:** `GET /client/live-sessions/:id` (`src/client/live/live.controller.ts`,
+  `getLiveSessionForClient`) was shipping raw StreamOS URLs — `hlsUrl`, the `hlsUrls`
+  quality→url map, and every `recordings[].path` — in cleartext. These are now encrypted
+  in place with the shared AES-128-CBC `{token, ciphertext}` scheme (same as `/v1/lecture`),
+  and a sibling `token` field was added to the response.
+- **New util:** `newEncryptor()` in `src/utils/videoEncryption.ts` — mints the 16-digit
+  token, derives key+IV once, returns `enc()` (empty/null → `""`). Centralizes the scheme
+  the lecture/category/live-course flows each hand-rolled.
+- **Contract note:** response keys are unchanged; only the string *values* became ciphertext,
+  plus the added `token`. Frontend decryption is documented in
+  `docs/client/VIDEO_URL_DECRYPTION.md`.
+- **Follow-up audit (full client sweep) found 2 more leaks, now fixed:**
+  - `client-catalog.service.ts` inlined course video list — rows shipped raw
+    `youtube_id/aws_id/vimeo_id`. Now encrypted in place with a **per-row** `token`.
+  - `client-free.service.ts` `shapeVideo` (free video listing) — same raw ids. Same fix.
+  - Both: keys/null-ness unchanged; non-null id values become ciphertext; `token` added per row.
+- **Confirmed clean:** category list/detail explicitly picks safe fields;
+  lecture/category/live-course detail already encrypt. No remaining raw
+  `aws_id`/`youtube_id`/`vimeo_id`/URL emission in any client response.
+- **No backfill / no DDL / no flag** — pure response encryption on already-SQL handlers.
+- FE decryption (incl. the per-row-token list shape) documented in
+  `docs/client/VIDEO_URL_DECRYPTION.md`.
+
+---
+
 ## 2026-07-10 — Drop Smart/Planner package flags + tighten packageTypeId + package-type validation
 
 > **Schema DROP (staged) + query/DTO change + validation fix.** `yarn typecheck` green,

@@ -1,7 +1,7 @@
 import logger from "../../utils/logger";
 import { prisma } from "../../config/prisma";
 import { redisClient } from "../../config/redis";
-import { parseGoalSelection, parseLabels, type GoalSelection } from "../../utils/goalSelection";
+import { parseGoalSelection, parseLabels, reconcileGoalSelection, type GoalSelection, type CatalogGoal } from "../../utils/goalSelection";
 
 // Goals are the customer target-goal master (`ws_customer_target_goal`), each
 // optionally carrying labels ([{ id, name }] JSON). The client selection lives on
@@ -33,15 +33,19 @@ export const updateMyGoals = async (customerId: string, goals: unknown, traceId?
 
     const parsed = parseGoalSelection(goals);
     const rows = parsed.length
-      ? await prisma.customerTargetGoal.findMany({ where: { id: { in: parsed.map((s) => s.goalId) } }, select: { id: true, labels: true } })
+      ? await prisma.customerTargetGoal.findMany({ where: { id: { in: parsed.map((s) => s.goalId) }, active: true }, select: { id: true, labels: true } })
       : [];
-    const labelSetByGoal = new Map(rows.map((r) => [r.id, new Set(parseLabels(r.labels).map((l) => l.id))]));
-    const selection: GoalSelection[] = [];
-    for (const sel of parsed) {
-      const valid = labelSetByGoal.get(sel.goalId);
-      if (!valid) continue; // unknown goal
-      selection.push({ goalId: sel.goalId, labelIds: sel.labelIds.filter((id) => valid.has(id)) });
-    }
+    // Reconcile the incoming selection against the catalog with the SAME rules as
+    // the read path: unknown/inactive goals are dropped, and a labelled goal sent
+    // with no valid label is dropped (not stored as a labelless shape) so a later
+    // GET /client/goals/my-goals can never crash the FE bottom sheet.
+    const validGoals = new Map<number, CatalogGoal>(
+      rows.map((r) => {
+        const labels = parseLabels(r.labels);
+        return [r.id, { labelIds: new Set(labels.map((l) => l.id)), hasLabels: labels.length > 0 }];
+      })
+    );
+    const selection: GoalSelection[] = reconcileGoalSelection(parsed, validGoals);
 
     await prisma.customer.update({ where: { id: cid }, data: { goal: selection as any, updatedAt: new Date() } });
     try { await redisClient.del(`${MY_SELECTED_GOALS_CACHE_PREFIX}${customerId}`, `${PROFILE_CACHE_PREFIX}${customerId}`); } catch { /* best-effort */ }
@@ -90,22 +94,33 @@ export const getMySelectedGoals = async (customerId: string, traceId?: string) =
       select: { id: true, name: true, image: true, labels: true },
     });
     const byId = new Map(rows.map((r) => [r.id, r]));
+    const labelsById = new Map(rows.map((r) => [r.id, parseLabels(r.labels)]));
 
-    const shaped = selections
-      .map((sel) => {
-        const row = byId.get(sel.goalId);
-        if (!row) return null;
-        const chosen = new Set(sel.labelIds);
-        return {
-          _id: String(row.id),
-          title: row.name,
-          image: row.image ?? null,
-          labels: parseLabels(row.labels)
-            .filter((l) => chosen.has(l.id))
-            .map((l) => ({ _id: String(l.id), name: l.name })),
-        };
+    // Reconcile the stored selection against the CURRENT catalog before shaping,
+    // so my-goals can never emit a shape that disagrees with GET /client/goals
+    // (the goal-moved-under-another-goal bug). Stale/inactive goals and labelled
+    // goals whose chosen labels all vanished are dropped rather than returned as
+    // a labelless shape the FE bottom sheet would crash on.
+    const validGoals = new Map<number, CatalogGoal>(
+      rows.map((r) => {
+        const labels = labelsById.get(r.id)!;
+        return [r.id, { labelIds: new Set(labels.map((l) => l.id)), hasLabels: labels.length > 0 }];
       })
-      .filter(Boolean);
+    );
+    const reconciled = reconcileGoalSelection(selections, validGoals);
+
+    const shaped = reconciled.map((sel) => {
+      const row = byId.get(sel.goalId)!; // guaranteed present by reconcile
+      const chosen = new Set(sel.labelIds);
+      return {
+        _id: String(row.id),
+        title: row.name,
+        image: row.image ?? null,
+        labels: labelsById.get(row.id)!
+          .filter((l) => chosen.has(l.id))
+          .map((l) => ({ _id: String(l.id), name: l.name })),
+      };
+    });
     return { ok: true, data: shaped };
   } catch (error) {
     logger.error("getMySelectedGoals service error", { traceId, customerId, error: (error as Error).message, stack: (error as Error).stack });

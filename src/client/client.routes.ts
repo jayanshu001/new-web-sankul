@@ -37,6 +37,7 @@ import clientLiveCourseRoutes from "./live-course/live-course.routes";
 import clientLiveReminderRoutes from "./live-reminder/live-reminder.routes";
 import clientLectureNoteRoutes from "./lecture-note/lecture-note.routes";
 import clientLectureAudioNoteRoutes from "./lecture-audio-note/lecture-audio-note.routes";
+import clientMediaRoutes from "./media/media.routes";
 import clientTestSeriesRoutes from "./testSeries/testSeries.routes";
 import clientLearningRoutes from "./learning/learning.routes";
 import clientCatalogRoutes from "./catalog/catalog.routes";
@@ -93,6 +94,7 @@ router.use("/live-courses",  clientLiveCourseRoutes);     // -> /api/v1/client/l
 router.use("/live-reminders", clientLiveReminderRoutes);  // -> /api/v1/client/live-reminders/*
 router.use("/lecture-notes", clientLectureNoteRoutes);    // -> /api/v1/client/lecture-notes/*
 router.use("/lecture-audio-notes", clientLectureAudioNoteRoutes); // -> /api/v1/client/lecture-audio-notes/*
+router.use("/media", clientMediaRoutes);                  // -> /api/v1/client/media/resolve (media-token → real URL)
 router.use("/test-series", clientTestSeriesRoutes); // -> /api/v1/client/test-series/*
 router.use("/learning", clientLearningRoutes);      // -> /api/v1/client/learning/* (unified Resume-Learning feed + live-session progress)
 router.use("/catalog", clientCatalogRoutes);        // -> /api/v1/client/catalog/:type/:id/{videos|materials|tests}

@@ -155,7 +155,8 @@ export const listFreeVideos = async (req: Request, res: Response) => {
     const { search } = req.query as Record<string, string>;
     const { pageNum, limitNum, skip } = paginate(req);
 
-    const { data, total } = await freeVideosSql({ search: search || null, page: pageNum, limit: limitNum, skip });
+    const customerId = req.user?.id ? Number(req.user.id) : null;
+    const { data, total } = await freeVideosSql({ search: search || null, page: pageNum, limit: limitNum, skip, customerId: Number.isInteger(customerId) ? customerId : null });
     logger.info("listFreeVideos success (sql)", { traceId, total, returned: data.length });
     return res.status(200).json({
       success: true, data,

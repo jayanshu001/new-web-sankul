@@ -46,6 +46,43 @@ const coerceCourseBodySql = (req: Request) => {
   if (typeof req.body.status === "string") req.body.status = req.body.status === "true";
   if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
   if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
+  // Scalar id refs: the detail GET returns these populated as {_id,name}/{_id,title}
+  // objects, and the edit form round-trips the object (or an empty string) back on
+  // save. Flatten object → id string and drop empties so Zod's `coerce.number` sees
+  // a clean numeric string (or an absent field) instead of coercing an object to NaN
+  // — which surfaced as "Expected number, received nan" on courseEducatorId.
+  const flattenIdRef = (v: any): any => {
+    if (v == null) return undefined;
+    // Real object (JSON body): { _id | id }.
+    if (typeof v === "object" && !Array.isArray(v)) {
+      const id = v._id ?? v.id;
+      return id != null ? String(id) : undefined;
+    }
+    // Multipart serializes nested values as strings — a ref object comes through
+    // as a JSON string, or as the useless "[object Object]" if String()'d.
+    if (typeof v === "string") {
+      const s = v.trim();
+      if (s === "" || s === "null" || s === "undefined" || s === "[object Object]") return undefined;
+      if (s.startsWith("{")) {
+        try {
+          const o = JSON.parse(s);
+          const id = o?._id ?? o?.id;
+          return id != null ? String(id) : undefined;
+        } catch {
+          /* not JSON — fall through */
+        }
+      }
+      return s; // plain id string ("1747") → coerce.number handles it
+    }
+    return v;
+  };
+  for (const k of ["courseEducatorId", "courseSubjectCategoryId", "videoCategoryId"] as const) {
+    if (k in req.body) {
+      const norm = flattenIdRef(req.body[k]);
+      if (norm === undefined) delete req.body[k];
+      else req.body[k] = norm;
+    }
+  }
   delete req.body.examCountdownCategoryId;
   const parseRefs = (raw: any): Array<{ category: number; order: number }> | undefined => {
     if (raw === undefined || raw === null || raw === "") return undefined;
@@ -171,7 +208,10 @@ export const createCourse = asyncHandler(async (req: Request, res: Response) => 
 });
 
 export const updateCourse = asyncHandler(async (req: Request, res: Response) => {
+  // TEMP diagnostic — remove once the courseEducatorId "nan" report is resolved.
+  console.log("[updateCourse] raw courseEducatorId:", JSON.stringify(req.body?.courseEducatorId), "type:", typeof req.body?.courseEducatorId);
   coerceCourseBodySql(req);
+  console.log("[updateCourse] coerced courseEducatorId:", JSON.stringify(req.body?.courseEducatorId), "type:", typeof req.body?.courseEducatorId);
   // Educator is compulsory on update: partial() relaxes everything, then we
   // force courseEducatorId back to required so it can't be cleared/omitted.
   const v = createCourseSqlSchema

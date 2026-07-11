@@ -19,6 +19,8 @@
  */
 import { prisma } from "../../config/prisma";
 import { defaultListingQualities } from "../../utils/videoQualities";
+import { signMediaToken } from "../../utils/mediaToken";
+import { hasActiveCourseSub } from "../client-lecture/client-lecture.service";
 import { getPurchasedMaterialIds } from "../client-material/client-material.service";
 import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
 
@@ -108,6 +110,9 @@ export const catalogVideos = async (opts: {
   // and `live-course` use the newer stripped shape (category + context-dependent
   // `count`, no inlined list) — they were never reverted.
   const inlineList = opts.type === "course";
+  // Inline video list exists only for `course` — entitlement is a single
+  // course-subscription check, computed once for the whole response.
+  const courseEntitled = inlineList && opts.customerId ? await hasActiveCourseSub(opts.customerId, opts.id) : false;
   const { descendantsOf } = await import("../catalog-category-tree/category-tree.service");
   const list = await Promise.all(selected.map(async (cat) => {
     const subtree = await descendantsOf([cat.id]);
@@ -136,10 +141,21 @@ export const catalogVideos = async (opts: {
     }
     const videoList = videos.map((v) => {
       const p = progByVideo.get(v.id);
+      // No raw id/url. Paid videos get a media token ONLY when the course is
+      // purchased (else null); free videos always get a free token. The client
+      // exchanges it at /media/resolve.
+      const isPaid = v.priceType === "paid";
+      const canPlay = !isPaid || courseEntitled;
+      const mediaToken =
+        opts.customerId && canPlay
+          ? isPaid
+            ? signMediaToken({ k: "video", id: v.id, scope: { kind: "course", id: opts.id }, cust: opts.customerId })
+            : signMediaToken({ k: "video", id: v.id, free: true, cust: opts.customerId })
+          : null;
       return {
         _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, order: v.order,
-        youtube_id: v.youtube_id ?? null, aws_id: v.aws_id ?? null, vimeo_id: v.vimeo_id ?? null,
         recordings: [], qualities: defaultListingQualities(),
+        mediaToken,
         progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
       };
     });

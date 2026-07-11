@@ -6,6 +6,7 @@ import {
 } from "../../admin/live/streamos.service";
 import { io, roomKey } from "../../socket/livechat.socket";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { signMediaToken } from "../../utils/mediaToken";
 import logger from "../../utils/logger";
 import { formatScheduledAt } from "../../utils/displayTime";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
@@ -59,13 +60,22 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
     const exposePlayback = preview.accessLevel === "full" || preview.accessLevel === "preview";
     const purchaseOptions = preview.accessLevel === "full" ? [] : await liveSql.buildPurchaseOptionsSql(liveCourseIds);
 
+    // No inline media. When playback is allowed (full OR preview access), mint a
+    // customer-bound media token the client exchanges at /media/resolve for the
+    // live HLS URL(s). No access → mediaToken null. `streamId`/`liveClassId` are
+    // internal identifiers (needed for the socket room), not playable URLs.
+    // No scope needed — resolve re-runs the full-OR-preview gate for live sessions.
+    const mediaToken =
+      exposePlayback && customerId != null
+        ? signMediaToken({ k: "liveSession", id: s.id, cust: customerId })
+        : null;
+
     logger.info("getLiveSessionForClient success (mysql)", { traceId, userId, sessionId: s.id, status, accessLevel: preview.accessLevel });
     return success(res, {
       id: String(s.id), title: s.title, status, canJoin: status === "CREATED",
       scheduledAt: s.scheduledAt ?? null, scheduledAtDisplay: formatScheduledAt(s.scheduledAt), streamId: s.streamId ?? null,
       liveCourseIds: liveCourseIds.map(String), isLive,
-      hlsUrl: exposePlayback ? hlsUrl ?? null : null, hlsUrls: exposePlayback ? hlsUrls ?? null : null,
-      recordings: exposePlayback ? recordings ?? [] : [],
+      mediaToken,
       liveClassId: s.streamId != null ? String(s.streamId) : null,
       accessLevel: preview.accessLevel, previewSeconds: preview.accessLevel === "full" ? null : liveSql.PREVIEW_SECONDS,
       previewExpiresAt: preview.previewExpiresAt, previewSecondsRemaining: preview.previewSecondsRemaining, purchaseOptions,

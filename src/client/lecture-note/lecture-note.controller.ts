@@ -86,7 +86,11 @@ export const listNotes = async (req: Request, res: Response) => {
       refInput = { lectureType: "live", userId, liveSessionId: liveSessionId! } as const;
     }
     const [lecture, resumeNext] = await Promise.all([buildLectureRef(refInput), buildResumeNextCard(refInput)]);
-    return success(res, { notes, lecture, resumeNext, pagination: buildPagination(total, page, limit) }, "Notes fetched.", 200);
+    // Live-course recordings: surface the owning liveCourseId on every note (when
+    // the note row didn't store it) so the FE can open the live player straight
+    // from the notes list without the 403-hint fallback.
+    const notesOut = lnSql.enrichNotesWithLiveCourse(notes, (lecture as any)?.liveCourseId ?? null);
+    return success(res, { notes: notesOut, lecture, resumeNext, pagination: buildPagination(total, page, limit) }, "Notes fetched.", 200);
   } catch (err) {
     logger.error("listNotes failed", { traceId, userId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Something went wrong. Please try again later.", 500);

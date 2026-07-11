@@ -60,3 +60,26 @@ export function decrypt(ciphertextBase64: string, key: Buffer, vector: Buffer): 
   ]);
   return decrypted.toString("utf8");
 }
+
+/**
+ * Opens a per-response crypto context: mints one 16-digit `token`, derives the
+ * key+IV from it once, and returns an `enc()` that encrypts any URL/id string
+ * in place using the shared AES-128-CBC scheme. Ship the returned `token`
+ * alongside the ciphertext(s); the client re-derives key+IV from `token` and
+ * decrypts. Empty/nullish input encrypts to "" so callers can wrap optional
+ * fields without branching. Use this anywhere a response would otherwise leak a
+ * raw playable URL (e.g. the live-session hlsUrl/hlsUrls/recordings), so every
+ * surface stays on the same {token, ciphertext} contract as `/v1/lecture`.
+ */
+export function newEncryptor(): {
+  token: string;
+  enc: (value: string | null | undefined) => string;
+} {
+  const token = generateToken(16);
+  const key = generateKey(token);
+  const vector = generateVector(token);
+  return {
+    token,
+    enc: (value) => (value ? encrypt(value, key, vector) : ""),
+  };
+}

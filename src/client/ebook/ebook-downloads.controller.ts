@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import * as dlSql from "../../modules/client-ebook-download/client-ebook-download.service";
+import { signMediaToken } from "../../utils/mediaToken";
 
 function userId(req: Request): string | null {
   return (req as any).user?.id ?? null;
@@ -31,7 +32,10 @@ export const recordEbookDownload = async (req: Request, res: Response) => {
     if (!ebook.bookUrl) return res.status(404).json({ success: false, message: "This ebook has no downloadable PDF." });
     await dlSql.recordDownload(cid, eId);
     logger.info("recordEbookDownload success (sql)", { traceId, customerId: uid, ebookId });
-    return res.status(200).json({ success: true, message: "Download recorded.", data: { ebookId: String(ebook.id), bookUrl: ebook.bookUrl } });
+    // Entitlement already checked above → issue a book media token the client
+    // exchanges at /media/resolve for a short-lived presigned URL. No raw URL.
+    const mediaToken = signMediaToken({ k: "ebook", id: ebook.id, scope: { kind: "ebook", id: ebook.id }, cust: cid });
+    return res.status(200).json({ success: true, message: "Download recorded.", data: { ebookId: String(ebook.id), mediaToken } });
   } catch (error: any) {
     logger.error("recordEbookDownload failed", { traceId, customerId: uid, ebookId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
