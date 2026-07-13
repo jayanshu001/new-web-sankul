@@ -28,7 +28,9 @@
  *    `publication`, `deliveryEta`, `isTrending`. `isTrending` synthesized false;
  *    `publication`/`deliveryEta` synthesized to the Mongo defaults so the
  *    response shape stays stable.
- *  - Field renames: `demo_url`→`demoUrl`, `dynamic_link`→`dynamicLink`,
+ *  - `demo_url` is NOT emitted raw — it is replaced by `demoMediaToken` (encrypted
+ *    media token, resolved at /client/media/resolve), mirroring the ebook demo.
+ *  - Field renames: `dynamic_link`→`dynamicLink`,
  *    `list_price`→`listPrice`, `discounted_price`→`discountedPrice`,
  *    `shipping_price`→`shippingPrice`, `order_by`→`orderBy`, `is_magazine`→
  *    `isMagazine`, `is_combo`→`isCombo`, `status`→`status`.
@@ -44,7 +46,10 @@ export interface BookDto {
   author: string | null;
   image: string | null;
   description: string | null;
-  demoUrl: string | null;
+  // Encrypted, short-lived media token for the free demo PDF (exchanged at
+  // POST /client/media/resolve) — replaces the raw demo URL, mirroring the ebook
+  // demo. Null when there is no demo PDF or no issuing customer.
+  demoMediaToken: string | null;
   weight: number | null;
   pages: number;
   dynamicLink: string | null;

@@ -27,7 +27,8 @@ export type MediaKind =
   | "liveSession"    // in-progress / replay live session (StreamOS)           → getStreamDetails
   | "audioNote"      // customer voice note (private Spaces object)            → presigned GET
   | "ebook"          // purchased ebook PDF (Spaces object)                   → presigned GET
-  | "ebookDemo";     // free ebook sample PDF (Spaces object)                 → presigned GET
+  | "ebookDemo"      // free ebook sample PDF (Spaces object)                 → presigned GET
+  | "bookDemo";      // free physical-book sample PDF (Spaces object)         → presigned GET
 
 // Normalized entitlement scope the resolver can re-check with a simple helper.
 // `null` when the media is free (`free: true`) and needs no entitlement.

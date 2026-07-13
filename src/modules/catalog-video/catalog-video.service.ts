@@ -113,14 +113,21 @@ export const getVideoCategoryChildren = async (
     repo.countActiveChildren(parentId, { search: searchOpt }),
   ]);
   const childIds = children.map((c) => c.id);
-  const [counts, parentsWithKids] = await Promise.all([
+  const [videoCounts, childCountRows] = await Promise.all([
     Promise.all(childIds.map((cid) => repo.countActiveVideosByCategory(cid))),
-    repo.parentsWithChildren(childIds),
+    repo.childCountsByParent(childIds),
   ]);
-  const hasKids = new Set(parentsWithKids.map((r) => r.parent));
+  // child-folder count per category (0 when a leaf).
+  const childFolderCount = new Map(childCountRows.map((r) => [r.parent, r._count._all]));
 
-  const list = children.map((c, i) => ({
-    category: { ...toVideoCategoryDto(c), count: counts[i], havingChildDirectory: hasKids.has(c.id) },
-  }));
+  const list = children.map((c, i) => {
+    const folders = childFolderCount.get(c.id) ?? 0;
+    const havingChildDirectory = folders > 0;
+    // Match the catalog contract: a directory node reports its child-folder count;
+    // a leaf reports its own video count. (Its videos live in the sub-folders, so a
+    // folder's direct video count is 0 — reporting that was the confusing bit.)
+    const count = havingChildDirectory ? folders : videoCounts[i];
+    return { category: { ...toVideoCategoryDto(c), count, havingChildDirectory } };
+  });
   return { parent: toVideoCategoryDto(parentRow), list, total };
 };

@@ -51,19 +51,23 @@ export const getCategoryChildren = async (
   ]);
 
   const childIds = children.map((c) => c.id);
-  const [counts, parentsWithKids] = await Promise.all([
+  const [examCounts, childCountRows] = await Promise.all([
     Promise.all(childIds.map((cid) => repo.countExams(cid))),
-    repo.parentsWithChildren(childIds),
+    repo.childCountsByParent(childIds),
   ]);
-  const hasKids = new Set(parentsWithKids.map((r) => r.parent));
+  // child-folder count per category (0 when a leaf).
+  const childFolderCount = new Map(childCountRows.map((r) => [r.parent, r._count._all]));
 
-  const list = children.map((c, i) => ({
-    category: {
-      ...toExamCategoryDto(c),
-      count: counts[i],
-      havingChildDirectory: hasKids.has(c.id),
-    },
-  }));
+  const list = children.map((c, i) => {
+    const folders = childFolderCount.get(c.id) ?? 0;
+    const havingChildDirectory = folders > 0;
+    // Match the catalog contract: a directory node reports its child-folder count;
+    // a leaf reports its own test count.
+    const count = havingChildDirectory ? folders : examCounts[i];
+    return {
+      category: { ...toExamCategoryDto(c), count, havingChildDirectory },
+    };
+  });
 
   return { parent: toExamCategoryDto(parentRow), list, total };
 };

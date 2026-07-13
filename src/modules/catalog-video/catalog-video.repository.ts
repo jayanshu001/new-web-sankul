@@ -64,9 +64,13 @@ export const catalogVideoRepository = {
     ...(opts?.search ? { title: { contains: opts.search } } : {}),
   }),
 
-  /** Of the given category ids, which have ≥1 active child (havingChildDirectory). */
-  parentsWithChildren: (childIds: number[]) =>
+  /**
+   * Active child-folder COUNT per parent for the given category ids. Drives both
+   * `havingChildDirectory` (count > 0) AND the directory-node `count` (child-folder
+   * count) so a folder-with-subfolders reports its subfolder count, not 0 videos.
+   */
+  childCountsByParent: (childIds: number[]) =>
     childIds.length
-      ? prisma.videoCategory.findMany({ where: { parent: { in: childIds }, status: true }, select: { parent: true }, distinct: ["parent"] })
-      : Promise.resolve([]),
+      ? prisma.videoCategory.groupBy({ by: ["parent"], where: { parent: { in: childIds }, status: true }, _count: { _all: true } })
+      : Promise.resolve([] as { parent: number | null; _count: { _all: number } }[]),
 };

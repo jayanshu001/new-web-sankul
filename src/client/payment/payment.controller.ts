@@ -89,6 +89,7 @@ const createBookOrderMysqlPath = async (
     preview: preview.preview,
     razorpayOrderId: rzpOrder.id,
     razorpayOrderPayload: JSON.stringify(rzpOrder),
+    userIp: req.ip ?? null, // client IP → ws_book_order.user_ip
   });
 
   logger.info("createBookOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount });

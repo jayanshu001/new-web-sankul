@@ -77,10 +77,51 @@ export const adminMasterRepository = {
   // Existing ids among the given set — used to validate childCategoryIds before binding.
   vcExistingIds: (ids: number[]) =>
     prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true } }),
-  // Re-parent the given categories (parent = 0 detaches to root). Children of a
-  // category are derived from this self-FK, so this is how childCategoryIds binds.
+  // Re-parent the given categories (parent = 0 detaches to root). Writes BOTH the
+  // self-FK (ws_video_category.parent) AND the ws_video_category_relation pivot the
+  // client catalog reads — kept in sync so havingChildDirectory / drill-in / counts
+  // are correct. Edge ids are PRESERVED across a move (update-in-place) because
+  // package composition (ws_video_category_package_relation) references them; a
+  // delete+recreate would silently drop subjects from packages.
   vcSetParent: (childIds: number[], parent: number) =>
-    prisma.videoCategory.updateMany({ where: { id: { in: childIds } }, data: { parent, updated_at: new Date() } }),
+    prisma.$transaction(async (tx) => {
+      // Snapshot each child's CURRENT parent + order BEFORE the self-FK flips, so we
+      // know which existing edge to move/remove.
+      const kids = await tx.videoCategory.findMany({
+        where: { id: { in: childIds } },
+        select: { id: true, parent: true, order_by: true },
+      });
+      await tx.videoCategory.updateMany({ where: { id: { in: childIds } }, data: { parent, updated_at: new Date() } });
+      for (const k of kids) {
+        const oldParent = k.parent ?? 0;
+        if (parent > 0) {
+          // Already linked to the new parent? nothing to do (idempotent).
+          const existingNew = await tx.videoCategoryRelation.findFirst({ where: { parent, child: k.id }, select: { id: true } });
+          if (existingNew) continue;
+          // Move the child's existing single-parent edge in place (keep its id), else
+          // create a fresh edge (brand-new link → nothing references it yet).
+          const oldEdge = oldParent > 0
+            ? await tx.videoCategoryRelation.findFirst({ where: { parent: oldParent, child: k.id }, select: { id: true } })
+            : null;
+          if (oldEdge) {
+            await tx.videoCategoryRelation.update({ where: { id: oldEdge.id }, data: { parent } });
+          } else {
+            await tx.videoCategoryRelation.create({ data: { parent, child: k.id, order: k.order_by ?? 0 } });
+          }
+        } else if (oldParent > 0) {
+          // Detach to root: remove only THIS child's edge under its former parent.
+          await tx.videoCategoryRelation.deleteMany({ where: { parent: oldParent, child: k.id } });
+        }
+      }
+    }),
+  // Ensure a (parent → child) pivot edge exists (insert if absent). Used when a
+  // category is CREATED with a parent — the row is brand-new so a plain insert is
+  // safe. No-op for root (parent = 0).
+  vcEnsureEdge: async (parent: number, child: number, order: number): Promise<void> => {
+    if (!parent || parent <= 0) return;
+    const existing = await prisma.videoCategoryRelation.findFirst({ where: { parent, child }, select: { id: true } });
+    if (!existing) await prisma.videoCategoryRelation.create({ data: { parent, child, order: order ?? 0 } });
+  },
   vcSlugTaken: (slug: string, exceptId?: number) =>
     prisma.videoCategory.findFirst({ where: { slug, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true } }),
   educator: (id: number) => prisma.courseEducator.findUnique({ where: { id }, select: { id: true, name: true } }),
@@ -178,6 +219,11 @@ export const adminMasterRepository = {
         const newId = idMap.get(oldId)!;
         const newParent = node.parent != null ? idMap.get(node.parent) ?? 0 : 0;
         await tx.videoCategory.update({ where: { id: newId }, data: { parent: newParent, updated_at: new Date() } });
+        // Mirror the clone's parent link into the pivot the client reads (both are
+        // brand-new rows, so a plain insert can't affect any existing package link).
+        if (newParent > 0) {
+          await tx.videoCategoryRelation.create({ data: { parent: newParent, child: newId, order: node.order_by ?? 0 } });
+        }
       }
 
       // Clone videos across all mapped categories, remapping vcategory_id.

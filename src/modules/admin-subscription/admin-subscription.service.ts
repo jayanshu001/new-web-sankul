@@ -369,6 +369,12 @@ export function courseSubExportSource(q: CourseSubReportQuery): ReportSource {
         yield batch.map((r) => REPORT_EXPORT_COLUMNS.map((c) => c.get(r)));
       }
     })(),
+    // Exact total (same filters as the export) so the async job reports true
+    // rowsWritten/total progress. Runs once, before streaming.
+    countTotal: async () => {
+      const resolved = await resolveCourseSubWhere(q, now);
+      return resolved ? repo.countSubs(resolved.listWhere) : 0;
+    },
   };
 }
 

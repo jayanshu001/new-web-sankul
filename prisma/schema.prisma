@@ -640,6 +640,7 @@ model BookOrder {
   receiptId        String            @map("order_id")
   user             Customer?         @relation(fields: [userId], references: [id])
   userId           Int?              @map("customer_id")
+  userIp           String?           @map("user_ip")
   cartId           String            @map("cart_id")
   shipping         CustomerShipping? @relation(fields: [shippingId], references: [id])
   shippingId       Int?              @map("shipping_id")

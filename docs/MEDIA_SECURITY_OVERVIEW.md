@@ -1,8 +1,8 @@
 # Media Security — What We Did (Plain-Language Overview)
 
-This is the simple story of how we secured videos, live streams, ebook PDFs, and
-audio notes in the client APIs. No deep code — just what the problem was, what we
-built, and why. For the exact API contract, see
+This is the simple story of how we secured videos, live streams, ebook PDFs,
+physical-book demo PDFs, and audio notes in the client APIs. No deep code — just
+what the problem was, what we built, and why. For the exact API contract, see
 [`client/CLIENT_MEDIA_ACCESS.md`](./client/CLIENT_MEDIA_ACCESS.md).
 
 ---
@@ -58,8 +58,14 @@ the coat after checking the tag is valid.
 | Who | What they get |
 |---|---|
 | **Hasn't purchased** the course / package / book | **Nothing** — no link, no ID, no ticket (just "locked") |
-| **Free content** (free videos, ebook samples) | A ticket (still no raw link) |
+| **Free content** (free videos, ebook samples, **physical-book demo PDFs**) | A ticket (still no raw link) |
 | **Has purchased** | A ticket, exchanged for a short-lived link at play time |
+
+> **Physical books are a special case.** A physical book is *shipped*, so there is
+> no full online PDF to protect — only a **demo sample**. That demo is public: its
+> ticket is issued to **any** user (bought or not), and it never expires into a
+> paywall. We still route it through the ticket system (no raw link in the
+> response), but the "re-check purchase" step doesn't apply to it.
 
 And these are **never** sent to the client anymore, in any form:
 AWS/Spaces keys, YouTube IDs, Vimeo IDs, VideoCrypt IDs, `.m3u8`/`.mp4` URLs,
@@ -90,7 +96,14 @@ Everything a paying user consumes:
 - **Free videos** (open, but still ticketed)
 - **Ebooks** — the free **sample** always available; the full **book PDF** only
   after purchase
+- **Physical-book demo PDFs** — the demo sample of a shippable book; public (any
+  logged-in user), no full-PDF token (the book itself is shipped, not downloaded)
 - **Audio notes** — a user's own voice notes, released only to their owner
+
+> One wrinkle handled along the way: some book demos are hosted on an **external**
+> legacy server (not our storage), and some were stored as odd, scheme-less
+> links. The resolver now returns external links as-is and repairs the malformed
+> ones, so every book demo opens as a valid PDF regardless of where it lives.
 
 ---
 
@@ -112,5 +125,7 @@ Full details, code samples, and error handling are in
 |---|---|
 | **This file** | Plain-language overview of the whole effort |
 | `client/CLIENT_MEDIA_ACCESS.md` | The current API contract + frontend integration guide |
+| `client/BOOK_DEMO_PDF_FRONTEND.md` | Physical-book demo PDF — frontend integration guide |
+| `client/BOOK_DEMO_PDF_BE_REPLY.md` | Backend reply: book-demo root-cause + fix + contract confirmation |
 | `client/VIDEO_URL_DECRYPTION.md` | The old scrambling scheme (Step 1) — **retired**, kept for history |
 | `MIGRATION_QUERY_CHANGES.md` | The dated, technical change log for every step |

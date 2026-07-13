@@ -178,22 +178,23 @@ export const catalogExamRepository = {
     ...(opts?.search ? { name: { contains: opts.search } } : {}),
   }),
 
-  /** UNCONDITIONAL count of exams in a category (no status filter — Mongo parity). */
+  /**
+   * Client-facing test count for a category, incl. ws_exam_category_pivot. Counts
+   * ONLY active, subject-type quizzes — drafts (status=false) and `daily`-type
+   * quizzes are excluded (they must not inflate the catalog `count`).
+   */
   countExams: (categoryId: number) =>
-    prisma.exam.count({ where: examInCategoryWhere(categoryId) }),
+    prisma.exam.count({ where: { AND: [examInCategoryWhere(categoryId), { status: true, type: "subject" }] } }),
 
   /**
-   * Of the given category ids, which have ≥1 active child (parent_id in ids).
-   * One distinct query → `havingChildDirectory` without N round-trips.
+   * Active child-folder COUNT per parent for the given category ids. Drives both
+   * `havingChildDirectory` (count > 0) AND the directory-node `count` (child-folder
+   * count) so a folder-with-subfolders reports its subfolder count, not its test count.
    */
-  parentsWithChildren: (categoryIds: number[]) =>
+  childCountsByParent: (categoryIds: number[]) =>
     categoryIds.length
-      ? prisma.examCategory.findMany({
-          where: { parent: { in: categoryIds }, status: true, deleted: false },
-          distinct: ["parent"],
-          select: { parent: true },
-        })
-      : Promise.resolve([]),
+      ? prisma.examCategory.groupBy({ by: ["parent"], where: { parent: { in: categoryIds }, status: true, deleted: false }, _count: { _all: true } })
+      : Promise.resolve([] as { parent: number; _count: { _all: number } }[]),
 
   /**
    * Of the given category ids, which have ≥1 child (regardless of status) — one

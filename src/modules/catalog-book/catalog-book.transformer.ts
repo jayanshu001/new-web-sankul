@@ -1,5 +1,6 @@
 import type { Book } from "@prisma/client";
 import type { BookDto } from "./catalog-book.types";
+import { signMediaToken } from "../../utils/mediaToken";
 
 /** The Mongo defaults for the SQL-absent `publication` / `deliveryEta` fields. */
 const DEFAULT_PUBLICATION = "WebSankul Publication";
@@ -11,14 +12,21 @@ const DEFAULT_DELIVERY_ETA = "5-7 days";
  * `publication`/`deliveryEta` synthesized to the Mongo defaults (no SQL columns).
  * The Mongo-only `packageIds[]` and order/cart-derived fields are NOT produced.
  */
-export const toBookDto = (row: Book): BookDto => ({
+export const toBookDto = (row: Book, opts: { customerId?: number | null } = {}): BookDto => {
+  // No raw demo PDF URL. The demo is PUBLIC content, so its short-lived encrypted
+  // token is always emitted when a demo PDF exists — independent of login OR
+  // purchase (null only when there is no demo). It is customer-bound when a viewer
+  // id is known (else a public `0` sentinel); the resolver does not gate the demo
+  // on that binding. Exchanged at /media/resolve (utils/mediaToken.ts, k="bookDemo").
+  const demoMediaToken = row.demo_url ? signMediaToken({ k: "bookDemo", id: row.id, free: true, cust: opts.customerId ?? 0 }) : null;
+  return {
   _id: String(row.id),
   name: row.name,
   thumbnail: row.thumbnail ?? null,
   author: row.author ?? null,
   image: row.image ?? null,
   description: row.description ?? null,
-  demoUrl: row.demo_url ?? null,
+  demoMediaToken,
   weight: row.weight ?? null,
   pages: row.pages ?? 0,
   dynamicLink: row.dynamic_link ?? null,
@@ -35,4 +43,5 @@ export const toBookDto = (row: Book): BookDto => ({
   status: row.active,
   createdAt: row.created_at ?? null,
   updatedAt: row.updated_at ?? null,
-});
+  };
+};

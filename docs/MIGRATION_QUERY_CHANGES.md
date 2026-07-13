@@ -15,6 +15,216 @@
 
 ---
 
+## 2026-07-13 — Fix: ws_book_order left user_ip / transaction_id / paid_at / created_at / updated_at NULL on the SQL path
+
+> **Write-path fix + one Prisma field addition (column already exists — NO DDL). `admin`/legacy rows unaffected.** `yarn typecheck` green, `prisma:generate` run.
+
+The migrated book-order write path never set these columns, so new orders inserted them
+NULL (only `order_date` populated — it has a DB `DEFAULT CURRENT_TIMESTAMP`). `created_at`/
+`updated_at` have **no** DB default and **no** Prisma `@default`/`@updatedAt`, so they must
+be set in code. (`user_ip`/`transaction_id`/`paid_at` were NULL even in legacy Laravel rows;
+now populated meaningfully.)
+
+- **`prisma/schema.prisma`** — added `userIp String? @map("user_ip")` to `BookOrder`
+  (the `user_ip` column already existed in `ws_book_order`; introspection had never mapped
+  it — **no ALTER**). `prisma:generate` run.
+- **`createPendingOrder`** (`book-order.repository.ts`) — now sets `createdAt`/`updatedAt`
+  = `new Date()` and `userIp` (from `req.ip`, threaded via `writeBookOrderMysql` +
+  `payment.controller`).
+- **`verifyBookTx`** (`book-order.repository.ts`) — on fulfillment now also sets
+  `transactionId` = razorpay payment id (previously only `gatewayPaymentId` /
+  `gateway_transaction_id` got it), `paidAt` = `new Date()`, and bumps `updatedAt`.
+- **Note:** the customer order list sorts by `createdAt desc`; migrated orders had NULL
+  `createdAt` and sank to the bottom — this fix corrects new orders' ordering. Existing
+  NULL rows would need a one-off backfill (`created_at = order_date`) if we want them to
+  sort correctly too — not done here.
+- **Ops note:** because `schema.prisma` changed, the Prisma client was regenerated
+  (`yarn prisma:generate`). A running `tsx watch` dev server does NOT reload the
+  regenerated client on a source hot-reload — it must be **fully restarted**, else
+  `bookOrder.create` throws `Unknown argument userId` (stale in-memory client). Verified
+  the on-disk client accepts the new create (`userId` + `userIp`) via a rolled-back txn.
+
+---
+
+## 2026-07-13 — Fix: media resolve mis-parsed SCHEME-LESS path-style Spaces URLs (book demos 404'd)
+
+> **Bugfix in `toObjectKey` (client-media resolve). Affects all presigned kinds (book demo, ebook, audio). No schema change.** `yarn typecheck` green.
+
+Some `ws_book.demo_url` rows store a **scheme-less path-style** Spaces URL, e.g.
+`blr1.digitaloceanspaces.com/websankul-staging/admin/profiles/…-demoUrl.pdf` (no
+`https://`). `toObjectKey` in `src/modules/client-media/client-media.service.ts` only
+parsed values that began with `http(s)://`; anything else was returned verbatim as the
+object key. So the **entire `host/bucket/path` string** became the S3 key → the
+presigned GET 404'd with `NoSuchKey` → the FE showed "Demo not available."
+
+- **Fix:** when the value looks like `<host.tld>/…` but has no scheme, prepend
+  `https://` before `new URL()` parsing, so the host + `<bucket>/` prefix are stripped
+  and the real key (`admin/profiles/…-demoUrl.pdf`) is produced. Truly bare keys (no
+  host) still pass through unchanged.
+- **Verified end-to-end** by resolving + fetching the presigned URL for four books:
+  external `gpsconline.com` (returned as-is), own-bucket URL (#192), and the two
+  scheme-less rows (#194/#195) — all now return HTTP 200 with `%PDF` bytes (previously
+  #194/#195 returned `NoSuchKey`).
+- **Note (ops):** in staging the Spaces credentials return **403 on `HeadObject`**, so
+  the `MEDIA_VERIFY_EBOOK_OBJECT` existence guard is inconclusive (treats non-404 as
+  "exists" and presigns anyway). Presigned **GET** works regardless. If a demo file is
+  genuinely missing, resolve will still hand out a URL that 404s — prefer storing a
+  null `demo_url` over a dangling key.
+
+---
+
+## 2026-07-13 — Physical-book demo PDF now served via encrypted media token (like the ebook demo)
+
+> **Response-contract change on client book surfaces + new `bookDemo` media-token kind. No DB schema/index change.** `yarn typecheck` green.
+
+The physical-**book** demo PDF was emitted as a **raw** `demoUrl` (Spaces URL) in the
+client book responses, unlike the ebook demo which already goes through the encrypted
+short-lived media-token flow (`signMediaToken` → `POST /client/media/resolve` →
+presigned GET). Brought books to parity.
+
+- **New media kind:** `bookDemo` (free) in `src/utils/mediaToken.ts`; resolved in
+  `src/modules/client-media/client-media.service.ts` — fetches `ws_book.demo_url`
+  (`prisma.book.findFirst({ where: { id, active: true }, select: { demo_url: true } })`),
+  HEAD-verifies the object, then presigns (same guard as the ebook demo,
+  `MEDIA_VERIFY_EBOOK_OBJECT`).
+- **Contract change:** the book DTO field `demoUrl: string | null` is **replaced** by
+  `demoMediaToken: string | null` (`src/modules/catalog-book/catalog-book.types.ts` +
+  `catalog-book.transformer.ts`, now takes `{ customerId }`). Affected client endpoints:
+  `GET /client/books` (list), `GET /client/books/:id` (detail),
+  `GET /client/books/trending[/books]`, and the home/free dashboards.
+- **Demo is PUBLIC** — the encrypted `demoMediaToken` is emitted whenever the book has a
+  demo PDF, **independent of login OR purchase** (null only when there is no demo). The
+  token is customer-bound when a viewer id is known (else a `0` sentinel), and the
+  resolver **skips the issuer-match check for `bookDemo`** (a demo resolves for any
+  caller). Every other media kind stays account-bound.
+- **External legacy demos:** most `ws_book.demo_url` values are fully-qualified URLs on
+  an EXTERNAL host (e.g. `gpsconline.com/uploads/e-books/demo_book/*.pdf`), NOT Spaces
+  objects. The `bookDemo` resolver returns those **as-is** (guarded by `isOwnBucketUrl`);
+  only own-bucket URLs get the HEAD-verify + presign path. Without this, resolve 404'd
+  every book demo (it tried to presign an external URL against our Spaces bucket).
+  Verified: book id 1 resolves to its raw external PDF URL.
+- **`customerId` threaded** through `catalog-book.service` (`getBookById`/`listBooksData`),
+  `book.controller`, and `client-trending.service.fetchTrendingBooksOnly` (+ its callers in
+  `client-dashboard.service` and `buildFreeDashboard`).
+- **Incidental fix:** the trending books builder read `b.demoUrl` (undefined — the Prisma
+  column is `demo_url`), so the trending demo field was always null; the token now reads
+  `b.demo_url` correctly.
+- **Not changed:** the trending **ebook** item still carries a (legacy, always-null)
+  `demoUrl` — the ebook catalog already uses `demoMediaToken`; left as-is to keep this
+  scoped to books.
+
+---
+
+## 2026-07-13 — Exam catalog test count: only active, subject-type quizzes
+
+> **Query-level count-filter change on the catalog test counts. No schema change.** `yarn typecheck`
+> green; verified against the live DB.
+
+The client-facing catalog test `count` (the "test count" leg of `havingChildDirectory ? childCount
+: testCount`) was counting quizzes that should not appear: **draft** quizzes (`ws_exam.status = false`)
+and **`daily`-type** quizzes. It must count only **active, subject-type** quizzes
+(`status = true AND type = 'subject'`).
+
+- **`catalog-exam.repository.countExams`** (children endpoint leaf count) — was UNCONDITIONAL (no
+  status/type filter); now `AND [{ status: true, type: "subject" }]`.
+- **`client-catalog.service` test-tab count** (`/catalog/:type/:id/tests`, all product types) — had
+  `status: true` only; added `type: "subject"`. This feeds both the per-category `count` and
+  `totals.items`.
+
+`ExamType` enum = `daily | subject`; drafts are `status = false`. Verified: categories 149 & 150
+each hold one draft subject quiz → old count 1, new count 0.
+
+NOT changed (different context / not the ternary count, flagged for follow-up if desired):
+`catalog-package.detail.sql` + `catalog-course/course-detail.sql` detail-bundle counts (already
+`status: true`, no type filter) and `client-free.service` free-test listing.
+
+**Files:** `src/modules/catalog-exam/catalog-exam.repository.ts`,
+`src/modules/client-catalog/client-catalog.service.ts`.
+
+---
+
+## 2026-07-13 — exam-categories/:id/children `count` now = child-folder count for directory nodes
+
+> **Query-level `count` semantics change on one client endpoint. No schema change.** `yarn typecheck`
+> green; verified against the live DB.
+
+Same fix as the video children endpoint, applied to `GET /client/exam-categories/:id/children`
+(`getCategoryChildren` in catalog-exam.service). `count` was the category's **direct test count**
+unconditionally, so a folder that only holds sub-folders showed a misleading number next to
+`havingChildDirectory: true` (e.g. category 112 "Ancient History": 1 direct test but 2
+sub-categories). Now: `count = havingChildDirectory ? childFolderCount : testCount`.
+
+- **`repo.childCountsByParent`** (new, `groupBy parent`, `status:true, deleted:false`) returns the
+  active child-folder count per category — drives both `havingChildDirectory` (count > 0) and the
+  directory-node `count`. Replaces the membership-only `parentsWithChildren` (removed from the exam repo).
+- Leaf nodes still report their own test count (`countExams` = `ws_exam` primary FK OR `ws_exam_category_pivot`).
+- Category hierarchy is still self-FK-based (`ws_exam_category.parent_id`); `ws_exam_category_pivot`
+  is only the exam↔category link behind the test count.
+
+**Files:** `src/modules/catalog-exam/catalog-exam.service.ts` (`getCategoryChildren`),
+`src/modules/catalog-exam/catalog-exam.repository.ts`.
+
+---
+
+## 2026-07-13 — video-categories/:id/children `count` now = child-folder count for directory nodes
+
+> **Query-level `count` semantics change on one client endpoint. No schema change.** `yarn typecheck`
+> green; verified against the live DB.
+
+`GET /client/video-categories/:id/children` returned `count` = the category's **direct active video
+count** unconditionally, so a folder that only contains sub-folders (no loose videos) showed
+`count: 0` alongside `havingChildDirectory: true` — confusing (e.g. category 296 "Law – Hima Desai":
+0 direct videos but 3 sub-categories). Now aligned with the catalog contract:
+`count = havingChildDirectory ? childFolderCount : videoCount`.
+
+- **`repo.childCountsByParent`** (new, `groupBy parent`) returns the active child-folder count per
+  category — drives both `havingChildDirectory` (count > 0) and the directory-node `count`. Replaces
+  the membership-only `parentsWithChildren` (removed from the video repo; the material/exam repos keep
+  their own copies).
+- Leaf nodes still report their own video count (a leaf's direct count = its subtree count).
+- Still self-FK-based (this endpoint derives children from `ws_video_category.parent`), unchanged.
+
+**Files:** `src/modules/catalog-video/catalog-video.service.ts` (`getVideoCategoryChildren`),
+`src/modules/catalog-video/catalog-video.repository.ts`.
+
+---
+
+## 2026-07-13 — Video categories: pivot (ws_video_category_relation) as the single source of truth
+
+> **Data backfill + admin write-sync. No schema change.** Applies data DDL
+> `docs/migration/schema-changes/2026-07-13_video_category_relation_backfill.sql`. `yarn typecheck`
+> green; create/move/detach + package-link preservation smoke-tested against the live DB.
+
+The client catalog video tree reads **only** the `ws_video_category_relation` pivot
+(`havingChildDirectory` = active pivot-child count; the `descendantsOf` drill-in subtree; and
+the counts). Admin, however, wrote parent/child links **only** via the single-parent self-FK
+`ws_video_category.parent` and never mirrored them into the pivot — so admin-created (or
+duplicated) subcategories were invisible client-side: `havingChildDirectory:false`, unreachable
+on drill-in, wrong `count`. 28 of 30 active self-FK child links had no pivot edge.
+
+**Backfill (existing data):** insert the missing `(parent, child, order)` pivot edges from the
+self-FK where absent. Non-destructive (insert-only; existing edge ids preserved — they're
+referenced by `ws_video_category_package_relation.video_category_relation_id`, i.e. package
+composition). Fixed all 28 (verified: 0 remaining).
+
+**Admin write-sync (new data):** every parentage write now keeps the pivot in sync —
+- `repo.vcSetParent` (attach/detach/move, used by `reconcileChildren` + the master `vcUpdate`
+  parent path): updates the self-FK AND the pivot. On a **move** it **updates the child's
+  existing edge in place (same edge id)** so package links follow; a brand-new link inserts;
+  detach-to-root deletes only that child's edge.
+- `repo.vcEnsureEdge` (new): the master `vcCreate` inserts a pivot edge when created with a parent.
+- `repo.vcDuplicate`: clone rewiring now inserts pivot edges for the cloned subtree.
+
+**Why update-in-place, not delete+recreate:** package composition references pivot edge **ids**;
+recreating an edge would silently drop the subject from every package that included it.
+
+**Files:** `src/modules/admin-master/admin-master.repository.ts` (`vcSetParent`, `vcEnsureEdge`,
+`vcDuplicate`), `src/modules/admin-master/admin-master.service.ts` (`vcCreate`, `vcUpdate`).
+
+**Deploy:** apply the backfill SQL. No `prisma:generate` needed (no schema change).
+
+---
+
 ## 2026-07-13 — Wallet ("coin") redemption wired into payment create-order + verify
 
 > **New columns + charge/verify logic across all 5 create-order flows.** Applies DDL
@@ -152,6 +362,34 @@ that counts videos.
 - No schema/index change.
 
 ---
+
+## 2026-07-13 — Export jobs: live incremental progress (0→1) instead of stuck-at-10%
+
+> **No DB/query-shape change — progress is persisted more often during streaming.** `yarn typecheck` green.
+
+Per docs/backend-requests/export-progress-granular-updates.md: the async export worker only
+wrote `progress` once (10 at start, 100 at ready), so the FE bar stuck at ~10% then jumped.
+Now `runExportJob` persists progress as rows stream: `streamReportToWritable` gained an
+`onProgress(rowsWritten)` callback (fires per ~5 000-row batch); the worker throttles a DB
+write to every 5 000 rows. When the source can cheaply COUNT the filtered set it reports true
+`rowsWritten/total` (and seeds `rowCount = total` up front for "of N"); otherwise it ramps
+monotonically toward 0.95. Always monotonic, capped 0.95 mid-run, 1 on `ready`. `ReportSource`
+gained optional `countTotal()`. Exact total wired for `subscription` (reuses
+`resolveCourseSubWhere` + `repo.countSubs`); the other 4 types (liveCourseSub/testSeriesSub/
+ebookSubscription/bookOrder) use the ramp until their counts are wired. Poll response shape
+unchanged.
+
+## 2026-07-13 — media/resolve: HEAD-check ebook PDF exists before signing (clean 404)
+
+> **No DB/query change — resolve-time storage guard.** `yarn typecheck` green.
+
+`resolveMediaToken` (`client-media.service.ts`) now HEADs the object for `ebook`/`ebookDemo`
+before presigning. If the stored `book_url`/`book_demo_url` key doesn't exist in the bucket
+(stale/placeholder key), it returns `404 "This e-book is not available."` instead of a signed
+URL that 404s (NoSuchKey) on Spaces — which the RN PDF viewer would otherwise save as
+XML-as-PDF and fail to open. Transient/permission errors on the HEAD do NOT block delivery
+(fail-open). Gated by `MEDIA_VERIFY_EBOOK_OBJECT` (default true; set false to skip the extra
+HEAD). Pairs with `scripts/check-ebook-pdf-objects.ts` (bulk audit of broken keys).
 
 ## 2026-07-13 — purchase-history/ebooks: purchasedAt falls back to subscription start_at
 

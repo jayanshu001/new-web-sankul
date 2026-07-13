@@ -71,15 +71,26 @@ export const vcList = async (opts: { search?: string; limit?: number } = {}) => 
   if (opts.limit && opts.limit > 0) rows = rows.slice(0, opts.limit);
   return rows;
 };
-export const vcCreate = async (d: any) => toVcDto(await repo.vcCreate({ title: d.title, slug: d.slug, image: d.image, parent: d.parent !== undefined ? toInt(d.parent) : 0, order_by: toInt(d.order_by), status: d.status ?? true, educatorId: d.educatorId ? toInt(d.educatorId) : 0, pdf: d.pdf ?? "" }));
+export const vcCreate = async (d: any) => {
+  const parent = d.parent !== undefined ? toInt(d.parent) : 0;
+  const order = toInt(d.order_by);
+  const created = await repo.vcCreate({ title: d.title, slug: d.slug, image: d.image, parent, order_by: order, status: d.status ?? true, educatorId: d.educatorId ? toInt(d.educatorId) : 0, pdf: d.pdf ?? "" });
+  // Mirror the parent link into the pivot the client catalog reads.
+  if (parent > 0) await repo.vcEnsureEdge(parent, created.id, order);
+  return toVcDto(created);
+};
 export const vcUpdate = async (id: number, d: any) => {
   if (!(await repo.vcFind(id))) return null;
   const data: Record<string, unknown> = {};
   for (const k of ["title", "slug", "image", "pdf", "status"]) if (d[k] !== undefined) data[k] = d[k];
-  if (d.parent !== undefined) data.parent = toInt(d.parent);
   if (d.order_by !== undefined) data.order_by = toInt(d.order_by);
   if (d.educatorId !== undefined) data.educatorId = d.educatorId ? toInt(d.educatorId) : 0;
-  return toVcDto(await repo.vcUpdate(id, data));
+  if (Object.keys(data).length) await repo.vcUpdate(id, data);
+  // A parent change syncs BOTH the self-FK and the pivot (edge id preserved on
+  // move so package composition links follow). vcSetParent stamps updated_at too.
+  if (d.parent !== undefined) await repo.vcSetParent([id], toInt(d.parent));
+  const row = await repo.vcFind(id);
+  return row ? toVcDto(row) : null;
 };
 export const vcDelete = async (id: number): Promise<{ ok: boolean; deletedRelations: number }> => {
   if (!(await repo.vcFind(id))) return { ok: false, deletedRelations: 0 };

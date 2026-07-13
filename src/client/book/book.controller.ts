@@ -53,7 +53,8 @@ export const listBooks = async (req: Request, res: Response) => {
     // per-customer cart `qty`/`cartId` + `isPurchased`.
     const base = resolveBase(req);
     const buildShareLink = (bid: string) => buildShareUrl("books", bid, base);
-    const { items: rows, total } = await listBooksData({ search, language, type, skip, take: limit }, buildShareLink);
+    const custIdForToken = Number.isInteger(Number(customerId)) ? Number(customerId) : null;
+    const { items: rows, total } = await listBooksData({ search, language, type, skip, take: limit }, buildShareLink, new Date(), custIdForToken);
 
     let cartId: string | null = null;
     let qtyByBookId = new Map<string, number>();
@@ -93,8 +94,9 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
     // Combined trending: fetch books + ebooks from SQL (capped), merge by
     // createdAt desc — the merge is in-memory, so paginate the resolved array
     // via skip/take with `total` = full merged length.
+    const custIdForToken = Number.isInteger(Number(req.user?.id)) ? Number(req.user?.id) : null;
     const [bookRes, ebookRes] = await Promise.all([
-      fetchTrendingBooksOnlySql({ type, search, language, limit: 100 }),
+      fetchTrendingBooksOnlySql({ type, search, language, limit: 100, customerId: custIdForToken }),
       fetchTrendingEbooksOnlySql({ type, search, language, limit: 100 }),
     ]);
     const base = resolveBase(req);
@@ -132,7 +134,8 @@ export const listTrendingBooksOnly = async (req: Request, res: Response) => {
   try {
     const { type, language } = req.query as Record<string, string>;
     const { search, page, limit, skip } = parseListQuery(req.query);
-    const result = await fetchTrendingBooksOnlySql({ type, search, language, limit, skip });
+    const custIdForToken = Number.isInteger(Number(req.user?.id)) ? Number(req.user?.id) : null;
+    const result = await fetchTrendingBooksOnlySql({ type, search, language, limit, skip, customerId: custIdForToken });
 
     const base = resolveBase(req);
     const items = result.items.map((item) => ({
@@ -195,7 +198,8 @@ export const getBookDetail = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid book id." });
     }
     const base = resolveBase(req);
-    const dto = await getBookById(bookIdInt, (bid) => buildShareUrl("books", bid, base));
+    const custIdForToken = Number.isInteger(Number(customerId)) ? Number(customerId) : null;
+    const dto = await getBookById(bookIdInt, (bid) => buildShareUrl("books", bid, base), new Date(), custIdForToken);
     if (!dto) {
       logger.warn("getBookDetail not found (mysql)", { traceId, customerId, id });
       return res.status(404).json({ success: false, message: "Book not found." });

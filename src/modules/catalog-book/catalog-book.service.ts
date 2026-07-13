@@ -48,10 +48,11 @@ const decorate = (
 export const getBookById = async (
   id: number,
   buildShareLink: (bookId: string) => string = (bid) => bid,
-  now: Date = new Date()
+  now: Date = new Date(),
+  customerId: number | null = null
 ): Promise<BookListItemDto | null> => {
   const row = await repo.findActiveById(id);
-  return row ? decorate(toBookDto(row), buildShareLink, now) : null;
+  return row ? decorate(toBookDto(row, { customerId }), buildShareLink, now) : null;
 };
 
 /**
@@ -63,7 +64,8 @@ export const getBookById = async (
 export const listBooksData = async (
   opts: ListBooksOptions = {},
   buildShareLink: (bookId: string) => string = (bid) => bid,
-  now: Date = new Date()
+  now: Date = new Date(),
+  customerId: number | null = null
 ): Promise<{ items: BookListItemDto[]; total: number }> => {
   const filter: ListBooksOptions = {
     search: opts.search?.trim() || undefined,
@@ -74,7 +76,7 @@ export const listBooksData = async (
     repo.listActive({ ...filter, skip: opts.skip, take: opts.take }),
     repo.countActive(filter),
   ]);
-  return { items: rows.map((r) => decorate(toBookDto(r), buildShareLink, now)), total };
+  return { items: rows.map((r) => decorate(toBookDto(r, { customerId }), buildShareLink, now)), total };
 };
 
 /** Books by ids (bulk hydration — purchase-history/cart book thumbnails). */

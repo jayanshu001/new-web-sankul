@@ -11,10 +11,10 @@
  * freshly PRESIGNED with a short TTL; video/live URLs are StreamOS/VideoCrypt/
  * YouTube URLs which are themselves natively time-limited.
  */
-import { GetObjectCommand } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { prisma } from "../../config/prisma";
-import { s3Config, DO_BUCKET } from "../../middlewares/upload";
+import { s3Config, DO_BUCKET, isOwnBucketUrl } from "../../middlewares/upload";
 import { resolveVideoSource } from "../../utils/videoResolver";
 import { getStreamDetails } from "../../admin/live/streamos.service";
 import { hasActiveCourseSub, hasActivePackageSub } from "../client-lecture/client-lecture.service";
@@ -34,9 +34,17 @@ export type ResolveResult =
 // (bucket as the first path segment) layouts. A value that is already a bare key
 // (no scheme) is returned unchanged.
 const toObjectKey = (urlOrKey: string): string => {
-  if (!/^https?:\/\//i.test(urlOrKey)) return urlOrKey.replace(/^\/+/, "");
+  let s = urlOrKey.trim();
+  // Some legacy rows store a SCHEME-LESS path-style URL, e.g.
+  // "blr1.digitaloceanspaces.com/<bucket>/admin/…/x.pdf". Without a scheme URL()
+  // can't parse it and the whole host+bucket would be mistaken for the key. Add a
+  // scheme when the value looks like "<host.tld>/…" so the parse below is correct.
+  if (!/^https?:\/\//i.test(s) && /^[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?\//i.test(s)) {
+    s = `https://${s}`;
+  }
+  if (!/^https?:\/\//i.test(s)) return s.replace(/^\/+/, ""); // truly a bare key
   try {
-    let key = new URL(urlOrKey).pathname.replace(/^\/+/, "");
+    let key = new URL(s).pathname.replace(/^\/+/, "");
     // Also strip stray trailing quote artifacts seen on some StreamOS/Spaces paths.
     key = key.replace(/(?:"|%22|%2522)+$/i, "");
     if (DO_BUCKET && key.startsWith(`${DO_BUCKET}/`)) key = key.slice(DO_BUCKET.length + 1);
@@ -52,6 +60,27 @@ const presign = (urlOrKey: string): Promise<string> =>
     new GetObjectCommand({ Bucket: DO_BUCKET, Key: toObjectKey(urlOrKey) }),
     { expiresIn: PRESIGN_TTL_SECONDS }
   );
+
+// Verify the object exists BEFORE handing out a signed URL. A stale/placeholder key
+// in book_url/book_demo_url would otherwise sign a URL that 404s (NoSuchKey) on
+// Spaces, which the RN PDF viewer saves as XML-as-PDF and fails to open. With this
+// check the client gets a clean 404 "not available" instead. Set
+// MEDIA_VERIFY_EBOOK_OBJECT=false to skip the extra HEAD if latency-sensitive.
+const MEDIA_VERIFY_EBOOK_OBJECT = process.env.MEDIA_VERIFY_EBOOK_OBJECT !== "false";
+
+const objectExists = async (urlOrKey: string): Promise<boolean> => {
+  const key = toObjectKey(urlOrKey);
+  try {
+    await (s3Config as any).send(new HeadObjectCommand({ Bucket: DO_BUCKET, Key: key }));
+    return true;
+  } catch (e: any) {
+    const code = e?.$metadata?.httpStatusCode;
+    if (code === 404 || e?.name === "NotFound" || e?.name === "NoSuchKey") return false;
+    // Transient/permission error → don't block delivery; let the presign proceed.
+    logger.warn("resolveMediaToken HEAD check inconclusive", { key, error: e?.name ?? String(e) });
+    return true;
+  }
+};
 
 // Re-check entitlement for the token's scope. `free` tokens skip; a "trusted"
 // scope relies on the issue-time gate plus the token's short TTL.
@@ -90,7 +119,9 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
     return { ok: false, status: err?.expired ? 410 : 401, message: err?.message ?? "Invalid media token." };
   }
 
-  if (claims.cust !== customerId) {
+  // `bookDemo` is PUBLIC demo content (not customer-bound) — skip the issuer match
+  // so a demo token resolves for any caller. Every other kind stays account-bound.
+  if (claims.k !== "bookDemo" && claims.cust !== customerId) {
     return { ok: false, status: 403, message: "This media token was issued to a different account." };
   }
   if (!(await entitled(customerId, claims))) {
@@ -155,6 +186,30 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
         if (!e) return { ok: false, status: 404, message: "Ebook not found." };
         const src = claims.k === "ebook" ? e.bookUrl : e.bookDemoUrl;
         if (!src) return { ok: false, status: 404, message: "This ebook has no downloadable PDF." };
+        if (MEDIA_VERIFY_EBOOK_OBJECT && !(await objectExists(src))) {
+          logger.warn("resolveMediaToken ebook object missing", { kind: claims.k, id: claims.id, key: toObjectKey(src) });
+          return { ok: false, status: 404, message: "This e-book is not available." };
+        }
+        const url = await presign(src);
+        return { ok: true, kind: claims.k, media: { url } };
+      }
+      case "bookDemo": {
+        // Free physical-book sample PDF (ws_book.demo_url). Same presign + object
+        // existence guard as the ebook demo; the token is `free` so no entitlement.
+        const b = await prisma.book.findFirst({ where: { id: claims.id, active: true }, select: { demo_url: true } });
+        if (!b) return { ok: false, status: 404, message: "Book not found." };
+        const src = b.demo_url;
+        if (!src) return { ok: false, status: 404, message: "This book has no demo PDF." };
+        // Legacy book demos are hosted EXTERNALLY (e.g. gpsconline.com), not in our
+        // Spaces bucket — those are already public, so return the URL as-is. Only
+        // objects that actually live in our bucket get the HEAD check + presign.
+        if (/^https?:\/\//i.test(src) && !isOwnBucketUrl(src)) {
+          return { ok: true, kind: claims.k, media: { url: src } };
+        }
+        if (MEDIA_VERIFY_EBOOK_OBJECT && !(await objectExists(src))) {
+          logger.warn("resolveMediaToken book demo object missing", { id: claims.id, key: toObjectKey(src) });
+          return { ok: false, status: 404, message: "This book demo is not available." };
+        }
         const url = await presign(src);
         return { ok: true, kind: claims.k, media: { url } };
       }

@@ -129,12 +129,18 @@ export const bookOrderRepository = {
     razorpayOrderPayload: string;
     orderItemsJson: string;
     items: CreateOrderItemInput[];
+    userIp?: string | null;
   }) =>
     prisma.$transaction(async (tx) => {
+      // ws_book_order has no DB default / Prisma @default on created_at/updated_at,
+      // so they must be set explicitly (the legacy Laravel app stamped them; the
+      // SQL path was leaving them NULL). Stamp both at insert.
+      const now = new Date();
       const order = await tx.bookOrder.create({
         data: {
           receiptId: input.orderKey, // @map("order_id") — the VARCHAR key
           userId: input.customerId,
+          userIp: input.userIp ?? null,
           cartId: input.cartId,
           shippingId: input.shippingId,
           orderType: "purchase",
@@ -144,6 +150,8 @@ export const bookOrderRepository = {
           gatewayOrderId: input.razorpayOrderId,
           gatewayOrder: input.razorpayOrderPayload,
           status: "pending",
+          createdAt: now,
+          updatedAt: now,
         },
       });
       if (input.items.length) {
@@ -189,7 +197,13 @@ export const bookOrderRepository = {
         data: {
           status: "verified",
           trackingId: tracking.tracking_id,
+          // Razorpay payment id → gateway_transaction_id (gateway ref) AND
+          // transaction_id (generic txn ref, previously left NULL). paid_at marks
+          // when the payment cleared; bump updated_at on this state change.
           gatewayPaymentId: input.razorpayPaymentId,
+          transactionId: input.razorpayPaymentId,
+          paidAt: new Date(),
+          updatedAt: new Date(),
         },
       });
       // Deactivate the active cart that placed this order (match shipping, like

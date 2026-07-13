@@ -96,9 +96,32 @@ export const runExportJob = async (jobRef: string): Promise<void> => {
     let rowCount: number | null = null;
     if (def.resolveSource) {
       const source = await def.resolveSource(params); // may throw on a bad filter
+
+      // Live progress: if the source can cheaply COUNT the filtered set, report true
+      // rowsWritten/total; otherwise ramp monotonically toward 0.95. Either way the
+      // bar moves during generation instead of sticking at the initial value. The
+      // final "ready" write below sets 100. Persist at most every PERSIST_EVERY rows
+      // so a 3s poll sees movement without hammering the DB. Progress writes are
+      // awaited inside the stream loop, so they all settle before the ready write.
+      const total = source.countTotal ? await source.countTotal().catch(() => null) : null;
+      if (total != null) {
+        await repo.update(job.id, { rowCount: total, updatedAt: new Date() }); // seed "of N"
+      }
+      const PERSIST_EVERY = 5_000;
+      let lastPersisted = 0;
+      const onProgress = async (rows: number): Promise<void> => {
+        if (rows - lastPersisted < PERSIST_EVERY) return;
+        lastPersisted = rows;
+        const frac =
+          total && total > 0
+            ? Math.min(0.95, rows / total)
+            : Math.min(0.95, 0.1 + 0.85 * (1 - Math.exp(-rows / 50_000)));
+        await repo.update(job.id, { progress: Math.round(frac * 100), rowCount: rows, updatedAt: new Date() });
+      };
+
       const upload = createExportUpload(key, contentTypeFor(fmt), fileName);
       try {
-        rowCount = await streamReportToWritable(source, fmt, upload.body);
+        rowCount = await streamReportToWritable(source, fmt, upload.body, onProgress);
       } catch (err) {
         upload.body.destroy(err as Error); // abort the multipart upload
         throw err;

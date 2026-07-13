@@ -98,7 +98,7 @@ export const buildHomeDashboard = async (customerId: number | null) => {
     prisma.bannerSlider.findMany({ orderBy: { orderBy: "asc" } }),
     prisma.package.findMany({ where: { active: true }, orderBy: { created_at: "desc" }, take: RECENTLY_ADDED_LIMIT, include: { packageType: { select: { id: true, name: true } } } }),
     prisma.course.findMany({ where: { status: true }, orderBy: { createdAt: "desc" }, take: DASHBOARD_SECTION_LIMIT }),
-    fetchTrendingBooksOnly({ type: "paid" }),
+    fetchTrendingBooksOnly({ type: "paid", customerId }),
     fetchTrendingEbooksOnly({ type: "paid" }),
     prisma.testimonial.findMany({ orderBy: { rating: "desc" }, take: DASHBOARD_SECTION_LIMIT }),
     prisma.courseSubjectCategory.findMany({ where: { status: true }, orderBy: { id: "asc" }, take: COURSE_CATEGORY_LIMIT }),

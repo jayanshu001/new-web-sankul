@@ -372,8 +372,9 @@ export const catalogTests = async (opts: { type: "course" | "package" | "live-co
     const ids = await descendantIds("ws_exam_category", "parent_id", cat.id);
     const [itemCount, childCount] = await Promise.all([
       // Mongo filtered status:PUBLISHED + non-ended window; SQL Exam.status is Boolean → status=true.
+      // Only active, subject-type quizzes count — drafts (status=false) and daily-type are excluded.
       prisma.exam.count({
-        where: { AND: [examInCategoriesWhere(ids), { status: true }] },
+        where: { AND: [examInCategoriesWhere(ids), { status: true, type: "subject" }] },
       }),
       prisma.examCategory.count({ where: { parent: cat.id, status: true } }),
     ]);

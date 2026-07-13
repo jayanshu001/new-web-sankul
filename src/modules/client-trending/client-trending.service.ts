@@ -13,10 +13,11 @@
  */
 import { prisma } from "../../config/prisma";
 import { isNewItem } from "../../utils/isNew";
+import { signMediaToken } from "../../utils/mediaToken";
 
 export const isClientTrendingMysql = (): boolean => true;
 
-type TrendingOpts = { type?: string; search?: string; language?: string; limit?: number; skip?: number };
+type TrendingOpts = { type?: string; search?: string; language?: string; limit?: number; skip?: number; customerId?: number | null };
 const flags = (o: TrendingOpts) => ({
   wantFree: o.type === "free",
   wantPaid: o.type === "paid" || !o.type,
@@ -39,7 +40,10 @@ export const fetchTrendingBooksOnly = async (opts: TrendingOpts = {}) => {
   ]);
   const items = books.map((b: any) => ({
     type: "book" as const, _id: String(b.id), name: b.name, description: b.description ?? null, author: b.author ?? null,
-    language: b.language, image: b.image ?? null, thumbnail: b.thumbnail ?? null, demoUrl: b.demoUrl ?? null,
+    // Encrypted demo token instead of the raw demo URL. Public content → always
+    // emitted when a demo PDF exists, independent of login/purchase.
+    language: b.language, image: b.image ?? null, thumbnail: b.thumbnail ?? null,
+    demoMediaToken: b.demo_url ? signMediaToken({ k: "bookDemo", id: b.id, free: true, cust: opts.customerId ?? 0 }) : null,
     isTrending: b.isTrending, isCombo: b.isCombo ?? false, isMagazine: b.isMagazine ?? false,
     listPrice: b.list_price ?? b.listPrice ?? null, discountedPrice: b.discounted_price, shippingPrice: b.shipping_price ?? null,
     pages: b.pages ?? 0, price: b.discounted_price, isFree: b.discounted_price === 0, isNew: isNewItem(b.created_at), createdAt: b.created_at,
@@ -115,7 +119,7 @@ const computeDaysLeft = (endAt: Date, now: Date) => Math.max(0, Math.ceil((endAt
  */
 export const buildFreeDashboard = async (customerId: number | null) => {
   const [trendingFreeBooks, trendingFreeEbooks, freeCats] = await Promise.all([
-    fetchTrendingBooksOnly({ type: "free", limit: FREE_LIMIT }),
+    fetchTrendingBooksOnly({ type: "free", limit: FREE_LIMIT, customerId }),
     fetchTrendingEbooksOnly({ type: "free", limit: FREE_LIMIT }),
     resolveFreeCategoryIds(),
   ]);

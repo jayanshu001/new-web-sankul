@@ -136,6 +136,7 @@ export const writeBookOrderMysql = async (input: {
   preview: BookOrderPreview;
   razorpayOrderId: string;
   razorpayOrderPayload: string;
+  userIp?: string | null;
 }): Promise<CreatedBookOrder> => {
   const order = await repo.createPendingOrder({
     orderKey: input.orderKey,
@@ -147,6 +148,7 @@ export const writeBookOrderMysql = async (input: {
     razorpayOrderPayload: input.razorpayOrderPayload,
     orderItemsJson: JSON.stringify(input.preview.items),
     items: input.preview.items,
+    userIp: input.userIp ?? null,
   });
   return { orderId: order.id, orderKey: input.orderKey };
 };
