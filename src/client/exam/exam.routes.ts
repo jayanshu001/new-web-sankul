@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
+import { cacheRoute } from "../../middlewares/cacheRoute";
 import {
   listCategories,
   listExamsByCategory,
@@ -26,8 +27,9 @@ const router = Router();
 
 router.use(authenticate);
 
-// Discovery
-router.get("/categories", listCategories);
+// Discovery — Tier-1: exam categories carry no per-user state.
+router.get("/categories", cacheRoute({ ttl: 300, entity: "catalog-exam", scope: "shared" }), listCategories);
+// Tier-2 (embeds isCompleted/lastResult): deferred, not cached.
 router.get("/categories/:categoryId/exams", listExamsByCategory);
 router.get("/daily", getDailyExams);
 

@@ -40,3 +40,8 @@ scripts/_tmp_*.ts
 
 graphify-out/
 .graphify/cache/
+
+# Reference cache docs copied from another project — NOT this project's source
+# of truth. Authoritative caching doc is docs/CACHING.md. Kept local for
+# reference, ignored so it doesn't clutter real diffs.
+cache/

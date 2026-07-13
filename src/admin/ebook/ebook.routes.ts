@@ -31,18 +31,22 @@ import {
   getPdfUploadBatch,
 } from "../pdfUpload/pdfUpload.controller";
 import { uploadSinglePdfToDisk } from "../pdfUpload/pdfUpload.multer";
+import { cacheRoute } from "../../middlewares/cacheRoute";
+import { autoFlushGroup } from "../../middlewares/autoFlush";
 
 const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
 // Ebooks
-router.get("/", getEbooks);
+// Route-level response cache. Reads tagged entity:"ebook"; writes below call
+// autoFlushGroup("ebook") so edits clear these instantly. See cache/ROUTE_CACHE.md.
+router.get("/", cacheRoute({ ttl: 120, entity: "ebook" }), getEbooks);
 router.get("/reorder", reorderEbooks);
-router.post("/reorder", reorderEbooks);
+router.post("/reorder", autoFlushGroup("ebook"), reorderEbooks);
 // PDF-upload status snapshot — must precede `/:id` so it isn't matched as an id.
 router.get("/pdf-jobs/:batchId", getPdfUploadBatch);
-router.get("/:id", getEbookById);
+router.get("/:id", cacheRoute({ ttl: 600, entity: "ebook" }), getEbookById);
 const ebookUpload = uploadS3Mixed.fields([
   { name: "image", maxCount: 1 },
   { name: "thumbnail", maxCount: 1 },
@@ -50,10 +54,10 @@ const ebookUpload = uploadS3Mixed.fields([
   { name: "bookUrl", maxCount: 1 },
 ]);
 
-router.post("/", ebookUpload, enforceMixedSizeLimits, createEbook);
-router.put("/:id", ebookUpload, enforceMixedSizeLimits, updateEbook);
-router.delete("/:id", deleteEbook);
-router.patch("/:id/trending", toggleEbookTrending);
+router.post("/", ebookUpload, enforceMixedSizeLimits, autoFlushGroup("ebook"), createEbook);
+router.put("/:id", ebookUpload, enforceMixedSizeLimits, autoFlushGroup("ebook"), updateEbook);
+router.delete("/:id", autoFlushGroup("ebook"), deleteEbook);
+router.patch("/:id/trending", autoFlushGroup("ebook"), toggleEbookTrending);
 
 // Async PDF upload (Book/Demo) via the BullMQ queue + live Socket progress.
 // Alternative to the synchronous bookUrl/demoUrl fields on PUT /:id — use this

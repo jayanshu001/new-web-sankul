@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
+import { cacheRoute } from "../../middlewares/cacheRoute";
 import {
   getPackageDetail,
   listPackages,
@@ -14,11 +15,12 @@ const router = Router();
 
 router.use(authenticate);
 
-// Flat paginated listing of active packages
+// Flat paginated listing of active packages — Tier-2 (embeds isPurchased),
+// deferred to the shared/overlay phase; not cached here.
 router.get("/", listPackages);
 
-// Discover package types (public-facing list)
-router.get("/types", listPackageTypes);
+// Tier-1 (fully shared): package types are pure metadata, no per-user state.
+router.get("/types", cacheRoute({ ttl: 3600, entity: "package-type", scope: "shared" }), listPackageTypes);
 
 // List packages by type
 router.get("/type/:typeId", listPackagesByType);

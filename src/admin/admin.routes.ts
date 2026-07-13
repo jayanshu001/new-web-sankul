@@ -39,6 +39,7 @@ import adminLiveCourseRoutes from "./live-course/live-course.routes";
 import adminTestSeriesRoutes from "./testSeries/testSeries.routes";
 import adminUploadsRoutes from "./uploads/uploads.routes";
 import adminExportsRoutes from "./exports/exports.routes";
+import adminCacheRoutes from "./cache/cache.routes";
 import authenticate, { requireRole } from "../middlewares/authenticate";
 import { enforceRbac } from "../middlewares/rbacEnforce";
 import { adminLimiter } from "../config/rateLimiter";
@@ -127,5 +128,6 @@ router.use("/live-courses",  adminLiveCourseRoutes);      // -> /api/v1/admin/li
 router.use("/test-series",   adminTestSeriesRoutes);      // -> /api/v1/admin/test-series/*
 router.use("/uploads",       adminUploadsRoutes);         // -> /api/v1/admin/uploads/* (presigned direct uploads)
 router.use("/exports",       adminExportsRoutes);         // -> /api/v1/admin/exports/* (async report export jobs)
+router.use("/cache",         adminCacheRoutes);           // -> /api/v1/admin/cache/* (route-cache flush/stats)
 
 export default router;
