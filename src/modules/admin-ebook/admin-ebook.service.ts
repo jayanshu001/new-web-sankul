@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
+import type { ReportSource } from "../../utils/reportStream";
 import { computeEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminEbookRepository as repo } from "./admin-ebook.repository";
@@ -428,6 +429,23 @@ export const buildSubscriptionsXlsx = async (q: SubReportQuery): Promise<Buffer>
   await finished;
   return Buffer.concat(chunks);
 };
+
+// Streamed export source (async job path) — same rows/columns as the sync builders.
+export async function ebookSubExportSource(q: SubReportQuery): Promise<ReportSource> {
+  const now = new Date();
+  const opts = await resolveSubOpts(q);
+  return {
+    worksheetName: "Ebook Subscriptions",
+    headers: EBOOK_SUB_EXPORT_COLUMNS.map((c) => c.header),
+    rowBatches: (async function* () {
+      if (opts) {
+        for await (const batch of iterateSubExportRows(opts)) {
+          yield batch.map((r) => EBOOK_SUB_EXPORT_COLUMNS.map((c) => c.get(r, now)));
+        }
+      }
+    })(),
+  };
+}
 
 export const getSubscriptionById = async (id: number) => {
   const sub = await repo.findSubscriptionById(id);

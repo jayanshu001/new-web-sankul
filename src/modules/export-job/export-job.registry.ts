@@ -17,6 +17,7 @@ import { buildSubReportQuery } from "../../admin/live-course/live-course.subscri
 import { parseSubReportQuery as parseTsReportQuery } from "../../admin/testSeries/testSeries.controller";
 import { parseSubReportQuery as parseEbookReportQuery } from "../../admin/ebook/ebook-subscription.controller";
 import { parseOrderReportQuery } from "../../admin/book/book.controller";
+import type { ReportSource } from "../../utils/reportStream";
 
 export type ExportFormat = "csv" | "excel";
 
@@ -30,56 +31,48 @@ const toBuf = (content: string | Buffer) => (Buffer.isBuffer(content) ? content 
 
 interface RegistryEntry {
   filenameBase: string;
-  // rawFilters = the FE `filters` object (string-valued, page/limit stripped).
-  build: (rawFilters: Record<string, string>, format: ExportFormat) => Promise<Buffer>;
+  // Streamed path (preferred): expose the report as a header + row-batch source so
+  // the worker pipes it straight into a multipart upload — no full-file buffer. Used
+  // by every keyset-paginated report so lakhs-of-rows exports run in bounded memory.
+  // `rawFilters` = the FE `filters` object (string-valued, page/limit stripped).
+  resolveSource?: (rawFilters: Record<string, string>) => Promise<ReportSource>;
+  // Buffer path (legacy): for small, non-keyset reports (referral withdrawals) that
+  // return a fully-materialized string. Only ONE of resolveSource/build is set.
+  build?: (rawFilters: Record<string, string>, format: ExportFormat) => Promise<Buffer>;
 }
 
 const REGISTRY: Record<string, RegistryEntry> = {
   subscription: {
     filenameBase: "subscription-report",
-    build: async (f, fmt) => {
-      const q = reportQueryFrom(f);
-      return toBuf(fmt === "csv" ? await subSql.buildCourseSubscriptionsCsv(q) : await subSql.buildCourseSubscriptionsXlsx(q));
-    },
+    resolveSource: async (f) => subSql.courseSubExportSource(reportQueryFrom(f)),
   },
   liveCourseSub: {
     filenameBase: "live-course-subscriptions",
-    build: async (f, fmt) => {
-      const q = buildSubReportQuery(f);
-      const c = fmt === "csv" ? await liveSql.buildSubscriptionsCsv(q) : await liveSql.buildSubscriptionsXlsx(q);
-      // Live-course builders return a discriminated error string for a bad id.
-      if (c === "bad_course") throw new Error("Invalid liveCourseId filter.");
-      if (c === "bad_customer") throw new Error("Invalid customerId filter.");
-      return toBuf(c);
-    },
+    // liveSubExportSource throws on a bad id filter — the worker marks the job failed.
+    resolveSource: async (f) => liveSql.liveSubExportSource(buildSubReportQuery(f)),
   },
   testSeriesSub: {
     filenameBase: "test-series-subscriptions",
-    build: async (f, fmt) => {
-      const q = parseTsReportQuery(f);
-      return toBuf(fmt === "csv" ? await tsSql.buildSubscriptionsCsv(q) : await tsSql.buildSubscriptionsXlsx(q));
-    },
+    resolveSource: async (f) => tsSql.tsSubExportSource(parseTsReportQuery(f)),
   },
   ebookSubscription: {
     filenameBase: "ebook-subscriptions",
-    build: async (f, fmt) => {
+    resolveSource: async (f) => {
       const parsed = parseEbookReportQuery(f);
       if (!parsed.ok) throw new Error(parsed.message);
-      return toBuf(fmt === "csv" ? await ebookSql.buildSubscriptionsCsv(parsed.query) : await ebookSql.buildSubscriptionsXlsx(parsed.query));
+      return ebookSql.ebookSubExportSource(parsed.query);
     },
   },
   bookOrder: {
     filenameBase: "book-orders",
-    build: async (f, fmt) => {
-      const q = parseOrderReportQuery(f);
-      return toBuf(fmt === "csv" ? await bookSql.buildOrdersCsv(q) : await bookSql.buildOrdersXlsx(q));
-    },
+    resolveSource: async (f) => bookSql.orderExportSource(parseOrderReportQuery(f)),
   },
   referral: {
     filenameBase: "referral-withdrawals",
     build: async (f, fmt) => {
       // Referral withdrawals export is CSV-only (matches the sync /withdrawals/csv
-      // endpoint + the FE, which offers no Excel here).
+      // endpoint + the FE, which offers no Excel here) and is small (not keyset-paged),
+      // so it stays on the buffer path.
       if (fmt !== "csv") throw new Error("Referral withdrawals export supports CSV only.");
       return toBuf(await referralAdmin.buildWithdrawalsCsv(f as referralAdmin.WithdrawalsCsvQuery));
     },

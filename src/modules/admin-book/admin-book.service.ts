@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
+import type { ReportSource } from "../../utils/reportStream";
 import { prisma } from "../../config/prisma";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminBookRepository as repo } from "./admin-book.repository";
@@ -603,6 +604,23 @@ export const buildOrdersXlsx = async (q: OrderReportQuery): Promise<Buffer> => {
   await finished;
   return Buffer.concat(chunks);
 };
+
+// Streamed export source (async job path) — same rows/columns as the sync builders.
+export async function orderExportSource(q: OrderReportQuery): Promise<ReportSource> {
+  const opts = await resolveOrderOpts(q);
+  return {
+    worksheetName: "Book Orders",
+    columnWidth: 20,
+    headers: ORDER_EXPORT_COLUMNS.map((c) => c.header),
+    rowBatches: (async function* () {
+      if (opts) {
+        for await (const batch of iterateOrderExportRows(opts)) {
+          yield batch.map((r) => ORDER_EXPORT_COLUMNS.map((c) => c.get(r)));
+        }
+      }
+    })(),
+  };
+}
 
 /** Batch-load the books referenced by a set of line items, keyed by id. */
 const loadBooks = async (items: OrderItemShape[]): Promise<Map<number, any>> => {

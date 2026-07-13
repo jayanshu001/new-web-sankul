@@ -1,6 +1,7 @@
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
+import type { ReportSource } from "../../utils/reportStream";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminLiveCourseRepository as repo } from "./admin-live-course.repository";
@@ -520,6 +521,26 @@ export const buildSubscriptionsXlsx = async (q: SubReportQuery): Promise<"bad_co
   await finished;
   return Buffer.concat(chunks);
 };
+
+// Streamed export source (async job path) — same rows/columns as the sync builders.
+// Throws on a bad id filter (the worker marks the job failed with this message).
+export async function liveSubExportSource(q: SubReportQuery): Promise<ReportSource> {
+  const now = new Date();
+  const filter = await resolveSubFilter(q, now);
+  if (filter === "bad_course") throw new Error("Invalid liveCourseId filter.");
+  if (filter === "bad_customer") throw new Error("Invalid customerId filter.");
+  return {
+    worksheetName: "Live Course Subscriptions",
+    headers: LIVE_SUB_EXPORT_COLUMNS.map((c) => c.header),
+    rowBatches: (async function* () {
+      if (filter !== "empty") {
+        for await (const batch of iterateSubExportRows(filter, now)) {
+          yield batch.map((r) => LIVE_SUB_EXPORT_COLUMNS.map((c) => c.get(r)));
+        }
+      }
+    })(),
+  };
+}
 
 export const getSubscription = async (id: number): Promise<"not_found" | any> => {
   const row = await repo.findSubscriptionById(id);

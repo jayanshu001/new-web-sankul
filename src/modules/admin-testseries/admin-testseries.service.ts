@@ -26,6 +26,7 @@
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
+import type { ReportSource } from "../../utils/reportStream";
 import { prisma } from "../../config/prisma";
 import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 import { buildPagination } from "../../utils/listQuery";
@@ -992,6 +993,20 @@ export const buildSubscriptionsXlsx = async (opts: SubReportOpts): Promise<Buffe
   await finished;
   return Buffer.concat(chunks);
 };
+
+// Streamed export source (async job path) — same rows/columns as the sync builders.
+export function tsSubExportSource(opts: SubReportOpts): ReportSource {
+  const now = new Date();
+  return {
+    worksheetName: "Test Series Subscriptions",
+    headers: TS_SUB_EXPORT_COLUMNS.map((c) => c.header),
+    rowBatches: (async function* () {
+      for await (const batch of iterateSubExportRows(opts, now)) {
+        yield batch.map((r) => TS_SUB_EXPORT_COLUMNS.map((c) => c.get(r)));
+      }
+    })(),
+  };
+}
 
 export type GrantWrite = {
   customerId: number;

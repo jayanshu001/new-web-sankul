@@ -39,10 +39,24 @@ function buildConnection(): RedisType {
   return new Redis({ host: REDIS_HOST, port: REDIS_PORT, password: REDIS_PASSWORD, maxRetriesPerRequest: null, enableReadyCheck: false });
 }
 
+// Ensure a PRODUCER queue exists so jobs can be enqueued. This is deliberately
+// independent of the worker: in a split deployment the HTTP process runs with
+// WORKER_ENABLED=false (so initExportScheduler / the worker never run here), yet it
+// still needs to enqueue from POST /admin/exports. It also covers the boot-race
+// window where the HTTP server accepts a request before startWorkers() has finished.
+// Idempotent — the worker's initExportScheduler reuses whatever this created.
+function ensureProducer(): Queue<ExportJobData> {
+  if (!queue) {
+    connection = connection ?? buildConnection();
+    queue = new Queue<ExportJobData>(QUEUE_NAME, { connection });
+  }
+  return queue;
+}
+
 /** Enqueue a generate job. jobId = `gen-<ref>` so a duplicate enqueue is a no-op. */
 export async function enqueueExportJob(jobRef: string): Promise<void> {
-  if (!queue) throw new Error("Export scheduler not initialised.");
-  await queue.add(
+  const q = ensureProducer();
+  await q.add(
     GENERATE,
     { jobRef },
     {
@@ -80,8 +94,8 @@ export async function initExportScheduler(): Promise<void> {
   if (started) return;
   started = true;
 
-  connection = buildConnection();
-  queue = new Queue<ExportJobData>(QUEUE_NAME, { connection });
+  // Reuse the producer queue if enqueue already lazily created it in this process.
+  ensureProducer();
 
   worker = new Worker<ExportJobData>(QUEUE_NAME, processExportJob, {
     connection: buildConnection(),

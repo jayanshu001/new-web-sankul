@@ -8,6 +8,8 @@
 
 import { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { Upload } from "@aws-sdk/lib-storage";
+import { PassThrough } from "node:stream";
 import { s3Config, DO_BUCKET } from "../middlewares/upload";
 
 // How long a signed download URL stays valid. Signed fresh on every poll, so this
@@ -37,6 +39,39 @@ export const uploadExportObject = async (
       ContentDisposition: `attachment; filename="${fileName.replace(/"/g, "")}"`,
     })
   );
+};
+
+/**
+ * Streaming PRIVATE upload for large exports. Returns a `body` PassThrough to write
+ * the file into and a `done` promise that resolves once Spaces has the whole object.
+ *
+ * Uses @aws-sdk/lib-storage `Upload`, which performs a MULTIPART upload off a stream:
+ * only ~`partSize` bytes (5 MB) are buffered in memory at a time, so a lakhs-of-rows
+ * CSV/XLSX never materializes in RAM. Unlike uploadExportObject (single PutObject with
+ * a full Buffer + ContentLength), no total size needs to be known up front.
+ */
+export const createExportUpload = (
+  key: string,
+  contentType: string,
+  fileName: string
+): { body: PassThrough; done: Promise<void> } => {
+  const body = new PassThrough();
+  const upload = new Upload({
+    client,
+    params: {
+      Bucket: DO_BUCKET,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      ACL: "private",
+      ContentDisposition: `attachment; filename="${fileName.replace(/"/g, "")}"`,
+    },
+    // 5 MB parts, up to 4 in flight — bounds peak memory to ~20 MB per job.
+    partSize: 5 * 1024 * 1024,
+    queueSize: 4,
+  });
+  const done = upload.done().then(() => undefined);
+  return { body, done };
 };
 
 /** Short-lived signed GET URL for a private export object. */

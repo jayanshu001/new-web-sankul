@@ -15,6 +15,67 @@
 
 ---
 
+## 2026-07-13 — Fix: admin subscription create computed endAt from plan duration as MONTHS instead of DAYS
+
+> **No DB schema/query change — date-arithmetic bugfix on the SQL create path.**
+
+`createCourseSubscription` (admin-subscription) computes `endAt` from the plan's
+`duration`. Per the platform contract, `duration` on plan/price rows is in **DAYS**.
+The fallback branch (used when the request carries no explicit `durationDays`) passed
+`plan.duration` to `computeEndAt` as `durationMonths` **without** `asDays: true`, so a
+90-day plan produced `startAt + 90 months` (~7.5 years) — e.g. `2026-07-13` → `2034-01-13`.
+
+- **File:** `src/modules/admin-subscription/admin-subscription.service.ts` (~L510)
+- **Fix:** added `asDays: true` so `plan.duration` is treated as days (90 days →
+  `startAt + 90 days`), matching the explicit-`durationDays` branch above it and the
+  "duration is DAYS" rule (`utils/planDuration.ts`).
+- **No** schema, index, or query-shape change. Sibling `admin-live-course` callsites use a
+  genuine `durationMonths` input and were left unchanged.
+- Pre-existing rows created with the wrong `endAt` (e.g. subscription `_id: 19`) are not
+  auto-corrected by this change and need a manual data patch if desired.
+
+---
+
+## 2026-07-13 — Async report exports stream to Spaces (bounded memory for lakhs-of-rows)
+
+> **No DB schema/query change — same keyset iterators, same column specs, byte-identical
+> output.** Delivery-mechanism change only. `yarn typecheck` green.
+
+**What changed:** the async export worker (`report-export` BullMQ queue) no longer
+materializes the whole file in RAM. Output is now streamed row-by-row into a multipart
+upload to Spaces, so peak memory is one 5 000-row DB batch + one ~5 MB upload part —
+flat regardless of row count. Eliminates OOM risk on large (5–10 lakh row) CSV/XLSX
+exports at worker concurrency 3.
+
+- **New:** `src/utils/reportStream.ts` — `streamReportToWritable(source, format, out)`
+  writes `{headers, rowBatches}` into a Writable as CSV (fast-csv) / XLSX (ExcelJS
+  `stream.xlsx.WorkbookWriter`); returns row count; respects backpressure.
+- **New:** `src/utils/exportStorage.ts → createExportUpload()` — multipart streaming
+  upload via `@aws-sdk/lib-storage` (Body = PassThrough, 5 MB parts). `uploadExportObject`
+  (single PutObject) retained for the small referral report.
+- **New per-report source factories** (reuse existing keyset iterators + column specs,
+  output unchanged): `admin-subscription.courseSubExportSource`,
+  `admin-ebook.ebookSubExportSource`, `admin-testseries.tsSubExportSource`,
+  `admin-book.orderExportSource`, `admin-live-course.liveSubExportSource`.
+- **Registry** (`export-job.registry.ts`): streamed reports now expose `resolveSource`;
+  referral (CSV-only, not keyset-paged) keeps the `build` buffer path.
+- **Worker** (`export-job.service.ts`): prefers stream→multipart-upload; falls back to
+  buffer path; persists `rowCount`.
+- **Sync `/export/{csv,excel}` endpoints unchanged** (still buffer — fine for small sets).
+
+**Also fixed "Export scheduler not initialised":** the BullMQ queue was only created
+inside `initExportScheduler()`, which runs **only in worker processes** (behind
+`WORKER_ENABLED`). But `enqueueExportJob()` is called from the HTTP handler
+(`POST /admin/exports`), so a split deployment (API `WORKER_ENABLED=false`) — or the
+boot-race window before workers start — threw "Export scheduler not initialised."
+`export.scheduler.ts` now has `ensureProducer()`: `enqueueExportJob` lazily creates a
+producer-only `Queue` in any process, and `initExportScheduler` reuses it before
+attaching the worker. Works for both single-process and split HTTP/worker topologies.
+
+Docs: `docs/exports/BACKEND_LARGE_EXPORTS.md`, `docs/exports/ADMIN_EXPORTS_GUIDE.md`.
+
+---
+
 ## 2026-07-11 — Fix PUT /admin/courses/:id "courseEducatorId nan" (GET↔PUT ref asymmetry)
 
 > **Controller coercion fix only — no schema/query change.** `yarn typecheck` green.

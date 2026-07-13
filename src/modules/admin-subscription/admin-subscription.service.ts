@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import type { ReportSource } from "../../utils/reportStream";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { splitFullName } from "../customer-profile/customer-profile.name";
@@ -355,6 +356,22 @@ export const buildCourseSubscriptionsXlsx = async (q: CourseSubReportQuery): Pro
   return Buffer.concat(chunks);
 };
 
+// Streamed export source (async job path). Same rows/columns as the sync builders
+// above, but exposed as a header + row-batch iterable so the worker can pipe it
+// straight into a multipart upload — no full-file buffer. See utils/reportStream.ts.
+export function courseSubExportSource(q: CourseSubReportQuery): ReportSource {
+  const now = new Date();
+  return {
+    worksheetName: "Subscriptions",
+    headers: REPORT_EXPORT_COLUMNS.map((c) => c.header),
+    rowBatches: (async function* () {
+      for await (const batch of iterateCourseSubExportRows(q, now)) {
+        yield batch.map((r) => REPORT_EXPORT_COLUMNS.map((c) => c.get(r)));
+      }
+    })(),
+  };
+}
+
 export const getCourseSubscriptionById = async (id: number): Promise<"not_found" | any> => {
   const r = await repo.findCourseSubById(id);
   if (!r) return "not_found";
@@ -490,7 +507,7 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
   const endAt =
     input.durationDays && input.durationDays > 0
       ? computeEndAt({ startAt, durationMonths: input.durationDays, asDays: true })
-      : computeEndAt({ startAt, durationMonths: plan.duration || 0 });
+      : computeEndAt({ startAt, durationMonths: plan.duration || 0, asDays: true });
 
   const order = await makeOrder();
 

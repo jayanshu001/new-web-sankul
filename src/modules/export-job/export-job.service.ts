@@ -3,9 +3,11 @@ import { exportJobRepository as repo } from "./export-job.repository";
 import { getExportDef, extFor, contentTypeFor, ExportFormat } from "./export-job.registry";
 import {
   uploadExportObject,
+  createExportUpload,
   deleteExportObject,
   getSignedDownloadUrl,
 } from "../../utils/exportStorage";
+import { streamReportToWritable } from "../../utils/reportStream";
 
 // How long a generated file (and thus its download link) stays valid before GC.
 const RETENTION_MS = (Number(process.env.EXPORT_RETENTION_MINUTES) || 45) * 60_000;
@@ -82,18 +84,40 @@ export const runExportJob = async (jobRef: string): Promise<void> => {
   await repo.update(job.id, { status: "processing", progress: 10, startedAt: new Date(), updatedAt: new Date() });
   try {
     const fmt: ExportFormat = job.format === "csv" ? "csv" : "excel";
-    const buffer = await def.build((job.params ?? {}) as Record<string, string>, fmt);
+    const params = (job.params ?? {}) as Record<string, string>;
     const ext = extFor(fmt);
     const now = new Date();
     const fileName = `${def.filenameBase}-${dateStamp(now)}.${ext}`;
     const key = `admin/exports/${job.type}/${job.jobRef}.${ext}`;
-    await uploadExportObject(key, buffer, contentTypeFor(fmt), fileName);
+
+    // Preferred path: stream the report straight into a multipart upload so a
+    // lakhs-of-rows file never materializes in memory. Buffer path (build) is only
+    // for the small non-keyset referral report.
+    let rowCount: number | null = null;
+    if (def.resolveSource) {
+      const source = await def.resolveSource(params); // may throw on a bad filter
+      const upload = createExportUpload(key, contentTypeFor(fmt), fileName);
+      try {
+        rowCount = await streamReportToWritable(source, fmt, upload.body);
+      } catch (err) {
+        upload.body.destroy(err as Error); // abort the multipart upload
+        throw err;
+      }
+      await upload.done;
+    } else if (def.build) {
+      const buffer = await def.build(params, fmt);
+      await uploadExportObject(key, buffer, contentTypeFor(fmt), fileName);
+    } else {
+      throw new Error(`Export type ${job.type} has no builder.`);
+    }
+
     const expiresAt = new Date(now.getTime() + RETENTION_MS);
     await repo.update(job.id, {
       status: "ready",
       progress: 100,
       fileKey: key,
       fileName,
+      rowCount,
       expiresAt,
       finishedAt: now,
       updatedAt: now,
