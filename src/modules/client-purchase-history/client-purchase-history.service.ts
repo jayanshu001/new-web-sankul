@@ -136,23 +136,30 @@ export const listBooks = async (customerId: number, statuses: string[], skip: nu
     repo.listBookOrders(customerId, statuses, skip, take, search),
     repo.countBookOrders(customerId, statuses, search),
   ]);
-  // first-item thumbnails from the order_items JSON (the `item` field is bookId).
+  // first-item name + thumbnail from the order_items JSON (the `item` field is
+  // bookId). The JSON may omit `name` on legacy rows, so fetch the first book of
+  // each order once and use it to backfill the title (mirrors the receipt path).
   const itemsByOrder = new Map<number, any[]>();
   orders.forEach((o) => itemsByOrder.set(o.id, parseOrderItems(o.orderItems)));
   const firstBookIds = [...new Set([...itemsByOrder.values()].map((items) => items[0]?.item).filter((x) => x != null).map(Number))];
-  const thumbById = new Map((await repo.booksByIds(firstBookIds)).map((b) => [b.id, b.thumbnail || b.image || null]));
+  const bookById = new Map((await repo.booksByIds(firstBookIds)).map((b) => [b.id, b]));
 
   const data = orders.map((o) => {
     const items = itemsByOrder.get(o.id) ?? [];
     const first = items[0];
     const more = items.length - 1;
-    const title = first ? (more > 0 ? `${first.name} +${more} more` : first.name) : "Books order";
+    const firstId = first?.item != null ? Number(first.item) : null;
+    const book = firstId != null ? bookById.get(firstId) : null;
+    const firstName = first ? (first.name || book?.name || "Book") : null;
+    const title = firstName ? (more > 0 ? `${firstName} +${more} more` : firstName) : "Books order";
     return {
       _id: String(o.id),
       title,
-      thumbnail: first?.item != null ? thumbById.get(Number(first.item)) ?? null : null,
+      thumbnail: book?.thumbnail || book?.image || null,
       amount: Number(o.amount),
-      purchasedAt: o.createdAt ?? null,
+      // Legacy rows may have a null created_at (no DB default) — fall back to
+      // order_date, then paid_at, so the purchase date still renders.
+      purchasedAt: o.createdAt ?? o.orderDate ?? o.paidAt ?? null,
       status: o.status,
       receiptUrl: `${RECEIPT_BASE}/books/${o.id}/receipt`,
       tracking: {
@@ -448,6 +455,16 @@ export const listEbooks = async (customerId: number, status: string, skip: numbe
   const ebookIds = [...new Set([...plans.values()].map((p) => p.ebookId).filter((x): x is number => x != null && x > 0))];
   const ebooks = new Map((await repo.ebooksByIds(ebookIds)).map((e) => [e.id, e]));
 
+  // Subscription start_at per order — the purchase-date proxy for legacy orders
+  // whose created_at is NULL (start_at lives on ws_ebook_subscription, not the order).
+  const startByOrder = new Map<number, Date>();
+  for (const s of await repo.ebookSubStartByOrderIds(orders.map((o) => o.id))) {
+    if (s.orderId != null && s.startAt) {
+      const cur = startByOrder.get(s.orderId);
+      if (!cur || s.startAt < cur) startByOrder.set(s.orderId, s.startAt); // earliest
+    }
+  }
+
   const data = orders.map((o) => {
     const plan = o.planId ? plans.get(o.planId) : null;
     const ebook = plan?.ebookId ? ebooks.get(plan.ebookId) : null;
@@ -457,7 +474,9 @@ export const listEbooks = async (customerId: number, status: string, skip: numbe
       author: ebook?.author || null,
       thumbnail: ebook?.thumbnail || null,
       amount: o.orderPrice,
-      purchasedAt: o.createdAt ?? null,
+      // created_at (true order time) first; for legacy NULL rows fall back to the
+      // subscription's start_at (≈ purchase date), then updated_at.
+      purchasedAt: o.createdAt ?? startByOrder.get(o.id) ?? o.updatedAt ?? null,
       status: o.status,
       receiptUrl: `${RECEIPT_BASE}/ebooks/${o.id}/receipt`,
       meta: {

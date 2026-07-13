@@ -15,6 +15,8 @@
  * Flag OFF until go-live sign-off.
  */
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { creditReferrer } from "../../client/referral/credit-referrer";
+import { debitWallet } from "../../client/referral/debit-wallet";
 import { ebookOrderRepository as repo } from "./ebook-order.repository";
 import { toEbookOrderRow, toEbookOrderDto } from "./ebook-order.transformer";
 import type {
@@ -56,6 +58,10 @@ export const createEbookOrderMysql = async (input: {
   orderPrice: number;
   razorpayOrderId: string;
   uniqueId: string;
+  // Referrer to credit at verify when a referral code was applied (else null).
+  referrerId?: number | null;
+  // Wallet coins redeemed; debited at verify (stored in wallet_coin). 0/null = none.
+  coin?: number | null;
 }): Promise<CreatedEbookOrder> => {
   const order = await repo.createPendingOrder(input);
   return { orderId: order.id };
@@ -137,6 +143,8 @@ export const verifyEbookOrderMysql = async (
       now,
       extend: { existingSubId: existingActive.id, newEndAt, newPrice: prevPrice + price },
     });
+    await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: price, source: "ebook" });
+    await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "ebook" });
     return toEbookOrderDto(result.order, ebookId);
   }
 
@@ -151,6 +159,8 @@ export const verifyEbookOrderMysql = async (
     now,
     fresh: { startAt, endAt },
   });
+  await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: price, source: "ebook" });
+  await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "ebook" });
   return toEbookOrderDto(result.order, ebookId);
 };
 

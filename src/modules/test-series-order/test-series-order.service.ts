@@ -1,5 +1,7 @@
 import { prisma } from "../../config/prisma";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { creditReferrer } from "../../client/referral/credit-referrer";
+import { debitWallet } from "../../client/referral/debit-wallet";
 
 /**
  * Test-series payment + subscription write path on SQL (Wave 7 — net-new tables
@@ -40,13 +42,14 @@ export const listPlansForSeries = (testSeriesId: number) =>
 export const createOrderMysql = async (input: {
   customerId: number; testSeriesId: number; planId: number;
   bd: { basePrice: number; discountAmount: number; gstAmount: number; handlingFee: number; totalAmount: number };
-  promocodeId: number | null; razorpayOrderId: string;
+  promocodeId: number | null; razorpayOrderId: string; referrerId?: number | null; coin?: number | null;
 }): Promise<{ orderId: number }> => {
   const o = await prisma.testSeriesOrder.create({ data: {
     customerId: input.customerId, testSeriesId: input.testSeriesId, planId: input.planId,
     paymentMethod: "razorpay", orderType: "purchase",
     orderPrice: input.bd.totalAmount, basePrice: input.bd.basePrice, discountAmount: input.bd.discountAmount,
     gstAmount: input.bd.gstAmount, handlingFee: input.bd.handlingFee, promocodeId: input.promocodeId,
+    referrerId: input.referrerId ?? null, walletCoin: input.coin ?? null,
     razorpayOrderId: input.razorpayOrderId, status: "pending",
   }});
   return { orderId: o.id };
@@ -102,6 +105,8 @@ export const verifyOrderMysql = async (order: any, razorpayPaymentId: string, no
     });
     return { sub, o };
   });
+  await creditReferrer({ referrerId: order.referrerId, buyerId: order.customerId, orderId: order.id, paidAmount: orderPrice, source: "testSeries" });
+  await debitWallet({ customerId: order.customerId, orderId: order.id, coin: order.walletCoin, source: "testSeries" });
   return toDto(result.sub, result.o);
 };
 

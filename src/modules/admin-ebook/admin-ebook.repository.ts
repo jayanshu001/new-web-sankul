@@ -163,6 +163,8 @@ export const adminEbookRepository = {
           bankTransactionId: input.transactionId ?? null,
           ip_address: input.ipAddress,
           status: "complete",
+          createdAt: new Date(),
+          updatedAt: new Date(),
         },
       });
       const subscription = await tx.eBookSubscription.create({
@@ -176,6 +178,8 @@ export const adminEbookRepository = {
           remarks: input.remarks,
           payment_type: "backend",
           status: input.status,
+          createdAt: new Date(),
+          updatedAt: new Date(),
         },
       });
       return { order, subscription };
@@ -221,6 +225,8 @@ export const adminEbookRepository = {
           bankTransactionId: input.transactionId ?? null,
           ip_address: input.ipAddress,
           status: "complete",
+          createdAt: new Date(),
+          updatedAt: new Date(),
         },
       });
       const subscription = await tx.eBookSubscription.update({
@@ -230,6 +236,7 @@ export const adminEbookRepository = {
           price: input.price,
           endAt: input.endAt,
           ...(input.remarks !== null ? { remarks: input.remarks } : {}),
+          updatedAt: new Date(),
         },
       });
       return { order, subscription };

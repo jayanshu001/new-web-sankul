@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadLivePlanDiscountsSql, resolveReferralCode, referralCovers } from "../../modules/promo-code/promo-code.service";
+import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { computePromoDiscount } from "../promocode/applies-to";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
@@ -19,6 +20,7 @@ const createOrderSqlSchema = z.object({
   promocode: z.string().trim().min(1).optional(),
   withMaterial: z.boolean().optional(),
   customerShippingId: z.coerce.number().int().positive().optional(),
+  coin: z.coerce.number().int().min(0).optional(),
 });
 
 // SQL variant: planId is a numeric id (migrated id-space).
@@ -242,6 +244,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       let promocodeIdNum: number | null = null;
       let originalAmount: number | null = null;
       let discountAmount: number | null = null;
+      let referrerIdNum: number | null = null;
       if (body.promocode) {
         const { result, error } = await resolvePromoForPlanSql(body.promocode, planSql.price, { type: "liveCourse", id: planSql.liveCourseId }, body.planId, customerIdInt);
         if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
@@ -251,6 +254,18 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
         originalAmount = result.originalAmount;
         discountAmount = result.discountAmount;
+        referrerIdNum = result.referrerId ?? null;
+      }
+
+      // Wallet ("coin") redemption — validate + reduce the charged amount (debited at verify).
+      const walletUsage = await resolveWalletUsage(customerIdInt, body.coin, planSql.price);
+      if (walletUsage.error) {
+        logger.warn("createLiveCourseOrderPayment[mysql] wallet rejected", { traceId, customerId, coin: body.coin, error: walletUsage.error });
+        return res.status(400).json({ success: false, message: walletUsage.error });
+      }
+      if (walletUsage.coin > 0) {
+        chargeAmount = chargeAmount - walletUsage.coin;
+        if (chargeAmount < 1) return res.status(400).json({ success: false, message: "Amount after discount and wallet is below the minimum payable. Please reduce wallet usage." });
       }
 
       const nowSql = new Date();
@@ -261,7 +276,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       });
       const { subscriptionId } = await createLiveCourseOrderMysql({
         customerId: customerIdInt, liveCourseId: planSql.liveCourseId, planId: body.planId,
-        amount: chargeAmount, razorpayOrderId: rzpOrder.id, promocodeId: promocodeIdNum, originalAmount, discountAmount,
+        amount: chargeAmount, razorpayOrderId: rzpOrder.id, promocodeId: promocodeIdNum, referrerId: referrerIdNum, coin: walletUsage.coin, originalAmount, discountAmount,
         withMaterial: withMaterialSql, customerShippingId: shippingIdSql, now: nowSql,
       });
       logger.info("createLiveCourseOrderPayment[mysql] success", { traceId, customerId, subscriptionId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });

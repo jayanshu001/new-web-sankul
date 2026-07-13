@@ -15,6 +15,238 @@
 
 ---
 
+## 2026-07-13 — Wallet ("coin") redemption wired into payment create-order + verify
+
+> **New columns + charge/verify logic across all 5 create-order flows.** Applies DDL
+> `docs/migration/schema-changes/2026-07-13_wallet_coin_in_payment.sql`. `yarn typecheck` green;
+> validation + idempotent-debit smoke-tested against the live DB.
+
+The wallet contract in `docs/FE_WALLET_IN_PAYMENT.md` was documented as "backend complete" but
+had **zero implementation** — the `coin` field was silently ignored, so the charged amount was
+never reduced and the wallet never debited. Now implemented for course, package, ebook,
+live-course, test-series (book cart excluded per contract). The wallet balance IS
+`ws_customer.reward_points` (the referral wallet).
+
+**Schema / DDL:**
+- `ADD COLUMN wallet_coin INT NULL` on `ws_ebook_order`, `ws_live_course_subscription`,
+  `ws_test_series_order`. Course + package **reuse the existing `ws_package_course_order.ws_coin`
+  column** (already surfaced in admin subscription reports).
+
+**Create-order (query-level):** each of the 5 controllers now accepts optional `coin` (integer
+rupees), validates it via `referral.resolveWalletUsage` — `coin ≤ reward_points` AND
+`coin ≤ floor(planPrice × 0.5)`, integer ≥ 0 — reduces the Razorpay charge by `coin`, and
+persists `coin` on the pending order (`ws_coin` / `wallet_coin`). Post-discount total < ₹1 is
+rejected. 400 messages match the FE contract exactly.
+
+**Verify (query-level, new side effect):** each `verify*Mysql` fulfillment path now debits the
+wallet — `referral.debitWalletForOrder`: decrement `reward_points` by `min(coin, balance)` +
+write a **source-tagged** `ws_refferal_transaction` DEBIT row (status `successful`, no
+`bank_account`). Idempotent on `(source, order_id, customer, type='debit')`; deducts
+what's-available so a dropped balance never blocks provisioning. Non-throwing (`debitWallet`
+wrapper) — a debit failure is logged, never blocks a paid order. Reuses the razorpay webhook
+fulfillment paths, so debit also fires on webhook-first.
+
+**Admin rollup fix:** `referral.repository.referrerRows` withdrawal aggregates (`totalWithdrawn`,
+`pendingWithdrawals`, `failedWithdrawals`, `successfulWithdrawals`, `lastWithdrawalAt`) now add
+`AND t.source IS NULL` so wallet-spend debits (which set `source`) are NOT miscounted as bank
+withdrawals. Withdrawals leave `source` NULL.
+
+**Files:** `prisma/schema.prisma` (3 models), the 5 create-order payment controllers, the 5
+`*-order` services/repos + course/ebook row types & transformers, `src/modules/referral/referral.service.ts`
++ `.repository.ts`, `src/client/referral/debit-wallet.ts` (new).
+
+**Deploy:** apply the DDL, then `yarn prisma:generate`. No backfill.
+
+---
+
+## 2026-07-13 — Referral reward on purchase (creditReferrer wired into verify)
+
+> **New columns + new query-level side effect on the purchase verify flow.** Applies DDL
+> `docs/migration/schema-changes/2026-07-13_referral_reward_on_purchase.sql`. `yarn typecheck` green.
+
+`creditReferrer` existed but had **zero callers** — a buyer using someone's referral code got
+the discount, but the referrer was never credited. Now, on successful payment verification,
+the referrer is credited `ReferralProgram.refferalReward %` of the paid amount into
+`ws_customer.reward_points` with a `ws_refferal_transaction` CREDIT row (surfaced by
+`GET /client/referral/rewards`). Covers all 5 referral-eligible types: course, package,
+ebook, live-course, test-series.
+
+**Schema / DDL:**
+- `ADD COLUMN referrer_id INT NULL` on `ws_package_course_order`, `ws_ebook_order`,
+  `ws_live_course_subscription`, `ws_test_series_order`. Stamped at create-order when a
+  referral code resolves (referral codes are NOT promocodes, so `promocode_id` can't carry
+  the referrer); read back at verify.
+- `ADD COLUMN source VARCHAR(20) NULL` on `ws_refferal_transaction`. Order ids are per-table
+  (a course order #100 and an ebook order #100 are different purchases), so the credit
+  **idempotency key changed from `(order_id, referrer)` → `(source, order_id, referrer)`**.
+  Added index `idx_refferal_txn_credit_dedupe (customer_id, source, order_id, type)`.
+  NOTE: `order_id` has **no physical FK** to `ws_package_course_order` in this DB (the Prisma
+  relation is logical only) — nothing dropped; `order_id` is now polymorphic per `source`.
+
+**Query-level:**
+- `resolvePromoForPlanSql` now returns `referrerId` on the referral branch (`resolveReferralForPlanSql`).
+- `referral.repository.findCreditByOrder` / `creditReferralReward` now take + filter/write `source`.
+- `creditReferrer` is now **idempotent + non-throwing** — a credit failure logs and is swallowed
+  so a verified purchase is never blocked. Called in every `verify*Mysql` fulfillment path
+  (which the razorpay webhook fulfillment reuses, so credits also fire on webhook-first).
+
+**Files:** `prisma/schema.prisma` (5 models), the 5 `*-order` services/repos + row types/transformers,
+the 5 create-order payment controllers, `src/client/referral/credit-referrer.ts`,
+`src/modules/referral/referral.service.ts` + `.repository.ts`, `src/modules/promo-code/promo-code.service.ts`.
+
+**Deploy:** apply the DDL, then `yarn prisma:generate`. No backfill (existing orders predate
+referrer capture — they were never credited and stay uncredited; only new purchases credit).
+
+---
+
+## 2026-07-13 — New: GET admin/test-series/subscriptions/:subscriptionId (detail endpoint)
+
+> **Additive read-only endpoint on the already-SQL `admin-testseries` module. No schema/index change.** `yarn typecheck` green.
+
+Test-series was the only subscription product type without a GET-by-id detail endpoint
+(it had list/update/delete only), so the admin **Subscription Details** page had no
+source for razorpay ids / order type / remarks. Added it to match the course/package/
+ebook/live-course detail contract.
+
+- **Route:** `GET /api/v1/admin/test-series/subscriptions/:subscriptionId` (admin Bearer;
+  registered AFTER `/subscriptions/export/*` so those aren't matched as an id). RBAC map:
+  `view("test-series.subscriptions")`.
+- **Files:** `src/admin/testSeries/testSeries.controller.ts` (`getSubscription`),
+  `src/admin/testSeries/testSeries.routes.ts`, `src/middlewares/rbacRouteMap.ts`,
+  `src/modules/admin-testseries/admin-testseries.service.ts` (`getSubscriptionById`).
+- **Queries:** `testSeriesSubscription.findUnique` + parallel populate of `customer`
+  (fullName→firstName/lastName via `splitFullName`), `testSeries` (title/thumbnail),
+  `testSeriesPrice` (name/durationDays/price) and the linked `testSeriesOrder`
+  (paymentMethod/orderType/razorpayOrderId/razorpayPaymentId/transactionId). Returns
+  `"not_found"` → controller 404.
+- **DTO:** `{ _id, customerId{_id,firstName,lastName,phoneNumber,emailAddress},
+  testSeriesId{_id,name,image}, planId{_id,name,duration,price}, orderType,
+  paymentMethod, razorpayOrderId, razorpayPaymentId, bankTransactionId, price,
+  paidAmount, startAt, endAt, remarks, paymentType, isActive, status, createdAt,
+  updatedAt }`. `isActive` = `normalizeStatus(...) === "active"`.
+
+---
+
+## 2026-07-13 — Client catalog COURSE videos endpoint returns a flat, searchable video list (no category grouping)
+
+> **Query-shape change scoped to `type === "course"` only. `package` / `live-course` unchanged.** `yarn typecheck` green.
+
+`GET /api/v1/client/catalog/course/:id/videos` previously returned a category-grouped
+payload (`list: [{ category, list: [videos] }]` + `availableCategories` + `totals`,
+where `pagination.total` counted categories). It now returns a **flat** `list` of video
+items with server-side title search across the **entire root subtree** and pagination
+that counts videos.
+
+- **Files:** `src/modules/client-catalog/client-catalog.service.ts` (`catalogVideos` —
+  new early return for `type === "course"`), `src/client/catalog/catalog.controller.ts`
+  (course response message → "Videos fetched.").
+- **New query shape (course):** one `prisma.video.findMany({ where: { videoCategoryId:
+  { in: descendantsOf([root]) }, status: true, title?: { contains: search } }, orderBy:
+  { order: "asc" } })` over the full subtree, instead of the per-root-category grouped
+  queries. Progress + media-token gating identical to the old grouped course path.
+- **Response contract change (course only):** `data.list` is now the flat video array
+  (each item: `_id,title,topic,platform,priceType,order,recordings,qualities,mediaToken,
+  progress` — same item shape as before). `availableCategories`, `totals`, and the
+  `category` wrapper are removed. `pagination` retained; `pagination.total` now = video
+  count. `package`/`live-course` responses are byte-identical to before.
+- No schema/index change.
+
+---
+
+## 2026-07-13 — purchase-history/ebooks: purchasedAt falls back to subscription start_at
+
+> **No DB/query-shape change — one extra read + fallback.** `yarn typecheck` green.
+
+For legacy ebook orders whose `created_at` is NULL, `/purchase-history/ebooks` now derives
+`purchasedAt` from the linked subscription's `start_at` (≈ purchase moment) before falling
+to `updated_at`. `start_at` lives on `ws_ebook_subscription`, so a new repo read
+`ebookSubStartByOrderIds(orderIds)` hops order→subscription; earliest start_at per order is
+used. Order: `o.createdAt ?? sub.start_at ?? o.updatedAt ?? null`. New rows (now stamped)
+keep using `created_at`.
+
+## 2026-07-13 — Auto-stamp timestamps on EBookOrder + EBookSubscription (created_at/updated_at were NULL)
+
+> **Prisma-client-level change — NO DDL.** `prisma:generate` + `yarn typecheck` green.
+
+New rows in `ws_ebook_order` and `ws_ebook_subscription` landed with NULL `created_at` /
+`updated_at`: the introspected schema declared them as bare `DateTime? @map(...)` (no
+`@default(now())`, no `@updatedAt`), the Prisma create paths never set them, and the MySQL
+columns have no `DEFAULT CURRENT_TIMESTAMP`. Added `@default(now())` to `createdAt` and
+`@updatedAt` to `updatedAt` on both models (`EBookOrder`, `EBookSubscription`) so Prisma
+now stamps them on insert/update. Client-side only — no migration, existing NULL rows
+unchanged (read paths already fall back). ⚠ Do NOT `yarn db:pull` — it strips these attrs.
+
+**Belt-and-suspenders (explicit writes):** the schema `@default(now())` only takes effect
+once the app runs the REGENERATED client (a live server on the old build still inserts NULL
+— the likely reason new rows were still NULL). So the ebook create/update paths now ALSO set
+the stamps explicitly: `ebook-order.repository.ts` (createPendingOrder, verifyEbookTx order
+update + fresh-sub create + extend update) and `admin-ebook.repository.ts` (backend grant +
+extend). This guarantees non-NULL stamps regardless of deploy timing.
+
+**Backfill for historical NULL rows (optional, proxy-based):**
+`docs/migration/schema-changes/2026-07-13_ebook_timestamp_backfill.sql` fills existing NULL
+`created_at`/`updated_at` from the best available proxy — subscription `start_at` (≈ purchase
+moment), then propagates to the order via `order_id`. Approximate (the true insert time was
+never recorded); rows with NULL `start_at` or orders with no linked subscription stay NULL.
+Idempotent; run STEP 1 before STEP 2. Not yet applied — run on staging first via
+`npx prisma db execute --file …`.
+
+**Systemic finding (not yet actioned):** the same bare pattern affects ~65/68 `created_at`
+columns and ~62 `updated_at` columns across the introspected schema — this is why several
+list/receipt readers use `createdAt ?? startAt/orderDate/paidAt` fallbacks. A schema-wide
+standardization was intentionally deferred (mass `@updatedAt` would override any code that
+sets `updated_at` manually); recommend a deliberate per-module rollout rather than a blanket
+edit.
+
+## 2026-07-13 — Fix client purchase-history books/ebooks: missing title + null purchasedAt
+
+> **No DB/query change — read-shape backfill + date fallbacks.** `yarn typecheck` green.
+
+`GET /client/purchase-history/books` and `/ebooks` under-populated two fields:
+
+- **Books title** used only `first.name` from the `order_items` JSON; legacy rows omit
+  `name` there, so the title showed the fallback / `undefined`. The list already fetches
+  the first book of each order (for thumbnails) — now it reuses that `Book` row to
+  backfill the name (`first.name || book.name || "Book"`), mirroring the receipt path
+  (`getBookReceiptMysql`). `thumbById` map replaced by a single `bookById` map.
+- **Books purchasedAt** `o.createdAt ?? null` → `o.createdAt ?? o.orderDate ?? o.paidAt ?? null`
+  (legacy `ws_book_order` rows have null `created_at` / no DB default).
+- **Ebooks purchasedAt** `o.createdAt ?? null` → `o.createdAt ?? o.updatedAt ?? null`
+  (`ws_ebook_order` has no order_date/paid_at columns).
+
+Ebook titles already resolve via the plan→price→ebook hop; unchanged (a still-missing
+name there means `plan_id`/plan.ebook_id is absent on that order — a data gap, not code).
+
+## 2026-07-13 — Add isPaid + isPurchased to client catalog videos (contract parity with materials)
+
+> **No DB/query change — additive response fields.** `yarn typecheck` green.
+
+`GET /client/catalog/:type/:id/videos` returned purchase status only implicitly
+(`priceType` + `mediaToken` presence), while the sibling `/materials` endpoint already
+exposed explicit `isPaid` + `isPurchased` booleans (`shapeMaterialDoc`). Added the same
+two flags to each video object in `client-catalog.service.ts` (both the flat course list
+and the grouped inline list), reusing the already-computed `isPaid = priceType==="paid"`
+and `isPurchased = canPlay = !isPaid || courseEntitled` (identical semantics to materials:
+free ⇒ accessible). Also added `videoCategoryId` (string, matching materials'
+`materialCategoryId`) to each video object. Additive — existing `priceType`/`mediaToken`
+unchanged. NOTE: other
+video-list endpoints (client-trending / client-free / client-lecture-progress /
+live-course / lecture) still lack these flags — a follow-up sweep is needed for full
+cross-API consistency.
+
+## 2026-07-13 — Fix: admin customer-details subscriptions showed paidAmount=null (wrong column)
+
+> **No DB schema/query change — transformer column fix.** `yarn typecheck` green.
+
+`admin-customer-details.transformer.ts` (`toCourseDto` + `toPackageDto`) sourced
+`paidAmount` from `s.paidAmount` (`ws_package_course_subscription.paid_amount`), which is
+a promoter-only column added later (`2026-06-19_subscription_promoter_cols.sql`) and stays
+NULL for non-promoter subscriptions → paidAmount always came back null. Repointed to
+`s.amount` (the canonical paid-value column written by the create path and summed by the
+Subscription Report). `PkgSub` type now declares `amount` instead of `paidAmount`; the
+repository `findMany` already returns the full row, so no query change. Response value
+changes null → actual paid amount for these rows.
+
 ## 2026-07-13 — Fix: admin subscription create computed endAt from plan duration as MONTHS instead of DAYS
 
 > **No DB schema/query change — date-arithmetic bugfix on the SQL create path.**

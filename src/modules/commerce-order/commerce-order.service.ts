@@ -17,6 +17,8 @@
  * Flag stays OFF until a separate go-live sign-off.
  */
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { creditReferrer } from "../../client/referral/credit-referrer";
+import { debitWallet } from "../../client/referral/debit-wallet";
 import { commerceOrderRepository as repo } from "./commerce-order.repository";
 import type { MaterialFulfillment } from "./commerce-order.repository";
 import {
@@ -104,6 +106,10 @@ export const createCourseOrderMysql = async (input: {
   // Delivery address for "With Materials" plans; persisted on the order row so
   // verify can stamp it onto the fulfilled subscription. Null for digital-only.
   customerShippingId?: number | null;
+  // Referrer to credit at verify when a referral code was applied (else null).
+  referrerId?: number | null;
+  // Wallet coins redeemed; debited at verify (stored in ws_coin). 0/null = none.
+  coin?: number | null;
 }): Promise<CreatedCourseOrder> => {
   const order = await repo.createPendingOrder({ ...input, shippingId: input.customerShippingId ?? null });
   return { orderId: order.id };
@@ -215,6 +221,10 @@ export const verifyCourseOrderMysql = async (
         newAmount: prevAmount + amount,
       },
     });
+    // Reward the referrer (if this order used a referral code). Idempotent +
+    // non-throwing — a credit failure never blocks the customer's fulfillment.
+    await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: amount, source: "course" });
+    await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "course" });
     return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
   }
 
@@ -232,6 +242,8 @@ export const verifyCourseOrderMysql = async (
     material,
     fresh: { startAt, endAt },
   });
+  await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: amount, source: "course" });
+  await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "course" });
   return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
 };
 
@@ -256,6 +268,10 @@ export const createPackageOrderMysql = async (input: {
   price: number;
   razorpayOrderId: string;
   customerShippingId?: number | null;
+  // Referrer to credit at verify when a referral code was applied (else null).
+  referrerId?: number | null;
+  // Wallet coins redeemed; debited at verify (stored in ws_coin). 0/null = none.
+  coin?: number | null;
 }): Promise<CreatedCourseOrder> => {
   const order = await repo.createPendingOrder({ ...input, shippingId: input.customerShippingId ?? null });
   return { orderId: order.id };
@@ -311,6 +327,8 @@ export const verifyPackageOrderMysql = async (
       orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now, material,
       extend: { existingSubId: existingActive.id, newEndAt, newAmount: prevAmount + amount },
     });
+    await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: amount, source: "package" });
+    await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "package" });
     return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
   }
 
@@ -320,5 +338,7 @@ export const verifyPackageOrderMysql = async (
     orderId: order.id, razorpayPaymentId, customerId, packageId, planId: order.planId, amount, now, material,
     fresh: { startAt, endAt },
   });
+  await creditReferrer({ referrerId: order.referrerId, buyerId: customerId, orderId: order.id, paidAmount: amount, source: "package" });
+  await debitWallet({ customerId, orderId: order.id, coin: order.walletCoin, source: "package" });
   return toVerifiedCourseSubscriptionDto(result.order, result.subscription);
 };

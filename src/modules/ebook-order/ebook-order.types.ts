@@ -85,6 +85,10 @@ export interface EbookOrderRow {
   razorpayOrderId: string | null;
   razorpayPaymentId: string | null;
   orderPrice: number;
+  /** ws_ebook_order.referrer_id — set when a referral code was used. */
+  referrerId: number | null;
+  /** ws_ebook_order.wallet_coin — wallet coins redeemed; debited at verify. */
+  walletCoin: number | null;
 }
 
 /** Result of the create-order write. */

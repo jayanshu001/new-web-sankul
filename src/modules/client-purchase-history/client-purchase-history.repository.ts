@@ -100,6 +100,9 @@ export const clientPurchaseHistoryRepository = {
     ids.length ? prisma.packageCourseEbookPrice.findMany({ where: { id: { in: ids } }, select: { id: true, ebookId: true } }) : Promise.resolve([]),
   ebooksByIds: (ids: number[]) =>
     ids.length ? prisma.eBook.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, thumbnail: true, author: true } }) : Promise.resolve([]),
+  /** subscription start_at per order (proxy for purchase date on legacy orders whose created_at is NULL). */
+  ebookSubStartByOrderIds: (orderIds: number[]) =>
+    orderIds.length ? prisma.eBookSubscription.findMany({ where: { orderId: { in: orderIds } }, select: { orderId: true, startAt: true } }) : Promise.resolve([]),
 
   // ── ebook receipt (single order, ownership-scoped) ───────────────────────────
   ebookOrderForReceipt: (orderId: number, customerId: number) =>

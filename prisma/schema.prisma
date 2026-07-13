@@ -530,6 +530,7 @@ model RefferalProgram {
 model RefferalTransaction {
   id          Int                       @id @default(autoincrement()) @map("id")
   orderId     Int?                      @map("order_id")
+  source      String?                   @map("source") @db.VarChar(20)
   order       PackageCourseOrder?       @relation(fields: [orderId], references: [id])
   customerId  Int                       @map("customer_id")
   customer    Customer?                 @relation(fields: [customerId], references: [id])
@@ -1287,6 +1288,7 @@ model PackageCourseOrder {
   shipping                          Int?                                @map("shipping")
   promocode                         Json?
   refferalcode                      Json?
+  referrerId                        Int?                                @map("referrer_id")
   OrigianalPrice                    Int                                 @map("price")
   codeDiscount                      Int?                                @map("code_discount")
   wsCoin                            Int?                                @map("ws_coin")
@@ -1366,6 +1368,8 @@ model EBookOrder {
   userId                  Int?                          @map("customer_id")
   orderType               PackageCourseEbookOrderType   @map("order_type")
   promocode               Json?
+  referrerId              Int?                          @map("referrer_id")
+  walletCoin              Int?                          @map("wallet_coin")
   PackageCourseEbookPrice PackageCourseEbookPrice?      @relation(fields: [planId], references: [id])
   planId                  Int?                          @map("plan_id")
   orderPrice              Int                           @map("order_price")
@@ -1376,8 +1380,8 @@ model EBookOrder {
   bankTransactionId       String?                       @map("transaction_id")
   ip_address              String?
   status                  PackageCourseEbookOrderStatus
-  createdAt               DateTime?                     @map("created_at")
-  updatedAt               DateTime?                     @map("updated_at")
+  createdAt               DateTime?                     @default(now()) @map("created_at")
+  updatedAt               DateTime?                     @updatedAt @map("updated_at")
   eBookSubscription       EBookSubscription[]
 
   @@map("ws_ebook_order")
@@ -1397,8 +1401,8 @@ model EBookSubscription {
   remarks      String?
   payment_type PackageCourseEbookPaymentType
   status       Boolean?
-  createdAt    DateTime?                     @map("created_at")
-  updatedAt    DateTime?                     @map("updated_at")
+  createdAt    DateTime?                     @default(now()) @map("created_at")
+  updatedAt    DateTime?                     @updatedAt @map("updated_at")
 
   @@map("ws_ebook_subscription")
 }
@@ -1773,6 +1777,8 @@ model LiveCourseSubscription {
   endAt             DateTime? @map("end_at")
   status            Boolean   @default(true)
   promocodeId       Int?      @map("promocode_id")
+  referrerId        Int?      @map("referrer_id")
+  walletCoin        Int?      @map("wallet_coin")
   originalAmount    Int?      @map("original_amount")
   discountAmount    Int?      @map("discount_amount")
   paidAmount        Int?      @map("paid_amount")
@@ -2263,6 +2269,8 @@ model TestSeriesOrder {
   gstAmount         Decimal   @default(0) @map("gst_amount") @db.Decimal(10, 2)
   handlingFee       Decimal   @default(0) @map("handling_fee") @db.Decimal(10, 2)
   promocodeId       Int?      @map("promocode_id")
+  referrerId        Int?      @map("referrer_id")
+  walletCoin        Int?      @map("wallet_coin")
   razorpayOrderId   String?   @map("razorpay_order_id")
   razorpayPaymentId String?   @map("razorpay_payment_id")
   ipAddress         String?   @map("ip_address")

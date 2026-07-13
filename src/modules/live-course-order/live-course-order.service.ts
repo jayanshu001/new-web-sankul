@@ -1,5 +1,7 @@
 import { prisma } from "../../config/prisma";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import { creditReferrer } from "../../client/referral/credit-referrer";
+import { debitWallet } from "../../client/referral/debit-wallet";
 
 /**
  * Live-course payment write path on SQL (Wave 7). UNLIKE course/package, the
@@ -92,6 +94,8 @@ export const createLiveCourseOrderMysql = async (input: {
   amount: number;
   razorpayOrderId: string;
   promocodeId?: number | null;
+  referrerId?: number | null;
+  coin?: number | null;
   originalAmount?: number | null;
   discountAmount?: number | null;
   withMaterial?: boolean;
@@ -107,6 +111,8 @@ export const createLiveCourseOrderMysql = async (input: {
       originalAmount: input.originalAmount != null ? Math.round(input.originalAmount) : null,
       discountAmount: input.discountAmount != null ? Math.round(input.discountAmount) : null,
       promocodeId: input.promocodeId ?? null,
+      referrerId: input.referrerId ?? null,
+      walletCoin: input.coin ?? null,
       paymentStatus: "pending",
       status: true,
       withMaterial: !!input.withMaterial,
@@ -174,6 +180,8 @@ export const verifyLiveCourseOrderMysql = async (
       });
       return ext;
     });
+    await creditReferrer({ referrerId: pending.referrerId, buyerId: pending.customerId, orderId: pending.id, paidAmount: amount, source: "liveCourse" });
+    await debitWallet({ customerId: pending.customerId, orderId: pending.id, coin: pending.walletCoin, source: "liveCourse" });
     return toVerifyDto(result);
   }
 
@@ -184,6 +192,8 @@ export const verifyLiveCourseOrderMysql = async (
     where: { id: pending.id },
     data: { paymentStatus: "verified", razorpayPaymentId, paidAt: now, startAt, endAt, status: true, updatedAt: now },
   });
+  await creditReferrer({ referrerId: pending.referrerId, buyerId: pending.customerId, orderId: pending.id, paidAmount: amount, source: "liveCourse" });
+  await debitWallet({ customerId: pending.customerId, orderId: pending.id, coin: pending.walletCoin, source: "liveCourse" });
   return toVerifyDto(updated);
 };
 

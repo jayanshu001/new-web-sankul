@@ -8,12 +8,14 @@ import {
   createPackageOrderMysql,
 } from "../../modules/commerce-order/commerce-order.service";
 import { resolvePromoForPlanSql, addressBelongsToCustomerSql } from "../../modules/promo-code/promo-code.service";
+import { resolveWalletUsage } from "../../modules/referral/referral.service";
 
 // SQL planId is numeric (migrated id-space).
 const createPackageOrderSqlSchema = z.object({
   packageId: z.coerce.number().int().positive(),
   customerShippingId: z.coerce.number().int().positive().optional(),
   promocode: z.string().trim().min(1).optional(),
+  coin: z.coerce.number().int().min(0).optional(),
 });
 
 // POST /api/v1/client/payment/create-order/package
@@ -61,6 +63,7 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
 
       let chargeAmount = planSql.price;
       let promocodeIdNum: number | null = null;
+      let referrerIdNum: number | null = null;
       let originalAmount: number | null = null;
       let discountAmount: number | null = null;
       if (body.promocode) {
@@ -72,6 +75,18 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
         promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
         originalAmount = result.originalAmount;
         discountAmount = result.discountAmount;
+        referrerIdNum = result.referrerId ?? null;
+      }
+
+      // Wallet ("coin") redemption — validate + reduce the charged amount (debited at verify).
+      const walletUsage = await resolveWalletUsage(customerIdInt, body.coin, planSql.price);
+      if (walletUsage.error) {
+        logger.warn("createPackageOrderPayment[mysql] wallet rejected", { traceId, customerId, coin: body.coin, error: walletUsage.error });
+        return res.status(400).json({ success: false, message: walletUsage.error });
+      }
+      if (walletUsage.coin > 0) {
+        chargeAmount = chargeAmount - walletUsage.coin;
+        if (chargeAmount < 1) return res.status(400).json({ success: false, message: "Amount after discount and wallet is below the minimum payable. Please reduce wallet usage." });
       }
 
       const receiptId = `package-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -81,7 +96,7 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       });
       // NOTE: SQL order row carries the CHARGED amount (post-promo) as both price
       // and discount_price (commerce-order.createPendingOrder sets both = input).
-      const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, razorpayOrderId: rzpOrder.id, customerShippingId: body.customerShippingId ?? null });
+      const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, razorpayOrderId: rzpOrder.id, customerShippingId: body.customerShippingId ?? null, referrerId: referrerIdNum, coin: walletUsage.coin });
       logger.info("createPackageOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
       return res.status(201).json({
         success: true,

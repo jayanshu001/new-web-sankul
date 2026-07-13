@@ -1,7 +1,9 @@
 import { creditReferrerMysql } from "../../modules/referral/referral.service";
+import logger from "../../utils/logger";
+import { getErrorMessage } from "../../utils/httpResponse";
 
 interface CreditOpts {
-  referrerId: number | string;
+  referrerId: number | string | null | undefined;
   buyerId: number | string;
   orderId: number | string;
   paidAmount: number;
@@ -9,8 +11,13 @@ interface CreditOpts {
 }
 
 // Credits the referrer with `ReferralProgram.referralReward` % of paidAmount.
-// Idempotent on orderId — a second call for the same order is a no-op so the
-// payment-verify path can be retried safely (Razorpay webhooks, manual reverify, etc.).
+// Idempotent on (source, orderId, referrer) — a second call for the same order is
+// a no-op so the payment-verify path can be retried safely (Razorpay webhooks,
+// manual reverify, etc.).
+//
+// NEVER THROWS: crediting is a post-payment side effect. A verified purchase must
+// succeed even if the reward credit fails — errors are logged and swallowed so the
+// customer's fulfillment is never blocked by the referrer's wallet write.
 export async function creditReferrer(opts: CreditOpts): Promise<void> {
   const { referrerId, buyerId, orderId, paidAmount, source } = opts;
   if (!referrerId || !orderId || paidAmount <= 0) return;
@@ -21,11 +28,21 @@ export async function creditReferrer(opts: CreditOpts): Promise<void> {
   const oid = Number(orderId);
   const bid = Number(buyerId);
   if (!Number.isInteger(rid) || rid <= 0 || !Number.isInteger(oid) || oid <= 0) return;
-  return creditReferrerMysql({
-    referrerId: rid,
-    buyerId: Number.isInteger(bid) ? bid : 0,
-    orderId: oid,
-    paidAmount,
-    source,
-  });
+  try {
+    await creditReferrerMysql({
+      referrerId: rid,
+      buyerId: Number.isInteger(bid) ? bid : 0,
+      orderId: oid,
+      paidAmount,
+      source,
+    });
+  } catch (error: any) {
+    logger.error("creditReferrer failed (non-fatal)", {
+      referrerId: rid,
+      orderId: oid,
+      source,
+      error: getErrorMessage(error),
+      stack: error?.stack,
+    });
+  }
 }

@@ -65,7 +65,8 @@ export const getCatalogVideos = async (req: Request, res: Response) => {
       : null;
     const userNum = catSql.parseCatId(String(req.user?.id ?? ""));
     const r = await catSql.catalogVideos({ type, id: idNum, customerId: userNum, search: search || null, categoryIds: catIds });
-    return success(res, { parent: { _id: id, type, name: sp.name }, ...paginateCategories(req, r) }, "Video categories fetched.");
+    const msg = type === "course" ? "Videos fetched." : "Video categories fetched.";
+    return success(res, { parent: { _id: id, type, name: sp.name }, ...paginateCategories(req, r) }, msg);
   } catch (err) {
     logger.error("getCatalogVideos failed", { traceId, type, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch video categories.", 500);

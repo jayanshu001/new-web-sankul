@@ -23,6 +23,7 @@ import {
   exportSubscriptionsCsv,
   exportSubscriptionsExcel,
   grantSubscription,
+  getSubscription,
   updateSubscription,
   deleteSubscription,
   listOrders,
@@ -46,6 +47,7 @@ router.get("/subscriptions",                        listSubscriptions);
 // Export routes before `/subscriptions/:subscriptionId` so they aren't matched as an id.
 router.get("/subscriptions/export/csv",             exportSubscriptionsCsv);
 router.get("/subscriptions/export/excel",           exportSubscriptionsExcel);
+router.get("/subscriptions/:subscriptionId",        getSubscription);
 router.put("/subscriptions/:subscriptionId",        updateSubscription);
 router.delete("/subscriptions/:subscriptionId",     deleteSubscription);
 

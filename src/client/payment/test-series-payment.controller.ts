@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadTestSeriesPlanDiscountsSql, resolveReferralCode, referralCovers } from "../../modules/promo-code/promo-code.service";
+import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { computePromoDiscount } from "../promocode/applies-to";
 import { _shared } from "../testSeries/testSeries.controller";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
@@ -10,7 +11,7 @@ import * as tsSql from "../../modules/test-series-order/test-series-order.servic
 
 // SQL planId is numeric (migrated id-space).
 const applyPromoSqlSchema = z.object({ planId: z.coerce.number().int().positive(), promocode: z.string().trim().min(1) });
-const createOrderSqlSchema = z.object({ planId: z.coerce.number().int().positive(), promocode: z.string().trim().min(1).optional() });
+const createOrderSqlSchema = z.object({ planId: z.coerce.number().int().positive(), promocode: z.string().trim().min(1).optional(), coin: z.coerce.number().int().min(0).optional() });
 
 // POST /api/v1/client/payment/apply-promo/test-series
 // Preview-only. Mirrors apply-promo/live-course.
@@ -193,14 +194,26 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       const series = await tsSql.findSeries(plan.testSeriesId);
       if (!series) return res.status(404).json({ success: false, message: "Test series not found or inactive." });
 
-      let discountAmount = 0; let promocodeIdNum: number | null = null;
+      let discountAmount = 0; let promocodeIdNum: number | null = null; let referrerIdNum: number | null = null;
       if (body.promocode) {
         const { result, error } = await resolvePromoForPlanSql(body.promocode, plan.price, { type: "testSeries", id: plan.testSeriesId }, body.planId, customerIdInt);
         if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
         discountAmount = result.discountAmount;
         const pid = Number(String(result.promo._id)); promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
+        referrerIdNum = result.referrerId ?? null;
       }
       const bd = _shared.computeBreakdown(plan.price, discountAmount, promocodeIdNum != null ? String(promocodeIdNum) : null);
+      // Wallet ("coin") redemption — validate vs balance + 50%-of-plan-price cap,
+      // then reduce the charged total. Coins are debited at verify.
+      const walletUsage = await resolveWalletUsage(customerIdInt, body.coin, plan.price);
+      if (walletUsage.error) {
+        logger.warn("createTestSeriesOrderPayment[mysql] wallet rejected", { traceId, customerId, coin: body.coin, error: walletUsage.error });
+        return res.status(400).json({ success: false, message: walletUsage.error });
+      }
+      if (walletUsage.coin > 0) {
+        bd.totalAmount = bd.totalAmount - walletUsage.coin;
+        if (bd.totalAmount < 1) return res.status(400).json({ success: false, message: "Amount after discount and wallet is below the minimum payable. Please reduce wallet usage." });
+      }
       if (bd.totalAmount < 1) return res.status(400).json({ success: false, message: "Final amount is below the minimum payable. Please contact support." });
 
       const receiptId = `ts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -208,7 +221,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
         amount: Math.round(bd.totalAmount * 100), currency: "INR", receipt: receiptId,
         notes: { kind: "test-series", testSeriesId: String(plan.testSeriesId), planId: String(body.planId), customerId: String(customerIdInt), ...(promocodeIdNum ? { promocodeId: String(promocodeIdNum) } : {}) },
       });
-      const { orderId } = await tsSql.createOrderMysql({ customerId: customerIdInt, testSeriesId: plan.testSeriesId, planId: body.planId, bd, promocodeId: promocodeIdNum, razorpayOrderId: rzpOrder.id });
+      const { orderId } = await tsSql.createOrderMysql({ customerId: customerIdInt, testSeriesId: plan.testSeriesId, planId: body.planId, bd, promocodeId: promocodeIdNum, razorpayOrderId: rzpOrder.id, referrerId: referrerIdNum, coin: walletUsage.coin });
       logger.info("createTestSeriesOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: bd.totalAmount });
       return res.status(201).json({ success: true, data: {
         testSeriesOrderId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: bd.totalAmount, breakdown: bd,

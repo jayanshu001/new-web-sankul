@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { resolvePromoForPlanSql, addressBelongsToCustomerSql } from "../../modules/promo-code/promo-code.service";
+import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -20,6 +21,7 @@ const createCourseOrderMysqlSchema = z.object({
   packageId: z.coerce.number().int().positive(),
   customerShippingId: z.coerce.number().int().positive().optional(),
   promocode: z.string().trim().min(1).optional(),
+  coin: z.coerce.number().int().min(0).optional(),
 });
 
 // POST /api/v1/client/payment/create-order/course
@@ -71,7 +73,7 @@ const createCourseOrderMysqlPath = async (
   ctx: { traceId?: string; customerId: number; rp: RazorpayClient }
 ) => {
   const { traceId, customerId, rp } = ctx;
-  const { packageId, customerShippingId, promocode } = createCourseOrderMysqlSchema.parse(req.body);
+  const { packageId, customerShippingId, promocode, coin } = createCourseOrderMysqlSchema.parse(req.body);
 
   const plan = await findCoursePlanForOrder(packageId);
   if (!plan) {
@@ -100,6 +102,7 @@ const createCourseOrderMysqlPath = async (
   let promocodeIdNum: number | null = null;
   let originalAmount: number | null = null;
   let discountAmount: number | null = null;
+  let referrerIdNum: number | null = null;
   if (promocode) {
     const { result, error } = await resolvePromoForPlanSql(promocode, plan.price, { type: "course", id: plan.courseId }, packageId, Number(customerId));
     if (error || !result) {
@@ -112,6 +115,21 @@ const createCourseOrderMysqlPath = async (
     promocodeIdNum = Number.isInteger(pid) && pid > 0 ? pid : null;
     originalAmount = result.originalAmount;
     discountAmount = result.discountAmount;
+    // Referral code (not a promocode) → stamp the referrer so verify can credit.
+    referrerIdNum = result.referrerId ?? null;
+  }
+
+  // Wallet ("coin") redemption — validate vs balance + 50%-of-plan-price cap, then
+  // reduce the charged amount. Coins are DEBITED at verify (not here); the amount
+  // stored on the order carries the coin so verify knows how much to debit.
+  const walletUsage = await resolveWalletUsage(Number(customerId), coin, plan.price);
+  if (walletUsage.error) {
+    logger.warn("createCourseOrderPayment[mysql] wallet rejected", { traceId, customerId, coin, error: walletUsage.error });
+    return res.status(400).json({ success: false, message: walletUsage.error });
+  }
+  if (walletUsage.coin > 0) {
+    chargeAmount = chargeAmount - walletUsage.coin;
+    if (chargeAmount < 1) return res.status(400).json({ success: false, message: "Amount after discount and wallet is below the minimum payable. Please reduce wallet usage." });
   }
 
   const receiptId = `course-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -135,6 +153,8 @@ const createCourseOrderMysqlPath = async (
     price: chargeAmount,
     razorpayOrderId: rzpOrder.id,
     customerShippingId: customerShippingId ?? null,
+    referrerId: referrerIdNum,
+    coin: walletUsage.coin,
   });
 
   logger.info("createCourseOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });

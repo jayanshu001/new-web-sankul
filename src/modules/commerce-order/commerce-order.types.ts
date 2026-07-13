@@ -112,6 +112,10 @@ export interface CourseOrderRow {
   razorpayPaymentId: string | null;
   /** order.discount_price — amount paid. */
   amount: number | null;
+  /** ws_package_course_order.referrer_id — set when a referral code was used. */
+  referrerId: number | null;
+  /** ws_package_course_order.ws_coin — wallet coins redeemed; debited at verify. */
+  walletCoin: number | null;
 }
 
 /** Result of the create-order write: the pending order row's id + receipt. */

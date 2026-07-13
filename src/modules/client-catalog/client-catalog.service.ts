@@ -114,6 +114,45 @@ export const catalogVideos = async (opts: {
   // course-subscription check, computed once for the whole response.
   const courseEntitled = inlineList && opts.customerId ? await hasActiveCourseSub(opts.customerId, opts.id) : false;
   const { descendantsOf } = await import("../catalog-category-tree/category-tree.service");
+
+  // `course` returns a FLAT, server-side-searchable video list (no category
+  // grouping) — the FE renders a single scrolling list. Search filters titles at
+  // the DB across the ENTIRE root subtree; the controller applies pagination on
+  // this flat list. `package`/`live-course` keep the category-grouped shape below.
+  if (opts.type === "course") {
+    const root = roots[0];
+    if (!root) return { list: [] };
+    const subtree = await descendantsOf([root.id]);
+    const videoWhere: any = { videoCategoryId: { in: subtree }, status: true };
+    if (opts.search) videoWhere.title = { contains: opts.search };
+    const videos = await prisma.video.findMany({ where: videoWhere, orderBy: { order: "asc" } });
+    let progByVideo = new Map<number, any>();
+    if (opts.customerId && videos.length) {
+      const rows = await prisma.lectureProgress.findMany({ where: { customerId: opts.customerId, videoId: { in: videos.map((v) => v.id) } }, select: { videoId: true, positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true } });
+      progByVideo = new Map(rows.map((r) => [r.videoId!, r]));
+    }
+    const flat = videos.map((v) => {
+      const p = progByVideo.get(v.id);
+      // Same media-token gating as the grouped course path: paid videos get a
+      // token only when the course is purchased; free videos always get one.
+      const isPaid = v.priceType === "paid";
+      const canPlay = !isPaid || courseEntitled;
+      const mediaToken =
+        opts.customerId && canPlay
+          ? isPaid
+            ? signMediaToken({ k: "video", id: v.id, scope: { kind: "course", id: opts.id }, cust: opts.customerId })
+            : signMediaToken({ k: "video", id: v.id, free: true, cust: opts.customerId })
+          : null;
+      return {
+        _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, isPaid, isPurchased: canPlay, videoCategoryId: v.videoCategoryId != null ? String(v.videoCategoryId) : null, order: v.order,
+        recordings: [], qualities: defaultListingQualities(),
+        mediaToken,
+        progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
+      };
+    });
+    return { list: flat };
+  }
+
   const list = await Promise.all(selected.map(async (cat) => {
     const subtree = await descendantsOf([cat.id]);
     const [videoCount, childCount] = await Promise.all([
@@ -153,7 +192,7 @@ export const catalogVideos = async (opts: {
             : signMediaToken({ k: "video", id: v.id, free: true, cust: opts.customerId })
           : null;
       return {
-        _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, order: v.order,
+        _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, isPaid, isPurchased: canPlay, videoCategoryId: v.videoCategoryId != null ? String(v.videoCategoryId) : null, order: v.order,
         recordings: [], qualities: defaultListingQualities(),
         mediaToken,
         progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,

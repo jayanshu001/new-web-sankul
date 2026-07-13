@@ -203,17 +203,19 @@ export const referralRepository = {
     prisma.customer.findFirst({ where: { id, isAccountDeleted: false }, select: { id: true, rewardPoints: true } }),
 
   // ─── Referral credit on purchase (order-idempotent) ───────────────────────
-  /** Existing CREDIT txn for this (order, referrer) — the idempotency key. */
-  findCreditByOrder: (orderId: number, customerId: number) =>
-    prisma.refferalTransaction.findFirst({ where: { orderId, customerId, type: "credit" }, select: { id: true } }),
+  /** Existing CREDIT txn for this (source, order, referrer) — the idempotency key.
+   *  `source` discriminates order ids that collide across the per-type order
+   *  tables (a course order #100 and an ebook order #100 are different rows). */
+  findCreditByOrder: (source: string, orderId: number, customerId: number) =>
+    prisma.refferalTransaction.findFirst({ where: { source, orderId, customerId, type: "credit" }, select: { id: true } }),
 
   /** Credit the referrer's points + write a successful CREDIT ledger row, atomic.
    *  Re-checks the idempotency key INSIDE the tx so a retried verify/webhook is a
    *  no-op. Returns true when it credited, false when it was already credited. */
-  creditReferralReward: (input: { referrerId: number; orderId: number; coin: number; description: string }) =>
+  creditReferralReward: (input: { referrerId: number; source: string; orderId: number; coin: number; description: string }) =>
     prisma.$transaction(async (tx) => {
       const dup = await tx.refferalTransaction.findFirst({
-        where: { orderId: input.orderId, customerId: input.referrerId, type: "credit" },
+        where: { source: input.source, orderId: input.orderId, customerId: input.referrerId, type: "credit" },
         select: { id: true },
       });
       if (dup) return false;
@@ -221,6 +223,7 @@ export const referralRepository = {
       await tx.refferalTransaction.create({
         data: {
           orderId: input.orderId,
+          source: input.source,
           customerId: input.referrerId,
           description: input.description.slice(0, 150),
           coin: input.coin,
@@ -231,6 +234,39 @@ export const referralRepository = {
         },
       });
       return true;
+    }),
+
+  /** Redeem wallet coins for a paid order — decrement reward_points + write a
+   *  source-tagged successful DEBIT ledger row (no bank_account → NOT a
+   *  withdrawal). Atomic + idempotent on (source, order, customer, debit): a
+   *  retried verify/webhook is a no-op. Deducts what's AVAILABLE (min(coin,
+   *  balance)) so a balance that dropped since create-order never blocks
+   *  fulfillment. Returns the coins actually deducted. */
+  debitWalletForOrder: (input: { customerId: number; source: string; orderId: number; coin: number; description: string }) =>
+    prisma.$transaction(async (tx) => {
+      const dup = await tx.refferalTransaction.findFirst({
+        where: { source: input.source, orderId: input.orderId, customerId: input.customerId, type: "debit" },
+        select: { id: true },
+      });
+      if (dup) return 0;
+      const cust = await tx.customer.findUnique({ where: { id: input.customerId }, select: { rewardPoints: true } });
+      const deduct = Math.max(0, Math.min(input.coin, cust?.rewardPoints ?? 0));
+      if (deduct <= 0) return 0;
+      await tx.customer.update({ where: { id: input.customerId }, data: { rewardPoints: { decrement: deduct } } });
+      await tx.refferalTransaction.create({
+        data: {
+          orderId: input.orderId,
+          source: input.source,
+          customerId: input.customerId,
+          description: input.description.slice(0, 150),
+          coin: deduct,
+          type: "debit",
+          status: "successful",
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+      return deduct;
     }),
 
   // ─── Admin: withdrawals report (DEBIT + bank_account present) ─────────────
@@ -304,12 +340,15 @@ export const referralRepository = {
     const sql =
       `SELECT c.id AS customerId, c.full_name AS customerName, c.phone AS phoneNumber, c.email_address AS emailAddress,
               c.referral_code AS referralCode, c.created_at AS referralCodeCreatedAt, COALESCE(c.reward_points,0) AS rewardPoints,
+              -- Withdrawal aggregates count bank withdrawals ONLY. Wallet-spend
+              -- debits (redeeming coins at checkout) carry a non-null source col;
+              -- exclude them here so they do not inflate withdrawn stats.
               COALESCE(SUM(CASE WHEN t.type='credit' THEN t.coin ELSE 0 END),0) AS totalEarned,
-              COALESCE(SUM(CASE WHEN t.type='debit' AND t.status='successful' THEN t.coin ELSE 0 END),0) AS totalWithdrawn,
-              COALESCE(SUM(CASE WHEN t.type='debit' AND t.status='pending' THEN 1 ELSE 0 END),0) AS pendingWithdrawals,
-              COALESCE(SUM(CASE WHEN t.type='debit' AND t.status='failed' THEN 1 ELSE 0 END),0) AS failedWithdrawals,
-              COALESCE(SUM(CASE WHEN t.type='debit' AND t.status='successful' THEN 1 ELSE 0 END),0) AS successfulWithdrawals,
-              MAX(CASE WHEN t.type='debit' THEN t.created_at END) AS lastWithdrawalAt
+              COALESCE(SUM(CASE WHEN t.type='debit' AND t.source IS NULL AND t.status='successful' THEN t.coin ELSE 0 END),0) AS totalWithdrawn,
+              COALESCE(SUM(CASE WHEN t.type='debit' AND t.source IS NULL AND t.status='pending' THEN 1 ELSE 0 END),0) AS pendingWithdrawals,
+              COALESCE(SUM(CASE WHEN t.type='debit' AND t.source IS NULL AND t.status='failed' THEN 1 ELSE 0 END),0) AS failedWithdrawals,
+              COALESCE(SUM(CASE WHEN t.type='debit' AND t.source IS NULL AND t.status='successful' THEN 1 ELSE 0 END),0) AS successfulWithdrawals,
+              MAX(CASE WHEN t.type='debit' AND t.source IS NULL THEN t.created_at END) AS lastWithdrawalAt
        FROM ws_customer c
        LEFT JOIN ws_refferal_transaction t ON t.customer_id = c.id
        WHERE ${conds.join(" AND ")}

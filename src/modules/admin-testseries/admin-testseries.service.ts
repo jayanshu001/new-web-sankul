@@ -30,6 +30,7 @@ import type { ReportSource } from "../../utils/reportStream";
 import { prisma } from "../../config/prisma";
 import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 import { buildPagination } from "../../utils/listQuery";
+import { splitFullName } from "../customer-profile/customer-profile.name";
 
 export const ADMIN_TESTSERIES_MODULE = "admin-testseries";
 export const isAdminTestSeriesMysql = (): boolean => true;
@@ -1134,6 +1135,71 @@ export const deleteSubscription = async (id: number): Promise<boolean> => {
   if (!exists) return false;
   await prisma.testSeriesSubscription.delete({ where: { id } });
   return true;
+};
+
+// GET-by-id detail for the admin Subscription Details page — same populated shape
+// contract as the other product-type detail endpoints (customer / test series /
+// plan populated; razorpay ids + order type from the linked ws_test_series_order).
+// Returns "not_found" when the id is unknown.
+export const getSubscriptionById = async (id: number): Promise<"not_found" | any> => {
+  const sub = await prisma.testSeriesSubscription.findUnique({ where: { id } });
+  if (!sub) return "not_found";
+  const now = new Date();
+  const [customer, series, plan, order] = await Promise.all([
+    sub.customerId != null
+      ? prisma.customer.findUnique({ where: { id: sub.customerId }, select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } })
+      : null,
+    sub.testSeriesId != null
+      ? prisma.testSeries.findUnique({ where: { id: sub.testSeriesId }, select: { id: true, title: true, thumbnail: true } })
+      : null,
+    sub.planId != null
+      ? prisma.testSeriesPrice.findUnique({ where: { id: sub.planId }, select: { id: true, name: true, durationDays: true, price: true } })
+      : null,
+    sub.orderId != null
+      ? prisma.testSeriesOrder.findUnique({ where: { id: sub.orderId }, select: { id: true, paymentMethod: true, orderType: true, razorpayOrderId: true, razorpayPaymentId: true, transactionId: true } })
+      : null,
+  ]);
+
+  const customerRef = customer
+    ? (() => {
+        const { firstName, lastName } = splitFullName(customer.fullName);
+        return { _id: String(customer.id), firstName, lastName, phoneNumber: customer.phoneNumber, emailAddress: customer.emailAddress ?? null };
+      })()
+    : sub.customerId != null
+      ? String(sub.customerId)
+      : null;
+
+  return {
+    _id: String(sub.id),
+    customerId: customerRef,
+    testSeriesId: series
+      ? { _id: String(series.id), name: series.title ?? null, image: series.thumbnail ?? null }
+      : sub.testSeriesId != null
+        ? String(sub.testSeriesId)
+        : null,
+    planId: plan
+      ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.durationDays ?? null, price: num(plan.price) }
+      : sub.planId != null
+        ? String(sub.planId)
+        : null,
+    orderType: order?.orderType ?? null,
+    // Gateway from the linked order (razorpay|bank|cash|…); falls back to the
+    // subscription's backend/online split when no order row is linked.
+    paymentMethod: order?.paymentMethod ? String(order.paymentMethod).toLowerCase() : sub.paymentType === "backend" ? "backend" : "online",
+    razorpayOrderId: blankToNull(order?.razorpayOrderId),
+    razorpayPaymentId: blankToNull(order?.razorpayPaymentId),
+    bankTransactionId: blankToNull(order?.transactionId),
+    price: num(sub.price),
+    paidAmount: num(sub.price),
+    startAt: sub.startAt ?? null,
+    endAt: sub.endAt ?? null,
+    remarks: sub.remarks ?? null,
+    paymentType: sub.paymentType,
+    isActive: normalizeStatus({ status: sub.status, endAt: sub.endAt }, now) === "active",
+    status: sub.status,
+    createdAt: sub.createdAt ?? null,
+    updatedAt: sub.updatedAt ?? null,
+  };
 };
 
 export type ListOrdersOpts = {

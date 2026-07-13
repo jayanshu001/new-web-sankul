@@ -1,8 +1,9 @@
 # Wallet ("coin") in Payment — Frontend Integration
 
-**Status:** Backend is complete. All 4 create-order endpoints now accept a `coin`
-field, charge Razorpay the reduced amount, and debit the wallet on payment
-verify. FE just needs to **send `coin`** in the order payload.
+**Status:** Backend implemented & live 2026-07-13. All **5** create-order endpoints
+(course, package, live-course, test-series, ebook) accept a `coin` field, charge
+Razorpay the reduced amount, and debit the wallet on payment verify. FE just needs
+to **send `coin`** in the order payload.
 
 **Base:** `/api/v1/client` · **Auth:** `Authorization: Bearer <token>` on all.
 

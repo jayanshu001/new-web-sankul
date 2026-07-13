@@ -225,6 +225,8 @@ export const commerceOrderRepository = {
     price: number;
     razorpayOrderId: string;
     shippingId?: number | null;
+    referrerId?: number | null;
+    coin?: number | null;
   }) =>
     prisma.packageCourseOrder.create({
       data: {
@@ -236,6 +238,8 @@ export const commerceOrderRepository = {
         amount: Math.round(input.price),
         gatewayOrderId: input.razorpayOrderId,
         shipping: input.shippingId ?? undefined,
+        referrerId: input.referrerId ?? null,
+        wsCoin: input.coin ?? null,
         status: "pending",
       },
     }),

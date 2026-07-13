@@ -66,13 +66,66 @@ export const creditReferrerMysql = async (opts: {
   const coin = Math.round((opts.paidAmount * pct) / 100);
   if (coin <= 0) return;
 
-  // Fast-path idempotency (the atomic write re-checks under the tx).
-  if (await repo.findCreditByOrder(opts.orderId, opts.referrerId)) return;
+  // Fast-path idempotency (the atomic write re-checks under the tx). Keyed on
+  // (source, orderId, referrer) — order ids collide across the per-type order
+  // tables, so `source` is required to tell a course order from an ebook order.
+  if (await repo.findCreditByOrder(opts.source, opts.orderId, opts.referrerId)) return;
   await repo.creditReferralReward({
     referrerId: opts.referrerId,
+    source: opts.source,
     orderId: opts.orderId,
     coin,
     description: `Referral reward (${pct}%) — ${opts.source} purchase`,
+  });
+};
+
+// ─── Wallet ("coin") redemption in payment ───────────────────────────────────
+// The wallet balance IS ws_customer.reward_points (the referral wallet). At
+// create-order the customer may redeem `coin` (integer rupees) to reduce the
+// charged amount; the coins are debited at verify. See docs/FE_WALLET_IN_PAYMENT.md.
+
+export type WalletUsage = { error?: string; coin: number };
+
+/**
+ * Validate a requested wallet `coin` against the customer's balance and the
+ * 50%-of-plan-price cap. Returns the usable coin (0 when none/invalid) or an
+ * error message matching the FE contract. `planPrice` is the pre-promo/pre-GST
+ * plan price (the cap base). A missing/zero coin is a valid no-op.
+ */
+export const resolveWalletUsage = async (
+  customerId: number,
+  coin: number | null | undefined,
+  planPrice: number
+): Promise<WalletUsage> => {
+  const c = coin ?? 0;
+  if (!Number.isInteger(c) || c < 0) return { error: "Invalid wallet amount", coin: 0 };
+  if (c === 0) return { coin: 0 };
+  const customer = await repo.findRewardCustomer(customerId);
+  const balance = customer?.rewardPoints ?? 0;
+  if (c > balance) return { error: "Insufficient wallet balance", coin: 0 };
+  const cap = Math.floor(planPrice * 0.5);
+  if (c > cap) return { error: "Wallet usage cannot exceed 50% of the plan price", coin: 0 };
+  return { coin: c };
+};
+
+/**
+ * Debit redeemed wallet coins for a verified order. Idempotent on
+ * (source, orderId, customer) + deducts only what's available. Safe to call on
+ * every verify/webhook run.
+ */
+export const debitWalletForOrderMysql = async (opts: {
+  customerId: number;
+  source: "course" | "package" | "ebook" | "liveCourse" | "testSeries";
+  orderId: number;
+  coin: number;
+}): Promise<number> => {
+  if (!opts.coin || opts.coin <= 0 || !opts.customerId || !opts.orderId) return 0;
+  return repo.debitWalletForOrder({
+    customerId: opts.customerId,
+    source: opts.source,
+    orderId: opts.orderId,
+    coin: opts.coin,
+    description: `Wallet redeemed — ${opts.source} purchase`,
   });
 };
 

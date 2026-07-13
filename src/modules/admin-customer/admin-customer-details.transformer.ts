@@ -25,7 +25,11 @@ const planRef = (
 // ── Package/course subscription (one model, split by course vs package) ────────
 type PkgSub = {
   id: number; courseId: number | null; packageId: number | null; planId: number | null;
-  paidAmount: unknown; status: boolean | null; startAt: Date | null; endAt: Date | null;
+  // `amount` is the canonical paid value on ws_package_course_subscription (written by
+  // the create path, summed by the Subscription Report). `paid_amount` is a later
+  // promoter-only column (2026-06-19_subscription_promoter_cols.sql) that stays NULL
+  // for non-promoter subs — so paidAmount is sourced from `amount`, not `paid_amount`.
+  amount: unknown; status: boolean | null; startAt: Date | null; endAt: Date | null;
 };
 
 export const toCourseDto = (
@@ -39,7 +43,7 @@ export const toCourseDto = (
     _id: String(s.id),
     courseId: ref(s.courseId, course && { name: course.name, image: course.image, level: course.level }),
     packageId: planRef(s.planId, s.planId != null ? plans.get(s.planId) : undefined),
-    paidAmount: dec(s.paidAmount),
+    paidAmount: dec(s.amount),
     paymentStatus: s.status ? "verified" : "pending",
     startAt: s.startAt,
     endAt: s.endAt,
@@ -58,7 +62,7 @@ export const toPackageDto = (
     _id: String(s.id),
     targetPackageId: ref(s.packageId, pkg && { name: pkg.name, image: pkg.image }),
     packageId: planRef(s.planId, s.planId != null ? plans.get(s.planId) : undefined),
-    paidAmount: dec(s.paidAmount),
+    paidAmount: dec(s.amount),
     paymentStatus: s.status ? "verified" : "pending",
     startAt: s.startAt,
     endAt: s.endAt,

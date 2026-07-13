@@ -53,6 +53,8 @@ export const ebookOrderRepository = {
     orderPrice: number;
     razorpayOrderId: string;
     uniqueId: string;
+    referrerId?: number | null;
+    coin?: number | null;
   }) =>
     prisma.eBookOrder.create({
       data: {
@@ -63,7 +65,14 @@ export const ebookOrderRepository = {
         paymentMethod: "razorpay",
         orderPrice: Math.round(input.orderPrice),
         gatewayOrderId: input.razorpayOrderId,
+        referrerId: input.referrerId ?? null,
+        walletCoin: input.coin ?? null,
         status: "pending",
+        // Explicit stamps: the ws_ebook_order columns have no DB default and older
+        // deploys may predate the schema @default(now())/@updatedAt — set them here
+        // so created_at/updated_at are never NULL on new rows.
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
     }),
 
@@ -89,7 +98,7 @@ export const ebookOrderRepository = {
     prisma.$transaction(async (tx) => {
       const order = await tx.eBookOrder.update({
         where: { id: input.orderId },
-        data: { status: "complete", gatewayPaymentId: input.razorpayPaymentId },
+        data: { status: "complete", gatewayPaymentId: input.razorpayPaymentId, updatedAt: input.now },
       });
 
       if (input.extend) {
@@ -99,6 +108,7 @@ export const ebookOrderRepository = {
             endAt: input.extend.newEndAt,
             price: new Prisma.Decimal(input.extend.newPrice),
             orderId: input.orderId, // follow the latest paid order
+            updatedAt: input.now,
           },
         });
         return { order, subscription: sub, extended: true as const };
@@ -114,6 +124,8 @@ export const ebookOrderRepository = {
           endAt: input.fresh!.endAt,
           payment_type: "online",
           status: true,
+          createdAt: input.now,
+          updatedAt: input.now,
         },
       });
       return { order, subscription: sub, extended: false as const };

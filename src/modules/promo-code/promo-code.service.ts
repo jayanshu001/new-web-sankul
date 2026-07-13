@@ -1066,6 +1066,10 @@ export interface PromoResolveResultSql {
   finalAmount: number;
   promoterPercentage: number;
   promoterCommission: number;
+  // Set ONLY when the code resolved as a referral code (not a promocode): the
+  // owning customer's id, so create-order can stamp referrer_id on the order row
+  // and verify can credit the referrer's wallet. Undefined for promocodes.
+  referrerId?: number;
 }
 
 export const resolvePromoForPlanSql = async (
@@ -1173,6 +1177,7 @@ const resolveReferralForPlanSql = async (
       finalAmount: baseAmount - discountAmount,
       promoterPercentage: 0,
       promoterCommission: 0,
+      referrerId: referral.referrerId,
     },
   };
 };

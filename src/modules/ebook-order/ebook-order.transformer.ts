@@ -14,6 +14,8 @@ export const toEbookOrderRow = (o: EBookOrder): EbookOrderRow => ({
   razorpayOrderId: o.gatewayOrderId ?? null,
   razorpayPaymentId: o.gatewayPaymentId ?? null,
   orderPrice: o.orderPrice ?? 0,
+  referrerId: o.referrerId ?? null,
+  walletCoin: o.walletCoin ?? null,
 });
 
 /**

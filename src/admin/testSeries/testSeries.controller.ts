@@ -618,6 +618,26 @@ export const grantSubscription = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/admin/test-series/subscriptions/:subscriptionId — single record,
+// customer / test series / plan populated for the admin Subscription Details page.
+export const getSubscription = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.subscriptionId);
+  logger.info("getSubscription invoked", { traceId, path: req.originalUrl, subscriptionId: id, userId: req.user?.id });
+
+  try {
+    const nid = tsSql.parseAtsId(id);
+    if (nid == null) { logger.warn("getSubscription invalid id", { traceId, id }); return failure(res, "Invalid id.", 422); }
+    const r = await tsSql.getSubscriptionById(nid);
+    if (r === "not_found") { logger.warn("getSubscription not found", { traceId, id }); return failure(res, "Subscription not found.", 404); }
+    logger.info("getSubscription success", { traceId, id });
+    return success(res, r, "Subscription fetched.");
+  } catch (err) {
+    logger.error("getSubscription failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to fetch subscription.", 500);
+  }
+};
+
 // PUT /api/v1/admin/test-series/subscriptions/:subscriptionId
 export const updateSubscription = async (req: Request, res: Response) => {
   const traceId = req.traceId;

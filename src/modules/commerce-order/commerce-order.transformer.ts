@@ -49,6 +49,8 @@ export const toCourseOrderRow = (o: PackageCourseOrder): CourseOrderRow => ({
   razorpayOrderId: o.gatewayOrderId ?? null,
   razorpayPaymentId: o.gatewayPaymentId ?? null,
   amount: o.amount ?? null,
+  referrerId: o.referrerId ?? null,
+  walletCoin: o.wsCoin ?? null,
 });
 
 /**

@@ -469,6 +469,7 @@ R("DELETE", "/test-series/papers/:id", "test-series.edit");
 R("PUT", "/test-series/prices/:id", "test-series.plans.edit");
 R("DELETE", "/test-series/prices/:id", "test-series.plans.delete");
 R("GET", "/test-series/subscriptions", ...view("test-series.subscriptions"));
+R("GET", "/test-series/subscriptions/:id", ...view("test-series.subscriptions"));
 R("PUT", "/test-series/subscriptions/:id", "test-series.subscriptions.edit");
 R("DELETE", "/test-series/subscriptions/:id", "test-series.subscriptions.delete");
 R("GET", "/test-series/orders", ...view("test-series"));
