@@ -484,6 +484,8 @@ export interface CreateSubInput {
   // extend=true → top up the customer's existing active subscription for this
   // ebook instead of creating a fresh row (falls back to create if none).
   extend?: boolean;
+  // Acting admin id (resolved server-side from the JWT) → audit columns.
+  actingAdminId?: number | null;
 }
 
 export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false; reason: "ebook" | "plan" } | { ok: true; data: any }> => {
@@ -522,6 +524,7 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
     endAt,
     remarks: d.remarks ?? null,
     status: d.status ?? true,
+    actingAdminId: d.actingAdminId ?? null,
   };
 
   // Subscription Type = Extend: append the plan's duration onto the customer's
@@ -542,7 +545,7 @@ export const createSubscription = async (d: CreateSubInput): Promise<{ ok: false
 
 export const updateSubscription = async (
   id: number,
-  d: { razorpayOrderId?: string; razorpayPaymentId?: string; remarks?: string | null; status?: boolean }
+  d: { razorpayOrderId?: string; razorpayPaymentId?: string; remarks?: string | null; status?: boolean; actingAdminId?: number | null }
 ): Promise<"not_found" | "order_not_found" | "already_active" | { order?: any; subscription: any }> => {
   const sub = await repo.findSubscriptionBare(id);
   if (!sub) return "not_found";
@@ -554,6 +557,8 @@ export const updateSubscription = async (
     const data: any = {};
     if (d.status !== undefined) data.status = d.status;
     if (d.remarks !== undefined) data.remarks = d.remarks ?? null;
+    // Admin edit → stamp updated_by (created_by unchanged).
+    if (d.actingAdminId != null) data.updated_by = d.actingAdminId;
     const subscription = await repo.updateSubscription(id, data);
     return { subscription };
   }
@@ -573,6 +578,8 @@ export const updateSubscription = async (
   const subData: any = {};
   if (d.status !== undefined) subData.status = d.status;
   if (d.remarks !== undefined) subData.remarks = d.remarks ?? null;
+  // Verifying an order is an admin edit → stamp updated_by on the sub too.
+  if (d.actingAdminId != null) subData.updated_by = d.actingAdminId;
   const subscription = Object.keys(subData).length ? await repo.updateSubscription(id, subData) : sub;
 
   return { order: updatedOrder, subscription };

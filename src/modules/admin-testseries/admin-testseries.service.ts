@@ -1024,6 +1024,8 @@ export type GrantWrite = {
   // extend=true → top up the customer's existing active subscription for this test
   // series instead of creating a fresh row (falls back to create if none).
   extend?: boolean;
+  // Acting admin id (resolved server-side from the JWT) → audit columns.
+  actingAdminId?: number | null;
 };
 
 /** Returns { planNotFound: true } | { missingDuration: true } | { subscription }. */
@@ -1086,6 +1088,8 @@ export const grantSubscription = async (
           price,
           endAt: base,
           ...(data.remarks !== undefined ? { remarks: data.remarks } : {}),
+          // Extend = admin edit of an existing row → stamp updated_by only.
+          ...(data.actingAdminId != null ? { updated_by: data.actingAdminId } : {}),
           updatedAt: now,
         },
       });
@@ -1106,6 +1110,9 @@ export const grantSubscription = async (
         paymentType: "backend", // PackageCourseEbookPaymentType.BACKEND
         remarks: data.remarks ?? null,
         status: true,
+        // Admin-initiated manual grant → both audit columns = the acting admin.
+        created_by: data.actingAdminId ?? null,
+        updated_by: data.actingAdminId ?? null,
       },
     });
     return { subscription };
@@ -1117,6 +1124,8 @@ export type UpdateSubWrite = {
   endAt?: string;
   status?: boolean;
   remarks?: string;
+  // Acting admin id (resolved server-side from the JWT) → updated_by.
+  actingAdminId?: number | null;
 };
 
 /** Returns null when missing. */
@@ -1125,6 +1134,8 @@ export const updateSubscription = async (id: number, data: UpdateSubWrite) => {
   if (data.endAt) set.endAt = new Date(data.endAt);
   if (typeof data.status === "boolean") set.status = data.status;
   if (typeof data.remarks === "string") set.remarks = data.remarks;
+  // Admin edit → stamp updated_by (created_by untouched).
+  if (data.actingAdminId != null) set.updated_by = data.actingAdminId;
   const sub = await prisma.testSeriesSubscription.update({ where: { id }, data: set }).catch(() => null);
   return sub ? { subscription: subscriptionDto(sub) } : null;
 };

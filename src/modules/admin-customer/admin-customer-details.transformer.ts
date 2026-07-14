@@ -131,7 +131,7 @@ type EbookSub = {
 export const toEbookDto = (
   s: EbookSub,
   ebooks: Lookup<{ name: string; author: string | null; publisher: string | null }>,
-  orders: Lookup<{ paymentMethod: string; orderPrice: number; status: string; createdAt: Date | null }>,
+  orders: Lookup<{ paymentMethod: string | null; orderPrice: number; status: string; createdAt: Date | null }>,
   now: Date
 ) => {
   const eb = s.ebookId != null ? ebooks.get(s.ebookId) : undefined;

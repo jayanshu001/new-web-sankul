@@ -607,6 +607,8 @@ export const grantSubscription = async (req: Request, res: Response) => {
       razorpayOrderId: data.razorpayOrderId ?? null,
       razorpayPaymentId: data.razorpayPaymentId ?? null,
       extend: data.extend,
+      // Audit: acting admin from the JWT (never from the body).
+      actingAdminId: tsSql.parseAtsId(String(req.user?.id ?? "")) ?? null,
     });
     if ("planNotFound" in r) { logger.warn("grantSubscription plan not found", { traceId, planId: data.planId }); return failure(res, "Plan not found.", 404); }
     if ("missingDuration" in r) { logger.warn("grantSubscription missing duration", { traceId, testSeriesId }); return failure(res, "durationDays is required (or supply planId).", 422); }
@@ -654,7 +656,8 @@ export const updateSubscription = async (req: Request, res: Response) => {
     }
     const nid = tsSql.parseAtsId(id);
     if (nid == null) { logger.warn("updateSubscription invalid id", { traceId, id }); return failure(res, "Invalid id.", 422); }
-    const r = await tsSql.updateSubscription(nid, data as any);
+    // Audit: acting admin from the JWT stamps updated_by.
+    const r = await tsSql.updateSubscription(nid, { ...data, actingAdminId: tsSql.parseAtsId(String(req.user?.id ?? "")) ?? null } as any);
     if (!r) { logger.warn("updateSubscription not found", { traceId, id }); return failure(res, "Subscription not found.", 404); }
     logger.info("updateSubscription success", { traceId, id });
     return success(res, r, "Updated.");

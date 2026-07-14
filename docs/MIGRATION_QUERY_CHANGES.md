@@ -15,6 +15,213 @@
 
 ---
 
+## 2026-07-14 — OTP login: block after 5 wrong attempts + auto-unblock sweep
+
+> **Behavior + new queries on `ws_customer`. No DDL** (`tried_otp`, `otp_blocked_at`,
+> `status` already exist).
+
+`POST /client/auth/otp/validate` previously kept decrementing "attempts remaining"
+past zero into negatives and never blocked. Now, on the `OTP_MAX_ATTEMPTS`-th (5th)
+wrong OTP it **blocks the account**: `status=false`, `otp_blocked_at=now`,
+`tried_otp=5` (new `customerAuthRepository.blockOtp`), returning "Due to too many
+wrong attempts, your account has been blocked for 24 hours." Earlier wrong attempts
+return "Invalid OTP. N attempt(s) remaining." with N ∈ {4,3,2,1} — never 0/negative.
+
+While blocked: validate → "Invalid user." (`findLoginableByPhone` already requires
+`status=true`); generate/resend → "Your account has been blocked, please contact the
+helpline number." A correct OTP is still checked *before* the counter, so a valid
+code always succeeds up to the block (a real 5 attempts, matching the message).
+
+Auto-unblock: new lightweight `setInterval` sweep (`otp-unblock.scheduler.ts`, every
+`OTP_UNBLOCK_SWEEP_MINUTES`=5) runs one atomic idempotent `updateMany`
+(`unblockExpiredOtp`): `WHERE status=false AND otp_blocked_at < now-OTP_BLOCK_HOURS`
+→ `status=true, otp_blocked_at=NULL, tried_otp=0`. The `otp_blocked_at < cutoff`
+predicate excludes NULL, so **admin-disabled accounts (otp_blocked_at NULL) are never
+auto-re-enabled**. No Redis "is-running" lock (the old design's stuck-flag-after-crash
+bug) — the sweep is idempotent, so concurrent runs across PM2 workers are safe.
+New env (optional): `OTP_BLOCK_HOURS` (24), `OTP_UNBLOCK_SWEEP_MINUTES` (5).
+
+---
+
+## 2026-07-14 — Study materials are ALWAYS paid (never free)
+
+> **Behavior + data change on `ws_material` only** (not books/ebooks). DML migration:
+> `docs/migration/schema-changes/2026-07-14_material_always_paid.sql`.
+
+Study materials are conceptually paid, gated PDFs — there is no free tier. Enforced
+at three layers so a stray/legacy `is_paid=0` can never serve a material for free:
+
+1. **Write (admin):** `admin-material.createMaterial` forces `isPaid=true`;
+   `updateMaterial` forces `isPaid=true` on every edit (ignores any client value).
+   (`ws_material.is_paid` already defaults `true` in schema.)
+2. **Read/gating (hard rule):** `client-material.getPurchasedMaterialIds` now
+   entitlement-checks EVERY material (dropped the `.filter(m => m.isPaid)`), and all
+   material shapers hard-code `isPaid=true` / `isPurchased = owned.has(id)`
+   (`client-material.shapeMaterial`, `client-catalog.shapeMaterialDoc`,
+   `client-folder.hydrateRefs`). So `mediaToken` is null unless the caller owns an
+   active course/package sub covering the material's category chain.
+3. **`/free-materials` endpoint** now returns an empty page unconditionally
+   (`client-free.freeMaterials`) — there are no free study materials to list. (Its
+   old free-only tree walker + the free-material shaper were removed.)
+
+Data cleanup: `UPDATE ws_material SET is_paid=1 WHERE is_paid=0 OR is_paid IS NULL`
+(idempotent). Staging already 227/227 `is_paid=1`. Response field `isPaid` on every
+material is now always `true`; frontend has dropped the Paid/Free control accordingly.
+
+---
+
+## 2026-07-14 — Subscription audit: stamp created_by / updated_by with the acting admin
+
+> **Schema change (3 tables get new columns) + write-logic change across 4 admin modules. DDL: `docs/migration/schema-changes/2026-07-14_subscription_created_by_updated_by_audit.sql` (applied to staging).**
+
+Admin-initiated manual subscription create/update now stamps `created_by` / `updated_by`
+with the **acting admin's id, derived server-side from the JWT** (`req.user?.id`), never
+from the request body. Covers all four subscription surfaces:
+
+| Product | Create endpoint | Update endpoint | Table |
+|---|---|---|---|
+| Package / Course | `POST admin/subscriptions` | `PUT admin/subscriptions/:id` | `ws_package_course_subscription` |
+| Live Course | `POST admin/live-courses/:id/grant` | `PUT admin/live-courses/subscriptions/:id` | `ws_live_course_subscription` |
+| Test Series | `POST admin/test-series/:id/grant` | `PUT admin/test-series/subscriptions/:id` | `ws_test_series_subscription` |
+| EBook | `POST admin/ebooks/subscriptions` | `PUT admin/ebooks/subscriptions/:id` | `ws_ebook_subscription` |
+
+Rules implemented:
+- **Create** → `created_by = updated_by = actingAdminId`.
+- **Update** → `updated_by = actingAdminId`; `created_by` left untouched (only set when
+  the admin id resolved, so a system/unauthenticated caller never nulls it).
+- **Extend** paths: package/course extend creates a NEW row → both columns set. Live /
+  test-series / ebook extend UPDATE an existing row → `updated_by` only (per contract).
+- **Source of truth = JWT.** Any `created_by`/`updated_by` in the body is ignored; the
+  Zod schemas were NOT widened — the id is threaded as a separate `actingAdminId` param
+  controller → service → repository.
+- Online/system purchases are unchanged (not admin-attributed → stay NULL).
+
+Schema: `ws_package_course_subscription` already had both columns. Added `created_by INT
+NULL` / `updated_by INT NULL` to `ws_live_course_subscription`,
+`ws_test_series_subscription`, `ws_ebook_subscription` (DDL above; `schema.prisma` models
+hand-edited to match; `prisma:generate` run). Existing rows stay NULL (no backfill —
+historical admin actor is unknown). Verified on staging: a create on each of the four
+tables persists `created_by = updated_by = <admin id>`.
+
+## 2026-07-14 — `EBookOrder.paymentMethod` relaxed enum → nullable String (dirty legacy data)
+
+> **Schema type change on ONE field (no DDL). Fixes a hard read crash on the eBook subscription export.**
+
+The eBook subscription export (`admin-ebook.repository.ts` `listSubscriptions` /
+`listSubscriptionsPageKeyset`) reads the joined `eBookOrder.paymentMethod`. Legacy
+`ws_ebook_order` rows store an **empty string** in `payment_method`, which is not a valid
+`PaymentMethod` enum member, so Prisma threw on deserialization:
+
+```
+Invalid `prisma.eBookSubscription.findMany()` invocation:
+Value '' not found in enum 'PaymentMethod'
+```
+
+Fix: `prisma/schema.prisma` `EBookOrder.paymentMethod` changed from `PaymentMethod` →
+`String?`. Prisma no longer validates the value against the enum on read, so `''`/null
+rows read through as-is and the export succeeds. **No DDL** — the MySQL column already
+holds these values; only Prisma's interpretation changed. Regenerated the client
+(`prisma:generate`). Writers were already `as any` / string literals (`"razorpay"`), so
+unaffected. Consumer type widened: `admin-customer-details.transformer.ts` `toEbookDto`
+`orders` Lookup `paymentMethod: string` → `string | null`. The export/DTO now surfaces the
+raw value (`''` for legacy rows) instead of crashing.
+
+**Watch:** the same `PaymentMethod` enum is still strict on `PackageCourseOrder.paymentMethod`
+and `BookOrder.paymentMethod`; if their tables also contain blank `payment_method` rows,
+their exports will hit the identical error and need the same relaxation.
+
+## 2026-07-14 — Study materials moved to the encrypted media-token contract
+
+> **Response-shape change (deliberate, coordinated w/ frontend). No schema/DDL change.**
+> Frontend integration doc: `docs/client/MATERIAL_MEDIA_TOKEN_FRONTEND.md`.
+
+Study-material responses previously inlined the raw `file` (Spaces URL) and
+`directLink`. They now follow the same media-token contract as video/ebook/audio:
+list/detail endpoints emit an opaque **`mediaToken`** (never the URL), which the
+client exchanges at `POST /client/media/resolve` for a short-lived URL. New
+`MediaKind: "material"`; resolver `case "material"` presigns the `file` Spaces
+object (or passes through an external `direct_link`), re-checking ownership for
+paid materials via `getPurchasedMaterialIds` (free tokens skip). Token minting is
+centralized in `client-material.materialMediaToken()`.
+
+Shape delta on every material object (all endpoints below): `file` and `directLink`
+are now always `""`; added `mediaToken: string | null` (null = locked/unpurchased
+or unauthenticated) and `isDirectLink: boolean` (external link vs uploaded PDF).
+Resolve returns `media: { url, mime, isDirectLink }`.
+
+Endpoints updated (all four material-bearing surfaces):
+- `client-material.service` — `/materials/categories/:id/contents`,
+  `/material-categories/:id/materials`, `/materials/:id`, `/materials/recent`
+- `client-free.service` — `/free-materials` (free-only)
+- `client-catalog.service` — `/catalog/:type/:id/materials` (course inlined list)
+- `client-folder.service` — saved material folders (`/material-folders/:id`, `/all-items`)
+
+---
+
+## 2026-07-14 — Media resolve: presign path-style own-bucket URLs + book/ebook demo audit script
+
+> **No schema/DDL change. Behavior fix in `client-media.service.resolveMediaToken` + new read-only audit script.**
+
+**Problem:** `/client/media/resolve` returned `404 "This book demo is not available."`
+(and the ebook equivalent) for some OLD rows. Two distinct causes:
+
+1. **Path-style own-bucket URLs served raw.** The `bookDemo` branch passed a URL
+   through as-is when `isOwnBucketUrl(src)` was false. That helper only recognizes
+   the **virtual-host** layout (`<bucket>.<endpoint-host>/…`); a legacy row stored
+   path-style (`<endpoint-host>/<bucket>/…`) was mistaken for external and returned
+   unsigned → private object → client 403/blank. Fixed: added `pointsAtOurSpaces()`
+   (matches either Spaces layout) and gate passthrough on it, so any own-bucket URL
+   is HEAD-checked + presigned. Truly external hosts (e.g. `gpsconline.com`) still
+   pass through.
+
+2. **Genuinely missing objects (data drift).** Rows whose `demo_url`/`book_url`
+   point at an object absent from the CURRENT bucket (carried over from another
+   environment, deleted file, corrupted key) correctly 404 — the resolver can't
+   invent the PDF. New script **`scripts/audit-book-demo-media.ts`** lists exactly
+   which `ws_book.demo_url` / `ws_ebook.demo_url` / `ws_ebook.book_url` rows are
+   broken (id, name, derived key) so the file can be re-uploaded or the URL fixed.
+   It reuses the resolver's own key-derivation + passthrough logic, so its verdict
+   matches runtime. Read-only; run per environment:
+   `npx tsx scripts/audit-book-demo-media.ts [--books|--ebooks|--materials]`.
+   The script now ALSO probes external URLs (HEAD/GET) and flags 4xx/5xx as
+   `external_DEAD` (bounded concurrency; `AUDIT_HTTP_TIMEOUT_MS`/`AUDIT_CONCURRENCY`
+   env knobs), and covers `ws_material.file`.
+   Staging audit at write time: books/ebooks 0 broken; **materials 226/227
+   external_DEAD** — every legacy `gpsconline.com/uploads/materials/*.pdf` link
+   returns HTTP 500 (host endpoint dead) and the files are NOT in our Spaces bucket.
+   Those reach the client verbatim (public passthrough), so the app shows the
+   origin's "Internal server error" when opening. Remediation is data-side:
+   re-host the PDFs to Spaces + repoint `ws_material.file` (new admin uploads
+   already write to Spaces correctly). No code fix can open a dead origin file.
+
+---
+
+## 2026-07-14 — Video-category DAG walkers also follow the self-FK `parent` (fix null mediaToken on deep hierarchies)
+
+> **Query-shape change (read-only). No schema/DDL change. Response shapes unchanged.**
+
+`catalog-category-tree.service` `ancestorsOf`/`descendantsOf` (the recursive-CTE DAG
+walkers backing `resolveVideoScope`, `resolveVideoCourseId`, `reachableCategoryIds`,
+and the client catalog subtree/counts) previously walked **only**
+`ws_video_category_relation`. Admin historically links subcategories via the legacy
+self-FK `ws_video_category.parent` and only later mirrors them into the pivot (see the
+`2026-07-13_video_category_relation_backfill.sql`). On any environment not yet fully
+backfilled, a video category nested **more than one level deep** had its pivot ancestor
+edge missing → the up-walk truncated → `resolveVideoScope` returned `null` →
+`isEntitledForScope` → `false` → paid videos got `mediaToken: null` (unplayable).
+
+Both CTEs now recurse over the **UNION** of the pivot edges and the self-FK `parent`
+column, so the walk is correct regardless of pivot-backfill completeness:
+
+- up-walk (`ancestorsOf`): `relation(child→parent)` ∪ `ws_video_category(id→parent)`
+- down-walk (`descendantsOf`): `relation(parent→child)` ∪ `ws_video_category(parent→id)`
+
+The self-FK arm only ADDS edges (never contradicts the pivot); dedup + the existing
+`MAX_DEPTH` cap keep it cycle-safe. No response shape changes; this only restores
+media tokens / scope that were incorrectly null for deep folder trees.
+
+---
+
 ## 2026-07-14 — Video-category hierarchy READS now sourced from `ws_video_category_relation`
 
 > **Query-source change (read-only). No schema/DDL change. Response shapes unchanged.**

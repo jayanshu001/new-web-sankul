@@ -118,6 +118,8 @@ export const createEbookSubscription = async (req: Request, res: Response) => {
       remarks: d.remarks ?? null,
       status: d.status,
       extend: d.extend,
+      // Audit: acting admin from the JWT (never from the body).
+      actingAdminId: adminEbook.parseEbookId(String(req.user?.id ?? "")) ?? null,
     });
     if (!result.ok) {
       const msg = result.reason === "ebook" ? "Ebook not found" : "Plan not found";
@@ -143,6 +145,8 @@ export const updateEbookSubscription = async (req: Request, res: Response) => {
       razorpayPaymentId: validatedData.razorpayPaymentId,
       remarks: validatedData.remarks,
       status: validatedData.status,
+      // Audit: acting admin from the JWT stamps updated_by.
+      actingAdminId: adminEbook.parseEbookId(String(req.user?.id ?? "")) ?? null,
     });
     if (result === "not_found") return res.status(404).json({ success: false, message: "Subscription not found" });
     if (result === "order_not_found") return res.status(404).json({ success: false, message: "Order not found" });

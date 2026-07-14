@@ -20,6 +20,7 @@ import { getStreamDetails } from "../../admin/live/streamos.service";
 import { hasActiveCourseSub, hasActivePackageSub } from "../client-lecture/client-lecture.service";
 import { hasAccessToAnyLiveCourse, resolveLivePreviewStateSql } from "../admin-live-course/admin-live-course.service";
 import { hasActiveSub as hasActiveEbookSub } from "../client-ebook-download/client-ebook-download.service";
+import { getPurchasedMaterialIds } from "../client-material/client-material.service";
 import { verifyMediaToken, MediaClaims, MediaScope } from "../../utils/mediaToken";
 import logger from "../../utils/logger";
 
@@ -60,6 +61,28 @@ const presign = (urlOrKey: string): Promise<string> =>
     new GetObjectCommand({ Bucket: DO_BUCKET, Key: toObjectKey(urlOrKey) }),
     { expiresIn: PRESIGN_TTL_SECONDS }
   );
+
+// A legacy book/demo URL may reference OUR Spaces bucket in either layout:
+//   virtual-host:  https://<bucket>.<endpoint-host>/<key>
+//   path-style:    https://<endpoint-host>/<bucket>/<key>
+// isOwnBucketUrl only recognizes the virtual-host form, but old rows also stored
+// the path-style form. BOTH must be presigned (their objects are private); only a
+// TRULY external host (e.g. gpsconline.com) is public and may be passed through
+// as-is. Treating a path-style own-bucket URL as "external" served a raw,
+// unsigned URL that 403s/blanks in the client — a real old-data failure mode.
+const SPACES_HOST = (() => {
+  try { return new URL(process.env.DO_ENDPOINT || "https://blr1.digitaloceanspaces.com").host; }
+  catch { return "blr1.digitaloceanspaces.com"; }
+})();
+const pointsAtOurSpaces = (src: string): boolean => {
+  if (isOwnBucketUrl(src)) return true; // virtual-host <bucket>.<endpoint-host>
+  try {
+    const host = new URL(/^https?:\/\//i.test(src) ? src : `https://${src}`).host;
+    return host === SPACES_HOST || host.endsWith(`.${SPACES_HOST}`);
+  } catch {
+    return false;
+  }
+};
 
 // Verify the object exists BEFORE handing out a signed URL. A stale/placeholder key
 // in book_url/book_demo_url would otherwise sign a URL that 404s (NoSuchKey) on
@@ -202,8 +225,9 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
         if (!src) return { ok: false, status: 404, message: "This book has no demo PDF." };
         // Legacy book demos are hosted EXTERNALLY (e.g. gpsconline.com), not in our
         // Spaces bucket — those are already public, so return the URL as-is. Only
-        // objects that actually live in our bucket get the HEAD check + presign.
-        if (/^https?:\/\//i.test(src) && !isOwnBucketUrl(src)) {
+        // objects that actually live in our bucket (virtual-host OR path-style) get
+        // the HEAD check + presign.
+        if (/^https?:\/\//i.test(src) && !pointsAtOurSpaces(src)) {
           return { ok: true, kind: claims.k, media: { url: src } };
         }
         if (MEDIA_VERIFY_EBOOK_OBJECT && !(await objectExists(src))) {
@@ -212,6 +236,35 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
         }
         const url = await presign(src);
         return { ok: true, kind: claims.k, media: { url } };
+      }
+      case "material": {
+        // Study material: an uploaded PDF in `file` (Spaces object) OR an external
+        // `direct_link`. Paid materials re-check ownership here (a `free` token
+        // skips it) — the same entitlement rule the list endpoints applied at
+        // issue time, so a token can't outlive an expired subscription.
+        const m = await prisma.material.findFirst({
+          where: { id: claims.id, status: true },
+          select: { id: true, file: true, direct_link: true, fileMime: true, isPaid: true, materialCategoryId: true },
+        });
+        if (!m) return { ok: false, status: 404, message: "Material not found." };
+        if (m.isPaid && !claims.free) {
+          const owned = await getPurchasedMaterialIds(customerId, [{ _id: m.id, materialCategoryId: m.materialCategoryId as number, isPaid: true }]);
+          if (!owned.has(m.id)) return { ok: false, status: 403, message: "Active subscription required to access this material." };
+        }
+        // Prefer the uploaded file; fall back to the external direct link.
+        const src = m.file || m.direct_link;
+        if (!src) return { ok: false, status: 404, message: "This material has no file." };
+        const isDirectLink = !m.file && !!m.direct_link;
+        // External direct links (not our Spaces bucket) are public — pass through.
+        if (/^https?:\/\//i.test(src) && !pointsAtOurSpaces(src)) {
+          return { ok: true, kind: claims.k, media: { url: src, mime: m.fileMime ?? null, isDirectLink } };
+        }
+        if (MEDIA_VERIFY_EBOOK_OBJECT && !(await objectExists(src))) {
+          logger.warn("resolveMediaToken material object missing", { id: claims.id, key: toObjectKey(src) });
+          return { ok: false, status: 404, message: "This material is not available." };
+        }
+        const url = await presign(src);
+        return { ok: true, kind: claims.k, media: { url, mime: m.fileMime ?? null, isDirectLink } };
       }
       default:
         return { ok: false, status: 400, message: "Unsupported media kind." };

@@ -146,6 +146,8 @@ export const adminEbookRepository = {
     endAt: Date;
     remarks: string | null;
     status: boolean;
+    // Acting admin id (from the JWT) → both audit columns on the new sub row.
+    actingAdminId?: number | null;
   }) =>
     prisma.$transaction(async (tx) => {
       const order = await tx.eBookOrder.create({
@@ -178,6 +180,9 @@ export const adminEbookRepository = {
           remarks: input.remarks,
           payment_type: "backend",
           status: input.status,
+          // Admin-initiated manual grant → both audit columns = the acting admin.
+          created_by: input.actingAdminId ?? null,
+          updated_by: input.actingAdminId ?? null,
           createdAt: new Date(),
           updatedAt: new Date(),
         },
@@ -209,6 +214,8 @@ export const adminEbookRepository = {
       price: number;
       endAt: Date;
       remarks: string | null;
+      // Acting admin id (from the JWT) → updated_by on the extended sub row.
+      actingAdminId?: number | null;
     }
   ) =>
     prisma.$transaction(async (tx) => {
@@ -236,6 +243,8 @@ export const adminEbookRepository = {
           price: input.price,
           endAt: input.endAt,
           ...(input.remarks !== null ? { remarks: input.remarks } : {}),
+          // Extend = admin edit of an existing row → stamp updated_by only.
+          ...(input.actingAdminId != null ? { updated_by: input.actingAdminId } : {}),
           updatedAt: new Date(),
         },
       });

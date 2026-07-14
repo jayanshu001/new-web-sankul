@@ -34,6 +34,10 @@ import {
   initPlanPopularityScheduler,
   stopPlanPopularityScheduler,
 } from "./modules/plan-popularity/plan-popularity.scheduler";
+import {
+  initOtpUnblockScheduler,
+  stopOtpUnblockScheduler,
+} from "./modules/customer-auth/otp-unblock.scheduler";
 import { closePdfBrowser } from "./libs/core/generate";
 import { installGracefulShutdown } from "./utils/gracefulShutdown";
 
@@ -81,6 +85,13 @@ const buildPreClose =
           err: (err as Error).message,
         });
       }
+      try {
+        stopOtpUnblockScheduler();
+      } catch (err) {
+        logger.warn("[shutdown] stopOtpUnblockScheduler failed", {
+          err: (err as Error).message,
+        });
+      }
     }
     if (sockets?.io) {
       try {
@@ -121,6 +132,10 @@ const startWorkers = async (): Promise<void> => {
   const t3 = Date.now();
   await initExportScheduler();
   bootMs("report-export scheduler", t3);
+
+  const t4 = Date.now();
+  initOtpUnblockScheduler();
+  bootMs("otp-unblock scheduler", t4);
 };
 
 const startServer = async () => {

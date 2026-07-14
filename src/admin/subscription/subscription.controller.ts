@@ -120,6 +120,9 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
     if (!(await sqlGetCustomer(customerId)))
       return res.status(404).json({ success: false, message: "Customer not found." });
 
+    // Audit: derive the acting admin from the JWT (never from the body).
+    const actingAdminId = subSql.parseSubId(String(req.user?.id ?? "")) ?? null;
+
     const r = await subSql.createCourseSubscription({
       customerId,
       courseId: data.courseId ? subSql.parseSubId(String(data.courseId)) ?? undefined : undefined,
@@ -139,6 +142,7 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
       remark: data.remark,
       status: data.status,
       extend: data.extend,
+      actingAdminId,
     });
     if (!r.ok) {
       if (r.reason === "plan_not_found") return res.status(404).json({ success: false, message: "Plan not found." });
@@ -292,6 +296,8 @@ export const updateCourseSubscription = async (req: Request, res: Response) => {
       shippingId,
       trackingId: data.trackingId === undefined ? undefined : data.trackingId === null ? null : BigInt(data.trackingId),
       remark: data.remark,
+      // Audit: acting admin from the JWT stamps updated_by (created_by unchanged).
+      actingAdminId: subSql.parseSubId(String(req.user?.id ?? "")) ?? null,
     });
     if (result === "not_found")
       return res.status(404).json({ success: false, message: "Subscription not found." });

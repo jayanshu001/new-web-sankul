@@ -21,7 +21,7 @@ import { prisma } from "../../config/prisma";
 import { defaultListingQualities } from "../../utils/videoQualities";
 import { signMediaToken } from "../../utils/mediaToken";
 import { hasActiveCourseSub } from "../client-lecture/client-lecture.service";
-import { getPurchasedMaterialIds } from "../client-material/client-material.service";
+import { getPurchasedMaterialIds, materialMediaToken } from "../client-material/client-material.service";
 import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
 
 export const CLIENT_CATALOG_MODULE = "client-catalog";
@@ -236,16 +236,19 @@ const shapeMaterialCategoryDoc = (
 // ws_material row → the FULL Mongo Material doc shape + isPurchased, with
 // file/directLink gated for unpurchased paid items (mirrors shapeMaterialForClient).
 // description/thumbnail are emitted only when set (Mongoose omits unset optionals).
-const shapeMaterialDoc = (m: any, owned: Set<number>) => {
-  const isPaid = !!m.isPaid;
-  const isPurchased = !isPaid || owned.has(m.id);
-  const gated = isPaid && !isPurchased;
+const shapeMaterialDoc = (m: any, owned: Set<number>, customerId: number | null = null) => {
+  const isPaid = true; // hard rule: study materials are always paid (ignores stored isPaid)
+  const isPurchased = owned.has(m.id);
+  const isDirectLink = !m.file && !!m.direct_link;
   const out: any = {
     _id: String(m.id),
     title: m.name,
     materialCategoryId: m.materialCategoryId != null ? String(m.materialCategoryId) : null,
-    file: gated ? "" : m.file ?? "",
-    directLink: gated ? "" : m.direct_link ?? "",
+    // Encrypted media contract — raw URLs withheld; resolve via mediaToken.
+    file: "",
+    directLink: "",
+    isDirectLink,
+    mediaToken: materialMediaToken(m.id, isPurchased, isPaid, customerId),
     fileSize: m.fileSize != null ? Number(m.fileSize) : null,
     fileMime: m.fileMime ?? null,
     language: m.language ?? null,
@@ -339,7 +342,7 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
     }
 
     // course: legacy inlined materials (count = subtree material count).
-    const materials = (directByCat.get(cat.id) ?? []).map((m) => shapeMaterialDoc(m, ownedIds));
+    const materials = (directByCat.get(cat.id) ?? []).map((m) => shapeMaterialDoc(m, ownedIds, opts.customerId ?? null));
     return { category: shapeMaterialCategoryDoc(cat, ancestors, childCategoryIds, itemCount), materials, _itemCount: itemCount };
   }));
   return {

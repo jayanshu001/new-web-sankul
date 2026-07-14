@@ -411,6 +411,7 @@ export const updateCourseSubscription = async (
   patch: {
     startAt?: Date; endAt?: Date; status?: boolean;
     shippingId?: number | null; trackingId?: bigint | null; remark?: string;
+    actingAdminId?: number | null;
   }
 ): Promise<"not_found" | any> => {
   if (!(await repo.findCourseSubById(id))) return "not_found";
@@ -421,6 +422,7 @@ export const updateCourseSubscription = async (
     shippingId: patch.shippingId,
     trackingId: patch.trackingId,
     remarks: patch.remark,
+    actingAdminId: patch.actingAdminId ?? null,
     now: new Date(),
   });
   return getCourseSubscriptionById(id);
@@ -461,6 +463,9 @@ export interface CreateCourseSubInput {
   // end date, floored at now); the prior row is left untouched. No existing active
   // sub → behaves as a fresh grant starting now.
   extend?: boolean;
+  // Acting admin id (resolved server-side from the JWT) → stamped on created_by +
+  // updated_by. An extend also creates a NEW row here, so both columns are set.
+  actingAdminId?: number | null;
 }
 
 export type CreateCourseSubResult =
@@ -536,6 +541,7 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
     materialAmount: input.withMaterial ? (plan.materialPrice ?? 0) : null,
     payment_type: input.paymentType,
     remarks: input.remark ?? null,
+    actingAdminId: input.actingAdminId ?? null,
     now,
   });
   return { ok: true, extended: wasExtension, data: await getCourseSubscriptionById(created.id) };

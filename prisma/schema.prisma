@@ -1374,7 +1374,12 @@ model EBookOrder {
   PackageCourseEbookPrice PackageCourseEbookPrice?      @relation(fields: [planId], references: [id])
   planId                  Int?                          @map("plan_id")
   orderPrice              Int                           @map("order_price")
-  paymentMethod           PaymentMethod                 @map("payment_method")
+  // Legacy ws_ebook_order rows carry an empty-string payment_method that is not a
+  // valid PaymentMethod enum member, which crashed enum deserialization on read
+  // (e.g. the ebook-subscription export). Typed as nullable String so those rows
+  // read through as-is ('' / null) instead of throwing; writes still pass the same
+  // string literals ("razorpay", …). No DDL — the column already holds these values.
+  paymentMethod           String?                       @map("payment_method")
   gatewayOrderId          String                        @map("razorpay_order_id")
   gatewayOrder            String?                       @map("razorpay_order")
   gatewayPaymentId        String?                       @map("razorpay_payment_id")
@@ -1404,6 +1409,9 @@ model EBookSubscription {
   status       Boolean?
   createdAt    DateTime?                     @default(now()) @map("created_at")
   updatedAt    DateTime?                     @updatedAt @map("updated_at")
+  // Audit: acting admin on manual grant/edit (see subscription audit backend-request).
+  created_by   Int?
+  updated_by   Int?
 
   @@map("ws_ebook_subscription")
 }
@@ -1800,6 +1808,9 @@ model LiveCourseSubscription {
   customerShippingId Int?      @map("customer_shipping_id")
   createdAt         DateTime? @map("created_at")
   updatedAt         DateTime? @map("updated_at")
+  // Audit: acting admin on manual grant/edit (see subscription audit backend-request).
+  created_by        Int?
+  updated_by        Int?
 
   @@map("ws_live_course_subscription")
 }
@@ -2301,6 +2312,9 @@ model TestSeriesSubscription {
   promocodeId  Int?      @map("promocode_id")
   createdAt    DateTime? @map("created_at")
   updatedAt    DateTime? @map("updated_at")
+  // Audit: acting admin on manual grant/edit (see subscription audit backend-request).
+  created_by   Int?
+  updated_by   Int?
 
   @@map("ws_test_series_subscription")
 }

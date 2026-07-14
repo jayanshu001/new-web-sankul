@@ -13,9 +13,35 @@
  * language/is_preview/is_paid/download_count) so the client shape has parity.
  */
 import { prisma } from "../../config/prisma";
+import { signMediaToken } from "../../utils/mediaToken";
 
 export const CLIENT_MATERIAL_MODULE = "client-material";
 export const isClientMaterialMysql = (): boolean => true;
+
+/**
+ * Mint a material media token, or `null` when the material is NOT accessible
+ * (unpurchased paid item, or no authenticated customer). The raw `file` /
+ * `direct_link` URL NEVER leaves the server — the client exchanges this opaque
+ * token at POST /client/media/resolve, which re-verifies entitlement and returns
+ * a short-lived URL (presigned for Spaces objects, passthrough for external
+ * direct links). Same contract as video/ebook/audio-note tokens.
+ *
+ * Paid materials carry a `trusted` scope; resolve independently re-checks
+ * ownership for `k:"material"` via getPurchasedMaterialIds, so the token can't
+ * outlive an expired subscription beyond its short TTL. Free materials get a
+ * `free` token (no entitlement check).
+ */
+export const materialMediaToken = (
+  materialId: number,
+  accessible: boolean,
+  isPaid: boolean,
+  customerId: number | null,
+): string | null => {
+  if (customerId == null || !accessible) return null;
+  return isPaid
+    ? signMediaToken({ k: "material", id: materialId, scope: { kind: "trusted" }, cust: customerId })
+    : signMediaToken({ k: "material", id: materialId, free: true, cust: customerId });
+};
 
 export const parseMatId = (id: string): number | null => {
   const n = Number(id);
@@ -51,7 +77,10 @@ export const getPurchasedMaterialIds = async (
 ): Promise<Set<number>> => {
   const owned = new Set<number>();
   if (!customerId) return owned;
-  const paid = materials.filter((m) => m.isPaid);
+  // Study materials are ALWAYS paid (hard rule) — every material is entitlement-
+  // checked, including any legacy row whose stored isPaid is false, so a historical
+  // free flag can never leak the PDF without a subscription.
+  const paid = materials;
   if (!paid.length) return owned;
 
   const leafIds = [...new Set(paid.map((m) => m.materialCategoryId).filter((n) => n != null))];
@@ -88,11 +117,17 @@ export const getPurchasedMaterialIds = async (
   return owned;
 };
 
-/** DB-agnostic shaping — gates file/directLink for unpurchased paid materials. */
-export const shapeMaterial = (m: any, ownedIds: Set<number>) => {
-  const isPaid = !!m.isPaid;
-  const isPurchased = !isPaid || ownedIds.has(m.id);
-  const gated = isPaid && !isPurchased;
+/**
+ * DB-agnostic shaping. The raw `file` / `directLink` URLs are NEVER emitted —
+ * they are replaced by an opaque `mediaToken` the client exchanges at
+ * /client/media/resolve (null for unpurchased paid materials, same as the old
+ * gated-empty behavior). `isDirectLink` tells the client whether the resolved
+ * URL is an external link (open in browser) vs an uploaded PDF (in-app viewer).
+ */
+export const shapeMaterial = (m: any, ownedIds: Set<number>, customerId: number | null = null) => {
+  const isPaid = true; // hard rule: study materials are always paid (ignores stored isPaid)
+  const isPurchased = ownedIds.has(m.id);
+  const isDirectLink = !m.file && !!m.direct_link;
   return {
     _id: String(m.id),
     title: m.name ?? "",
@@ -106,8 +141,11 @@ export const shapeMaterial = (m: any, ownedIds: Set<number>) => {
     isPurchased,
     order: m.order_by,
     createdAt: m.created_at ?? null,
-    file: gated ? "" : m.file ?? "",
-    directLink: gated ? "" : m.direct_link ?? "",
+    // Encrypted media contract — raw URLs withheld; resolve via mediaToken.
+    file: "",
+    directLink: "",
+    isDirectLink,
+    mediaToken: materialMediaToken(m.id, isPurchased, isPaid, customerId),
     downloadCount: m.downloadCount ?? 0,
   };
 };
@@ -171,7 +209,7 @@ export const getCategoryContents = async (
     prisma.material.count({ where: matsWhere }),
   ]);
   const ownedIds = await getPurchasedMaterialIds(customerId, matsRaw.map(toLite));
-  const materials = matsRaw.map((m) => shapeMaterial(m, ownedIds));
+  const materials = matsRaw.map((m) => shapeMaterial(m, ownedIds, customerId));
 
   // breadcrumbs: ancestor chain (root → current) via the parent walk.
   const chainRows = await prisma.$queryRawUnsafe<{ id: number; title: string | null; depth: number }[]>(
@@ -210,7 +248,7 @@ export const listMaterialsByCategoryPaged = async (
     prisma.material.count({ where }),
   ]);
   const ownedIds = await getPurchasedMaterialIds(customerId, matsRaw.map(toLite));
-  const list = matsRaw.map((m) => shapeMaterial(m, ownedIds));
+  const list = matsRaw.map((m) => shapeMaterial(m, ownedIds, customerId));
 
   return { category: { _id: String(category.id), title: category.name, image: category.image }, list, total };
 };
@@ -219,7 +257,7 @@ export const getMaterialDetail = async (materialId: number, customerId: number |
   const m = await prisma.material.findFirst({ where: { id: materialId, status: true }, select: { ...MAT_SELECT, MaterialCategory: { select: { id: true, name: true } } } });
   if (!m) return null;
   const ownedIds = await getPurchasedMaterialIds(customerId, [toLite(m)]);
-  const shaped = shapeMaterial(m, ownedIds);
+  const shaped = shapeMaterial(m, ownedIds, customerId);
   (shaped as any).materialCategoryId = m.MaterialCategory ? { _id: String(m.MaterialCategory.id), title: m.MaterialCategory.name } : (m.materialCategoryId != null ? String(m.materialCategoryId) : null);
   return shaped;
 };
@@ -249,7 +287,7 @@ export const getRecentMaterials = async (
   ]);
   const ownedIds = await getPurchasedMaterialIds(customerId, matsRaw.map(toLite));
   const materials = matsRaw.map((m) => {
-    const shaped = shapeMaterial(m, ownedIds);
+    const shaped = shapeMaterial(m, ownedIds, customerId);
     (shaped as any).materialCategoryId = m.MaterialCategory ? { _id: String(m.MaterialCategory.id), title: m.MaterialCategory.name } : null;
     return shaped;
   });

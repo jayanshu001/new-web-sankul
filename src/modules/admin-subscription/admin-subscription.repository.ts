@@ -94,6 +94,8 @@ export const adminSubscriptionRepository = {
     shippingId: number | null; startAt: Date; endAt: Date; status: boolean; amount: number;
     courseAmount: number | null; materialAmount: number | null;
     payment_type: "backend" | "online"; remarks: string | null; now: Date;
+    // Acting admin id (from the JWT) → stamped on both audit columns at create.
+    actingAdminId?: number | null;
   }) =>
     prisma.packageCourseSubscription.create({
       data: {
@@ -111,6 +113,9 @@ export const adminSubscriptionRepository = {
         materialAmount: d.materialAmount,
         payment_type: d.payment_type,
         remarks: d.remarks,
+        // Admin-initiated manual grant → both audit columns = the acting admin.
+        created_by: d.actingAdminId ?? null,
+        updated_by: d.actingAdminId ?? null,
         createdAt: d.now,
         updatedAt: d.now,
       },
@@ -120,6 +125,8 @@ export const adminSubscriptionRepository = {
     d: {
       startAt?: Date; endAt?: Date; status?: boolean;
       shippingId?: number | null; trackingId?: bigint | null; remarks?: string; now: Date;
+      // Acting admin id (from the JWT) → stamped on updated_by for this edit.
+      actingAdminId?: number | null;
     }
   ) =>
     prisma.packageCourseSubscription.update({
@@ -131,6 +138,9 @@ export const adminSubscriptionRepository = {
         ...(d.shippingId !== undefined ? { shippingId: d.shippingId } : {}),
         ...(d.trackingId !== undefined ? { trackingId: d.trackingId } : {}),
         ...(d.remarks !== undefined ? { remarks: d.remarks } : {}),
+        // Admin edit → stamp updated_by (created_by left untouched). Only when the
+        // acting admin resolved, so a system caller never nulls an existing value.
+        ...(d.actingAdminId != null ? { updated_by: d.actingAdminId } : {}),
         updatedAt: d.now,
       },
     }),

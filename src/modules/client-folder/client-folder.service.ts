@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { getPurchasedMaterialIds, materialMediaToken } from "../client-material/client-material.service";
 
 /**
  * Saved-folders (video/material) write+read path on SQL (Wave 7 — net-new
@@ -42,14 +43,31 @@ const folderDto = (f: any, itemCount?: number) => ({
 });
 
 // content hydration: refId → ws_video / ws_material row (Mongo-shaped)
-const hydrateRefs = async (kind: string, refIds: number[]): Promise<Map<number, any>> => {
+const hydrateRefs = async (kind: string, refIds: number[], customerId: number | null = null): Promise<Map<number, any>> => {
   if (!refIds.length) return new Map();
   if (kind === "video") {
     const rows = await prisma.video.findMany({ where: { id: { in: refIds } } });
     return new Map(rows.map((v) => [v.id, { _id: String(v.id), title: v.title, topic: v.topic, slug: v.slug, platform: v.platform, status: v.status }]));
   }
   const rows = await prisma.material.findMany({ where: { id: { in: refIds } } });
-  return new Map(rows.map((m) => [m.id, { _id: String(m.id), title: m.name, file: m.file, direct_link: m.direct_link ?? null, status: m.status }]));
+  // Encrypted media contract — saved materials expose a mediaToken (resolved at
+  // /client/media/resolve), never the raw file/direct_link. Paid materials are
+  // ownership-gated exactly like the material list endpoints.
+  const ownedIds = await getPurchasedMaterialIds(
+    customerId,
+    rows.map((m) => ({ _id: m.id, materialCategoryId: m.materialCategoryId as number, isPaid: !!m.isPaid })),
+  );
+  return new Map(rows.map((m) => {
+    const isPaid = true; // hard rule: study materials are always paid (ignores stored isPaid)
+    const isPurchased = ownedIds.has(m.id);
+    return [m.id, {
+      _id: String(m.id), title: m.name, status: m.status,
+      file: "", direct_link: null,
+      isDirectLink: !m.file && !!m.direct_link,
+      isPaid, isPurchased,
+      mediaToken: materialMediaToken(m.id, isPurchased, isPaid, customerId),
+    }];
+  }));
 };
 
 // ── folder CRUD ───────────────────────────────────────────────────────────────
@@ -85,7 +103,7 @@ export const folderDetail = async (customerId: number, type: string, folderId: n
     prisma.folderItem.findMany({ where, orderBy: { addedAt: "desc" }, skip, take }),
     prisma.folderItem.count({ where }),
   ]);
-  const refMap = await hydrateRefs(kindOf(type), items.map((i) => i.refId));
+  const refMap = await hydrateRefs(kindOf(type), items.map((i) => i.refId), customerId);
   const list = items.map((it) => ({ _id: String(it.id), kind: it.kind, refId: String(it.refId), addedAt: it.addedAt, ref: refMap.get(it.refId) ?? null }));
   return { folder: folderDto(folder), list, total };
 };
@@ -151,7 +169,7 @@ export const allItems = async (customerId: number, type: string, search?: string
   ]);
   if (!folders.length) return { data: [], total };
   const items = await prisma.folderItem.findMany({ where: { folderId: { in: folders.map((f) => f.id) }, customerId, kind: kindOf(type) }, orderBy: { addedAt: "desc" } });
-  const refMap = await hydrateRefs(kindOf(type), items.map((i) => i.refId));
+  const refMap = await hydrateRefs(kindOf(type), items.map((i) => i.refId), customerId);
   const byFolder = new Map<number, any[]>();
   for (const it of items) {
     const ref = refMap.get(it.refId);

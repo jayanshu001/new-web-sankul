@@ -236,8 +236,11 @@ export const createMaterial = async (d: MaterialWriteInput): Promise<"category" 
   const catId = d.materialCategoryId ? parseMaterialId(d.materialCategoryId) : null;
   if (!catId || !(await repo.findCategoryById(catId))) return "category";
   const now = new Date();
+  // Study materials are ALWAYS paid (never a free tier) — force isPaid=true here
+  // regardless of any client payload, so a stray isPaid:false can never create a
+  // free material. See docs/client (study-materials-always-paid). The remaining
   // Mongo-only fields (description/thumbnail/fileSize/fileMime/language/isPreview/
-  // isPaid/downloadCount) are dropped — no SQL columns.
+  // downloadCount) are still dropped on this admin write path.
   const created = await repo.createMaterial({
     materialCategoryId: catId,
     name: d.title ?? "",
@@ -246,6 +249,7 @@ export const createMaterial = async (d: MaterialWriteInput): Promise<"category" 
     direct_link: d.directLink ?? null,
     order_by: d.order ?? 0,
     status: d.status ?? true,
+    isPaid: true, // hard rule: every study material is paid
     created_at: now, updated_at: now,
   });
   return toMaterialDto(created as MatRow);
@@ -253,7 +257,9 @@ export const createMaterial = async (d: MaterialWriteInput): Promise<"category" 
 
 export const updateMaterial = async (id: number, d: MaterialWriteInput): Promise<"not_found" | "category" | any> => {
   if (!(await repo.findMaterialBare(id))) return "not_found";
-  const data: any = { updated_at: new Date() };
+  // Study materials are always paid — force isPaid=true on every update, ignoring
+  // any incoming value, so editing a legacy free row also repairs it.
+  const data: any = { updated_at: new Date(), isPaid: true };
   if (d.materialCategoryId !== undefined) {
     const catId = parseMaterialId(d.materialCategoryId);
     if (!catId || !(await repo.findCategoryById(catId))) return "category";

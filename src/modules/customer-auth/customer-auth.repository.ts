@@ -110,6 +110,34 @@ export const customerAuthRepository = {
       data: { triedOtp: 0, ...(osType ? { os_type: osType as never } : {}) },
     }),
 
+  /**
+   * Block OTP login after too many wrong attempts: disable the account
+   * (status=false), stamp the block time, and pin the tried counter at the cap.
+   * The account is auto-restored 24h later by the otp-unblock sweep.
+   */
+  blockOtp: (id: number, attempts: number, osType?: string) =>
+    prisma.customer.update({
+      where: { id },
+      data: {
+        triedOtp: attempts,
+        otpBlockedAt: new Date(),
+        status: false,
+        ...(osType ? { os_type: osType as never } : {}),
+      },
+    }),
+
+  /**
+   * Auto-unblock accounts whose OTP block is older than `cutoff`. Only touches
+   * rows blocked by OTP (`otpBlockedAt` set AND older than cutoff) — an
+   * admin-disabled account has `otpBlockedAt = null` and is left untouched.
+   * Atomic + idempotent (safe to run concurrently); returns the affected count.
+   */
+  unblockExpiredOtp: (cutoff: Date) =>
+    prisma.customer.updateMany({
+      where: { status: false, otpBlockedAt: { lt: cutoff } },
+      data: { status: true, otpBlockedAt: null, triedOtp: 0 },
+    }),
+
   /** Invalidate every token for a customer (validate re-issue, logout). */
   deactivateTokens: (customerId: number) =>
     prisma.customerAccessToken.updateMany({

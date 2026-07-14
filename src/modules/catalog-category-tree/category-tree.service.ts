@@ -17,10 +17,29 @@ export const isCategoryTreeMysql = (): boolean => true;
 
 const MAX_DEPTH = 20; // generous cap; real trees are <6 deep. Guards cycles.
 
+// Both walkers traverse the UNION of two hierarchy stores, not the pivot alone:
+//   (a) ws_video_category_relation — the many-to-many DAG (source of truth), and
+//   (b) ws_video_category.parent    — the legacy single-parent self-FK.
+// Admin historically wrote subcategory links via the self-FK and only later
+// mirrored them into the pivot (see the 2026-07-13 backfill). Until every deploy
+// is fully backfilled, a subcategory nested >1 level deep can have its pivot edge
+// missing — which silently truncated the ancestor chain, so resolveVideoScope
+// returned null and paid videos got a null mediaToken. Following the self-FK too
+// keeps the walk correct regardless of pivot completeness. The self-FK arm only
+// ADDS edges (never contradicts the pivot); dedup + depth cap keep it cycle-safe.
+const CHILD_TO_PARENT_EDGES =
+  `SELECT child AS node, parent AS parent_id FROM ws_video_category_relation WHERE parent > 0
+   UNION
+   SELECT id AS node, parent AS parent_id FROM ws_video_category WHERE parent > 0`;
+const PARENT_TO_CHILD_EDGES =
+  `SELECT parent AS node, child AS child_id FROM ws_video_category_relation WHERE child > 0
+   UNION
+   SELECT parent AS node, id AS child_id FROM ws_video_category WHERE parent > 0`;
+
 /**
  * All descendant category ids of the given roots (INCLUSIVE of the roots),
- * walking DOWN `ws_video_category_relation` (parent → child). Mirrors
- * `collectCategoryTreeIds` BFS semantics; deduped; cycle-safe via depth cap.
+ * walking DOWN (parent → child) over both the pivot DAG and the self-FK column.
+ * Mirrors `collectCategoryTreeIds` BFS semantics; deduped; cycle-safe via depth cap.
  */
 export const descendantsOf = async (rootIds: number[]): Promise<number[]> => {
   const roots = [...new Set(rootIds.filter((n) => Number.isInteger(n) && n > 0))];
@@ -33,9 +52,9 @@ export const descendantsOf = async (rootIds: number[]): Promise<number[]> => {
     `WITH RECURSIVE tree (id, depth) AS (
        ${seed}
        UNION
-       SELECT r.child, t.depth + 1
-         FROM ws_video_category_relation r
-         JOIN tree t ON r.parent = t.id
+       SELECT e.child_id, t.depth + 1
+         FROM tree t
+         JOIN (${PARENT_TO_CHILD_EDGES}) e ON e.node = t.id
         WHERE t.depth < ${MAX_DEPTH}
      )
      SELECT DISTINCT id FROM tree`
@@ -47,8 +66,8 @@ export const descendantsOf = async (rootIds: number[]): Promise<number[]> => {
 
 /**
  * All ancestor category ids of the given leaves (INCLUSIVE), walking UP
- * `ws_video_category_relation` (child → parent). Mirrors the bounded up-walk in
- * `resolveVideoCourse`/`resolveVideoScope`'s ancestorChain.
+ * (child → parent) over both the pivot DAG and the self-FK column. Mirrors the
+ * bounded up-walk in `resolveVideoCourse`/`resolveVideoScope`'s ancestorChain.
  */
 export const ancestorsOf = async (leafIds: number[]): Promise<number[]> => {
   const leaves = [...new Set(leafIds.filter((n) => Number.isInteger(n) && n > 0))];
@@ -58,9 +77,9 @@ export const ancestorsOf = async (leafIds: number[]): Promise<number[]> => {
     `WITH RECURSIVE chain (id, depth) AS (
        ${seed}
        UNION
-       SELECT r.parent, c.depth + 1
-         FROM ws_video_category_relation r
-         JOIN chain c ON r.child = c.id
+       SELECT e.parent_id, c.depth + 1
+         FROM chain c
+         JOIN (${CHILD_TO_PARENT_EDGES}) e ON e.node = c.id
         WHERE c.depth < ${MAX_DEPTH}
      )
      SELECT DISTINCT id FROM chain`

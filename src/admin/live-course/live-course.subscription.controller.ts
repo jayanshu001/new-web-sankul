@@ -156,7 +156,9 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
     if (!cid) return failure(res, "Invalid live course id.", 422);
     let v: z.infer<typeof grantSqlSchema>;
     try { v = grantSqlSchema.parse(req.body); } catch (err) { if (err instanceof z.ZodError) return zodIssueResponse(res, err); throw err; }
-    const r = await liveSql.grantSubscription(cid, v);
+    // Audit: acting admin from the JWT (never from the body).
+    const actingAdminId = liveSql.parseLiveId(String(req.user?.id ?? "")) ?? null;
+    const r = await liveSql.grantSubscription(cid, { ...v, actingAdminId });
     if (!r.ok) {
       const code = r.code === "course" || r.code === "customer" || r.code === "plan" ? 404 : 422;
       return failure(res, r.msg, code);
@@ -180,7 +182,9 @@ export const updateLiveCourseSubscription = async (req: Request, res: Response) 
     if (!sid) return failure(res, "Invalid subscription id.", 422);
     let v: z.infer<typeof updateSubscriptionSchema>;
     try { v = updateSubscriptionSchema.parse(req.body); } catch (err) { if (err instanceof z.ZodError) return zodIssueResponse(res, err); throw err; }
-    const r = await liveSql.updateSubscription(sid, v);
+    // Audit: acting admin from the JWT stamps updated_by.
+    const actingAdminId = liveSql.parseLiveId(String(req.user?.id ?? "")) ?? null;
+    const r = await liveSql.updateSubscription(sid, { ...v, actingAdminId });
     if (r === "not_found") return failure(res, "Subscription not found.", 404);
     if (r === "bad_start") return failure(res, "startAt must be a valid date.", 422);
     if (r === "bad_end") return failure(res, "endAt must be a valid date.", 422);

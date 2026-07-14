@@ -11,6 +11,10 @@ import {
 // ─── Constants ────────────────────────────────────────────────────────────────
 const OTP_TTL_MINUTES = 5;
 const OTP_MAX_ATTEMPTS = 5;
+// After OTP_MAX_ATTEMPTS wrong entries the account is OTP-blocked for this long;
+// the otp-unblock scheduler auto-restores it once the block is older than this.
+// Kept in sync with the scheduler via the same OTP_BLOCK_HOURS env (default 24).
+const OTP_BLOCK_HOURS = Number(process.env.OTP_BLOCK_HOURS) || 24;
 const LOGIN_MAX_ATTEMPTS = 20;
 // Test numbers always get static OTP
 const TESTING_ACCOUNTS: string[] = (process.env.TESTING_PHONE_NUMBERS || "")
@@ -107,7 +111,7 @@ export async function generateOtp(rawPhone: string, traceId?: string): Promise<{
   const row = await customerAuthRepository.findActiveByPhone(phone);
   if (row && !row.status) {
     logger.warn("generateOtp service account blocked", { traceId, phone });
-    return { ok: false, message: "Your account has been blocked. Please contact support." };
+    return { ok: false, message: "Your account has been blocked, please contact the helpline number." };
   }
 
   const otp = otpFor();
@@ -178,7 +182,7 @@ export async function resendOtp(rawPhone: string, traceId?: string): Promise<{
     return { ok: false, message: "User not found. Please register first." };
   }
   if (!row.status) {
-    return { ok: false, message: "Your account has been blocked. Please contact support." };
+    return { ok: false, message: "Your account has been blocked, please contact the helpline number." };
   }
   // 60-second strict cooldown using otp_expires_at.
   if (row.otp_expires_at && row.otp_expires_at > new Date()) {
@@ -234,8 +238,20 @@ export async function validateOtp(
   const inputBuf = Buffer.from(String(otp ?? ""), "utf8");
   const otpMismatch = otpBuf.length !== inputBuf.length || !crypto.timingSafeEqual(otpBuf, inputBuf);
   if (otpMismatch) {
+    // On the OTP_MAX_ATTEMPTS-th wrong entry, block the account (status=false +
+    // otpBlockedAt=now) instead of returning a zero/negative "attempts remaining".
+    // findLoginableByPhone requires status=true, so once blocked every further
+    // validate returns "Invalid user." until the 24h otp-unblock sweep restores it.
+    if (triedOtp >= OTP_MAX_ATTEMPTS) {
+      await customerAuthRepository.blockOtp(row.id, OTP_MAX_ATTEMPTS, osType);
+      logger.warn("validateOtp service account blocked (too many wrong OTPs)", { traceId, customerId: row.id });
+      return {
+        ok: false,
+        message: `Due to too many wrong attempts, your account has been blocked for ${OTP_BLOCK_HOURS} hours.`,
+      };
+    }
     await customerAuthRepository.bumpTriedOtp(row.id, triedOtp, osType);
-    const remaining = OTP_MAX_ATTEMPTS - triedOtp;
+    const remaining = OTP_MAX_ATTEMPTS - triedOtp; // always ≥ 1 here (block handled above)
     logger.warn("validateOtp service wrong otp", { traceId, customerId: row.id, remaining });
     return { ok: false, message: `Invalid OTP. ${remaining} attempt(s) remaining.` };
   }

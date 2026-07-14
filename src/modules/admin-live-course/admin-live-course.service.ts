@@ -548,7 +548,7 @@ export const getSubscription = async (id: number): Promise<"not_found" | any> =>
   return (await hydrateSubs([row]))[0];
 };
 
-export const grantSubscription = async (liveCourseId: number, v: { customerId: string; planId: string; durationDays?: number; durationMonths?: number; startAt?: string; endAt?: string; amount?: number; withMaterial?: boolean; customerShippingId?: string | null; remarks?: string | null; paymentMethod?: string; bankTransactionId?: string | null; razorpayOrderId?: string | null; razorpayPaymentId?: string | null; extend?: boolean }): Promise<{ ok: false; code: string; msg: string } | { ok: true; created: boolean; data: any }> => {
+export const grantSubscription = async (liveCourseId: number, v: { customerId: string; planId: string; durationDays?: number; durationMonths?: number; startAt?: string; endAt?: string; amount?: number; withMaterial?: boolean; customerShippingId?: string | null; remarks?: string | null; paymentMethod?: string; bankTransactionId?: string | null; razorpayOrderId?: string | null; razorpayPaymentId?: string | null; extend?: boolean; actingAdminId?: number | null }): Promise<{ ok: false; code: string; msg: string } | { ok: true; created: boolean; data: any }> => {
   if (!(await repo.exists(liveCourseId))) return { ok: false, code: "course", msg: "Live course not found." };
   const customerId = parseLiveId(v.customerId);
   const planId = parseLiveId(v.planId);
@@ -588,6 +588,8 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
       razorpayPaymentId: v.razorpayPaymentId ?? null,
       bankTransactionId: v.bankTransactionId ?? null,
       ...(v.remarks !== undefined ? { remarks: v.remarks } : {}),
+      // Extend = admin edit of an existing row → stamp updated_by only.
+      ...(v.actingAdminId != null ? { updated_by: v.actingAdminId } : {}),
     });
     return { ok: true, created: false, data: (await hydrateSubs([updated]))[0] };
   }
@@ -606,14 +608,19 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
     customerShippingId: shippingId,
     remarks: v.remarks ?? null,
     paidAt: now,
+    // Admin-initiated manual grant → both audit columns = the acting admin.
+    created_by: v.actingAdminId ?? null,
+    updated_by: v.actingAdminId ?? null,
     createdAt: now, updatedAt: now,
   });
   return { ok: true, created: true, data: (await hydrateSubs([sub]))[0] };
 };
 
-export const updateSubscription = async (id: number, v: { status?: boolean; paymentStatus?: string; startAt?: string; endAt?: string }): Promise<"not_found" | "bad_start" | "bad_end" | any> => {
+export const updateSubscription = async (id: number, v: { status?: boolean; paymentStatus?: string; startAt?: string; endAt?: string; actingAdminId?: number | null }): Promise<"not_found" | "bad_start" | "bad_end" | any> => {
   if (!(await repo.findSubscriptionById(id))) return "not_found";
   const data: any = { updatedAt: new Date() };
+  // Admin edit → stamp updated_by (created_by untouched).
+  if (v.actingAdminId != null) data.updated_by = v.actingAdminId;
   if (v.status !== undefined) data.status = v.status;
   if (v.paymentStatus !== undefined) data.paymentStatus = v.paymentStatus;
   if (v.startAt !== undefined) { const dt = new Date(v.startAt); if (isNaN(dt.getTime())) return "bad_start"; data.startAt = dt; }

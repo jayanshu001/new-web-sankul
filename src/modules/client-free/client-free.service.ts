@@ -257,73 +257,13 @@ const emptyTestsLevel = (opts: { year?: number; month?: number; week?: number; p
 // ── FREE-MATERIALS ─────────────────────────────────────────────────────────────
 // Recursive tree TOP-grouped by product; only FREE (isPaid=false) materials.
 // LiveCourse omitted (no SQL material-category pivot — documented drift).
-export const freeMaterials = async (opts: { customerId: number | null; search: string | null; page: number; limit: number; skip: number }) => {
-  const [courses, packages, matCourseRefs, matPkgRefs] = await Promise.all([
-    prisma.course.findMany({ where: { status: true }, select: { id: true, name: true, image: true } }),
-    prisma.package.findMany({ where: { active: true }, select: { id: true, name: true, image: true } }),
-    prisma.materialCategoryCourse.findMany({ orderBy: { order: "asc" }, select: { courseId: true, materialCategoryId: true } }),
-    prisma.materialCategoryPackage.findMany({ orderBy: { order: "asc" }, select: { packageId: true, materialCategoryId: true } }),
-  ]);
-
-  type ProductType = "course" | "package";
-  const products: { _id: number; name: string; image: string | null; type: ProductType; rootIds: number[] }[] = [];
-  const rootsByCourse = new Map<number, number[]>();
-  const rootsByPkg = new Map<number, number[]>();
-  for (const r of matCourseRefs) if (r.courseId != null && r.materialCategoryId != null) (rootsByCourse.get(r.courseId) ?? rootsByCourse.set(r.courseId, []).get(r.courseId)!).push(r.materialCategoryId);
-  for (const r of matPkgRefs) if (r.packageId != null && r.materialCategoryId != null) (rootsByPkg.get(r.packageId) ?? rootsByPkg.set(r.packageId, []).get(r.packageId)!).push(r.materialCategoryId);
-  for (const c of courses) products.push({ _id: c.id, name: c.name ?? "", image: c.image ?? null, type: "course", rootIds: rootsByCourse.get(c.id) ?? [] });
-  for (const p of packages) products.push({ _id: p.id, name: p.name, image: p.image ?? null, type: "package", rootIds: rootsByPkg.get(p.id) ?? [] });
-
-  const allRootIds = [...new Set(products.flatMap((p) => p.rootIds))];
-  if (!allRootIds.length) return { data: [] as any[], total: 0 };
-
-  // Expand each root → full subtree; build catById + childrenOf.
-  const allIds = await descendantIds("ws_material_category", "parent", allRootIds);
-  const cats = await prisma.materialCategory.findMany({ where: { id: { in: allIds }, status: true }, orderBy: [{ order_by: "asc" }, { name: "asc" }], select: { id: true, name: true, image: true, parent: true } });
-  const catById = new Map<number, any>();
-  const childrenOf = new Map<number, number[]>();
-  for (const c of cats) {
-    catById.set(c.id, { _id: c.id, title: c.name, image: c.image });
-    if (c.parent != null) (childrenOf.get(c.parent) ?? childrenOf.set(c.parent, []).get(c.parent)!).push(c.id);
-  }
-
-  // Free materials across the whole set, grouped by category.
-  const catIds = [...catById.keys()];
-  const materials = catIds.length
-    ? await prisma.material.findMany({
-        where: { materialCategoryId: { in: catIds }, status: true, isPaid: false },
-        orderBy: [{ order_by: "asc" }, { created_at: "desc" }],
-      })
-    : [];
-
-  const base = resolveSpacesBase();
-  const materialsByCat = new Map<number, any[]>();
-  for (const m of materials) {
-    if (m.materialCategoryId == null) continue;
-    (materialsByCat.get(m.materialCategoryId) ?? materialsByCat.set(m.materialCategoryId, []).get(m.materialCategoryId)!).push(shapeMaterial(m, base));
-  }
-
-  const buildNode = (catId: number): any | null => {
-    const cat = catById.get(catId);
-    if (!cat) return null;
-    const ownMaterials = materialsByCat.get(catId) ?? [];
-    const children = (childrenOf.get(catId) ?? []).map((cid) => buildNode(cid)).filter(Boolean) as any[];
-    if (!ownMaterials.length && !children.length) return null;
-    const materialCount = ownMaterials.length + children.reduce((n, c) => n + c.materialCount, 0);
-    return { _id: String(cat._id), title: cat.title, image: cat.image, materialCount, materials: ownMaterials, children };
-  };
-
-  let groups = products.map((p) => {
-    const categories = p.rootIds.map((rid) => buildNode(rid)).filter(Boolean) as any[];
-    if (!categories.length) return null;
-    return { _id: String(p._id), title: p.name, image: p.image, type: p.type, materialCount: categories.reduce((n, c) => n + c.materialCount, 0), categories };
-  }).filter(Boolean) as any[];
-
-  if (opts.search) { const s = opts.search.toLowerCase(); groups = groups.filter((g) => (g.title ?? "").toLowerCase().includes(s)); }
-
-  const total = groups.length;
-  const data = groups.slice(opts.skip, opts.skip + opts.limit);
-  return { data, total };
+//
+// HARD RULE: study materials are ALWAYS paid — there is no free tier. So this
+// discovery listing has, by definition, nothing to return. We short-circuit to an
+// empty page in code (not only via the isPaid=false query) so the guarantee holds
+// even on an environment where the one-time data migration hasn't been applied.
+export const freeMaterials = async (_opts: { customerId: number | null; search: string | null; page: number; limit: number; skip: number }) => {
+  return { data: [] as any[], total: 0 };
 };
 
 // ── FREE-VIDEOS ─────────────────────────────────────────────────────────────
@@ -604,32 +544,8 @@ const resolveOwnedEndAt = async (customerId: number | null, courseIds: number[],
 // ── shaping helpers ────────────────────────────────────────────────────────────
 const daysBetween = (from: Date, to: Date) => Math.max(0, Math.ceil((to.getTime() - from.getTime()) / 86_400_000));
 
-const resolveSpacesBase = (): string => (process.env.SPACES_PUBLIC_BASE || process.env.SPACES_CDN_URL || process.env.ORIGIN || "").replace(/\/$/, "");
-
-// Client material shape (mirrors shapeMaterialForClient: free-only listing so
-// isLocked is always false). file/directLink resolved to absolute when relative.
-const shapeMaterial = (m: any, base: string) => {
-  const resolve = (u: string | null): string | null => {
-    if (!u) return null;
-    return /^https?:\/\//i.test(u) ? u : `${base}/${String(u).replace(/^\//, "")}`;
-  };
-  return {
-    _id: String(m.id),
-    title: m.name,
-    description: m.description ?? null,
-    thumbnail: m.thumbnail ?? null,
-    file: resolve(m.file) ?? "",
-    directLink: m.direct_link ?? "",
-    fileSize: m.fileSize != null ? Number(m.fileSize) : null,
-    language: m.language ?? null,
-    isPreview: m.isPreview,
-    isPaid: false,        // free-only listing
-    isPurchased: true,    // free material is always accessible
-    materialCategoryId: m.materialCategoryId != null ? String(m.materialCategoryId) : null,
-    order: m.order_by,
-    createdAt: m.created_at ?? null,
-  };
-};
+// NOTE: the former free-material shaper was removed — study materials are always
+// paid, so freeMaterials() now returns an empty page (see its definition above).
 
 const shapeVideo = (v: any, customerId: number | null) => {
   // Free videos: no raw id/url. A `free` media token (bound to the customer) is
