@@ -94,8 +94,8 @@ export const listActiveVideoCategories = async (): Promise<VideoCategoryDto[]> =
  * Children-nav drill-down for a video category (client `categories` controller).
  * Returns { parent, list } where each list[].category = { ...categoryDto, count
  * (active videos), havingChildDirectory (≥1 active grandchild) }. Returns null if
- * the parent is missing. ⚠ Mongo gates children via the `childCategoryIds[]` DAG;
- * SQL derives them from the single `parent` FK (same divergence as admin-master).
+ * the parent is missing. Children are resolved from ws_video_category_relation (the
+ * DAG edge table) — matching the Mongo `childCategoryIds[]` semantics.
  * The parent is fetched WITHOUT a status gate, matching the Mongo `findById`
  * (an inactive parent still renders its children).
  */

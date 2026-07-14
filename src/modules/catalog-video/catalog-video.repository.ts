@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { childIdsOf } from "../../utils/videoCategoryRelation";
 
 /**
  * Prisma persistence for the catalog · video MySQL branch (flag OFF).
@@ -41,36 +42,61 @@ export const catalogVideoRepository = {
     }),
 
   /**
-   * Active CHILD categories of a parent (children-nav drill-down). ⚠ Mongo
-   * `childCategoryIds[]` is a DAG; SQL derives children from the single `parent`
-   * FK (same divergence as admin-master). Optional title search.
+   * Active CHILD categories of a parent (children-nav drill-down). Children come
+   * from ws_video_category_relation (the DAG edge table); the returned rows are then
+   * filtered to active + optional title search and paginated. Ordered by order_by.
    */
-  listActiveChildren: (parentId: number, opts?: { search?: string; skip?: number; take?: number }) =>
-    prisma.videoCategory.findMany({
-      where: catalogVideoRepository.activeChildrenWhere(parentId, opts),
+  listActiveChildren: async (parentId: number, opts?: { search?: string; skip?: number; take?: number }) => {
+    const childIds = await childIdsOf(parentId);
+    if (!childIds.length) return [];
+    return prisma.videoCategory.findMany({
+      where: catalogVideoRepository.activeChildrenWhere(childIds, opts),
       orderBy: [{ order_by: "asc" }, { title: "asc" }],
       ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
       ...(opts?.take !== undefined ? { take: opts.take } : {}),
-    }),
+    });
+  },
 
   /** Count of active children matching the same filter as `listActiveChildren`. */
-  countActiveChildren: (parentId: number, opts?: { search?: string }) =>
-    prisma.videoCategory.count({ where: catalogVideoRepository.activeChildrenWhere(parentId, opts) }),
+  countActiveChildren: async (parentId: number, opts?: { search?: string }) => {
+    const childIds = await childIdsOf(parentId);
+    if (!childIds.length) return 0;
+    return prisma.videoCategory.count({ where: catalogVideoRepository.activeChildrenWhere(childIds, opts) });
+  },
 
-  /** Shared WHERE for active children list/count. */
-  activeChildrenWhere: (parentId: number, opts?: { search?: string }) => ({
-    parent: parentId,
+  /** Shared WHERE for active children list/count — over a pre-resolved child-id set. */
+  activeChildrenWhere: (childIds: number[], opts?: { search?: string }) => ({
+    id: { in: childIds },
     status: true,
     ...(opts?.search ? { title: { contains: opts.search } } : {}),
   }),
 
   /**
-   * Active child-folder COUNT per parent for the given category ids. Drives both
-   * `havingChildDirectory` (count > 0) AND the directory-node `count` (child-folder
-   * count) so a folder-with-subfolders reports its subfolder count, not 0 videos.
+   * Active child-folder COUNT per parent for the given category ids, over the
+   * ws_video_category_relation DAG. Drives both `havingChildDirectory` (count > 0)
+   * AND the directory-node `count` (child-folder count) so a folder-with-subfolders
+   * reports its subfolder count, not 0 videos. A child folder is counted only if the
+   * child category is active.
    */
-  childCountsByParent: (childIds: number[]) =>
-    childIds.length
-      ? prisma.videoCategory.groupBy({ by: ["parent"], where: { parent: { in: childIds }, status: true }, _count: { _all: true } })
-      : Promise.resolve([] as { parent: number | null; _count: { _all: number } }[]),
+  childCountsByParent: async (childIds: number[]): Promise<{ parent: number | null; _count: { _all: number } }[]> => {
+    if (!childIds.length) return [];
+    const edges = await prisma.videoCategoryRelation.findMany({
+      where: { parent: { in: childIds } },
+      select: { parent: true, child: true },
+    });
+    if (!edges.length) return [];
+    const uniqueChildren = [...new Set(edges.map((e) => e.child))];
+    const active = new Set(
+      (await prisma.videoCategory.findMany({ where: { id: { in: uniqueChildren }, status: true }, select: { id: true } })).map((r) => r.id)
+    );
+    // parent → distinct set of its active child folders (dedupes multi-edge pairs).
+    const counts = new Map<number, Set<number>>();
+    for (const e of edges) {
+      if (!e.parent || e.parent <= 0 || !active.has(e.child)) continue;
+      let s = counts.get(e.parent);
+      if (!s) { s = new Set<number>(); counts.set(e.parent, s); }
+      s.add(e.child);
+    }
+    return [...counts].map(([parent, s]) => ({ parent, _count: { _all: s.size } }));
+  },
 };

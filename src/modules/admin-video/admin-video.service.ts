@@ -70,14 +70,18 @@ export const getPreRequisites = async (opts: { search?: string; limit?: number }
   const [cats, parentIds] = await Promise.all([repo.listActiveCategories(opts), repo.childParentIds()]);
   // parentId + ancestors[{id,name}] (root→immediate-parent) so the videos-list modal
   // can render the greyed parent rows for a match (the feed was flat with no parent link).
-  const ancestorsFor = await resolveAncestors(cats.map((c) => c.parent), repo.categoriesByIds);
+  // Parent is sourced from ws_video_category_relation (the DAG edge table), collapsed
+  // to a deterministic single parent — not the legacy ws_video_category.parent column.
+  const primaryParent = await repo.primaryParents(cats.map((c) => c.id));
+  const parentOf = (id: number) => primaryParent.get(id) ?? 0;
+  const ancestorsFor = await resolveAncestors(cats.map((c) => parentOf(c.id)), repo.categoriesByIds);
   return {
     categories: cats.map((c) => ({
       id: String(c.id),
       name: c.title,
       slug: c.slug,
-      parentId: c.parent && c.parent > 0 ? String(c.parent) : null,
-      ancestors: ancestorsFor(c.parent),
+      parentId: parentOf(c.id) > 0 ? String(parentOf(c.id)) : null,
+      ancestors: ancestorsFor(parentOf(c.id)),
       has_children: parentIds.has(c.id),
     })),
     types: [{ value: "free", label: "Free" }, { value: "paid", label: "Paid" }],

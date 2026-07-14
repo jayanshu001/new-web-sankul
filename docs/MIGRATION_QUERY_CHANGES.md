@@ -15,6 +15,42 @@
 
 ---
 
+## 2026-07-14 — Video-category hierarchy READS now sourced from `ws_video_category_relation`
+
+> **Query-source change (read-only). No schema/DDL change. Response shapes unchanged.**
+> Backfill required before flip: `scripts/backfill-video-category-relation-from-parent.ts`.
+
+Video categories carry two hierarchy stores kept in sync by the admin CRUD — the
+single-parent `ws_video_category.parent` column and the many-to-many
+`ws_video_category_relation` edge table (the DAG the client catalog + package
+composition already trust). All **parent/child reads** were moved off the column and
+onto the relation table. Writes are unchanged (`vcSetParent`/`vcCreate`/`vcDuplicate`
+still keep the column + edges in sync; the column stays populated).
+
+Single-parent surfaces (picker `parentId`, admin category tree, ancestor chains)
+collapse the DAG to a deterministic **primary parent** (lowest edge `order`, then
+lowest `parent` id) via new util `src/utils/videoCategoryRelation.ts` — so for
+well-formed data (one edge per child) the value equals the old column, and the JSON
+is byte-identical.
+
+Changed reads:
+- `admin-master.repository`: `vcChildren`, `hasChildren` (now `videoCategoryRelation.findFirst`),
+  `vcCategoriesByIds` (parent from relation), new `vcAllEdges` / `vcPrimaryParents`.
+  `admin-master.service`: `vcList` (in-memory tree from edges), `fullVcList` / `loadFullVc`
+  (batched primary parent). `vcDuplicate`'s internal clone BFS intentionally stays on the
+  in-sync column (write path).
+- `admin-video.repository`: `childParentIds` (distinct relation parents), `categoriesByIds`
+  (parent from relation), new `primaryParents`; `listActiveCategories` no longer selects
+  `parent`. `admin-video.service.getPreRequisites`: `parentId`/`ancestors` from relation.
+- `catalog-video.repository`: `listActiveChildren` / `countActiveChildren` (children via
+  `childIdsOf`), `childCountsByParent` (per-parent active child-folder count over edges).
+
+Behavior note: values change only where the DAG genuinely holds **multiple** parents for
+a child (the column could hold only one) — there the relation table now wins, which is the
+intended, more-correct semantics.
+
+---
+
 ## 2026-07-14 — Admin video-categories: `status` filter accepts boolean-style values
 
 > **Validation contract fix (query-shape). No schema/query change.** Endpoints: `GET /admin/video-categories`, `/:id/courses`, `/:id/videos`.

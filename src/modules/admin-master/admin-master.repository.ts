@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { childIdsOf, loadAllEdges, primaryParentsOf } from "../../utils/videoCategoryRelation";
 
 /**
  * Prisma persistence for the admin "master" sub-catalog CRUD (small lookup
@@ -66,14 +67,31 @@ export const adminMasterRepository = {
     if (opts.educatorId !== undefined) where.educatorId = opts.educatorId;
     return prisma.videoCategory.count({ where });
   },
-  vcChildren: (parentId: number) =>
-    prisma.videoCategory.findMany({ where: { parent: parentId }, select: { id: true, title: true, slug: true, status: true, order_by: true }, orderBy: { order_by: "asc" } }),
+  // Direct children of a category, sourced from ws_video_category_relation (the DAG
+  // edge table), re-ordered by the child category's own order_by for a stable list.
+  vcChildren: async (parentId: number) => {
+    const childIds = await childIdsOf(parentId);
+    if (!childIds.length) return [];
+    return prisma.videoCategory.findMany({
+      where: { id: { in: childIds } },
+      select: { id: true, title: true, slug: true, status: true, order_by: true },
+      orderBy: { order_by: "asc" },
+    });
+  },
+  // Every parent→child edge (whole DAG) for in-memory tree builds (vcList).
+  vcAllEdges: () => loadAllEdges(),
+  // Batched `child → primary parent` map from the relation DAG (deterministic single parent).
+  vcPrimaryParents: (ids: number[]) => primaryParentsOf(ids),
   // Batched {id, name, parent} loader for ancestor-chain resolution (title→name; one
-  // query per tree level).
-  vcCategoriesByIds: async (ids: number[]) =>
-    ids.length
-      ? (await prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true, title: true, parent: true } })).map((r) => ({ id: r.id, name: r.title, parent: r.parent }))
-      : [],
+  // query per tree level). Parent is resolved from ws_video_category_relation.
+  vcCategoriesByIds: async (ids: number[]) => {
+    if (!ids.length) return [];
+    const [cats, parents] = await Promise.all([
+      prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true, title: true } }),
+      primaryParentsOf(ids),
+    ]);
+    return cats.map((r) => ({ id: r.id, name: r.title, parent: parents.get(r.id) ?? null }));
+  },
   // Existing ids among the given set — used to validate childCategoryIds before binding.
   vcExistingIds: (ids: number[]) =>
     prisma.videoCategory.findMany({ where: { id: { in: ids } }, select: { id: true } }),
@@ -156,7 +174,8 @@ export const adminMasterRepository = {
     return prisma.video.count({ where });
   },
   videoInCategory: (categoryId: number) => prisma.video.findFirst({ where: { videoCategoryId: categoryId }, select: { id: true } }),
-  hasChildren: (categoryId: number) => prisma.videoCategory.findFirst({ where: { parent: categoryId }, select: { id: true } }),
+  // A category "has children" when it is the parent of ≥1 ws_video_category_relation edge.
+  hasChildren: (categoryId: number) => prisma.videoCategoryRelation.findFirst({ where: { parent: categoryId }, select: { id: true } }),
 
   // ── duplicate (clone a category + its sub-tree + videos) ────────────────────
   // The Mongo source modelled a childCategoryIds[] DAG; SQL models a single-parent
@@ -171,6 +190,10 @@ export const adminMasterRepository = {
       if (!source) return null;
 
       // BFS the parent-tree, collecting every node once (guards against cycles).
+      // Traversal reads the `parent` column (still written in sync by vcSetParent /
+      // vcCreate) rather than the relation edges: this is a WRITE path cloning a
+      // single-parent tree, and the in-sync column is equivalent while keeping the
+      // transactional clone logic (parent remap + edge creation below) unchanged.
       const nodesById = new Map<number, any>();
       nodesById.set(source.id, source);
       const queue: number[] = [source.id];

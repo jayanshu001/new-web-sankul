@@ -1,5 +1,6 @@
 import { adminMasterRepository as repo } from "./admin-master.repository";
 import { resolveAncestors } from "../../utils/categoryAncestors";
+import { primaryParentMap } from "../../utils/videoCategoryRelation";
 
 export const ADMIN_MASTER_MODULE = "admin-master";
 export const isAdminMasterMysql = (): boolean => true;
@@ -41,30 +42,42 @@ export const subjDelete = async (id: number) => { if (!(await repo.subjFind(id))
 // ── VideoCategory ──────────────────────────────────────────────────────────────
 const toVcDto = (c: any) => ({ _id: String(c.id), title: c.title, slug: c.slug, image: c.image, pdf: c.pdf ?? null, parent: c.parent ?? null, educatorId: c.educatorId ?? null, order_by: c.order_by, status: c.status, createdAt: c.created_at ?? null, updatedAt: c.updated_at ?? null });
 /**
- * List with child_categories (resolved via the `parent` self-FK) + hasChildren.
+ * List with child_categories + hasChildren + ancestors, all resolved from the
+ * ws_video_category_relation DAG (edge table) — NOT the legacy `parent` column.
  * `hasChildren` is computed over the full set first, so a category matched by
  * `search` still reports children even when they don't match the query. `search`
  * (title substring) and `limit` are applied afterwards for picker server-search.
  */
 export const vcList = async (opts: { search?: string; limit?: number } = {}) => {
-  const all = await repo.vcList();
+  const [all, edges] = await Promise.all([repo.vcList(), repo.vcAllEdges()]);
+  const byId = new Map<number, any>(all.map((c) => [c.id, c]));
+  // child → primary (deterministic single) parent, for the ancestor chain.
+  const primaryParent = primaryParentMap(edges);
+  // parent → child rows (deduped per edge), sorted by the child's own order_by.
   const childrenByParent = new Map<number, any[]>();
-  for (const c of all) {
-    if (c.parent != null && c.parent > 0) {
-      (childrenByParent.get(c.parent) ?? childrenByParent.set(c.parent, []).get(c.parent)!).push(
-        { _id: String(c.id), title: c.title, slug: c.slug, status: c.status, order_by: c.order_by }
-      );
-    }
+  const seenPair = new Set<string>();
+  for (const e of edges) {
+    if (!e.parent || e.parent <= 0) continue;
+    const child = byId.get(e.child);
+    if (!child) continue;
+    const key = `${e.parent}:${e.child}`;
+    if (seenPair.has(key)) continue;
+    seenPair.add(key);
+    (childrenByParent.get(e.parent) ?? childrenByParent.set(e.parent, []).get(e.parent)!).push(
+      { _id: String(child.id), title: child.title, slug: child.slug, status: child.status, order_by: child.order_by }
+    );
   }
+  for (const list of childrenByParent.values()) list.sort((a, b) => (a.order_by ?? 0) - (b.order_by ?? 0));
   // ancestors[{id,name}] root→immediate-parent for greyed parent rows. The full set is
-  // already in memory, so resolve against it (no extra query).
+  // already in memory, so resolve against it via the relation-derived primary parent.
   const ancestorsFor = await resolveAncestors(
-    all.map((c) => c.parent),
-    async (ids) => all.filter((c) => ids.includes(c.id)).map((c) => ({ id: c.id, name: c.title, parent: c.parent })),
+    all.map((c) => primaryParent.get(c.id) ?? null),
+    async (ids) => ids.map((id) => byId.get(id)).filter(Boolean).map((c) => ({ id: c.id, name: c.title, parent: primaryParent.get(c.id) ?? null })),
   );
   let rows = all.map((c) => {
     const children = childrenByParent.get(c.id) ?? [];
-    return { ...toVcDto(c), child_categories: children, hasChildren: children.length > 0, ancestors: ancestorsFor(c.parent) };
+    const parent = primaryParent.get(c.id) ?? null;
+    return { ...toVcDto({ ...c, parent }), child_categories: children, hasChildren: children.length > 0, ancestors: ancestorsFor(parent) };
   });
   const q = opts.search?.trim().toLowerCase();
   if (q) rows = rows.filter((r) => (r.title ?? "").toLowerCase().includes(q));
@@ -128,12 +141,20 @@ const toFullVcDto = (c: any, children: any[], educator: any | null, ancestors: {
   updated_at: c.updated_at ?? null,
 });
 
-const loadFullVc = async (c: any, ancestors: { id: string; name: string }[] = []) => {
+// `primaryParent` (the category's own parent, from ws_video_category_relation) can be
+// passed in when the caller already resolved it in a batch (fullVcList); otherwise it
+// is looked up here so single-item loads (get/create/update/toggle) stay relation-sourced.
+const loadFullVc = async (
+  c: any,
+  ancestors: { id: string; name: string }[] = [],
+  primaryParent?: number | null,
+) => {
   const [children, educator] = await Promise.all([
     repo.vcChildren(c.id),
     c.educatorId && c.educatorId > 0 ? repo.educator(c.educatorId) : Promise.resolve(null),
   ]);
-  return toFullVcDto(c, children, educator, ancestors);
+  const parent = primaryParent !== undefined ? primaryParent : (await repo.vcPrimaryParents([c.id])).get(c.id) ?? null;
+  return toFullVcDto({ ...c, parent }, children, educator, ancestors);
 };
 
 export const fullVcList = async (q: { search?: string; status?: string; educatorId?: string; page: number; per_page: number; sort_by: string; sort_dir: string }) => {
@@ -147,9 +168,12 @@ export const fullVcList = async (q: { search?: string; status?: string; educator
     repo.vcListFiltered({ ...opts, skip: (q.page - 1) * q.per_page, take: q.per_page }),
     repo.vcCountFiltered(opts),
   ]);
-  // Paginated page → resolve ancestors via a batched DB loader (one query per level).
-  const ancestorsFor = await resolveAncestors(rows.map((r) => r.parent), repo.vcCategoriesByIds);
-  const items = await Promise.all(rows.map((c) => loadFullVc(c, ancestorsFor(c.parent))));
+  // Parent link is sourced from ws_video_category_relation (batched for the page), then
+  // ancestors resolve up that same relation via the batched vcCategoriesByIds loader.
+  const primaryParent = await repo.vcPrimaryParents(rows.map((r) => r.id));
+  const parentOf = (id: number) => primaryParent.get(id) ?? null;
+  const ancestorsFor = await resolveAncestors(rows.map((r) => parentOf(r.id)), repo.vcCategoriesByIds);
+  const items = await Promise.all(rows.map((c) => loadFullVc(c, ancestorsFor(parentOf(c.id)), parentOf(c.id))));
   return { items, total };
 };
 
