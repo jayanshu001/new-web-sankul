@@ -131,37 +131,60 @@ const parseOrderItems = (json: string | null): any[] => {
   try { const a = JSON.parse(json); return Array.isArray(a) ? a : []; } catch { return []; }
 };
 
+// Resolve a line item's book id regardless of order_items shape. SQL-created
+// orders write `{ bookId, qty, price, ... }` (from CreateOrderItemInput); legacy
+// Mongo-migrated rows used `{ item, name, qty, price }`. Accept both → the numeric
+// book id, or null when it can't be resolved.
+const itemBookId = (it: any): number | null => {
+  const raw = it?.bookId ?? it?.item;
+  const n = raw != null ? Number(raw) : NaN;
+  return Number.isInteger(n) && n > 0 ? n : null;
+};
+
 export const listBooks = async (customerId: number, statuses: string[], skip: number, take: number, page: number, limit: number, search?: string) => {
   const [orders, total] = await Promise.all([
     repo.listBookOrders(customerId, statuses, skip, take, search),
     repo.countBookOrders(customerId, statuses, search),
   ]);
-  // first-item name + thumbnail from the order_items JSON (the `item` field is
-  // bookId). The JSON may omit `name` on legacy rows, so fetch the first book of
-  // each order once and use it to backfill the title (mirrors the receipt path).
+  // The order_items JSON carries the priced lines (bookId + qty + price) but NO
+  // book name/thumbnail, so resolve EVERY referenced book (not just the first) to
+  // render each line's real title + thumbnail. Legacy rows use {item,name}; SQL
+  // rows use {bookId} — itemBookId handles both.
   const itemsByOrder = new Map<number, any[]>();
   orders.forEach((o) => itemsByOrder.set(o.id, parseOrderItems(o.orderItems)));
-  const firstBookIds = [...new Set([...itemsByOrder.values()].map((items) => items[0]?.item).filter((x) => x != null).map(Number))];
-  const bookById = new Map((await repo.booksByIds(firstBookIds)).map((b) => [b.id, b]));
+  const allBookIds = [...new Set([...itemsByOrder.values()].flat().map(itemBookId).filter((x): x is number => x != null))];
+  const bookById = new Map((await repo.booksByIds(allBookIds)).map((b) => [b.id, b]));
 
   const data = orders.map((o) => {
-    const items = itemsByOrder.get(o.id) ?? [];
-    const first = items[0];
-    const more = items.length - 1;
-    const firstId = first?.item != null ? Number(first.item) : null;
-    const book = firstId != null ? bookById.get(firstId) : null;
-    const firstName = first ? (first.name || book?.name || "Book") : null;
-    const title = firstName ? (more > 0 ? `${firstName} +${more} more` : firstName) : "Books order";
+    const rawItems = itemsByOrder.get(o.id) ?? [];
+    // Full per-book detail for the order — the app renders this list instead of a
+    // bare "Book" placeholder. Name backfilled from ws_book when the JSON omits it.
+    const books = rawItems.map((it) => {
+      const bookId = itemBookId(it);
+      const book = bookId != null ? bookById.get(bookId) : null;
+      return {
+        bookId: bookId != null ? String(bookId) : null,
+        name: it.name || book?.name || "Book",
+        thumbnail: book?.thumbnail || book?.image || null,
+        qty: it.qty != null ? Number(it.qty) : 1,
+        price: it.price != null ? Number(it.price) : null,
+      };
+    });
+    const first = books[0];
+    const more = books.length - 1;
+    const title = first ? (more > 0 ? `${first.name} +${more} more` : first.name) : "Books order";
     return {
       _id: String(o.id),
       title,
-      thumbnail: book?.thumbnail || book?.image || null,
+      thumbnail: first?.thumbnail ?? null,
       amount: Number(o.amount),
       // Legacy rows may have a null created_at (no DB default) — fall back to
       // order_date, then paid_at, so the purchase date still renders.
       purchasedAt: o.createdAt ?? o.orderDate ?? o.paidAt ?? null,
       status: o.status,
       receiptUrl: `${RECEIPT_BASE}/books/${o.id}/receipt`,
+      // Every book in the order, with proper details (name/thumbnail/qty/price).
+      books,
       tracking: {
         // ws_book_tracking is a flat status row → AWB only; no courier column.
         trackingId: o.BookTracking?.tracking_id != null ? String(o.BookTracking.tracking_id) : null,
@@ -169,7 +192,7 @@ export const listBooks = async (customerId: number, statuses: string[], skip: nu
       },
       meta: {
         receiptId: o.receiptId,
-        itemsCount: items.length,
+        itemsCount: books.length,
         razorpayOrderId: o.gatewayOrderId ?? null,
         razorpayPaymentId: o.gatewayPaymentId ?? null,
       },
@@ -233,11 +256,13 @@ export const getBookReceiptMysql = async (orderId: number, customerId: number) =
   if (!o) return null;
 
   const rawItems = parseOrderItems(o.orderItems);
-  // backfill missing names via a Book lookup (item field = bookId).
-  const missingIds = [...new Set(rawItems.filter((it) => !it.name).map((it) => Number(it.item)).filter((x) => Number.isInteger(x) && x > 0))];
+  // backfill missing names via a Book lookup. SQL rows carry the id as `bookId`
+  // (no name); legacy rows as `item` — itemBookId resolves either.
+  const missingIds = [...new Set(rawItems.filter((it) => !it.name).map(itemBookId).filter((x): x is number => x != null))];
   const nameById = new Map((await repo.booksByIds(missingIds)).map((b) => [b.id, b.name]));
   const items = rawItems.map((it) => {
-    const name = it.name ?? nameById.get(Number(it.item)) ?? null;
+    const bookId = itemBookId(it);
+    const name = it.name ?? (bookId != null ? nameById.get(bookId) : null) ?? null;
     return { name, qty: it.qty, unitPrice: it.price, lineTotal: it.price * it.qty };
   });
 

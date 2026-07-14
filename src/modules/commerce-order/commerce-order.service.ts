@@ -103,6 +103,10 @@ export const createCourseOrderMysql = async (input: {
   planId: number;
   price: number;
   razorpayOrderId: string;
+  // Receipt id (unique_id) + full Razorpay order payload (razorpay_order) so the
+  // order row is fully populated, matching the ebook/book order create paths.
+  uniqueId?: string | null;
+  razorpayOrderPayload?: string | null;
   // Delivery address for "With Materials" plans; persisted on the order row so
   // verify can stamp it onto the fulfilled subscription. Null for digital-only.
   customerShippingId?: number | null;
@@ -267,6 +271,9 @@ export const createPackageOrderMysql = async (input: {
   planId: number;
   price: number;
   razorpayOrderId: string;
+  // Receipt id (unique_id) + full Razorpay order payload (razorpay_order).
+  uniqueId?: string | null;
+  razorpayOrderPayload?: string | null;
   customerShippingId?: number | null;
   // Referrer to credit at verify when a referral code was applied (else null).
   referrerId?: number | null;

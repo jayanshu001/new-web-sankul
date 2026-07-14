@@ -15,6 +15,226 @@
 
 ---
 
+## 2026-07-14 — Admin video-categories: `status` filter accepts boolean-style values
+
+> **Validation contract fix (query-shape). No schema/query change.** Endpoints: `GET /admin/video-categories`, `/:id/courses`, `/:id/videos`.
+
+The list `status` filter was a strict Zod enum `active|inactive`, but the FE toggle
+sends `status=false` / `status=true`, so `GET /admin/video-categories?...&status=false`
+422'd with `Invalid enum value. Expected 'active' | 'inactive', received 'false'`.
+
+Fix (`src/admin/videoCategory/videoCategory.validation.ts`): added a `statusFilter`
+preprocessor that normalizes before enum validation and applied it to `listQuerySchema`,
+`categoryCoursesQuerySchema`, `categoryVideosQuerySchema`:
+- `true|"true"|"1"|1` → `"active"`, `false|"false"|"0"|0` → `"inactive"`
+- `""|"all"|"null"|"undefined"` → undefined (no filter)
+- `"active"|"inactive"` still pass through unchanged (no breaking change)
+
+The service (`admin-master.service.ts` `fullVcList`) already maps the enum to the
+boolean column filter, so `status=false` now correctly returns inactive categories.
+
+---
+
+## 2026-07-14 — Books purchase-history: real book titles + full per-book details
+
+> **Read-shape fix + additive response field. Course of the "Book" placeholder title on `GET /client/purchase-history/books`.**
+
+The books tab (`listBooks`, `src/modules/client-purchase-history/client-purchase-history.service.ts`)
+read each order's line items as `{ item, name }`, but the SQL book-order create path
+(`book-order.service.ts` → `JSON.stringify(preview.items)`) writes
+`{ bookId, qty, listPrice, price, shippingPrice }` — **no `name`, and the id key is
+`bookId`, not `item`**. So for every SQL-created order the id list was empty, the book
+lookup resolved nothing, and the title fell back to `"Book"`.
+
+Fix:
+- New `itemBookId()` helper resolves the line's book id from **either** shape
+  (`bookId` for SQL rows, `item` for legacy Mongo-migrated rows).
+- `listBooks` now resolves **all** referenced books (not just the first) via `booksByIds`,
+  backfills each line's name/thumbnail from `ws_book`, and computes the title from the
+  resolved name (`"<First> +N more"`).
+- **Additive:** each order now carries a `books: [{ bookId, name, thumbnail, qty, price }]`
+  array so the app can render the full list of purchased books. Existing fields
+  (`title`, `thumbnail`, `meta.itemsCount`, `tracking`) are unchanged.
+- Same latent bug fixed in `getBookReceiptMysql` (receipt line names): `Number(it.item)`
+  → `itemBookId(it)`, so SQL-created orders' receipt items resolve their names too.
+
+No schema/index/query change — purely how the already-fetched `order_items` JSON is
+interpreted + one extra `booksByIds` read.
+
+## 2026-07-14 — No tracking row for "Without Material" course/package subscriptions
+
+> **Write-logic fix (no schema/index change). Digital-only subs were getting a spurious tracking row + `tracking` FK.**
+
+On payment verify, both `verifyCourseTx` and `verifyPackageTx`
+(`src/modules/commerce-order/commerce-order.repository.ts`) unconditionally created a
+`ws_package_course_subscription_tracking` row (status `pending` for material, `complete`
+otherwise) and set `ws_package_course_subscription.tracking` to its id — **even for
+"Without Material" / digital-only plans**, which have nothing to ship. That produced a
+Tracking ID on subscriptions that should never have one.
+
+Fix: the tracking (dispatch) row is now created **only when `material.withMaterial` is
+true** (status `pending` — a kit to ship). For without-material plans no tracking row is
+created and `trackingId` stays NULL. The DTO already surfaces `trackingId` as
+`number | null` (transformer `trackingToNumber`), so response shapes are unchanged; the
+book-order verify path (physical books, always shipped) is a separate flow and untouched.
+
+**Note:** this fixes new fulfillments. Existing digital-only rows that already carry a
+`tracking` FK are not backfilled here — a cleanup could null out `tracking` (and delete the
+orphan tracking rows) for subs whose plan is without-material, if desired.
+
+## 2026-07-14 — Populate `unique_id` / `razorpay_order` / `created_at` / `updated_at` on course+package orders
+
+> **Write-shape fix (no schema/index change). The client checkout create-order path left four `ws_package_course_order` columns NULL on every new row.**
+
+`createPendingOrder` (`src/modules/commerce-order/commerce-order.repository.ts`), shared by
+the client course + package create-order endpoints, never set these columns; they are
+nullable with no DB default, so they landed NULL:
+
+- **`unique_id`** ← the receipt id (`course-…` / `package-…`), the order's business key —
+  same convention as the ebook create path.
+- **`razorpay_order`** (`gatewayOrder`, distinct from `razorpay_order_id`/`gatewayOrderId`)
+  ← `JSON.stringify(rzpOrder)`, the full Razorpay order response — mirrors the book-order
+  path (`gatewayOrder: razorpayOrderPayload`).
+- **`created_at` / `updated_at`** ← explicit `new Date()` stamps (mirrors ebook-order).
+
+Wiring: `uniqueId` + `razorpayOrderPayload` added to `createPendingOrder` and to
+`createCourseOrderMysql` / `createPackageOrderMysql` (service), passed from
+`course-payment.controller.ts` and `package-payment.controller.ts` (both already had
+`receiptId` + the `rzpOrder` object). No response-shape change. The admin manual-grant
+order path (`admin-subscription.createPaymentOrder`) already stamped unique_id/created_at/
+updated_at and has no Razorpay payload, so it was left as-is.
+
+## 2026-07-14 — Subscription Report `hasWsCoin` filter
+
+> **Query-shape change (new filter on the merged course+package subscription report). No schema/index change — `ws_coin` already exists on `ws_package_course_order`.**
+
+`GET admin/subscriptions` (+ `/export/csv`, `/export/excel`, and the async export job)
+gained an optional tri-state `hasWsCoin` query param that scopes the merged
+course+package subscription list (both the Subscription Report and Subscription Material
+Report) by whether the linked order redeemed Ws Coin.
+
+- `hasWsCoin=true` → only subs whose order has `ws_coin > 0`.
+- `hasWsCoin=false` → the complement: order-less subs (`order_id` NULL) **plus** orders
+  with `ws_coin` NULL or ≤ 0. (Order-less counts as "without" per the request.)
+- omitted → no Ws Coin filter (prior behaviour).
+
+Implementation: `ws_coin` lives on `ws_package_course_order`, reached via the
+`packageCourseOrder` relation (the same relation `orderMethod` uses). The filter is added
+as an ANDed relation fragment in `buildSubWhere`
+(`src/modules/admin-subscription/admin-subscription.repository.ts`), so it feeds the base
+`where` and therefore scopes the list, the revenue aggregate, and the active/expired
+counts — `pagination.total` and `summary` reflect the filtered set. Composes (AND) with
+every existing filter. Wired through `reportQueryFrom` (controller) →
+`CourseSubReportQuery` / `resolveCourseSubWhere` (service) → `CourseSubFilter` (repo), so
+the list and both exports honor it identically. The `false` branch is spelled out via
+explicit `orderId: null` / `wsCoin: null` / `wsCoin ≤ 0` OR-branches rather than a
+relation `isNot`, whose null-relation handling is unreliable in Prisma.
+
+**Note:** the sibling Activation Type dropdown needs no backend work — it reuses the
+existing `paymentMethod` param (not the no-op `activationType`).
+
+## 2026-07-14 — All API response dates now rendered in IST (+05:30) instead of UTC (Z)
+
+> **Response serialization change only. Storage stays UTC — this is display-only, applied centrally.**
+
+Every `Date` value in JSON responses (`created_at`/`updated_at` and all other Date fields)
+was serialized as a UTC ISO string (`2026-07-10T12:42:45.000Z`). Admins wanted IST. Rather
+than change storage (anti-pattern: would corrupt existing UTC rows + break report filters /
+date comparisons / payment reconciliation across ~396 `new Date()` sites), the output is now
+formatted centrally:
+
+- **New:** `src/utils/istJson.ts` — `istJsonReplacer` (+ `toISTISOString`). Emits ISO-8601 in
+  IST: `2026-07-10T18:12:45.000+05:30`. Still a valid instant, so `new Date(str)` on any client
+  resolves to the SAME moment — clients doing date math are unaffected; clients showing the raw
+  string now see IST.
+- **Wired:** `src/app.ts` — `app.set("json replacer", istJsonReplacer)` right after
+  `trust proxy`. Applies to every `res.json()`; no transformer/DTO changes.
+- **Mechanism:** JSON.stringify calls `Date.prototype.toJSON` before the replacer, so the
+  replacer inspects `this[key] instanceof Date` (the original Date) to reformat.
+- **Caveat:** only raw `Date` values are converted. A few call sites that pre-stringify with
+  `.toISOString()` still emit `...Z`; migrate those to raw Date passthrough if full uniformity
+  is needed. No DB/schema/query change. `yarn typecheck` green; runtime-verified round-trip.
+- **Contract note:** date fields change from `...Z` to `...+05:30`. Any consumer string-matching
+  the literal `Z` suffix (rather than parsing) must be updated.
+
+> **Query-source change only (no DB/schema change). Fixes a split-brain where the admin setting never reached checkout.**
+
+`getFreeShippingMin()` (`src/modules/book-order/book-order.service.ts`) — used by BOTH the
+book cart preview (`client-cart.service.ts`) and book order create — previously read
+`ws_termsandcondition.freeShippingMinimumOrderAmount` (`module='book', status=true`). But
+the admin edits the threshold via `PUT /admin/books/settings`, which writes a **different**
+table/column: `ws_book_setting.freeShippingMinOrderAmount` (`settingKey='default'`). So the
+admin value never affected the shipping waiver — it worked in envs where the terms row
+happened to be populated (local) and silently failed where it wasn't (deployed server).
+
+- **Change:** `getFreeShippingMin()` now reads `prisma.bookSetting.findFirst({ where:
+  { settingKey: "default" }, select: { freeShippingMinOrderAmount } })` → `?? 0`.
+- **Effect:** the `/admin/books/settings` `freeShippingMinOrderAmount` value now drives the
+  waiver everywhere (`shippingWaived = min > 0 && discountedSubtotal >= min`). No API
+  response shape changed. No DDL / schema change (reads an existing column). `yarn typecheck` green.
+- **Ops note:** no DB migration needed. On deploy, ensure `ws_book_setting` (settingKey
+  'default') has the intended `free_shipping_min_order_amount`; the old
+  `ws_termsandcondition` book value is no longer consulted for shipping.
+
+> **Schema change: +`ws_offline_batch.deleted_at` (DDL `2026-07-14_offline_batch_soft_delete.sql`) + Prisma field. Behavior change to the batch delete flow.**
+
+`DELETE /api/v1/admin/offline/batches/:id` previously HARD-deleted the batch **and**
+cascade-deleted all of its enquiries (`deleteEnquiriesInBatch` → `offlineEnquiry.deleteMany`),
+so the enquiries vanished from `/api/v1/admin/offline/batch-enquiries`. Since
+`ws_offline_enquiry.batch_id` is a **required FK**, enquiries can't outlive a hard-deleted
+batch — so the batch is now **soft-deleted** instead:
+
+- **Schema:** `OfflineBatch.deletedAt DateTime? @map("deleted_at")` (nullable, no default —
+  existing rows = not deleted). DDL: `docs/migration/schema-changes/2026-07-14_offline_batch_soft_delete.sql`
+  (`ADD COLUMN deleted_at` + `idx_ws_offline_batch_deleted_at`). `prisma:generate` run.
+- **Write (`offline-batch.repository.ts`):** `deleteBatch` now `update({ data: { deletedAt: new Date() } })`
+  instead of `.delete()`; the `deleteEnquiriesInBatch` cascade was removed (call + helper).
+- **Reads (`offline-batch.repository.ts`):** all batch queries now filter `deletedAt: null` —
+  `batchListWhere`, `clientBatchWhere` (→ listBatches/countBatches/listBatchesAdmin/countBatchesList),
+  `findBatchById` (changed `findUnique`→`findFirst` to allow the non-unique filter),
+  `listUpcoming`, `listBatchesByCenters`, `countBatchesInCenter`.
+- **Result:** deleted batch disappears from every batch list, but its enquiries remain and
+  still show in `/batch-enquiries` with their batch name (the `include: { batch }` relation
+  in `offline-enquiry.repository.ts` does not filter `deletedAt`, so the soft-deleted batch
+  still resolves). No API response shape changed. `yarn typecheck` green.
+- **Deploy:** apply the DDL (`npx prisma db execute --file docs/migration/schema-changes/2026-07-14_offline_batch_soft_delete.sql`) before/with the code deploy.
+
+> **Controller-only change (no DB/query/schema change). Response body made readable; status code unchanged (400).**
+
+`POST /api/v1/client/payment/create-order/ebook` (`src/client/payment/ebook-payment.controller.ts`)
+previously returned the raw `ZodError.issues` array on validation failure — an
+unreadable blob of `{ code, minimum, type, path }` objects (e.g. `"Number must be
+greater than or equal to 0"`). Fixed:
+
+- **Schema messages:** `createEbookOrderMysqlSchema` now carries human-readable messages —
+  `planId` → "Please select a valid eBook plan.", `promocode` → "Promo code cannot be
+  empty…", `coin` → "Coins to redeem cannot be negative." / "…must be a whole number."
+- **Response body:** the catch block now returns a flat `{ field: message }` map under
+  `errors` plus the first message as top-level `message`, instead of `errors: e.issues`.
+  Full raw issues still logged via `logger.warn` for debugging.
+- **Unchanged:** HTTP status stays **400**; no query/schema/index change; scope limited to
+  the client eBook create-order endpoint only. `yarn typecheck` green.
+
+> **DDL-record edit only (no schema.prisma change, no new columns). Amends the un-applied `2026-07-08_merge_promo_code_into_promocode.sql`.**
+
+Per client request, `description` is now left **entirely unchanged** by
+`docs/migration/schema-changes/2026-07-08_merge_promo_code_into_promocode.sql`. The
+`MODIFY COLUMN description ...` line was removed; the migration now only `ADD`s the four
+discount/appliesTo columns (`discount_type`, `discount_value`, `applies_to_type`,
+`applies_to_ids`) plus the two indexes.
+
+- **Was:** `MODIFY COLUMN description TEXT NULL` (later `TEXT ... utf8mb4`) to widen the
+  column to match the former `ws_promo_code` rule table's `TEXT` description.
+- **Now:** no `description` change at all.
+- **Caveat to watch:** if `ws_promocode.description` is currently narrower than the rule
+  table's `TEXT` (e.g. a `VARCHAR`), the backfill (`scripts/backfill-merge-promo-code.ts`)
+  could **truncate** long rule descriptions when copying `ws_promo_code` rows over. Confirm
+  the existing `ws_promocode.description` type is wide enough before running the backfill.
+- **Scope:** `prisma/schema.prisma` unchanged (`description String? @db.Text` already
+  declared); no `prisma:generate` needed.
+
+---
+
 ## 2026-07-13 — Fix: ws_book_order left user_ip / transaction_id / paid_at / created_at / updated_at NULL on the SQL path
 
 > **Write-path fix + one Prisma field addition (column already exists — NO DDL). `admin`/legacy rows unaffected.** `yarn typecheck` green, `prisma:generate` run.

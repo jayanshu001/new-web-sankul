@@ -40,6 +40,8 @@ export const reportQueryFrom = (q: Record<string, string>): subSql.CourseSubRepo
   status: q.status, paymentMethod: q.paymentMethod,
   // tri-state: absent = no filter, "true" = with material, "false" = without.
   hasMaterial: q.hasMaterial === "true" ? true : q.hasMaterial === "false" ? false : undefined,
+  // tri-state Ws Coin filter (order.ws_coin): "true" = redeemed (>0), "false" = not.
+  hasWsCoin: q.hasWsCoin === "true" ? true : q.hasWsCoin === "false" ? false : undefined,
   // promoter / promocode filters + orderMethod (payment gateway, ≠ paymentMethod).
   promoterId: q.promoterId, promocodeId: q.promocodeId, orderMethod: q.orderMethod,
   dateFrom: q.createdFrom ?? q.dateFrom ?? q.fromDate, dateTo: q.createdTo ?? q.dateTo ?? q.toDate,

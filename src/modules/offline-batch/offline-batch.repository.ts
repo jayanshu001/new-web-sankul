@@ -12,6 +12,7 @@ const centerListWhere = (opts?: { cityId?: number; search?: string }) => ({
 });
 
 const batchListWhere = (opts?: { centerId?: number; search?: string; upcomingAfter?: Date }) => ({
+  deletedAt: null, // soft delete: hide flagged batches from lists
   ...(opts?.centerId != null ? { centerId: opts.centerId } : {}),
   ...(opts?.search ? { name: { contains: opts.search } } : {}),
   ...(opts?.upcomingAfter ? { startAt: { gt: opts.upcomingAfter } } : {}),
@@ -19,6 +20,7 @@ const batchListWhere = (opts?: { centerId?: number; search?: string; upcomingAft
 
 // Client browse WHERE (center OR city→centerIds set), name search, upcoming.
 const clientBatchWhere = (opts?: { centerId?: number; centerIds?: number[]; search?: string; upcomingAfter?: Date }) => ({
+  deletedAt: null, // soft delete: hide flagged batches from lists
   ...(opts?.centerId != null ? { centerId: opts.centerId } : {}),
   ...(opts?.centerIds ? { centerId: { in: opts.centerIds } } : {}),
   ...(opts?.search ? { name: { contains: opts.search } } : {}),
@@ -58,8 +60,8 @@ export const offlineBatchRepository = {
   // ── batches ──────────────────────────────────────────────────────────────
   /** Single batch by id, with center → city. */
   findBatchById: (id: number) =>
-    prisma.offlineBatch.findUnique({
-      where: { id },
+    prisma.offlineBatch.findFirst({
+      where: { id, deletedAt: null }, // exclude soft-deleted batches
       include: { center: { include: { city: true } } },
     }),
 
@@ -97,7 +99,7 @@ export const offlineBatchRepository = {
   listBatchesByCenters: (centerIds: number[]) =>
     centerIds.length
       ? prisma.offlineBatch.findMany({
-          where: { centerId: { in: centerIds } },
+          where: { centerId: { in: centerIds }, deletedAt: null },
           orderBy: [{ startAt: "asc" }, { id: "asc" }],
         })
       : Promise.resolve([]),
@@ -105,7 +107,7 @@ export const offlineBatchRepository = {
   /** Active batches starting after `now`, soonest first (dashboard upcoming). */
   listUpcoming: (now: Date, take: number) =>
     prisma.offlineBatch.findMany({
-      where: { startAt: { gt: now } },
+      where: { startAt: { gt: now }, deletedAt: null },
       include: { center: { include: { city: true } } },
       orderBy: { startAt: "asc" },
       take,
@@ -136,7 +138,7 @@ export const offlineBatchRepository = {
   deleteCenter: (id: number) => prisma.offlineCenter.delete({ where: { id } }),
 
   countBatchesInCenter: (centerId: number) =>
-    prisma.offlineBatch.count({ where: { centerId } }),
+    prisma.offlineBatch.count({ where: { centerId, deletedAt: null } }),
 
   createBatch: (data: {
     name: string; image: string; discription: string; startAt: Date; duration: string; centerId: number;
@@ -155,10 +157,10 @@ export const offlineBatchRepository = {
       include: { center: { include: { city: true } } },
     }),
 
-  deleteBatch: (id: number) => prisma.offlineBatch.delete({ where: { id } }),
-
-  deleteEnquiriesInBatch: (batchId: number) =>
-    prisma.offlineEnquiry.deleteMany({ where: { batchId } }),
+  // Soft delete: flag the batch instead of removing the row, so its enquiries
+  // (required FK → batch) stay valid and keep showing in /batch-enquiries.
+  deleteBatch: (id: number) =>
+    prisma.offlineBatch.update({ where: { id }, data: { deletedAt: new Date() } }),
 
   // ── offline banner (OfflineBannerSlider) ────────────────────────────────────
   listBanners: () => prisma.offlineBannerSlider.findMany({ orderBy: { orderBy: "asc" } }),

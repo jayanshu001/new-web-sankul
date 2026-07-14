@@ -80,6 +80,9 @@ const customerRef = (c: { id: number; fullName: string | null; phoneNumber: stri
 export interface CourseSubReportQuery {
   customerId?: string; courseId?: string; packageId?: string; status?: string;
   paymentMethod?: string; hasMaterial?: boolean;
+  // hasWsCoin → scope by whether the linked order redeemed Ws Coin (ws_coin > 0);
+  // false includes order-less subs (see repository buildSubWhere).
+  hasWsCoin?: boolean;
   // promoterId/promocodeId → filter to subs by that promoter / promocode; orderMethod
   // → payment gateway (order.payment_method), distinct from paymentMethod (activation).
   promoterId?: string; promocodeId?: string; orderMethod?: string;
@@ -118,6 +121,7 @@ const resolveCourseSubWhere = async (q: CourseSubReportQuery, now: Date) => {
     packageId: q.packageId ? parseSubId(q.packageId) ?? undefined : undefined,
     paymentType: q.paymentMethod === "online" ? "online" : q.paymentMethod === "backend" ? "backend" : undefined,
     hasMaterial: q.hasMaterial,
+    hasWsCoin: q.hasWsCoin,
     promoterId: q.promoterId ? parseSubId(q.promoterId) ?? undefined : undefined,
     orderMethod: q.orderMethod ? GATEWAY_BY_INPUT[q.orderMethod.trim().toLowerCase()] : undefined,
     orderIdsIn,

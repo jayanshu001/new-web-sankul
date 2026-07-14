@@ -38,13 +38,19 @@ export const parseBookOrderId = (id: string): number | null => {
   return Number.isInteger(n) && n > 0 ? n : null;
 };
 
-/** The book free-shipping threshold (ws_termsandcondition, module='book'). */
+/**
+ * The book free-shipping threshold. Sourced from the book settings row
+ * (ws_book_setting, settingKey='default') — the same value the admin edits via
+ * PUT /admin/books/settings (`freeShippingMinOrderAmount`). Previously this read
+ * ws_termsandcondition.freeShippingMinimumOrderAmount, so the admin setting never
+ * reached checkout (split-brain); consolidated 2026-07-14 onto book settings.
+ */
 export const getFreeShippingMin = async (): Promise<number> => {
-  const row = await prisma.termsAndConditions.findFirst({
-    where: { module: "book", status: true },
-    select: { freeShippingMinimumOrderAmount: true },
+  const row = await prisma.bookSetting.findFirst({
+    where: { settingKey: "default" },
+    select: { freeShippingMinOrderAmount: true },
   });
-  return row?.freeShippingMinimumOrderAmount ?? 0;
+  return row?.freeShippingMinOrderAmount ?? 0;
 };
 
 export interface BookOrderPreview {

@@ -152,6 +152,8 @@ const createCourseOrderMysqlPath = async (
     planId: packageId,
     price: chargeAmount,
     razorpayOrderId: rzpOrder.id,
+    uniqueId: receiptId,
+    razorpayOrderPayload: JSON.stringify(rzpOrder),
     customerShippingId: customerShippingId ?? null,
     referrerId: referrerIdNum,
     coin: walletUsage.coin,

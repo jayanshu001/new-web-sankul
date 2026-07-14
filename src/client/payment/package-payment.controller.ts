@@ -96,7 +96,7 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       });
       // NOTE: SQL order row carries the CHARGED amount (post-promo) as both price
       // and discount_price (commerce-order.createPendingOrder sets both = input).
-      const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, razorpayOrderId: rzpOrder.id, customerShippingId: body.customerShippingId ?? null, referrerId: referrerIdNum, coin: walletUsage.coin });
+      const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, razorpayOrderId: rzpOrder.id, uniqueId: receiptId, razorpayOrderPayload: JSON.stringify(rzpOrder), customerShippingId: body.customerShippingId ?? null, referrerId: referrerIdNum, coin: walletUsage.coin });
       logger.info("createPackageOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
       return res.status(201).json({
         success: true,

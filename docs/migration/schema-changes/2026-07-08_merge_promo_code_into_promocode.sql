@@ -11,8 +11,8 @@
 -- getPromoterPromocodes + catalog availablePromo now read/write ws_promocode.
 --
 -- The `type` values written by the module ("public"/"private") already match the
--- ws_promocode `type` ENUM(private,public). `description` is widened to TEXT to
--- preserve the rule table's TEXT capacity.
+-- ws_promocode `type` ENUM(private,public). `description` is left UNCHANGED (per
+-- client request) — this migration only ADDs the four discount/appliesTo columns.
 --
 -- DEPLOY ORDER:
 --   1) Apply THIS file (adds columns; non-destructive).
@@ -24,7 +24,6 @@
 --   5) Verify, then apply 2026-07-08_drop_ws_promo_code.sql.
 
 ALTER TABLE `ws_promocode`
-  MODIFY COLUMN `description` TEXT NULL,
   ADD COLUMN `discount_type`   VARCHAR(32)   NOT NULL DEFAULT 'percentage' AFTER `status`,
   ADD COLUMN `discount_value`  DECIMAL(10,2) NOT NULL DEFAULT 0            AFTER `discount_type`,
   ADD COLUMN `applies_to_type` VARCHAR(32)   NULL                         AFTER `discount_value`,

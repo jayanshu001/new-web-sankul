@@ -24,6 +24,7 @@ import {
 import { requestContextMiddleware } from "./middlewares/requestContext";
 import deeplinkingRoutes from "./deeplinking/deeplinking.routes";
 import { isAllowedOrigin, parseAllowedOrigins } from "./config/corsOrigins";
+import { istJsonReplacer } from "./utils/istJson";
 
 // ─── Route modules ──────────────────────────────────────────────────────────
 import clientRoutes from "./client/client.routes";
@@ -39,6 +40,11 @@ const app = express();
 // Without this, per-IP rate limiting would bucket ALL traffic under one LB IP.
 // Increase the hop count if there is more than one proxy in front of the app.
 app.set("trust proxy", 1);
+
+// Render all Date values in JSON responses as IST (ISO-8601 with +05:30) instead
+// of the default UTC `...Z`. Storage stays UTC; this is display-only and applies to
+// every res.json() centrally. See utils/istJson.ts.
+app.set("json replacer", istJsonReplacer);
 
 // --- Security & Performance -------------------------------------------------
 app.use(helmet());

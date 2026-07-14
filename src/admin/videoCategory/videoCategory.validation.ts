@@ -26,6 +26,16 @@ const filterOptionalId = z.preprocess(
   objectIdSchema.optional()
 );
 
+// Status filter accepts the canonical enum ("active"/"inactive") but also the
+// boolean-style values the FE toggle sends (true/false, 1/0) and normalizes them
+// to the enum the service expects. "" / "all" -> no filter.
+const statusFilter = z.preprocess((v) => {
+  if (v === "" || v === "all" || v === "null" || v === "undefined") return undefined;
+  if (v === true || v === "true" || v === "1" || v === 1) return "active";
+  if (v === false || v === "false" || v === "0" || v === 0) return "inactive";
+  return v;
+}, z.enum(["active", "inactive"]).optional());
+
 const parseChildIds = z
   .union([
     z.array(objectIdSchema),
@@ -61,7 +71,7 @@ export const updateVideoCategorySchema = z.object({
 
 export const listQuerySchema = z.object({
   search: z.string().trim().optional(),
-  status: z.enum(["active", "inactive"]).optional(),
+  status: statusFilter,
   educatorId: filterOptionalId,
   childCategoryId: filterOptionalId,
   page: z.coerce.number().int().min(1).optional().default(1),
@@ -83,7 +93,7 @@ export const sortFieldMap: Record<string, string> = {
 // Query schema for the category-scoped Courses tab list.
 export const categoryCoursesQuerySchema = z.object({
   search: z.string().trim().optional(),
-  status: z.enum(["active", "inactive"]).optional(),
+  status: statusFilter,
   page: z.coerce.number().int().min(1).optional().default(1),
   per_page: z.coerce.number().int().min(1).max(500).optional().default(20),
 });
@@ -91,7 +101,7 @@ export const categoryCoursesQuerySchema = z.object({
 // Query schema for the category-scoped Videos tab list.
 export const categoryVideosQuerySchema = z.object({
   search: z.string().trim().optional(),
-  status: z.enum(["active", "inactive"]).optional(),
+  status: statusFilter,
   platform: z.enum(["youtube", "vimeo", "aws"]).optional(),
   page: z.coerce.number().int().min(1).optional().default(1),
   per_page: z.coerce.number().int().min(1).max(500).optional().default(20),

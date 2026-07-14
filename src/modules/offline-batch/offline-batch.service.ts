@@ -313,8 +313,7 @@ export const updateBatch = async (
 export const deleteBatch = async (id: number): Promise<Envelope<null>> => {
   const exists = await repo.findBatchById(id);
   if (!exists) return { ok: false, status: 404, message: "Batch not found." };
-  await repo.deleteBatch(id);
-  await repo.deleteEnquiriesInBatch(id); // cascade, mirrors Mongo deleteBatch
+  await repo.deleteBatch(id); // soft delete: flags deletedAt, keeps enquiries intact
   return { ok: true, data: null };
 };
 

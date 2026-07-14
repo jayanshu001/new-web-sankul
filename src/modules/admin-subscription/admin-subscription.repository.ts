@@ -18,6 +18,8 @@ import { andWhere } from "../../utils/reportFilters";
 export interface CourseSubFilter {
   customerId?: number; courseId?: number; packageId?: number; status?: boolean;
   paymentType?: "online" | "backend"; hasMaterial?: boolean;
+  // hasWsCoin → linked order's ws_coin (>0 = redeemed); false also matches order-less subs.
+  hasWsCoin?: boolean;
   // promoterId → own column; orderMethod → gateway on the linked order (payment_method);
   // orderIdsIn → subscriptions whose order matched a promocode (resolved upstream).
   promoterId?: number; orderMethod?: string; orderIdsIn?: number[];
@@ -240,12 +242,24 @@ function buildSubWhere(opts: CourseSubFilter): Prisma.PackageCourseSubscriptionW
   // promocodeId was resolved upstream to the set of matching order ids (the code is a
   // JSON snapshot on the order, no live FK). Empty set is handled upstream (→ no rows).
   if (opts.orderIdsIn) where.orderId = { in: opts.orderIdsIn };
+  // AND-ed fragments (kept off the top-level keys so they never collide with the
+  // search OR below, and compose with each other).
+  const and: Prisma.PackageCourseSubscriptionWhereInput[] = [];
   // Subscription Material Report: material=true → only with-material rows; material=false
   // → only without. Mirrors the report label's single source of truth (service
   // rowHasMaterial): legacy rows carry a pc_material_id, SQL-created grants carry only a
-  // material_amount — either counts. AND-ed so it doesn't collide with the search OR below.
-  if (opts.hasMaterial === true) where.AND = [{ OR: [{ pcMaterialId: { gt: 0 } }, { materialAmount: { gt: 0 } }] }];
-  else if (opts.hasMaterial === false) where.AND = [{ OR: [{ pcMaterialId: null }, { pcMaterialId: 0 }] }, { OR: [{ materialAmount: null }, { materialAmount: 0 }] }];
+  // material_amount — either counts.
+  if (opts.hasMaterial === true) and.push({ OR: [{ pcMaterialId: { gt: 0 } }, { materialAmount: { gt: 0 } }] });
+  else if (opts.hasMaterial === false) and.push({ OR: [{ pcMaterialId: null }, { pcMaterialId: 0 }] }, { OR: [{ materialAmount: null }, { materialAmount: 0 }] });
+  // Ws Coin filter: ws_coin (Int?) lives on the linked order (ws_package_course_order).
+  // true → an order that redeemed coin (ws_coin > 0). false → the complement, spelled
+  // out explicitly (rather than a relation `isNot`, whose null-relation handling is
+  // unreliable): order-less subs (orderId null) plus orders with null/≤0 ws_coin — all
+  // "without". Relation filter, ANDed so it composes with orderMethod's own relation is.
+  if (opts.hasWsCoin === true) and.push({ packageCourseOrder: { is: { wsCoin: { gt: 0 } } } });
+  else if (opts.hasWsCoin === false)
+    and.push({ OR: [{ orderId: null }, { packageCourseOrder: { is: { wsCoin: null } } }, { packageCourseOrder: { is: { wsCoin: { lte: 0 } } } }] });
+  if (and.length) where.AND = and;
   if (opts.fromDate || opts.toDate) {
     where.createdAt = {};
     if (opts.fromDate) where.createdAt.gte = opts.fromDate;

@@ -7,7 +7,8 @@ import { Prisma } from "@prisma/client";
  *  - courseAmount   : digital portion (always set; = full paid amount when no material)
  *  - materialAmount : physical portion, residual of (paid − course); null when no material
  *  - pcMaterialId   : the entitled material kit copied from the Course/Package; null when no material
- *  - withMaterial   : gates the tracking row's status (pending kit-ship vs complete)
+ *  - withMaterial   : gates whether a tracking (dispatch) row is created at all — one is
+ *    created ONLY for material plans; digital-only subs get no tracking row (trackingId null)
  */
 export type MaterialFulfillment = {
   courseAmount: number;
@@ -171,11 +172,15 @@ export const commerceOrderRepository = {
         return { order, subscription: sub, extended: true as const };
       }
 
-      // Tracking row status starts "pending" for material plans (the kit still has
-      // to ship) and "complete" for digital-only orders (nothing to dispatch).
-      const tracking = await tx.packageCourseSubscriptionTracking.create({
-        data: { orderId: input.orderId, status: input.material.withMaterial ? "pending" : "complete" },
-      });
+      // A tracking row (the dispatch record) is created ONLY for material plans —
+      // the kit still has to ship, so status starts "pending". "Without Material" /
+      // digital-only orders have nothing to dispatch, so no tracking row is created
+      // and trackingId stays null.
+      const tracking = input.material.withMaterial
+        ? await tx.packageCourseSubscriptionTracking.create({
+            data: { orderId: input.orderId, status: "pending" },
+          })
+        : null;
       const sub = await tx.packageCourseSubscription.create({
         data: {
           customerId: input.customerId,
@@ -188,7 +193,7 @@ export const commerceOrderRepository = {
           pcMaterialId: input.material.pcMaterialId,
           // Dispatch address captured at order time (null for digital-only).
           shippingId: order.shipping ?? undefined,
-          trackingId: tracking.id,
+          trackingId: tracking?.id ?? undefined,
           startAt: input.fresh!.startAt,
           endAt: input.fresh!.endAt,
           amount: new Prisma.Decimal(input.amount),
@@ -224,12 +229,17 @@ export const commerceOrderRepository = {
     planId: number;
     price: number;
     razorpayOrderId: string;
+    // Business key (the receipt id) → unique_id; full Razorpay order response
+    // (JSON string) → razorpay_order. Mirrors the ebook/book order create paths.
+    uniqueId?: string | null;
+    razorpayOrderPayload?: string | null;
     shippingId?: number | null;
     referrerId?: number | null;
     coin?: number | null;
   }) =>
     prisma.packageCourseOrder.create({
       data: {
+        uniqueId: input.uniqueId ?? null,
         userId: input.customerId,
         planId: input.planId,
         orderType: "purchase",
@@ -237,10 +247,16 @@ export const commerceOrderRepository = {
         OrigianalPrice: Math.round(input.price),
         amount: Math.round(input.price),
         gatewayOrderId: input.razorpayOrderId,
+        gatewayOrder: input.razorpayOrderPayload ?? null,
         shipping: input.shippingId ?? undefined,
         referrerId: input.referrerId ?? null,
         wsCoin: input.coin ?? null,
         status: "pending",
+        // Explicit stamps: the ws_package_course_order columns have no DB default,
+        // so created_at/updated_at would land NULL on new rows otherwise (mirrors
+        // the ebook-order create path).
+        createdAt: new Date(),
+        updatedAt: new Date(),
       },
     }),
 
@@ -284,12 +300,15 @@ export const commerceOrderRepository = {
         return { order, subscription: sub, extended: true as const };
       }
 
-      // fresh grant: tracking row first (its id is the subscription.tracking FK),
-      // then the subscription pointing at both order + tracking. Tracking status
-      // starts "pending" for material plans (kit still to ship), else "complete".
-      const tracking = await tx.packageCourseSubscriptionTracking.create({
-        data: { orderId: input.orderId, status: input.material.withMaterial ? "pending" : "complete" },
-      });
+      // fresh grant: a tracking row (the dispatch record) is created ONLY for
+      // material plans — there's a physical kit to ship, so status starts "pending".
+      // "Without Material" / digital-only subs have nothing to dispatch, so no
+      // tracking row is created and trackingId stays null.
+      const tracking = input.material.withMaterial
+        ? await tx.packageCourseSubscriptionTracking.create({
+            data: { orderId: input.orderId, status: "pending" },
+          })
+        : null;
       const sub = await tx.packageCourseSubscription.create({
         data: {
           customerId: input.customerId,
@@ -301,7 +320,7 @@ export const commerceOrderRepository = {
           pcMaterialId: input.material.pcMaterialId,
           // Dispatch address captured at order time (null for digital-only).
           shippingId: order.shipping ?? undefined,
-          trackingId: tracking.id,
+          trackingId: tracking?.id ?? undefined,
           startAt: input.fresh!.startAt,
           endAt: input.fresh!.endAt,
           amount: new Prisma.Decimal(input.amount),

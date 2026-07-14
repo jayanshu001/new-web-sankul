@@ -17,9 +17,20 @@ type RazorpayClient = NonNullable<ReturnType<typeof getRazorpay>>;
 // the same optional promo code as the Mongo branch (ebooks are digital — no
 // delivery address).
 const createEbookOrderMysqlSchema = z.object({
-  planId: z.coerce.number().int().positive(),
-  promocode: z.string().trim().min(1).optional(),
-  coin: z.coerce.number().int().min(0).optional(),
+  planId: z.coerce
+    .number({ invalid_type_error: "Please select a valid eBook plan." })
+    .int("Please select a valid eBook plan.")
+    .positive("Please select a valid eBook plan."),
+  promocode: z
+    .string()
+    .trim()
+    .min(1, "Promo code cannot be empty. Remove it or enter a valid code.")
+    .optional(),
+  coin: z.coerce
+    .number({ invalid_type_error: "Coins to redeem must be a whole number." })
+    .int("Coins to redeem must be a whole number.")
+    .min(0, "Coins to redeem cannot be negative.")
+    .optional(),
 });
 
 // POST /api/v1/client/payment/create-order/ebook
@@ -50,7 +61,21 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
     }
     return createEbookOrderMysqlPath(req, res, { traceId, customerId: customerIdInt, rp });
   } catch (e: any) {
-    if (e.issues) { logger.warn("createEbookOrderPayment validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    if (e.issues) {
+      logger.warn("createEbookOrderPayment validation failed", { traceId, customerId, issues: e.issues });
+      // Readable output: a flat field -> message map plus the first message as the
+      // top-level `message`, instead of the raw ZodError.issues blob.
+      const errors: Record<string, string> = {};
+      for (const issue of e.issues) {
+        const key = issue.path.join(".") || "_";
+        if (!errors[key]) errors[key] = issue.message;
+      }
+      return res.status(400).json({
+        success: false,
+        message: e.issues[0]?.message || "Validation failed.",
+        errors,
+      });
+    }
     const message =
       e?.error?.description ||
       e?.message ||

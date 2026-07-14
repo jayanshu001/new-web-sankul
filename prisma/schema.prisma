@@ -1543,6 +1543,9 @@ model OfflineBatch {
   center         OfflineCenter?   @relation(fields: [centerId], references: [id])
   createdAt      DateTime         @map("created_at")
   updatedAt      DateTime         @map("updated_at")
+  // Soft delete (2026-07-14): deleteBatch flags this instead of hard-deleting, so
+  // the batch's enquiries stay visible in /batch-enquiries via the required relation.
+  deletedAt      DateTime?        @map("deleted_at")
   OfflineEnquiry OfflineEnquiry[]
 
   @@map("ws_offline_batch")
