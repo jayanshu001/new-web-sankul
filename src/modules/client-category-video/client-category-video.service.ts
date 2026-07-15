@@ -66,10 +66,70 @@ export const progressByVideo = async (customerId: number, videoIds: number[]): P
   return new Map(rows.map((r) => [r.videoId!, r]));
 };
 
-/** Owning-container scope ({kind, id}) for a category — SQL DAG resolver. */
+/** Owning-container scope ({kind, id}) for a category — SQL DAG resolver (FIRST owner). */
 export const scopeForCategory = async (categoryId: number) => {
   const { resolveVideoScope } = await import("../catalog-category-tree/category-tree.service");
   return resolveVideoScope(categoryId);
+};
+
+/** ALL owning containers for a category (a category may sit under multiple packages). */
+export const scopesForCategory = async (categoryId: number) => {
+  const { resolveVideoScopes } = await import("../catalog-category-tree/category-tree.service");
+  return resolveVideoScopes(categoryId);
+};
+
+/**
+ * The FIRST scope (in course→live→package priority) the customer holds an active
+ * subscription for, or null if none. Unlike isEntitledForScope (which checks ONE
+ * container), this checks EVERY owning container so a buyer of any owning package is
+ * entitled — and returns which one, so the media token can be scoped to a container the
+ * customer actually owns (keeping /media/resolve's single-scope re-check valid). Uses
+ * the same gates as isEntitledForScope (status=true + endAt in future; live also
+ * payment_status=verified).
+ */
+export const entitledScopeFor = async (
+  customerId: number | null,
+  scopes: { kind: string; id: string }[],
+): Promise<{ kind: string; id: string } | null> => {
+  if (customerId == null || !scopes.length) return null;
+  const now = new Date();
+  const num = (s: { id: string }) => Number(s.id);
+  const courseIds = scopes.filter((s) => s.kind === "course").map(num).filter((n) => Number.isInteger(n) && n > 0);
+  const packageIds = scopes.filter((s) => s.kind === "package").map(num).filter((n) => Number.isInteger(n) && n > 0);
+  const liveIds = scopes.filter((s) => s.kind === "liveCourse").map(num).filter((n) => Number.isInteger(n) && n > 0);
+
+  const [pcSubs, liveSubs] = await Promise.all([
+    courseIds.length || packageIds.length
+      ? prisma.packageCourseSubscription.findMany({
+          where: {
+            customerId, status: true, endAt: { gt: now },
+            OR: [
+              ...(courseIds.length ? [{ courseId: { in: courseIds } }] : []),
+              ...(packageIds.length ? [{ packageId: { in: packageIds } }] : []),
+            ],
+          },
+          select: { courseId: true, packageId: true },
+        })
+      : Promise.resolve([]),
+    liveIds.length
+      ? prisma.liveCourseSubscription.findMany({
+          where: { customerId, status: true, paymentStatus: "verified", endAt: { gt: now }, liveCourseId: { in: liveIds } },
+          select: { liveCourseId: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const ownedCourses = new Set(pcSubs.map((s) => s.courseId).filter((x): x is number => x != null));
+  const ownedPackages = new Set(pcSubs.map((s) => s.packageId).filter((x): x is number => x != null));
+  const ownedLives = new Set(liveSubs.map((s) => s.liveCourseId));
+
+  for (const s of scopes) {
+    const idn = Number(s.id);
+    if (s.kind === "course" && ownedCourses.has(idn)) return s;
+    if (s.kind === "package" && ownedPackages.has(idn)) return s;
+    if (s.kind === "liveCourse" && ownedLives.has(idn)) return s;
+  }
+  return null;
 };
 
 /**

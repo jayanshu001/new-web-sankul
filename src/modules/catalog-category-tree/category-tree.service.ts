@@ -185,6 +185,47 @@ export const resolveVideoScope = async (videoCategoryId: number | null | undefin
 };
 
 /**
+ * ALL owning containers for a video's leaf category — unlike resolveVideoScope (which
+ * returns only the FIRST match), this returns every course / live-course / package the
+ * category belongs to. A video's category can sit under multiple packages, so
+ * entitlement must consider all of them (a buyer of ANY owning package is entitled).
+ * Ordered course → liveCourse → package (same priority as the single resolver).
+ */
+export const resolveVideoScopes = async (videoCategoryId: number | null | undefined): Promise<VideoScope[]> => {
+  if (!videoCategoryId) return [];
+  const ancestors = await ancestorsOf([videoCategoryId]);
+  if (!ancestors.length) return [];
+
+  const [catCourses, owningCourses, owningLives, directPkgs, relRows] = await Promise.all([
+    prisma.videoCategory.findMany({ where: { id: { in: ancestors }, course: { some: {} } }, select: { course: { select: { id: true } } } }),
+    prisma.course.findMany({ where: { videoCategoryId: { in: ancestors }, status: true }, select: { id: true } }),
+    prisma.liveCourse.findMany({ where: { videoCategoryId: { in: ancestors }, status: true }, select: { id: true } }),
+    prisma.packageSpecificSubject.findMany({ where: { subjectId: { in: ancestors }, status: true, Package: { active: true } }, select: { packageId: true } }),
+    prisma.videoCategoryRelation.findMany({ where: { OR: [{ child: { in: ancestors } }, { parent: { in: ancestors } }] }, select: { id: true } }),
+  ]);
+
+  const courseIds = new Set<number>();
+  for (const c of catCourses) for (const cc of c.course) if (cc.id) courseIds.add(cc.id);
+  for (const c of owningCourses) courseIds.add(c.id);
+  const liveIds = new Set<number>(owningLives.map((l) => l.id));
+  const pkgIds = new Set<number>();
+  for (const p of directPkgs) if (p.packageId) pkgIds.add(p.packageId);
+  if (relRows.length) {
+    const relPkgs = await prisma.packageVideoCategoryRelation.findMany({
+      where: { videoCategoryRelationId: { in: relRows.map((r) => r.id) }, status: true },
+      select: { packageId: true },
+    });
+    for (const p of relPkgs) if (p.packageId) pkgIds.add(p.packageId);
+  }
+
+  const scopes: VideoScope[] = [];
+  for (const id of courseIds) scopes.push({ kind: "course", id: String(id) });
+  for (const id of liveIds) scopes.push({ kind: "liveCourse", id: String(id) });
+  for (const id of pkgIds) scopes.push({ kind: "package", id: String(id) });
+  return scopes;
+};
+
+/**
  * Resolve the owning courseId for a recorded video's leaf category (SQL mirror
  * of resolveVideoCourseId). Leaf's course → ancestor's course → Course pointing
  * down at leaf/ancestor.

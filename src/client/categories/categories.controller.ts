@@ -67,20 +67,24 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     const typeQ = String(req.query.type ?? "").toLowerCase();
     const priceType = typeQ === "free" || typeQ === "paid" ? (typeQ as "free" | "paid") : null;
 
-    const [{ rows, total }, scope] = await Promise.all([
+    const [{ rows, total }, scopes] = await Promise.all([
       cvSql.listVideos({ categoryId: catId, search: search || null, priceType, skip, limitNum }),
-      cvSql.scopeForCategory(catId),
+      cvSql.scopesForCategory(catId),
     ]);
+    // Representative owning container for the response `scope` field (course→live→package
+    // priority; back-compat with the old single-scope shape).
+    const scope = scopes[0] ?? null;
 
     const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
     const progMap = uid != null ? await cvSql.progressByVideo(uid, rows.map((v) => v.id)) : new Map<number, any>();
 
-    // Entitlement gate: paid videos only get a (playable) media token when the
-    // caller holds an active subscription for this category's owning container.
-    // Unpurchased paid rows get `mediaToken: null` — no id/url at all. Free rows
-    // get a free token. Resolution happens later at /media/resolve, so the list
-    // no longer pays a per-row resolve cost.
-    const entitled = await cvSql.isEntitledForScope(uid, scope);
+    // Entitlement gate: paid videos only get a (playable) media token when the caller
+    // holds an active subscription for ANY of this category's owning containers (a video
+    // can belong to multiple packages — a buyer of any one is entitled). The token is
+    // scoped to the container they actually own so /media/resolve's re-check passes.
+    // Unpurchased paid rows get `mediaToken: null`. Free rows get a free token.
+    const entitledScope = await cvSql.entitledScopeFor(uid, scopes);
+    const entitled = entitledScope != null;
 
     const list = rows.map((v) => {
       const isPaid = v.priceType === "paid";
@@ -91,7 +95,7 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
         progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
         recordings: [], // SQL videos carry no live-session back-link
         qualities: defaultListingQualities(),
-        mediaToken: mediaTokenForVideo(v, entitled, uid, scope),
+        mediaToken: mediaTokenForVideo(v, entitled, uid, entitledScope),
       };
     });
 
@@ -124,21 +128,22 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
     const v = await cvSql.findVideoInCategory(catId, vidId);
     if (!v) return res.status(404).json({ success: false, message: "Video not found in this category." });
 
-    // Resolve scope up front, then gate paid videos on an active subscription
-    // for the owning container — same rule (and 403) as the lecture-detail and
-    // progress endpoints, so this playback source can't hand out decryptable
-    // URLs the other two would refuse. Free videos skip the gate.
-    const sc = await cvSql.scopeForCategory(v.videoCategoryId ?? catId);
+    // Resolve ALL owning containers, then gate paid videos on an active subscription
+    // for ANY of them (a video's category can belong to multiple packages — a buyer of
+    // any one is entitled). The token is scoped to the container the caller actually
+    // owns so /media/resolve's re-check passes. Free videos skip the gate.
+    const scopes = await cvSql.scopesForCategory(v.videoCategoryId ?? catId);
     const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
     if (uid == null) return res.status(401).json({ success: false, message: "Unauthorized." });
-    if (v.priceType === "paid") {
-      const entitled = await cvSql.isEntitledForScope(uid, sc);
-      if (!entitled) return res.status(403).json({ success: false, message: "Active subscription required to access this lecture" });
+    const entitledScope = v.priceType === "paid" ? await cvSql.entitledScopeFor(uid, scopes) : null;
+    if (v.priceType === "paid" && entitledScope == null) {
+      return res.status(403).json({ success: false, message: "Active subscription required to access this lecture" });
     }
 
     // No inline media — mint a media token the client resolves at /media/resolve.
+    const sc = scopes[0] ?? null; // representative scope for the response shape
     const mediaToken = v.priceType === "paid"
-      ? signMediaToken({ k: "video", id: v.id, scope: toMediaScope(sc), cust: uid })
+      ? signMediaToken({ k: "video", id: v.id, scope: toMediaScope(entitledScope), cust: uid })
       : signMediaToken({ k: "video", id: v.id, free: true, cust: uid });
     return res.status(200).json({
       success: true,

@@ -50,6 +50,28 @@
 
 ---
 
+## 2026-07-15 — Category-video entitlement checks ALL owning packages (not just the first)
+
+> **Read/query change only. No DDL.** Fixes wrongful 403 / null media token for a video
+> whose category belongs to multiple packages when the buyer owns a non-first one.
+
+- **Bug:** `resolveVideoScope` returns only the FIRST owning container (findFirst per
+  kind), so a video-category under several packages resolved to one package; a customer
+  who bought a DIFFERENT owning package was denied a playable token (listing) or 403'd
+  (`getVideoByCategory`), and the media token was scoped to the wrong package.
+- **Fix** (`catalog-category-tree.service`): new `resolveVideoScopes()` returns EVERY
+  owning course/live-course/package (findMany over the DAG ancestors). `client-category-video.service`
+  adds `scopesForCategory()` + `entitledScopeFor(customerId, scopes)` — the same gates as
+  `isEntitledForScope` (status=true + endAt>now; live also payment_status=verified) but
+  across ALL owners, returning WHICH scope the customer owns.
+- `client/categories/categories.controller` (listVideosByCategory + getVideoByCategory):
+  entitlement now grants if the customer owns ANY owning container, and the media token is
+  scoped to that owned container so `/media/resolve`'s single-scope re-check still passes
+  (that path is unchanged). Response `scope` stays the representative first owner (shape
+  unchanged).
+- Parity note: lecture-detail (`client-lecture`) + the progress heartbeat still gate on a
+  single owning scope — a follow-up if those playback paths must match this multi-owner rule.
+
 ## 2026-07-15 — Maintain ws_video_category_package_relation (denormalized cache)
 
 > **No DDL. Backfill + runtime sync of an existing table the SQL flow left unmanaged.**
