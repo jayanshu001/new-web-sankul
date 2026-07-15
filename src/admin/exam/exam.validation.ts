@@ -33,8 +33,18 @@ export const createExamSchema = z
       .default(ExamType.SUBJECT),
     positiveMarks: z.coerce.number().nonnegative(),
     negativeMarks: z.coerce.number(),
-    startAt: z.coerce.date().optional(),
-    endAt: z.coerce.date().optional(),
+    // Accept a date (set), absence (leave unchanged), or null / "" (clear → null the
+    // column). Mirrors solutionPdfUrl: without the null/"" handling a JSON null would
+    // coerce to the 1970 epoch and a multipart "" would 422, so the cleared window
+    // never persisted. The service writes null through (admin-exam.service updateExam).
+    startAt: z.preprocess(
+      (v) => (v === "" ? null : v),
+      z.coerce.date().nullable().optional()
+    ),
+    endAt: z.preprocess(
+      (v) => (v === "" ? null : v),
+      z.coerce.date().nullable().optional()
+    ),
     // Accept a URL (set), absence (leave unchanged), or null / "" (clear). The
     // controller translates a null/empty value into a $unset so the FE can
     // remove an attached solution PDF via JSON `solutionPdfUrl: null`.
@@ -57,7 +67,7 @@ export const createExamSchema = z
 // and the window must be non-empty. Shared by create (full payload) and the
 // controller's update path (merged effective values).
 function requireDailyWindow(
-  data: { type?: string; startAt?: Date; endAt?: Date },
+  data: { type?: string; startAt?: Date | null; endAt?: Date | null },
   ctx: z.RefinementCtx
 ) {
   if (data.type !== ExamType.DAILY) return;

@@ -1,6 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
-import { examInCategoryWhere } from "./exam-category-pivot.where";
+import { examInCategoryWhere, subjectStartedWhere } from "./exam-category-pivot.where";
 
 /**
  * Prisma persistence for the catalog · exam READ branch (flag OFF). Scoped to
@@ -180,11 +180,12 @@ export const catalogExamRepository = {
 
   /**
    * Client-facing test count for a category, incl. ws_exam_category_pivot. Counts
-   * ONLY active, subject-type quizzes — drafts (status=false) and `daily`-type
-   * quizzes are excluded (they must not inflate the catalog `count`).
+   * ONLY active, subject-type quizzes that have already STARTED — drafts
+   * (status=false), `daily`-type, and scheduled-for-later subject quizzes are
+   * excluded (they must not inflate the catalog `count`).
    */
   countExams: (categoryId: number) =>
-    prisma.exam.count({ where: { AND: [examInCategoryWhere(categoryId), { status: true, type: "subject" }] } }),
+    prisma.exam.count({ where: { AND: [examInCategoryWhere(categoryId), { status: true, type: "subject" }, subjectStartedWhere(new Date())] } }),
 
   /**
    * Active child-folder COUNT per parent for the given category ids. Drives both

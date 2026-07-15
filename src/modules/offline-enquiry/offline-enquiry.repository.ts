@@ -11,6 +11,28 @@ export const offlineEnquiryRepository = {
     (await prisma.offlineBatch.count({ where: { id: batchId } })) > 0,
 
   /**
+   * Has this customer already submitted an enquiry for the same batch AND the
+   * same qualification within the given day window? Backs the batch-enquiry
+   * duplicate guard (same user + batch + qualification + same day). Anonymous
+   * (customerId 0) is never matched — the caller must pass a real customer id.
+   */
+  existsSameDayForBatchQualification: async (opts: {
+    customerId: number;
+    batchId: number;
+    qualification: string;
+    dayStart: Date;
+    dayEnd: Date;
+  }): Promise<boolean> =>
+    (await prisma.offlineEnquiry.count({
+      where: {
+        userId: opts.customerId,
+        batchId: opts.batchId,
+        qualification: opts.qualification,
+        createdAt: { gte: opts.dayStart, lte: opts.dayEnd },
+      },
+    })) > 0,
+
+  /**
    * Insert an enquiry row. customer_id stores 0 for anonymous (NOT NULL col).
    * `otherQualification` is optional (only the batch-enquiry "Register" form
    * sets it; maps to ws_offline_enquiry.other_qualification).

@@ -1,6 +1,7 @@
 import { adminMasterRepository as repo } from "./admin-master.repository";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { primaryParentMap } from "../../utils/videoCategoryRelation";
+import { resyncAllPackageRelations } from "../admin-package/package-relation-sync";
 
 export const ADMIN_MASTER_MODULE = "admin-master";
 export const isAdminMasterMysql = (): boolean => true;
@@ -89,7 +90,10 @@ export const vcCreate = async (d: any) => {
   const order = toInt(d.order_by);
   const created = await repo.vcCreate({ title: d.title, slug: d.slug, image: d.image, parent, order_by: order, status: d.status ?? true, educatorId: d.educatorId ? toInt(d.educatorId) : 0, pdf: d.pdf ?? "" });
   // Mirror the parent link into the pivot the client catalog reads.
-  if (parent > 0) await repo.vcEnsureEdge(parent, created.id, order);
+  if (parent > 0) {
+    await repo.vcEnsureEdge(parent, created.id, order);
+    await resyncAllPackageRelations(); // DAG edge added → refresh package relation cache
+  }
   return toVcDto(created);
 };
 export const vcUpdate = async (id: number, d: any) => {
@@ -101,7 +105,10 @@ export const vcUpdate = async (id: number, d: any) => {
   if (Object.keys(data).length) await repo.vcUpdate(id, data);
   // A parent change syncs BOTH the self-FK and the pivot (edge id preserved on
   // move so package composition links follow). vcSetParent stamps updated_at too.
-  if (d.parent !== undefined) await repo.vcSetParent([id], toInt(d.parent));
+  if (d.parent !== undefined) {
+    await repo.vcSetParent([id], toInt(d.parent));
+    await resyncAllPackageRelations(); // DAG edge moved → refresh package relation cache
+  }
   const row = await repo.vcFind(id);
   return row ? toVcDto(row) : null;
 };
@@ -110,6 +117,7 @@ export const vcDelete = async (id: number): Promise<{ ok: boolean; deletedRelati
   // Keep the relation DAG consistent: drop this category's edges, then the row.
   const { count } = await repo.vcDeleteRelations(id);
   await repo.vcDelete(id);
+  if (count > 0) await resyncAllPackageRelations(); // DAG edges removed → refresh cache
   return { ok: true, deletedRelations: count };
 };
 
@@ -211,6 +219,8 @@ const reconcileChildren = async (parentId: number, desired: number[]): Promise<v
   const toDetach = current.filter((id) => !desiredSet.has(id));
   if (toAttach.length) await repo.vcSetParent(toAttach, parentId);
   if (toDetach.length) await repo.vcSetParent(toDetach, 0);
+  // DAG edges changed (attach/detach) → refresh the package relation cache.
+  if (toAttach.length || toDetach.length) await resyncAllPackageRelations();
 };
 
 export const fullVcCreate = async (d: any): Promise<{ ok: false; reason: "slug" | "educator" | "child" } | { ok: true; data: any }> => {
@@ -259,6 +269,7 @@ export const fullVcDelete = async (id: number): Promise<"not_found" | "in_use" |
   // Drop any relation-DAG edges before the row so no dangling edge survives.
   await repo.vcDeleteRelations(id);
   await repo.vcDelete(id);
+  await resyncAllPackageRelations(); // DAG edges removed → refresh the package relation cache
   return "ok";
 };
 
@@ -282,6 +293,7 @@ export const fullVcDuplicate = async (
 > => {
   const result = await repo.vcDuplicate(id);
   if (!result) return "not_found";
+  await resyncAllPackageRelations(); // cloned subtree added new DAG edges → refresh cache
   return {
     id: String(result.rootId),
     name: result.rootTitle,

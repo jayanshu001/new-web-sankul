@@ -15,6 +15,243 @@
 
 ---
 
+## 2026-07-15 — Subject exams gated by start date in client catalog counts + lists
+
+> **Query-shape change on three client endpoints. No DDL.**
+
+- `GET /client/exam-categories/:id/exams`, `GET /client/exam-categories/:id/children`
+  (per-child `count`), and `GET /client/catalog/:type/:id/tests` counted/listed
+  subject-type exams by `status=true` + `type="subject"` only — a subject exam
+  scheduled for a future `start_date` was already appearing/counting.
+- Now subject exams are additionally gated on the window **start**: visible only once
+  `start_date <= now` (a NULL `start_date` = "no schedule" → always available). New
+  shared helper `subjectStartedWhere(now)` in `catalog-exam/exam-category-pivot.where.ts`
+  (`OR: [{ startAt: null }, { startAt: { lte: now } }]`), AND-merged into:
+  `client-exam.repository` `examsByCategoryPaged` + `countExamsByCategoryPaged`,
+  `catalog-exam.repository.countExams`, and `client-catalog.service.catalogTests` itemCount.
+- The pre-existing end-of-window gate (`endAt null || >= now`) on the `/exams` list is
+  unchanged; this only adds the start-of-window gate.
+
+---
+
+## 2026-07-15 — Ebook purchase-history resolves plan-less orders via subscription
+
+> **Query-shape change on `GET /client/purchase-history/ebooks` + its receipt. No DDL.**
+
+- Plan-less ebook grants (manual duration/price, `plan_id = NULL`) previously showed
+  the generic "E-Book purchase" title with `ebookId: null` because resolution only
+  hopped `order.plan_id → price.ebook_id → ebook`. Now the ebook falls back to
+  `ws_ebook_subscription.ebook_id` (linked by `order_id`) when the plan hop yields nothing.
+- `client-purchase-history.repository.ebookSubStartByOrderIds` now also selects `ebookId`;
+  new `ebookIdBySubForOrder(orderId)` for the receipt path.
+- **Title prefixes dropped:** list + receipt now show the raw title (`ebook.name` /
+  `ts.title`) with no `E-Book:` / `Test Series:` prefix; fallbacks
+  ("E-Book purchase" / "Test Series subscription") unchanged.
+
+---
+
+## 2026-07-15 — Maintain ws_video_category_package_relation (denormalized cache)
+
+> **No DDL. Backfill + runtime sync of an existing table the SQL flow left unmanaged.**
+
+- **Problem:** on MySQL nothing ever inserted into `ws_video_category_package_relation`
+  (only `deletePackage` cleaned it), so new/edited packages had stale/absent rows. The
+  table is a denormalized cache: for each package it should hold every
+  `ws_video_category_relation` edge in the DOWNWARD closure of the package's active
+  specific-subjects (`ws_package_specific_subject`).
+- **Runtime sync** (`src/modules/admin-package/package-relation-sync.ts`, best-effort /
+  non-throwing):
+  - `resyncPackageRelations([pkgId])` — on package create/update when specific-subjects
+    change (`admin-package.service`).
+  - `resyncAllPackageRelations()` — after any video-category **DAG edge** mutation in
+    `admin-master.service` (vcCreate w/ parent, vcUpdate parent-change, vcDelete,
+    reconcileChildren attach/detach, fullVcDelete, fullVcDuplicate), since one added/moved/
+    removed edge can change any package whose subtree includes it. Full rebuild is ~200ms
+    for all packages (122 packages / ~2.5k edges).
+- **Backfill:** `scripts/backfill-package-video-category-relation.ts` (idempotent). Uses
+  `rebuildAllPackageRelations()` — an ATOMIC full-table clear+rebuild in ONE transaction
+  (fail-loud, rolls back on error, leaving existing rows intact), distinct from the
+  best-effort runtime syncs. Run once on deploy (targets `DATABASE_URL`).
+- Note: the SQL client tree/scope/media path reads subjects + the DAG directly and does
+  NOT depend on this table — it's kept current for consumers that read it directly.
+
+## 2026-07-15 — Exam update can CLEAR the availability window (startAt/endAt → null)
+
+> **DDL: widen `ws_exam.start_date` / `end_date` to NULL.** Matches the clear-support the
+> solution PDF already had.
+
+- **DDL** (`docs/migration/schema-changes/2026-07-15_exam_start_end_nullable.sql`):
+  `ALTER TABLE ws_exam MODIFY start_date DATETIME NULL, MODIFY end_date DATETIME NULL;`
+  The Prisma model already mapped these `DateTime?`, but the real columns were NOT NULL,
+  so nulling threw a constraint violation. No backfill; `createExam` still defaults a
+  missing window to `now`.
+- **Zod** (`admin/exam/exam.validation.ts`): `startAt`/`endAt` were
+  `z.coerce.date().optional()` — a JSON `null` coerced to the 1970 epoch and a multipart
+  `""` 422'd, so the clear never persisted. Now `z.preprocess((v)=> v===""?null:v,
+  z.coerce.date().nullable().optional())`, mirroring `solutionPdfUrl`. The service
+  (`admin-exam.service updateExam`) already writes null through.
+- **Controller** (`admin/exam/exam.controller.ts` updateExam): effective-window calc now
+  distinguishes cleared (`null`) from not-provided (`undefined`) so clearing a **daily**
+  test's window is correctly rejected (was masked by `?? current`).
+
+## 2026-07-15 — With-material validity extension ships (tracks) a new kit
+
+> **Write-path change in the verify FOLD (extend) branch. No DDL.**
+
+- Previously the extend branch of `verifyCourseTx`/`verifyPackageTx` returned before
+  creating a dispatch row, so a with-material *extension* got no shipment/AWB and its
+  purchase-history row showed `tracking: null`. Now the extend branch creates a fresh
+  `ws_package_course_subscription_tracking` row keyed by the extension **order** id (only
+  when `material.withMaterial`) and advances the sub's `tracking` FK to it — so the
+  extension row is trackable, resolved by order id like any other purchase.
+- Live-course extend (`verifyLiveCourseOrderMysql`): the retired pending row IS the
+  extension's history row, so a with-material extension now stamps its own
+  `tracking_id`/`tracking_status` on that retired row (was only set on the surviving sub).
+- **Not retroactive** — extension orders completed before this change have no tracking
+  row; a backfill would be needed if historical extensions must become trackable.
+
+## 2026-07-15 — Purchase-History Subscriptions tab is order-based (each purchase = one row)
+
+> **Read/query change only — NO DDL, NO change to payment/entitlement.** A validity
+> extension still FOLDS onto the entitlement subscription (access / My-Subscriptions /
+> dashboards / reporting unchanged). Only what Purchase History LISTS changed.
+
+- **Why:** package/course + test-series verify FOLD an extension onto the existing
+  subscription (bumps `end_at` + sums `amount`), so an extension never appeared as its
+  own row — the sub just showed a higher price. Now each completed **order** is its own
+  history row.
+- **List** (`GET client/purchase-history/subscriptions`): package/course now reads
+  `ws_package_course_order` (status="complete"); test-series reads `ws_test_series_order`
+  (status="complete"). Live-course unchanged (its retired extend rows already stay
+  `payment_status="verified"`). **Legacy pre-migration purchases have no order row**, so
+  active subs with `order_id IS NULL` are unioned back in (else they'd vanish) under a
+  `pcs_`/`tss_` id prefix.
+- **`_id` prefixes** now emitted: (plain)=pc order id, `lc_`=live sub id, `ts_`=ts order id,
+  `pcs_`=legacy pc sub id, `tss_`=legacy ts sub id. razorpay ids now populate from the
+  order (were null on the sub path).
+- **Receipt + tracking resolvers repointed to order id** for plain/`ts_` ids
+  (`courseOrderByIdForReceipt`, `testSeriesOrderByIdForReceipt`, order-keyed tracking via
+  `packageCourseSubscriptionTracking.order`); `pcs_`/`tss_` keep the sub-based path
+  (`getCourseReceiptBySubMysql`, `getTestSeriesReceiptBySubMysql`). Window (`start/endAt`)
+  read from the entitlement sub (fold-aware), scoped to the page's course/package targets.
+- Also fixed: with-material detection now uses `material_amount` (set by the payment
+  split) not `pc_material_id` (null when the package has no kit configured); the tracking
+  detail resolves the delivery address from `ws_customer_shipping` OR `ws_customer_address`
+  (the sub/order `shipping` FK is inconsistent across order paths).
+
+## 2026-07-15 — Track Order for with-material subscription orders (Books-parity)
+
+> **DDL: 2 new columns on `ws_live_course_subscription`.** Adds shipment "Track Order"
+> to the Purchase History → Subscriptions tab for package/course + live-course orders
+> bought on a with-material plan, mirroring the existing Books tab tracking.
+
+- **DDL** (`docs/migration/schema-changes/2026-07-15_live_course_material_tracking.sql`):
+  `ALTER TABLE ws_live_course_subscription ADD COLUMN tracking_id BIGINT NULL,
+  ADD COLUMN tracking_status VARCHAR(20) NULL;` — live-course had `with_material` +
+  `customer_shipping_id` but no place to store a shipment AWB/status (package/course
+  already has `ws_package_course_subscription.tracking` + `ws_package_course_subscription_tracking`;
+  books use `ws_book_order.tracking_id`). Schema: `LiveCourseSubscription.trackingId` /
+  `trackingStatus`. **No backfill** — historical live-course subs stay `tracking:null`.
+- **Write:** `verifyLiveCourseOrderMysql` now sets `tracking_id` (= the sub id, a synthetic
+  AWB below the Tirupati threshold, same idea as SQL book AWBs) + `tracking_status="pending"`
+  at payment-verify for `with_material` orders (fresh grant + extend + webhook paths).
+  Package/course already wrote its tracking row at verify — no change there.
+- **List query** (`GET client/purchase-history/subscriptions`): `listSubscriptions` now
+  `include`s `packageCourseSubscriptionTracking.status`. Each subscription row gains
+  `withMaterial` (package/course = `pc_material_id != null`; live = `with_material`; test
+  series = false), `status` (shipment status, material only), and `tracking` (`{trackingId,
+  courier}` or `null`). `courier` derived from the AWB range.
+- **Detail reads** (new): `GET client/purchase-history/subscriptions/:id/tracking` and
+  `/tracking/live` — owner-scoped `packageCourseSubscription.findFirst` (incl.
+  `customerShipping` + tracking row) / `liveCourseSubscription.findFirst` (+ `customerAddress`
+  by `customer_shipping_id`). Returns the Book tracking DTO shape; live path scrapes the
+  Tirupati AWB API (synthetic AWBs are below-threshold → 422 with static `trackingUrl`).
+
+## 2026-07-15 — Admin grant/create endpoints accept plan-less subscriptions
+
+> **Write-shape change on the admin manual-grant endpoints. No DDL — `plan_id`
+> (`ws_package_course_subscription`, `ws_package_course_order`, `ws_live_course_subscription.pcb_id`)
+> is already nullable.**
+
+- The frontend Add-Subscription form can now POST without `planId`. The create/grant
+  endpoints no longer require it; when absent, the request's `amount`/`price` becomes the
+  paid amount and `durationDays` drives `startAt`/`endAt` (instead of deriving both from a
+  plan). At least one window source is required — validation now enforces
+  `planId || durationDays` (or `durationMonths`/`endAt` for live courses).
+- **Course/Package** (`POST /admin/subscriptions`): `createSubscriptionSchema.planId` now
+  optional + refine `planId || durationDays`; `admin-subscription.service.createCourseSubscription`
+  skips the plan lookup / course-package-mismatch checks when no plan, writes `plan_id = NULL`
+  on both the order and subscription rows, and prices from `amount` (`course_amount`/
+  `material_amount` NULL without a plan). Repo `createPaymentOrder`/`createSub` `planId` widened
+  to `number | null`.
+- **Live course** (`POST /admin/live-courses/:id/grant`): `planId` now optional + refine;
+  `admin-live-course.service.grantSubscription` requires a window when no plan (new
+  `code:"duration"` → 422) and writes `pcb_id = NULL`.
+- **Test series** (`POST /admin/test-series/:id/grant`) and **ebook**
+  (`POST /admin/ebooks/subscriptions`): already accepted an absent `planId` (refine
+  `planId || durationDays`) — unchanged.
+
+---
+
+## 2026-07-15 — Permission catalog rendered entirely from DB
+
+> **Query-shape + response-contract change on `GET /admin/permissions/catalog`. No DDL.**
+
+- `catalog.controller.ts` / `permission-catalog.service.ts` no longer source the
+  response from the in-code registry (`permissions.catalog.ts`). The catalog is now
+  built **only from the database**: `ws_permissions` rows for the `?guard=` (default
+  `web`), grouped under their `ws_permission_category` via `category_id`.
+- New query `getCatalogFromDb(guard)`: `adminPermissionRow.findMany({ where:{guardName}, select:{id,name,categoryId} })` + `permissionCategoryRow.findMany` ordered by `order_by,id`.
+- **Response shape changed** (only DB-available fields survive): `data = { guard, categories: [{ id, title, slug, orderBy, permissions: [{ id, name }] }] }`. Dropped code-only fields: `version`, module `key/label/group/description`, per-permission `label/action/subResource`, and the code-diff `deprecated[]`. Uncategorised rows fall into a trailing `{ id:null, ... }` bucket. Frontend RBAC tree must adapt to category-grouped rows.
+
+---
+
+## 2026-07-14 — Offline batch-enquiry: block duplicate submissions per day
+
+> **New query on `ws_offline_enquiry`. No DDL** (uses existing `customer_id`,
+> `batch_id`, `qualification`, `created_at` columns).
+
+`POST /client/offline/batch-enquiry` previously accepted unlimited identical
+submissions. It now rejects a re-submission by the **same logged-in customer** for
+the **same batch AND same qualification** on the **same calendar day** with HTTP
+**409**.
+
+New repo query `offlineEnquiryRepository.existsSameDayForBatchQualification` —
+`count` on `ws_offline_enquiry` where `userId = customerId AND batchId = batchId AND
+qualification = qualification AND createdAt BETWEEN dayStart..dayEnd` (local-day
+bounds). Guard runs in `submitBatchEnquiryMysql` before insert; throws the new
+`DuplicateEnquiryError` → controller maps to 409. Skipped for anonymous (0 sentinel);
+the route is auth-required so customerId is always real. `POST /client/offline/enquiry`
+(anonymous public form) is intentionally unchanged.
+
+---
+
+## 2026-07-14 — Invoice download: gate on order status, not gatewayPaymentId
+
+> **Query-shape change only. No DDL** (`status` already exists on every order table).
+
+Invoice/receipt generation in `src/libs/core/generate.ts` blocked download whenever
+`gatewayPaymentId` was absent. Offline / free orders (cash, bank, QR, `Backend`, `free`
+payment methods) never carry a `gatewayPaymentId` — only razorpay online orders do — so
+manually-settled and free subscriptions could not download invoices even though they are
+fully processed.
+
+Fix: each MySQL receipt loader now selects `status` and gates on the completed-order
+state that the purchase-history listing already uses, instead of `gatewayPaymentId`:
+
+- `loadBookReceiptFromMysql` — added `status` to the `bookOrder` select; allow when
+  `status ∈ {verified, shipped, delivered}`.
+- `loadEbookReceiptFromMysql` — added `status` to the `eBookOrder` select; allow when
+  `status === "complete"`.
+- `loadCourseReceiptFromMysql` — added `status` to the `packageCourseOrder` select; allow
+  when `packageCourseOrder.status === "complete"`.
+- `loadLiveCourseReceiptFromMysql` — unchanged; already gates on `paymentStatus === "verified"`
+  and does not require `razorpayPaymentId`.
+
+No response-shape change; `razorpayPaymentId` still renders `"-"` when absent.
+
+---
+
 ## 2026-07-14 — OTP login: block after 5 wrong attempts + auto-unblock sweep
 
 > **Behavior + new queries on `ws_customer`. No DDL** (`tried_otp`, `otp_blocked_at`,

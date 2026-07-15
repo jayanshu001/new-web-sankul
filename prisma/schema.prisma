@@ -1806,6 +1806,13 @@ model LiveCourseSubscription {
   // delivery address (ws_customer_address.id).
   withMaterial       Boolean   @default(false) @map("with_material")
   customerShippingId Int?      @map("customer_shipping_id")
+  // Shipment tracking for the material kit (mirrors ws_book_order.tracking_id +
+  // ws_package_course_subscription.tracking). Unlike package/course there is no
+  // separate live tracking table — the AWB + flat status live inline. Allocated at
+  // payment-verify for with-material subs; trackingId is a synthetic AWB (below the
+  // Tirupati threshold → generic trackingUrl), consistent with SQL book AWBs.
+  trackingId         BigInt?   @map("tracking_id")
+  trackingStatus     String?   @map("tracking_status")
   createdAt         DateTime? @map("created_at")
   updatedAt         DateTime? @map("updated_at")
   // Audit: acting admin on manual grant/edit (see subscription audit backend-request).

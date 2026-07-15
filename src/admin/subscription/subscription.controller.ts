@@ -115,8 +115,11 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
 
     const customerId = subSql.parseSubId(String(data.customerId));
     if (!customerId) return res.status(400).json({ success: false, message: "Invalid customerId." });
-    const planId = subSql.parseSubId(String(data.planId));
-    if (!planId) return res.status(400).json({ success: false, message: "Invalid planId." });
+    // planId is optional: absent → the grant is priced/dated from the request
+    // (amount + durationDays) rather than a plan. A malformed non-empty planId
+    // is still rejected.
+    const planId = data.planId != null ? subSql.parseSubId(String(data.planId)) : null;
+    if (data.planId != null && !planId) return res.status(400).json({ success: false, message: "Invalid planId." });
     if (!(await sqlGetCustomer(customerId)))
       return res.status(404).json({ success: false, message: "Customer not found." });
 

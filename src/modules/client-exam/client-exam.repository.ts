@@ -1,5 +1,5 @@
 import { prisma } from "../../config/prisma";
-import { examInCategoryWhere } from "../catalog-exam/exam-category-pivot.where";
+import { examInCategoryWhere, subjectStartedWhere } from "../catalog-exam/exam-category-pivot.where";
 
 /**
  * Prisma READ persistence for the client-exam MySQL branch.
@@ -49,6 +49,8 @@ export const clientExamRepository = {
           examInCategoryWhere(categoryId),
           { status: true, type: "subject" },
           ...(search ? [{ name: { contains: search } }] : []),
+          // subject exams: only once started (see subjectStartedWhere) and before the window ends.
+          subjectStartedWhere(now),
           { OR: [{ endAt: null }, { endAt: { gte: now } }] },
         ],
       },
@@ -63,6 +65,8 @@ export const clientExamRepository = {
           examInCategoryWhere(categoryId),
           { status: true, type: "subject" },
           ...(search ? [{ name: { contains: search } }] : []),
+          // subject exams: only once started (see subjectStartedWhere) and before the window ends.
+          subjectStartedWhere(now),
           { OR: [{ endAt: null }, { endAt: { gte: now } }] },
         ],
       },

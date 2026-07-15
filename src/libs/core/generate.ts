@@ -230,6 +230,7 @@ async function loadBookReceiptFromMysql(
       receiptId: true,
       paymentMethod: true,
       gatewayPaymentId: true,
+      status: true,
       amount: true,
       paidAt: true,
       createdAt: true,
@@ -237,7 +238,12 @@ async function loadBookReceiptFromMysql(
     },
   });
   if (!order) throw new Error("Order not found.");
-  if (!order.gatewayPaymentId) throw new Error("Order has not been paid yet.");
+  // Offline / free book orders (cash, bank, QR, Backend, free) never carry a
+  // gatewayPaymentId — they are settled manually. Gate on the order status
+  // instead, matching the paid states the purchase-history listing exposes.
+  if (!["verified", "shipped", "delivered"].includes(order.status)) {
+    throw new Error("Order has not been paid yet.");
+  }
   if (!order.user) throw new Error("Customer not found.");
 
   const orderItems = await prisma.bookOrderItem.findMany({
@@ -317,12 +323,15 @@ async function loadEbookReceiptFromMysql(
       paymentMethod: true,
       gatewayPaymentId: true,
       gatewayOrderId: true,
+      status: true,
       createdAt: true,
       Customer: { select: { fullName: true, phoneNumber: true, emailAddress: true } },
     },
   });
   if (!order) throw new Error("Order not found.");
-  if (!order.gatewayPaymentId) throw new Error("Order has not been paid yet.");
+  // Offline / free ebook orders have no gatewayPaymentId; a settled order is
+  // marked `complete`. Gate on status so manual/free purchases can download.
+  if (order.status !== "complete") throw new Error("Order has not been paid yet.");
   if (!order.Customer) throw new Error("Customer not found.");
 
   const plan = order.planId
@@ -414,6 +423,7 @@ async function loadCourseReceiptFromMysql(
           paymentMethod: true,
           gatewayPaymentId: true,
           gatewayOrderId: true,
+          status: true,
           amount: true,
           createdAt: true,
         },
@@ -422,7 +432,10 @@ async function loadCourseReceiptFromMysql(
   });
   if (!sub) throw new Error("Order not found.");
   const ord = sub.packageCourseOrder;
-  if (!ord?.gatewayPaymentId) throw new Error("Order has not been paid yet.");
+  // Offline / free course & package orders have no gatewayPaymentId; a settled
+  // order is marked `complete`. Gate on status so manual/free purchases can
+  // download their invoice.
+  if (ord?.status !== "complete") throw new Error("Order has not been paid yet.");
 
   const plan = sub.packageCourseEbookPrice;
   const productName =

@@ -67,7 +67,7 @@ export const adminSubscriptionRepository = {
   // Admin-grant order row: carries the granular payment_method + reference ids +
   // amount so the Subscription Report (ordersByIds) reads them back via order_id.
   createPaymentOrder: (d: {
-    customerId: number; planId: number; shippingId: number | null; amount: number;
+    customerId: number; planId: number | null; shippingId: number | null; amount: number;
     paymentMethod: string; razorpayOrderId: string | null; razorpayPaymentId: string | null;
     bankTransactionId: string | null; now: Date;
   }) =>
@@ -90,7 +90,7 @@ export const adminSubscriptionRepository = {
       },
     }),
   createSub: (d: {
-    customerId: number; orderId?: number | null; courseId: number | null; packageId: number | null; planId: number;
+    customerId: number; orderId?: number | null; courseId: number | null; packageId: number | null; planId: number | null;
     shippingId: number | null; startAt: Date; endAt: Date; status: boolean; amount: number;
     courseAmount: number | null; materialAmount: number | null;
     payment_type: "backend" | "online"; remarks: string | null; now: Date;

@@ -21,6 +21,7 @@ import {
   submitEnquiryMysql,
   submitBatchEnquiryMysql,
   OFFLINE_BATCH_QUALIFICATIONS,
+  DuplicateEnquiryError,
 } from "../../modules/offline-enquiry/offline-enquiry.service";
 
 // MySQL enquiry: batchId is an INT (the migrated id-space), not an ObjectId.
@@ -290,6 +291,7 @@ export const submitBatchEnquiry = async (req: Request, res: Response) => {
     return res.status(201).json({ success: true, data: enquiry });
   } catch (e: any) {
     if (e.issues) { logger.warn("submitBatchEnquiry validation failed", { traceId, customerId: userId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    if (e instanceof DuplicateEnquiryError) { logger.warn("submitBatchEnquiry duplicate (mysql)", { traceId, customerId: userId }); return res.status(409).json({ success: false, message: e.message }); }
     logger.error("submitBatchEnquiry failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
   }

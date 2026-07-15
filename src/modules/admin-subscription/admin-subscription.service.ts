@@ -443,7 +443,9 @@ export interface CreateCourseSubInput {
   customerId: number;
   courseId?: number | null;
   packageId?: number | null;
-  planId: number;
+  // Optional: when absent, `amount` is the paid amount and `durationDays` drives
+  // the window (no plan lookup) — see createCourseSubscription below.
+  planId?: number | null;
   withMaterial: boolean;
   paymentType: "backend" | "online";
   // Granular payment method (cash/bank/razorpay/free/…) + reference ids, persisted
@@ -473,16 +475,19 @@ export type CreateCourseSubResult =
   | { ok: true; extended: boolean; data: any };
 
 export const createCourseSubscription = async (input: CreateCourseSubInput): Promise<CreateCourseSubResult> => {
-  const plan = await repo.findPlanById(input.planId);
-  if (!plan) return { ok: false, reason: "plan_not_found" };
-  if (input.courseId && Number(plan.courseId ?? 0) !== input.courseId) return { ok: false, reason: "course_mismatch" };
-  if (input.packageId && Number(plan.packageId ?? 0) !== input.packageId) return { ok: false, reason: "package_mismatch" };
+  // planId is optional: with a plan we derive price/duration from it (and validate
+  // the course/package match); without one the grant is priced by `amount` and
+  // dated by `durationDays` (the caller/validation guarantees durationDays here).
+  const plan = input.planId != null ? await repo.findPlanById(input.planId) : null;
+  if (input.planId != null && !plan) return { ok: false, reason: "plan_not_found" };
+  if (plan && input.courseId && Number(plan.courseId ?? 0) !== input.courseId) return { ok: false, reason: "course_mismatch" };
+  if (plan && input.packageId && Number(plan.packageId ?? 0) !== input.packageId) return { ok: false, reason: "package_mismatch" };
   if (input.withMaterial && !input.customerShippingId) return { ok: false, reason: "shipping_required" };
 
-  const resolvedCourseId = input.courseId || plan.courseId || null;
-  const resolvedPackageId = input.packageId || plan.packageId || null;
+  const resolvedCourseId = input.courseId || plan?.courseId || null;
+  const resolvedPackageId = input.packageId || plan?.packageId || null;
   const computedAmount =
-    input.amount != null ? input.amount : (plan.price || 0) + (input.withMaterial ? (plan.materialPrice || 0) : 0);
+    input.amount != null ? input.amount : (plan?.price || 0) + (input.withMaterial ? (plan?.materialPrice || 0) : 0);
   const now = new Date();
 
   // The order row carrying the granular payment method + reference ids + amount.
@@ -491,7 +496,7 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
   const makeOrder = () =>
     repo.createPaymentOrder({
       customerId: input.customerId,
-      planId: plan.id,
+      planId: plan?.id ?? null,
       shippingId: input.customerShippingId ?? null,
       amount: Math.round(computedAmount),
       paymentMethod: input.paymentMethod ?? "cash",
@@ -522,7 +527,7 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
   const endAt =
     input.durationDays && input.durationDays > 0
       ? computeEndAt({ startAt, durationMonths: input.durationDays, asDays: true })
-      : computeEndAt({ startAt, durationMonths: plan.duration || 0, asDays: true });
+      : computeEndAt({ startAt, durationMonths: plan?.duration || 0, asDays: true });
 
   const order = await makeOrder();
 
@@ -531,14 +536,14 @@ export const createCourseSubscription = async (input: CreateCourseSubInput): Pro
     orderId: order.id,
     courseId: resolvedCourseId,
     packageId: resolvedPackageId,
-    planId: plan.id,
+    planId: plan?.id ?? null,
     shippingId: input.customerShippingId ?? null,
     startAt,
     endAt,
     status: input.status,
     amount: computedAmount,
-    courseAmount: plan.price ?? null,
-    materialAmount: input.withMaterial ? (plan.materialPrice ?? 0) : null,
+    courseAmount: plan?.price ?? null,
+    materialAmount: input.withMaterial ? (plan?.materialPrice ?? 0) : null,
     payment_type: input.paymentType,
     remarks: input.remark ?? null,
     actingAdminId: input.actingAdminId ?? null,

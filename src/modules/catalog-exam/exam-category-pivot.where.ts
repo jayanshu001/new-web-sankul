@@ -43,6 +43,17 @@ export const examInCategoriesWhere = (categoryIds: number[]): Prisma.ExamWhereIn
 export const examInCategoryWhere = (categoryId: number): Prisma.ExamWhereInput =>
   examInCategoriesWhere([categoryId]);
 
+/**
+ * Subject-type exams are only visible once their start date has arrived; a NULL
+ * `start_date` means "no schedule" → always available. Pair this with
+ * `{ status: true, type: "subject" }` so scheduled-for-later subject exams are
+ * excluded from client catalog counts + test lists (they should not appear until
+ * they start). AND-merge into the exam filter.
+ */
+export const subjectStartedWhere = (now: Date): Prisma.ExamWhereInput => ({
+  OR: [{ startAt: null }, { startAt: { lte: now } }],
+});
+
 /** AND-merge category match into an existing exam filter. */
 export const withExamInCategories = (
   base: Prisma.ExamWhereInput,

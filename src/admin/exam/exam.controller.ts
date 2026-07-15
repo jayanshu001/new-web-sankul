@@ -304,8 +304,11 @@ export const updateExam = async (req: Request, res: Response) => {
     // Resolve effective type/window/status by merging the partial update over
     // the current row, then run the shared daily-overlap rule.
     const effectiveType = data.type ?? current.type;
-    const effectiveStartAt = data.startAt ?? current.startAt;
-    const effectiveEndAt = data.endAt ?? current.endAt;
+    // Distinguish "cleared" (null) from "not provided" (undefined): a null must stay
+    // null here so a daily test that clears its window is correctly rejected below
+    // (a `?? current` would mask the clear and then persist null → invalid daily test).
+    const effectiveStartAt = data.startAt !== undefined ? data.startAt : current.startAt;
+    const effectiveEndAt = data.endAt !== undefined ? data.endAt : current.endAt;
     const effectivePublished = data.status !== undefined ? data.status === true : current.status;
     if (effectiveType === "daily" && (!effectiveStartAt || !effectiveEndAt))
       return res.status(400).json({ success: false, message: "startAt and endAt are required for daily tests." });

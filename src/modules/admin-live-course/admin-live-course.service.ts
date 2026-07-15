@@ -548,14 +548,16 @@ export const getSubscription = async (id: number): Promise<"not_found" | any> =>
   return (await hydrateSubs([row]))[0];
 };
 
-export const grantSubscription = async (liveCourseId: number, v: { customerId: string; planId: string; durationDays?: number; durationMonths?: number; startAt?: string; endAt?: string; amount?: number; withMaterial?: boolean; customerShippingId?: string | null; remarks?: string | null; paymentMethod?: string; bankTransactionId?: string | null; razorpayOrderId?: string | null; razorpayPaymentId?: string | null; extend?: boolean; actingAdminId?: number | null }): Promise<{ ok: false; code: string; msg: string } | { ok: true; created: boolean; data: any }> => {
+export const grantSubscription = async (liveCourseId: number, v: { customerId: string; planId?: string; durationDays?: number; durationMonths?: number; startAt?: string; endAt?: string; amount?: number; withMaterial?: boolean; customerShippingId?: string | null; remarks?: string | null; paymentMethod?: string; bankTransactionId?: string | null; razorpayOrderId?: string | null; razorpayPaymentId?: string | null; extend?: boolean; actingAdminId?: number | null }): Promise<{ ok: false; code: string; msg: string } | { ok: true; created: boolean; data: any }> => {
   if (!(await repo.exists(liveCourseId))) return { ok: false, code: "course", msg: "Live course not found." };
   const customerId = parseLiveId(v.customerId);
-  const planId = parseLiveId(v.planId);
+  // planId is optional: with a plan we derive the window (and validate it belongs
+  // to this course); without one, amount + duration/endAt drive the grant.
+  const planId = v.planId ? parseLiveId(v.planId) : null;
   if (!customerId || !(await repo.customerExists(customerId))) return { ok: false, code: "customer", msg: "Customer not found." };
   const plan = planId ? await repo.findPlanById(planId) : null;
-  if (!plan) return { ok: false, code: "plan", msg: "Plan not found." };
-  if (plan.liveCourseId !== liveCourseId) return { ok: false, code: "mismatch", msg: "Plan does not belong to this live course." };
+  if (v.planId && !plan) return { ok: false, code: "plan", msg: "Plan not found." };
+  if (plan && plan.liveCourseId !== liveCourseId) return { ok: false, code: "mismatch", msg: "Plan does not belong to this live course." };
 
   const now = new Date();
   let startAt = now;
@@ -565,7 +567,8 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
   if (v.endAt) { const dt = new Date(v.endAt); if (isNaN(dt.getTime())) return { ok: false, code: "endAt", msg: "endAt must be a valid date." }; endAt = dt; }
   else if (v.durationDays != null) endAt = computeEndAt({ startAt, durationMonths: v.durationDays, asDays: true });
   else if (v.durationMonths != null) endAt = computeEndAt({ startAt, durationMonths: v.durationMonths });
-  else endAt = computeEndAt({ startAt, durationMonths: plan.duration, asDays: true });
+  else if (plan) endAt = computeEndAt({ startAt, durationMonths: plan.duration, asDays: true });
+  else return { ok: false, code: "duration", msg: "durationDays is required (or supply planId)." };
   if (endAt.getTime() <= startAt.getTime()) return { ok: false, code: "window", msg: "endAt must be after startAt." };
 
   // Subscription Type = Extend: top up the customer's existing active subscription
@@ -577,7 +580,9 @@ export const grantSubscription = async (liveCourseId: number, v: { customerId: s
       ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: v.durationDays, asDays: true, now })
       : v.durationMonths != null
         ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: v.durationMonths, now })
-        : extendEndAt({ currentEndAt: existing.endAt, durationMonths: plan.duration, asDays: true, now });
+        : plan
+          ? extendEndAt({ currentEndAt: existing.endAt, durationMonths: plan.duration, asDays: true, now })
+          : endAt;
     const updated = await repo.updateSubscription(existing.id, {
       endAt: newEnd,
       planId,

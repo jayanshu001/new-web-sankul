@@ -11,7 +11,9 @@ import { PaymentMethod } from "../../shared/enums";
 // (this table has no sibling order table). Ref ids arrive only for their method.
 const grantSqlSchema = z.object({
   customerId:        z.coerce.string().min(1),
-  planId:            z.coerce.string().min(1),
+  // Optional: without a plan the grant is priced by `amount` and its window is
+  // driven by durationDays/durationMonths/endAt (one of which is then required).
+  planId:            z.coerce.string().min(1).optional(),
   durationDays:      z.number().int().positive().optional(),
   durationMonths:    z.number().int().positive().optional(),
   startAt:           z.string().trim().optional(),
@@ -26,7 +28,10 @@ const grantSqlSchema = z.object({
   razorpayPaymentId: z.string().optional().nullable(),
   // Subscription Type = Extend: top up the existing sub instead of a fresh row.
   extend:            z.boolean().optional(),
-}).strict();
+}).strict().refine(
+  (v) => !!(v.planId || v.durationDays || v.durationMonths || v.endAt),
+  { message: "Provide planId or a window (durationDays/durationMonths/endAt).", path: ["planId"] },
+);
 
 function zodIssueResponse(res: Response, err: z.ZodError) {
   const messages = err.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`);

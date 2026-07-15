@@ -22,7 +22,7 @@ import { defaultListingQualities } from "../../utils/videoQualities";
 import { signMediaToken } from "../../utils/mediaToken";
 import { hasActiveCourseSub } from "../client-lecture/client-lecture.service";
 import { getPurchasedMaterialIds, materialMediaToken } from "../client-material/client-material.service";
-import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
+import { examInCategoriesWhere, subjectStartedWhere } from "../catalog-exam/exam-category-pivot.where";
 
 export const CLIENT_CATALOG_MODULE = "client-catalog";
 export const isClientCatalogMysql = (): boolean => true;
@@ -375,9 +375,10 @@ export const catalogTests = async (opts: { type: "course" | "package" | "live-co
     const ids = await descendantIds("ws_exam_category", "parent_id", cat.id);
     const [itemCount, childCount] = await Promise.all([
       // Mongo filtered status:PUBLISHED + non-ended window; SQL Exam.status is Boolean → status=true.
-      // Only active, subject-type quizzes count — drafts (status=false) and daily-type are excluded.
+      // Only active, subject-type quizzes that have already STARTED count — drafts
+      // (status=false), daily-type, and scheduled-for-later subject quizzes are excluded.
       prisma.exam.count({
-        where: { AND: [examInCategoriesWhere(ids), { status: true, type: "subject" }] },
+        where: { AND: [examInCategoriesWhere(ids), { status: true, type: "subject" }, subjectStartedWhere(new Date())] },
       }),
       prisma.examCategory.count({ where: { parent: cat.id, status: true } }),
     ]);

@@ -21,6 +21,17 @@ export {
 
 export const OFFLINE_ENQUIRY_MODULE = "offline-enquiry";
 
+/**
+ * Thrown when a customer re-submits a batch enquiry for the same batch AND
+ * qualification on the same calendar day. The controller maps this to HTTP 409.
+ */
+export class DuplicateEnquiryError extends Error {
+  constructor(message = "You have already submitted an enquiry for this batch and qualification today.") {
+    super(message);
+    this.name = "DuplicateEnquiryError";
+  }
+}
+
 export const isOfflineEnquiryMysql = (): boolean => true;
 
 export const parseOfflineEnquiryId = (id: string): number | null => {
@@ -64,6 +75,24 @@ export const submitEnquiryMysql = async (
 export const submitBatchEnquiryMysql = async (
   input: BatchEnquiryInput
 ): Promise<BatchEnquiryDto> => {
+  // Duplicate guard: block a re-submission for the same batch + qualification by
+  // the same logged-in customer on the same calendar day. Skipped for anonymous
+  // (0 sentinel) — this route requires auth, so customerId is always real here.
+  if (input.customerId && input.customerId > 0) {
+    const dayStart = new Date();
+    dayStart.setHours(0, 0, 0, 0);
+    const dayEnd = new Date();
+    dayEnd.setHours(23, 59, 59, 999);
+    const duplicate = await repo.existsSameDayForBatchQualification({
+      customerId: input.customerId,
+      batchId: input.batchId,
+      qualification: input.qualification,
+      dayStart,
+      dayEnd,
+    });
+    if (duplicate) throw new DuplicateEnquiryError();
+  }
+
   const digits = input.mobile.replace(/\D/g, "");
   const mobile = digits ? BigInt(digits) : BigInt(0);
   const row = await repo.create({

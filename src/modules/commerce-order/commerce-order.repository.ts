@@ -165,9 +165,20 @@ export const commerceOrderRepository = {
       });
 
       if (input.extend) {
+        // A validity extension on a WITH-MATERIAL plan ships a NEW kit, so allocate a
+        // fresh dispatch/tracking row keyed by THIS order — purchase history resolves the
+        // extension row's tracking by order id — and point the entitlement sub at the
+        // latest shipment. Without-material/digital extensions create no tracking row.
+        const extTracking = input.material.withMaterial
+          ? await tx.packageCourseSubscriptionTracking.create({ data: { orderId: input.orderId, status: "pending" } })
+          : null;
         const sub = await tx.packageCourseSubscription.update({
           where: { id: input.extend.existingSubId },
-          data: { endAt: input.extend.newEndAt, amount: new Prisma.Decimal(input.extend.newAmount) },
+          data: {
+            endAt: input.extend.newEndAt,
+            amount: new Prisma.Decimal(input.extend.newAmount),
+            ...(extTracking ? { trackingId: extTracking.id } : {}),
+          },
         });
         return { order, subscription: sub, extended: true as const };
       }
@@ -293,9 +304,20 @@ export const commerceOrderRepository = {
       });
 
       if (input.extend) {
+        // A validity extension on a WITH-MATERIAL plan ships a NEW kit, so allocate a
+        // fresh dispatch/tracking row keyed by THIS order — purchase history resolves the
+        // extension row's tracking by order id — and point the entitlement sub at the
+        // latest shipment. Without-material/digital extensions create no tracking row.
+        const extTracking = input.material.withMaterial
+          ? await tx.packageCourseSubscriptionTracking.create({ data: { orderId: input.orderId, status: "pending" } })
+          : null;
         const sub = await tx.packageCourseSubscription.update({
           where: { id: input.extend.existingSubId },
-          data: { endAt: input.extend.newEndAt, amount: new Prisma.Decimal(input.extend.newAmount) },
+          data: {
+            endAt: input.extend.newEndAt,
+            amount: new Prisma.Decimal(input.extend.newAmount),
+            ...(extTracking ? { trackingId: extTracking.id } : {}),
+          },
         });
         return { order, subscription: sub, extended: true as const };
       }

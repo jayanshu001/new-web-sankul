@@ -1,4 +1,5 @@
 import { clientPurchaseHistoryRepository as repo } from "./client-purchase-history.repository";
+import { COURIER } from "../../config/courier";
 
 export const PURCHASE_HISTORY_MODULE = "client-purchase-history";
 export const isPurchaseHistoryMysql = (): boolean => true;
@@ -9,6 +10,15 @@ export const parsePhId = (id: string): number | null => {
 };
 
 const RECEIPT_BASE = "/api/v1/client/purchase-history";
+
+// Carrier key derived from the AWB range (same threshold buildTrackingUrl routes on):
+// at/above the Tirupati INITIAL_Number → "tirupati", below → "mahavir". null when no
+// AWB has been allocated. Books return courier:null on SQL; we surface the derived key
+// so the subscriptions `tracking` object carries the same courier vocabulary the FE uses.
+const courierForAwb = (awb: number | bigint | null | undefined): string | null => {
+  if (awb == null) return null;
+  return Number(awb) >= COURIER.TIRUPATI.INITIAL_Number ? "tirupati" : "mahavir";
+};
 
 // ── subscriptions tab ──────────────────────────────────────────────────────────
 // The tab UNIONS three independent tables:
@@ -21,57 +31,117 @@ const RECEIPT_BASE = "/api/v1/client/purchase-history";
 // then sliced so pagination is correct even when the top rows all come from one table.
 const LIVE_ID_PREFIX = "lc_";
 const TS_ID_PREFIX = "ts_";
+// Order-less LEGACY subscriptions (pre-migration purchases with no SQL order) keep a
+// sub-based id under a distinct prefix so /subscriptions/:id/{receipt,tracking} route
+// to the sub path. SQL-native purchases + manual grants always have an order → plain id.
+const PCS_ID_PREFIX = "pcs_";
+const TSS_ID_PREFIX = "tss_";
 
 export const listSubscriptions = async (customerId: number, skip: number, take: number, page: number, limit: number) => {
   const overFetch = skip + take;
-  const [subs, total, liveSubs, liveTotal, tsSubs, tsTotal] = await Promise.all([
-    repo.listSubscriptions(customerId, 0, overFetch),
-    repo.countSubscriptions(customerId),
+  // Package/course + test-series list from their ORDER tables so each purchase (incl.
+  // a validity extension) is its own row — the entitlement subscription still folds,
+  // that is untouched. Live-course already lists per-purchase from its sub table.
+  // Legacy purchases (subs with no order) are unioned back in so history isn't lost.
+  const [pcOrders, pcTotal, liveSubs, liveTotal, tsOrders, tsTotal, olSubs, olTotal, olTsSubs, olTsTotal] = await Promise.all([
+    repo.listPurchaseOrders(customerId, 0, overFetch),
+    repo.countPurchaseOrders(customerId),
     repo.listLiveSubscriptions(customerId, overFetch),
     repo.countLiveSubscriptions(customerId),
-    repo.listTestSeriesSubscriptions(customerId, overFetch),
-    repo.countTestSeriesSubscriptions(customerId),
+    repo.listTestSeriesOrders(customerId, 0, overFetch),
+    repo.countTestSeriesOrders(customerId),
+    repo.listOrderlessSubs(customerId, 0, overFetch),
+    repo.countOrderlessSubs(customerId),
+    repo.listOrderlessTsSubs(customerId, overFetch),
+    repo.countOrderlessTsSubs(customerId),
   ]);
-  const grandTotal = total + liveTotal + tsTotal;
-  if (!subs.length && !liveSubs.length && !tsSubs.length) return { data: [], pagination: { total: grandTotal, page, limit, totalPages: 0 } };
+  const grandTotal = pcTotal + liveTotal + tsTotal + olTotal + olTsTotal;
+  if (!pcOrders.length && !liveSubs.length && !tsOrders.length && !olSubs.length && !olTsSubs.length) return { data: [], pagination: { total: grandTotal, page, limit, totalPages: 0 } };
 
-  const courses = new Map((await repo.coursesByIds([...new Set(subs.map((s) => s.courseId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
-  const packages = new Map((await repo.packagesByIds([...new Set(subs.map((s) => s.packageId).filter((x): x is number => x != null && x > 0))])).map((p) => [p.id, p]));
+  // Resolve the order's plan → course/package target (title, badge, kind).
+  const plans = new Map((await repo.pcPlansByIds([...new Set(pcOrders.map((o) => o.planId).filter((x): x is number => x != null && x > 0))])).map((p) => [p.id, p]));
+  // Course/package/test-series ids come from BOTH the order plans and the order-less
+  // subs (which carry course_id/package_id/test_series_id directly).
+  const courseIds = new Set<number>([...[...plans.values()].map((p) => p.courseId), ...olSubs.map((s) => s.courseId)].filter((x): x is number => x != null && x > 0));
+  const packageIds = new Set<number>([...[...plans.values()].map((p) => p.packageId), ...olSubs.map((s) => s.packageId)].filter((x): x is number => x != null && x > 0));
+  const tsIds = new Set<number>([...tsOrders.map((o) => o.testSeriesId), ...olTsSubs.map((s) => s.testSeriesId)].filter((x): x is number => x != null && x > 0));
+  const courses = new Map((await repo.coursesByIds([...courseIds])).map((c) => [c.id, c]));
+  const packages = new Map((await repo.packagesByIds([...packageIds])).map((p) => [p.id, p]));
   const types = new Map((await repo.packageTypesByIds([...new Set([...packages.values()].map((p) => p.packageTypeId).filter((x): x is number => x != null && x > 0))])).map((t) => [t.id, t]));
   const liveCourses = new Map((await repo.liveCoursesByIds([...new Set(liveSubs.map((s) => s.liveCourseId).filter((x): x is number => x != null && x > 0))])).map((c) => [c.id, c]));
-  const testSeries = new Map((await repo.testSeriesByIds([...new Set(tsSubs.map((s) => s.testSeriesId).filter((x): x is number => x != null && x > 0))])).map((t) => [t.id, t]));
+  const testSeries = new Map((await repo.testSeriesByIds([...tsIds])).map((t) => [t.id, t]));
 
-  const pkgRows = subs.map((s) => {
-    const course = s.courseId ? courses.get(s.courseId) : null;
-    const pkg = s.packageId ? packages.get(s.packageId) : null;
+  // Shipment tracking rows are keyed by the ORDER that created them (material orders).
+  const trackingByOrder = new Map((await repo.pcTrackingByOrderIds(pcOrders.map((o) => o.id))).map((t) => [t.orderId, t]));
+  // Decorate each order with the entitlement window from its subscription. Fresh orders
+  // map by order_id; extension orders (folded, no own sub) fall back to the customer's
+  // latest active sub for the same course/package.
+  const pcSubs = await repo.pcSubsForTargets(customerId, [...courses.keys()], [...packages.keys()]);
+  const subByOrder = new Map(pcSubs.filter((s) => s.orderId != null).map((s) => [s.orderId as number, s]));
+  const latestSubByKey = new Map<string, (typeof pcSubs)[number]>();
+  for (const s of pcSubs) {
+    const key = s.courseId ? `c:${s.courseId}` : s.packageId ? `p:${s.packageId}` : null;
+    if (!key) continue;
+    const cur = latestSubByKey.get(key);
+    if (!cur || (s.endAt?.getTime() ?? 0) > (cur.endAt?.getTime() ?? 0)) latestSubByKey.set(key, s);
+  }
+
+  const pkgRows = pcOrders.map((o) => {
+    const plan = o.planId ? plans.get(o.planId) : null;
+    const courseId = plan?.courseId && plan.courseId > 0 ? plan.courseId : null;
+    const packageId = plan?.packageId && plan.packageId > 0 ? plan.packageId : null;
+    const course = courseId ? courses.get(courseId) : null;
+    const pkg = packageId ? packages.get(packageId) : null;
     const type = pkg?.packageTypeId ? types.get(pkg.packageTypeId) : null;
+    // With-material = the order's plan carries material. The shipment AWB/status live on
+    // the tracking row created at verify (keyed by order id) — only fresh material orders
+    // get one (an extension folds and creates no new kit), so tracking may be null.
+    const withMaterial = !!plan?.withMaterial;
+    const track = trackingByOrder.get(o.id) ?? null;
+    const tracking =
+      withMaterial && track
+        ? { trackingId: String(track.id), courier: courierForAwb(track.id) }
+        : null;
+    // Validity window (cumulative on the entitlement sub) for this purchase's card.
+    const win =
+      subByOrder.get(o.id) ??
+      (courseId ? latestSubByKey.get(`c:${courseId}`) : packageId ? latestSubByKey.get(`p:${packageId}`) : null) ??
+      null;
     return {
-      _id: String(s.id),
-      kind: s.courseId ? "course" : "package",
+      _id: String(o.id),
+      kind: courseId ? "course" : "package",
       title: course?.name || pkg?.name || "Subscription",
       author: null, // ws_course has no author column (Mongo-only)
       thumbnail: course?.image || pkg?.image || null,
       badge: type?.name || null,
-      amount: s.amount != null ? Number(s.amount) : null,
-      // Legacy SQL-created rows may have a null created_at (no DB default) — fall
-      // back to start_at so the purchase date still renders. New rows set both.
-      purchasedAt: s.createdAt ?? s.startAt ?? null,
-      startAt: s.startAt ?? null,
-      endAt: s.endAt ?? null,
-      receiptUrl: `${RECEIPT_BASE}/subscriptions/${s.id}/receipt`,
+      withMaterial,
+      status: withMaterial ? (track?.status ?? null) : null,
+      tracking,
+      amount: o.amount != null ? Number(o.amount) : null,
+      purchasedAt: o.createdAt ?? null,
+      startAt: win?.startAt ?? null,
+      endAt: win?.endAt ?? null,
+      receiptUrl: `${RECEIPT_BASE}/subscriptions/${o.id}/receipt`,
       meta: {
-        courseId: s.courseId != null && s.courseId > 0 ? String(s.courseId) : null,
-        targetPackageId: s.packageId != null && s.packageId > 0 ? String(s.packageId) : null,
-        planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
-        // razorpay ids not stored on ws_package_course_subscription (Mongo-only)
-        razorpayOrderId: null,
-        razorpayPaymentId: null,
+        courseId: courseId ? String(courseId) : null,
+        targetPackageId: packageId ? String(packageId) : null,
+        planId: o.planId != null && o.planId > 0 ? String(o.planId) : null,
+        // ws_package_course_order carries the real razorpay ids (unlike the sub).
+        razorpayOrderId: o.gatewayOrderId ?? null,
+        razorpayPaymentId: o.gatewayPaymentId ?? null,
       },
     };
   });
 
   const liveRows = liveSubs.map((s) => {
     const lc = s.liveCourseId ? liveCourses.get(s.liveCourseId) : null;
+    // Live-course carries with_material inline (no plan flag); the AWB + status are
+    // inline columns (allocated at verify for material orders) — no separate table.
+    const withMaterial = !!s.withMaterial;
+    const tracking =
+      withMaterial && s.trackingId != null
+        ? { trackingId: String(s.trackingId), courier: courierForAwb(s.trackingId) }
+        : null;
     return {
       _id: `${LIVE_ID_PREFIX}${s.id}`,
       kind: "live-course",
@@ -79,6 +149,9 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
       author: null,
       thumbnail: lc?.image || null,
       badge: "Live",
+      withMaterial,
+      status: withMaterial ? (s.trackingStatus ?? null) : null,
+      tracking,
       amount: s.paidAmount != null ? Number(s.paidAmount) : null,
       purchasedAt: s.createdAt ?? s.startAt ?? null,
       startAt: s.startAt ?? null,
@@ -94,35 +167,252 @@ export const listSubscriptions = async (customerId: number, skip: number, take: 
     };
   });
 
-  const tsRows = tsSubs.map((s) => {
-    const ts = s.testSeriesId ? testSeries.get(s.testSeriesId) : null;
+  // Test-series validity window per order (fold-aware, same as package/course).
+  const tsSubs = await repo.tsSubsForSeries(customerId, [...testSeries.keys()]);
+  const tsSubByOrder = new Map(tsSubs.filter((s) => s.orderId != null).map((s) => [s.orderId as number, s]));
+  const latestTsSubByTs = new Map<number, (typeof tsSubs)[number]>();
+  for (const s of tsSubs) {
+    const cur = latestTsSubByTs.get(s.testSeriesId);
+    if (!cur || (s.endAt?.getTime() ?? 0) > (cur.endAt?.getTime() ?? 0)) latestTsSubByTs.set(s.testSeriesId, s);
+  }
+
+  const tsRows = tsOrders.map((o) => {
+    const ts = o.testSeriesId ? testSeries.get(o.testSeriesId) : null;
+    const win = tsSubByOrder.get(o.id) ?? latestTsSubByTs.get(o.testSeriesId) ?? null;
     return {
-      _id: `${TS_ID_PREFIX}${s.id}`,
+      _id: `${TS_ID_PREFIX}${o.id}`,
       kind: "test-series",
       title: ts?.title || "Test Series",
       author: null,
       thumbnail: ts?.thumbnail || null,
       badge: "Test Series",
-      amount: s.price != null ? Number(s.price) : null,
+      // Test series never ships physical material — no Track Order.
+      withMaterial: false,
+      status: null,
+      tracking: null,
+      amount: o.orderPrice != null ? Number(o.orderPrice) : null,
+      purchasedAt: o.createdAt ?? null,
+      startAt: win?.startAt ?? null,
+      endAt: win?.endAt ?? null,
+      receiptUrl: `${RECEIPT_BASE}/subscriptions/${TS_ID_PREFIX}${o.id}/receipt`,
+      meta: {
+        testSeriesId: o.testSeriesId != null && o.testSeriesId > 0 ? String(o.testSeriesId) : null,
+        planId: o.planId != null && o.planId > 0 ? String(o.planId) : null,
+        // ws_test_series_order carries the razorpay ids directly.
+        razorpayOrderId: o.razorpayOrderId ?? null,
+        razorpayPaymentId: o.razorpayPaymentId ?? null,
+      },
+    };
+  });
+
+  // Legacy package/course subs (no order) — sub-based rows, "pcs_"-prefixed id.
+  const orderlessPkgRows = olSubs.map((s) => {
+    const course = s.courseId ? courses.get(s.courseId) : null;
+    const pkg = s.packageId ? packages.get(s.packageId) : null;
+    const type = pkg?.packageTypeId ? types.get(pkg.packageTypeId) : null;
+    const withMaterial = s.materialAmount != null;
+    const trackStatus = (s as any).packageCourseSubscriptionTracking?.status ?? null;
+    const tracking =
+      withMaterial && s.trackingId != null
+        ? { trackingId: String(s.trackingId), courier: courierForAwb(s.trackingId) }
+        : null;
+    return {
+      _id: `${PCS_ID_PREFIX}${s.id}`,
+      kind: s.courseId ? "course" : "package",
+      title: course?.name || pkg?.name || "Subscription",
+      author: null,
+      thumbnail: course?.image || pkg?.image || null,
+      badge: type?.name || null,
+      withMaterial,
+      status: withMaterial ? trackStatus : null,
+      tracking,
+      amount: s.amount != null ? Number(s.amount) : null,
       purchasedAt: s.createdAt ?? s.startAt ?? null,
       startAt: s.startAt ?? null,
       endAt: s.endAt ?? null,
-      receiptUrl: `${RECEIPT_BASE}/subscriptions/${TS_ID_PREFIX}${s.id}/receipt`,
+      receiptUrl: `${RECEIPT_BASE}/subscriptions/${PCS_ID_PREFIX}${s.id}/receipt`,
       meta: {
-        testSeriesId: s.testSeriesId != null && s.testSeriesId > 0 ? String(s.testSeriesId) : null,
+        courseId: s.courseId != null && s.courseId > 0 ? String(s.courseId) : null,
+        targetPackageId: s.packageId != null && s.packageId > 0 ? String(s.packageId) : null,
         planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
-        // razorpay ids live on ws_test_series_order (via order_id), not the subscription.
         razorpayOrderId: null,
         razorpayPaymentId: null,
       },
     };
   });
 
-  const data = [...pkgRows, ...liveRows, ...tsRows]
+  // Legacy test-series subs (no order) — sub-based rows, "tss_"-prefixed id.
+  const orderlessTsRows = olTsSubs.map((s) => {
+    const ts = s.testSeriesId ? testSeries.get(s.testSeriesId) : null;
+    return {
+      _id: `${TSS_ID_PREFIX}${s.id}`,
+      kind: "test-series",
+      title: ts?.title || "Test Series",
+      author: null,
+      thumbnail: ts?.thumbnail || null,
+      badge: "Test Series",
+      withMaterial: false,
+      status: null,
+      tracking: null,
+      amount: s.price != null ? Number(s.price) : null,
+      purchasedAt: s.createdAt ?? s.startAt ?? null,
+      startAt: s.startAt ?? null,
+      endAt: s.endAt ?? null,
+      receiptUrl: `${RECEIPT_BASE}/subscriptions/${TSS_ID_PREFIX}${s.id}/receipt`,
+      meta: {
+        testSeriesId: s.testSeriesId != null && s.testSeriesId > 0 ? String(s.testSeriesId) : null,
+        planId: s.planId != null && s.planId > 0 ? String(s.planId) : null,
+        razorpayOrderId: null,
+        razorpayPaymentId: null,
+      },
+    };
+  });
+
+  const data = [...pkgRows, ...liveRows, ...tsRows, ...orderlessPkgRows, ...orderlessTsRows]
     .sort((a, b) => (b.purchasedAt?.getTime() ?? 0) - (a.purchasedAt?.getTime() ?? 0))
     .slice(skip, skip + take);
 
   return { data, pagination: { total: grandTotal, page, limit, totalPages: Math.ceil(grandTotal / limit) } };
+};
+
+// ── subscription material shipment tracking (SQL) ────────────────────────────
+// Client "Track Order" for with-material package/course + live-course purchases.
+// Mirrors the Books tab's getOrderTrackingMysql DTO EXACTLY so the app can reuse
+// BookOrderTrackScreen. The `_id` from the subscriptions list carries the "lc_"
+// prefix for live subs (separate table) and no prefix for package/course; "ts_"
+// (test series) is never material → not trackable.
+type SubscriptionTracking = {
+  orderId: string;
+  receiptId: string;
+  awb: number | null;
+  courier: string | null;
+  from: { city: null; hub: null };
+  to: { city: string | null; hub: string | null; pincode: string | null };
+  consignee: string | null;
+  consigneePhone: string | null;
+  bookedAt: Date | null;
+  currentStatus: string | null;
+  orderStatus: string;
+  shippedAt: null;
+  deliveredAt: null;
+  history: Array<{ status: string; location: null; note: null; at: Date | null }>;
+};
+
+const addrTo = (a: any) => ({
+  city: a?.city ?? null,
+  hub: a?.address ?? null,
+  pincode: a?.pincode != null ? String(a.pincode) : null,
+});
+
+export const getSubscriptionTrackingMysql = async (
+  idStr: string,
+  customerId: number
+): Promise<SubscriptionTracking | null> => {
+  // Test-series never ships material ("ts_" order id or "tss_" legacy sub id).
+  if (idStr.startsWith(TSS_ID_PREFIX) || idStr.startsWith(TS_ID_PREFIX)) return null;
+
+  // Legacy package/course sub (no order, "pcs_"-prefixed) — sub-based tracking.
+  if (idStr.startsWith(PCS_ID_PREFIX)) {
+    const subId = parsePhId(idStr.slice(PCS_ID_PREFIX.length));
+    if (subId == null) return null;
+    const sub = await repo.subscriptionForTracking(subId, customerId);
+    if (!sub || sub.materialAmount == null) return null;
+    const ship: any =
+      sub.customerShipping ??
+      (sub.shippingId != null ? await repo.customerAddressById(sub.shippingId) : null) ??
+      {};
+    const track: any = (sub as any).packageCourseSubscriptionTracking ?? null;
+    const status = track?.status ?? null;
+    return {
+      orderId: String(sub.id),
+      receiptId: String(sub.id),
+      awb: sub.trackingId != null ? Number(sub.trackingId) : null,
+      courier: courierForAwb(sub.trackingId),
+      from: { city: null, hub: null },
+      to: addrTo(ship),
+      consignee: ship?.name ?? null,
+      consigneePhone: ship?.phone != null ? String(ship.phone) : null,
+      bookedAt: sub.createdAt ?? null,
+      currentStatus: status ?? (sub.status ? "verified" : "inactive"),
+      orderStatus: sub.status ? "verified" : "inactive",
+      shippedAt: null,
+      deliveredAt: null,
+      history: status ? [{ status, location: null, note: null, at: track?.updated_at ?? track?.created_at ?? null }] : [],
+    };
+  }
+
+  // Live-course (prefixed id): AWB + status are inline columns; address lives in
+  // ws_customer_address (customer_shipping_id), a different table than package/course.
+  if (idStr.startsWith(LIVE_ID_PREFIX)) {
+    const subId = parsePhId(idStr.slice(LIVE_ID_PREFIX.length));
+    if (subId == null) return null;
+    const sub = await repo.liveSubscriptionForTracking(subId, customerId);
+    // Trackable only for with-material orders (AWB allocated at verify for those).
+    if (!sub || !sub.withMaterial) return null;
+    const addr = sub.customerShippingId != null ? await repo.customerAddressById(sub.customerShippingId) : null;
+    const status = sub.trackingStatus ?? null;
+    return {
+      orderId: String(sub.id),
+      receiptId: String(sub.id),
+      awb: sub.trackingId != null ? Number(sub.trackingId) : null,
+      courier: courierForAwb(sub.trackingId),
+      from: { city: null, hub: null },
+      to: addrTo(addr),
+      consignee: addr?.name ?? null,
+      consigneePhone: addr?.phone != null ? String(addr.phone) : null,
+      bookedAt: sub.paidAt ?? sub.createdAt ?? null,
+      currentStatus: status ?? sub.paymentStatus ?? null,
+      orderStatus: sub.paymentStatus ?? "verified",
+      shippedAt: null,
+      deliveredAt: null,
+      history: status ? [{ status, location: null, note: null, at: sub.updatedAt ?? sub.createdAt ?? null }] : [],
+    };
+  }
+
+  // Package/course PURCHASE ORDER (unprefixed id = the order id the list emits). The
+  // shipment status row is keyed by order id and created at verify only for a FRESH
+  // material order (an extension folds and ships no new kit → not trackable). The
+  // dispatch address is on the order's ws_customer_shipping FK, or ws_customer_address
+  // (inconsistent across order paths) — fall back like elsewhere.
+  const orderId = parsePhId(idStr);
+  if (orderId == null) return null;
+  const order = await repo.courseOrderByIdForReceipt(orderId, customerId);
+  if (!order) return null;
+  const plan = order.planId ? (await repo.pcPlansByIds([order.planId]))[0] : null;
+  if (!plan?.withMaterial) return null;
+  const track = (await repo.pcTrackingByOrderIds([order.id]))[0] ?? null;
+  if (!track) return null;
+  const ship: any =
+    (order as any).CustomerShipping ??
+    (order.shipping != null ? await repo.customerAddressById(order.shipping) : null) ??
+    {};
+  const status = track.status ?? null;
+  return {
+    orderId: String(order.id),
+    receiptId: order.uniqueId ?? String(order.id),
+    awb: track.id != null ? Number(track.id) : null,
+    courier: courierForAwb(track.id),
+    from: { city: null, hub: null },
+    to: addrTo(ship),
+    consignee: ship?.name ?? null,
+    consigneePhone: ship?.phone != null ? String(ship.phone) : null,
+    bookedAt: order.createdAt ?? null,
+    currentStatus: status ?? "verified",
+    orderStatus: "verified",
+    shippedAt: null,
+    deliveredAt: null,
+    history: status ? [{ status, location: null, note: null, at: track.updated_at ?? track.created_at ?? null }] : [],
+  };
+};
+
+/** Minimal AWB lookup for the /tracking/live guard (mirrors getOrderTrackingLiveMysql). */
+export const getSubscriptionTrackingLiveMysql = async (
+  idStr: string,
+  customerId: number
+): Promise<{ trackingId: number | null } | null> => {
+  const data = await getSubscriptionTrackingMysql(idStr, customerId);
+  if (!data) return null;
+  return { trackingId: data.awb };
 };
 
 // ── books tab ────────────────────────────────────────────────────────────────
@@ -209,9 +499,11 @@ export const getEbookReceiptMysql = async (orderId: number, customerId: number) 
   const order = await repo.ebookOrderForReceipt(orderId, customerId);
   if (!order) return null;
 
-  // ws_ebook_order has no ebook_id → hop plan_id → price.ebook_id → ebook.
+  // ws_ebook_order has no ebook_id → hop plan_id → price.ebook_id → ebook. For
+  // plan-less orders (manual grants) fall back to the subscription's ebook_id.
   const plan = order.planId ? await repo.planForReceipt(order.planId) : null;
-  const ebook = plan?.ebookId ? await repo.ebookById(plan.ebookId) : null;
+  const resolvedEbookId = plan?.ebookId ?? (await repo.ebookIdBySubForOrder(order.id))?.ebookId ?? null;
+  const ebook = resolvedEbookId ? await repo.ebookById(resolvedEbookId) : null;
 
   return {
     kind: "ebook" as const,
@@ -227,7 +519,7 @@ export const getEbookReceiptMysql = async (orderId: number, customerId: number) 
     },
     items: [
       {
-        name: ebook?.name ? `E-Book: ${ebook.name}` : "E-Book purchase",
+        name: ebook?.name || "E-Book purchase",
         qty: 1,
         unitPrice: order.orderPrice,
         lineTotal: order.orderPrice,
@@ -298,39 +590,48 @@ export const getBookReceiptMysql = async (orderId: number, customerId: number) =
   };
 };
 
-// ── course/package receipt (SQL mirror of getCourseReceipt) ──────────────────
-// DRIFT: ws_package_course_subscription has NO paid_at and NO razorpay columns.
-// Mongo's paymentStatus:"verified" → status=true here; razorpay ids are read
-// via the order hop; paidAt stays null (no column anywhere).
-export const getCourseReceiptMysql = async (subId: number, customerId: number) => {
-  const sub = await repo.subscriptionForReceipt(subId, customerId);
-  if (!sub) return null;
+// ── course/package receipt (ORDER-based — one receipt per purchase) ──────────
+// Keyed by the ORDER id now surfaced as the purchase-history _id, so a validity
+// extension has its own receipt. The order carries amount + razorpay ids + dates
+// directly; the validity window is read from the entitlement sub this order fed
+// (fresh → by order id; extension → the customer's latest active sub for the target).
+export const getCourseReceiptMysql = async (orderId: number, customerId: number) => {
+  const order = await repo.courseOrderByIdForReceipt(orderId, customerId);
+  if (!order) return null;
 
-  const [plan, course, pkg, order] = await Promise.all([
-    sub.planId ? repo.planDurationForReceipt(sub.planId) : Promise.resolve(null),
-    sub.courseId ? repo.courseForReceipt(sub.courseId) : Promise.resolve(null),
-    sub.packageId ? repo.packageForReceipt(sub.packageId) : Promise.resolve(null),
-    sub.orderId ? repo.courseOrderForReceipt(sub.orderId) : Promise.resolve(null),
+  const plan = order.planId ? (await repo.pcPlansByIds([order.planId]))[0] : null;
+  const courseId = plan?.courseId && plan.courseId > 0 ? plan.courseId : null;
+  const packageId = plan?.packageId && plan.packageId > 0 ? plan.packageId : null;
+  const [course, pkg, subs] = await Promise.all([
+    courseId ? repo.courseForReceipt(courseId) : Promise.resolve(null),
+    packageId ? repo.packageForReceipt(packageId) : Promise.resolve(null),
+    repo.pcSubsForTargets(customerId, courseId ? [courseId] : [], packageId ? [packageId] : []),
   ]);
+  const win =
+    subs.find((s) => s.orderId === order.id) ??
+    subs
+      .filter((s) => (courseId ? s.courseId === courseId : s.packageId === packageId))
+      .sort((a, b) => (b.endAt?.getTime() ?? 0) - (a.endAt?.getTime() ?? 0))[0] ??
+    null;
 
-  const isPackageKind = !sub.courseId && !!pkg;
+  const isPackageKind = !courseId && !!pkg;
   const lineName =
     course?.name && pkg?.name
       ? `${course.name} — ${pkg.name}`
       : course?.name || pkg?.name || "Subscription";
-  const amount = Number(sub.amount ?? 0);
+  const amount = Number(order.amount ?? 0);
 
   return {
     kind: isPackageKind ? ("package" as const) : ("course" as const),
-    receiptId: String(sub.id),
-    purchasedAt: sub.createdAt ?? null,
-    paidAt: null,
+    receiptId: order.uniqueId ?? String(order.id),
+    purchasedAt: order.createdAt ?? null,
+    paidAt: order.createdAt ?? null,
     status: "verified",
-    customer: { id: String(sub.customerId) },
+    customer: { id: String(order.userId ?? customerId) },
     payment: {
       method: "razorpay",
-      razorpayOrderId: order?.gatewayOrderId ?? null,
-      razorpayPaymentId: order?.gatewayPaymentId ?? null,
+      razorpayOrderId: order.gatewayOrderId ?? null,
+      razorpayPaymentId: order.gatewayPaymentId ?? null,
     },
     items: [
       {
@@ -345,6 +646,45 @@ export const getCourseReceiptMysql = async (subId: number, customerId: number) =
       grandTotal: amount,
       currency: "INR" as const,
     },
+    extra: {
+      courseId: courseId ? String(courseId) : null,
+      targetPackageId: packageId ? String(packageId) : null,
+      planId: order.planId != null ? String(order.planId) : null,
+      duration: plan?.duration ?? null,
+      startAt: win?.startAt ?? null,
+      endAt: win?.endAt ?? null,
+    },
+  };
+};
+
+// ── course/package receipt (SUB-based — legacy "pcs_" orders-less subs) ──────
+// Legacy pre-migration subs have no order row, so their receipt reads the sub
+// directly (razorpay ids unavailable → null). Same output shape as the order path.
+export const getCourseReceiptBySubMysql = async (subId: number, customerId: number) => {
+  const sub = await repo.subscriptionForReceipt(subId, customerId);
+  if (!sub) return null;
+
+  const [plan, course, pkg] = await Promise.all([
+    sub.planId ? repo.planDurationForReceipt(sub.planId) : Promise.resolve(null),
+    sub.courseId ? repo.courseForReceipt(sub.courseId) : Promise.resolve(null),
+    sub.packageId ? repo.packageForReceipt(sub.packageId) : Promise.resolve(null),
+  ]);
+
+  const isPackageKind = !sub.courseId && !!pkg;
+  const lineName =
+    course?.name && pkg?.name ? `${course.name} — ${pkg.name}` : course?.name || pkg?.name || "Subscription";
+  const amount = Number(sub.amount ?? 0);
+
+  return {
+    kind: isPackageKind ? ("package" as const) : ("course" as const),
+    receiptId: String(sub.id),
+    purchasedAt: sub.createdAt ?? null,
+    paidAt: null,
+    status: "verified",
+    customer: { id: String(sub.customerId) },
+    payment: { method: "razorpay", razorpayOrderId: null, razorpayPaymentId: null },
+    items: [{ name: lineName, qty: 1, unitPrice: amount, lineTotal: amount }],
+    totals: { subTotal: amount, grandTotal: amount, currency: "INR" as const },
     extra: {
       courseId: sub.courseId != null ? String(sub.courseId) : null,
       targetPackageId: sub.packageId != null ? String(sub.packageId) : null,
@@ -410,34 +750,43 @@ export const getLiveCourseReceiptMysql = async (subId: number, customerId: numbe
   };
 };
 
-// ── test-series receipt (single subscription, ownership-scoped) ──────────────────
-export const getTestSeriesReceiptMysql = async (subId: number, customerId: number) => {
-  const sub = await repo.testSeriesSubscriptionForReceipt(subId, customerId);
-  if (!sub) return null;
+// ── test-series receipt (ORDER-based — one receipt per purchase) ─────────────────
+// Keyed by the test-series ORDER id (the list's "ts_"-stripped _id) so each extension
+// has its own receipt. The order carries price + razorpay ids directly; the validity
+// window comes from the entitlement sub (fresh by order id, else latest for the series).
+export const getTestSeriesReceiptMysql = async (orderId: number, customerId: number) => {
+  const order = await repo.testSeriesOrderByIdForReceipt(orderId, customerId);
+  if (!order) return null;
 
-  const [plan, ts, order] = await Promise.all([
-    sub.planId ? repo.testSeriesPlanForReceipt(sub.planId) : Promise.resolve(null),
-    repo.testSeriesForReceipt(sub.testSeriesId),
-    sub.orderId ? repo.testSeriesOrderForReceipt(sub.orderId) : Promise.resolve(null),
+  const [plan, ts, subs] = await Promise.all([
+    order.planId ? repo.testSeriesPlanForReceipt(order.planId) : Promise.resolve(null),
+    repo.testSeriesForReceipt(order.testSeriesId),
+    repo.tsSubsForSeries(customerId, [order.testSeriesId]),
   ]);
+  const win =
+    subs.find((s) => s.orderId === order.id) ??
+    subs
+      .filter((s) => s.testSeriesId === order.testSeriesId)
+      .sort((a, b) => (b.endAt?.getTime() ?? 0) - (a.endAt?.getTime() ?? 0))[0] ??
+    null;
 
-  const total = sub.price != null ? Number(sub.price) : 0;
+  const total = order.orderPrice != null ? Number(order.orderPrice) : 0;
 
   return {
     kind: "test-series" as const,
-    receiptId: String(sub.id),
-    purchasedAt: sub.createdAt ?? null,
-    paidAt: sub.createdAt ?? null,
-    status: sub.status ? "verified" : "inactive",
-    customer: { id: String(sub.customerId) },
+    receiptId: String(order.id),
+    purchasedAt: order.createdAt ?? null,
+    paidAt: order.createdAt ?? null,
+    status: "verified",
+    customer: { id: String(order.customerId) },
     payment: {
-      method: order?.paymentMethod ?? sub.paymentType ?? "razorpay",
-      razorpayOrderId: order?.razorpayOrderId ?? null,
-      razorpayPaymentId: order?.razorpayPaymentId ?? null,
+      method: order.paymentMethod ?? "razorpay",
+      razorpayOrderId: order.razorpayOrderId ?? null,
+      razorpayPaymentId: order.razorpayPaymentId ?? null,
     },
     items: [
       {
-        name: ts?.title ? `Test Series: ${ts.title}` : "Test Series subscription",
+        name: ts?.title || "Test Series subscription",
         qty: 1,
         unitPrice: total,
         lineTotal: total,
@@ -448,6 +797,37 @@ export const getTestSeriesReceiptMysql = async (subId: number, customerId: numbe
       grandTotal: total,
       currency: "INR" as const,
     },
+    extra: {
+      testSeriesId: String(order.testSeriesId),
+      planId: order.planId != null ? String(order.planId) : null,
+      duration: plan?.durationDays ?? null,
+      startAt: win?.startAt ?? null,
+      endAt: win?.endAt ?? null,
+    },
+  };
+};
+
+// ── test-series receipt (SUB-based — legacy "tss_" order-less subs) ──────────────
+export const getTestSeriesReceiptBySubMysql = async (subId: number, customerId: number) => {
+  const sub = await repo.testSeriesSubscriptionForReceipt(subId, customerId);
+  if (!sub) return null;
+
+  const [plan, ts] = await Promise.all([
+    sub.planId ? repo.testSeriesPlanForReceipt(sub.planId) : Promise.resolve(null),
+    repo.testSeriesForReceipt(sub.testSeriesId),
+  ]);
+  const total = sub.price != null ? Number(sub.price) : 0;
+
+  return {
+    kind: "test-series" as const,
+    receiptId: String(sub.id),
+    purchasedAt: sub.createdAt ?? null,
+    paidAt: sub.createdAt ?? null,
+    status: sub.status ? "verified" : "inactive",
+    customer: { id: String(sub.customerId) },
+    payment: { method: sub.paymentType ?? "razorpay", razorpayOrderId: null, razorpayPaymentId: null },
+    items: [{ name: ts?.title || "Test Series subscription", qty: 1, unitPrice: total, lineTotal: total }],
+    totals: { subTotal: total, grandTotal: total, currency: "INR" as const },
     extra: {
       testSeriesId: String(sub.testSeriesId),
       planId: sub.planId != null ? String(sub.planId) : null,
@@ -477,25 +857,35 @@ export const listEbooks = async (customerId: number, status: string, skip: numbe
   // ws_ebook_order has no ebook_id → hop order.plan_id → price.ebook_id → ebook.
   const planIds = [...new Set(orders.map((o) => o.planId).filter((x): x is number => x != null && x > 0))];
   const plans = new Map((await repo.plansByIds(planIds)).map((p) => [p.id, p]));
-  const ebookIds = [...new Set([...plans.values()].map((p) => p.ebookId).filter((x): x is number => x != null && x > 0))];
-  const ebooks = new Map((await repo.ebooksByIds(ebookIds)).map((e) => [e.id, e]));
 
-  // Subscription start_at per order — the purchase-date proxy for legacy orders
-  // whose created_at is NULL (start_at lives on ws_ebook_subscription, not the order).
+  // Subscription per order: start_at is the purchase-date proxy for legacy orders
+  // whose created_at is NULL; ebook_id resolves the ebook for plan-less orders
+  // (manual grants) whose order.plan_id → ebook hop yields nothing.
   const startByOrder = new Map<number, Date>();
+  const ebookIdByOrder = new Map<number, number>();
   for (const s of await repo.ebookSubStartByOrderIds(orders.map((o) => o.id))) {
-    if (s.orderId != null && s.startAt) {
+    if (s.orderId == null) continue;
+    if (s.startAt) {
       const cur = startByOrder.get(s.orderId);
       if (!cur || s.startAt < cur) startByOrder.set(s.orderId, s.startAt); // earliest
     }
+    if (s.ebookId != null && s.ebookId > 0 && !ebookIdByOrder.has(s.orderId)) ebookIdByOrder.set(s.orderId, s.ebookId);
   }
+
+  const ebookIds = [...new Set([
+    ...[...plans.values()].map((p) => p.ebookId),
+    ...ebookIdByOrder.values(),
+  ].filter((x): x is number => x != null && x > 0))];
+  const ebooks = new Map((await repo.ebooksByIds(ebookIds)).map((e) => [e.id, e]));
 
   const data = orders.map((o) => {
     const plan = o.planId ? plans.get(o.planId) : null;
-    const ebook = plan?.ebookId ? ebooks.get(plan.ebookId) : null;
+    // Prefer the plan hop; fall back to the subscription's ebook_id for plan-less grants.
+    const resolvedEbookId = plan?.ebookId ?? ebookIdByOrder.get(o.id) ?? null;
+    const ebook = resolvedEbookId ? ebooks.get(resolvedEbookId) : null;
     return {
       _id: String(o.id),
-      title: ebook?.name ? `E-Book: ${ebook.name}` : "E-Book purchase",
+      title: ebook?.name || "E-Book purchase",
       author: ebook?.author || null,
       thumbnail: ebook?.thumbnail || null,
       amount: o.orderPrice,

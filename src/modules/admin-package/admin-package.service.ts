@@ -1,6 +1,7 @@
 import { HttpError } from "../../middlewares/errorHandler";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminPackageRepository as repo } from "./admin-package.repository";
+import { resyncPackageRelations } from "./package-relation-sync";
 import { parseLabels } from "../../utils/goalSelection";
 import type { Package, PackageType } from "@prisma/client";
 
@@ -323,6 +324,8 @@ export const createPackage = async (d: PackageWriteInput) => {
     materialCategories: catRows(d.materialCategories),
     examCategories: catRows(d.examCategories),
   });
+  // Sync the denormalized video-category↔package relation from the new subjects.
+  await resyncPackageRelations([pkg.id]);
   return toPackageDto(await repo.findById(pkg.id) as PkgRow, await loadEmbeds(pkg.id), gf.goalLabelName);
 };
 
@@ -370,6 +373,8 @@ export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"
     materialCategories: d.materialCategories !== undefined ? catRows(d.materialCategories) : undefined,
     examCategories: d.examCategories !== undefined ? catRows(d.examCategories) : undefined,
   });
+  // Subjects changed → recompute this package's video-category relation rows.
+  if (d.specificSubjects !== undefined) await resyncPackageRelations([id]);
   const row = (await repo.findById(id)) as PkgRow;
   return toPackageDto(row, await loadEmbeds(id), await resolveLabelNameForRow(row));
 };

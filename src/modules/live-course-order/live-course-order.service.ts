@@ -171,12 +171,22 @@ export const verifyLiveCourseOrderMysql = async (
     const result = await prisma.$transaction(async (tx) => {
       const ext = await tx.liveCourseSubscription.update({
         where: { id: existingActive.id },
-        data: { endAt: newEndAt, paidAmount: (existingActive.paidAmount ?? 0) + amount, updatedAt: now },
+        data: {
+          endAt: newEndAt,
+          paidAmount: (existingActive.paidAmount ?? 0) + amount,
+          updatedAt: now,
+        },
       });
-      // Retire this pending row: mark verified, no fresh window (folded into ext).
+      // Retire this pending row: mark verified, no fresh window (folded into ext). This
+      // retired row is the EXTENSION's purchase-history row, so a with-material extension
+      // ships a new kit → give it its own shipment AWB (its id, synthetic AWB) so it's
+      // trackable, mirroring the fresh-grant path.
       await tx.liveCourseSubscription.update({
         where: { id: pending.id },
-        data: { paymentStatus: "verified", razorpayPaymentId, paidAt: now, status: false, updatedAt: now },
+        data: {
+          paymentStatus: "verified", razorpayPaymentId, paidAt: now, status: false, updatedAt: now,
+          ...(pending.withMaterial ? { trackingId: pending.id, trackingStatus: "pending" } : {}),
+        },
       });
       return ext;
     });
@@ -190,7 +200,13 @@ export const verifyLiveCourseOrderMysql = async (
   const endAt = computeEndAt({ startAt, durationMonths: durationDays, asDays: true });
   const updated = await prisma.liveCourseSubscription.update({
     where: { id: pending.id },
-    data: { paymentStatus: "verified", razorpayPaymentId, paidAt: now, startAt, endAt, status: true, updatedAt: now },
+    data: {
+      paymentStatus: "verified", razorpayPaymentId, paidAt: now, startAt, endAt, status: true, updatedAt: now,
+      // Auto-allocate a shipment AWB for with-material orders (mirrors the SQL
+      // book/package verify path). The sub id is the synthetic AWB (below the
+      // Tirupati threshold → generic trackingUrl); status starts "pending".
+      ...(pending.withMaterial ? { trackingId: pending.id, trackingStatus: "pending" } : {}),
+    },
   });
   await creditReferrer({ referrerId: pending.referrerId, buyerId: pending.customerId, orderId: pending.id, paidAmount: amount, source: "liveCourse" });
   await debitWallet({ customerId: pending.customerId, orderId: pending.id, coin: pending.walletCoin, source: "liveCourse" });

@@ -16,7 +16,9 @@ export const createSubscriptionSchema = z
     // Exactly one of these two must be provided:
     courseId: objectIdSchema.optional(),
     packageId: objectIdSchema.optional(), // the target Package _id (not the plan row)
-    planId: objectIdSchema, // PackageCourseEbookPrice _id
+    // Optional: when omitted, the grant is priced by the request's amount and
+    // its window computed from durationDays instead of being derived from a plan.
+    planId: objectIdSchema.optional(), // PackageCourseEbookPrice _id
     withMaterial: z.boolean().optional().default(false),
     paymentMethod: z
       .enum([
@@ -35,8 +37,8 @@ export const createSubscriptionSchema = z
     bankTransactionId: z.string().max(191).optional().nullable(),
     razorpayOrderId: z.string().max(191).optional().nullable(),
     razorpayPaymentId: z.string().max(191).optional().nullable(),
-    // Optional override; if omitted, endAt is computed from the plan's
-    // duration (months) per project convention.
+    // Plan-less grants require this (it drives endAt); with a plan it stays an
+    // optional override, else endAt is computed from the plan's duration.
     durationDays: z.number().int().positive().optional(),
     startAt: z.string().optional(),
     customerShippingId: objectIdSchema.optional().nullable(),
@@ -50,6 +52,12 @@ export const createSubscriptionSchema = z
   .refine((d) => !!(d.courseId || d.packageId), {
     message: "Provide either courseId or packageId.",
     path: ["courseId"],
+  })
+  // Without a plan there is no duration to derive the window from, so the
+  // request must supply durationDays explicitly.
+  .refine((d) => !!(d.planId || d.durationDays), {
+    message: "Provide planId or durationDays.",
+    path: ["planId"],
   });
 
 export const updateSubscriptionSchema = z.object({
