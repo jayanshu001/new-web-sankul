@@ -41,6 +41,7 @@ import clientMediaRoutes from "./media/media.routes";
 import clientTestSeriesRoutes from "./testSeries/testSeries.routes";
 import clientLearningRoutes from "./learning/learning.routes";
 import clientCatalogRoutes from "./catalog/catalog.routes";
+import clientRecentlyAddedRoutes from "./recently-added/recently-added.routes";
 import clientAppVersionRoutes from "./app-version/app-version.routes";
 
 const router = Router();
@@ -71,6 +72,7 @@ router.use("/", clientCmsRoutes); // -> /api/v1/client/{faqs|popup|banners|testi
 router.use("/", clientInquiryRoutes); // -> /api/v1/client/{inquiry|contactus}
 router.use("/", clientNotificationRoutes); // -> /api/v1/client/{notifications|image-notifications}
 router.use("/", clientDashboardRoutes); // -> /api/v1/client/{dashboard|free-dashboard}
+router.use("/", clientRecentlyAddedRoutes); // -> /api/v1/client/recently-added
 router.use("/", clientFreeRoutes); // -> /api/v1/client/{free-tests|free-materials|free-videos|free-ebooks|free-courses}
 router.use("/offline", clientOfflineRoutes); // -> /api/v1/client/offline/*
 router.use("/wishlist", clientWishlistRoutes); // -> /api/v1/client/wishlist/*

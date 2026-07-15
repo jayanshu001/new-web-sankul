@@ -102,7 +102,11 @@ export const reachableCategoryIds = async (
 
   if (kind === "course") {
     const [course, tagged] = await Promise.all([
-      prisma.course.findFirst({ where: { id: scopeId, status: true }, select: { videoCategoryId: true } }),
+      // No status filter on the container: this resolves TOPOLOGY (which categories a
+      // course owns) for OWNED-content access. A deactivated course must still resolve
+      // for its existing subscribers; non-owners are gated by the subscription check
+      // downstream. Browse/discovery uses the separate catalog-course repo (keeps status).
+      prisma.course.findFirst({ where: { id: scopeId }, select: { videoCategoryId: true } }),
       prisma.videoCategory.findMany({ where: { course: { some: { id: scopeId } } }, select: { id: true } }),
     ]);
     if (course?.videoCategoryId) rootIds.add(course.videoCategoryId);
@@ -115,7 +119,8 @@ export const reachableCategoryIds = async (
     // both resolve by this column). Live courses generally have no root set, so
     // omitting (b) made every live-course video unreachable (false "not part of").
     const [lc, tagged] = await Promise.all([
-      prisma.liveCourse.findFirst({ where: { id: scopeId, status: true }, select: { videoCategoryId: true } }),
+      // No container status filter — topology for owned access (see course branch).
+      prisma.liveCourse.findFirst({ where: { id: scopeId }, select: { videoCategoryId: true } }),
       prisma.videoCategory.findMany({ where: { liveCourseId: scopeId }, select: { id: true } }),
     ]);
     if (lc?.videoCategoryId) rootIds.add(lc.videoCategoryId);
@@ -151,21 +156,25 @@ export const resolveVideoScope = async (videoCategoryId: number | null | undefin
   if (!videoCategoryId) return null;
   const ancestors = await ancestorsOf([videoCategoryId]);
 
+  // Ownership/topology resolver → NO container status filter (course.status /
+  // liveCourse.status / Package.active), so a DEACTIVATED container still resolves as the
+  // owner for its existing subscribers. Non-owners are gated by the subscription check in
+  // the caller. Row-level link status (subject/relation) is kept. See reachableCategoryIds.
   // ── course ──
   const [catWithCourse, owningCourse] = await Promise.all([
     prisma.videoCategory.findFirst({ where: { id: { in: ancestors }, course: { some: {} } }, select: { course: { select: { id: true }, take: 1 } } }),
-    prisma.course.findFirst({ where: { videoCategoryId: { in: ancestors }, status: true }, select: { id: true } }),
+    prisma.course.findFirst({ where: { videoCategoryId: { in: ancestors } }, select: { id: true } }),
   ]);
   if (catWithCourse?.course?.[0]?.id) return { kind: "course", id: String(catWithCourse.course[0].id) };
   if (owningCourse?.id) return { kind: "course", id: String(owningCourse.id) };
 
   // ── live course ── (downward pointer only; no SQL live_course_id tag column)
-  const owningLive = await prisma.liveCourse.findFirst({ where: { videoCategoryId: { in: ancestors }, status: true }, select: { id: true } });
+  const owningLive = await prisma.liveCourse.findFirst({ where: { videoCategoryId: { in: ancestors } }, select: { id: true } });
   if (owningLive?.id) return { kind: "liveCourse", id: String(owningLive.id) };
 
-  // ── package ──
+  // ── package ── (keep the subject-link row status; drop the Package.active container gate)
   const directPkg = await prisma.packageSpecificSubject.findFirst({
-    where: { subjectId: { in: ancestors }, status: true, Package: { active: true } },
+    where: { subjectId: { in: ancestors }, status: true },
     select: { packageId: true },
   });
   if (directPkg?.packageId) return { kind: "package", id: String(directPkg.packageId) };
@@ -196,11 +205,13 @@ export const resolveVideoScopes = async (videoCategoryId: number | null | undefi
   const ancestors = await ancestorsOf([videoCategoryId]);
   if (!ancestors.length) return [];
 
+  // Ownership/topology → NO container status filter (owners of a deactivated container
+  // keep access; non-owners gated by the subscription check in entitledScopeFor).
   const [catCourses, owningCourses, owningLives, directPkgs, relRows] = await Promise.all([
     prisma.videoCategory.findMany({ where: { id: { in: ancestors }, course: { some: {} } }, select: { course: { select: { id: true } } } }),
-    prisma.course.findMany({ where: { videoCategoryId: { in: ancestors }, status: true }, select: { id: true } }),
-    prisma.liveCourse.findMany({ where: { videoCategoryId: { in: ancestors }, status: true }, select: { id: true } }),
-    prisma.packageSpecificSubject.findMany({ where: { subjectId: { in: ancestors }, status: true, Package: { active: true } }, select: { packageId: true } }),
+    prisma.course.findMany({ where: { videoCategoryId: { in: ancestors } }, select: { id: true } }),
+    prisma.liveCourse.findMany({ where: { videoCategoryId: { in: ancestors } }, select: { id: true } }),
+    prisma.packageSpecificSubject.findMany({ where: { subjectId: { in: ancestors }, status: true }, select: { packageId: true } }),
     prisma.videoCategoryRelation.findMany({ where: { OR: [{ child: { in: ancestors } }, { parent: { in: ancestors } }] }, select: { id: true } }),
   ]);
 
@@ -232,11 +243,13 @@ export const resolveVideoScopes = async (videoCategoryId: number | null | undefi
  */
 export const resolveVideoCourseId = async (videoCategoryId: number | null | undefined): Promise<number | null> => {
   if (!videoCategoryId) return null;
+  // Topology/ownership resolver → no course.status filter (owned access survives
+  // deactivation; callers gate on the subscription).
   // 1. leaf category's own course
-  const leafCourse = await prisma.course.findFirst({ where: { videoCategoryId, status: true }, select: { id: true } });
+  const leafCourse = await prisma.course.findFirst({ where: { videoCategoryId }, select: { id: true } });
   if (leafCourse?.id) return leafCourse.id;
   // 2. any ancestor that a course points down at
   const ancestors = await ancestorsOf([videoCategoryId]);
-  const owning = await prisma.course.findFirst({ where: { videoCategoryId: { in: ancestors }, status: true }, select: { id: true } });
+  const owning = await prisma.course.findFirst({ where: { videoCategoryId: { in: ancestors } }, select: { id: true } });
   return owning?.id ?? null;
 };

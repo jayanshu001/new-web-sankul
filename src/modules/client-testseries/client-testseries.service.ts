@@ -172,12 +172,14 @@ export type DetailOpts = {
 
 /** Returns null when the series is missing/inactive (→ controller 404). */
 export const getTestSeriesDetailMysql = async (opts: DetailOpts) => {
+  // No status filter here — a DEACTIVATED series must still open for its active
+  // subscribers (owner-aware guard below); non-owners get 404.
   const series = await prisma.testSeries.findFirst({
-    where: { id: opts.id, status: true },
+    where: { id: opts.id },
     select: {
       id: true, title: true, description: true, thumbnail: true, examCategoryIds: true,
       language: true, paperCount: true, isFree: true, instructions: true, policy: true, orderBy: true,
-      createdAt: true, updatedAt: true,
+      status: true, createdAt: true, updatedAt: true,
     },
   });
   if (!series) return null;
@@ -213,6 +215,9 @@ export const getTestSeriesDetailMysql = async (opts: DetailOpts) => {
       };
     }
   }
+
+  // Deactivated series: visible only to an active subscriber; 404 for everyone else.
+  if (!series.status && !activeSubscription) return null;
 
   const catMap = await buildExamCategoryMap([series.examCategoryIds]);
   const shareableLink = opts.buildShareUrl("test-series", String(series.id), opts.base);
@@ -281,24 +286,29 @@ export type SeriesPapersOpts = {
 
 /** Returns null when the series is missing/inactive (→ controller 404). */
 export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
+  // No status filter — owner-aware guard below keeps a DEACTIVATED series open for its
+  // active subscribers while 404-ing for everyone else.
   const series = await prisma.testSeries.findFirst({
-    where: { id: opts.id, status: true },
-    select: { id: true, isFree: true },
+    where: { id: opts.id },
+    select: { id: true, isFree: true, status: true },
   });
   if (!series) return null;
 
   const isPaid = !series.isFree;
 
-  // Access — series-level subscription gates the "start" buttons.
-  let hasAccess = false;
-  if (series.isFree) {
-    hasAccess = true;
-  } else if (opts.customerId) {
-    hasAccess = !!(await prisma.testSeriesSubscription.findFirst({
-      where: { customerId: opts.customerId, testSeriesId: opts.id, status: true, endAt: { gt: opts.now } },
-      select: { id: true },
-    }));
-  }
+  // Active paid subscription — drives both the deactivated-series guard and the paid gate.
+  const subscribed = opts.customerId
+    ? !!(await prisma.testSeriesSubscription.findFirst({
+        where: { customerId: opts.customerId, testSeriesId: opts.id, status: true, endAt: { gt: opts.now } },
+        select: { id: true },
+      }))
+    : false;
+  // Deactivated series: visible only to an active subscriber (a deactivated FREE series
+  // has no subscriber to grandfather, so it 404s for everyone — same as the detail page).
+  if (!series.status && !subscribed) return null;
+
+  // Access — series-level subscription gates the "start" buttons (free = open).
+  const hasAccess = series.isFree ? true : subscribed;
 
   // Papers (exam links) are the paginated collection here. `search` filters by
   // the linked exam title — resolve matching exam ids first so the where stays

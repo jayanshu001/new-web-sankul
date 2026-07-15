@@ -16,8 +16,8 @@ export const parseCdId = (id: string): number | null => {
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { fetchTrendingBooksOnly, fetchTrendingEbooksOnly } from "../client-trending/client-trending.service";
+import { listRecentlyAdded } from "../client-recently-added/client-recently-added.service";
 
-const RECENTLY_ADDED_LIMIT = 10;
 const COURSE_CATEGORY_LIMIT = 20;
 const EXAM_COUNTDOWN_LIMIT = 2;
 // Home dashboard trims every non-banner section to its latest N items (response
@@ -94,9 +94,12 @@ const resolveOwnedEndAt = async (customerId: number | null, courseIds: number[],
 /** getDashboard (home) sections on SQL. */
 export const buildHomeDashboard = async (customerId: number | null) => {
   const now = new Date();
-  const [banners, recentPackages, courses, trendingBooks, trendingEbooks, testimonials, courseCategories, examCountdownsRaw, dailyTest, unreadNotifications] = await Promise.all([
+  const [banners, recentlyAddedFeed, courses, trendingBooks, trendingEbooks, testimonials, courseCategories, examCountdownsRaw, dailyTest, unreadNotifications] = await Promise.all([
     prisma.bannerSlider.findMany({ orderBy: { orderBy: "asc" } }),
-    prisma.package.findMany({ where: { active: true }, orderBy: { created_at: "desc" }, take: RECENTLY_ADDED_LIMIT, include: { packageType: { select: { id: true, name: true } } } }),
+    // "Recently Added" = newest Planner packages + Smart packages + live courses,
+    // merged by created date desc (kind-tagged). Capped to the section limit here;
+    // the full paginated + searchable feed lives at GET /client/recently-added.
+    listRecentlyAdded(customerId, { page: 1, limit: DASHBOARD_SECTION_LIMIT }),
     prisma.course.findMany({ where: { status: true }, orderBy: { createdAt: "desc" }, take: DASHBOARD_SECTION_LIMIT }),
     fetchTrendingBooksOnly({ type: "paid", customerId }),
     fetchTrendingEbooksOnly({ type: "paid" }),
@@ -119,18 +122,14 @@ export const buildHomeDashboard = async (customerId: number | null) => {
   const countByCat = new Map((catCounts as any[]).map((r) => [r.courseSubjectCategoryId, r._count._all]));
   const courseCategoriesData = courseCategories.map((c) => ({ ...c, _id: String(c.id), courseCount: countByCat.get(c.id) ?? 0 }));
 
-  // course + package plans
+  // course plans (package plans now come pre-decorated from the recently-added feed).
   const courseIds = courses.map((c) => c.id);
-  const packageIds = recentPackages.map((p) => p.id);
-  const [coursePlans, packagePlans, { courseDaysLeft, packageDaysLeft }] = await Promise.all([
+  const [coursePlans, { courseDaysLeft }] = await Promise.all([
     courseIds.length ? prisma.packageCourseEbookPrice.findMany({ where: { courseId: { in: courseIds }, status: true }, orderBy: { duration: "asc" } }) : [],
-    packageIds.length ? prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packageIds }, status: true }, orderBy: { duration: "asc" } }) : [],
-    resolveOwnedEndAt(customerId, courseIds, packageIds),
+    resolveOwnedEndAt(customerId, courseIds, []),
   ]);
   const plansByCourse = new Map<number, { withMaterial: any[]; withoutMaterial: any[] }>();
   for (const p of coursePlans) { if (p.courseId == null) continue; const b = plansByCourse.get(p.courseId) ?? plansByCourse.set(p.courseId, { withMaterial: [], withoutMaterial: [] }).get(p.courseId)!; (p.withMaterial ? b.withMaterial : b.withoutMaterial).push(p); }
-  const plansByPackage = new Map<number, { withMaterial: any[]; withoutMaterial: any[] }>();
-  for (const p of packagePlans) { if (p.packageId == null) continue; const b = plansByPackage.get(p.packageId) ?? plansByPackage.set(p.packageId, { withMaterial: [], withoutMaterial: [] }).get(p.packageId)!; (p.withMaterial ? b.withMaterial : b.withoutMaterial).push(p); }
 
   const coursesWithPlans = courses.map((c: any) => ({
     ...c, _id: String(c.id),
@@ -139,7 +138,8 @@ export const buildHomeDashboard = async (customerId: number | null) => {
     isPurchased: courseDaysLeft.has(c.id),
     daysLeft: courseDaysLeft.get(c.id) ?? null,
   }));
-  const recentlyAdded = recentPackages.map((p: any) => ({ ...p, _id: String(p.id), plans: plansByPackage.get(p.id) ?? { withMaterial: [], withoutMaterial: [] }, isPaid: true, isPurchased: packageDaysLeft.has(p.id), daysLeft: packageDaysLeft.get(p.id) ?? null }));
+  // Combined Planner/Smart/Live feed, already capped to the section limit + card-decorated.
+  const recentlyAdded = recentlyAddedFeed.data;
 
   // trending decoration (ownership)
   const bookIds = trendingBooks.items.map((b: any) => Number(b._id));
@@ -176,7 +176,7 @@ export const buildHomeDashboard = async (customerId: number | null) => {
     { title: "Banner", type: "banner", data: banners },
     { title: "Exam Countdown", type: "exam-countdown", data: examCountdowns },
     { title: "Daily Test", type: "daily-test", data: dailyTestSection ? [dailyTestSection] : [] },
-    { title: "Recently Added", type: "package", data: recentlyAdded },
+    { title: "Recently Added", type: "recently-added", data: recentlyAdded },
     { title: "Course Subjects", type: "course", data: coursesWithPlans },
     { title: "Course Categories", type: "courseCategory", data: courseCategoriesData },
     { title: "Trending Books", type: "trending-book", data: trendingBookData },

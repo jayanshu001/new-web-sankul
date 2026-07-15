@@ -8,9 +8,9 @@ import { signMediaToken } from "../../utils/mediaToken";
  * EBookSubscription (commerce-ebook-sub). So no content-id bridge is needed —
  * the ebook id arrives as a SQL int in the route.
  *
- * "Active download" = a download row whose ebook is live (status=true) AND whose
- * subscription is still active (status=true, endAt>now) — mirrors the Mongo
- * listEbookDownloads / countActiveEbookDownloads filter.
+ * "Active download" = a download row whose subscription is still active (status=true,
+ * endAt>now). The ebook's OWN status is NOT required — an owner keeps access to a
+ * DEACTIVATED ebook they bought (deactivation only hides it from browse/new purchase).
  */
 export const EBOOK_DOWNLOAD_MODULE = "client-ebook-download";
 export const isEbookDownloadMysql = (): boolean => true;
@@ -29,8 +29,10 @@ const activeSubEbookIds = async (customerId: number, now: Date, filter?: number[
   return new Set(rows.map((r) => String(r.ebookId)));
 };
 
+// No `active` filter — the download endpoint gates on hasActiveSub (subscription), so an
+// owner can download a deactivated ebook. Name kept for backwards-compat (findActiveEbook).
 export const findActiveEbook = (ebookId: number) =>
-  prisma.eBook.findFirst({ where: { id: ebookId, active: true }, select: { id: true, name: true, bookUrl: true } });
+  prisma.eBook.findFirst({ where: { id: ebookId }, select: { id: true, name: true, bookUrl: true } });
 
 export const hasActiveSub = async (customerId: number, ebookId: number, now = new Date()): Promise<boolean> =>
   (await activeSubEbookIds(customerId, now, [ebookId])).has(String(ebookId));
@@ -48,7 +50,9 @@ export const listDownloads = async (customerId: number, now = new Date()) => {
   const ebookIds = [...new Set(rows.map((r) => r.ebookId))];
   const [activeIds, ebooks] = await Promise.all([
     activeSubEbookIds(customerId, now, ebookIds),
-    prisma.eBook.findMany({ where: { id: { in: ebookIds }, active: true }, select: { id: true, name: true, author: true, image: true, thumbnail: true, bookUrl: true, language: true } }),
+    // No `active` filter → deactivated-but-owned ebooks stay in the downloads list
+    // (subscription is the gate via activeIds).
+    prisma.eBook.findMany({ where: { id: { in: ebookIds } }, select: { id: true, name: true, author: true, image: true, thumbnail: true, bookUrl: true, language: true } }),
   ]);
   const byId = new Map(ebooks.map((e) => [e.id, e]));
   return rows
@@ -69,7 +73,8 @@ export const countActiveDownloads = async (customerId: number, now = new Date())
   const ebookIds = [...new Set(rows.map((r) => r.ebookId))];
   const [activeIds, live] = await Promise.all([
     activeSubEbookIds(customerId, now, ebookIds),
-    prisma.eBook.findMany({ where: { id: { in: ebookIds }, active: true }, select: { id: true } }),
+    // No `active` filter — count deactivated-but-owned ebooks too (subscription-gated).
+    prisma.eBook.findMany({ where: { id: { in: ebookIds } }, select: { id: true } }),
   ]);
   const liveIds = new Set(live.map((e) => String(e.id)));
   return rows.reduce((n, r) => (activeIds.has(String(r.ebookId)) && liveIds.has(String(r.ebookId)) ? n + 1 : n), 0);

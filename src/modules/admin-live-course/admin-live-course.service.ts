@@ -1127,7 +1127,7 @@ export const getLiveCourseDetailForClient = async (
   baseUrl?: string
 ): Promise<"not_found" | any> => {
   const row = await repo.findById(id);
-  if (!row || !row.status) return "not_found";
+  if (!row) return "not_found";
 
   const [educator, pkgCat, plansRaw, subscribed, daysLeftMap] = await Promise.all([
     row.educatorId != null ? repo.findEducator(row.educatorId) : Promise.resolve(null),
@@ -1136,6 +1136,10 @@ export const getLiveCourseDetailForClient = async (
     hasAccessToAnyLiveCourse(customerId, [id]),
     getDaysLeftMap(customerId, [id]),
   ]);
+
+  // Deactivated live course stays hidden from non-owners (browse/purchase), but existing
+  // active subscribers keep full access to its detail + content.
+  if (!row.status && !subscribed) return "not_found";
 
   const planList = plansRaw
     .filter((p) => p.status)
@@ -1319,7 +1323,11 @@ export const getRecordingsForClient = async (
   q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
 ): Promise<"not_found" | any> => {
   const course = await repo.findById(courseId);
-  if (!course || !course.status) return "not_found";
+  if (!course) return "not_found";
+  // Owner-aware: a deactivated live course still serves its recordings to existing active
+  // subscribers, but 404s for everyone else (non-owner / browse).
+  const subscribed = await hasAccessToAnyLiveCourse(customerId, [courseId]);
+  if (!course.status && !subscribed) return "not_found";
 
   const folders = await prisma.videoCategory.findMany({
     where: { liveCourseId: courseId, status: true },
@@ -1331,10 +1339,7 @@ export const getRecordingsForClient = async (
     ? await prisma.video.findMany({ where: { videoCategoryId: { in: folderIds }, status: true }, orderBy: [{ order: "asc" }, { created_at: "asc" }] })
     : [];
 
-  const [subscribed, daysLeftMap] = await Promise.all([
-    hasAccessToAnyLiveCourse(customerId, [courseId]),
-    getDaysLeftMap(customerId, [courseId]),
-  ]);
+  const daysLeftMap = await getDaysLeftMap(customerId, [courseId]);
   const daysLeft = daysLeftMap.has(String(courseId)) ? daysLeftMap.get(String(courseId)) ?? null : null;
 
   // per-quality recordings from the source live session
@@ -1461,7 +1466,10 @@ export const listSessionRecordingsForClient = async (
   search?: string
 ): Promise<"not_found" | { liveCourse: any; subscribed: boolean; total: number; page: number; limit: number; lectures: any[] }> => {
   const course = await repo.findById(courseId);
-  if (!course || !course.status) return "not_found";
+  if (!course) return "not_found";
+  // Owner-aware: deactivated live course still serves its session recordings to existing
+  // active subscribers; 404 for non-owners / browse.
+  if (!course.status && !(await hasAccessToAnyLiveCourse(customerId, [courseId]))) return "not_found";
 
   const links = await prisma.liveSessionCourse.findMany({ where: { liveCourseId: courseId }, select: { liveSessionId: true } });
   const sessionIds = [...new Set(links.map((l) => l.liveSessionId).filter((n): n is number => n != null))];

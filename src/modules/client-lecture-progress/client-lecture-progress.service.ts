@@ -269,10 +269,11 @@ export const reportContainerProgress = async (input: {
     return { ok: false, status: 400, message: `Video is not part of the scoped ${labels[input.scope.kind]}.` };
   }
 
-  // Entitlement gate per kind. Free videos only need the container to exist.
+  // Entitlement gate per kind. Free videos only need the container to EXIST (no status
+  // filter — a deactivated container's free items still report progress for consistency).
   if (input.scope.kind === "course") {
     if (isFree) {
-      const c = await prisma.course.findFirst({ where: { id: input.scope.id, status: true }, select: { id: true } });
+      const c = await prisma.course.findFirst({ where: { id: input.scope.id }, select: { id: true } });
       if (!c) return { ok: false, status: 404, message: "Course not found." };
     } else {
       const sub = await prisma.packageCourseSubscription.findFirst({
@@ -283,7 +284,7 @@ export const reportContainerProgress = async (input: {
     }
   } else if (input.scope.kind === "package") {
     if (isFree) {
-      const p = await prisma.package.findFirst({ where: { id: input.scope.id, active: true }, select: { id: true } });
+      const p = await prisma.package.findFirst({ where: { id: input.scope.id }, select: { id: true } });
       if (!p) return { ok: false, status: 404, message: "Package not found." };
     } else {
       const sub = await prisma.packageCourseSubscription.findFirst({
@@ -294,7 +295,7 @@ export const reportContainerProgress = async (input: {
     }
   } else {
     if (isFree) {
-      const lc = await prisma.liveCourse.findFirst({ where: { id: input.scope.id, status: true }, select: { id: true } });
+      const lc = await prisma.liveCourse.findFirst({ where: { id: input.scope.id }, select: { id: true } });
       if (!lc) return { ok: false, status: 404, message: "Live course not found." };
     } else {
       const sub = await prisma.liveCourseSubscription.findFirst({
@@ -527,9 +528,12 @@ export const listMyLearningProgress = async (
 
   const [courses, packages, liveCourses, courseSubs, packageSubs, liveSubs, totals,
          courseDone, packageDone, liveDone, videoPos, sessionPos] = await Promise.all([
-    courseIds.length ? prisma.course.findMany({ where: { id: { in: courseIds }, status: true }, select: { id: true, name: true, image: true, educator: { select: { id: true, name: true, image: true } } } }) : [],
-    packageIds.length ? prisma.package.findMany({ where: { id: { in: packageIds }, active: true }, select: { id: true, name: true, image: true, educator_id: true } }) : [],
-    liveIds.length ? prisma.liveCourse.findMany({ where: { id: { in: liveIds }, status: true }, select: { id: true, name: true, image: true, educatorId: true } }) : [],
+    // Owned-item hydration (ids come from the customer's progress) → NO container status
+    // filter, so a DEACTIVATED-but-owned course/package/live still shows in the dashboard /
+    // continue-watching. Deleted rows still drop out (no row for the id).
+    courseIds.length ? prisma.course.findMany({ where: { id: { in: courseIds } }, select: { id: true, name: true, image: true, educator: { select: { id: true, name: true, image: true } } } }) : [],
+    packageIds.length ? prisma.package.findMany({ where: { id: { in: packageIds } }, select: { id: true, name: true, image: true, educator_id: true } }) : [],
+    liveIds.length ? prisma.liveCourse.findMany({ where: { id: { in: liveIds } }, select: { id: true, name: true, image: true, educatorId: true } }) : [],
     courseIds.length ? prisma.packageCourseSubscription.findMany({ where: { customerId, courseId: { in: courseIds }, status: true, endAt: { gt: now } }, select: { courseId: true, endAt: true } }) : [],
     packageIds.length ? prisma.packageCourseSubscription.findMany({ where: { customerId, packageId: { in: packageIds }, status: true, endAt: { gt: now } }, select: { packageId: true, endAt: true } }) : [],
     liveIds.length ? prisma.liveCourseSubscription.findMany({ where: { customerId, liveCourseId: { in: liveIds }, status: true, paymentStatus: "verified", endAt: { gt: now } }, select: { liveCourseId: true, endAt: true } }) : [],
@@ -653,10 +657,11 @@ export const listMyCoursesForResume = async (
   if (!perCourse.length) return { courses: [], resumeNext: null, total: 0 };
 
   // Resolve the course rows for every started course first — the names drive the
-  // optional `search` filter, and the active-status check drops orphaned rows.
+  // optional `search` filter. No container status filter: a deactivated-but-owned course
+  // stays in the list (deleted rows still drop out — no row for the id).
   const allCourseIds = perCourse.map((p) => p._id);
   const activeCourses = await prisma.course.findMany({
-    where: { id: { in: allCourseIds }, status: true },
+    where: { id: { in: allCourseIds } },
     select: { id: true, name: true, image: true },
   });
   const courseById = new Map(activeCourses.map((c) => [c.id, c]));
@@ -790,7 +795,7 @@ export const buildResumeNextCardSql = async (input:
     const courseId = await resolveVideoCourseId(video.videoCategoryId);
     if (!courseId) return null;
     const [course, rollup, sub, cats] = await Promise.all([
-      prisma.course.findFirst({ where: { id: courseId, status: true }, select: { id: true, name: true, image: true, educator: { select: { id: true, name: true, image: true } } } }),
+      prisma.course.findFirst({ where: { id: courseId }, select: { id: true, name: true, image: true, educator: { select: { id: true, name: true, image: true } } } }),
       rollupByContainer(input.customerId, "courseId").then((rs) => rs.find((r) => r._id === courseId)),
       prisma.packageCourseSubscription.findFirst({ where: { customerId: input.customerId, courseId, status: true, endAt: { gt: now } }, select: { endAt: true } }),
       reachableCategoryIds("course", courseId),
@@ -817,7 +822,7 @@ export const buildResumeNextCardSql = async (input:
   const sub = await prisma.liveCourseSubscription.findFirst({ where: { customerId: input.customerId, liveCourseId: { in: liveCourseIds }, status: true, paymentStatus: "verified", endAt: { gt: now } }, select: { liveCourseId: true, endAt: true } });
   const liveCourseId = sub?.liveCourseId ?? liveCourseIds[0];
   const [lc, rollup] = await Promise.all([
-    prisma.liveCourse.findFirst({ where: { id: liveCourseId, status: true }, select: { id: true, name: true, image: true, educatorId: true } }),
+    prisma.liveCourse.findFirst({ where: { id: liveCourseId }, select: { id: true, name: true, image: true, educatorId: true } }),
     rollupByContainer(input.customerId, "liveCourseId").then((rs) => rs.find((r) => r._id === liveCourseId)),
   ]);
   if (!lc) return null;

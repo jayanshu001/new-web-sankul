@@ -15,6 +15,67 @@
 
 ---
 
+## 2026-07-15 — Deactivating an item (status=false) grandfathers active subscribers
+
+> **Read/query change only. No DDL.** When an admin deactivates a Course / Package /
+> Live-Course / EBook / Test-Series, it stays HIDDEN from public browse & new purchase but
+> remains fully visible + playable for customers with an ACTIVE subscription.
+
+- **Rule:** OWNED-CONTENT/ACCESS paths that filtered the CONTAINER by its own status now
+  relax (a subscription/ownership gate runs downstream); BROWSE/PURCHASE paths keep their
+  filters; inner-item status (video/material/exam) is untouched. Container flags:
+  `Course.status`, `Package.active` (@map status), `LiveCourse.status`, `EBook.active`,
+  `TestSeries.status`.
+- **Video (course/package/live)** — `catalog-category-tree.service`: `reachableCategoryIds`,
+  `resolveVideoScope`, `resolveVideoScopes`, `resolveVideoCourseId` dropped the container
+  status filter (kept row-level subject/relation `status`). This one change propagates to
+  video listing, single-video, lecture detail, and the progress heartbeat.
+- **Live-course** — `admin-live-course.service`: `getLiveCourseDetailForClient`,
+  `getRecordingsForClient`, `listSessionRecordingsForClient` are now owner-aware (fetch
+  without status; 404 only when `!status && !subscribed`, reusing `hasAccessToAnyLiveCourse`).
+- **Dashboard/continue-watching/resume** — `client-lecture-progress.service`: owned-item
+  hydration (course/package/live) + heartbeat free-container checks dropped the container
+  status filter (deleted rows still drop out — no row for the id).
+- **EBook** — `client-media.service` ebook resolve + `client-ebook-download.service`
+  (`findActiveEbook`, `listDownloads`, `countActiveDownloads`) dropped `active` (subscription
+  is the gate).
+- **Test-series** — `client-testseries.service`: `getTestSeriesDetailMysql` +
+  `listSeriesPapersMysql` owner-aware (a deactivated series 404s unless the caller has an
+  active sub; a deactivated FREE series 404s for all — no subscriber to grandfather).
+- **Book** — no change (owned order/receipt/tracking views already read the book via an
+  unfiltered relation). Kept unchanged: catalog-course/package/book/ebook browse repos,
+  test-series browse, create-order gates, dashboard "recently added", book/ebook demos.
+- Verified on staging (owner vs non-owner) for package video scope, test-series detail+papers,
+  ebook download, and live-course detail+recordings.
+
+## 2026-07-15 — Client "Recently Added" = Planner + Smart packages + live courses
+
+> **New client read endpoint + dashboard section reshape. No DDL.** Frontend guide:
+> `docs/RECENTLY_ADDED_CLIENT.md`.
+
+- The dashboard "Recently Added" section previously listed the newest active
+  **packages** (`type: "package"`). It now shows the newest items merged across three
+  kinds — Planner packages, Smart packages, live courses — sorted by created date desc,
+  capped to 5 total, each tagged with `kind` + `type`. Section `type` is now
+  `"recently-added"`.
+- New feed module `modules/client-recently-added` over-fetches each source table to
+  `skip+take`, merges by `created_at`/`createdAt` desc, slices the page, then decorates
+  only that page (package plans + ownership, live plans + ownership). Queries:
+  `package.findMany({ active, packageTypeId in [...] })` + count,
+  `liveCourse.findMany({ status })` + count, `packageCourseEbookPrice` plans,
+  `packageCourseSubscription` ownership. Reuses live helpers `plansGrouped` /
+  `getDaysLeftMap` / `getOwnedCourseIds` from `admin-live-course.service`.
+- New route `GET /api/v1/client/recently-added?kind=&search=&page=&limit=` (the
+  "View All"): CSV `kind` filter (planner/smart/live-course), server-side search +
+  pagination.
+- Planner/Smart package types resolved by **name** from `ws_package_type` at request
+  time (`resolveKindTypeIds`): type name contains "planner" → planner, "smart" → smart
+  (e.g. "Planner Course" id 3, "Smart Course" id 4). No env/config — survives id
+  changes; a rename away from those keywords drops the type from the feed. (Replaced an
+  earlier env-based `config/packageTypes.ts` approach, now removed.)
+
+---
+
 ## 2026-07-15 — Subject exams gated by start date in client catalog counts + lists
 
 > **Query-shape change on three client endpoints. No DDL.**
