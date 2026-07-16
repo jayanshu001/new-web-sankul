@@ -266,6 +266,22 @@
 
 ---
 
+## 2026-07-16 — Admin customer search: `ws_customer` name/phone/email → utf8mb4
+
+> **DDL only.** Closes the gap left by `2026-07-16_search_columns_utf8mb4.sql`, which
+> converted `ws_promoter` search columns but omitted `ws_customer`.
+
+- **Symptom:** `GET /admin/customers?search=સિતારો` (any Gujarati/Hindi/emoji term)
+  → MySQL 3988 on `prisma.customer.count()` /
+  `Conversion from collation utf8mb4_general_ci into latin1_swedish_ci impossible`.
+  English search worked; non-Latin did not.
+- **DDL:** `docs/migration/schema-changes/2026-07-16_customer_search_columns_utf8mb4.sql`
+  converts `ws_customer.full_name`, `phone`, `email_address` to
+  `utf8mb4 / utf8mb4_0900_ai_ci`. No code / `schema.prisma` change (collation not
+  tracked). Apply via `yarn db:migrate`. Re-running is a no-op.
+
+---
+
 ## 2026-07-16 — Uniform Unicode + case-insensitive search across all modules
 
 > **DDL + query-shape change.** Charset conversion of the remaining searched columns,
@@ -280,6 +296,8 @@
   Lossless (`latin1`→utf8mb4 transcodes; `utf8mb3`→utf8mb4 superset). Collation is NOT in
   `schema.prisma` → no `db:pull`/`prisma:generate`. Re-running is a no-op; before another
   environment, re-run the audit query in the SQL header and add any still-non-utf8mb4 cols.
+  **Follow-up:** `ws_customer` search columns were missed here — see
+  `2026-07-16_customer_search_columns_utf8mb4.sql` above.
 - **Connection:** verified the Prisma MySQL driver already carries 4-byte utf8mb4 end to
   end (emoji insert + `contains` round-trip succeeds) — no `DATABASE_URL` change required.
 - **Query shape:** new shared helper `src/utils/searchFilter.ts` (repurposed from the dead
