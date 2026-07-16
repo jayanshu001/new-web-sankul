@@ -14,6 +14,7 @@
  */
 import { prisma } from "../../config/prisma";
 import { signMediaToken } from "../../utils/mediaToken";
+import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
 
 export const LECTURE_NOTE_MODULE = "client-lecture-note";
 export const isLectureNoteMysql = (): boolean => true;
@@ -130,7 +131,8 @@ export const listNotes = async (
   const where: any = { customerId, lectureType };
   if (key.videoId != null) where.videoId = key.videoId;
   if (key.liveSessionId != null) where.liveSessionId = key.liveSessionId;
-  if (opts.search) where.content = { contains: opts.search };
+  const contentSearch = buildPrismaSearch(opts.search, ["content"]);
+  if (contentSearch) where.AND = contentSearch.AND;
   const [rows, total] = await Promise.all([
     prisma.lectureNote.findMany({ where, orderBy: [{ timestampSec: "asc" }, { createdAt: "asc" }], skip: opts.skip, take: opts.take }),
     prisma.lectureNote.count({ where }),
@@ -175,7 +177,8 @@ export const listAudioNotes = async (
   const where: any = { customerId, lectureType };
   if (key.videoId != null) where.videoId = key.videoId;
   if (key.liveSessionId != null) where.liveSessionId = key.liveSessionId;
-  if (opts.search) where.title = { contains: opts.search };
+  const titleSearch = buildPrismaSearch(opts.search, ["title"]);
+  if (titleSearch) where.AND = titleSearch.AND;
   const [rows, total] = await Promise.all([
     prisma.lectureAudioNote.findMany({ where, orderBy: [{ timestampSec: "asc" }, { createdAt: "asc" }], skip: opts.skip, take: opts.take }),
     prisma.lectureAudioNote.count({ where }),
@@ -239,7 +242,7 @@ export const savedMaterials = async (
   // Grouping/title contract stays intact — `search` (lecture title) filters the
   // top-level group list, then we paginate that list. `total` = full match count.
   const filtered = opts.search
-    ? items.filter((r) => (r.title ?? "").toLowerCase().includes(opts.search!.toLowerCase()))
+    ? items.filter((r) => matchesAllTokens(opts.search, [r.title]))
     : items;
   const total = filtered.length;
   const skip = opts.skip ?? 0;

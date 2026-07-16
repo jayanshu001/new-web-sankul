@@ -1045,6 +1045,7 @@ model Package {
   goalId                    Int?                        @map("goal_id")
   isIndividual              Boolean                     @default(false) @map("is_individual")
   isPaid                    Boolean                     @default(true) @map("is_paid")
+  isPopular                 Boolean                     @default(false) @map("is_popular")
   examCountdownCategoryIds  Json?                       @map("exam_countdown_category_ids")
   examCountdownIds          Json?                       @map("exam_countdown_ids")
   examId                    Int?                        @map("exam_id")
@@ -2084,26 +2085,6 @@ model FolderItem {
 
   @@unique([folderId, kind, refId], name: "uniq_folder_kind_ref")
   @@map("ws_folder_item")
-}
-
-// Multi-device FCM tokens — SQL home for Mongo Customer.firebaseTokens[].
-// One row per (customer, token); `token` globally unique so a handset
-// re-registering moves the row (matches Mongo's token-keyed $pull/$push upsert).
-model CustomerDeviceToken {
-  id         Int       @id @default(autoincrement())
-  customerId Int       @map("customer_id")
-  // Field-level @unique (not @@unique with a name): keeps the Prisma where-key
-  // as `token` so the TS types AND the query engine agree. `map` preserves the
-  // existing DB constraint name (uniq_device_token). The previous named
-  // @@unique made the engine demand `where: { uniq_device_token: {...} }` while
-  // the TS types only accepted `{ token }`, so every upsert threw at runtime.
-  token      String    @unique(map: "uniq_device_token") @db.VarChar(512)
-  platform   String?   @db.VarChar(16)
-  createdAt  DateTime? @map("created_at")
-  updatedAt  DateTime? @map("updated_at")
-
-  @@index([customerId, updatedAt], name: "idx_dt_customer")
-  @@map("ws_customer_device_token")
 }
 
 // ── Wave 8 misc/low-value modules (net-new tables) ───────────────────────────

@@ -1,18 +1,12 @@
 import { prisma } from "../../config/prisma";
 import type { EBookLanguage } from "@prisma/client";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /** Shared WHERE for the active-ebook listing + its count (kept identical so the page total matches the rows). */
 const activeWhere = (opts?: { search?: string; language?: EBookLanguage }) => ({
   active: true,
   ...(opts?.language ? { language: opts.language } : {}),
-  ...(opts?.search
-    ? {
-        OR: [
-          { name: { contains: opts.search } },
-          { author: { contains: opts.search } },
-        ],
-      }
-    : {}),
+  ...(buildPrismaSearch(opts?.search, ["name", "author"]) ?? {}),
 });
 
 /**

@@ -1,5 +1,6 @@
 import { promoterDataRepository as repo } from "./promoter-data.repository";
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const PROMOTER_DATA_MODULE = "promoter-data";
 export const isPromoterDataMysql = (): boolean => true;
@@ -28,14 +29,8 @@ export const listPromoterCustomers = async (
   if (!ids.length) return { items: [], total: 0 };
 
   const where: any = { id: { in: ids }, isAccountDeleted: false };
-  if (opts.search) {
-    const q = opts.search.trim();
-    where.OR = [
-      { fullName: { contains: q } },
-      { phoneNumber: { contains: q } },
-      { emailAddress: { contains: q } },
-    ];
-  }
+  const search = buildPrismaSearch(opts.search, ["fullName", "phoneNumber", "emailAddress"]);
+  if (search) where.AND = search.AND;
   const skip = (opts.page - 1) * opts.limit;
   const [rows, total] = await Promise.all([
     prisma.customer.findMany({

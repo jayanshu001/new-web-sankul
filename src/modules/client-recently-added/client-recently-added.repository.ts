@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma READ persistence for the client "Recently Added" feed. Combines two
@@ -16,7 +17,7 @@ export const clientRecentlyAddedRepository = {
   recentPackagesByTypes: (typeIds: number[], search: string | null, take: number) =>
     typeIds.length
       ? prisma.package.findMany({
-          where: { active: true, packageTypeId: { in: typeIds }, ...(search ? { name: { contains: search } } : {}) },
+          where: { active: true, packageTypeId: { in: typeIds }, ...(buildPrismaSearch(search, ["name"]) ?? {}) },
           orderBy: { created_at: "desc" },
           take,
           include: { packageType: { select: { id: true, name: true } } },
@@ -24,7 +25,7 @@ export const clientRecentlyAddedRepository = {
       : Promise.resolve([]),
   countPackagesByTypes: (typeIds: number[], search: string | null) =>
     typeIds.length
-      ? prisma.package.count({ where: { active: true, packageTypeId: { in: typeIds }, ...(search ? { name: { contains: search } } : {}) } })
+      ? prisma.package.count({ where: { active: true, packageTypeId: { in: typeIds }, ...(buildPrismaSearch(search, ["name"]) ?? {}) } })
       : Promise.resolve(0),
   /** Active price plans for the given packages (grouped by material in the service). */
   packagePlansByPackageIds: (ids: number[]) =>
@@ -44,10 +45,10 @@ export const clientRecentlyAddedRepository = {
   /** Newest active live courses (createdAt desc). */
   recentLiveCourses: (search: string | null, take: number) =>
     prisma.liveCourse.findMany({
-      where: { status: true, ...(search ? { name: { contains: search } } : {}) },
+      where: { status: true, ...(buildPrismaSearch(search, ["name"]) ?? {}) },
       orderBy: { createdAt: "desc" },
       take,
     }),
   countLiveCourses: (search: string | null) =>
-    prisma.liveCourse.count({ where: { status: true, ...(search ? { name: { contains: search } } : {}) } }),
+    prisma.liveCourse.count({ where: { status: true, ...(buildPrismaSearch(search, ["name"]) ?? {}) } }),
 };

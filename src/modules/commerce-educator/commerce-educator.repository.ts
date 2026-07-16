@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the commerce · educator READ branch
@@ -32,7 +33,7 @@ export const commerceEducatorRepository = {
     prisma.courseEducator.findMany({
       where: {
         status: true,
-        ...(opts?.search ? { name: { contains: opts.search } } : {}),
+        ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
       },
       orderBy: [{ name: "asc" }, { id: "asc" }],
     }),

@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { getPurchasedMaterialIds, materialMediaToken } from "../client-material/client-material.service";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Saved-folders (video/material) write+read path on SQL (Wave 7 — net-new
@@ -73,7 +74,7 @@ const hydrateRefs = async (kind: string, refIds: number[], customerId: number | 
 // ── folder CRUD ───────────────────────────────────────────────────────────────
 export const listFolders = async (customerId: number, type: string, search: string | undefined, skip: number, take: number) => {
   await ensureDefaultFolders(customerId);
-  const where: any = { customerId, type, ...(search ? { name: { contains: search } } : {}) };
+  const where: any = { customerId, type, ...(buildPrismaSearch(search, ["name"]) ?? {}) };
   const [folders, total] = await Promise.all([
     prisma.folder.findMany({ where, orderBy: [{ isDefaultFolder: "desc" }, { createdAt: "desc" }], skip, take }),
     prisma.folder.count({ where }),
@@ -162,7 +163,7 @@ export const removeItem = async (customerId: number, type: string, folderId: num
 
 export const allItems = async (customerId: number, type: string, search?: string, skip = 0, take = 20) => {
   await ensureDefaultFolders(customerId);
-  const where: any = { customerId, type, ...(search ? { name: { contains: search } } : {}) };
+  const where: any = { customerId, type, ...(buildPrismaSearch(search, ["name"]) ?? {}) };
   const [folders, total] = await Promise.all([
     prisma.folder.findMany({ where, orderBy: [{ isDefaultFolder: "desc" }, { createdAt: "desc" }], skip, take }),
     prisma.folder.count({ where }),

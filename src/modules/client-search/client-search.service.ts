@@ -12,6 +12,7 @@
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { isNewItem } from "../../utils/isNew";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const CLIENT_SEARCH_MODULE = "client-search";
 export const isClientSearchMysql = (): boolean => true;
@@ -27,10 +28,10 @@ const parseId = (id: string): number | null => {
 // ── per-type fetch (name search + enabled flag) ──────────────────────────────
 const fetchType = async (type: SearchType, q: string, skip: number, take: number) => {
   const name = (q || "").trim();
-  const contains = name ? { contains: name } : undefined;
+  const nameSearch = buildPrismaSearch(name, ["name"]);
   switch (type) {
     case "courses": {
-      const where: any = { status: true, ...(contains ? { name: contains } : {}) };
+      const where: any = { status: true, ...(nameSearch ?? {}) };
       const [rows, total] = await Promise.all([
         prisma.course.findMany({ where, orderBy: { createdAt: "desc" }, skip, take }),
         prisma.course.count({ where }),
@@ -38,7 +39,7 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
       return { rows, total };
     }
     case "packages": {
-      const where: any = { active: true, ...(contains ? { name: contains } : {}) };
+      const where: any = { active: true, ...(nameSearch ?? {}) };
       const [rows, total] = await Promise.all([
         prisma.package.findMany({ where, orderBy: { created_at: "desc" }, skip, take }),
         prisma.package.count({ where }),
@@ -46,7 +47,7 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
       return { rows, total };
     }
     case "liveCourses": {
-      const where: any = { status: true, ...(contains ? { name: contains } : {}) };
+      const where: any = { status: true, ...(nameSearch ?? {}) };
       const [rows, total] = await Promise.all([
         prisma.liveCourse.findMany({ where, orderBy: { createdAt: "desc" }, skip, take }),
         prisma.liveCourse.count({ where }),
@@ -54,7 +55,7 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
       return { rows, total };
     }
     case "books": {
-      const where: any = { active: true, ...(contains ? { name: contains } : {}) };
+      const where: any = { active: true, ...(nameSearch ?? {}) };
       const [rows, total] = await Promise.all([
         prisma.book.findMany({ where, orderBy: { created_at: "desc" }, skip, take }),
         prisma.book.count({ where }),
@@ -62,7 +63,7 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
       return { rows, total };
     }
     case "ebooks": {
-      const where: any = { active: true, ...(contains ? { name: contains } : {}) };
+      const where: any = { active: true, ...(nameSearch ?? {}) };
       const [rows, total] = await Promise.all([
         prisma.eBook.findMany({ where, orderBy: { createdAt: "desc" }, skip, take }),
         prisma.eBook.count({ where }),

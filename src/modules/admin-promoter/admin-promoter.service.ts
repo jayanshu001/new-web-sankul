@@ -1,5 +1,6 @@
 import bcrypt from "bcryptjs";
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 import { promoterDataRepository } from "../promoter-data/promoter-data.repository";
 import {
   ALLOWED_RANGES,
@@ -92,14 +93,8 @@ export const listPromoters = async (opts: {
 }): Promise<{ data: any[]; total: number }> => {
   const where: any = { is_delete: false };
   if (opts.status !== undefined) where.status = opts.status;
-  if (opts.search) {
-    const q = opts.search.trim();
-    where.OR = [
-      { full_name: { contains: q } },
-      { email: { contains: q } },
-      { phone: { contains: q } },
-    ];
-  }
+  const search = buildPrismaSearch(opts.search, ["full_name", "email", "phone"]);
+  if (search) Object.assign(where, search);
   const skip = (opts.page - 1) * opts.limit;
   const [rows, total] = await Promise.all([
     prisma.promoter.findMany({

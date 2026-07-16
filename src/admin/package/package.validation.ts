@@ -29,6 +29,7 @@ export const createPackageSchema = z.object({
   order: z.number().int().optional(),
   active: z.boolean().optional(),
   isPaid: z.boolean().optional(),
+  isPopular: z.boolean().optional(),
   packageTypeId: optIdString,
   goalId: optIdString,
   goalLabelId: optIdString,

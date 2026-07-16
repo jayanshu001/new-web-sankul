@@ -11,6 +11,7 @@ import logger from "../../utils/logger";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { redisClient } from "../../config/redis";
 import { parseLabels as parseStoredLabels } from "../../utils/goalSelection";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 const ADMIN_GOALS_CACHE_KEY = "cache:admin:goals:list";
 const ACTIVE_GOALS_CACHE_KEY = "cache:client:goals:active";
@@ -92,7 +93,8 @@ export const getGoals = async (
   const { search, isActive, page = 1, limit = 10, sortOrder = "desc" } = query;
 
   const where: any = {};
-  if (search && String(search).trim()) where.name = { contains: String(search).trim() };
+  const nameSearch = buildPrismaSearch(typeof search === "string" ? search : undefined, ["name"]);
+  if (nameSearch) Object.assign(where, nameSearch);
   if (isActive !== undefined && isActive !== "") where.active = isActive === "true" || isActive === true;
 
   const p = Number(page), l = Number(limit);

@@ -26,6 +26,7 @@
 import ExcelJS from "exceljs";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 import type { ReportSource } from "../../utils/reportStream";
 import { prisma } from "../../config/prisma";
 import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
@@ -220,7 +221,8 @@ export type ListSeriesOpts = {
 
 export const listTestSeries = async (opts: ListSeriesOpts) => {
   const where: any = {};
-  if (opts.search) where.title = { contains: opts.search };
+  const search = buildPrismaSearch(opts.search, ["title"]);
+  if (search) Object.assign(where, search);
   if (opts.status !== null) where.status = opts.status;
 
   const [rows, total] = await Promise.all([
@@ -698,13 +700,13 @@ export type ListSubsOpts = {
 const customerIdsByText = async (q: string): Promise<number[]> =>
   (
     await prisma.customer.findMany({
-      where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] },
+      where: buildPrismaSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {},
       select: { id: true },
     })
   ).map((r) => r.id);
 
 const testSeriesIdsByText = async (q: string): Promise<number[]> =>
-  (await prisma.testSeries.findMany({ where: { title: { contains: q } }, select: { id: true } })).map((r) => r.id);
+  (await prisma.testSeries.findMany({ where: buildPrismaSearch(q, ["title"]) ?? {}, select: { id: true } })).map((r) => r.id);
 
 const SUB_SORT_FIELDS: Record<string, "createdAt" | "startAt" | "endAt" | "price"> = {
   createdAt: "createdAt",

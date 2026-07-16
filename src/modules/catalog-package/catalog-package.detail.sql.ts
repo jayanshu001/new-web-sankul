@@ -17,6 +17,7 @@
  */
 import type { Package } from "@prisma/client";
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
@@ -162,6 +163,7 @@ export const buildPackageDetailSql = async (packageId: number, customerId: numbe
       packageType,
       goal,
       isPaid: pkg.isPaid,
+      isPopular: pkg.isPopular ?? false,
       isPurchased,
       daysLeft,
       examCountdownCategoryIds: [],
@@ -200,6 +202,7 @@ export const enrichPackagesSql = async (rows: Package[], customerId: number | nu
         goalId,
         goalLabelId: p.goalLabelId != null ? String(p.goalLabelId) : null,
         isPaid: p.isPaid,
+        isPopular: p.isPopular ?? false,
         order: p.order_by,
         active: p.active,
         pcMaterialId: p.pcMaterialId != null ? String(p.pcMaterialId) : null,
@@ -218,11 +221,13 @@ export const enrichPackagesSql = async (rows: Package[], customerId: number | nu
 
 // ── list queries (filters mirror the Mongo controller) ───────────────────────
 export const listPackagesPaginatedSql = async (opts: {
-  search?: string; packageTypeId?: number; goalId?: number; isPaid?: boolean; skip: number; take: number;
+  search?: string; packageTypeId?: number; goalId?: number; isPaid?: boolean; isPopular?: boolean; skip: number; take: number;
 }) => {
   const where: any = { active: true };
-  if (opts.search) where.name = { contains: opts.search };
+  const search = buildPrismaSearch(opts.search, ["name"]);
+  if (search) where.AND = search.AND;
   if (opts.isPaid !== undefined) where.isPaid = opts.isPaid;
+  if (opts.isPopular !== undefined) where.isPopular = opts.isPopular;
   if (opts.packageTypeId != null) where.packageTypeId = opts.packageTypeId;
   if (opts.goalId != null) where.goalId = opts.goalId;
   const [rows, total] = await Promise.all([
@@ -237,7 +242,7 @@ export const listPackagesPaginatedSql = async (opts: {
 // exact same `where` as `findMany` (Promise.all).
 type ListOpts = { search?: string; skip?: number; take?: number };
 const withSearch = (where: any, opts?: ListOpts) =>
-  opts?.search ? { ...where, name: { contains: opts.search } } : where;
+  ({ ...where, ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}) });
 
 export const listPackagesByTypeSql = async (packageTypeId: number, opts: ListOpts = {}) => {
   const where = withSearch({ active: true, packageTypeId }, opts);

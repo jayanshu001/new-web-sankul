@@ -1,5 +1,6 @@
 import type { RefferalTerm, RefferalFaq } from "@prisma/client";
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const REFERRAL_CONTENT_MODULE = "referral-content";
 
@@ -115,7 +116,8 @@ const rcOrderBy = (opts: RcListOpts): any[] => {
 
 export const listTerms = async (opts: RcListOpts = {}): Promise<{ data: TermDto[]; total: number }> => {
   const where: any = {};
-  if (opts.search?.trim()) where.text = { contains: opts.search.trim() };
+  const search = buildPrismaSearch(opts.search, ["text"]);
+  if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
     prisma.refferalTerm.findMany({
       where,
@@ -180,10 +182,8 @@ export const deleteTerm = async (id: number): Promise<boolean> => {
 
 export const listFaqs = async (opts: RcListOpts = {}): Promise<{ data: FaqDto[]; total: number }> => {
   const where: any = {};
-  if (opts.search?.trim()) {
-    const s = opts.search.trim();
-    where.OR = [{ question: { contains: s } }, { answer: { contains: s } }];
-  }
+  const search = buildPrismaSearch(opts.search, ["question", "answer"]);
+  if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
     prisma.refferalFaq.findMany({
       where,

@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 import {
   BANNER_KEY_TO_MYSQL,
   type BannerCreateInput,
@@ -28,8 +29,10 @@ const BANNER_SORT_COLUMNS: Record<string, string> = {
 const buildBannerWhere = (opts: BannerListOpts) => {
   const where: Record<string, unknown> = {};
   if (opts.key) where.key = BANNER_KEY_TO_MYSQL[opts.key];
-  const q = opts.search?.trim();
-  if (q) where.OR = [{ image: { contains: q } }, { key: { contains: q } }];
+  const and: unknown[] = [];
+  const search = buildPrismaSearch(opts.search, ["image", "key"]);
+  if (search) and.push(search);
+  if (and.length) where.AND = and;
   return where;
 };
 

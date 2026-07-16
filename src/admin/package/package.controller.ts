@@ -62,6 +62,7 @@ const coercePackageBody = (req: Request) => {
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);
   if (typeof req.body.active === "string") req.body.active = req.body.active === "true";
   if (typeof req.body.isPaid === "string") req.body.isPaid = req.body.isPaid === "true";
+  if (typeof req.body.isPopular === "string") req.body.isPopular = req.body.isPopular === "true";
   coerceIdArrayField(req, "examCountdownCategoryIds");
   coerceIdArrayField(req, "examCountdownIds");
 };

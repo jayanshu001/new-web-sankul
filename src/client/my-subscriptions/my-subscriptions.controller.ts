@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { matchesAllTokens } from "../../utils/searchFilter";
 import * as mySubSql from "../../modules/client-my-subscriptions/client-my-subscriptions.service";
 import * as tsOrderSql from "../../modules/test-series-order/test-series-order.service";
 
@@ -89,8 +90,7 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
     // `?search=` filters the built cards on their display title (case-insensitive)
     // before paginating, so `total` reflects the filtered set.
     if (search) {
-      const q = search.toLowerCase();
-      cards = cards.filter((c) => (c.title ?? "").toLowerCase().includes(q));
+      cards = cards.filter((c) => matchesAllTokens(search, [c.title]));
     }
 
     const total = cards.length;

@@ -8,6 +8,7 @@
  * "_id firstName lastName phoneNumber email").
  */
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const INQUIRY_MODULE = "inquiry";
 export const isInquiryMysql = (): boolean => true;
@@ -67,13 +68,8 @@ export const listInquiries = async (opts: {
   const where: any = {};
   if (opts.course && COURSES.has(opts.course)) where.course = opts.course;
   if (opts.mode && MODES.has(opts.mode)) where.mode = opts.mode;
-  if (opts.search && opts.search.trim()) {
-    const s = opts.search.trim();
-    where.OR = [
-      { description: { contains: s } }, { name: { contains: s } },
-      { mobile: { contains: s } }, { email: { contains: s } },
-    ];
-  }
+  const search = buildPrismaSearch(opts.search, ["description", "name", "mobile", "email"]);
+  if (search) where.AND = search.AND;
   if (opts.from || opts.to) {
     where.createdAt = {};
     if (opts.from) where.createdAt.gte = opts.from;

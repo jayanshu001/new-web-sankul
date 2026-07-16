@@ -15,6 +15,7 @@
  */
 import { prisma } from "../../config/prisma";
 import { buildPagination } from "../../utils/listQuery";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 // 2026-07-08: the discount-rule promocode was merged into ws_promocode (Prisma
 // model `Promocode`); the former ws_promo_code / `PromoCodeRule` model is gone.
@@ -1238,31 +1239,31 @@ export const getPromocodePlansSql = async (query: {
     let docs: { id: number; name: string | null; goalLabelId?: any }[] = [];
     if (t === "package") {
       const rows = await prisma.package.findMany({
-        where: search ? { name: { contains: search } } : {},
+        where: buildPrismaSearch(search, ["name"]) ?? {},
         select: { id: true, name: true },
       });
       docs = rows.map((r) => ({ id: r.id, name: r.name }));
     } else if (t === "course") {
       const rows = await prisma.course.findMany({
-        where: search ? { name: { contains: search } } : {},
+        where: buildPrismaSearch(search, ["name"]) ?? {},
         select: { id: true, name: true },
       });
       docs = rows.map((r) => ({ id: r.id, name: r.name }));
     } else if (t === "liveCourse") {
       const rows = await prisma.liveCourse.findMany({
-        where: search ? { name: { contains: search } } : {},
+        where: buildPrismaSearch(search, ["name"]) ?? {},
         select: { id: true, name: true },
       });
       docs = rows.map((r) => ({ id: r.id, name: r.name }));
     } else if (t === "ebook") {
       const rows = await prisma.eBook.findMany({
-        where: search ? { name: { contains: search } } : {},
+        where: buildPrismaSearch(search, ["name"]) ?? {},
         select: { id: true, name: true },
       });
       docs = rows.map((r) => ({ id: r.id, name: r.name }));
     } else {
       const rows = await prisma.testSeries.findMany({
-        where: search ? { title: { contains: search } } : {},
+        where: buildPrismaSearch(search, ["title"]) ?? {},
         select: { id: true, title: true },
       });
       docs = rows.map((r) => ({ id: r.id, name: r.title }));

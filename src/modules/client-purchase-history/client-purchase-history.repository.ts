@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the client purchase-history MySQL branch (Wave 7).
@@ -117,13 +118,13 @@ export const clientPurchaseHistoryRepository = {
   // live inside that JSON, so a LIKE over the raw text matches by book title.
   listBookOrders: (customerId: number, statuses: string[], skip: number, take: number, search?: string) =>
     prisma.bookOrder.findMany({
-      where: { userId: customerId, status: { in: statuses }, ...(search ? { orderItems: { contains: search } } : {}) },
+      where: { userId: customerId, status: { in: statuses }, ...(buildPrismaSearch(search, ["orderItems"]) ?? {}) },
       include: { BookTracking: { select: { tracking_id: true, status: true } } },
       orderBy: { id: "desc" },
       skip, take,
     }),
   countBookOrders: (customerId: number, statuses: string[], search?: string) =>
-    prisma.bookOrder.count({ where: { userId: customerId, status: { in: statuses }, ...(search ? { orderItems: { contains: search } } : {}) } }),
+    prisma.bookOrder.count({ where: { userId: customerId, status: { in: statuses }, ...(buildPrismaSearch(search, ["orderItems"]) ?? {}) } }),
   booksByIds: (ids: number[]) =>
     ids.length ? prisma.book.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, thumbnail: true, image: true } }) : Promise.resolve([]),
 
@@ -140,7 +141,7 @@ export const clientPurchaseHistoryRepository = {
     prisma.eBookOrder.count({ where: { userId: customerId, status: status as any, ...(planIds ? { planId: { in: planIds } } : {}) } }),
   /** ebook ids whose name matches the search text (name-search entry point). */
   ebookIdsByName: (search: string) =>
-    prisma.eBook.findMany({ where: { name: { contains: search } }, select: { id: true } }),
+    prisma.eBook.findMany({ where: buildPrismaSearch(search, ["name"]) ?? {}, select: { id: true } }),
   /** price (plan) ids linked to the given ebook ids (ws_ebook_order filters by plan_id). */
   planIdsByEbookIds: (ebookIds: number[]) =>
     ebookIds.length ? prisma.packageCourseEbookPrice.findMany({ where: { ebookId: { in: ebookIds } }, select: { id: true } }) : Promise.resolve([]),

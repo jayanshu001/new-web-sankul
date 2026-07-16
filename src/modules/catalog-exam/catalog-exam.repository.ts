@@ -1,6 +1,7 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { examInCategoryWhere, subjectStartedWhere } from "./exam-category-pivot.where";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the catalog · exam READ branch (flag OFF). Scoped to
@@ -74,7 +75,8 @@ export const catalogExamRepository = {
     const where: any = { deleted: false };
     if (opts.parentRoot) where.parent = 0;
     else if (opts.parentId !== undefined) where.parent = opts.parentId;
-    if (opts.search) where.name = { contains: opts.search };
+    const search = buildPrismaSearch(opts.search, ["name"]);
+    if (search) where.AND = search.AND;
     if (opts.status !== undefined) where.status = opts.status;
     return where;
   },
@@ -110,7 +112,8 @@ export const catalogExamRepository = {
     opts: { search?: string; status?: boolean }
   ) => {
     const where: any = { examCategoryPackage: { some: { examCategoryId: categoryId } } };
-    if (opts.search) where.name = { contains: opts.search };
+    const search = buildPrismaSearch(opts.search, ["name"]);
+    if (search) where.AND = search.AND;
     if (opts.status !== undefined) where.active = opts.status;
     return where;
   },
@@ -148,7 +151,8 @@ export const catalogExamRepository = {
     opts: { search?: string; status?: boolean }
   ) => {
     const where: any = { examCategoryCourse: { some: { examCategoryId: categoryId } } };
-    if (opts.search) where.name = { contains: opts.search };
+    const search = buildPrismaSearch(opts.search, ["name"]);
+    if (search) where.AND = search.AND;
     if (opts.status !== undefined) where.status = opts.status;
     return where;
   },
@@ -175,7 +179,7 @@ export const catalogExamRepository = {
     parent: parentId,
     status: true,
     deleted: false,
-    ...(opts?.search ? { name: { contains: opts.search } } : {}),
+    ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
   }),
 
   /**

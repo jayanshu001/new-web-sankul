@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { buildPrismaSearch, buildLikeTokens } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-book MySQL branch (ws_book + ws_book_order /
@@ -113,7 +114,7 @@ export const adminBookRepository = {
   /** Customer ids whose name/phone matches the search (for order search). */
   findCustomerIdsBySearch: async (q: string): Promise<number[]> => {
     const rows = await prisma.customer.findMany({
-      where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] },
+      where: buildPrismaSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {},
       select: { id: true },
     });
     return rows.map((r) => r.id);
@@ -128,7 +129,7 @@ export const adminBookRepository = {
    */
   findOrderKeysByBookSearch: async (q: string): Promise<string[]> => {
     const keys = new Set<string>();
-    const books = await prisma.book.findMany({ where: { name: { contains: q } }, select: { id: true } });
+    const books = await prisma.book.findMany({ where: buildPrismaSearch(q, ["name"]) ?? {}, select: { id: true } });
     if (books.length) {
       const items = await prisma.bookOrderItem.findMany({
         where: { bookId: { in: books.map((b) => b.id) } },
@@ -136,11 +137,15 @@ export const adminBookRepository = {
       });
       for (const it of items) keys.add(it.order_id);
     }
-    // JSON-snapshot match: the order_items text contains the item name.
-    const like = `%${q}%`;
-    const rows = await prisma.$queryRaw<Array<{ order_id: string }>>`
-      SELECT order_id FROM ws_book_order WHERE order_items LIKE ${like}`;
-    for (const r of rows) keys.add(r.order_id);
+    // JSON-snapshot match: the order_items text contains every search token.
+    const like = buildLikeTokens(q, ["order_items"]);
+    if (like) {
+      const rows = await prisma.$queryRawUnsafe<Array<{ order_id: string }>>(
+        `SELECT order_id FROM ws_book_order WHERE ${like.sql}`,
+        ...like.params
+      );
+      for (const r of rows) keys.add(r.order_id);
+    }
     return [...keys];
   },
 
@@ -168,10 +173,8 @@ export const adminBookRepository = {
 
 function buildWhere(opts: { search?: string; language?: string; isMagazine?: boolean; isCombo?: boolean; status?: boolean }): Prisma.BookWhereInput {
   const where: Prisma.BookWhereInput = {};
-  if (opts.search) {
-    const q = opts.search.trim();
-    where.OR = [{ name: { contains: q } }, { author: { contains: q } }];
-  }
+  const search = buildPrismaSearch(opts.search, ["name", "author"]);
+  if (search) Object.assign(where, search);
   if (opts.language) where.language = opts.language;
   if (opts.isMagazine !== undefined) where.is_magazine = opts.isMagazine;
   if (opts.isCombo !== undefined) where.isCombo = opts.isCombo;
@@ -203,7 +206,8 @@ function buildOrderWhere(opts: { customerId?: number; status?: string; state?: n
   // Search OR: receiptId match | order belongs to a matched customer | order_id
   // appears in the item-matched key set. Each clause optional; AND with filters.
   const or: Prisma.BookOrderWhereInput[] = [];
-  if (opts.receiptSearch) or.push({ receiptId: { contains: opts.receiptSearch } });
+  const receiptSearch = buildPrismaSearch(opts.receiptSearch, ["receiptId"]);
+  if (receiptSearch) or.push(receiptSearch);
   if (opts.customerIdsIn?.length) or.push({ userId: { in: opts.customerIdsIn } });
   if (opts.orderIdsIn?.length) or.push({ receiptId: { in: opts.orderIdsIn } });
   if (or.length) where.OR = or;

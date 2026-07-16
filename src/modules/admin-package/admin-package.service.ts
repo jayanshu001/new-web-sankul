@@ -110,6 +110,7 @@ const toPackageDto = (
   order: row.order_by,
   active: row.active,
   isPaid: row.isPaid,
+  isPopular: row.isPopular ?? false,
   packageTypeId: row.packageType ? { _id: String(row.packageType.id), name: row.packageType.name } : idStrOrNull(row.packageTypeId),
   goalId: idStrOrNull(row.goalId),
   goalLabelId: goalLabelName ?? null,
@@ -267,6 +268,7 @@ export interface PackageWriteInput {
   packageTypeId?: string | null; educatorId?: string | null;
   goalId?: string | null; goalLabelId?: string | null; // goalLabelId = label NAME
   isPaid?: boolean;
+  isPopular?: boolean;
   packageCategoryId?: string | null;
   // Physical-material kit id (ws_package.pc_material_id). null detaches.
   pcMaterialId?: string | null;
@@ -314,6 +316,7 @@ export const createPackage = async (d: PackageWriteInput) => {
       goalLabelId: gf.goalLabelId,
       isIndividual: gf.isIndividual,
       isPaid: d.isPaid ?? true,
+      isPopular: d.isPopular ?? false,
       packageCategoryId: d.packageCategoryId ? parsePackageId(d.packageCategoryId) : null,
       pcMaterialId: d.pcMaterialId ? parsePackageId(d.pcMaterialId) ?? null : null,
       examCountdownCategoryIds: toIntIdArray(d.examCountdownCategoryIds),
@@ -344,6 +347,7 @@ export const updatePackage = async (id: number, d: PackageWriteInput): Promise<"
   if (d.packageTypeId !== undefined) data.packageTypeId = await resolvePackageTypeId(d.packageTypeId);
   if (d.educatorId !== undefined) data.educator_id = d.educatorId ? parsePackageId(d.educatorId) : null;
   if (d.isPaid !== undefined) data.isPaid = d.isPaid;
+  if (d.isPopular !== undefined) data.isPopular = d.isPopular;
   if (d.packageCategoryId !== undefined) data.packageCategoryId = d.packageCategoryId ? parsePackageId(d.packageCategoryId) : null;
   if (d.pcMaterialId !== undefined) data.pcMaterialId = d.pcMaterialId ? parsePackageId(d.pcMaterialId) ?? null : null;
   if (d.examCountdownCategoryIds !== undefined) data.examCountdownCategoryIds = toIntIdArray(d.examCountdownCategoryIds);

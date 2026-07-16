@@ -10,6 +10,7 @@
  * handler spread wholesale). All ids are SQL ints stringified.
  */
 import { prisma } from "../../config/prisma";
+import { matchesAllTokens } from "../../utils/searchFilter";
 
 export const CLIENT_WISHLIST_MODULE = "client-wishlist";
 export const isClientWishlistMysql = (): boolean => true;
@@ -76,8 +77,7 @@ export const listWishlistMysql = async (
     }));
 
   if (opts.search) {
-    const q = opts.search.toLowerCase();
-    combined = combined.filter((c) => (c.item.title ?? "").toLowerCase().includes(q));
+    combined = combined.filter((c) => matchesAllTokens(opts.search, [c.item.title]));
   }
 
   const total = combined.length;

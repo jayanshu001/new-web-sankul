@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { childIdsOf } from "../../utils/videoCategoryRelation";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the catalog · video MySQL branch (flag OFF).
@@ -68,7 +69,7 @@ export const catalogVideoRepository = {
   activeChildrenWhere: (childIds: number[], opts?: { search?: string }) => ({
     id: { in: childIds },
     status: true,
-    ...(opts?.search ? { title: { contains: opts.search } } : {}),
+    ...(buildPrismaSearch(opts?.search, ["title"]) ?? {}),
   }),
 
   /**

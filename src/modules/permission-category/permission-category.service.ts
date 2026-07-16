@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const PERMISSION_CATEGORY_MODULE = "permission-category";
 
@@ -73,7 +74,8 @@ export const listCategories = async (
 
   const where: any = {};
   if (typeof status === "boolean") where.status = status;
-  if (search) where.title = { contains: search };
+  const titleSearch = buildPrismaSearch(search, ["title"]);
+  if (titleSearch) where.AND = titleSearch.AND;
 
   const orderField = SORT_FIELD_MAP[sortBy] ?? "orderBy";
   const skip = (page - 1) * per_page;

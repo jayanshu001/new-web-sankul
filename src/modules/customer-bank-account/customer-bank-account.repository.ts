@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 import type {
   BankAccountCreateInput,
   BankAccountUpdateInput,
@@ -7,19 +8,15 @@ import type {
 
 /** Owner-scoped where-clause + optional text search, shared by list/count. */
 const buildBankAccountWhere = (customerId: number, search?: string): Prisma.CustomerBankAccountWhereInput => {
-  const s = search?.trim();
+  const s = buildPrismaSearch(search, [
+    "accountHolderName",
+    "bankName",
+    "accountNumber",
+    "ifscCode",
+  ]);
   return {
     customerId,
-    ...(s
-      ? {
-          OR: [
-            { accountHolderName: { contains: s } },
-            { bankName: { contains: s } },
-            { accountNumber: { contains: s } },
-            { ifscCode: { contains: s } },
-          ],
-        }
-      : {}),
+    ...(s ?? {}),
   };
 };
 

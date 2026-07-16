@@ -1,6 +1,7 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { parentIdsWithChildren, primaryParentsOf } from "../../utils/videoCategoryRelation";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-video MySQL branch (ws_video).
@@ -34,7 +35,7 @@ export const adminVideoRepository = {
    *  `search` = title contains-match; `limit` caps the page (omit → all, back-compat). */
   listActiveCategories: (opts: { search?: string; limit?: number } = {}) =>
     prisma.videoCategory.findMany({
-      where: { status: true, ...(opts.search ? { title: { contains: opts.search } } : {}) },
+      where: { status: true, ...(buildPrismaSearch(opts.search, ["title"]) ?? {}) },
       orderBy: [{ order_by: "asc" }, { title: "asc" }],
       select: { id: true, title: true, slug: true },
       ...(opts.limit && opts.limit > 0 ? { take: opts.limit } : {}),
@@ -75,10 +76,8 @@ function sortCol(sortBy: string): string {
 
 function buildWhere(opts: { search?: string; status?: boolean; type?: "free" | "paid"; platform?: string; videoCategoryId?: number }): Prisma.VideoWhereInput {
   const where: Prisma.VideoWhereInput = {};
-  if (opts.search) {
-    const q = opts.search.trim();
-    where.OR = [{ title: { contains: q } }, { slug: { contains: q } }, { topic: { contains: q } }];
-  }
+  const search = buildPrismaSearch(opts.search, ["title", "slug", "topic"]);
+  if (search) Object.assign(where, search);
   if (opts.status !== undefined) where.status = opts.status;
   if (opts.type) where.priceType = opts.type;
   if (opts.platform) where.platform = opts.platform;

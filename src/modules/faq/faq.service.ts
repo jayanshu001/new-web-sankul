@@ -1,5 +1,6 @@
 import { faqRepository } from "./faq.repository";
 import { toFaqDto, toFaqTypeDto } from "./faq.transformer";
+import { matchesAllTokens } from "../../utils/searchFilter";
 import type {
   FaqCategory,
   FaqCreateInput,
@@ -160,8 +161,7 @@ export const listFaqTypesClientPaged = async (q: {
     createdAt: undefined,
     updatedAt: undefined,
   }));
-  const s = q.search?.trim().toLowerCase();
-  const filtered = s ? all.filter((t) => t.title.toLowerCase().includes(s)) : all;
+  const filtered = all.filter((t) => matchesAllTokens(q.search, [t.title]));
   const total = filtered.length;
   const start = q.skip ?? 0;
   const items =

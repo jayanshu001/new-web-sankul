@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the offline · batch/center READ branch (flag OFF).
@@ -8,13 +9,13 @@ import { prisma } from "../../config/prisma";
 // Shared WHERE builders for the admin center/batch list + count.
 const centerListWhere = (opts?: { cityId?: number; search?: string }) => ({
   ...(opts?.cityId != null ? { cityId: opts.cityId } : {}),
-  ...(opts?.search ? { name: { contains: opts.search } } : {}),
+  ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
 });
 
 const batchListWhere = (opts?: { centerId?: number; search?: string; upcomingAfter?: Date }) => ({
   deletedAt: null, // soft delete: hide flagged batches from lists
   ...(opts?.centerId != null ? { centerId: opts.centerId } : {}),
-  ...(opts?.search ? { name: { contains: opts.search } } : {}),
+  ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
   ...(opts?.upcomingAfter ? { startAt: { gt: opts.upcomingAfter } } : {}),
 });
 
@@ -23,7 +24,7 @@ const clientBatchWhere = (opts?: { centerId?: number; centerIds?: number[]; sear
   deletedAt: null, // soft delete: hide flagged batches from lists
   ...(opts?.centerId != null ? { centerId: opts.centerId } : {}),
   ...(opts?.centerIds ? { centerId: { in: opts.centerIds } } : {}),
-  ...(opts?.search ? { name: { contains: opts.search } } : {}),
+  ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
   ...(opts?.upcomingAfter ? { startAt: { gt: opts.upcomingAfter } } : {}),
 });
 

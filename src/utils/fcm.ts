@@ -140,7 +140,7 @@ export async function sendPush(
 
   if (invalidTokens.length) {
     try {
-      // Prune the ws_customer_device_token rows for the invalid tokens.
+      // Clear the ws_customer.device column for any customer holding these tokens.
       await customerProfileRepository.pruneDeviceTokens(invalidTokens);
     } catch (err) {
       logger.error("Failed to prune invalid FCM tokens", {

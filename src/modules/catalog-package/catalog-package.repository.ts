@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the catalog · package MySQL branch.
@@ -18,7 +19,7 @@ export const catalogPackageRepository = {
    */
   listPackageTypes: (opts?: { search?: string; skip?: number; take?: number }) =>
     prisma.packageType.findMany({
-      where: opts?.search ? { name: { contains: opts.search } } : {},
+      where: buildPrismaSearch(opts?.search, ["name"]) ?? {},
       orderBy: [{ name: "asc" }, { id: "asc" }],
       skip: opts?.skip,
       take: opts?.take,
@@ -27,7 +28,7 @@ export const catalogPackageRepository = {
   /** Count of package types matching the (optional) name search. */
   countPackageTypes: (opts?: { search?: string }) =>
     prisma.packageType.count({
-      where: opts?.search ? { name: { contains: opts.search } } : {},
+      where: buildPrismaSearch(opts?.search, ["name"]) ?? {},
     }),
 
   // ── package (ws_package) — Phase B, flag OFF ─────────────────────────────
@@ -40,7 +41,7 @@ export const catalogPackageRepository = {
     prisma.package.findMany({
       where: {
         active: true,
-        ...(opts?.search ? { name: { contains: opts.search } } : {}),
+        ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
       },
       orderBy: [{ order_by: "asc" }, { id: "desc" }],
     }),

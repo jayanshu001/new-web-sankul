@@ -6,6 +6,7 @@ import {
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { matchesAllTokens } from "../../utils/searchFilter";
 import {
   parseOfflineId,
   getCentersWithBatchesByCities as getCentersWithBatchesByCitiesMysql,
@@ -332,8 +333,7 @@ export const listCentersByCity = async (req: Request, res: Response) => {
     const byCity = await getCentersWithBatchesByCitiesMysql([cid]);
     let all = byCity.get(String(cid)) ?? [];
     if (search) {
-      const term = search.toLowerCase();
-      all = all.filter((c: any) => String(c?.name ?? "").toLowerCase().includes(term));
+      all = all.filter((c: any) => matchesAllTokens(search, [String(c?.name ?? "")]));
     }
     const total = all.length;
     const data = all.slice(skip, skip + limit);

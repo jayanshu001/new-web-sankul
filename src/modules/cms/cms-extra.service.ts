@@ -9,6 +9,7 @@
  * here, the FE only needs the id for these admin lists).
  */
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const CMS_EXTRA_MODULE = "cms-extra";
 export const isCmsExtraMysql = (): boolean => true;
@@ -30,8 +31,7 @@ export const listSocialLinkTypes = async () =>
 export const listSocialLinkTypesPaged = async (q: {
   search?: string; skip?: number; take?: number;
 }) => {
-  const qq = q.search?.trim();
-  const where = qq ? { title: { contains: qq } } : {};
+  const where = buildPrismaSearch(q.search, ["title"]) ?? {};
   const [rows, total] = await Promise.all([
     prisma.socialLinkType.findMany({
       where,
@@ -109,9 +109,9 @@ export const listClientSocialLinks = async () => {
 export const listClientSocialLinksPaged = async (q: {
   search?: string; skip?: number; take?: number;
 }) => {
-  const qq = q.search?.trim();
   const where: any = { status: true };
-  if (qq) where.OR = [{ title: { contains: qq } }, { link: { contains: qq } }];
+  const search = buildPrismaSearch(q.search, ["title", "link"]);
+  if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
     prisma.socialLink.findMany({
       where,
@@ -188,10 +188,7 @@ const CA_SORT_COLUMNS: Record<string, string> = { createdAt: "createdAt", title:
 export const listCurrentAffairsPaged = async (q: {
   search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number;
 }) => {
-  const qq = q.search?.trim();
-  const where = qq
-    ? { OR: [{ title: { contains: qq } }, { youtubeLink: { contains: qq } }, { image: { contains: qq } }] }
-    : {};
+  const where = buildPrismaSearch(q.search, ["title", "youtubeLink", "image"]) ?? {};
   const [rows, total] = await Promise.all([
     prisma.currentAffair.findMany({
       where,
@@ -223,9 +220,9 @@ export const listClientCurrentAffairs = async (limit = 0) => {
 export const listClientCurrentAffairsPaged = async (q: {
   search?: string; skip?: number; take?: number;
 }) => {
-  const qq = q.search?.trim();
   const where: any = { status: true };
-  if (qq) where.title = { contains: qq };
+  const search = buildPrismaSearch(q.search, ["title"]);
+  if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
     prisma.currentAffair.findMany({
       where,
@@ -285,8 +282,7 @@ const LB_SORT_COLUMNS: Record<string, string> = { orderBy: "orderBy", createdAt:
 export const listLiveBannersPaged = async (q: {
   search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number;
 }) => {
-  const qq = q.search?.trim();
-  const where = qq ? { image: { contains: qq } } : {};
+  const where = buildPrismaSearch(q.search, ["image"]) ?? {};
   const [rows, total] = await Promise.all([
     prisma.liveBannerSlider.findMany({
       where,

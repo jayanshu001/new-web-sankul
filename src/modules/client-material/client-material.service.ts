@@ -14,6 +14,7 @@
  */
 import { prisma } from "../../config/prisma";
 import { signMediaToken } from "../../utils/mediaToken";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const CLIENT_MATERIAL_MODULE = "client-material";
 export const isClientMaterialMysql = (): boolean => true;
@@ -203,7 +204,8 @@ export const getCategoryContents = async (
   // Leaf materials at this node — the genuine collection we paginate. Child
   // folders (`subjects`) + breadcrumbs are node metadata and stay intact.
   const matsWhere: any = { materialCategoryId: categoryId, status: true };
-  if (opts.search) matsWhere.name = { contains: opts.search };
+  const matsSearch = buildPrismaSearch(opts.search, ["name"]);
+  if (matsSearch) matsWhere.AND = matsSearch.AND;
   const [matsRaw, materialsTotal] = await Promise.all([
     prisma.material.findMany({ where: matsWhere, orderBy: { order_by: "asc" }, skip: opts.skip, take: opts.take, select: MAT_SELECT }),
     prisma.material.count({ where: matsWhere }),
@@ -239,7 +241,8 @@ export const listMaterialsByCategoryPaged = async (
   if (!category) return null;
 
   const where: any = { materialCategoryId: categoryId, status: true };
-  if (opts.search) where.name = { contains: opts.search };
+  const search = buildPrismaSearch(opts.search, ["name"]);
+  if (search) where.AND = search.AND;
   if (opts.type === "free") where.isPaid = false;
   else if (opts.type === "paid") where.isPaid = true;
 
@@ -276,7 +279,8 @@ export const getRecentMaterials = async (
 ) => {
   const cutoff = new Date(Date.now() - days * 86_400_000);
   const where: any = { status: true, created_at: { gt: cutoff } };
-  if (opts.search) where.name = { contains: opts.search };
+  const search = buildPrismaSearch(opts.search, ["name"]);
+  if (search) where.AND = search.AND;
   const [matsRaw, total] = await Promise.all([
     prisma.material.findMany({
       where,

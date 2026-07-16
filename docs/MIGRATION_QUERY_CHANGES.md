@@ -15,6 +15,114 @@
 
 ---
 
+## 2026-07-16 — Collapse device tokens into ws_customer.device (drop ws_customer_device_token)
+
+> **Schema drop + query-shape change.** Notification device tokens now live in the
+> single `ws_customer.device` (firebaseToken) column — one token per customer,
+> last-device-wins. The `ws_customer_device_token` multi-device table is removed.
+
+- **DDL:** `docs/migration/schema-changes/2026-07-16_drop_customer_device_token.sql` —
+  backfills the newest token from `ws_customer_device_token` into `ws_customer.device`
+  for any row where `device` is empty (safety; the dual-write window kept most rows in
+  sync already), then `DROP TABLE ws_customer_device_token`. Reverses the 2026-06-18
+  create. **Behavior change:** multi-device delivery is gone — a customer receives pushes
+  only on their most-recently-registered device (older devices go silent). Deliberate
+  product decision.
+- **Schema:** removed the `CustomerDeviceToken` model from `prisma/schema.prisma`
+  (`prisma:generate` regenerated).
+- **Repository** (`customer-profile.repository.ts`): `setDeviceToken` /
+  `setDeviceTokenByPhone` now write `ws_customer.device` directly (first clearing the
+  token off any other customer that held it, to preserve token-ownership-move semantics);
+  `clearDeviceToken` and `pruneDeviceTokens` null the column; `listDeviceTokens` removed
+  (was unused) and the token-keyed upsert replaced by `writeDeviceToken`.
+- **Audience/dispatch** (`admin-notification.service.ts`): `resolveAudience` folds the
+  token-owning gate into the `ws_customer` query via `firebaseToken: { not: null }`
+  (was a `distinct customerId` scan of the token table); `collectTokens` reads
+  `firebaseToken` off `ws_customer` for both broadcast and targeted sends. Recipient set
+  is unchanged in shape — still "live, non-deleted customers with a token, matching
+  platform/user/course filters".
+- Invalid-token pruning (`utils/fcm.ts`) unchanged at the call site
+  (`customerProfileRepository.pruneDeviceTokens`); it now nulls the `device` column for
+  the owning customer(s) instead of deleting a token row (comment updated to match).
+- Verify scripts (`scripts/verify-device-token.ts`, `verify-notification-sql.ts`) updated
+  to the single column (the notification-sql harness now stashes + restores the real
+  customer's original token so verification never clobbers a live device).
+
+---
+
+## 2026-07-16 — Uniform Unicode + case-insensitive search across all modules
+
+> **DDL + query-shape change.** Charset conversion of the remaining searched columns,
+> plus a shared search-predicate builder (trim + multi-word token-AND).
+
+- **DDL:** `docs/migration/schema-changes/2026-07-16_search_columns_utf8mb4.sql` converts
+  the searched columns still on `latin1`/`utf8mb3` to `utf8mb4 / utf8mb4_0900_ai_ci`
+  (19 columns across `ws_material`, `ws_popup_notification`, `ws_promocode`, `ws_promoter`,
+  `ws_user_inquiry`, `ws_video`, `ws_video_category` in the current app DB). Generalizes
+  the 2026-07-09 `name`-only fix to EVERY searchable column so emoji (🔥) and
+  Gujarati/Hindi both STORE and MATCH, and English is case-/accent-insensitive.
+  Lossless (`latin1`→utf8mb4 transcodes; `utf8mb3`→utf8mb4 superset). Collation is NOT in
+  `schema.prisma` → no `db:pull`/`prisma:generate`. Re-running is a no-op; before another
+  environment, re-run the audit query in the SQL header and add any still-non-utf8mb4 cols.
+- **Connection:** verified the Prisma MySQL driver already carries 4-byte utf8mb4 end to
+  end (emoji insert + `contains` round-trip succeeds) — no `DATABASE_URL` change required.
+- **Query shape:** new shared helper `src/utils/searchFilter.ts` (repurposed from the dead
+  Mongo-`$regex` version): `buildPrismaSearch`, `buildLikeTokens` (raw SQL), `matchesAllTokens`
+  (in-memory), `searchTokens`. Search terms are now **trimmed and tokenized on whitespace,
+  ANDing each token** (each token OR-ed across the searched fields). Adopted at ~130 sites
+  across ~80 files on all four surfaces: the Prisma `contains` list/detail searches (flat +
+  nested-relation, via `buildPrismaSearch`/`searchTokens`), the raw-SQL `LIKE` clusters
+  (`admin-book` order_items, `referral` withdrawal/referrer reports incl. JSON bank fields,
+  `exam-countdown`), and the in-memory `.toLowerCase().includes()` post-fetch filters in both
+  services and `src/client/**` controllers (`address`, `my-subscriptions`, `package`,
+  `live-reminder`, `client-wishlist`, `admin-live-course`, etc.).
+- **Intentionally NOT touched:** exact code/email lookups (login, `/refresh`, promocode
+  APPLICATION via `promocode: { contains: term.toUpperCase() }`) — these are identity/code
+  matches, not free-text list search.
+- **Behavior change to QA:** multi-word queries now match rows containing ALL words in any
+  order (e.g. `"ram sita"` → rows with both). Single-word queries are unchanged. No
+  `LOWER()`/`BINARY`/`mode:"insensitive"` — case-insensitivity is collation-driven, so
+  indexes still apply. Response envelopes/DTOs are unchanged (only the `where` differs).
+
+---
+
+## 2026-07-16 — Client package `isPopular` filter + DTO field
+
+> **Read/query change only. No DDL** (reuses the `ws_package.is_popular` column added below).
+
+- **Filter (no new endpoint):** `GET /client/packages` now accepts `?isPopular=true|false`
+  (`client/package/package.controller.ts` → `listPackages`). `true` → only popular, `false`
+  → only non-popular, omitted → unfiltered. Combines (AND) with existing
+  `search`/`type`/`packageTypeId`/`goalId` + pagination. The "Popular Packages" screen is
+  just this endpoint with `isPopular=true`.
+- **Query:** `listPackagesPaginatedSql` gained an optional `isPopular?: boolean` filter
+  (`where.isPopular` when defined); existing callers unaffected (undefined → no filter).
+- **DTO:** `isPopular` now surfaced on the client package **list** row (`enrichPackagesSql`)
+  and the package **detail** (`buildPackageDetailSql`) — additive boolean field, present on
+  `GET /client/packages`, `/type/:typeId`, and `/:id`.
+- Frontend doc: `docs/client/POPULAR_PACKAGES_CLIENT.md`.
+
+---
+
+## 2026-07-16 — Package `isPopular` flag (admin panel)
+
+> **DDL.** New non-null boolean column on `ws_package`.
+
+- **Column:** `ws_package.is_popular TINYINT(1) NOT NULL DEFAULT 0` — see
+  `docs/migration/schema-changes/2026-07-16_package_is_popular.sql`. Mirrors `is_paid` /
+  `is_individual`. No backfill needed (default 0). Prisma model `Package.isPopular`
+  (`@map("is_popular")`, `@default(false)`).
+- **Write:** admin package create/update now accept `isPopular` (boolean). Controller
+  coerces the multipart `"true"/"false"` string (same as `isPaid`). Create defaults to
+  `false`; update is partial-merge (absent `isPopular` leaves the column unchanged).
+- **Read:** `isPopular` surfaced on the package detail + list DTOs via `toPackageDto`
+  (reads directly off the row; `include`-based selects pick the new scalar up
+  automatically — no repository change).
+- **Note:** distinct from the plan-row `is_most_popular` (plan-popularity) concept — this
+  is a package-container flag, matching Course's `isPopular` (which maps to `is_featured`).
+
+---
+
 ## 2026-07-15 — Deactivating an item (status=false) grandfathers active subscribers
 
 > **Read/query change only. No DDL.** When an admin deactivates a Course / Package /

@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /** Shared WHERE builder for the admin list + count (keeps both in lockstep). */
 const buildAdminListWhere = (opts: {
@@ -8,14 +9,8 @@ const buildAdminListWhere = (opts: {
   ids?: bigint[];
 }): Prisma.AdminUserWhereInput => {
   const where: Prisma.AdminUserWhereInput = {};
-  if (opts.search) {
-    const q = opts.search.trim();
-    where.OR = [
-      { firstName: { contains: q } },
-      { lastName: { contains: q } },
-      { email: { contains: q } },
-    ];
-  }
+  const search = buildPrismaSearch(opts.search, ["firstName", "lastName", "email"]);
+  if (search) Object.assign(where, search);
   if (opts.status !== undefined) {
     where.status = opts.status ? "active" : "inactive";
   }

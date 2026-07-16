@@ -16,6 +16,17 @@ Powers the search-results screen with tabs (Courses / Packages / Books / E-Books
 
 Case-insensitive substring match on the `name` field of the selected collection. Only active records (`status: true`) are returned. Results are sorted by `createdAt` desc.
 
+**Matching semantics (uniform across every module's search, as of 2026-07-16):**
+
+- **Unicode:** works for English, Hindi (राम), Gujarati (રામ), and emoji (🔥) — searchable
+  columns are `utf8mb4`.
+- **Case- & accent-insensitive:** `RAM` and `ram` return the same rows (English only —
+  Hindi/Gujarati have no case). Driven by the `utf8mb4_0900_ai_ci` column collation.
+- **Whitespace:** the term is trimmed at both ends; internal spaces are preserved.
+- **Multi-word:** the term is tokenized on spaces and each token is **AND**-ed, so
+  `ram sita` returns rows containing **both** words (in any order), not the literal
+  phrase `"ram sita"`.
+
 ### Query params
 
 | param   | type   | required | notes                                                                 |

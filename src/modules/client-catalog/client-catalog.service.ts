@@ -23,6 +23,7 @@ import { signMediaToken } from "../../utils/mediaToken";
 import { hasActiveCourseSub } from "../client-lecture/client-lecture.service";
 import { getPurchasedMaterialIds, materialMediaToken } from "../client-material/client-material.service";
 import { examInCategoriesWhere, subjectStartedWhere } from "../catalog-exam/exam-category-pivot.where";
+import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
 
 export const CLIENT_CATALOG_MODULE = "client-catalog";
 export const isClientCatalogMysql = (): boolean => true;
@@ -124,7 +125,8 @@ export const catalogVideos = async (opts: {
     if (!root) return { list: [] };
     const subtree = await descendantsOf([root.id]);
     const videoWhere: any = { videoCategoryId: { in: subtree }, status: true };
-    if (opts.search) videoWhere.title = { contains: opts.search };
+    const flatSearch = buildPrismaSearch(opts.search, ["title"]);
+    if (flatSearch) videoWhere.AND = flatSearch.AND;
     const videos = await prisma.video.findMany({ where: videoWhere, orderBy: { order: "asc" } });
     let progByVideo = new Map<number, any>();
     if (opts.customerId && videos.length) {
@@ -171,7 +173,8 @@ export const catalogVideos = async (opts: {
 
     // course: legacy inlined video list (title search applies to the list; count = subtree count).
     const videoWhere: any = { videoCategoryId: cat.id, status: true };
-    if (opts.search) videoWhere.title = { contains: opts.search };
+    const catSearch = buildPrismaSearch(opts.search, ["title"]);
+    if (catSearch) videoWhere.AND = catSearch.AND;
     const videos = await prisma.video.findMany({ where: videoWhere, orderBy: { order: "asc" } });
     let progByVideo = new Map<number, any>();
     if (opts.customerId && videos.length) {
@@ -298,7 +301,7 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
   let cats = catIds.length ? await prisma.materialCategory.findMany({ where: { id: { in: catIds }, status: true } }) : [];
   const byId = new Map(cats.map((c) => [c.id, c]));
   let ordered = catIds.map((cid) => byId.get(cid)).filter(Boolean) as any[];
-  if (opts.search) ordered = ordered.filter((c) => (c.name ?? "").toLowerCase().includes(opts.search!.toLowerCase()));
+  if (opts.search) ordered = ordered.filter((c) => matchesAllTokens(opts.search, [c.name]));
 
   // Only `course` keeps the legacy inlined per-category `materials` array.
   // `package` and `live-course` use the newer stripped shape (category + context-
@@ -366,7 +369,7 @@ export const catalogTests = async (opts: { type: "course" | "package" | "live-co
   let cats = catIds.length ? await prisma.examCategory.findMany({ where: { id: { in: catIds }, status: true } }) : [];
   const byId = new Map(cats.map((c) => [c.id, c]));
   let ordered = catIds.map((cid) => byId.get(cid)).filter(Boolean) as any[];
-  if (opts.search) ordered = ordered.filter((c) => (c.name ?? "").toLowerCase().includes(opts.search!.toLowerCase()));
+  if (opts.search) ordered = ordered.filter((c) => matchesAllTokens(opts.search, [c.name]));
 
   // `count` is context-dependent: a directory node reports its direct child-folder
   // count; a leaf reports the exam count across its subtree. `totals.items` keeps

@@ -66,10 +66,11 @@ export const customerProfileRepository = {
   setProfilePicture: (id: number, url: string) =>
     prisma.customer.update({ where: { id }, data: { profile_picture: url, updatedAt: new Date() } }),
 
-  // ── Device tokens — multi-device child table ws_customer_device_token ──────────
-  // Mirrors Mongo Customer.firebaseTokens[] (token-keyed upsert: the token moves
-  // to whichever customer last registered it). Also keeps the legacy single
-  // `device` column in sync (newest wins) so the Mongo-mirrored read still works.
+  // ── Device token — single column ws_customer.device (firebaseToken) ───────────
+  // One token per customer (last device wins): registering a new token overwrites
+  // the previous one. Re-registering the same token elsewhere moves it (the token
+  // is cleared from any other customer that still held it) to mirror the old
+  // token-keyed ownership semantics without a separate table.
 
   /** Register/move a device token to this customer. Returns {count} for 404. */
   setDeviceToken: async (id: number, token: string, platform?: string) => {
@@ -78,14 +79,12 @@ export const customerProfileRepository = {
       select: { id: true },
     });
     if (!customer) return { count: 0 };
-    await upsertDeviceToken(id, token, platform);
+    await writeDeviceToken(id, token, platform);
     return { count: 1 };
   },
 
-  /** Remove a single device token (logout on this device). */
+  /** Remove this device token (logout on this device). */
   clearDeviceToken: async (id: number, token: string) => {
-    await prisma.customerDeviceToken.deleteMany({ where: { customerId: id, token } });
-    // Clear the legacy column too if it held this token.
     await prisma.customer.updateMany({
       where: { id, isAccountDeleted: false, firebaseToken: token },
       data: { firebaseToken: null, updatedAt: new Date() },
@@ -100,35 +99,30 @@ export const customerProfileRepository = {
       select: { id: true },
     });
     if (!customer) return { count: 0 };
-    await upsertDeviceToken(customer.id, token, platform);
+    await writeDeviceToken(customer.id, token, platform);
     return { count: 1 };
   },
 
-  /** All active device tokens for a customer (for FCM fan-out). */
-  listDeviceTokens: (id: number) =>
-    prisma.customerDeviceToken.findMany({
-      where: { customerId: id },
-      select: { token: true },
-    }),
-
   /** Prune invalid tokens reported by FCM (mirrors Mongo $pull on dead tokens). */
   pruneDeviceTokens: (tokens: string[]) =>
-    prisma.customerDeviceToken.deleteMany({ where: { token: { in: tokens } } }),
+    prisma.customer.updateMany({
+      where: { firebaseToken: { in: tokens } },
+      data: { firebaseToken: null, updatedAt: new Date() },
+    }),
 };
 
 /**
- * Token-keyed upsert into ws_customer_device_token. The `token` column is
- * UNIQUE, so re-registering an existing token moves it to the new owner +
- * refreshes platform/updatedAt — matching Mongo's two-step $pull/$push. Also
- * mirrors the token into the legacy single `device` column (newest wins).
+ * Write the device token into ws_customer.device (single column, last-device-
+ * wins). First clears the token from any OTHER customer that still held it, so a
+ * handset re-registering under a new account can't leave the token double-owned
+ * (mirrors the old token-keyed ownership move without a separate table).
  */
-async function upsertDeviceToken(customerId: number, token: string, platform?: string) {
+async function writeDeviceToken(customerId: number, token: string, platform?: string) {
   const now = new Date();
   const plat = platform === "ios" || platform === "android" ? platform : null;
-  await prisma.customerDeviceToken.upsert({
-    where: { token },
-    update: { customerId, platform: plat ?? undefined, updatedAt: now },
-    create: { customerId, token, platform: plat, createdAt: now, updatedAt: now },
+  await prisma.customer.updateMany({
+    where: { firebaseToken: token, id: { not: customerId } },
+    data: { firebaseToken: null, updatedAt: now },
   });
   await prisma.customer.updateMany({
     where: { id: customerId, isAccountDeleted: false },

@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { childIdsOf, loadAllEdges, primaryParentsOf } from "../../utils/videoCategoryRelation";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin "master" sub-catalog CRUD (small lookup
@@ -54,7 +55,8 @@ export const adminMasterRepository = {
   // ── full videoCategory controller support (admin/videoCategory) ─────────────
   vcListFiltered: (opts: { search?: string; status?: boolean; educatorId?: number; sortBy: string; sortDir: "asc" | "desc"; skip: number; take: number }) => {
     const where: any = {};
-    if (opts.search) where.OR = [{ title: { contains: opts.search.trim() } }, { slug: { contains: opts.search.trim() } }];
+    const search = buildPrismaSearch(opts.search, ["title", "slug"]);
+    if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.educatorId !== undefined) where.educatorId = opts.educatorId;
     const col = opts.sortBy === "name" || opts.sortBy === "title" ? "title" : opts.sortBy === "order" ? "order_by" : opts.sortBy === "updatedAt" ? "updated_at" : "created_at";
@@ -62,7 +64,8 @@ export const adminMasterRepository = {
   },
   vcCountFiltered: (opts: { search?: string; status?: boolean; educatorId?: number }) => {
     const where: any = {};
-    if (opts.search) where.OR = [{ title: { contains: opts.search.trim() } }, { slug: { contains: opts.search.trim() } }];
+    const search = buildPrismaSearch(opts.search, ["title", "slug"]);
+    if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.educatorId !== undefined) where.educatorId = opts.educatorId;
     return prisma.videoCategory.count({ where });
@@ -149,26 +152,30 @@ export const adminMasterRepository = {
   // relation lists
   coursesForCategory: (categoryId: number, opts: { search?: string; status?: boolean; skip: number; take: number }) => {
     const where: any = { videoCategoryId: categoryId };
-    if (opts.search) where.name = { contains: opts.search.trim() };
+    const search = buildPrismaSearch(opts.search, ["name"]);
+    if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     return prisma.course.findMany({ where, select: { id: true, name: true, status: true, ordered: true }, orderBy: { ordered: "asc" }, skip: opts.skip, take: opts.take });
   },
   countCoursesForCategory: (categoryId: number, opts: { search?: string; status?: boolean }) => {
     const where: any = { videoCategoryId: categoryId };
-    if (opts.search) where.name = { contains: opts.search.trim() };
+    const search = buildPrismaSearch(opts.search, ["name"]);
+    if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     return prisma.course.count({ where });
   },
   videosForCategory: (categoryId: number, opts: { search?: string; status?: boolean; platform?: string; skip: number; take: number }) => {
     const where: any = { videoCategoryId: categoryId };
-    if (opts.search) where.OR = [{ title: { contains: opts.search.trim() } }, { slug: { contains: opts.search.trim() } }, { topic: { contains: opts.search.trim() } }];
+    const search = buildPrismaSearch(opts.search, ["title", "slug", "topic"]);
+    if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.platform) where.platform = opts.platform;
     return prisma.video.findMany({ where, select: { id: true, title: true, slug: true, status: true, order: true, platform: true }, orderBy: { order: "asc" }, skip: opts.skip, take: opts.take });
   },
   countVideosForCategory: (categoryId: number, opts: { search?: string; status?: boolean; platform?: string }) => {
     const where: any = { videoCategoryId: categoryId };
-    if (opts.search) where.OR = [{ title: { contains: opts.search.trim() } }, { slug: { contains: opts.search.trim() } }, { topic: { contains: opts.search.trim() } }];
+    const search = buildPrismaSearch(opts.search, ["title", "slug", "topic"]);
+    if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.platform) where.platform = opts.platform;
     return prisma.video.count({ where });
@@ -316,7 +323,8 @@ async function uniqueSlugTx(tx: any, base: string): Promise<string> {
 
 function subjWhere(opts?: { search?: string }) {
   const where: any = {};
-  if (opts?.search) where.title = { contains: opts.search.trim() };
+  const search = buildPrismaSearch(opts?.search, ["title"]);
+  if (search) Object.assign(where, search);
   return where;
 }
 

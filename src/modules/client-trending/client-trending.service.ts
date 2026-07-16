@@ -14,6 +14,7 @@
 import { prisma } from "../../config/prisma";
 import { isNewItem } from "../../utils/isNew";
 import { signMediaToken } from "../../utils/mediaToken";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const isClientTrendingMysql = (): boolean => true;
 
@@ -29,7 +30,8 @@ export const fetchTrendingBooksOnly = async (opts: TrendingOpts = {}) => {
   const skip = Math.max(opts.skip ?? 0, 0);
   const where: any = { active: true, isTrending: true };
   if (opts.language) where.language = opts.language;
-  if (opts.search) where.OR = [{ name: { contains: opts.search } }, { author: { contains: opts.search } }];
+  const search = buildPrismaSearch(opts.search, ["name", "author"]);
+  if (search) where.AND = search.AND;
   if (wantFree) where.discounted_price = 0;
   else if (wantPaid) where.discounted_price = { gt: 0 };
 
@@ -56,7 +58,8 @@ export const fetchTrendingEbooksOnly = async (opts: TrendingOpts = {}) => {
   const skip = Math.max(opts.skip ?? 0, 0);
   const where: any = { active: true, isTrending: true };
   if (opts.language) where.language = opts.language;
-  if (opts.search) where.OR = [{ name: { contains: opts.search } }, { author: { contains: opts.search } }];
+  const search = buildPrismaSearch(opts.search, ["name", "author"]);
+  if (search) where.AND = search.AND;
 
   const ebooks = await prisma.eBook.findMany({ where, orderBy: [{ orderby: "asc" }, { createdAt: "desc" }] });
   const ids = ebooks.map((e) => e.id);

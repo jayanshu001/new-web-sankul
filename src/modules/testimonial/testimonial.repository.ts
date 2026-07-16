@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 import type {
   TestimonialCreateInput,
   TestimonialUpdateInput,
@@ -22,17 +23,8 @@ const TESTIMONIAL_SORT_COLUMNS: Record<string, string> = {
   title: "title",
 };
 
-const buildTestimonialWhere = (opts: TestimonialListOpts) => {
-  const q = opts.search?.trim();
-  if (!q) return {} as Record<string, unknown>;
-  return {
-    OR: [
-      { name: { contains: q } },
-      { title: { contains: q } },
-      { discription: { contains: q } },
-    ],
-  };
-};
+const buildTestimonialWhere = (opts: TestimonialListOpts): Record<string, unknown> =>
+  buildPrismaSearch(opts.search, ["name", "title", "discription"]) ?? {};
 
 export const testimonialRepository = {
   /** Client + admin list. Legacy API sorts by rating desc. */

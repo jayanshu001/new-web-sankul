@@ -17,6 +17,7 @@
  */
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const CLIENT_TESTSERIES_MODULE = "client-testseries";
 export const isClientTestSeriesMysql = (): boolean => true;
@@ -82,7 +83,8 @@ export type ListOpts = {
 
 export const listTestSeriesMysql = async (opts: ListOpts) => {
   const where: any = { status: true };
-  if (opts.search) where.title = { contains: opts.search };
+  const search = buildPrismaSearch(opts.search, ["title"]);
+  if (search) where.AND = search.AND;
 
   const [rows, total] = await Promise.all([
     prisma.testSeries.findMany({
@@ -316,7 +318,7 @@ export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
   const linkWhere: any = { testSeriesId: opts.id, status: true };
   if (opts.search) {
     const matchedExams = await prisma.exam.findMany({
-      where: { name: { contains: opts.search } },
+      where: buildPrismaSearch(opts.search, ["name"]) ?? {},
       select: { id: true },
     });
     linkWhere.examId = { in: matchedExams.map((e) => e.id) };
@@ -434,7 +436,7 @@ export const listMySubscriptionsMysql = async (opts: MySubsOpts) => {
   // for both findMany + count.
   if (opts.search) {
     const matched = await prisma.testSeries.findMany({
-      where: { title: { contains: opts.search } },
+      where: buildPrismaSearch(opts.search, ["title"]) ?? {},
       select: { id: true },
     });
     where.testSeriesId = { in: matched.map((m) => m.id) };

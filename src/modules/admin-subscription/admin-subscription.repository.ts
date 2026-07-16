@@ -1,6 +1,7 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import { andWhere } from "../../utils/reportFilters";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-subscription MySQL branch (Wave 7).
@@ -193,9 +194,9 @@ export const adminSubscriptionRepository = {
   },
 
   // ── search-id resolvers (cross-table search) ────────────────────────────────
-  customerIdsByText: async (q: string) => (await prisma.customer.findMany({ where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] }, select: { id: true } })).map((r) => r.id),
-  courseIdsByText: async (q: string) => (await prisma.course.findMany({ where: { name: { contains: q } }, select: { id: true } })).map((r) => r.id),
-  packageIdsByText: async (q: string) => (await prisma.package.findMany({ where: { name: { contains: q } }, select: { id: true } })).map((r) => r.id),
+  customerIdsByText: async (q: string) => (await prisma.customer.findMany({ where: buildPrismaSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {}, select: { id: true } })).map((r) => r.id),
+  courseIdsByText: async (q: string) => (await prisma.course.findMany({ where: buildPrismaSearch(q, ["name"]) ?? {}, select: { id: true } })).map((r) => r.id),
+  packageIdsByText: async (q: string) => (await prisma.package.findMany({ where: buildPrismaSearch(q, ["name"]) ?? {}, select: { id: true } })).map((r) => r.id),
 
   // ── plans-for-target ─────────────────────────────────────────────────────────
   plansForTarget: (opts: { courseId?: number; packageId?: number }) =>

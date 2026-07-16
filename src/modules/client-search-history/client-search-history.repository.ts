@@ -2,6 +2,7 @@
  * Recent Search History — Prisma calls ONLY (no business logic).
  */
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 // Upsert by (customer_id, query): re-searching an existing term refreshes its
 // created_at (move-to-top / dedupe) instead of inserting a duplicate row.
@@ -23,7 +24,7 @@ export const listRecent = (customerId: number, take: number) =>
 // Newest-first paginated list with optional query-text search (`skip`/`take`).
 export const listPaged = (customerId: number, search: string | undefined, skip: number, take: number) =>
   prisma.searchHistory.findMany({
-    where: { customerId, ...(search ? { query: { contains: search } } : {}) },
+    where: { customerId, ...(buildPrismaSearch(search, ["query"]) ?? {}) },
     orderBy: { createdAt: "desc" },
     skip,
     take,
@@ -32,7 +33,7 @@ export const listPaged = (customerId: number, search: string | undefined, skip: 
 // Total rows matching the same customer/search filter (pagination count).
 export const countList = (customerId: number, search: string | undefined) =>
   prisma.searchHistory.count({
-    where: { customerId, ...(search ? { query: { contains: search } } : {}) },
+    where: { customerId, ...(buildPrismaSearch(search, ["query"]) ?? {}) },
   });
 
 // Ids of the rows to KEEP (the newest `keep`), used to compute the overflow.

@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 import type {
   StateInput,
   DistrictInput,
@@ -12,7 +13,7 @@ export const customerLookupsRepository = {
     prisma.customerState.findMany({
       where: {
         ...(opts?.activeOnly ? { active: true } : {}),
-        ...(opts?.search ? { name: { contains: opts.search } } : {}),
+        ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
       },
       orderBy: { name: "asc" },
     }),

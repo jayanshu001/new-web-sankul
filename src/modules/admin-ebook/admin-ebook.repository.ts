@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma, PaymentMethod } from "@prisma/client";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 // Filters shared by list + count so `pagination.total` matches the page slice.
 export type SubFilter = {
@@ -260,27 +261,29 @@ export const adminEbookRepository = {
   // ── search helpers (cross-table, for subscription search) ───────────────────────
   findCustomerIdsBySearch: async (q: string): Promise<number[]> => {
     const rows = await prisma.customer.findMany({
-      where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] },
+      where: buildPrismaSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {},
       select: { id: true },
     });
     return rows.map((r) => r.id);
   },
   findEbookIdsBySearch: async (q: string): Promise<number[]> => {
-    const rows = await prisma.eBook.findMany({ where: { name: { contains: q } }, select: { id: true } });
+    const rows = await prisma.eBook.findMany({ where: buildPrismaSearch(q, ["name"]) ?? {}, select: { id: true } });
     return rows.map((r) => r.id);
   },
 };
 
 function buildEbookWhere(opts: { search?: string; author?: string; publisher?: string; language?: string; status?: boolean }): Prisma.EBookWhereInput {
   const where: Prisma.EBookWhereInput = {};
-  if (opts.search) {
-    const q = opts.search.trim();
-    where.OR = [{ name: { contains: q } }, { author: { contains: q } }];
-  }
-  if (opts.author) where.author = { contains: opts.author.trim() };
-  if (opts.publisher) where.publisher = { contains: opts.publisher.trim() };
+  const and: Prisma.EBookWhereInput[] = [];
+  const search = buildPrismaSearch(opts.search, ["name", "author"]);
+  if (search) and.push(search);
+  const author = buildPrismaSearch(opts.author, ["author"]);
+  if (author) and.push(author);
+  const publisher = buildPrismaSearch(opts.publisher, ["publisher"]);
+  if (publisher) and.push(publisher);
   if (opts.language) where.language = opts.language as any;
   if (opts.status !== undefined) where.active = opts.status;
+  if (and.length) where.AND = and;
   return where;
 }
 

@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-material MySQL branch.
@@ -217,21 +218,23 @@ function buildCatWhere(opts: { parent?: number | "root"; search?: string; status
   const where: Prisma.MaterialCategoryWhereInput = {};
   if (opts.parent === "root") where.parent = ROOT;
   else if (typeof opts.parent === "number") where.parent = opts.parent;
-  if (opts.search) where.name = { contains: opts.search.trim() };
+  const search = buildPrismaSearch(opts.search, ["name"]);
+  if (search) Object.assign(where, search);
   if (opts.status !== undefined) where.status = opts.status;
   return where;
 }
 
 function buildCategoryCourseWhere(categoryId: number, search?: string): Prisma.MaterialCategoryCourseWhereInput {
   const where: Prisma.MaterialCategoryCourseWhereInput = { materialCategoryId: categoryId };
-  const s = search?.trim();
-  if (s) where.Course = { name: { contains: s } };
+  const toks = searchTokens(search);
+  if (toks.length) where.AND = toks.map((t) => ({ Course: { name: { contains: t } } }));
   return where;
 }
 
 function buildMatWhere(opts: { search?: string; materialCategoryId?: number; status?: boolean }): Prisma.MaterialWhereInput {
   const where: Prisma.MaterialWhereInput = {};
-  if (opts.search) where.name = { contains: opts.search.trim() };
+  const search = buildPrismaSearch(opts.search, ["name"]);
+  if (search) Object.assign(where, search);
   if (opts.materialCategoryId !== undefined) where.materialCategoryId = opts.materialCategoryId;
   if (opts.status !== undefined) where.status = opts.status;
   return where;

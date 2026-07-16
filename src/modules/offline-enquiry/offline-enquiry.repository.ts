@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the offline · enquiry WRITE branch (Phase 3b,
@@ -69,7 +70,8 @@ export const offlineEnquiryRepository = {
   }) => {
     const where: any = {};
     if (opts.batchId != null) where.batchId = opts.batchId;
-    if (opts.search) where.OR = [{ name: { contains: opts.search } }, { email: { contains: opts.search } }];
+    const search = buildPrismaSearch(opts.search, ["name", "email"]);
+    if (search) where.AND = search.AND;
     if (opts.from || opts.to) {
       where.createdAt = {};
       if (opts.from) where.createdAt.gte = opts.from;

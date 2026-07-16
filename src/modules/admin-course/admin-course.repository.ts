@@ -1,5 +1,21 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
+
+// Tokenized name-search over a single related category/book (Prisma nested relation
+// filter — the flat helper can't express relations). AND each token; empty → {}.
+function examCatNameSearch(term?: string): Prisma.ExamCategoryCourseWhereInput {
+  const toks = searchTokens(term);
+  return toks.length ? { AND: toks.map((t) => ({ ExamCategory: { name: { contains: t } } })) } : {};
+}
+function materialCatNameSearch(term?: string): Prisma.MaterialCategoryCourseWhereInput {
+  const toks = searchTokens(term);
+  return toks.length ? { AND: toks.map((t) => ({ MaterialCategory: { name: { contains: t } } })) } : {};
+}
+function courseBookNameSearch(term?: string): Prisma.CourseBookWhereInput {
+  const toks = searchTokens(term);
+  return toks.length ? { AND: toks.map((t) => ({ Book: { name: { contains: t } } })) } : {};
+}
 
 /**
  * Prisma persistence for the admin-course MySQL branch.
@@ -61,7 +77,7 @@ export const adminCourseRepository = {
   // case-insensitive search on the linked category name.
   examCategoriesForPaged: (courseId: number, opts: { skip: number; take: number; search?: string }) =>
     prisma.examCategoryCourse.findMany({
-      where: { courseId, ...(opts.search ? { ExamCategory: { name: { contains: opts.search } } } : {}) },
+      where: { courseId, ...examCatNameSearch(opts.search) },
       include: { ExamCategory: { select: { id: true, name: true, image: true, status: true } } },
       orderBy: { order: "asc" },
       skip: opts.skip,
@@ -69,11 +85,11 @@ export const adminCourseRepository = {
     }),
   countExamCategoriesFor: (courseId: number, search?: string) =>
     prisma.examCategoryCourse.count({
-      where: { courseId, ...(search ? { ExamCategory: { name: { contains: search } } } : {}) },
+      where: { courseId, ...examCatNameSearch(search) },
     }),
   materialCategoriesForPaged: (courseId: number, opts: { skip: number; take: number; search?: string }) =>
     prisma.materialCategoryCourse.findMany({
-      where: { courseId, ...(opts.search ? { MaterialCategory: { name: { contains: opts.search } } } : {}) },
+      where: { courseId, ...materialCatNameSearch(opts.search) },
       include: { MaterialCategory: { select: { id: true, name: true, image: true, status: true } } },
       orderBy: { order: "asc" },
       skip: opts.skip,
@@ -81,7 +97,7 @@ export const adminCourseRepository = {
     }),
   countMaterialCategoriesFor: (courseId: number, search?: string) =>
     prisma.materialCategoryCourse.count({
-      where: { courseId, ...(search ? { MaterialCategory: { name: { contains: search } } } : {}) },
+      where: { courseId, ...materialCatNameSearch(search) },
     }),
 
   // Physical books linked to a course (Course-Detail "Material (Book)" tab), with
@@ -89,7 +105,7 @@ export const adminCourseRepository = {
   // case-insensitive search on the linked book name.
   booksForPaged: (courseId: number, opts: { skip: number; take: number; search?: string }) =>
     prisma.courseBook.findMany({
-      where: { courseId, ...(opts.search ? { Book: { name: { contains: opts.search } } } : {}) },
+      where: { courseId, ...courseBookNameSearch(opts.search) },
       include: { Book: true },
       orderBy: { order: "asc" },
       skip: opts.skip,
@@ -97,7 +113,7 @@ export const adminCourseRepository = {
     }),
   countBooksFor: (courseId: number, search?: string) =>
     prisma.courseBook.count({
-      where: { courseId, ...(search ? { Book: { name: { contains: search } } } : {}) },
+      where: { courseId, ...courseBookNameSearch(search) },
     }),
 
   // ── course ↔ book link write ─────────────────────────────────────────────────
@@ -264,10 +280,8 @@ function courseSortCol(sortBy: string): string {
 
 function buildCourseWhere(opts: { search?: string; status?: boolean; isPaid?: boolean; isPopular?: boolean }): Prisma.CourseWhereInput {
   const where: Prisma.CourseWhereInput = {};
-  if (opts.search) {
-    const q = opts.search.trim();
-    where.OR = [{ name: { contains: q } }, { description: { contains: q } }];
-  }
+  const search = buildPrismaSearch(opts.search, ["name", "description"]);
+  if (search) Object.assign(where, search);
   if (opts.status !== undefined) where.status = opts.status;
   // purchase enum('0','1'): Mongo isPaid defaults TRUE → only explicit '0' is unpaid.
   if (opts.isPaid === true) where.purchase = { not: "no" };

@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the commerce · promoter READ branch
@@ -32,14 +33,7 @@ export const commercePromoterRepository = {
       where: {
         status: true,
         is_delete: false,
-        ...(opts?.search
-          ? {
-              OR: [
-                { full_name: { contains: opts.search } },
-                { email: { contains: opts.search } },
-              ],
-            }
-          : {}),
+        ...(buildPrismaSearch(opts?.search, ["full_name", "email"]) ?? {}),
       },
       orderBy: [{ full_name: "asc" }, { id: "asc" }],
     }),

@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 import type { FaqCategory, FaqCreateInput, FaqUpdateInput } from "./faq.types";
 import { toPrismaFaqCreate, toPrismaFaqUpdate } from "./faq.transformer";
 
@@ -21,8 +22,8 @@ const FAQ_SORT_COLUMNS: Record<string, string> = {
 const buildFaqWhere = (opts: FaqListOpts) => {
   const where: Record<string, unknown> = {};
   if (opts.type) where.type = opts.type;
-  const q = opts.search?.trim();
-  if (q) where.OR = [{ question: { contains: q } }, { answer: { contains: q } }];
+  const search = buildPrismaSearch(opts.search, ["question", "answer"]);
+  if (search) where.AND = search.AND;
   return where;
 };
 

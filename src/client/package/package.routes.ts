@@ -14,7 +14,7 @@ const router = Router();
 
 router.use(authenticate);
 
-// Flat paginated listing of active packages
+// Flat paginated listing of active packages (add ?isPopular=true for the popular feed)
 router.get("/", listPackages);
 
 // Discover package types (public-facing list)

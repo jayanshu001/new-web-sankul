@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { examInCategoryWhere, subjectStartedWhere } from "../catalog-exam/exam-category-pivot.where";
+import { searchTokens } from "../../utils/searchFilter";
 
 /**
  * Prisma READ persistence for the client-exam MySQL branch.
@@ -30,7 +31,7 @@ export const clientExamRepository = {
         AND: [
           examInCategoryWhere(categoryId),
           { status: true },
-          ...(search ? [{ name: { contains: search } }] : []),
+          ...searchTokens(search).map((t) => ({ name: { contains: t } })),
           { OR: [{ type: "subject" }, { endAt: null }, { endAt: { gte: now } }] },
         ],
       },
@@ -48,7 +49,7 @@ export const clientExamRepository = {
         AND: [
           examInCategoryWhere(categoryId),
           { status: true, type: "subject" },
-          ...(search ? [{ name: { contains: search } }] : []),
+          ...searchTokens(search).map((t) => ({ name: { contains: t } })),
           // subject exams: only once started (see subjectStartedWhere) and before the window ends.
           subjectStartedWhere(now),
           { OR: [{ endAt: null }, { endAt: { gte: now } }] },
@@ -64,7 +65,7 @@ export const clientExamRepository = {
         AND: [
           examInCategoryWhere(categoryId),
           { status: true, type: "subject" },
-          ...(search ? [{ name: { contains: search } }] : []),
+          ...searchTokens(search).map((t) => ({ name: { contains: t } })),
           // subject exams: only once started (see subjectStartedWhere) and before the window ends.
           subjectStartedWhere(now),
           { OR: [{ endAt: null }, { endAt: { gte: now } }] },
@@ -96,14 +97,14 @@ export const clientExamRepository = {
   /** A customer's results, paginated (my-results), optional exam-name search. */
   myResults: (customerId: number, skip: number, take: number, search?: string | null) =>
     prisma.examResult.findMany({
-      where: { customerId, status: true, ...(search ? { Exam: { name: { contains: search } } } : {}) },
+      where: { customerId, status: true, ...(search ? { AND: searchTokens(search).map((t) => ({ Exam: { name: { contains: t } } })) } : {}) },
       include: { Exam: { select: { id: true, name: true } } },
       orderBy: [{ created_at: "desc" }, { id: "desc" }],
       skip,
       take,
     }),
   countMyResults: (customerId: number, search?: string | null) =>
-    prisma.examResult.count({ where: { customerId, status: true, ...(search ? { Exam: { name: { contains: search } } } : {}) } }),
+    prisma.examResult.count({ where: { customerId, status: true, ...(search ? { AND: searchTokens(search).map((t) => ({ Exam: { name: { contains: t } } })) } : {}) } }),
 
   findResult: (id: number, customerId: number) =>
     prisma.examResult.findFirst({ where: { id, customerId } }),
@@ -123,7 +124,7 @@ export const clientExamRepository = {
   /** Past (submitted) attempts of DAILY-type exams, paginated, optional name search. */
   pastDailyResults: (customerId: number, skip: number, take: number, search?: string | null) =>
     prisma.examResult.findMany({
-      where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily", ...(search ? { name: { contains: search } } : {}) } },
+      where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily", ...(search ? { AND: searchTokens(search).map((t) => ({ name: { contains: t } })) } : {}) } },
       include: {
         Exam: {
           select: { id: true, name: true, type: true, time: true, positiveMarks: true, negativeMarks: true, startAt: true },
@@ -135,7 +136,7 @@ export const clientExamRepository = {
     }),
   countPastDailyResults: (customerId: number, search?: string | null) =>
     prisma.examResult.count({
-      where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily", ...(search ? { name: { contains: search } } : {}) } },
+      where: { customerId, status: true, inProgress: false, submittedAt: { not: null }, Exam: { type: "daily", ...(search ? { AND: searchTokens(search).map((t) => ({ name: { contains: t } })) } : {}) } },
     }),
 
   /** Daily-exam drill-down counts by year/month/week via raw SQL date grouping. */
@@ -162,7 +163,7 @@ export const clientExamRepository = {
       where: {
         type: "daily",
         status: true,
-        ...(search ? { name: { contains: search } } : {}),
+        ...(search ? { AND: searchTokens(search).map((t) => ({ name: { contains: t } })) } : {}),
         OR: [{ startAt: { gte: from, lte: to } }, { startAt: null, createAt: { gte: from, lte: to } }],
       },
       orderBy: [{ startAt: "desc" }, { id: "desc" }],
@@ -174,7 +175,7 @@ export const clientExamRepository = {
       where: {
         type: "daily",
         status: true,
-        ...(search ? { name: { contains: search } } : {}),
+        ...(search ? { AND: searchTokens(search).map((t) => ({ name: { contains: t } })) } : {}),
         OR: [{ startAt: { gte: from, lte: to } }, { startAt: null, createAt: { gte: from, lte: to } }],
       },
     }),

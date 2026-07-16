@@ -8,7 +8,7 @@
 //   - limit : default 20, clamped to [1, 100]
 //   - search: trimmed; empty => undefined
 //
-// Pair with buildRegexCondition(search) from ./searchFilter for the Mongo regex.
+// Pair with buildPrismaSearch(search, fields) from ./searchFilter to build the where.
 
 export interface ListQuery {
   search?: string;

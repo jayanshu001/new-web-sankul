@@ -6,8 +6,8 @@
  * `isAdminNotificationMysql()` and delegate here when on.
  *
  * Coupling resolved vs Mongo:
- *  - tokens: read from ws_customer_device_token (the multi-device table built as
- *    `client-notification` prerequisite (a)), NOT Customer.firebaseTokens[].
+ *  - tokens: read from the single ws_customer.device (firebaseToken) column —
+ *    one token per customer (last device wins), NOT Customer.firebaseTokens[].
  *  - audience: SQL customer ids (int). Course-targeting uses
  *    ws_package_course_subscription — which has NO payment_status column, so the
  *    entitlement signal is status=true (+ endAt null/future), per the migration's
@@ -20,6 +20,7 @@
  * admin-supplied courseIds/userIds arrive as numeric strings on the SQL path.
  */
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch, searchTokens } from "../../utils/searchFilter";
 import { sendPush } from "../../utils/fcm";
 import logger from "../../utils/logger";
 
@@ -58,9 +59,9 @@ export interface DispatchResult {
 
 /**
  * Resolve a targeted audience to SQL customer ids. Empty filter → isAll.
- * Only customers that (a) match platform/user/course filters AND (b) own at
- * least one device token are returned (token-owning gate mirrors Mongo's
- * `firebaseTokens.0 $exists`).
+ * Only customers that (a) match platform/user/course filters AND (b) have a
+ * device token in ws_customer.device are returned (token-owning gate mirrors
+ * Mongo's `firebaseTokens.0 $exists`).
  */
 export async function resolveAudience(filter: AudienceFilter): Promise<ResolvedAudience> {
   const platforms = filter.platforms ?? [];
@@ -105,21 +106,16 @@ export async function resolveAudience(filter: AudienceFilter): Promise<ResolvedA
     idIn = courseCustomerIds;
   }
 
-  // Only customers owning a device token (multi-device child table).
-  const tokenOwners = await prisma.customerDeviceToken.findMany({
-    where: { customerId: idIn ? { in: idIn } : undefined },
-    select: { customerId: true },
-    distinct: ["customerId"],
-  });
-  let candidateIds = tokenOwners.map((t) => t.customerId);
-  if (candidateIds.length === 0) return { isAll: false, customerIds: [] };
-
-  // Apply platform + live-account filters against ws_customer.
+  // Token-owning gate + platform + live-account filters against ws_customer.
+  // A device token lives in the single `device` column (firebaseToken); only
+  // customers with a non-null token can receive a push (mirrors Mongo's
+  // `firebaseTokens.0 $exists`).
   const customers = await prisma.customer.findMany({
     where: {
-      id: { in: candidateIds },
+      ...(idIn ? { id: { in: idIn } } : {}),
       isAccountDeleted: false,
       status: true,
+      firebaseToken: { not: null },
       ...(hasPlatforms ? { os_type: { in: platforms } } : {}),
     },
     select: { id: true },
@@ -132,22 +128,18 @@ export async function resolveAudience(filter: AudienceFilter): Promise<ResolvedA
 async function collectTokens(audience: ResolvedAudience): Promise<string[]> {
   if (audience.isAll) {
     // Broadcast: every token whose owner is a live, non-deleted customer.
-    const liveIds = await prisma.customer.findMany({
-      where: { isAccountDeleted: false, status: true },
-      select: { id: true },
+    const rows = await prisma.customer.findMany({
+      where: { isAccountDeleted: false, status: true, firebaseToken: { not: null } },
+      select: { firebaseToken: true },
     });
-    const rows = await prisma.customerDeviceToken.findMany({
-      where: { customerId: { in: liveIds.map((c) => c.id) } },
-      select: { token: true },
-    });
-    return rows.map((r) => r.token).filter(Boolean);
+    return rows.map((r) => r.firebaseToken!).filter(Boolean);
   }
   if (audience.customerIds.length === 0) return [];
-  const rows = await prisma.customerDeviceToken.findMany({
-    where: { customerId: { in: audience.customerIds } },
-    select: { token: true },
+  const rows = await prisma.customer.findMany({
+    where: { id: { in: audience.customerIds } },
+    select: { firebaseToken: true },
   });
-  return rows.map((r) => r.token).filter(Boolean);
+  return rows.map((r) => r.firebaseToken!).filter(Boolean);
 }
 
 /**
@@ -419,10 +411,8 @@ export async function listAdminLog(opts: {
   take: number;
 }): Promise<{ data: any[]; total: number }> {
   const where: any = { customerId: null };
-  if (opts.q && opts.q.trim()) {
-    const s = opts.q.trim();
-    where.OR = [{ title: { contains: s } }, { body: { contains: s } }];
-  }
+  const search = buildPrismaSearch(opts.q, ["title", "body"]);
+  if (search) Object.assign(where, search);
   if (opts.status && ["sent", "scheduled", "failed", "cancelled"].includes(opts.status)) {
     where.status = opts.status;
   }
@@ -505,7 +495,8 @@ export async function searchTargetOptions(opts: {
     count: (args: any) => Promise<number>,
     labelField: string
   ) => {
-    const where = q ? { [labelField]: { contains: q } } : {};
+    const toks = searchTokens(q);
+    const where = toks.length ? { AND: toks.map((t) => ({ [labelField]: { contains: t } })) } : {};
     const [rows, total] = await Promise.all([
       findMany({ where, orderBy: { [labelField]: "asc" }, skip: opts.skip, take: opts.take }),
       count({ where }),

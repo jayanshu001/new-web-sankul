@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
+import { matchesAllTokens } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   parsePackageId,
@@ -58,6 +59,7 @@ export const listPackages = async (req: Request, res: Response) => {
       packageTypeId,
       goalId,
       type,
+      isPopular,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
@@ -69,6 +71,7 @@ export const listPackages = async (req: Request, res: Response) => {
     const cid = req.user?.id ? Number(req.user.id) : null;
     const { rows, total: totalSql } = await listPackagesPaginatedSql({
       search: search?.trim() || undefined,
+      isPopular: isPopular === "true" ? true : isPopular === "false" ? false : undefined,
       isPaid: type === "paid" ? true : type === "free" ? false : undefined,
       packageTypeId: packageTypeId && /^\d+$/.test(packageTypeId) ? Number(packageTypeId) : undefined,
       goalId: goalId && /^\d+$/.test(goalId) ? Number(goalId) : undefined,
@@ -331,7 +334,7 @@ export const listMyPackages = async (req: Request, res: Response) => {
     // Non-Prisma source (subscriptions): filter by the enriched package name,
     // then slice the resolved array. `total` reflects the post-search set.
     const filtered = search
-      ? dataAll.filter((d) => String((d.packageId as any)?.name ?? "").toLowerCase().includes(search.toLowerCase()))
+      ? dataAll.filter((d) => matchesAllTokens(search, [String((d.packageId as any)?.name ?? "")]))
       : dataAll;
     const total = filtered.length;
     const dataSql = filtered.slice(skip, skip + limit);

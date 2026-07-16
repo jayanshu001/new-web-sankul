@@ -7,6 +7,7 @@ import {
 } from "./live-reminder.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { matchesAllTokens } from "../../utils/searchFilter";
 import logger from "../../utils/logger";
 import { formatScheduledAt } from "../../utils/displayTime";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
@@ -150,8 +151,7 @@ export const listMyLiveSessionReminders = async (req: Request, res: Response) =>
     const dtos = await liveSql.listRemindersForCustomer(cid);
     let reminders = dtos.map((r: any) => sqlReminderToPublic(r));
     if (search) {
-      const s = search.toLowerCase();
-      reminders = reminders.filter((r) => (r.session?.title ?? "").toLowerCase().includes(s));
+      reminders = reminders.filter((r) => matchesAllTokens(search, [r.session?.title]));
     }
     if (upcomingOnly) {
       const now = Date.now();

@@ -14,6 +14,7 @@
  */
 import { prisma } from "../../config/prisma";
 import { parseLabels } from "../../utils/goalSelection";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const CUSTOMER_MASTER_MODULE = "customer-master";
 export const isCustomerMasterMysql = (): boolean => true;
@@ -37,7 +38,8 @@ export const listStates = async (opts?: {
 }): Promise<{ data: any[]; total: number }> => {
   const where: any = {};
   if (opts?.active !== undefined) where.active = opts.active;
-  if (opts?.search) where.OR = [{ name: { contains: opts.search } }, { state_code: { contains: opts.search } }];
+  const search = buildPrismaSearch(opts?.search, ["name", "state_code"]);
+  if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
     prisma.customerState.findMany({
       where,

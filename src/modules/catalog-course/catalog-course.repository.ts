@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the catalog · course MySQL branch (flag OFF).
@@ -26,7 +27,7 @@ export const catalogCourseRepository = {
   paginateActiveCategories: (args: { search?: string; skip: number; take: number }) => {
     const where = {
       status: true,
-      ...(args.search ? { title: { contains: args.search } } : {}),
+      ...(buildPrismaSearch(args.search, ["title"]) ?? {}),
     };
     return Promise.all([
       prisma.courseSubjectCategory.findMany({
@@ -60,14 +61,7 @@ export const catalogCourseRepository = {
     prisma.course.findMany({
       where: {
         status: true,
-        ...(opts?.search
-          ? {
-              OR: [
-                { name: { contains: opts.search } },
-                { description: { contains: opts.search } },
-              ],
-            }
-          : {}),
+        ...(buildPrismaSearch(opts?.search, ["name", "description"]) ?? {}),
       },
       orderBy: [{ ordered: "asc" }, { id: "desc" }],
     }),
@@ -104,14 +98,7 @@ export const catalogCourseRepository = {
       ...(args.where.categoryId != null
         ? { courseSubjectCategoryId: args.where.categoryId }
         : {}),
-      ...(args.where.search
-        ? {
-            OR: [
-              { name: { contains: args.where.search } },
-              { description: { contains: args.where.search } },
-            ],
-          }
-        : {}),
+      ...(buildPrismaSearch(args.where.search, ["name", "description"]) ?? {}),
     };
     return Promise.all([
       prisma.course.findMany({

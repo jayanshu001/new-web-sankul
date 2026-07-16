@@ -38,6 +38,7 @@ import { isNewItem } from "../../utils/isNew";
 import { signMediaToken } from "../../utils/mediaToken";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
 import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
+import { searchTokens, buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
 
 export const CLIENT_FREE_MODULE = "client-free";
 export const isClientFreeMysql = (): boolean => true;
@@ -131,7 +132,7 @@ export const freeTests = async (opts: {
       { status: true, isPaid: false, type: "subject" as const, startAt: { lte: endOfDay } },
     ],
   };
-  if (opts.search) baseWhere.AND.push({ name: { contains: opts.search } });
+  baseWhere.AND.push(...searchTokens(opts.search).map((t) => ({ name: { contains: t } })));
 
   const { year, month, week } = opts;
 
@@ -341,7 +342,7 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
     return { _id: String(p._id), title: p.name, image: p.image, type: p.type, videoCount: categories.reduce((n, c) => n + c.videoCount, 0), categories };
   }).filter(Boolean) as any[];
 
-  if (opts.search) { const s = opts.search.toLowerCase(); groups = groups.filter((g) => (g.title ?? "").toLowerCase().includes(s)); }
+  if (opts.search) groups = groups.filter((g) => matchesAllTokens(opts.search, [g.title]));
 
   const total = groups.length;
   const data = groups.slice(opts.skip, opts.skip + opts.limit);
@@ -354,7 +355,8 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
 // shareableLink.
 export const freeEbooks = async (opts: { customerId: number | null; search: string | null; language: string | null; page: number; limit: number; skip: number; shareBase: string }) => {
   const where: any = { active: true };
-  if (opts.search) where.OR = [{ name: { contains: opts.search } }, { author: { contains: opts.search } }];
+  const ebookSearch = buildPrismaSearch(opts.search, ["name", "author"]);
+  if (ebookSearch) where.AND = ebookSearch.AND;
   if (opts.language) where.language = opts.language as any;
 
   // Free is price-derived, so we can't paginate at the DB. Load active ebooks,
@@ -413,7 +415,8 @@ export const freeCourses = async (opts: { customerId: number | null; search: str
   const courseWhere: any = { status: true, purchase: opts.wantPaid ? ("yes" as any) : ("no" as any) };
   // Package: no isPaid col. Free request → no packages; paid request → all active.
   const packageWhere: any | null = opts.wantPaid ? { active: true } : null;
-  if (opts.search) { courseWhere.name = { contains: opts.search }; if (packageWhere) packageWhere.name = { contains: opts.search }; }
+  const courseSearch = buildPrismaSearch(opts.search, ["name"]);
+  if (courseSearch) { courseWhere.AND = courseSearch.AND; if (packageWhere) packageWhere.AND = courseSearch.AND; }
 
   const [courses, packages] = await Promise.all([
     prisma.course.findMany({

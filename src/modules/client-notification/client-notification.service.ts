@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Client-facing notification reads on SQL (Wave 7 — net-new ws_notification).
@@ -40,8 +41,9 @@ export const listNotifications = async (
   const base = visWhere(customerId);
   // `search` narrows the paginated list + its total by title/body; the unread
   // badge stays over the FULL visible set (base) so it remains a true count.
-  const where: any = search
-    ? { AND: [base, { OR: [{ title: { contains: search } }, { body: { contains: search } }] }] }
+  const searchFilter = buildPrismaSearch(search, ["title", "body"]);
+  const where: any = searchFilter
+    ? { AND: [base, ...searchFilter.AND] }
     : base;
   const [rows, total, unread] = await Promise.all([
     prisma.notification.findMany({ where, orderBy: { createdAt: "desc" }, skip, take }),

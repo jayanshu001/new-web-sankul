@@ -13,6 +13,7 @@
  * matching how SQL videos (not promoted-from-live) behave.
  */
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const CATEGORY_VIDEO_MODULE = "client-category-video";
 export const isCategoryVideoMysql = (): boolean => true;
@@ -44,7 +45,8 @@ export const listVideos = async (opts: {
   categoryId: number; search: string | null; priceType: "free" | "paid" | null; skip: number; limitNum: number;
 }) => {
   const where: any = { videoCategoryId: opts.categoryId, status: true };
-  if (opts.search) where.title = { contains: opts.search };
+  const search = buildPrismaSearch(opts.search, ["title"]);
+  if (search) where.AND = search.AND;
   if (opts.priceType) where.priceType = opts.priceType;
   const [rows, total] = await Promise.all([
     prisma.video.findMany({ where, orderBy: { order: "asc" }, skip: opts.skip, take: opts.limitNum, select: videoSelect }),

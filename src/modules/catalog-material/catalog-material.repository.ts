@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the catalog · material READ branch (flag OFF).
@@ -32,7 +33,7 @@ export const catalogMaterialRepository = {
   activeChildrenWhere: (parentId: number, opts?: { search?: string }) => ({
     parent: parentId,
     status: true,
-    ...(opts?.search ? { name: { contains: opts.search } } : {}),
+    ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
   }),
 
   /** Count of active materials directly in a category. */

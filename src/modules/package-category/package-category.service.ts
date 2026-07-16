@@ -12,6 +12,7 @@
  */
 import { prisma } from "../../config/prisma";
 import * as liveSql from "../admin-live-course/admin-live-course.service";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const PACKAGE_CATEGORY_MODULE = "package-category";
 export const isPackageCategoryMysql = (): boolean => true;
@@ -116,9 +117,10 @@ export const listPackagesAndLiveByCategory = async (
 
   const pkgWhere: any = { active: true, packageCategoryId: categoryId };
   const liveWhere: any = { status: true, packageCategoryId: categoryId };
-  if (search) {
-    pkgWhere.name = { contains: search };
-    liveWhere.name = { contains: search };
+  const nameSearch = buildPrismaSearch(search, ["name"]);
+  if (nameSearch) {
+    pkgWhere.AND = nameSearch.AND;
+    liveWhere.AND = nameSearch.AND;
   }
 
   // Both-tab counts for the FE tab badges — computed under the current search so
@@ -171,7 +173,8 @@ export const listPackagesAndLiveByCategory = async (
 // Optional search (title) + sort + pagination. skip/take omitted → full list.
 export const listAll = async (q?: { search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number }) => {
   const where: any = {};
-  if (q?.search) where.title = { contains: q.search.trim() };
+  const titleSearch = buildPrismaSearch(q?.search, ["title"]);
+  if (titleSearch) where.AND = titleSearch.AND;
   const col = q?.sortBy === "title" ? "title" : q?.sortBy === "createdAt" ? "createdAt" : "order";
   // Newest-first tiebreaker so recently-added categories surface on top among
   // equal sort-key rows (the common case: most share order=0). `id desc` mirrors
@@ -254,7 +257,8 @@ export const listClientPackageCategories = async (opts: {
   liveOnly: boolean; search: string | null; skip: number; limitNum: number; pageNum: number;
 }) => {
   const where: any = { status: true };
-  if (opts.search) where.title = { contains: opts.search };
+  const titleSearch = buildPrismaSearch(opts.search, ["title"]);
+  if (titleSearch) where.AND = titleSearch.AND;
 
   if (!opts.liveOnly) {
     const [rawList, total] = await Promise.all([

@@ -22,19 +22,23 @@ async function main() {
   if (!svc.isAdminNotificationMysql()) throw new Error("flag client-notification is OFF — enable before verifying");
 
   // ── Reuse a real, live customer + attach a throwaway device token ─────────
-  await prisma.customerDeviceToken.deleteMany({ where: { token: { startsWith: "VERIFY_TOK_" } } });
+  // The token lives in ws_customer.device (single column), so we stash the real
+  // customer's current token and restore it during cleanup — never clobber a
+  // live user's device token.
   const cust = await prisma.customer.findFirst({
     where: { isAccountDeleted: false, status: true },
-    select: { id: true },
+    select: { id: true, firebaseToken: true },
     orderBy: { id: "asc" },
   });
   if (!cust) throw new Error("no live customer in DB to verify against");
   const customerId = cust.id;
+  const originalToken = cust.firebaseToken;
   const createdCustomer = false;
-  await prisma.customerDeviceToken.create({
-    data: { customerId, token: "VERIFY_TOK_A", platform: "android", createdAt: new Date(), updatedAt: new Date() },
+  await prisma.customer.update({
+    where: { id: customerId },
+    data: { firebaseToken: "VERIFY_TOK_A", updatedAt: new Date() },
   });
-  console.log(`\nUsing live customer #${customerId} (+1 throwaway device token)\n`);
+  console.log(`\nUsing live customer #${customerId} (device token temporarily set to a throwaway)\n`);
 
   const seen: number[] = []; // ws_notification ids we create, for cleanup
 
@@ -120,7 +124,11 @@ async function main() {
   // ── Cleanup ───────────────────────────────────────────────────────────────
   await prisma.notification.deleteMany({ where: { id: { in: seen } } });
   await prisma.notification.deleteMany({ where: { customerId, title: { startsWith: "VERIFY" } } });
-  await prisma.customerDeviceToken.deleteMany({ where: { token: { startsWith: "VERIFY_TOK_" } } });
+  // Restore the customer's original device token (or clear our throwaway).
+  await prisma.customer.update({
+    where: { id: customerId },
+    data: { firebaseToken: originalToken, updatedAt: new Date() },
+  });
   if (createdCustomer) await prisma.customer.delete({ where: { id: customerId } });
 
   console.log(`\n────────────\nPASS ${pass}  FAIL ${fail}\n`);

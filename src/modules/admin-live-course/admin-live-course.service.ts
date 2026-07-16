@@ -12,6 +12,7 @@ import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession, P
 import { getVodStreamMeta } from "../../admin/live/streamos.service";
 import { redisClient } from "../../config/redis";
 import { buildPagination } from "../../utils/listQuery";
+import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
 
 export const LIVE_COURSE_MODULE = "live-course";
 export const isLiveCourseMysql = (): boolean => true;
@@ -1247,7 +1248,7 @@ export const listMyLiveCoursesForClient = async (
   // Optional name search + pagination over the resolved cards (subscription rows
   // are hydrated in-memory, so paginate the assembled array via slice).
   const filtered = q.search
-    ? liveCourses.filter((c) => (c.liveCourse?.name ?? "").toLowerCase().includes(q.search!.toLowerCase()))
+    ? liveCourses.filter((c) => matchesAllTokens(q.search, [c.liveCourse?.name]))
     : liveCourses;
   const total = filtered.length;
   const paged = filtered.slice((q.page - 1) * q.limit, (q.page - 1) * q.limit + q.limit);
@@ -1424,10 +1425,9 @@ export const getRecordingsForClient = async (
   // Optional lecture-title search drops non-matching lectures (and now-empty
   // folders); pagination is over the FOLDER list (the recordings screen renders
   // folder-by-folder). totalLectures reflects the search-filtered universe.
-  const term = q.search ? q.search.toLowerCase() : null;
-  const filteredFolders = term
+  const filteredFolders = q.search
     ? allFolders
-        .map((f) => ({ ...f, lectures: f.lectures.filter((l) => (l.title ?? "").toLowerCase().includes(term)) }))
+        .map((f) => ({ ...f, lectures: f.lectures.filter((l) => matchesAllTokens(q.search, [l.title])) }))
         .filter((f) => f.lectures.length > 0)
     : allFolders;
   const totalLectures = filteredFolders.reduce((n, f) => n + f.lectures.length, 0);
@@ -1473,7 +1473,7 @@ export const listSessionRecordingsForClient = async (
 
   const links = await prisma.liveSessionCourse.findMany({ where: { liveCourseId: courseId }, select: { liveSessionId: true } });
   const sessionIds = [...new Set(links.map((l) => l.liveSessionId).filter((n): n is number => n != null))];
-  const where: Prisma.LiveSessionWhereInput = { id: { in: sessionIds.length ? sessionIds : [-1] }, status: { in: ["SCHEDULED", "CREATED"] }, ...(search ? { title: { contains: search } } : {}) };
+  const where: Prisma.LiveSessionWhereInput = { id: { in: sessionIds.length ? sessionIds : [-1] }, status: { in: ["SCHEDULED", "CREATED"] }, ...(buildPrismaSearch(search, ["title"]) ?? {}) };
   const [sessions, total, subscribed] = await Promise.all([
     prisma.liveSession.findMany({ where, orderBy: [{ scheduledAt: "asc" }, { createdAt: "asc" }], skip: (page - 1) * limit, take: limit }),
     prisma.liveSession.count({ where }),
@@ -1590,7 +1590,8 @@ export const listClient = async (customerId: number | null, q: { search?: string
 // agree. No hero ranking (that's listing-only). Paginated.
 export const listRecentLiveCourses = async (customerId: number | null, q: { search?: string; page: number; limit: number }) => {
   const where: Prisma.LiveCourseWhereInput = { status: true };
-  if (q.search) where.name = { contains: q.search };
+  const nameSearch = buildPrismaSearch(q.search, ["name"]);
+  if (nameSearch) Object.assign(where, nameSearch);
   const [rows, total] = await Promise.all([
     prisma.liveCourse.findMany({ where, orderBy: { createdAt: "desc" }, skip: (q.page - 1) * q.limit, take: q.limit }),
     prisma.liveCourse.count({ where }),
@@ -1908,8 +1909,8 @@ export const lcListFolders = async (
   search?: string
 ): Promise<{ folders: any[]; relations: any[] }> => {
   const where: any = { liveCourseId };
-  const term = search?.trim();
-  if (term) where.title = { contains: term };
+  const titleSearch = buildPrismaSearch(search, ["title"]);
+  if (titleSearch) Object.assign(where, titleSearch);
   const folders = await prisma.videoCategory.findMany({
     where,
     orderBy: [{ order_by: "asc" }, { created_at: "asc" }],

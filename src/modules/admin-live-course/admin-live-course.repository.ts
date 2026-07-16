@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-live-course MySQL branch (Wave 6).
@@ -81,7 +82,7 @@ export const adminLiveCourseRepository = {
   countSubs: (where: Prisma.LiveCourseSubscriptionWhereInput) => prisma.liveCourseSubscription.count({ where }),
   // Customer search resolver (name / phone / EMAIL) → id set for the OR fragment.
   customerIdsByText: async (q: string) =>
-    (await prisma.customer.findMany({ where: { OR: [{ fullName: { contains: q } }, { phoneNumber: { contains: q } }, { emailAddress: { contains: q } }] }, select: { id: true } })).map((r) => r.id),
+    (await prisma.customer.findMany({ where: buildPrismaSearch(q, ["fullName", "phoneNumber", "emailAddress"]) ?? {}, select: { id: true } })).map((r) => r.id),
   findSubscriptionById: (id: number) => prisma.liveCourseSubscription.findUnique({ where: { id } }),
   createSubscription: (data: Prisma.LiveCourseSubscriptionUncheckedCreateInput) => prisma.liveCourseSubscription.create({ data }),
   updateSubscription: (id: number, data: Prisma.LiveCourseSubscriptionUncheckedUpdateInput) => prisma.liveCourseSubscription.update({ where: { id }, data }),
@@ -110,7 +111,8 @@ export const adminLiveCourseRepository = {
     const where: Prisma.LiveSessionWhereInput = { id: { in: ids } };
     if (opts.upcoming) { where.status = "SCHEDULED"; where.scheduledAt = { gte: opts.now }; }
     else if (opts.status) where.status = opts.status;
-    if (opts.search) where.title = { contains: opts.search };
+    const search = buildPrismaSearch(opts.search, ["title"]);
+    if (search) Object.assign(where, search);
     const [rows, total] = await Promise.all([
       prisma.liveSession.findMany({ where, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], skip: opts.skip, take: opts.take }),
       prisma.liveSession.count({ where }),
@@ -153,7 +155,8 @@ export const adminLiveCourseRepository = {
     const where: Prisma.LiveSessionWhereInput = { id: { in: sessionIds } };
     if (opts.upcoming) { where.status = "SCHEDULED"; where.scheduledAt = { gte: opts.now }; }
     else if (opts.liveNow) where.status = "CREATED"; // "live now" = CREATED (mirrors Mongo)
-    if (opts.search) where.title = { contains: opts.search };
+    const search = buildPrismaSearch(opts.search, ["title"]);
+    if (search) Object.assign(where, search);
     const [rows, total] = await Promise.all([
       prisma.liveSession.findMany({ where, orderBy: [{ scheduledAt: "asc" }, { createdAt: "desc" }], skip: opts.skip, take: opts.take }),
       prisma.liveSession.count({ where }),
@@ -316,14 +319,16 @@ export const adminLiveCourseRepository = {
 
 function buildWhere(opts: { search?: string; status?: boolean }): Prisma.LiveCourseWhereInput {
   const where: Prisma.LiveCourseWhereInput = {};
-  if (opts.search) where.name = { contains: opts.search.trim() };
+  const search = buildPrismaSearch(opts.search, ["name"]);
+  if (search) Object.assign(where, search);
   if (opts.status !== undefined) where.status = opts.status;
   return where;
 }
 
 function clientCourseWhere(opts: { search?: string; upcomingOnly?: boolean; packageCategoryId?: number; now: Date }): Prisma.LiveCourseWhereInput {
   const where: Prisma.LiveCourseWhereInput = { status: true };
-  if (opts.search) where.name = { contains: opts.search.trim() };
+  const search = buildPrismaSearch(opts.search, ["name"]);
+  if (search) Object.assign(where, search);
   if (opts.upcomingOnly) where.startTime = { gte: opts.now };
   if (opts.packageCategoryId !== undefined) where.packageCategoryId = opts.packageCategoryId;
   return where;

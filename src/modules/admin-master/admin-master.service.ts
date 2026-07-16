@@ -1,5 +1,6 @@
 import { adminMasterRepository as repo } from "./admin-master.repository";
 import { resolveAncestors } from "../../utils/categoryAncestors";
+import { matchesAllTokens } from "../../utils/searchFilter";
 import { primaryParentMap } from "../../utils/videoCategoryRelation";
 import { resyncAllPackageRelations } from "../admin-package/package-relation-sync";
 
@@ -80,8 +81,7 @@ export const vcList = async (opts: { search?: string; limit?: number } = {}) => 
     const parent = primaryParent.get(c.id) ?? null;
     return { ...toVcDto({ ...c, parent }), child_categories: children, hasChildren: children.length > 0, ancestors: ancestorsFor(parent) };
   });
-  const q = opts.search?.trim().toLowerCase();
-  if (q) rows = rows.filter((r) => (r.title ?? "").toLowerCase().includes(q));
+  rows = rows.filter((r) => matchesAllTokens(opts.search, [r.title]));
   if (opts.limit && opts.limit > 0) rows = rows.slice(0, opts.limit);
   return rows;
 };

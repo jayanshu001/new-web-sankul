@@ -18,11 +18,11 @@
  */
 import { prisma } from "../../config/prisma";
 import { getPurchasedBookIdSet } from "../book-order/book-order.service";
+import { buildLikeTokens } from "../../utils/searchFilter";
 
 const idStr = (v: number | null | undefined): string | null => (v != null ? String(v) : null);
 const daysBetween = (from: Date, to: Date): number =>
   Math.max(0, Math.ceil((to.getTime() - from.getTime()) / 86_400_000));
-const likeParam = (s?: string | null): string | null => (s && s.trim() ? `%${s.trim()}%` : null);
 
 // ── id-membership lookups (JSON_CONTAINS on the countdown columns) ─────────────
 // Returns the matching row ids (status-active) for a table, honoring an optional
@@ -37,13 +37,13 @@ const matchingIds = async (
   // Caller-supplied fixed identifier (never user input) — safe to inline.
   orderCol: string = "order_by"
 ): Promise<number[]> => {
-  const like = likeParam(search);
+  const nameSearch = buildLikeTokens(search, ["name"]);
   const sql =
     `SELECT id FROM ${table} WHERE status = 1 ` +
     `AND JSON_CONTAINS(${jsonCol}, CAST(? AS JSON))` +
-    (like ? ` AND name LIKE ?` : ``) +
+    (nameSearch ? ` AND ${nameSearch.sql}` : ``) +
     ` ORDER BY ${orderCol} ASC, id DESC`;
-  const params: any[] = like ? [id, like] : [id];
+  const params: any[] = nameSearch ? [id, ...nameSearch.params] : [id];
   const rows = await prisma.$queryRawUnsafe<{ id: number }[]>(sql, ...params);
   return rows.map((r) => Number(r.id));
 };

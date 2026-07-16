@@ -1,6 +1,7 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
 import type { ListBooksOptions } from "./catalog-book.types";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the catalog · book READ branch (`ws_book`, flag OFF).
@@ -16,7 +17,8 @@ const buildWhere = (opts?: ListBooksOptions): Prisma.BookWhereInput => {
   if (opts?.type === "magazine") where.is_magazine = true;
   else if (opts?.type === "combo") where.isCombo = true;
   else if (opts?.type === "regular") { where.is_magazine = false; where.isCombo = false; }
-  if (opts?.search) where.OR = [{ name: { contains: opts.search } }, { author: { contains: opts.search } }];
+  const search = buildPrismaSearch(opts?.search, ["name", "author"]);
+  if (search) where.AND = search.AND;
   return where;
 };
 

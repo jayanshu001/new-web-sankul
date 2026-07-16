@@ -12,6 +12,7 @@
  * the admin/client response contracts are unchanged.
  */
 import { prisma } from "../../config/prisma";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const EXAM_COUNTDOWN_MODULE = "exam-countdown";
 export const isExamCountdownMysql = (): boolean => true;
@@ -130,7 +131,8 @@ export const populateExamCountdowns = async (row: {
 // (preserves the legacy "all categories" behaviour for non-paginating callers).
 export const listCategoriesAdmin = async (opts?: { search?: string | null; skip?: number; take?: number }) => {
   const where: any = {};
-  if (opts?.search) where.name = { contains: opts.search };
+  const search = buildPrismaSearch(opts?.search, ["name"]);
+  if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
     prisma.examCountdownCategory.findMany({ where, orderBy: [{ order: "asc" }, { name: "asc" }], skip: opts?.skip, take: opts?.take }),
     prisma.examCountdownCategory.count({ where }),
@@ -173,7 +175,8 @@ export const listCountdownsAdmin = async (opts: {
 }) => {
   const where: any = {};
   if (opts.categoryId) where.categoryId = opts.categoryId;
-  if (opts.search) where.title = { contains: opts.search };
+  const titleSearch = buildPrismaSearch(opts.search, ["title"]);
+  if (titleSearch) where.AND = titleSearch.AND;
   if (!opts.includePast) where.examDate = { gte: opts.todayUTC };
 
   const [rows, total] = await Promise.all([
@@ -255,7 +258,8 @@ const clientRow = (r: any, todayUTC: Date) => ({
 
 export const listCategoriesClient = async (opts: { search: string | null; skip: number; limit: number; page: number }) => {
   const where: any = { status: true };
-  if (opts.search) where.name = { contains: opts.search };
+  const search = buildPrismaSearch(opts.search, ["name"]);
+  if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
     prisma.examCountdownCategory.findMany({ where, orderBy: [{ order: "asc" }, { name: "asc" }], skip: opts.skip, take: opts.limit }),
     prisma.examCountdownCategory.count({ where }),
@@ -269,7 +273,8 @@ export const listCountdownsClient = async (opts: {
 }) => {
   const where: any = { status: true };
   if (opts.categoryId) where.categoryId = opts.categoryId;
-  if (opts.search) where.title = { contains: opts.search };
+  const titleSearch = buildPrismaSearch(opts.search, ["title"]);
+  if (titleSearch) where.AND = titleSearch.AND;
   if (!opts.includePast) where.examDate = { gte: opts.todayUTC };
   const [rows, total] = await Promise.all([
     prisma.examCountdown.findMany({ where, orderBy: { examDate: "asc" }, skip: opts.skip, take: opts.limitNum }),
@@ -283,7 +288,8 @@ export const upcomingCountdownsClient = async (opts: {
   search: string | null; skip: number; limit: number; page: number; todayUTC: Date;
 }) => {
   const where: any = { status: true, examDate: { gte: opts.todayUTC } };
-  if (opts.search) where.title = { contains: opts.search };
+  const titleSearch = buildPrismaSearch(opts.search, ["title"]);
+  if (titleSearch) where.AND = titleSearch.AND;
   const [rows, total] = await Promise.all([
     prisma.examCountdown.findMany({ where, orderBy: { examDate: "asc" }, skip: opts.skip, take: opts.limit }),
     prisma.examCountdown.count({ where }),

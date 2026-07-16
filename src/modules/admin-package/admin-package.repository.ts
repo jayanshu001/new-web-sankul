@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the admin-package MySQL branch.
@@ -201,7 +202,8 @@ async function replacePivots(
 
 function buildWhere(opts: { search?: string; active?: boolean; packageTypeId?: number }): Prisma.PackageWhereInput {
   const where: Prisma.PackageWhereInput = {};
-  if (opts.search) where.name = { contains: opts.search.trim() };
+  const search = buildPrismaSearch(opts.search, ["name"]);
+  if (search) Object.assign(where, search);
   if (opts.active !== undefined) where.active = opts.active;
   if (opts.packageTypeId !== undefined) where.packageTypeId = opts.packageTypeId;
   return where;

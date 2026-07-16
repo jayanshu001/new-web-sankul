@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import type { Prisma } from "@prisma/client";
+import { buildLikeTokens, buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the referral MySQL branch.
@@ -39,7 +40,7 @@ export const referralRepository = {
   // column on the ledger row).
   listTransactions: (customerId: number, opts: { type?: "credit" | "debit"; search?: string; skip: number; take: number }) =>
     prisma.refferalTransaction.findMany({
-      where: { customerId, ...(opts.type ? { type: opts.type } : {}), ...(opts.search ? { description: { contains: opts.search } } : {}) },
+      where: { customerId, ...(opts.type ? { type: opts.type } : {}), ...(buildPrismaSearch(opts.search, ["description"]) ?? {}) },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
@@ -47,7 +48,7 @@ export const referralRepository = {
 
   countTransactions: (customerId: number, opts: { type?: "credit" | "debit"; search?: string }) =>
     prisma.refferalTransaction.count({
-      where: { customerId, ...(opts.type ? { type: opts.type } : {}), ...(opts.search ? { description: { contains: opts.search } } : {}) },
+      where: { customerId, ...(opts.type ? { type: opts.type } : {}), ...(buildPrismaSearch(opts.search, ["description"]) ?? {}) },
     }),
 
   findTransaction: (id: number, customerId: number) =>
@@ -278,9 +279,15 @@ export const referralRepository = {
     if (opts.from) { conds.push("t.created_at >= ?"); params.push(opts.from); }
     if (opts.to) { conds.push("t.created_at <= ?"); params.push(opts.to); }
     if (opts.search) {
-      const s = `%${opts.search.trim()}%`;
-      conds.push(`(JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.accountHolderName')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.accountNumber')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.ifscCode')) LIKE ? OR c.full_name LIKE ? OR c.phone LIKE ? OR c.referral_code LIKE ?)`);
-      params.push(s, s, s, s, s, s);
+      const s = buildLikeTokens(opts.search, [
+        "JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.accountHolderName'))",
+        "JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.accountNumber'))",
+        "JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.ifscCode'))",
+        "c.full_name",
+        "c.phone",
+        "c.referral_code",
+      ]);
+      if (s) { conds.push(s.sql); params.push(...s.params); }
     }
     const where = conds.join(" AND ");
     const limit = opts.take !== undefined ? ` LIMIT ? OFFSET ?` : "";
@@ -307,9 +314,15 @@ export const referralRepository = {
     if (opts.from) { conds.push("t.created_at >= ?"); params.push(opts.from); }
     if (opts.to) { conds.push("t.created_at <= ?"); params.push(opts.to); }
     if (opts.search) {
-      const s = `%${opts.search.trim()}%`;
-      conds.push(`(JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.accountHolderName')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.accountNumber')) LIKE ? OR JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.ifscCode')) LIKE ? OR c.full_name LIKE ? OR c.phone LIKE ? OR c.referral_code LIKE ?)`);
-      params.push(s, s, s, s, s, s);
+      const s = buildLikeTokens(opts.search, [
+        "JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.accountHolderName'))",
+        "JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.accountNumber'))",
+        "JSON_UNQUOTE(JSON_EXTRACT(t.bank_account,'$.ifscCode'))",
+        "c.full_name",
+        "c.phone",
+        "c.referral_code",
+      ]);
+      if (s) { conds.push(s.sql); params.push(...s.params); }
     }
     const rows = await prisma.$queryRawUnsafe<any[]>(
       `SELECT COUNT(*) AS n FROM ws_refferal_transaction t LEFT JOIN ws_customer c ON c.id=t.customer_id WHERE ${conds.join(" AND ")}`,
@@ -323,9 +336,8 @@ export const referralRepository = {
     const conds: string[] = ["c.referral_code IS NOT NULL", "c.is_account_deleted = 0"];
     const params: any[] = [];
     if (opts.search) {
-      const s = `%${opts.search.trim()}%`;
-      conds.push("(c.referral_code LIKE ? OR c.full_name LIKE ? OR c.phone LIKE ? OR c.email_address LIKE ?)");
-      params.push(s, s, s, s);
+      const s = buildLikeTokens(opts.search, ["c.referral_code", "c.full_name", "c.phone", "c.email_address"]);
+      if (s) { conds.push(s.sql); params.push(...s.params); }
     }
     const having: string[] = [];
     if (opts.hasWithdrawn === "true") having.push("totalWithdrawn > 0");

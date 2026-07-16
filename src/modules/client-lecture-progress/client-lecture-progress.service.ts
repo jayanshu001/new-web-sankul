@@ -1,6 +1,7 @@
 import { prisma } from "../../config/prisma";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
 
 /**
  * Lecture-progress heartbeat + rollup reads on SQL (Wave 7 — net-new
@@ -183,7 +184,8 @@ export const listFreeResume = async (
   // (video title) is pushed into the Prisma where so non-matching videos are
   // simply absent from `byId` and drop out of the built cards.
   const videoWhere: any = { id: { in: videoIds }, status: true, priceType: "free" };
-  if (opts.search) videoWhere.title = { contains: opts.search };
+  const videoSearch = buildPrismaSearch(opts.search, ["title"]);
+  if (videoSearch) videoWhere.AND = videoSearch.AND;
   const videos = await prisma.video.findMany({
     where: videoWhere,
     select: {
@@ -634,7 +636,7 @@ export const listMyLearningProgress = async (
   // `search` filters the flat card stream by course/package/live-course title;
   // resumeNext = the most-recent matching card (hero), independent of the page.
   const matched = opts.search
-    ? cards.filter((c) => (c.title ?? "").toLowerCase().includes(opts.search!.toLowerCase()))
+    ? cards.filter((c) => matchesAllTokens(opts.search, [c.title]))
     : cards;
   const total = matched.length;
   const skip = opts.skip ?? 0;
@@ -668,11 +670,10 @@ export const listMyCoursesForResume = async (
 
   // Candidate cards = started + active, optionally name-filtered; paginate the
   // resolved array (total = full match count).
-  const search = opts.search?.trim().toLowerCase();
   let candidates = perCourse.filter((p) => courseById.has(p._id));
-  if (search) {
+  if (opts.search) {
     candidates = candidates.filter((p) =>
-      (courseById.get(p._id)?.name ?? "").toLowerCase().includes(search)
+      matchesAllTokens(opts.search, [courseById.get(p._id)?.name])
     );
   }
   const total = candidates.length;
