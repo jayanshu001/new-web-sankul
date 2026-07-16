@@ -266,6 +266,23 @@
 
 ---
 
+## 2026-07-16 — Sweep remaining searched columns to utf8mb4 (full audit)
+
+> **DDL only.** Closes the leftover latin1/utf8mb3 gaps after the three earlier
+> utf8mb4 search DDLs (name-only → promoter/misc → customer).
+
+- **Symptom:** MySQL 3988 on free-text `search` with emoji/Gujarati against still-legacy
+  columns — e.g. `course`/`ebook` description+author (`utf8mb3`), `book.author` /
+  `banner_slider.image|key` / offline `name` columns (`latin1`), plus customer
+  `referral_code` and master lookups (`state`/`district`/`education`/`goal`).
+- **DDL:** `docs/migration/schema-changes/2026-07-16_remaining_search_columns_utf8mb4.sql`
+  converts **54 columns across 29 tables** to `utf8mb4 / utf8mb4_0900_ai_ci`
+  (searched / search-adjacent free-text only). No `schema.prisma` change. Apply via
+  `yarn db:migrate`. Re-running is a no-op; re-audit with the SQL header query before
+  other environments.
+
+---
+
 ## 2026-07-16 — Admin customer search: `ws_customer` name/phone/email → utf8mb4
 
 > **DDL only.** Closes the gap left by `2026-07-16_search_columns_utf8mb4.sql`, which
@@ -296,8 +313,9 @@
   Lossless (`latin1`→utf8mb4 transcodes; `utf8mb3`→utf8mb4 superset). Collation is NOT in
   `schema.prisma` → no `db:pull`/`prisma:generate`. Re-running is a no-op; before another
   environment, re-run the audit query in the SQL header and add any still-non-utf8mb4 cols.
-  **Follow-up:** `ws_customer` search columns were missed here — see
-  `2026-07-16_customer_search_columns_utf8mb4.sql` above.
+  **Follow-ups:** `ws_customer` search columns — see
+  `2026-07-16_customer_search_columns_utf8mb4.sql`; remaining searched tables — see
+  `2026-07-16_remaining_search_columns_utf8mb4.sql`.
 - **Connection:** verified the Prisma MySQL driver already carries 4-byte utf8mb4 end to
   end (emoji insert + `contains` round-trip succeeds) — no `DATABASE_URL` change required.
 - **Query shape:** new shared helper `src/utils/searchFilter.ts` (repurposed from the dead
