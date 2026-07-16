@@ -98,11 +98,30 @@ export const deleteInquiry = async (id: number): Promise<boolean> => {
   return true;
 };
 
-/** Client submit: { customerId, description } (matches the Mongo client path). */
+/** Client submit: { customerId, description } (matches the Mongo client path).
+ *  Snapshots the submitter's profile (name/mobile/email/city) onto the row so the
+ *  admin list shows who inquired without a customer join — previously these
+ *  columns were left NULL. `new Date()` is a UTC instant; Prisma persists it as
+ *  UTC for the DATETIME columns regardless of the DB session timezone. */
 export const submitInquiry = async (customerId: number, description: string): Promise<any> => {
   const now = new Date();
-  const row = await prisma.inquiry.create({
-    data: { customerId, description, source: "app", createdAt: now, updatedAt: now },
+  const customer = await prisma.customer.findUnique({
+    where: { id: customerId },
+    select: { fullName: true, phoneNumber: true, emailAddress: true, city: true },
   });
-  return dto({ ...row, customer: null });
+  const row = await prisma.inquiry.create({
+    data: {
+      customerId,
+      description,
+      name: customer?.fullName ?? null,
+      mobile: customer?.phoneNumber ?? null,
+      email: customer?.emailAddress ?? null,
+      city: customer?.city ?? null,
+      source: "app",
+      createdAt: now,
+      updatedAt: now,
+    },
+  });
+  const [h] = await hydrateCustomers([row]);
+  return dto(h);
 };

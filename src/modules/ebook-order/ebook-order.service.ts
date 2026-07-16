@@ -36,13 +36,14 @@ export const parseEbookOrderId = (id: string): number | null => {
 
 /**
  * Read an active ebook plan for create-order: {ebookId, price, duration} or null
- * if the plan doesn't exist / has no ebook / is free.
+ * if the plan doesn't exist / has no ebook / is free / is deactivated
+ * (`status=false`). Guarding on status stops a disabled price row being purchased.
  */
 export const findEbookPlanForOrder = async (
   planId: number
 ): Promise<{ ebookId: number; price: number; duration: number } | null> => {
   const plan = await repo.findPlan(planId);
-  if (!plan?.ebookId || !plan.price || plan.price <= 0) return null;
+  if (!plan?.ebookId || plan.status === false || !plan.price || plan.price <= 0) return null;
   return { ebookId: plan.ebookId, price: plan.price, duration: plan.duration ?? 0 };
 };
 

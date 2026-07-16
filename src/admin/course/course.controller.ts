@@ -208,10 +208,7 @@ export const createCourse = asyncHandler(async (req: Request, res: Response) => 
 });
 
 export const updateCourse = asyncHandler(async (req: Request, res: Response) => {
-  // TEMP diagnostic — remove once the courseEducatorId "nan" report is resolved.
-  console.log("[updateCourse] raw courseEducatorId:", JSON.stringify(req.body?.courseEducatorId), "type:", typeof req.body?.courseEducatorId);
   coerceCourseBodySql(req);
-  console.log("[updateCourse] coerced courseEducatorId:", JSON.stringify(req.body?.courseEducatorId), "type:", typeof req.body?.courseEducatorId);
   // Educator is compulsory on update: partial() relaxes everything, then we
   // force courseEducatorId back to required so it can't be cleared/omitted.
   const v = createCourseSqlSchema
@@ -233,6 +230,15 @@ export const toggleCoursePopular = asyncHandler(async (req: Request, res: Respon
     res,
     data,
     `Course marked as ${data.isPopular ? "popular" : "not popular"}`
+  );
+});
+
+export const toggleCourseStatus = asyncHandler(async (req: Request, res: Response) => {
+  const data = await courseService.toggleCourseStatus(req.params.id as string, req.body?.status);
+  return success(
+    res,
+    data,
+    `Course ${data.status ? "activated" : "deactivated"}`
   );
 });
 

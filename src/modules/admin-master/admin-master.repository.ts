@@ -23,14 +23,14 @@ export const adminMasterRepository = {
 
   // ── CourseSubjectCategory ───────────────────────────────────────────────────
   // Optional search (title) + sort + pagination. skip/take omitted → full list.
-  subjList: (opts?: { search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number }) =>
+  subjList: (opts?: { search?: string; status?: boolean; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number }) =>
     prisma.courseSubjectCategory.findMany({
       where: subjWhere(opts),
       orderBy: subjOrderBy(opts?.sortBy, opts?.sortDir ?? "asc"),
       ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
       ...(opts?.take !== undefined ? { take: opts.take } : {}),
     }),
-  subjCount: (opts?: { search?: string }) => prisma.courseSubjectCategory.count({ where: subjWhere(opts) }),
+  subjCount: (opts?: { search?: string; status?: boolean }) => prisma.courseSubjectCategory.count({ where: subjWhere(opts) }),
   subjFind: (id: number) => prisma.courseSubjectCategory.findUnique({ where: { id } }),
   subjCreate: (data: { title: string; slug: string; image: string; parent: number; order: number; status: boolean }) =>
     prisma.courseSubjectCategory.create({ data: { ...data, createdAt: new Date(), updatedAt: new Date() } }),
@@ -321,10 +321,11 @@ async function uniqueSlugTx(tx: any, base: string): Promise<string> {
   return candidate;
 }
 
-function subjWhere(opts?: { search?: string }) {
+function subjWhere(opts?: { search?: string; status?: boolean }) {
   const where: any = {};
   const search = buildPrismaSearch(opts?.search, ["title"]);
   if (search) Object.assign(where, search);
+  if (opts?.status !== undefined) where.status = opts.status;
   return where;
 }
 

@@ -1,7 +1,8 @@
 import { Request, Response } from "express";
-import { z } from "zod";
+import { z, ZodError } from "zod";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
+import { formatZodError } from "../../utils/httpResponse";
 import { prisma } from "../../config/prisma";
 import {
   findPackagePlanForOrder,
@@ -12,10 +13,21 @@ import { resolveWalletUsage } from "../../modules/referral/referral.service";
 
 // SQL planId is numeric (migrated id-space).
 const createPackageOrderSqlSchema = z.object({
-  packageId: z.coerce.number().int().positive(),
-  customerShippingId: z.coerce.number().int().positive().optional(),
-  promocode: z.string().trim().min(1).optional(),
-  coin: z.coerce.number().int().min(0).optional(),
+  packageId: z.coerce
+    .number({ invalid_type_error: "Please select a valid plan." })
+    .int("Please select a valid plan.")
+    .positive("Please select a valid plan."),
+  customerShippingId: z.coerce
+    .number({ invalid_type_error: "Please select a valid delivery address." })
+    .int("Please select a valid delivery address.")
+    .positive("Please select a valid delivery address.")
+    .optional(),
+  promocode: z.string().trim().min(1, "Promo code cannot be empty. Remove it or enter a valid code.").optional(),
+  coin: z.coerce
+    .number({ invalid_type_error: "Coins to redeem must be a whole number." })
+    .int("Coins to redeem must be a whole number.")
+    .min(0, "Coins to redeem cannot be negative.")
+    .optional(),
 });
 
 // POST /api/v1/client/payment/create-order/package
@@ -56,10 +68,16 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       }
       const planSql = await findPackagePlanForOrder(body.packageId);
       if (!planSql) {
-        logger.warn("createPackageOrderPayment[mysql] plan invalid/not-package/zero", { traceId, customerId, packageId: body.packageId });
-        return res.status(404).json({ success: false, message: "Plan not found, not a package plan, or zero price." });
+        logger.warn("createPackageOrderPayment[mysql] plan invalid/not-package/zero/inactive", { traceId, customerId, packageId: body.packageId });
+        return res.status(404).json({ success: false, message: "This plan is currently unavailable. Please choose another plan." });
       }
-      const pkgSql = await prisma.package.findFirst({ where: { id: planSql.packageId }, select: { id: true, name: true } });
+      // Gate on the parent package being active — a disabled/removed package must
+      // not be purchasable even if a stale plan row still points at it.
+      const pkgSql = await prisma.package.findFirst({ where: { id: planSql.packageId, active: true }, select: { id: true, name: true } });
+      if (!pkgSql) {
+        logger.warn("createPackageOrderPayment[mysql] package inactive/missing", { traceId, customerId, targetPackageId: planSql.packageId });
+        return res.status(404).json({ success: false, message: "This package is currently unavailable. Please choose another." });
+      }
 
       let chargeAmount = planSql.price;
       let promocodeIdNum: number | null = null;
@@ -102,19 +120,19 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
         success: true,
         data: {
           subscriptionId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
-          package: pkgSql ? { _id: String(pkgSql.id), name: pkgSql.name } : { _id: String(planSql.packageId), name: null },
+          package: { _id: String(pkgSql.id), name: pkgSql.name },
           plan: { _id: String(body.packageId), duration: planSql.duration, price: planSql.price },
           promo: promocodeIdNum ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount } : null,
         },
       });
     }
   } catch (e: any) {
-    if (e.issues) { logger.warn("createPackageOrderPayment validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
-    const message =
-      e?.error?.description ||
-      e?.message ||
-      "Unknown error creating package payment order.";
-    logger.error("createPackageOrderPayment failed", { traceId, customerId, error: message, stack: e?.stack });
-    return res.status(500).json({ success: false, message });
+    if (e instanceof ZodError) {
+      logger.warn("createPackageOrderPayment validation failed", { traceId, customerId, issues: e.issues });
+      const { message, errors } = formatZodError(e);
+      return res.status(400).json({ success: false, message, errors });
+    }
+    logger.error("createPackageOrderPayment failed", { traceId, customerId, error: e?.error?.description || e?.message, stack: e?.stack });
+    return res.status(500).json({ success: false, message: e?.error?.description || "Something went wrong while creating your order. Please try again." });
   }
 };

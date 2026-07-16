@@ -9,13 +9,15 @@ import {
   deleteState,
 } from "../customer-master/customer-master.controller";
 
+// Cities are sourced from ws_customer_distict (districts), not ws_offline_city.
+// Same request/response contract; see admin.cities.controller for the mapping.
 import {
   listCities,
   getCity,
   createCity,
   updateCity,
   deleteCity,
-} from "../offline/offline.controller";
+} from "./admin.cities.controller";
 
 const router = Router();
 

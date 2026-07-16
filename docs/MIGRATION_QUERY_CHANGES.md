@@ -15,6 +15,222 @@
 
 ---
 
+## 2026-07-16 — Harden client create-order preconditions (plan/parent active-status + friendly errors)
+
+> **Query-shape changes (create-order guards).** No schema/DDL change; adds `status`
+> to two plan selects and one parent-entity filter so deactivated catalog rows can no
+> longer be purchased. Affects the client `/payment/create-order/*` endpoints only.
+
+**Query changes**
+- `commerce-order.repository.findPlan` — added `status: true` to the `ws_package_course_ebook_price` select. Consumed by `findCoursePlanForOrder` / `findPackagePlanForOrder`, which now return `null` when `status === false` (course + package create-order reject an inactive plan). Verify path is unaffected (extra column only).
+- `ebook-order.repository.findPlan` — added `status: true` to the same table's select; `findEbookPlanForOrder` now returns `null` for an inactive plan.
+- `live-course-order.service.findLiveCourse` — select now includes `status`; live-course create-order rejects a deactivated `ws_live_course` (previously the lookup was non-blocking / name-only).
+- `package-payment.controller` — the parent-package lookup now filters `where: { id, active: true }` (`ws_package.status`) and is a hard guard (404) instead of a name-only, non-blocking read.
+- Test-series + live-course *plan* lookups already filtered `status: true` — unchanged.
+
+**Behavioral / contract notes (no query change)**
+- Friendly user-facing error strings replace internal-leaking ones on all order endpoints; raw Zod `issues` blobs replaced by a `{ message, errors }` map via new `utils/httpResponse.formatZodError`. 500 handlers no longer echo `e.message` to clients. Success responses and status codes are unchanged.
+- **Not enforced (no column exists — would need DDL):** promocode usage-limit / per-user cap (`ws_promocode` has no such column) and book stock/inventory (`ws_book` tracks no quantity). Already-owned/duplicate-purchase blocking intentionally skipped (app has an "Extend Validity" flow).
+
+---
+
+## 2026-07-16 — Auto-populate created/updated timestamps on every write (fix ws_customer.created_at NULL)
+
+> **Central Prisma middleware.** The introspected schema leaves most `created_at`/`updated_at`
+> columns without `@default(now())`/`@updatedAt`, so unless a caller passed them they landed
+> NULL (e.g. every `ws_customer.created_at`). Now set centrally for ALL models.
+
+- **Root cause:** `customer-auth.repository.ts#createStub` (and many other create paths) never
+  set `createdAt`; the column has no DB default → NULL. `updated_at` looked fine only because
+  its column has `DEFAULT CURRENT_TIMESTAMP` — but that uses the DB session tz and bypasses the
+  IST write-shift, so it was inconsistent anyway.
+- **Fix** (`config/prisma.ts`): a `$use` middleware built from the DMMF maps each model → its
+  DateTime created/updated fields (name variants `createdAt`/`created_at`/`createAt`,
+  `updatedAt`/`updated_at`; business timestamps like `startAt`/`expiresAt` excluded). On
+  `create`/`createMany` it fills created+updated when the caller omitted them; on
+  `update`/`updateMany`/`upsert` it fills updated. Installed BEFORE the IST-shift middleware so
+  the populated `new Date()` flows through the +5:30 shift → stored as IST, consistent with
+  everything else. Only fills when `undefined` (never overrides an explicit value).
+- **Coverage (audit):** 126 models — 94 have both created+updated (both filled), 9 created-only
+  (tokens/logs/results: CustomerOtp, *AccessToken, ExamResult, OfflineEnquiry, LiveSessionCourse,
+  SearchHistory — filled), 23 have no audit timestamps (nothing to fill). No raw `INSERT INTO ws_*`
+  exists, so nothing bypasses the middleware.
+- **Verified:** customer create → `created_at`+`updated_at` populated as IST, Prisma reads UTC;
+  update refreshes `updated_at` only, leaves `created_at`. `typecheck` green.
+- **Limitation:** nested relation creates (`data:{ rel:{ create:{…} } }`) are not auto-filled
+  (only top-level `data`); such nested rows should pass timestamps explicitly if needed.
+
+---
+
+## 2026-07-16 — Timestamps now STORED as IST in the DB (Prisma shift middleware + backfill)
+
+> **Storage-timezone migration (client requirement).** DB now holds IST wall-clock;
+> app layer stays UTC; API still returns IST. Full runbook:
+> `docs/migration/IST_STORAGE_MIGRATION.md`. **No API contract change → no frontend change.**
+
+- **Middleware** (`config/prisma.ts`): `$use` shifts every write Date `+5:30` (DB = IST) and
+  every read Date `-5:30` (app = UTC). Recurses only into plain objects/arrays (Decimal/BigInt/
+  Buffer safe). Verified it also intercepts `$queryRaw*`, so raw Date params (WHERE bounds) and
+  raw Date results are auto-shifted — the whole app/filters/sort/`istJsonReplacer` are unchanged.
+- **Only raw SQL fix** (`admin-dashboard.service.ts`): `HOUR/DAYOFMONTH(CONVERT_TZ(created_at,
+  '+00:00','+05:30'))` → `HOUR/DAYOFMONTH(created_at)` (column is already IST). This was the sole
+  SQL-side timezone function in the codebase (grep-confirmed: no other `CONVERT_TZ`/`NOW()`/
+  `UNIX_TIMESTAMP` in raw queries). Report buckets that used `YEAR/MONTH/DAY/DATE_FORMAT` on the
+  raw column now bucket by IST day (was UTC day) — intended under IST-everywhere.
+- **Backfill** (`scripts/backfill-ist-timestamps.ts`): one-time `+INTERVAL 330 MINUTE` on all
+  `ws_*` datetime/timestamp columns (261 of them). **Batched by PK (20k) + resumable per-column
+  ledger `_ist_backfill`** after the naive single-UPDATE version overflowed the binlog and crashed
+  MySQL on the 600k-row subscription tables. Guarded by `IST_BACKFILL_CONFIRM=YES`.
+- **Deploy:** code + backfill must cut over together (maintenance window) — un-backfilled UTC rows
+  read `-5:30` wrong under the new middleware, and IST rows read wrong under old code.
+- **Verified on local:** all 261 columns shifted; legacy inquiry id=1 `09:36`UTC→`15:06`IST stored,
+  Prisma reads `09:36Z`, API `15:06+05:30`; `typecheck` green.
+
+---
+
+## 2026-07-16 — Inquiry submit now snapshots the customer profile (name/mobile/email/city)
+
+> **Write-behavior fix, no schema change.** `POST /client/inquiry` was persisting only
+> `{ customerId, description, source }`, leaving `name/mobile/email/city` NULL on
+> `ws_website_inquiry` — so the admin inquiry list showed those columns empty.
+
+- **Fix** (`modules/inquiry/inquiry.service.ts#submitInquiry`): before insert, fetch the
+  submitting customer (`fullName`, `phoneNumber`, `emailAddress`, `city`) and write them to
+  `name`/`mobile`/`email`/`city`. Response now also hydrates the `customerId` nested object
+  (was `customer: null`).
+- **Timezone note (no code change needed):** `createdAt`/`updatedAt` are written as
+  `new Date()` (UTC instant). Verified empirically that Prisma persists these as UTC to the
+  DATETIME columns **even when the DB session `time_zone` is forced to +05:30** — the model's
+  `@default(now())`/`@updatedAt` mean Prisma always supplies an explicit UTC value, so the DB's
+  `DEFAULT/ON UPDATE CURRENT_TIMESTAMP` (which would use session tz) never fires. Any IST rows
+  are legacy (old PHP app) or from a pre-migration deployment, not the current write path.
+- Verified on local DB: submit → row + DTO carry name/mobile/email/city; `getInquiry` returns
+  them; `createdAt` stored == UTC now.
+
+---
+
+## 2026-07-16 — Admin /address/cities full CRUD moved to ws_customer_distict (was ws_offline_city)
+
+> **Data-source change on an admin management surface, same response contract.** Follows
+> the client `/address/cities` switch — the admin Cities screen now creates/reads/updates/
+> deletes DISTRICTS (`ws_customer_distict`), keeping the offline-city DTO shape.
+
+- **Scope:** all of `GET/POST/GET:id/PUT/DELETE /admin/address/cities`. Repointed
+  `admin.address.routes` from `offline.controller` to the new
+  `src/admin/address/admin.cities.controller.ts`. Offline-city CRUD
+  (`/admin/offline`, cart `cityId`→name, `/cities/:cityId/centers`) is untouched and still
+  uses `ws_offline_city`. Districts also remain managed at `/admin/customer-master/districts`.
+- **New repo methods** (`customer-lookups.repository`): `listAdminDistricts` /
+  `countAdminDistricts` (shared `adminDistrictWhere`: optional `active` status + `stateId` +
+  name `buildPrismaSearch`, name order, state included, paginated), `findDistrictWithState`,
+  `createDistrictWithState`, `updateDistrictWithState`, and `countCustomersInDistrict`
+  (`prisma.customer.count({ where: { districtId } })` — delete guard).
+- **New service** (`customer-lookups.service`): `listCityDistrictsAdmin` /
+  `getCityDistrictAdmin` / `createCityDistrict` / `updateCityDistrict` / `deleteCityDistrict`,
+  all returning the offline-city `CityDto` via the shared `districtToCity` mapper (image "",
+  order 0, timestamps null, status ← active, stateId ← state).
+- **Contract deltas forced by the district schema (FRONTEND-visible):**
+  - `stateId` is now **REQUIRED** on create (district FK is NOT NULL) → 400 if missing/invalid.
+  - `image` and `order` are accepted but **ignored** (no district columns); response always
+    `image:""`, `order:0`, `createdAt/updatedAt:null`.
+  - DELETE returns **409** when any customer references the district (`ws_customer.district`).
+- Verified on local DB: create/get/list(+state/search/status filters)/update/delete +
+  bad-state 400 + not-found 404, DTO keys byte-identical to the old city response.
+
+---
+
+## 2026-07-16 — GET /client/address/cities now sourced from ws_customer_distict (was ws_offline_city)
+
+> **Data-source change, identical response contract.** The client city dropdown now
+> reads districts (`ws_customer_distict` / `CustomerDistict`) instead of
+> `ws_offline_city`. Response shape and all filters are unchanged.
+
+- **Why:** business decision — the address city picker should list districts.
+- **Scope:** ONLY `GET /client/address/cities` (`address.controller.listCities`). The
+  offline-city module (`listActiveCities`) is untouched, so `/client/offline` cities, cart
+  `cityId`→name resolution (`resolveCityName`), `/cities/:cityId/centers`, and admin city
+  CRUD still use `ws_offline_city`.
+- **New query:** `customer-lookups.repository.listActiveDistricts({ search?, stateId? })` —
+  `prisma.customerDistict.findMany` where `active: true` (+ name `buildPrismaSearch` + optional
+  `stateId`), `include` parent state, `orderBy name asc`. Same conditions as the old city list;
+  districts have no `order` column so name-order stands in for the city `(order, name)` sort.
+- **Contract parity:** `customer-lookups.service.listActiveCitiesFromDistricts` reuses
+  offline-city's `toCityDto` transformer, defaulting the columns districts lack — `image: ""`,
+  `order: 0`, `createdAt/updatedAt: null`; `status` ← `active`; `stateId` ← populated state
+  `{ _id, name, stateCode }`. DTO keys byte-identical to the old city response.
+- Verified on local DB: 33/34 districts active → 33 returned; active-only, name sort, `stateId`
+  scope, and name `search` all hold; DTO keys `_id,name,image,status,order,stateId,createdAt,updatedAt`.
+
+---
+
+## 2026-07-16 — GET /admin/master/subject-categories: honor the `status` filter (was ignored)
+
+> **Query-shape fix (no schema change).** The `?status=` query param on the subject-
+> category list was silently dropped — the endpoint returned rows of any status AND
+> counted all rows for `pagination.total`.
+
+- **Bug:** `subjectCategory.controller.ts#getSubjectCategories` never read `status` from
+  the query, and `subjList`/`subjCount` (service + repo) had no `status` param. So
+  `?status=true` returned inactive rows (reported: a `status:false` row under
+  `status=true`) and `pagination.total` ignored the filter.
+- **Fix:** threaded an optional `status?: boolean` through `subjWhere` (adds
+  `where.status`), `repo.subjList`, `repo.subjCount`, and `service.subjList` — the count
+  now receives the same status as the list. Controller parses the param: `true`/`active`
+  → true, `false`/`inactive` → false, absent/other → undefined (no filter). Accepts both
+  the boolean form (frontend sends `status=true`) and the `active`/`inactive` form used by
+  sibling master lists.
+- Verified on local DB: `status=true`→0/total 0, `status=false`→1, no-filter→1, and
+  `total(true)+total(false)==total(all)`. DTO shape unchanged. No new index (small master
+  table, existing scan).
+
+---
+
+## 2026-07-16 — Add PATCH /admin/courses/:id/status (course status toggle)
+
+> **New endpoint (no DB/schema change).** Brings Courses in line with every other
+> admin module's dedicated status-toggle. Frontend previously faked this via full
+> `PUT /admin/courses/:id` with `{ status }`, which now correctly 422s on the
+> required `courseEducatorId` — see the entry below.
+
+- **Route:** `PATCH /admin/courses/:id/status` (auth-gated via the admin router, same as
+  the sibling `PATCH /:id/popular`). Mounted in `src/admin/course/course.routes.ts`.
+- **Behavior:** flips `ws_course.status` by default; an explicit `status` in the body
+  (`true`/`false` or `"true"`/`"false"`) sets it directly. No required-field validation —
+  a status flip never trips `courseEducatorId`. Mirrors `toggleCoursePopular` exactly.
+- **Response:** envelope `data = { _id: string, status: boolean }` (e.g.
+  `{ "_id": "990115", "status": false }`) — key is **`status`** (course column is
+  `status`), consistent with material's toggle; packages use `{ active }` only because
+  their column is `active`. `_id` included to match `toggleCoursePopular`'s shape.
+- **Layers:** repository `setStatus` (`admin-course.repository.ts`), module service
+  `toggleCourseStatus` (`admin-course.service.ts`), admin wrapper `toggleCourseStatus`
+  (`course.service.ts`, 404 on not-found), controller `toggleCourseStatus`
+  (`course.controller.ts`). Verified end-to-end on course 990115: flip, explicit set,
+  not-found→404, state restored. No new query filters/indexes.
+
+---
+
+## 2026-07-16 — Course update: courseEducatorId returns "Educator is required" instead of "received nan"
+
+> **Validation-contract fix (no DB change).** `PUT /admin/courses/:id` and
+> `POST /admin/courses` — `courseEducatorId` stays **required** (create and update);
+> only the error for the missing/empty case is fixed.
+
+- **Root cause:** the field used `z.coerce.number()`. On an omitted field Zod ran
+  `Number(undefined)` → `NaN`, failing with the misleading `"expected 'number', received
+  'nan'"`. Update re-requires the field via `.partial().required({ courseEducatorId: true })`,
+  so a missing key hit coercion before any "required" check.
+- **Fix** (`src/admin/course/course.validation.ts`): replaced `z.coerce.number(...)` with a
+  `z.preprocess` that maps `""`/`null`/`undefined` → `undefined` (→ clean `422 "Educator is
+  required"`) and coerces real numeric id strings via `Number()` into a plain
+  `z.number({ required_error, invalid_type_error }).int().positive()`. Empty/null/garbage all
+  now return "Educator is required"; `"42"`→`42` unchanged.
+- Removed the TEMP `console.log` diagnostics from `updateCourse` (`course.controller.ts`).
+- **Decision (product):** `courseEducatorId` is REQUIRED on every course update — frontend
+  must always send it. No schema/query/index change; verified via safeParse across
+  omitted/empty/null/valid/garbage/zero inputs.
+
+---
+
 ## 2026-07-16 — Collapse device tokens into ws_customer.device (drop ws_customer_device_token)
 
 > **Schema drop + query-shape change.** Notification device tokens now live in the

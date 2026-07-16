@@ -4,14 +4,24 @@ import * as master from "../../modules/admin-master/admin-master.service";
 
 export const getSubjectCategories = async (req: Request, res: Response) => {
   try {
-    const { search, sortBy, sortOrder, page, limit } = req.query as Record<string, string>;
+    const { search, sortBy, sortOrder, page, limit, status } = req.query as Record<string, string>;
     // Pagination is opt-in: page/limit present → paginate + return a `pagination`
     // block; otherwise the full list (back-compat for dropdown/form callers).
     const paginate = page !== undefined || limit !== undefined;
     const pageNum = Math.max(parseInt(page ?? "1", 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit ?? "20", 10) || 20, 1);
+    // Optional status filter. Absent → no filter (all rows). Accepts both the
+    // boolean form (true/false) and the active/inactive form used by sibling
+    // master lists; anything else is ignored rather than filtering to nothing.
+    const statusFilter =
+      status === "true" || status === "active"
+        ? true
+        : status === "false" || status === "inactive"
+          ? false
+          : undefined;
     const { data, total } = await master.subjList({
       search,
+      status: statusFilter,
       sortBy,
       sortDir: sortOrder === "desc" ? "desc" : "asc",
       ...(paginate ? { skip: (pageNum - 1) * limitNum, take: limitNum } : {}),

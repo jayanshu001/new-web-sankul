@@ -78,15 +78,15 @@ const computeMaterialSplit = (
 
 /**
  * Read an active COURSE plan for create-order: returns {courseId, duration,
- * price} or null if the plan doesn't exist / isn't a course plan / is free.
- * (The plan's status isn't on this select; commerce-price owns active-status
- * reads — create-order only needs the course/price facts.)
+ * price} or null if the plan doesn't exist / isn't a course plan / is free /
+ * is deactivated (`status=false`). Guarding on status here stops a disabled
+ * price row from being purchased at create-order time.
  */
 export const findCoursePlanForOrder = async (
   planId: number
 ): Promise<{ courseId: number; price: number; duration: number } | null> => {
   const plan = await repo.findPlan(planId);
-  if (!plan?.courseId || !plan.price || plan.price <= 0) return null;
+  if (!plan?.courseId || plan.status === false || !plan.price || plan.price <= 0) return null;
   return { courseId: plan.courseId, price: plan.price, duration: plan.duration ?? 0 };
 };
 
@@ -256,12 +256,12 @@ export const verifyCourseOrderMysql = async (
 // plan (plan.packageId set, no courseId) and the fulfilled sub sets package_id
 // (course_id null). DAYS duration, idempotent, dual-read fallback — all identical.
 
-/** Read an active PACKAGE plan for create-order. Null if missing/not-a-package/free. */
+/** Read an active PACKAGE plan for create-order. Null if missing/not-a-package/free/deactivated. */
 export const findPackagePlanForOrder = async (
   planId: number
 ): Promise<{ packageId: number; price: number; duration: number } | null> => {
   const plan = await repo.findPlan(planId);
-  if (!plan?.packageId || plan.courseId || !plan.price || plan.price <= 0) return null;
+  if (!plan?.packageId || plan.courseId || plan.status === false || !plan.price || plan.price <= 0) return null;
   return { packageId: plan.packageId, price: plan.price, duration: plan.duration ?? 0 };
 };
 

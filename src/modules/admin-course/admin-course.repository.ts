@@ -193,6 +193,9 @@ export const adminCourseRepository = {
   setPopular: (id: number, isPopular: boolean) =>
     prisma.course.update({ where: { id }, data: { is_featured: isPopular ? "yes" : "no", updatedAt: new Date() } }),
 
+  setStatus: (id: number, status: boolean) =>
+    prisma.course.update({ where: { id }, data: { status, updatedAt: new Date() } }),
+
   // ── plans (course-owned price rows) ─────────────────────────────────────────
   // ws_package_course_ebook_price is shared (package/course/ebook). A course-OWNED
   // plan has packageId=0 AND ebookId=0 (createPlan writes exactly that), so scope to

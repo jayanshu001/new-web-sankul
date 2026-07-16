@@ -4,6 +4,8 @@ import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.serv
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
+import { formatZodError } from "../../utils/httpResponse";
+import { ZodError } from "zod";
 import {
   createEbookOrderMysql,
   findEbookPlanForOrder,
@@ -61,27 +63,13 @@ export const createEbookOrderPayment = async (req: Request, res: Response) => {
     }
     return createEbookOrderMysqlPath(req, res, { traceId, customerId: customerIdInt, rp });
   } catch (e: any) {
-    if (e.issues) {
+    if (e instanceof ZodError) {
       logger.warn("createEbookOrderPayment validation failed", { traceId, customerId, issues: e.issues });
-      // Readable output: a flat field -> message map plus the first message as the
-      // top-level `message`, instead of the raw ZodError.issues blob.
-      const errors: Record<string, string> = {};
-      for (const issue of e.issues) {
-        const key = issue.path.join(".") || "_";
-        if (!errors[key]) errors[key] = issue.message;
-      }
-      return res.status(400).json({
-        success: false,
-        message: e.issues[0]?.message || "Validation failed.",
-        errors,
-      });
+      const { message, errors } = formatZodError(e);
+      return res.status(400).json({ success: false, message, errors });
     }
-    const message =
-      e?.error?.description ||
-      e?.message ||
-      "Unknown error creating ebook payment order.";
-    logger.error("createEbookOrderPayment failed", { traceId, customerId, error: message, stack: e?.stack });
-    return res.status(500).json({ success: false, message });
+    logger.error("createEbookOrderPayment failed", { traceId, customerId, error: e?.error?.description || e?.message, stack: e?.stack });
+    return res.status(500).json({ success: false, message: e?.error?.description || "Something went wrong while creating your order. Please try again." });
   }
 };
 
@@ -99,10 +87,10 @@ const createEbookOrderMysqlPath = async (
 
   const plan = await findEbookPlanForOrder(planId);
   if (!plan) {
-    logger.warn("createEbookOrderPayment[mysql] plan invalid", { traceId, customerId, planId });
+    logger.warn("createEbookOrderPayment[mysql] plan invalid/inactive", { traceId, customerId, planId });
     return res.status(404).json({
       success: false,
-      message: "Plan not found, not an ebook plan, or zero price.",
+      message: "This eBook plan is currently unavailable. Please choose another plan.",
     });
   }
 

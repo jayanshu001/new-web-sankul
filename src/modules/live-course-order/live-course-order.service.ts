@@ -72,9 +72,10 @@ export const findLiveCoursePlanForOrder = async (
   };
 };
 
-/** Minimal live-course lookup (id + name) for SQL order responses. */
+/** Minimal live-course lookup (id + name + status) for SQL order responses.
+ *  `status` lets create-order refuse a deactivated live course. */
 export const findLiveCourse = (id: number) =>
-  prisma.liveCourse.findFirst({ where: { id }, select: { id: true, name: true } });
+  prisma.liveCourse.findFirst({ where: { id }, select: { id: true, name: true, status: true } });
 
 /** All active pricing plans for a live course (apply-promo plan list). */
 export const listPlansForLiveCourse = (liveCourseId: number) =>
