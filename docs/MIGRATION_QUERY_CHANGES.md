@@ -15,6 +15,284 @@
 
 ---
 
+## 2026-07-17 — Quizzes: multiple parent categories (`ws_exam_category_pivot` re-purposed)
+
+> **No schema change.** Query-semantics + write-contract change on an existing table.
+> **Cleanup script:** `scripts/cleanup-exam-category-pivot-ancestors.ts` (dry-run by default)
+
+A quiz may now be filed under **one or more** leaf exam categories, not exactly one.
+Frontend spec: `docs/backend-requests/exam-multiple-parent-categories.md` (§4 asks for a
+new `ws_exam_exam_category` table — **not built**: `ws_exam_category_pivot` already has
+that exact shape, unique pair + cascade + category index).
+
+**Meaning of `ws_exam_category_pivot` changed.** It previously held the primary category
+**plus every ancestor** (a denormalized rollup written by `replaceExamCategoryPivot`). It
+now holds **only the categories an admin chose** — always leaves. Rationale: with rollup
+rows in the same table there is no way to read the admin's actual selection back out for
+the edit modal's chips (an ancestor is indistinguishable from a selection), and the rollup
+could not express a second category's ancestors anyway.
+
+- `replaceExamCategoryPivot(examId, primaryCategoryId)` → **`setExamCategories(examId, categoryIds[])`**
+  (full-replace; deletes rows not in the set, `skipDuplicates` insert → idempotent, preserves `created_at`).
+- New `validateLeafCategoryIds()` — each id must exist, not be soft-deleted, and be a leaf.
+- New `descendantExamCategoryIds(rootId)` — recursive self-FK walk (`WITH RECURSIVE`).
+
+**Query-shape change — parent lookups now expand at READ time.** Because the pivot no
+longer stores ancestors, matching a parent id against it directly returns nothing. Sites
+passing a single unexpanded id were changed to expand first:
+
+- `client-exam.repository.examsByCategory` / `examsByCategoryPaged` / `countExamsByCategoryPaged`
+  now take `categoryIds: number[]` (subtree) instead of `categoryId: number`;
+  `client-exam.service` expands via `descendantExamCategoryIds`. **Behaviour preserved**
+  (a parent still surfaces its subtree's quizzes) but now explicit rather than dependent
+  on pivot contents.
+- **Unchanged on purpose:** `catalog-exam.repository.countExams` (result only consumed for
+  leaf nodes — `havingChildDirectory ? folders : examCount`), `examCountForCategory`
+  (delete guard; categories with children are already blocked by `has_children`), and the
+  admin `?categoryId=` filter (spec §5.3 wants an exact match, no roll-up).
+- `client-catalog`, `catalog-course`, `catalog-package`, `client-free` already expanded
+  their own descendant sets → unaffected.
+
+**API contract:** `POST/PUT /admin/quizzes` accept `categoryIds: string[]` (JSON) or
+repeated `categoryIds[]` keys (multipart; a lone scalar is lifted to a 1-element array).
+Non-empty; deduped; omitted ⇒ links untouched; present-but-empty ⇒ 400. Legacy scalar
+`categoryId` still accepted. `GET /admin/quizzes` + `/:id` return populated
+`categoryIds: [{_id,name}]` (soft-deleted categories excluded). `ws_exam.exam_category_id`
+is **retained** as the primary (first chosen) category — it is `NOT NULL` and still
+OR-matched by `examInCategoriesWhere`; §6's `DROP COLUMN` is **not** done.
+
+**Legacy data:** pivot rows written before this change include ancestors and would render
+as bogus chips. Run the cleanup script (`--apply`) to strip rows whose category has active
+children; it skips (and reports) any exam filed only on a non-leaf, rather than orphaning it.
+`scripts/seed-exam-category-pivot.ts` also updated to stop seeding ancestors.
+
+**Verified** against `websankul_staging_1` (exam 300004): pivot `[112,124,149]` →
+`[148,149]`; populated `categoryIds` on detail + list; `?categoryId=` finds the quiz via
+**both** 148 and 149 with no duplicate rows; re-save idempotent; empty / non-leaf / missing
+ids rejected with the pivot left unchanged.
+
+**Still open:** category-delete relaxation (block only when a delete would leave a quiz
+with zero categories, instead of the current blanket `has_exams` 400) + the bulk-reassign
+endpoint that gives admins an exit. Not yet implemented.
+
+---
+
+## 2026-07-17 — Dropped 2 stale tables: `ws_user_inquiry` + `ws_live_course_category`
+
+> **DDL:** `docs/migration/schema-changes/2026-07-17_drop_stale_tables.sql`
+> (applied to LOCAL only — see the prod gate below). Schema model removed + client regenerated.
+
+Found by a full static audit of `src/`: no Prisma accessor, no relation `include`, no
+raw-SQL mention, and **zero inbound foreign keys** on either. Local row counts: both 0.
+Table count 133 → 131.
+
+- **`ws_live_course_category`** — architecturally **superseded**, not merely unused. Live-course
+  categories live as JSON on `ws_live_course.material_categories` / `exam_categories`, read via
+  a local helper. The near-miss worth recording: `client-catalog.service.ts:61` defines
+  `liveCourseCategoryIds`, a *function name* that greps identically to a
+  `prisma.liveCourseCategory` accessor — the table looked used and wasn't. Its
+  `LiveCourseCategory` model is removed from `schema.prisma` (hand-edited, per the
+  never-`db:pull`-for-small-changes rule) and the client regenerated.
+- **`ws_user_inquiry`** — contact/inquiry form, never modelled, no code path. latin1 charset +
+  camelCase columns = pre-migration legacy.
+
+**Verified:** both absent from `information_schema`; `yarn typecheck` green; Prisma client
+regenerates without the dropped model; live-course reads still work (4 rows).
+
+### 🚩 PROD GATE — do NOT run this DDL on staging/prod unchecked
+
+`ws_user_inquiry` holds **personal lead data**: name, email, phone, city, dob, gender,
+education, inquiryFor. It is empty and code-stale *locally*, but **"no code reads it" is not
+"no data in it"** — a lead-capture table like this is commonly read by hand (exports /
+phpMyAdmin) by sales, which no code audit can detect. Before running anywhere else:
+
+1. `SELECT COUNT(*) FROM ws_user_inquiry;`
+2. If > 0: **export the rows and confirm with the business** before dropping.
+
+`ws_live_course_category` carries no such risk (superseded by design, no personal data).
+
+The DDL file records the exact `CREATE TABLE` statements for both as a rollback — **structure
+only; dropped rows are not recoverable from it.**
+
+---
+
+## 2026-07-17 — `ws_test_series` created_at/updated_at never written (same hazard as the order table)
+
+> **Write-path fix — no schema/DDL, no query-shape change.** Post-migration bugfix on an
+> already-SQL module (`admin-testseries`).
+
+`ws_test_series` rows read back `created_at: null`. Neither write path set the
+timestamps: `createTestSeries` omitted both, `updateTestSeries` omitted `updatedAt`.
+Nothing else fills them in — the column has **no DB default and no ON UPDATE**, and the
+Prisma model declares **neither `@default(now())` nor `@updatedAt`**. Same defect as
+`ws_test_series_order` (logged below), one table up.
+
+Now: `createTestSeries` sets `createdAt` + `updatedAt`; `updateTestSeries` sets
+`updatedAt`. Both take an injectable `now` for testability, matching `createOrderMysql`.
+
+**Verified** by round-tripping the real service against MySQL: `createdAt` populates on
+create, is preserved across a subsequent update, and `updatedAt` advances independently.
+Probe row deleted afterwards.
+
+**No backfill** — the one existing row has no recoverable creation time. Consistent with
+the order-table decision: a fabricated timestamp is indistinguishable from a real one,
+and a null that reads "unknown" is more honest.
+
+### ⚠ Systemic — this is a table-family hazard, not two isolated bugs
+
+**Every** `ws_test_series*` table has a `created_at` with no default and no auto-update,
+so each write path must remember to set it by hand — and two authors already forgot:
+
+| Table | created_at write path |
+|---|---|
+| `ws_test_series` | ✅ fixed here |
+| `ws_test_series_order` | ✅ fixed (entry below) |
+| `ws_test_series_subscription` | ✅ already explicit (has the warning comment) |
+| `ws_test_series_content_category` | ⚠ **unaudited** |
+| `ws_test_series_exam` | ⚠ **unaudited** |
+| `ws_test_series_price` | ⚠ **unaudited** |
+
+The durable fix is a DDL adding `DEFAULT CURRENT_TIMESTAMP` / `ON UPDATE CURRENT_TIMESTAMP`
+so the DB guarantees the value instead of relying on every future author. **Not done
+here** — it interacts with the IST-in-DB Prisma middleware (which shifts writes +5:30;
+a DB-side `CURRENT_TIMESTAMP` would NOT be shifted and would land 5.5h off the
+app-written rows). Needs deliberate design — see docs/migration/IST_STORAGE_MIGRATION.md.
+
+---
+
+## 2026-07-17 — Report `status` filter: reject unknown values (was silently unfiltered) + test-series order timestamps
+
+> **Filter-contract change (all four subscription reports) + a write fix.** No schema/DDL.
+
+### 1. `statusWhere` silently ignored unrecognised values
+
+`statusWhere(status)` (`utils/reportFilters.ts`) is a **JS switch on exact lower-case
+strings** and returned `{}` — no filter — for anything it didn't recognise. So
+`?status=ACTIVE` (what the admin UI sent) wasn't rejected, it was **ignored**: the
+endpoint returned a plausible, unfiltered list that an admin would trust. Worst failure
+mode available. `isReportStatus` existed as the validator all along and had **zero
+callers** — written, never wired up.
+
+- `statusWhere`: absent/`""` → `{}` (unchanged — most callers pass nothing and mean
+  "no filter"); unrecognised → **throws 422**. Backstop so no future caller can
+  reintroduce the silent swallow.
+- New `assertReportStatus(status)` — boundary validator, wired into the three parsers
+  that passed `q.status` through raw: `subscription.controller.ts` (`reportQueryFrom`),
+  `testSeries.controller.ts` (`parseSubReportQuery`), `live-course.subscription.controller.ts`
+  (`buildSubReportQuery`).
+- New `failureFrom(res, err, fallback)` (`utils/httpResponse.ts`) — honors a thrown
+  `HttpError`'s 4xx instead of flattening it to an opaque 500; wired into the 6 affected
+  test-series/live-course handlers (list + CSV + Excel each). `subscription.controller`'s
+  three handlers return a hand-rolled `{success,message}` envelope — **left as-is**, only
+  the status code corrected via a local `errStatus` helper.
+- `ebook-subscription.controller.ts` had a **separate copy** of the same silent-drop and
+  now rejects via its existing `ok:false` → 400 channel. It still accepts legacy
+  `true`/`false` booleans, which is why it can't reuse `assertReportStatus` directly.
+
+**Behaviour change:** `?status=<unknown>` now 422s (400 for ebook) instead of returning
+everything. FE has already shipped lower-case for both filters and dropped the
+nonexistent `Failed`/`Cancelled`/`Revoked` options, so no compatibility risk. `Revoked`
+never existed in any casing — the enum is `active | expired | inactive`.
+
+**Verified:** `undefined`/`""` → `{}`; `active`/`inactive` → correct fragments;
+`ACTIVE`/`revoked` → 422; ebook still accepts `true`/`false`.
+
+**Deliberately NOT tightened:** `book.controller.ts:274` (`BookOrderStatus`) has the same
+silent-drop shape but a different enum and doesn't use `statusWhere`. Tightening it could
+break a caller that sends a value today — needs its own FE check first.
+
+### 2. `ws_test_series_order.created_at` / `updated_at` never set on client checkout
+
+`created_at` is nullable with no DB default, and `createOrderMysql`
+(`test-series-order.service.ts`) omitted it — so client-checkout orders read back
+`createdAt: null`, rendered `—` in the admin Orders tab, and sorted unpredictably under
+the list's `orderBy: { createdAt: "desc" }`. The **admin grant path already set them**
+(`admin-testseries.service.ts`), which is why admin-granted rows were the only populated
+ones. The identical hazard was already documented three lines below, on the subscription
+create.
+
+Now sets `createdAt`/`updatedAt` on create and `updatedAt` on the verify →
+`complete` transition. **No backfill** — orders with a null `created_at` have no reliable
+creation time anywhere, and a fabricated timestamp would be indistinguishable from a real
+one. A null that reads "unknown" is the honest answer.
+
+### ⚠ Related, NOT fixed — test-series payments have no webhook
+
+The only writer of `status: "complete"` on the client path is `verifyOrderMysql`, called
+solely from `client/payment/verify.controller.ts` — a synchronous, browser-driven call
+after Razorpay returns. **No webhook backs it.** If a customer pays and closes the tab,
+Razorpay captures the money and the order stays `pending` forever with no subscription
+granted — indistinguishable from ordinary abandonment. So **`pending` is not a safe proxy
+for "didn't pay"**, and the Orders tab can't be trusted for reconciliation until this is
+addressed. Read-only first step (agreed with FE): query Razorpay for captured payments
+whose `order_id` matches a `pending` row, to establish whether this has already bitten
+anyone. Payment-flow change — needs sign-off before design.
+
+---
+
+## 2026-07-17 — Strip legacy ancestor rows from `ws_exam_category_pivot` (ran the cleanup)
+
+> **Data fix only — no schema, no query-shape, no code change.**
+> **Script:** `scripts/cleanup-exam-category-pivot-ancestors.ts --apply`
+
+`PUT /admin/quizzes/300003` was rejected with `Category 108 is not a leaf category`,
+using a `categoryIds` the **read endpoint itself had just returned** — breaking the
+invariant *whatever GET returns must be a legal PUT body*.
+
+**Cause:** the pivot was re-purposed from ancestor-rollup → chosen-leaves-only, but the
+cleanup script written at that time was never run. Exam 300003 still had the old rollup
+on disk — rows `108, 109, 150` (all `created_at 2026-07-15 15:59:35`), where only `150`
+is a leaf and `ws_exam.exam_category_id = 150` confirms the true selection. The admin
+could not fix it from the UI: the picker greys out non-leaves, so `108`/`109` were
+un-deselectable.
+
+**Not** read-side expansion leaking into the serialised field — `descendantExamCategoryIds`
+stays in the filter path. Disk was wrong, and the read faithfully reported it.
+
+**Applied:** dry run → 2 deletable rows, 0 exams stranded → `--apply` removed exam 300003's
+`108` + `109`. Verified after: exam 300003 has exactly `[150]`; that set passes
+`validateLeafCategoryIds` (returns null); **0 non-leaf rows remain table-wide** (8 → 6).
+
+**Deploy:** this script must be run on staging/production — they will carry the same
+artifacts. It is a dry run by default and skips exams that would be left with zero
+categories (reporting them for manual assignment).
+
+---
+
+## 2026-07-17 — Repair orphaned `ws_customer_distict.state` (admin cities list 500)
+
+> **Data fix only — no schema, no query-shape, no code change.**
+> **DDL:** `docs/migration/schema-changes/2026-07-17_fix_orphan_district_state.sql`
+
+`GET /api/v1/admin/address/cities` failed for any page containing district `id=1`:
+
+```
+Inconsistent query result: Field state is required to return data, got `null` instead.
+```
+
+**Cause:** legacy blank "unset" placeholder row `ws_customer_distict` `id=1`
+(`name=''`, `active=0`) had `state=0`, and no `ws_customer_state` row with `id=0`
+exists. `CustomerDistict.state` is a **required** relation in `prisma/schema.prisma`,
+so the `include: { state }` join returning nothing is a hard Prisma error.
+
+Only the admin list tripped it: `listAdminDistricts` includes inactive rows by design,
+while the client `listActiveDistricts` filters `active: true` and skipped the bad row.
+`findDistrictWithState(1)` was broken by the same cause.
+
+**Fix:** repointed the placeholder district at the matching placeholder **state**
+(`id=1`, likewise `name=''`, `active=0`) — the same legacy "unset" convention. The row
+stays blank + inactive, and the **24 `ws_customer` rows referencing `district=1`** are
+untouched. The `UPDATE` is guarded on `state = 0`, so it is idempotent.
+
+**Deploy:** apply the DDL. Verified post-apply: 35 districts, 0 orphaned state refs.
+
+**Watch-list:** `state`/`district` have **no FK constraints** in MySQL, so nothing
+prevents this drift from recurring. Same family as the `ws_video_category`
+`parent`/`educator_id` NOT NULL `default 0` drift — legacy `0` used as "unset" where a
+required Prisma relation expects a real parent row.
+
+---
+
 ## 2026-07-16 — Harden client create-order preconditions (plan/parent active-status + friendly errors)
 
 > **Query-shape changes (create-order guards).** No schema/DDL change; adds `status`

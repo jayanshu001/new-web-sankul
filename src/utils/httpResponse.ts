@@ -55,6 +55,32 @@ export const failure = (
   return res.status(status).json(responseData);
 };
 
+/**
+ * Failure response that honors a thrown `HttpError`'s own status + message,
+ * falling back to a generic message otherwise.
+ *
+ * Use in a controller catch that would otherwise blanket-500: a boundary
+ * validator throwing 422 ("Invalid status ...") is only useful if the catch
+ * doesn't flatten it into an opaque 500. Unknown errors keep the generic
+ * fallback so internals are never leaked to the client.
+ *
+ *   } catch (err) {
+ *     logger.error(...);
+ *     return failureFrom(res, err, "Failed to list subscriptions.");
+ *   }
+ */
+export const failureFrom = (
+  res: Response,
+  error: unknown,
+  fallbackMessage: string,
+  fallbackStatus: number = 500
+): Response => {
+  const statusCode = (error as { statusCode?: unknown } | null)?.statusCode;
+  if (typeof statusCode === "number" && statusCode >= 400 && statusCode < 500)
+    return failure(res, getErrorMessage(error), statusCode);
+  return failure(res, fallbackMessage, fallbackStatus);
+};
+
 // Helper to get a standard error message
 export const getErrorMessage = (error: unknown): string => {
   let message: string;

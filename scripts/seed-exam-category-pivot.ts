@@ -147,8 +147,12 @@ export const buildDemoPivotRows = async (prisma: PrismaClient): Promise<PivotSee
       );
       leaf = defaultLeaf;
     }
-    for (const catId of categoryAncestorIds(leaf, catById)) add(exam.id, catId);
-    if (extraRoot > 0) add(exam.id, extraRoot);
+    // Only the category the exam is actually filed under — NOT its ancestors. The
+    // pivot records the admin's chosen (leaf) categories; parent lookups expand the
+    // tree at read time instead (see descendantExamCategoryIds). Seeding ancestors
+    // here would put rows in the table that no write path can produce.
+    add(exam.id, leaf);
+    if (extraRoot > 0) add(exam.id, extraRoot); // second category → exercises multi-category
   }
 
   return rows;

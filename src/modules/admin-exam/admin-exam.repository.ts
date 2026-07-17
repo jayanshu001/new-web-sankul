@@ -16,6 +16,19 @@ export interface QuestionWrite {
   options: { name: string }[];
 }
 
+/**
+ * The exam's chosen categories, for the populated `categoryIds` DTO field. Excludes
+ * soft-deleted categories: a link to one is inert everywhere else (every read filters
+ * `deleted:false`), so surfacing it would render a chip the picker can't offer back.
+ */
+const examCategoriesInclude = {
+  examCategoryPivot: {
+    where: { Category: { deleted: false } },
+    select: { Category: { select: { id: true, name: true } } },
+    orderBy: { categoryId: "asc" },
+  },
+} satisfies Prisma.ExamInclude;
+
 /** ws_exam.questions = count of ACTIVE (status=true) questions — mirrors the Mongo recompute. */
 async function recomputeCount(tx: Prisma.TransactionClient, examId: number) {
   const count = await tx.examQuestion.count({ where: { exam: examId, status: true } });
@@ -33,7 +46,7 @@ export const adminExamRepository = {
     const where = adminExamRepository.examListWhere(opts);
     return prisma.exam.findMany({
       where,
-      include: { ExamCategory: { select: { id: true, name: true } } },
+      include: { ExamCategory: { select: { id: true, name: true } }, ...examCategoriesInclude },
       // `order_by` is a legacy field with no correlation to recency (1487 rows
       // sit at 0, 2760 at 1, spanning the same 2018-2023 date range in both
       // buckets), so sorting by it first forced every `order_by=0` row ahead
@@ -64,7 +77,10 @@ export const adminExamRepository = {
     return parts.length ? { AND: parts } : {};
   },
   findExam: (id: number) =>
-    prisma.exam.findUnique({ where: { id }, include: { ExamCategory: { select: { id: true, name: true } } } }),
+    prisma.exam.findUnique({
+      where: { id },
+      include: { ExamCategory: { select: { id: true, name: true } }, ...examCategoriesInclude },
+    }),
   countQuestionsForExam: (examId: number) => prisma.examQuestion.count({ where: { exam: examId } }),
 
   // ── exam writes ──────────────────────────────────────────────────────────────

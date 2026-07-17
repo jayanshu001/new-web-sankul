@@ -346,10 +346,16 @@ const mapSeriesWrite = (data: SeriesWrite): any => {
   return out;
 };
 
-export const createTestSeries = async (data: SeriesWrite) => {
+export const createTestSeries = async (data: SeriesWrite, now: Date = new Date()) => {
   const set = mapSeriesWrite(data);
   // Empty-string thumbnail means "no thumbnail" — drop it (Mongo parity).
   if (data.thumbnail !== undefined && data.thumbnail !== "") set.thumbnail = data.thumbnail;
+  // created_at/updated_at have no DB default and no ON UPDATE on this introspected
+  // legacy table, and the model declares neither @default(now()) nor @updatedAt — so
+  // unless set here the row reads back null and is invisible to created_at-windowed
+  // reads (admin dashboard) + sorts unpredictably. Same hazard as ws_test_series_order.
+  set.createdAt = now;
+  set.updatedAt = now;
   const created = await prisma.testSeries.create({ data: set });
   const catMap = await buildExamCategoryMap([created.examCategoryIds]);
   return { series: seriesDto(created, catMap) };
@@ -371,12 +377,14 @@ export const hasActivePlan = async (testSeriesId: number): Promise<boolean> => {
 };
 
 /** Returns null when the series is missing (→ controller 404). */
-export const updateTestSeries = async (id: number, data: SeriesWrite) => {
+export const updateTestSeries = async (id: number, data: SeriesWrite, now: Date = new Date()) => {
   const set = mapSeriesWrite(data);
   // Empty-string thumbnail removes it; a present non-empty value sets it; a
   // missing thumbnail field leaves it unchanged.
   if (data.thumbnail === "") set.thumbnail = null;
   else if (data.thumbnail !== undefined) set.thumbnail = data.thumbnail;
+  // No @updatedAt on the model / no ON UPDATE on the column — set it explicitly.
+  set.updatedAt = now;
 
   const updated = await prisma.testSeries.update({ where: { id }, data: set }).catch(() => null);
   if (!updated) return null;

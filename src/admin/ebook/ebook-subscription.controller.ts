@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { createEbookSubscriptionSqlSchema, updateEbookSubscriptionSchema } from "./ebook.validation";
 import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
+import { isReportStatus, REPORT_STATUSES } from "../../utils/reportFilters";
 
 // Shared filter mapping for the report list + its CSV/Excel exports, so all three
 // honor the identical param contract. Returns a 400 message on invalid ids/method.
@@ -12,8 +13,17 @@ export const parseSubReportQuery = (
   const paymentMethodEnum = adminEbook.coercePaymentMethod(q.paymentMethod);
   if (q.paymentMethod && !paymentMethodEnum) return { ok: false, message: "Invalid paymentMethod" };
   // Computed report status (active|expired|inactive); legacy true/false still accepted.
-  const statusFilter =
-    q.status === "active" || q.status === "expired" || q.status === "inactive" ? q.status : undefined;
+  // Anything else is rejected rather than dropped: an unrecognised value (e.g. the
+  // upper-case "ACTIVE" the admin UI used to send) would otherwise fall through BOTH
+  // `statusFilter` and the legacy boolean below as undefined, returning a plausible
+  // but silently UNFILTERED list. This mirrors assertReportStatus in reportFilters;
+  // that helper isn't reused here only because this report also honors true/false.
+  if (q.status && !isReportStatus(q.status) && q.status !== "true" && q.status !== "false")
+    return {
+      ok: false,
+      message: `Invalid status "${q.status}". Allowed: ${REPORT_STATUSES.join(", ")} (lower-case).`,
+    };
+  const statusFilter = isReportStatus(q.status) ? q.status : undefined;
   return {
     ok: true,
     query: {

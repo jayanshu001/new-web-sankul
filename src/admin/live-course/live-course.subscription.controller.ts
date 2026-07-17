@@ -1,9 +1,10 @@
 import { Request, Response } from "express";
 import { z } from "zod";
-import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { success, failure, failureFrom, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 import { PaymentMethod } from "../../shared/enums";
+import { assertReportStatus } from "../../utils/reportFilters";
 
 // SQL grant: numeric ids (the Mongo schema enforces ObjectId). Extended from the
 // original free-grant to a full paid grant via the standardized payment section:
@@ -54,7 +55,8 @@ const updateSubscriptionSchema = z
 export const buildSubReportQuery = (q: Record<string, string>, paramsId?: string | string[]): liveSql.SubReportQuery => ({
   liveCourseId: paramsId ? String(paramsId) : (q.liveCourseId ? String(q.liveCourseId) : undefined),
   customerId: q.customerId ? String(q.customerId) : undefined,
-  status: q.status,
+  // 422s an unrecognised status instead of silently returning an unfiltered list.
+  status: assertReportStatus(q.status),
   paymentMethod: q.paymentMethod,
   activationType: q.activationType,
   // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is the
@@ -90,7 +92,7 @@ export const listLiveCourseSubscriptions = async (req: Request, res: Response) =
     return res.status(200).json({ success: true, summary: r.summary, data: r.data, pagination: r.pagination });
   } catch (err) {
     logger.error("listLiveCourseSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, "Failed to list subscriptions.", 500);
+    return failureFrom(res, err, "Failed to list subscriptions.");
   }
 };
 
@@ -108,7 +110,7 @@ export const exportLiveCourseSubscriptionsCsv = async (req: Request, res: Respon
     return res.status(200).send(r);
   } catch (err) {
     logger.error("exportLiveCourseSubscriptionsCsv failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, "Failed to export subscriptions.", 500);
+    return failureFrom(res, err, "Failed to export subscriptions.");
   }
 };
 
@@ -126,7 +128,7 @@ export const exportLiveCourseSubscriptionsExcel = async (req: Request, res: Resp
     return res.status(200).send(r);
   } catch (err) {
     logger.error("exportLiveCourseSubscriptionsExcel failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, "Failed to export subscriptions.", 500);
+    return failureFrom(res, err, "Failed to export subscriptions.");
   }
 };
 

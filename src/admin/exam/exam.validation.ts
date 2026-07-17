@@ -27,6 +27,16 @@ export const createExamSchema = z
     title: z.string().min(1).max(255),
     durationMinutes: z.coerce.number().int().positive(),
     questionCount: z.coerce.number().int().nonnegative().optional(),
+    // Full-replace set of leaf category ids. A single selection arrives from a
+    // multipart form as ONE `categoryIds[]` key (a bare scalar, not an array), so
+    // lift it before validating — otherwise picking exactly one category while
+    // uploading a solution PDF would 400. Existence + leaf-ness are checked in the
+    // service, which needs the DB; here we only enforce shape and non-emptiness.
+    categoryIds: z.preprocess(
+      (v) => (v === undefined || Array.isArray(v) ? v : [v]),
+      z.array(z.string().min(1)).nonempty("At least one parent category is required").optional()
+    ),
+    // Legacy single-category form, still accepted so older clients keep working.
     categoryId: z.string().nullable().optional(),
     type: z
       .enum([ExamType.DAILY, ExamType.SUBJECT, ExamType.MOCK, ExamType.WEEKLY])

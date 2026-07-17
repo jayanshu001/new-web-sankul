@@ -43,7 +43,7 @@ export const createOrderMysql = async (input: {
   customerId: number; testSeriesId: number; planId: number;
   bd: { basePrice: number; discountAmount: number; gstAmount: number; handlingFee: number; totalAmount: number };
   promocodeId: number | null; razorpayOrderId: string; referrerId?: number | null; coin?: number | null;
-}): Promise<{ orderId: number }> => {
+}, now: Date = new Date()): Promise<{ orderId: number }> => {
   const o = await prisma.testSeriesOrder.create({ data: {
     customerId: input.customerId, testSeriesId: input.testSeriesId, planId: input.planId,
     paymentMethod: "razorpay", orderType: "purchase",
@@ -51,6 +51,11 @@ export const createOrderMysql = async (input: {
     gstAmount: input.bd.gstAmount, handlingFee: input.bd.handlingFee, promocodeId: input.promocodeId,
     referrerId: input.referrerId ?? null, walletCoin: input.coin ?? null,
     razorpayOrderId: input.razorpayOrderId, status: "pending",
+    // created_at/updated_at have no DB default (introspected legacy table) — set them
+    // or the row reads back null, renders "—" in the admin Orders tab and sorts
+    // unpredictably under `orderBy createdAt desc`. Same hazard as the subscription
+    // create below; the admin grant path (admin-testseries.service) already does this.
+    createdAt: now, updatedAt: now,
   }});
   return { orderId: o.id };
 };
@@ -87,7 +92,7 @@ export const verifyOrderMysql = async (order: any, razorpayPaymentId: string, no
   });
 
   const result = await prisma.$transaction(async (tx) => {
-    const o = await tx.testSeriesOrder.update({ where: { id: order.id }, data: { status: "complete", razorpayPaymentId } });
+    const o = await tx.testSeriesOrder.update({ where: { id: order.id }, data: { status: "complete", razorpayPaymentId, updatedAt: now } });
     if (existingActive) {
       const newEndAt = extendEndAt({ currentEndAt: existingActive.endAt, durationMonths: durationDays, asDays: true, now });
       const sub = await tx.testSeriesSubscription.update({

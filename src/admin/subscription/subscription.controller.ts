@@ -7,6 +7,7 @@ import {
   adminUpdateAddressSchema,
 } from "./subscription.validation";
 import { PaymentMethod } from "../../shared/enums";
+import { assertReportStatus } from "../../utils/reportFilters";
 import * as subSql from "../../modules/admin-subscription/admin-subscription.service";
 import {
   listAddresses as sqlListAddresses,
@@ -18,6 +19,15 @@ import {
 import type { AddressCreateInput, AddressUpdateInput } from "../../modules/customer-address/customer-address.types";
 import { getCustomer as sqlGetCustomer } from "../../modules/admin-customer/admin-customer.service";
 import { resolveCityName } from "../../modules/offline-city/offline-city.service";
+
+// Status code for a caught error, honoring a thrown HttpError's own 4xx (e.g. the
+// 422 from assertReportStatus) instead of flattening every failure to 500. These
+// handlers return a hand-rolled { success, message } envelope rather than
+// failure()'s — kept as-is, only the code is corrected.
+const errStatus = (error: unknown): number => {
+  const statusCode = (error as { statusCode?: unknown } | null)?.statusCode;
+  return typeof statusCode === "number" && statusCode >= 400 && statusCode < 500 ? statusCode : 500;
+};
 
 const paginated = (req: Request) => {
   const pageNum = Math.max(parseInt((req.query.page as string) || "1", 10) || 1, 1);
@@ -37,7 +47,8 @@ const paginated = (req: Request) => {
 // activationType accepted, see service note.
 export const reportQueryFrom = (q: Record<string, string>): subSql.CourseSubReportQuery => ({
   customerId: q.customerId, courseId: q.courseId, packageId: q.packageId, type: q.type,
-  status: q.status, paymentMethod: q.paymentMethod,
+  // 422s an unrecognised status instead of silently returning an unfiltered list.
+  status: assertReportStatus(q.status), paymentMethod: q.paymentMethod,
   // tri-state: absent = no filter, "true" = with material, "false" = without.
   hasMaterial: q.hasMaterial === "true" ? true : q.hasMaterial === "false" ? false : undefined,
   // tri-state Ws Coin filter (order.ws_coin): "true" = redeemed (>0), "false" = not.
@@ -59,7 +70,7 @@ export const listCourseSubscriptions = async (req: Request, res: Response) => {
     });
     return res.status(200).json({ success: true, summary, data, pagination });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(errStatus(error)).json({ success: false, message: error.message });
   }
 };
 
@@ -72,7 +83,7 @@ export const exportCourseSubscriptionsCsv = async (req: Request, res: Response) 
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     return res.status(200).send(csv);
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(errStatus(error)).json({ success: false, message: error.message });
   }
 };
 
@@ -85,7 +96,7 @@ export const exportCourseSubscriptionsExcel = async (req: Request, res: Response
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     return res.status(200).send(buf);
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(errStatus(error)).json({ success: false, message: error.message });
   }
 };
 

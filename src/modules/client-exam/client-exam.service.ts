@@ -1,4 +1,5 @@
 import { clientExamRepository as repo } from "./client-exam.repository";
+import { descendantExamCategoryIds } from "../catalog-exam/exam-category-pivot.where";
 
 export const CLIENT_EXAM_MODULE = "client-exam";
 export const isClientExamMysql = (): boolean => true;
@@ -62,9 +63,10 @@ export const listExamsByCategory = async (
   opts: { skip?: number; take?: number; search?: string | null } = {}
 ) => {
   const now = new Date();
+  const categoryIds = await descendantExamCategoryIds(categoryId);
   const [subjects, exams] = await Promise.all([
     repo.subCategories(categoryId),
-    repo.examsByCategory(categoryId, now, opts.search ?? null),
+    repo.examsByCategory(categoryIds, now, opts.search ?? null),
   ]);
 
   const resultByExam = new Map<string, any>();
@@ -103,9 +105,10 @@ export const listExamsByCategoryPaged = async (
   if (!category) return null;
 
   const now = new Date();
+  const categoryIds = await descendantExamCategoryIds(categoryId);
   const [exams, total] = await Promise.all([
-    repo.examsByCategoryPaged(categoryId, now, opts.search ?? null, opts.skip, opts.take),
-    repo.countExamsByCategoryPaged(categoryId, now, opts.search ?? null),
+    repo.examsByCategoryPaged(categoryIds, now, opts.search ?? null, opts.skip, opts.take),
+    repo.countExamsByCategoryPaged(categoryIds, now, opts.search ?? null),
   ]);
 
   const resultByExam = new Map<string, any>();

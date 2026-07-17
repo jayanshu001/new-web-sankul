@@ -1,10 +1,11 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { PaymentMethod, PackageCourseEbookOrderStatus, PackageCourseEbookOrderType } from "../../shared/enums";
-import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { success, failure, failureFrom, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as tsSql from "../../modules/admin-testseries/admin-testseries.service";
 import { parseListQuery } from "../../utils/listQuery";
+import { assertReportStatus } from "../../utils/reportFilters";
 import {
   createTestSeriesSchema,
   updateTestSeriesSchema,
@@ -501,7 +502,8 @@ export const deletePrice = async (req: Request, res: Response) => {
 export const parseSubReportQuery = (q: Record<string, string>): tsSql.SubReportOpts => ({
   testSeriesId: q.testSeriesId ? tsSql.parseAtsId(q.testSeriesId) : null,
   customerId: q.customerId ? tsSql.parseAtsId(q.customerId) : null,
-  status: q.status,
+  // 422s an unrecognised status instead of silently returning an unfiltered list.
+  status: assertReportStatus(q.status),
   paymentMethod: q.paymentMethod,
   // Date range bounds `createdAt` at IST day edges — `createdFrom`/`createdTo` is the
   // unified cross-report name (reports-date-filter-created-at.md); dateFrom/dateTo +
@@ -535,7 +537,7 @@ export const listSubscriptions = async (req: Request, res: Response) => {
     return res.status(200).json({ success: true, summary, data, pagination });
   } catch (err) {
     logger.error("listSubscriptions failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, "Failed to list subscriptions.", 500);
+    return failureFrom(res, err, "Failed to list subscriptions.");
   }
 };
 
@@ -551,7 +553,7 @@ export const exportSubscriptionsCsv = async (req: Request, res: Response) => {
     return res.status(200).send(csv);
   } catch (err) {
     logger.error("exportSubscriptionsCsv failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, "Failed to export subscriptions.", 500);
+    return failureFrom(res, err, "Failed to export subscriptions.");
   }
 };
 
@@ -567,7 +569,7 @@ export const exportSubscriptionsExcel = async (req: Request, res: Response) => {
     return res.status(200).send(buf);
   } catch (err) {
     logger.error("exportSubscriptionsExcel failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
-    return failure(res, "Failed to export subscriptions.", 500);
+    return failureFrom(res, err, "Failed to export subscriptions.");
   }
 };
 

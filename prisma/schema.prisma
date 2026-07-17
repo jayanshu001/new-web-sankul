@@ -1857,20 +1857,6 @@ model LiveSessionCourse {
   @@map("ws_live_session_course")
 }
 
-model LiveCourseCategory {
-  id        Int       @id @default(autoincrement())
-  name      String
-  slug      String?
-  image     String?
-  parent    Int       @default(0)
-  order_by  Int       @default(0)
-  status    Boolean   @default(true)
-  createdAt DateTime? @map("created_at")
-  updatedAt DateTime? @map("updated_at")
-
-  @@map("ws_live_course_category")
-}
-
 model LiveChatMessage {
   id          Int       @id @default(autoincrement())
   liveClassId String    @map("live_class_id")

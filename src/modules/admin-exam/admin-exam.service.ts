@@ -1,5 +1,5 @@
 import { adminExamRepository as repo } from "./admin-exam.repository";
-import { replaceExamCategoryPivot } from "../catalog-exam/exam-category-pivot.where";
+import { setExamCategories, validateLeafCategoryIds } from "../catalog-exam/exam-category-pivot.where";
 
 export const ADMIN_EXAM_MODULE = "admin-exam";
 export const isAdminExamMysql = (): boolean => true;
@@ -29,6 +29,13 @@ const toExamDto = (e: any) => ({
   // ws_exam_category row has id 0 — same convention as parent_id=0 for root
   // categories), so it must resolve to `null`, not the string "0".
   categoryId: e.ExamCategory ? { _id: String(e.ExamCategory.id), name: e.ExamCategory.name ?? null } : (e.examCategoryId ? String(e.examCategoryId) : null),
+  // An exam is filed under one or more LEAF categories, held in ws_exam_category_pivot.
+  // Populated ({_id,name}) because the list renders a badge per entry and the edit
+  // modal prefills its chips from this — bare ids would show as raw numbers.
+  categoryIds: (e.examCategoryPivot ?? [])
+    .map((p: any) => p.Category)
+    .filter(Boolean)
+    .map((c: any) => ({ _id: String(c.id), name: c.name ?? null })),
   durationMinutes: e.time,
   questionCount: e.numberOfQuestions,
   positiveMarks: num(e.positiveMarks),
@@ -101,6 +108,12 @@ export interface ExamWriteInput {
   title?: string;
   description?: string | null;
   type?: string;
+  /**
+   * Full-replace set of leaf category ids. Omitted → links left untouched; present
+   * but empty is rejected upstream (validation), never treated as a clear.
+   * `categoryId` remains accepted as the legacy single-category form.
+   */
+  categoryIds?: string[];
   categoryId?: string | null;
   isPaid?: boolean;
   durationMinutes?: number;
@@ -119,6 +132,35 @@ export interface ExamWriteInput {
 export const getExamMeta = (id: number) => repo.findExamMeta(id);
 
 /**
+ * Resolve a write's category set from `categoryIds` (preferred) or the legacy scalar
+ * `categoryId`. Returns `null` when neither is supplied — on update that means "leave
+ * the links untouched"; create rejects it separately. Every id must parse, exist, and
+ * be a leaf.
+ */
+const resolveCategoryIds = async (
+  input: ExamWriteInput
+): Promise<{ ids: number[] } | { error: string } | null> => {
+  const raw =
+    input.categoryIds !== undefined
+      ? input.categoryIds
+      : input.categoryId !== undefined
+        ? input.categoryId === null
+          ? []
+          : [input.categoryId]
+        : null;
+  if (raw === null) return null;
+
+  const ids: number[] = [];
+  for (const value of raw) {
+    const parsed = parseExamId(String(value));
+    if (!parsed) return { error: `Category ${value} not found` };
+    ids.push(parsed);
+  }
+  const error = await validateLeafCategoryIds(ids);
+  return error ? { error } : { ids: [...new Set(ids)] };
+};
+
+/**
  * Returns the conflicting daily test as a Mongo-shaped clash ({_id,title,startAt,
  * endAt}) for the controller's 409, or null when no clash. Only PUBLISHED daily
  * tests with a complete window can clash — mirrors the Mongo `findDailyOverlap`.
@@ -131,11 +173,15 @@ export const examDailyOverlap = async (c: {
   return clash ? { _id: String(clash.id), title: clash.name, startAt: clash.startAt, endAt: clash.endAt } : null;
 };
 
-export const createExam = async (input: ExamWriteInput): Promise<"category_required" | ReturnType<typeof toExamDto>> => {
-  // ws_exam.exam_category_id is NOT NULL in the DB (no FK, no sentinel) — an
-  // exam must belong to a category, so a valid categoryId is mandatory.
-  const catId = input.categoryId ? parseExamId(input.categoryId) : null;
-  if (!catId) return "category_required";
+export const createExam = async (input: ExamWriteInput): Promise<{ error: string } | ReturnType<typeof toExamDto>> => {
+  // An exam must be filed under at least one leaf category.
+  const resolved = await resolveCategoryIds(input);
+  if (resolved === null) return { error: "At least one parent category is required" };
+  if ("error" in resolved) return resolved;
+  // ws_exam.exam_category_id is NOT NULL in the DB (no FK, no sentinel). It stays the
+  // PRIMARY category — first of the chosen set — because several read paths still
+  // OR against the column (see examInCategoriesWhere); the pivot holds the full set.
+  const catId = resolved.ids[0]!;
   const now = new Date();
   // ws_exam.start_date / end_date are NOT NULL in the DB (even subject exams,
   // which ignore the window, carry dates). Default both to now when absent so
@@ -159,9 +205,10 @@ export const createExam = async (input: ExamWriteInput): Promise<"category_requi
     createAt: now,
     updatedAt: now,
   });
-  await replaceExamCategoryPivot(row.id, catId);
-  // Unpopulated categoryId (string id) — matches the Mongo create response.
-  return toExamDto(row);
+  await setExamCategories(row.id, resolved.ids);
+  // Re-read so the response carries the populated categoryIds the caller just set
+  // (the create row has no pivot relation loaded).
+  return toExamDto((await repo.findExam(row.id)) ?? row);
 };
 
 /**
@@ -169,20 +216,21 @@ export const createExam = async (input: ExamWriteInput): Promise<"category_requi
  * solution PDF when the caller cleared it (solutionPdfUrl === null), so the
  * controller can best-effort delete it from S3 after the write.
  */
-export const updateExam = async (id: number, input: ExamWriteInput): Promise<"not_found" | "category_required" | { data: ReturnType<typeof toExamDto>; orphanPdfUrl: string | null }> => {
+export const updateExam = async (id: number, input: ExamWriteInput): Promise<"not_found" | { error: string } | { data: ReturnType<typeof toExamDto>; orphanPdfUrl: string | null }> => {
   const meta = await repo.findExamMeta(id);
   if (!meta) return "not_found";
+
+  // Full-replace semantics: an omitted categoryIds leaves the links alone, a present
+  // one is the exam's complete category set. Resolved before the write so an invalid
+  // id fails the whole update rather than half-applying it.
+  const resolved = await resolveCategoryIds(input);
+  if (resolved && "error" in resolved) return resolved;
 
   const data: any = { updatedAt: new Date() };
   if (input.title !== undefined) data.name = input.title;
   if (input.type !== undefined) data.type = mapType(input.type);
-  // exam_category_id is NOT NULL — only update it to a valid id; reject an
-  // explicit null/invalid value (omitting categoryId leaves it unchanged).
-  if (input.categoryId !== undefined) {
-    const catId = input.categoryId ? parseExamId(input.categoryId) : null;
-    if (!catId) return "category_required";
-    data.examCategoryId = catId;
-  }
+  // exam_category_id is NOT NULL — keep it pointing at the primary (first) category.
+  if (resolved) data.examCategoryId = resolved.ids[0]!;
   if (input.isPaid !== undefined) data.isPaid = input.isPaid;
   if (input.durationMinutes !== undefined) data.time = input.durationMinutes;
   if (input.questionCount !== undefined) data.numberOfQuestions = input.questionCount;
@@ -207,8 +255,9 @@ export const updateExam = async (id: number, input: ExamWriteInput): Promise<"no
   }
 
   const row = await repo.updateExam(id, data);
-  if (row.examCategoryId != null) await replaceExamCategoryPivot(id, row.examCategoryId);
-  return { data: toExamDto(row), orphanPdfUrl };
+  if (resolved) await setExamCategories(id, resolved.ids);
+  // Re-read for the populated categoryIds (updateExam returns no pivot relation).
+  return { data: toExamDto((await repo.findExam(id)) ?? row), orphanPdfUrl };
 };
 
 export const updateExamStatus = async (id: number, status: boolean): Promise<"not_found" | ReturnType<typeof toExamDto>> => {

@@ -15,6 +15,8 @@
 // independent fragments under `AND: [...]` (use `andWhere(...)`), never by
 // spreading them into one object.
 
+import { HttpError } from "../middlewares/errorHandler";
+
 export type ReportStatus = "active" | "expired" | "inactive";
 
 export const REPORT_STATUSES: ReportStatus[] = ["active", "expired", "inactive"];
@@ -35,13 +37,39 @@ export function dateWhere(dateFrom?: string, dateTo?: string): Record<string, an
 }
 
 /**
+ * Validate a caller-supplied `status` at the request boundary.
+ *
+ * Absent/empty is legitimate — it means "no status filter", so it returns
+ * undefined. Anything else that isn't a ReportStatus throws 422 rather than
+ * being quietly dropped: this filter is CASE-SENSITIVE and lower-case only, so
+ * a caller sending "ACTIVE" or "revoked" previously got an unfiltered list that
+ * looked correct — an admin filters to Active, gets a plausible page of rows and
+ * trusts it. Silent wrong results beat loud errors nowhere.
+ */
+export function assertReportStatus(status: string | undefined): ReportStatus | undefined {
+  if (status === undefined || status === "") return undefined;
+  if (!isReportStatus(status))
+    throw new HttpError(
+      422,
+      `Invalid status "${status}". Allowed: ${REPORT_STATUSES.join(", ")} (lower-case).`
+    );
+  return status;
+}
+
+/**
  * Prisma `where` fragment for a normalized status, over a row carrying a
- * `status` boolean column + an `endAt` DateTime. Returns `{}` for an
- * unrecognised/absent value (no filtering). NOTE: the "active" fragment
- * contains an `OR` — combine with other OR-bearing fragments via `andWhere`.
+ * `status` boolean column + an `endAt` DateTime. Absent status → `{}` (no
+ * filtering); an unrecognised value THROWS — see assertReportStatus for why.
+ * Callers should validate at the boundary so the 422 carries a useful message;
+ * this throw is the backstop that keeps any future caller from reintroducing
+ * the silent-unfiltered-result bug. NOTE: the "active" fragment contains an
+ * `OR` — combine with other OR-bearing fragments via `andWhere`.
  */
 export function statusWhere(status: string | undefined, now: Date = new Date()): Record<string, any> {
   switch (status) {
+    case undefined:
+    case "":
+      return {};
     case "active":
       return { status: true, OR: [{ endAt: null }, { endAt: { gt: now } }] };
     case "expired":
@@ -49,7 +77,10 @@ export function statusWhere(status: string | undefined, now: Date = new Date()):
     case "inactive":
       return { status: false };
     default:
-      return {};
+      throw new HttpError(
+        422,
+        `Invalid status "${status}". Allowed: ${REPORT_STATUSES.join(", ")} (lower-case).`
+      );
   }
 }
 

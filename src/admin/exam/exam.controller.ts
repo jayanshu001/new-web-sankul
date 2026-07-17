@@ -229,6 +229,14 @@ export const getExamById = async (req: Request, res: Response) => {
 };
 
 function applyExamUpload(req: Request) {
+  // Multipart forms send the id array as repeated `categoryIds[]` keys (the
+  // convention the other multipart admin endpoints use); JSON sends `categoryIds`.
+  // Fold the bracketed form onto the canonical key so one schema serves both.
+  const bracketed = req.body?.["categoryIds[]"];
+  if (bracketed !== undefined && req.body.categoryIds === undefined) {
+    req.body.categoryIds = bracketed;
+    delete req.body["categoryIds[]"];
+  }
   const file = req.file as any;
   if (file?.location) {
     req.body.solutionPdfUrl = file.location;
@@ -283,7 +291,7 @@ export const createExam = async (req: Request, res: Response) => {
     });
     if (clash) return sendDailyOverlap(res, clash);
     const created = await adminExam.createExam(data as any);
-    if (created === "category_required") return res.status(400).json({ success: false, message: "categoryId is required." });
+    if ("error" in created) return res.status(400).json({ success: false, message: created.error });
     return res.status(201).json({ success: true, data: created });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });
@@ -323,7 +331,7 @@ export const updateExam = async (req: Request, res: Response) => {
 
     const result = await adminExam.updateExam(numId, data as any);
     if (result === "not_found") return res.status(404).json({ success: false, message: "Exam not found." });
-    if (result === "category_required") return res.status(400).json({ success: false, message: "categoryId is required." });
+    if ("error" in result) return res.status(400).json({ success: false, message: result.error });
     if (result.orphanPdfUrl) deleteFromS3FileUrl(result.orphanPdfUrl).catch(() => {});
     return res.status(200).json({ success: true, data: result.data });
   } catch (error: any) {

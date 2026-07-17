@@ -1,5 +1,5 @@
 import { prisma } from "../../config/prisma";
-import { examInCategoryWhere, subjectStartedWhere } from "../catalog-exam/exam-category-pivot.where";
+import { examInCategoriesWhere, subjectStartedWhere } from "../catalog-exam/exam-category-pivot.where";
 import { searchTokens } from "../../utils/searchFilter";
 
 /**
@@ -24,12 +24,16 @@ export const clientExamRepository = {
       orderBy: [{ order_by: "asc" }, { name: "asc" }],
     }),
 
-  /** Published exams in a category (pivot-aware), hiding scheduled exams whose window ended. */
-  examsByCategory: (categoryId: number, now: Date, search?: string | null) =>
+  /**
+   * Published exams in a category SUBTREE, hiding scheduled exams whose window ended.
+   * Takes the expanded id set (self + descendants): exams are filed only under leaf
+   * categories, so a parent id matches nothing on its own.
+   */
+  examsByCategory: (categoryIds: number[], now: Date, search?: string | null) =>
     prisma.exam.findMany({
       where: {
         AND: [
-          examInCategoryWhere(categoryId),
+          examInCategoriesWhere(categoryIds),
           { status: true },
           ...searchTokens(search).map((t) => ({ name: { contains: t } })),
           { OR: [{ type: "subject" }, { endAt: null }, { endAt: { gte: now } }] },
@@ -42,12 +46,12 @@ export const clientExamRepository = {
   findCategory: (id: number) =>
     prisma.examCategory.findFirst({ where: { id }, select: { id: true, name: true, image: true, order_by: true } }),
 
-  /** Published non-daily exams in a category, paginated + optional title search. */
-  examsByCategoryPaged: (categoryId: number, now: Date, search: string | null, skip: number, take: number) =>
+  /** Published non-daily exams in a category subtree, paginated + optional title search. */
+  examsByCategoryPaged: (categoryIds: number[], now: Date, search: string | null, skip: number, take: number) =>
     prisma.exam.findMany({
       where: {
         AND: [
-          examInCategoryWhere(categoryId),
+          examInCategoriesWhere(categoryIds),
           { status: true, type: "subject" },
           ...searchTokens(search).map((t) => ({ name: { contains: t } })),
           // subject exams: only once started (see subjectStartedWhere) and before the window ends.
@@ -59,11 +63,11 @@ export const clientExamRepository = {
       skip,
       take,
     }),
-  countExamsByCategoryPaged: (categoryId: number, now: Date, search: string | null) =>
+  countExamsByCategoryPaged: (categoryIds: number[], now: Date, search: string | null) =>
     prisma.exam.count({
       where: {
         AND: [
-          examInCategoryWhere(categoryId),
+          examInCategoriesWhere(categoryIds),
           { status: true, type: "subject" },
           ...searchTokens(search).map((t) => ({ name: { contains: t } })),
           // subject exams: only once started (see subjectStartedWhere) and before the window ends.
