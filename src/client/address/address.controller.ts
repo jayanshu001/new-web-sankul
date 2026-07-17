@@ -14,6 +14,7 @@ import {
 import {
   listStates as lookupListStates,
   listEducations as lookupListEducations,
+  listActiveCitiesFromDistricts as svcListCityDistricts,
 } from "../../modules/customer-lookups/customer-lookups.service";
 import {
   parseAddressId,
@@ -29,7 +30,6 @@ import type {
   AddressUpdateInput,
 } from "../../modules/customer-address/customer-address.types";
 import {
-  listActiveCities as svcListActiveCities,
   resolveCityName as svcResolveCityName,
 } from "../../modules/offline-city/offline-city.service";
 import { getActiveGoals } from "../goal/goal.client.service";
@@ -304,7 +304,9 @@ export const listCities = async (req: Request, res: Response) => {
       }
       stateNum = n;
     }
-    const data = await svcListActiveCities(search, stateNum);
+    // Cities are sourced from ws_customer_distict (districts), shaped to the
+    // offline-city contract — same fields/filters as before.
+    const data = await svcListCityDistricts(search, stateNum);
     logger.info("listCities success", { traceId, count: data.length, source: "mysql", stateId: stateNum ?? null });
     return res.status(200).json({ success: true, data });
   } catch (e: any) {

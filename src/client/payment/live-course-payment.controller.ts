@@ -5,7 +5,8 @@ import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { computePromoDiscount } from "../promocode/applies-to";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
-import { getErrorMessage } from "../../utils/httpResponse";
+import { getErrorMessage, formatZodError } from "../../utils/httpResponse";
+import { ZodError } from "zod";
 import {
   findLiveCoursePlanForOrder,
   findLiveCourse,
@@ -16,17 +17,31 @@ import { customerAddressRepository } from "../../modules/customer-address/custom
 
 // SQL planId is numeric (migrated id-space).
 const createOrderSqlSchema = z.object({
-  planId: z.coerce.number().int().positive(),
-  promocode: z.string().trim().min(1).optional(),
+  planId: z.coerce
+    .number({ invalid_type_error: "Please select a valid plan." })
+    .int("Please select a valid plan.")
+    .positive("Please select a valid plan."),
+  promocode: z.string().trim().min(1, "Promo code cannot be empty. Remove it or enter a valid code.").optional(),
   withMaterial: z.boolean().optional(),
-  customerShippingId: z.coerce.number().int().positive().optional(),
-  coin: z.coerce.number().int().min(0).optional(),
+  customerShippingId: z.coerce
+    .number({ invalid_type_error: "Please select a valid delivery address." })
+    .int("Please select a valid delivery address.")
+    .positive("Please select a valid delivery address.")
+    .optional(),
+  coin: z.coerce
+    .number({ invalid_type_error: "Coins to redeem must be a whole number." })
+    .int("Coins to redeem must be a whole number.")
+    .min(0, "Coins to redeem cannot be negative.")
+    .optional(),
 });
 
 // SQL variant: planId is a numeric id (migrated id-space).
 const applyPromoSqlSchema = z.object({
-  planId: z.coerce.number().int().positive(),
-  promocode: z.string().trim().min(1),
+  planId: z.coerce
+    .number({ invalid_type_error: "Please select a valid plan." })
+    .int("Please select a valid plan.")
+    .positive("Please select a valid plan."),
+  promocode: z.string().trim().min(1, "Please enter a promo code."),
 });
 
 // POST /api/v1/client/payment/apply-promo/live-course
@@ -47,7 +62,7 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
     {
       const body = applyPromoSqlSchema.parse(req.body);
       const plan = await findLiveCoursePlanForOrder(body.planId);
-      if (!plan) return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
+      if (!plan) return res.status(404).json({ success: false, message: "This plan is currently unavailable. Please choose another plan." });
       const liveCourseId = plan.liveCourseId;
 
       const promo = await findActiveByCode(body.promocode);
@@ -183,9 +198,13 @@ export const applyLiveCoursePromo = async (req: Request, res: Response) => {
       });
     }
   } catch (e: any) {
-    if (e.issues) { logger.warn("applyLiveCoursePromo validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    if (e instanceof ZodError) {
+      logger.warn("applyLiveCoursePromo validation failed", { traceId, customerId, issues: e.issues });
+      const { message, errors } = formatZodError(e);
+      return res.status(400).json({ success: false, message, errors });
+    }
     logger.error("applyLiveCoursePromo failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
-    return res.status(500).json({ success: false, message: e.message });
+    return res.status(500).json({ success: false, message: "Something went wrong while applying the promo code. Please try again." });
   }
 };
 
@@ -222,10 +241,16 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       const body = createOrderSqlSchema.parse(req.body);
       const planSql = await findLiveCoursePlanForOrder(body.planId);
       if (!planSql) {
-        logger.warn("createLiveCourseOrderPayment[mysql] plan not found/zero-price", { traceId, customerId, planId: body.planId });
-        return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
+        logger.warn("createLiveCourseOrderPayment[mysql] plan not found/zero-price/inactive", { traceId, customerId, planId: body.planId });
+        return res.status(404).json({ success: false, message: "This plan is currently unavailable. Please choose another plan." });
       }
+      // Gate on the parent live course being active — a disabled live course must
+      // not be purchasable even if an active plan row still points at it.
       const courseSql = await findLiveCourse(planSql.liveCourseId);
+      if (!courseSql || courseSql.status === false) {
+        logger.warn("createLiveCourseOrderPayment[mysql] live course inactive/missing", { traceId, customerId, liveCourseId: planSql.liveCourseId });
+        return res.status(404).json({ success: false, message: "This live course is currently unavailable. Please choose another." });
+      }
 
       // Material is a property of the selected PLAN (mirrors Course/Package).
       // When the plan ships material, accept + validate the delivery address.
@@ -284,15 +309,19 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
         success: true,
         data: {
           subscriptionId: String(subscriptionId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
-          liveCourse: courseSql ? { _id: String(planSql.liveCourseId), name: (courseSql as any).name } : { _id: String(planSql.liveCourseId), name: null },
+          liveCourse: { _id: String(planSql.liveCourseId), name: courseSql.name },
           plan: { _id: String(body.planId), duration: planSql.duration, price: planSql.price },
           promo: promocodeIdNum ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount } : null,
         },
       });
     }
   } catch (e: any) {
-    if (e.issues) { logger.warn("createLiveCourseOrderPayment validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    if (e instanceof ZodError) {
+      logger.warn("createLiveCourseOrderPayment validation failed", { traceId, customerId, issues: e.issues });
+      const { message, errors } = formatZodError(e);
+      return res.status(400).json({ success: false, message, errors });
+    }
     logger.error("createLiveCourseOrderPayment failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
-    return res.status(500).json({ success: false, message: e.message });
+    return res.status(500).json({ success: false, message: e?.error?.description || "Something went wrong while creating your order. Please try again." });
   }
 };

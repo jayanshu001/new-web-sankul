@@ -51,7 +51,11 @@ const liveCourseRevenue = async (w: Win) => {
 const seriesFor = async (table: string, revenueCol: string, w: Win, unit: "hour" | "day", extraWhere = "") => {
   const fn = unit === "hour" ? "HOUR" : "DAYOFMONTH";
   const rows = await prisma.$queryRawUnsafe<{ slot: number; orders: bigint; earnings: any }[]>(
-    `SELECT ${fn}(CONVERT_TZ(created_at,'+00:00','+05:30')) AS slot, COUNT(*) AS orders, COALESCE(SUM(${revenueCol}),0) AS earnings
+    // created_at is stored as IST wall-clock (see config/prisma.ts IST shift), so
+    // HOUR()/DAYOFMONTH() on the raw column already yields the IST bucket — no
+    // CONVERT_TZ needed. The `?` bounds (UTC Dates) are auto-shifted +5:30 to IST
+    // by the Prisma raw-query middleware, so they still match.
+    `SELECT ${fn}(created_at) AS slot, COUNT(*) AS orders, COALESCE(SUM(${revenueCol}),0) AS earnings
      FROM ${table}
      WHERE created_at >= ? AND created_at <= ? ${extraWhere}
      GROUP BY slot`,

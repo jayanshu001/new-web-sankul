@@ -41,12 +41,12 @@ export const createBookOrderPayment = async (req: Request, res: Response) => {
     // Razorpay's SDK errors often arrive as { statusCode, error: { description } }
     // and Mongo validation errors come with .errors. Surface the most useful
     // string we can find so the next 500 actually tells us what blew up.
-    const message =
+    const logMessage =
       e?.error?.description ||
       e?.message ||
       (typeof e === "string" ? e : "Unknown error creating payment order.");
-    logger.error("createBookOrderPayment failed", { traceId, customerId, error: message, stack: e?.stack });
-    return res.status(500).json({ success: false, message });
+    logger.error("createBookOrderPayment failed", { traceId, customerId, error: logMessage, stack: e?.stack });
+    return res.status(500).json({ success: false, message: e?.error?.description || "Something went wrong while creating your order. Please try again." });
   }
 };
 
@@ -63,10 +63,10 @@ const createBookOrderMysqlPath = async (
   const preview = await previewBookOrderFromCartMysql(customerId);
   if (!preview.ok) {
     const map: Record<typeof preview.code, { status: number; message: string }> = {
-      EMPTY_CART: { status: 400, message: "Cart is empty." },
-      NO_SHIPPING: { status: 400, message: "Shipping address is required before payment." },
-      UNAVAILABLE: { status: 400, message: "One or more books in the cart are unavailable." },
-      ZERO_AMOUNT: { status: 400, message: "Order amount is zero — use the free-checkout flow instead." },
+      EMPTY_CART: { status: 400, message: "Your cart is empty. Add a book before checkout." },
+      NO_SHIPPING: { status: 400, message: "Please add a delivery address before payment." },
+      UNAVAILABLE: { status: 400, message: "One or more books in your cart are no longer available. Please review your cart." },
+      ZERO_AMOUNT: { status: 400, message: "This order has nothing payable. Please review your cart." },
     };
     const r = map[preview.code];
     logger.warn("createBookOrderPayment[mysql] precondition", { traceId, customerId, code: preview.code });

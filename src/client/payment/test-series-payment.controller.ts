@@ -6,12 +6,30 @@ import { computePromoDiscount } from "../promocode/applies-to";
 import { _shared } from "../testSeries/testSeries.controller";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
-import { getErrorMessage } from "../../utils/httpResponse";
+import { getErrorMessage, formatZodError } from "../../utils/httpResponse";
+import { ZodError } from "zod";
 import * as tsSql from "../../modules/test-series-order/test-series-order.service";
 
 // SQL planId is numeric (migrated id-space).
-const applyPromoSqlSchema = z.object({ planId: z.coerce.number().int().positive(), promocode: z.string().trim().min(1) });
-const createOrderSqlSchema = z.object({ planId: z.coerce.number().int().positive(), promocode: z.string().trim().min(1).optional(), coin: z.coerce.number().int().min(0).optional() });
+const applyPromoSqlSchema = z.object({
+  planId: z.coerce
+    .number({ invalid_type_error: "Please select a valid plan." })
+    .int("Please select a valid plan.")
+    .positive("Please select a valid plan."),
+  promocode: z.string().trim().min(1, "Please enter a promo code."),
+});
+const createOrderSqlSchema = z.object({
+  planId: z.coerce
+    .number({ invalid_type_error: "Please select a valid plan." })
+    .int("Please select a valid plan.")
+    .positive("Please select a valid plan."),
+  promocode: z.string().trim().min(1, "Promo code cannot be empty. Remove it or enter a valid code.").optional(),
+  coin: z.coerce
+    .number({ invalid_type_error: "Coins to redeem must be a whole number." })
+    .int("Coins to redeem must be a whole number.")
+    .min(0, "Coins to redeem cannot be negative.")
+    .optional(),
+});
 
 // POST /api/v1/client/payment/apply-promo/test-series
 // Preview-only. Mirrors apply-promo/live-course.
@@ -30,7 +48,7 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
     {
       const body = applyPromoSqlSchema.parse(req.body);
       const plan = await tsSql.findPlanForOrder(body.planId);
-      if (!plan) return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
+      if (!plan) return res.status(404).json({ success: false, message: "This plan is currently unavailable. Please choose another plan." });
       const testSeriesId = plan.testSeriesId;
 
       const promo = await findActiveByCode(body.promocode);
@@ -158,9 +176,13 @@ export const applyTestSeriesPromo = async (req: Request, res: Response) => {
       });
     }
   } catch (e: any) {
-    if (e.issues) { logger.warn("applyTestSeriesPromo validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    if (e instanceof ZodError) {
+      logger.warn("applyTestSeriesPromo validation failed", { traceId, customerId, issues: e.issues });
+      const { message, errors } = formatZodError(e);
+      return res.status(400).json({ success: false, message, errors });
+    }
     logger.error("applyTestSeriesPromo failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
-    return res.status(500).json({ success: false, message: e.message });
+    return res.status(500).json({ success: false, message: "Something went wrong while applying the promo code. Please try again." });
   }
 };
 
@@ -190,7 +212,7 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       if (!Number.isInteger(customerIdInt)) return res.status(400).json({ success: false, message: "Invalid customer id." });
       const body = createOrderSqlSchema.parse(req.body);
       const plan = await tsSql.findPlanForOrder(body.planId);
-      if (!plan) return res.status(404).json({ success: false, message: "Plan not found, inactive, or zero price." });
+      if (!plan) return res.status(404).json({ success: false, message: "This plan is currently unavailable. Please choose another plan." });
       const series = await tsSql.findSeries(plan.testSeriesId);
       if (!series) return res.status(404).json({ success: false, message: "Test series not found or inactive." });
 
@@ -230,12 +252,12 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       }});
     }
   } catch (e: any) {
-    if (e.issues) { logger.warn("createTestSeriesOrderPayment validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
-    const message =
-      e?.error?.description ||
-      e?.message ||
-      "Unknown error creating test-series payment order.";
-    logger.error("createTestSeriesOrderPayment failed", { traceId, customerId, error: message, stack: e?.stack });
-    return res.status(500).json({ success: false, message });
+    if (e instanceof ZodError) {
+      logger.warn("createTestSeriesOrderPayment validation failed", { traceId, customerId, issues: e.issues });
+      const { message, errors } = formatZodError(e);
+      return res.status(400).json({ success: false, message, errors });
+    }
+    logger.error("createTestSeriesOrderPayment failed", { traceId, customerId, error: e?.error?.description || e?.message, stack: e?.stack });
+    return res.status(500).json({ success: false, message: e?.error?.description || "Something went wrong while creating your order. Please try again." });
   }
 };

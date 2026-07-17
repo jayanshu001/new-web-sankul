@@ -234,6 +234,20 @@ export const toggleCoursePopular = async (id: number, requested?: boolean | stri
   return { _id: String(id), isPopular: next };
 };
 
+// Toggle status (ws_course.status). Flips the current value; an explicit
+// boolean/"true"/"false" in the body sets it directly. No required-field checks
+// (unlike the full update) so a status flip never trips e.g. courseEducatorId.
+export const toggleCourseStatus = async (id: number, requested?: boolean | string): Promise<"not_found" | { _id: string; status: boolean }> => {
+  const course = await repo.findBare(id);
+  if (!course) return "not_found";
+  let next: boolean;
+  if (typeof requested === "boolean") next = requested;
+  else if (requested === "true" || requested === "false") next = requested === "true";
+  else next = !course.status;
+  await repo.setStatus(id, next);
+  return { _id: String(id), status: next };
+};
+
 // ── plans ──────────────────────────────────────────────────────────────────────
 export const listCoursePlans = async (
   courseId: number,

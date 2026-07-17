@@ -4,7 +4,8 @@ import { resolvePromoForPlanSql, addressBelongsToCustomerSql } from "../../modul
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
 import logger from "../../utils/logger";
-import { getErrorMessage } from "../../utils/httpResponse";
+import { getErrorMessage, formatZodError } from "../../utils/httpResponse";
+import { ZodError } from "zod";
 import {
   createCourseOrderMysql,
   findCoursePlanForOrder,
@@ -18,10 +19,21 @@ type RazorpayClient = NonNullable<ReturnType<typeof getRazorpay>>;
 // ObjectId. Accept a positive-int packageId (as number or numeric string) plus
 // the same optional promocode + delivery-address fields as the Mongo branch.
 const createCourseOrderMysqlSchema = z.object({
-  packageId: z.coerce.number().int().positive(),
-  customerShippingId: z.coerce.number().int().positive().optional(),
-  promocode: z.string().trim().min(1).optional(),
-  coin: z.coerce.number().int().min(0).optional(),
+  packageId: z.coerce
+    .number({ invalid_type_error: "Please select a valid plan." })
+    .int("Please select a valid plan.")
+    .positive("Please select a valid plan."),
+  customerShippingId: z.coerce
+    .number({ invalid_type_error: "Please select a valid delivery address." })
+    .int("Please select a valid delivery address.")
+    .positive("Please select a valid delivery address.")
+    .optional(),
+  promocode: z.string().trim().min(1, "Promo code cannot be empty. Remove it or enter a valid code.").optional(),
+  coin: z.coerce
+    .number({ invalid_type_error: "Coins to redeem must be a whole number." })
+    .int("Coins to redeem must be a whole number.")
+    .min(0, "Coins to redeem cannot be negative.")
+    .optional(),
 });
 
 // POST /api/v1/client/payment/create-order/course
@@ -56,9 +68,13 @@ export const createCourseOrderPayment = async (req: Request, res: Response) => {
     }
     return createCourseOrderMysqlPath(req, res, { traceId, customerId: customerIdInt, rp });
   } catch (e: any) {
-    if (e.issues) { logger.warn("createCourseOrderPayment validation failed", { traceId, customerId, issues: e.issues }); return res.status(400).json({ success: false, errors: e.issues }); }
+    if (e instanceof ZodError) {
+      logger.warn("createCourseOrderPayment validation failed", { traceId, customerId, issues: e.issues });
+      const { message, errors } = formatZodError(e);
+      return res.status(400).json({ success: false, message, errors });
+    }
     logger.error("createCourseOrderPayment failed", { traceId, customerId, error: getErrorMessage(e), stack: e.stack });
-    return res.status(500).json({ success: false, message: e.message });
+    return res.status(500).json({ success: false, message: e?.error?.description || "Something went wrong while creating your order. Please try again." });
   }
 };
 
@@ -77,10 +93,10 @@ const createCourseOrderMysqlPath = async (
 
   const plan = await findCoursePlanForOrder(packageId);
   if (!plan) {
-    logger.warn("createCourseOrderPayment[mysql] plan invalid", { traceId, customerId, packageId });
+    logger.warn("createCourseOrderPayment[mysql] plan invalid/inactive", { traceId, customerId, packageId });
     return res.status(404).json({
       success: false,
-      message: "Plan not found, not a course plan, or zero price.",
+      message: "This plan is currently unavailable. Please choose another plan.",
     });
   }
 

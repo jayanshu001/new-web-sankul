@@ -7,6 +7,14 @@ import type {
   TargetGoalInput,
 } from "./customer-lookups.types";
 
+// Shared WHERE for the admin district ("city") list + count: optional status
+// (active), state filter, and name search. Mirrors the offline-city admin WHERE.
+const adminDistrictWhere = (opts?: { status?: boolean; stateId?: number; search?: string }) => ({
+  ...(opts?.status === undefined ? {} : { active: opts.status }),
+  ...(opts?.stateId ? { stateId: opts.stateId } : {}),
+  ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
+});
+
 export const customerLookupsRepository = {
   // ── States ──
   listStates: (opts?: { activeOnly?: boolean; search?: string }) =>
@@ -42,6 +50,22 @@ export const customerLookupsRepository = {
       },
       orderBy: { name: "asc" },
     }),
+
+  // Active districts for the /address/cities dropdown (sourced from
+  // ws_customer_distict). Same conditions as the offline-city list: active-only,
+  // name search, optional state scope. Districts have no `order` column, so name
+  // order stands in for the city (order, name) sort. Includes the parent state
+  // for the populated `stateId` sub-object.
+  listActiveDistricts: (opts?: { search?: string; stateId?: number }) =>
+    prisma.customerDistict.findMany({
+      where: {
+        active: true,
+        ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
+        ...(opts?.stateId ? { stateId: opts.stateId } : {}),
+      },
+      include: { state: { select: { id: true, name: true, state_code: true } } },
+      orderBy: { name: "asc" },
+    }),
   findDistrict: (id: number) => prisma.customerDistict.findUnique({ where: { id } }),
   createDistrict: (input: DistrictInput) =>
     prisma.customerDistict.create({
@@ -57,6 +81,38 @@ export const customerLookupsRepository = {
       },
     }),
   deleteDistrict: (id: number) => prisma.customerDistict.delete({ where: { id } }),
+
+  // ── Districts as admin "cities" (/admin/address/cities → ws_customer_distict) ──
+  // Admin list includes inactive; optional status + state filter + name search,
+  // name order, paginated when skip/take given. State included for the city DTO.
+  listAdminDistricts: (opts?: { status?: boolean; stateId?: number; search?: string; skip?: number; take?: number }) =>
+    prisma.customerDistict.findMany({
+      where: adminDistrictWhere(opts),
+      include: { state: { select: { id: true, name: true, state_code: true } } },
+      orderBy: { name: "asc" },
+      ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts?.take !== undefined ? { take: opts.take } : {}),
+    }),
+  countAdminDistricts: (opts?: { status?: boolean; stateId?: number; search?: string }) =>
+    prisma.customerDistict.count({ where: adminDistrictWhere(opts) }),
+  findDistrictWithState: (id: number) =>
+    prisma.customerDistict.findUnique({
+      where: { id },
+      include: { state: { select: { id: true, name: true, state_code: true } } },
+    }),
+  createDistrictWithState: (data: { name: string; stateId: number; active: boolean }) =>
+    prisma.customerDistict.create({
+      data,
+      include: { state: { select: { id: true, name: true, state_code: true } } },
+    }),
+  updateDistrictWithState: (id: number, data: { name?: string; stateId?: number; active?: boolean }) =>
+    prisma.customerDistict.update({
+      where: { id },
+      data,
+      include: { state: { select: { id: true, name: true, state_code: true } } },
+    }),
+  // Delete guard: districts are referenced by ws_customer.district (customer FK).
+  countCustomersInDistrict: (id: number) => prisma.customer.count({ where: { districtId: id } }),
 
   // ── Educations ──
   listEducations: (opts?: { activeOnly?: boolean }) =>

@@ -49,9 +49,22 @@ export const createCourseSqlSchema = z.object({
   status: z.boolean(),
   isPaid: z.boolean().optional(),
   isPopular: z.boolean().optional(),
-  // Educator is compulsory on create. (Update relaxes the whole schema via
-  // .partial() then re-requires this field explicitly — see updateCourse.)
-  courseEducatorId: z.coerce.number({ required_error: "Educator is required" }).int().positive(),
+  // Educator is compulsory on create AND update. A preprocess (not z.coerce)
+  // keeps an omitted/empty value as `undefined` so it fails with a clean
+  // "Educator is required" 422 — z.coerce.number would run Number(undefined)
+  // → NaN and throw the misleading "expected number, received nan". A real
+  // numeric id string still coerces. Update re-requires this field after
+  // .partial() (see updateCourse) and gets the same message.
+  courseEducatorId: z.preprocess(
+    (v) => (v === "" || v === null || v === undefined ? undefined : Number(v)),
+    z
+      .number({
+        required_error: "Educator is required",
+        invalid_type_error: "Educator is required",
+      })
+      .int()
+      .positive(),
+  ),
   courseSubjectCategoryId: z.coerce.number().int().positive().optional(),
   videoCategoryId: z.coerce.number().int().positive().optional(),
   // Physical-material kit id (ws_package_course_material). Optional; null detaches.

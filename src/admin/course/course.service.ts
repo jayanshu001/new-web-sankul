@@ -148,6 +148,12 @@ export const toggleCoursePopular = async (id: string, requested?: boolean | stri
   return res;
 };
 
+export const toggleCourseStatus = async (id: string, requested?: boolean | string) => {
+  const res = await adminCourse.toggleCourseStatus(assertCourseSqlId(id, "Course"), requested);
+  if (res === "not_found") throw new HttpError(404, "Course not found");
+  return res;
+};
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Plans scoped to a course
 // ──────────────────────────────────────────────────────────────────────────────

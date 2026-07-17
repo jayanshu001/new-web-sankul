@@ -21,6 +21,7 @@ import {
   updateCourse,
   deleteCourse,
   toggleCoursePopular,
+  toggleCourseStatus,
   getCoursePlans,
   getCoursePromocodes,
   getCourseExamCategories,
@@ -78,6 +79,9 @@ router.delete("/:id", deleteCourse);
 
 // PATCH toggle popular flag
 router.patch("/:id/popular", toggleCoursePopular);
+
+// PATCH toggle status (activate/deactivate) — no required-field checks
+router.patch("/:id/status", toggleCourseStatus);
 
 // Pricing Plans
 router.get("/:id/plans", getCoursePlans);

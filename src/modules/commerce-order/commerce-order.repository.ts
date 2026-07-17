@@ -62,6 +62,7 @@ export const commerceOrderRepository = {
         packageId: true,
         duration: true,
         price: true,
+        status: true,
         withMaterial: true,
         materialPrice: true,
       },

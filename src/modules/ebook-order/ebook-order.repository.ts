@@ -27,7 +27,7 @@ export const ebookOrderRepository = {
   findPlan: (planId: number) =>
     prisma.packageCourseEbookPrice.findUnique({
       where: { id: planId },
-      select: { id: true, ebookId: true, duration: true, price: true },
+      select: { id: true, ebookId: true, duration: true, price: true, status: true },
     }),
 
   /**

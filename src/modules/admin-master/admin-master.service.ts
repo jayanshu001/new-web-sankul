@@ -26,8 +26,8 @@ export const pcmDelete = async (id: number) => { if (!(await repo.pcmFind(id))) 
 
 // ── CourseSubjectCategory ─────────────────────────────────────────────────────
 const toSubjDto = (c: any) => ({ _id: String(c.id), title: c.title, slug: c.slug, image: c.image, parent: c.parent, order: c.order, status: c.status, createdAt: c.createdAt ?? null, updatedAt: c.updatedAt ?? null });
-export const subjList = async (q?: { search?: string; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number }) => {
-  const [rows, total] = await Promise.all([repo.subjList(q), repo.subjCount({ search: q?.search })]);
+export const subjList = async (q?: { search?: string; status?: boolean; sortBy?: string; sortDir?: "asc" | "desc"; skip?: number; take?: number }) => {
+  const [rows, total] = await Promise.all([repo.subjList(q), repo.subjCount({ search: q?.search, status: q?.status })]);
   return { data: rows.map(toSubjDto), total };
 };
 export const subjCreate = async (d: any) => toSubjDto(await repo.subjCreate({ title: d.title, slug: d.slug, image: d.image, parent: toInt(d.parent), order: toInt(d.order), status: d.status ?? true }));
