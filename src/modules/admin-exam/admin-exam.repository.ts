@@ -34,7 +34,12 @@ export const adminExamRepository = {
     return prisma.exam.findMany({
       where,
       include: { ExamCategory: { select: { id: true, name: true } } },
-      orderBy: [{ order_by: "asc" }, { createAt: "desc" }],
+      // `order_by` is a legacy field with no correlation to recency (1487 rows
+      // sit at 0, 2760 at 1, spanning the same 2018-2023 date range in both
+      // buckets), so sorting by it first forced every `order_by=0` row ahead
+      // of every `order_by=1` row regardless of actual creation date. Sort by
+      // creation date only; `id desc` breaks ties deterministically.
+      orderBy: [{ createAt: "desc" }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
     });

@@ -25,7 +25,10 @@ const toExamDto = (e: any) => ({
   description: e.description ?? null,
   type: e.type,
   isPaid: e.isPaid,
-  categoryId: e.ExamCategory ? { _id: String(e.ExamCategory.id), name: e.ExamCategory.name ?? null } : (e.examCategoryId != null ? String(e.examCategoryId) : null),
+  // `exam_category_id = 0` is the legacy "no category assigned" sentinel (no
+  // ws_exam_category row has id 0 — same convention as parent_id=0 for root
+  // categories), so it must resolve to `null`, not the string "0".
+  categoryId: e.ExamCategory ? { _id: String(e.ExamCategory.id), name: e.ExamCategory.name ?? null } : (e.examCategoryId ? String(e.examCategoryId) : null),
   durationMinutes: e.time,
   questionCount: e.numberOfQuestions,
   positiveMarks: num(e.positiveMarks),
