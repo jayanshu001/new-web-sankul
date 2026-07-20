@@ -150,6 +150,8 @@ export async function dispatchAudience(
   payload: {
     title: string;
     body: string;
+    titleHtml?: string | null;
+    bodyHtml?: string | null;
     image?: string | null;
     type?: string;
     deepLink?: string | null;
@@ -164,6 +166,8 @@ export async function dispatchAudience(
   const sendResult = await sendPush(tokens, {
     title: payload.title,
     body: payload.body,
+    titleHtml: payload.titleHtml,
+    bodyHtml: payload.bodyHtml,
     image: payload.image,
     deepLink: payload.deepLink,
     data: payload.data,
@@ -195,7 +199,9 @@ export async function dispatchAudience(
             customerId: id,
             broadcast: false,
             title: payload.title,
+            titleHtml: payload.titleHtml ?? null,
             body: payload.body,
+            bodyHtml: payload.bodyHtml ?? null,
             image: payload.image ?? null,
             type: payload.type ?? "general",
             deepLink: payload.deepLink ?? null,
@@ -265,6 +271,8 @@ export async function dispatchScheduledById(
       {
         title: claimed.title,
         body: claimed.body,
+        titleHtml: claimed.titleHtml,
+        bodyHtml: claimed.bodyHtml,
         image: claimed.image,
         type: claimed.type,
         deepLink: claimed.deepLink,
@@ -326,6 +334,8 @@ export async function createScheduled(input: {
   broadcast: boolean;
   title: string;
   body: string;
+  titleHtml?: string | null;
+  bodyHtml?: string | null;
   image?: string | null;
   type: string;
   deepLink?: string | null;
@@ -339,7 +349,9 @@ export async function createScheduled(input: {
       customerId: null,
       broadcast: input.broadcast,
       title: input.title,
+      titleHtml: input.titleHtml ?? null,
       body: input.body,
+      bodyHtml: input.bodyHtml ?? null,
       image: input.image ?? null,
       type: input.type,
       deepLink: input.deepLink ?? null,
@@ -360,6 +372,8 @@ export async function createImmediateLog(input: {
   broadcast: boolean;
   title: string;
   body: string;
+  titleHtml?: string | null;
+  bodyHtml?: string | null;
   image?: string | null;
   type: string;
   deepLink?: string | null;
@@ -375,7 +389,9 @@ export async function createImmediateLog(input: {
       customerId: null,
       broadcast: input.broadcast,
       title: input.title,
+      titleHtml: input.titleHtml ?? null,
       body: input.body,
+      bodyHtml: input.bodyHtml ?? null,
       image: input.image ?? null,
       type: input.type,
       deepLink: input.deepLink ?? null,

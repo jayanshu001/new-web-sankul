@@ -2,11 +2,11 @@ import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
 import {
-  getEducators, createEducator, updateEducator, deleteEducator, getEducatorDetails,
+  getEducators, getEducatorById, createEducator, updateEducator, deleteEducator, getEducatorDetails,
   getEducatorCourses, getEducatorLiveCourses, getEducatorPackages,
   getEducatorVideoCategories, getEducatorLiveSessions,
 } from "./educator.controller";
-import { getSubjectCategories, createSubjectCategory, updateSubjectCategory, deleteSubjectCategory } from "./subjectCategory.controller";
+import { getSubjectCategories, getSubjectCategoryById, createSubjectCategory, updateSubjectCategory, deleteSubjectCategory } from "./subjectCategory.controller";
 import { getMaterials, createMaterial, updateMaterial, deleteMaterial } from "./material.controller";
 import { getVideoCategories, createVideoCategory, updateVideoCategory, deleteVideoCategory } from "./videoCategory.controller";
 import { getPackageCategories, createPackageCategory, updatePackageCategory, deletePackageCategory } from "./packageCategory.controller";
@@ -18,6 +18,7 @@ router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level st
 
 // Educator Master
 router.get("/educators", getEducators);
+router.get("/educators/:id", getEducatorById);
 router.get("/educators/:id/details", getEducatorDetails);
 router.get("/educators/:id/courses", getEducatorCourses);
 router.get("/educators/:id/live-courses", getEducatorLiveCourses);
@@ -30,6 +31,7 @@ router.delete("/educators/:id", deleteEducator);
 
 // Subject Category Master
 router.get("/subject-categories", getSubjectCategories);
+router.get("/subject-categories/:id", getSubjectCategoryById);
 router.post("/subject-categories", uploadS3.single("image"), createSubjectCategory);
 router.put("/subject-categories/:id", uploadS3.single("image"), updateSubjectCategory);
 router.delete("/subject-categories/:id", deleteSubjectCategory);

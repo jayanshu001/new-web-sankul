@@ -15,6 +15,146 @@
 
 ---
 
+## 2026-07-20 — FCM: reverted per-platform HTML tray split → PLAIN on both Android + iOS
+
+> **No schema/DDL change.** Push-payload shape only. `title_html`/`body_html` columns and
+> the client-feed `titleHtml`/`bodyHtml` fields are untouched. Doc:
+> `docs/admin/NOTIFICATION_PER_PLATFORM_HTML.md`.
+
+`src/utils/fcm.ts` `buildMessage` previously fed the HTML variant into `android.notification`
+(formatted Android tray) while iOS got plain. Per request, the tray is now **plain on both
+platforms** — `android.notification` and `apns.aps.alert` both use the plain `title`/`body`.
+The HTML is still carried in the FCM `data` payload (`titleHtml`/`bodyHtml`) and persisted on
+`ws_notification`, so the **in-app inbox** still renders rich text; only the push tray/banner
+reverted to plain. Immediate + scheduled + targeted paths all inherit this via the shared
+`sendPush`.
+
+## 2026-07-20 — Admin Offline Section: re-mounted its own offline-city CRUD (`ws_offline_city`)
+
+> **No schema/DDL change.** Route mount only. Frontend contract:
+> `docs/admin/OFFLINE_CITY_VS_DISTRICT_ADMIN.md`.
+
+The admin panel has two distinct "city" masters and they must not be conflated:
+- **`/admin/offline/cities`** → `ws_offline_city` (offline centers reference these ids;
+  carry image + order + state).
+- **`/admin/address/cities`** → `ws_customer_distict` districts (customer addresses
+  reference these ids) — unchanged.
+
+The offline-city admin CRUD handlers already existed in
+`src/admin/offline/offline.controller.ts` (backed by `modules/offline-city/*`) but their
+routes were commented out when the admin "Cities" master screen was repointed to districts —
+which left the **Offline Section with no city API of its own**. Re-mounted
+`GET/POST /admin/offline/cities`, `GET/PUT/DELETE /admin/offline/cities/:id`
+(`src/admin/offline/offline.routes.ts`). Delete is guarded `409` when the city still has
+centers. Mirrors the already-differentiated client side (`/client/address/cities` = districts,
+`/client/offline/*` = offline cities).
+
+---
+
+## 2026-07-20 — Admin profile: empty-string `image` now clears the profile photo
+
+> **No schema/DDL change.** Controller input handling only. Source:
+> `docs/backend-requests/profile-remove-image-not-persisting.md`.
+
+`PUT /admin/auth/profile` (multipart) previously only set `image` from an uploaded
+file, so a "Remove Photo" submit (empty-string `image`, no file) resolved to
+`undefined` → the repo skipped the column → the old image persisted. The handler now
+distinguishes three cases (mirrors goal / video-category): file → new URL; `image=""` →
+clear; absent → unchanged. `AdminUser.image` is `NOT NULL VarChar(255)`, so cleared is
+stored as `""` (not SQL NULL) and the DTO returns `image: ""`. Service-level S3 cleanup
+of the previous image already fires because `"" !== oldUrl`.
+
+---
+
+## 2026-07-20 — Admin picker unblockers: by-id reads, promoter/category filters, pc-material pagination
+
+> **No schema/DDL change.** Query-shape + new read endpoints only (server-search
+> support for admin dropdown pickers). Source: `docs/backend-requests/server-search-blockers.md`.
+
+Backend support so the admin frontend can drop capped `limit: 200/500` eager dropdown
+fetches in favor of server-searched type-ahead pickers:
+
+- **`GET /admin/goals/:id`** — new. `customerTargetGoal.findUnique({ where: { id } })` →
+  old ws_goal DTO (`_id, title, labels:[{id,name}], image, isActive`). Lets a picker
+  resolve the selected goal's `labels[]` for its dependent Goal-Label sub-dropdown.
+- **`GET /admin/educators/:id`** — new lightweight read. `courseEducator.findUnique` →
+  `toEducatorListDto`. (Distinct from the existing heavy `/:id/details` aggregate.)
+- **`GET /admin/subject-categories/:id`** — new. `courseSubjectCategory.findUnique` →
+  subj DTO.
+- **`GET /admin/promocodes?promoterId=<id>`** — new optional list filter. Adds
+  `where.promoterId = <id>` to `listPromocodes`. Invalid id → 400.
+- **`GET /admin/exam-countdowns?categoryId[]=…` / `?categoryIds=a,b`** — countdown list
+  now scopes by an **array** of categories (`where.categoryId = { in: [...] }`); still
+  accepts a single `categoryId` (back-compat). Any invalid id → 400.
+- **`GET /admin/pc-materials`** — now supports `?search=` + opt-in `?page/?limit`
+  pagination (`buildPrismaSearch` on title + `packageCourseMaterial.count`). No
+  page/limit → full list (back-compat, unchanged shape for eager callers incl.
+  `GET /admin/materials`).
+
+---
+
+## 2026-07-20 — Notifications: per-platform HTML (Android) / plain (iOS) + `title_html`/`body_html`
+
+> **New columns.** DDL: `docs/migration/schema-changes/2026-07-20_notification_html_columns.sql`
+> **No backfill** (existing rows keep NULL html). Apply DDL on deploy, then `prisma:generate`.
+> **Frontend contract:** `docs/admin/NOTIFICATION_PER_PLATFORM_HTML.md`
+
+Adds optional rich-text (HTML) variants to admin notifications so pushes render
+per-platform: **Android → HTML title/body**, **iOS → plain** (iOS banners show raw tags
+otherwise). The frontend sends `title`/`body` (plain, always) plus `titleHtml`/`bodyHtml`
+(only when formatting exists). Endpoint unchanged: `POST /api/v1/admin/notifications/broadcast`.
+
+- **Schema:** `ws_notification` gains `title_html TEXT NULL`, `body_html TEXT NULL`
+  (Prisma `Notification.titleHtml` / `.bodyHtml`). Persisted on immediate log, scheduled
+  row, and per-recipient fan-out rows — so the in-app inbox + re-send keep formatting.
+- **FCM (`utils/fcm.ts`):** one multicast now carries per-platform overrides —
+  top-level `notification` = plain (fallback), `android` config = HTML-source title/body,
+  `apns` alert = plain (iOS never receives tags), and `data` carries plain + html for the
+  Android app's `Html.fromHtml` path.
+- **Client feed DTO** (`client-notification.service.ts`): now returns `titleHtml`/`bodyHtml`
+  (nullable) alongside `title`/`body` for rich in-app rendering.
+
+---
+
+## 2026-07-20 — Postman collection reorg: removed "Auto-synced" dumping folders
+
+> **Docs-only** (no code / DB change). File: `docs/postman/WebSankul-Complete-2026.postman_collection.json`
+
+Dismantled the `🔄 Auto-synced (missing endpoints) — 2026-07-16` wrapper folders (a
+one-off staging dump, not produced by any generator) across all four surfaces. Their
+107 lowercase subfolders were merged into the matching curated `emoji + Title` folders
+(dedup by `METHOD + path`) or promoted to their own well-named `Surface + Title Case`
+folders. All **925 endpoints preserved**, zero duplicates introduced, no wrapper left.
+
+---
+
+## 2026-07-20 — Client notification delete (per-user dismissal): NEW `ws_notification_dismissal`
+
+> **New table.** DDL: `docs/migration/schema-changes/2026-07-20_notification_dismissal.sql`
+> **No backfill** (starts empty). Apply the DDL on deploy, then `yarn prisma:generate`.
+> **Frontend contract:** `docs/client/NOTIFICATION_DELETE_FRONTEND.md`
+
+Adds client-side notification delete (single / multi / all). "Delete" is a **per-customer
+dismissal**, not a row delete — broadcast notifications (`ws_notification.broadcast = 1`)
+are shared across all customers, so a hard delete would wipe them from everyone's feed.
+Each delete inserts `(customer_id, notification_id)` into `ws_notification_dismissal`
+(unique pair, idempotent via `skipDuplicates`/`upsert`).
+
+**Query-shape change** — `client-notification.service.ts`:
+- `listNotifications` + `unreadCount` now exclude dismissed ids: the visibility filter
+  `(customer_id = me OR broadcast = true)` gains `AND id NOT IN (<dismissed for me>)`.
+  Applies to the feed list, its total, AND the unread badge (a deleted item must not
+  keep the badge lit).
+
+**New endpoint** (Bearer-auth, under `/api/v1/client`) — one route covers single/multi/all:
+- `POST /notifications/delete` — body `{ ids: number[] }` dismisses those ids (single =
+  one-element array); body `{ all: true }` dismisses the whole visible feed. Returns
+  `deleted` count. Ids not visible to the caller are silently skipped.
+
+Model `NotificationDismissal` → `prisma.notificationDismissal` → `ws_notification_dismissal`.
+
+---
+
 ## 2026-07-17 — Quizzes: multiple parent categories (`ws_exam_category_pivot` re-purposed)
 
 > **No schema change.** Query-semantics + write-contract change on an existing table.

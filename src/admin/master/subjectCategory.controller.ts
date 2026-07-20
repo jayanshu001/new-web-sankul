@@ -36,6 +36,19 @@ export const getSubjectCategories = async (req: Request, res: Response) => {
   }
 };
 
+export const getSubjectCategoryById = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    const numId = master.parseMasterId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Subject Category ID" });
+    const data = await master.subjGet(numId);
+    if (!data) return res.status(404).json({ success: false, message: "Category not found" });
+    return res.status(200).json({ success: true, data });
+  } catch (error: any) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const createSubjectCategory = async (req: Request, res: Response) => {
   try {
     const file = req.file as any;

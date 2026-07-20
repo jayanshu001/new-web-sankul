@@ -16,6 +16,7 @@ export const getPromocodes = async (req: Request, res: Response) => {
       type,
       fromDate,
       toDate,
+      promoterId,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
@@ -24,12 +25,20 @@ export const getPromocodes = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
+    // Optional scope to a single promoter's codes (Promoter Dashboard filter).
+    // Invalid id → return an empty page rather than ignoring the filter.
+    const promoterFilter = promoterId ? pcSql.parsePcId(promoterId) : undefined;
+    if (promoterId && promoterFilter == null) {
+      return res.status(400).json({ success: false, message: "Invalid promoterId." });
+    }
+
     const r = await pcSql.listPromocodes({
       search: search?.trim() || null,
       status: status === "true" ? true : status === "false" ? false : null,
       type: type === "public" || type === "private" ? type : null,
       fromDate: fromDate ? new Date(fromDate) : null,
       toDate: toDate ? new Date(toDate) : null,
+      promoterId: promoterFilter,
       skip,
       limitNum,
       pageNum,

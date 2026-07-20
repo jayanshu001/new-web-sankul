@@ -248,6 +248,7 @@ export const listPromocodes = async (opts: {
   type: "public" | "private" | null;
   fromDate: Date | null;
   toDate: Date | null;
+  promoterId?: number | null;
   skip: number;
   limitNum: number;
   pageNum: number;
@@ -256,6 +257,7 @@ export const listPromocodes = async (opts: {
   if (opts.search) where.promocode = { contains: opts.search.toUpperCase() };
   if (opts.status !== null) where.status = opts.status;
   if (opts.type) where.type = opts.type;
+  if (opts.promoterId != null) where.promoterId = opts.promoterId;
   if (opts.fromDate || opts.toDate) {
     where.promo_start_at = {};
     if (opts.fromDate) where.promo_start_at.gte = opts.fromDate;

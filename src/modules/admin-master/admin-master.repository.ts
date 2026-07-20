@@ -13,7 +13,15 @@ import { buildPrismaSearch } from "../../utils/searchFilter";
  */
 export const adminMasterRepository = {
   // ── PackageCourseMaterial (pc-material + master/material share this table) ──
-  pcmList: () => prisma.packageCourseMaterial.findMany({ orderBy: { id: "desc" } }),
+  // Optional search (title) + pagination. skip/take omitted → full list.
+  pcmList: (opts?: { search?: string; skip?: number; take?: number }) =>
+    prisma.packageCourseMaterial.findMany({
+      where: pcmWhere(opts),
+      orderBy: { id: "desc" },
+      ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
+      ...(opts?.take !== undefined ? { take: opts.take } : {}),
+    }),
+  pcmCount: (opts?: { search?: string }) => prisma.packageCourseMaterial.count({ where: pcmWhere(opts) }),
   pcmFind: (id: number) => prisma.packageCourseMaterial.findUnique({ where: { id } }),
   pcmCreate: (title: string) =>
     prisma.packageCourseMaterial.create({ data: { title, created_at: new Date(), updated_at: new Date() } }),
@@ -319,6 +327,13 @@ async function uniqueSlugTx(tx: any, base: string): Promise<string> {
     candidate = `${base}-${n}`;
   }
   return candidate;
+}
+
+function pcmWhere(opts?: { search?: string }) {
+  const where: any = {};
+  const search = buildPrismaSearch(opts?.search, ["title"]);
+  if (search) Object.assign(where, search);
+  return where;
 }
 
 function subjWhere(opts?: { search?: string; status?: boolean }) {

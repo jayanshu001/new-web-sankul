@@ -14,8 +14,23 @@ import {
 } from "./pc-material.validation";
 import * as master from "../../modules/admin-master/admin-master.service";
 
-export const listPcMaterials = asyncHandler(async (_req: Request, res: Response) => {
-  return res.status(200).json({ success: true, data: await master.pcmList() });
+export const listPcMaterials = asyncHandler(async (req: Request, res: Response) => {
+  const { search, page, limit } = req.query as Record<string, string>;
+  // Pagination is opt-in: page/limit present → paginate + return a `pagination`
+  // block; otherwise the full list (back-compat for eager dropdown callers).
+  // `search` is honored in both modes so pickers can type-ahead.
+  const paginate = page !== undefined || limit !== undefined;
+  const pageNum = Math.max(parseInt(page ?? "1", 10) || 1, 1);
+  const limitNum = Math.max(parseInt(limit ?? "20", 10) || 20, 1);
+  const { data, total } = await master.pcmList({
+    search,
+    ...(paginate ? { skip: (pageNum - 1) * limitNum, take: limitNum } : {}),
+  });
+  return res.status(200).json(
+    paginate
+      ? { success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } }
+      : { success: true, data }
+  );
 });
 
 export const getPcMaterialById = asyncHandler(async (req: Request, res: Response) => {

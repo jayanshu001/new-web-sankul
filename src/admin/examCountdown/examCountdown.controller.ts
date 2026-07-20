@@ -143,7 +143,6 @@ export const adminDeleteCategory = async (req: Request, res: Response) => {
 export const adminListCountdowns = async (req: Request, res: Response) => {
   try {
     const {
-      categoryId,
       search = "",
       page = "1",
       limit = "20",
@@ -154,15 +153,24 @@ export const adminListCountdowns = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
-    let catId: number | null = null;
-    if (categoryId) {
-      catId = ecSql.parseEcId(categoryId);
-      if (catId == null) return res.status(400).json({ success: false, message: "Invalid categoryId." });
+    // Scope by one OR many countdown categories. Accepts a single `categoryId`,
+    // a repeated `categoryId=a&categoryId=b`, or a CSV `categoryIds=a,b`. Any
+    // invalid id → 400 (no silent drop). Empty/absent → no category filter.
+    const rawCat = [
+      ...(Array.isArray(req.query.categoryId) ? (req.query.categoryId as string[]) : req.query.categoryId ? [String(req.query.categoryId)] : []),
+      ...String(req.query.categoryIds ?? "").split(","),
+    ];
+    const catTokens = rawCat.map((s) => s.trim()).filter(Boolean);
+    const catIds: number[] = [];
+    for (const t of catTokens) {
+      const n = ecSql.parseEcId(t);
+      if (n == null) return res.status(400).json({ success: false, message: "Invalid categoryId." });
+      if (!catIds.includes(n)) catIds.push(n);
     }
     const now = new Date();
     const todayUTC = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
     const r = await ecSql.listCountdownsAdmin({
-      categoryId: catId, search: search || null, includePast: includePast !== "false",
+      categoryIds: catIds.length ? catIds : null, search: search || null, includePast: includePast !== "false",
       skip, limitNum, pageNum, todayUTC,
     });
     return res.status(200).json({ success: true, ...r });

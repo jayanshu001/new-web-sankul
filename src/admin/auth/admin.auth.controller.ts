@@ -232,9 +232,16 @@ export const adminUpdateProfileHandler = async (req: Request, res: Response) => 
 
     const { firstName, lastName } = req.body;
 
-    // `multer-s3` attaches the S3 URL exactly to `req.file.location`
+    // Image resolution, three cases (mirrors the goal / video-category handlers):
+    //   - file uploaded        → use its S3 URL (replace)
+    //   - empty `image` field  → "" sentinel → clear (stored as "" — the column
+    //                            is NOT NULL VarChar, so "" is the empty value)
+    //   - field absent         → undefined  → leave unchanged (partial update)
+    // `multer-s3` attaches the uploaded S3 URL exactly to `req.file.location`.
     const file = req.file as any;
-    const image = file?.location;
+    let image: string | undefined;
+    if (file?.location) image = file.location;
+    else if (req.body.image === "") image = "";
 
     const result = await updateAdminProfile(adminId, { firstName, lastName, image }, traceId);
 

@@ -1,6 +1,6 @@
 import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
-import { createGoal, getGoals, updateGoal, deleteGoal } from "./goal.admin.service";
+import { createGoal, getGoals, getGoalById, updateGoal, deleteGoal } from "./goal.admin.service";
 import logger from "../../utils/logger";
 
 /**
@@ -67,6 +67,32 @@ export const getGoalsHandler = async (req: Request, res: Response) => {
     return success(res, result, "Goals fetched successfully.", 200);
   } catch (err) {
     logger.error("getGoalsHandler failed", {
+      traceId,
+      error: getErrorMessage(err),
+      stack: (err as Error).stack,
+    });
+    return failure(res, getErrorMessage(err), 500);
+  }
+};
+
+/**
+ * GET /api/v1/admin/goals/:id
+ */
+export const getGoalByIdHandler = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const { id } = req.params;
+  logger.info("getGoalByIdHandler invoked", { traceId, path: req.originalUrl, userId: req.user?.id, goalId: id });
+
+  try {
+    const goal = await getGoalById(String(id), traceId);
+    if (!goal) {
+      logger.warn("getGoalByIdHandler not found", { traceId, goalId: id });
+      return failure(res, "Goal not found!", 404);
+    }
+    logger.info("getGoalByIdHandler success", { traceId, goalId: id });
+    return success(res, goal, "Goal fetched successfully.", 200);
+  } catch (err) {
+    logger.error("getGoalByIdHandler failed", {
       traceId,
       error: getErrorMessage(err),
       stack: (err as Error).stack,

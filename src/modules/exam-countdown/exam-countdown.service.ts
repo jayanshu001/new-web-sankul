@@ -171,10 +171,12 @@ export const deleteCategory = async (id: number) => {
 
 // ── Countdown CRUD ─────────────────────────────────────────────────────────────
 export const listCountdownsAdmin = async (opts: {
-  categoryId: number | null; search: string | null; includePast: boolean; skip: number; limitNum: number; pageNum: number; todayUTC: Date;
+  categoryIds: number[] | null; search: string | null; includePast: boolean; skip: number; limitNum: number; pageNum: number; todayUTC: Date;
 }) => {
   const where: any = {};
-  if (opts.categoryId) where.categoryId = opts.categoryId;
+  if (opts.categoryIds && opts.categoryIds.length) {
+    where.categoryId = opts.categoryIds.length === 1 ? opts.categoryIds[0] : { in: opts.categoryIds };
+  }
   const titleSearch = buildPrismaSearch(opts.search, ["title"]);
   if (titleSearch) where.AND = titleSearch.AND;
   if (!opts.includePast) where.examDate = { gte: opts.todayUTC };

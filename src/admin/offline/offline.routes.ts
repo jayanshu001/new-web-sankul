@@ -21,12 +21,16 @@ router.post("/banners/reorder", reorderBanners);
 router.put("/banners/:id", uploadS3.single("image"), updateBanner);
 router.delete("/banners/:id", deleteBanner);
 
-// Cities — moved to /api/v1/admin/address/cities (see admin/address/admin.address.routes.ts)
-// router.get("/cities", listCities);
-// router.post("/cities", uploadS3.single("image"), createCity);
-// router.get("/cities/:id", getCity);
-// router.put("/cities/:id", uploadS3.single("image"), updateCity);
-// router.delete("/cities/:id", deleteCity);
+// Offline Cities (ws_offline_city) — the Offline Section's OWN city master, with
+// image + manual order + state. Distinct from /admin/address/cities, which is the
+// Address districts master (ws_customer_distict). Do NOT conflate the two: offline
+// centers/batches reference these offline-city ids; customer addresses reference
+// district ids. See docs/admin/OFFLINE_CITY_VS_DISTRICT_ADMIN.md.
+router.get("/cities", listCities);
+router.post("/cities", uploadS3.single("image"), createCity);
+router.get("/cities/:id", getCity);
+router.put("/cities/:id", uploadS3.single("image"), updateCity);
+router.delete("/cities/:id", deleteCity);
 
 // Centers
 router.get("/centers", listCenters);

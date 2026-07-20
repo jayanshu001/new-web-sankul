@@ -39,6 +39,12 @@ function initFirebase(): boolean {
 export interface FcmPayload {
   title: string;
   body: string;
+  // Rich (HTML) variants, present only when the composer applied real formatting.
+  // NOT used for the push tray on either platform — both Android and iOS show the
+  // plain title/body first. The HTML is carried in `data` (and persisted on the
+  // row) so the in-app inbox can render the formatted version when opened.
+  titleHtml?: string | null;
+  bodyHtml?: string | null;
   image?: string | null;
   deepLink?: string | null;
   data?: Record<string, unknown>;
@@ -52,13 +58,23 @@ export interface FcmSendResult {
   skipped: boolean;
 }
 
-function buildMessage(payload: FcmPayload): {
-  notification: admin.messaging.Notification;
-  data?: Record<string, string>;
-} {
+// Build the multicast. The push TRAY is PLAIN on BOTH platforms (Android + iOS
+// show plain text first — raw <b>/<p> tags must never leak into a banner):
+//   • top-level notification → PLAIN.
+//   • android config         → PLAIN alert.
+//   • apns config            → PLAIN alert.
+//   • data                   → carries plain + html; the in-app inbox uses the
+//                              html variant to render rich text when the
+//                              notification is opened. The tray never reads it.
+function buildMessage(
+  payload: FcmPayload
+): Omit<admin.messaging.MulticastMessage, "tokens"> {
+  const plainTitle = payload.title;
+  const plainBody = payload.body;
+
   const notification: admin.messaging.Notification = {
-    title: payload.title,
-    body: payload.body,
+    title: plainTitle,
+    body: plainBody,
   };
   if (payload.image) notification.imageUrl = payload.image;
 
@@ -69,8 +85,30 @@ function buildMessage(payload: FcmPayload): {
       data[k] = typeof v === "string" ? v : JSON.stringify(v);
     }
   }
+  // Plain always available in data; html only when the composer formatted it —
+  // consumed by the in-app inbox, not the push tray.
+  if (!("title" in data)) data.title = plainTitle;
+  if (!("body" in data)) data.body = plainBody;
+  if (payload.titleHtml) data.titleHtml = payload.titleHtml;
+  if (payload.bodyHtml) data.bodyHtml = payload.bodyHtml;
 
-  return { notification, data: Object.keys(data).length ? data : undefined };
+  const androidNotification: admin.messaging.AndroidNotification = {
+    title: plainTitle,
+    body: plainBody,
+  };
+  if (payload.image) androidNotification.imageUrl = payload.image;
+
+  const android: admin.messaging.AndroidConfig = { notification: androidNotification };
+  const apns: admin.messaging.ApnsConfig = {
+    payload: { aps: { alert: { title: plainTitle, body: plainBody } } },
+  };
+
+  return {
+    notification,
+    data: Object.keys(data).length ? data : undefined,
+    android,
+    apns,
+  };
 }
 
 export async function sendPush(
@@ -89,7 +127,7 @@ export async function sendPush(
     };
   }
 
-  const { notification, data } = buildMessage(payload);
+  const message = buildMessage(payload);
   const messaging = admin.messaging();
 
   let successCount = 0;
@@ -113,8 +151,7 @@ export async function sendPush(
         () =>
           messaging.sendEachForMulticast({
             tokens: batch,
-            notification,
-            data,
+            ...message,
           }),
         { label: "fcm.sendMulticast", timeoutMs: 10_000, attempts: 3 }
       );

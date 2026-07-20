@@ -18,7 +18,10 @@ const toInt = (v: unknown, def = 0): number => {
 
 // ── PackageCourseMaterial (pc-material + master/material; id+title only) ──────
 const toPcmDto = (m: any) => ({ _id: String(m.id), title: m.title, createdAt: m.created_at ?? null, updatedAt: m.updated_at ?? null });
-export const pcmList = async () => (await repo.pcmList()).map(toPcmDto);
+export const pcmList = async (q?: { search?: string; skip?: number; take?: number }) => {
+  const [rows, total] = await Promise.all([repo.pcmList(q), repo.pcmCount({ search: q?.search })]);
+  return { data: rows.map(toPcmDto), total };
+};
 export const pcmGet = async (id: number) => { const m = await repo.pcmFind(id); return m ? toPcmDto(m) : null; };
 export const pcmCreate = async (title: string) => toPcmDto(await repo.pcmCreate(title));
 export const pcmUpdate = async (id: number, title: string) => { if (!(await repo.pcmFind(id))) return null; return toPcmDto(await repo.pcmUpdate(id, title)); };
@@ -30,6 +33,7 @@ export const subjList = async (q?: { search?: string; status?: boolean; sortBy?:
   const [rows, total] = await Promise.all([repo.subjList(q), repo.subjCount({ search: q?.search, status: q?.status })]);
   return { data: rows.map(toSubjDto), total };
 };
+export const subjGet = async (id: number) => { const c = await repo.subjFind(id); return c ? toSubjDto(c) : null; };
 export const subjCreate = async (d: any) => toSubjDto(await repo.subjCreate({ title: d.title, slug: d.slug, image: d.image, parent: toInt(d.parent), order: toInt(d.order), status: d.status ?? true }));
 export const subjUpdate = async (id: number, d: any) => {
   if (!(await repo.subjFind(id))) return null;

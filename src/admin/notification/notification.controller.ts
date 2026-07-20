@@ -32,6 +32,11 @@ const isValidId = (v: string) => parseIntId(v) != null;
 const broadcastSchema = z.object({
   title: z.string().min(1).max(255),
   body: z.string().min(1),
+  // Rich (HTML) variants from the editor — sent ONLY when real formatting exists.
+  // Android push gets these; iOS always gets plain title/body. Persisted for the
+  // in-app inbox + re-send.
+  titleHtml: z.string().optional(),
+  bodyHtml: z.string().optional(),
   image: z.string().optional(),
   type: z.string().max(50).optional().default("general"),
   // Legacy / escape-hatch: hand-formed routing. `target` (below) is preferred —
@@ -136,6 +141,8 @@ export const broadcastNotification = async (req: Request, res: Response) => {
         broadcast: isAll,
         title: data.title,
         body: data.body,
+        titleHtml: data.titleHtml ?? null,
+        bodyHtml: data.bodyHtml ?? null,
         image: data.image ?? null,
         type: data.type,
         deepLink: data.deepLink ?? null,
@@ -162,6 +169,8 @@ export const broadcastNotification = async (req: Request, res: Response) => {
       {
         title: data.title,
         body: data.body,
+        titleHtml: data.titleHtml ?? null,
+        bodyHtml: data.bodyHtml ?? null,
         image: data.image,
         type: data.type,
         deepLink: data.deepLink,
@@ -176,6 +185,8 @@ export const broadcastNotification = async (req: Request, res: Response) => {
       broadcast: result.isBroadcast,
       title: data.title,
       body: data.body,
+      titleHtml: data.titleHtml ?? null,
+      bodyHtml: data.bodyHtml ?? null,
       image: data.image ?? null,
       type: data.type,
       deepLink: data.deepLink ?? null,

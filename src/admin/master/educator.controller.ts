@@ -129,6 +129,23 @@ export const updateEducator = async (req: Request, res: Response) => {
   }
 };
 
+// ─── Educator by id (lightweight — for server-searched pickers' edit label) ──
+
+export const getEducatorById = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+
+    // ─── MySQL branch (ws_course_educator) ────────────────────────────────
+    const numId = parseEducatorIntId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Educator ID" });
+    const row = await eduRepo.findById(numId);
+    if (!row) return res.status(404).json({ success: false, message: "Educator not found" });
+    return res.status(200).json({ success: true, data: toEducatorListDto(row) });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // ─── Educator Details (aggregate for admin detail page) ──────────────────────
 
 export const getEducatorDetails = async (req: Request, res: Response) => {

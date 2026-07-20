@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   createGoalHandler,
   getGoalsHandler,
+  getGoalByIdHandler,
   updateGoalHandler,
   deleteGoalHandler,
 } from "./goal.admin.controller";
@@ -26,6 +27,9 @@ router.post("/", authenticate, uploadS3.single("image"), createGoalHandler);
 
 // Read all goals natively built for dashboard
 router.get("/", authenticate, getGoalsHandler);
+
+// Read a single goal by id (with its labels — for server-searched pickers)
+router.get("/:id", authenticate, getGoalByIdHandler);
 
 // Update specific goal
 router.put("/:id", authenticate, uploadS3.single("image"), updateGoalHandler);

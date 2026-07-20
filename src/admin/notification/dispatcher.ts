@@ -24,6 +24,8 @@ export async function dispatchAudience(
   payload: {
     title: string;
     body: string;
+    titleHtml?: string | null;
+    bodyHtml?: string | null;
     image?: string | null;
     type?: string;
     deepLink?: string | null;

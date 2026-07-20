@@ -107,6 +107,19 @@ export const getGoals = async (
   return { data: rows.map(dto), meta: { total, page: p, limit: l, totalPages: Math.ceil(total / l) } };
 };
 
+/**
+ * GET /admin/goals/:id — resolve one goal (with its `labels[]`) in the old
+ * ws_goal DTO shape. Needed for server-searched Goal pickers to render the
+ * selected goal's dependent "Goal Label" sub-dropdown in edit mode.
+ */
+export const getGoalById = async (id: string, traceId?: string) => {
+  logger.info("getGoalById service invoked", { traceId, id });
+  const nid = parseGoalId(id);
+  if (nid == null) return null;
+  const row = await prisma.customerTargetGoal.findUnique({ where: { id: nid } });
+  return row ? dto(row) : null;
+};
+
 export const updateGoal = async (
   id: string,
   data: { title?: string; labels?: any; image?: string | null; isActive?: boolean | string },

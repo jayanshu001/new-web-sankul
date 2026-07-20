@@ -67,6 +67,40 @@ export const markAllAsRead = async (req: Request, res: Response) => {
   }
 };
 
+// POST /api/v1/client/notifications/delete — one endpoint for single / multi / all.
+//   Body { all: true }        → dismiss the entire visible feed.
+//   Body { ids: number[] }    → dismiss those ids (single = a one-element array).
+export const deleteNotifications = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("deleteNotifications invoked", { traceId, path: req.originalUrl, customerId: userId });
+
+  try {
+    if (!userId) { logger.warn("deleteNotifications unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    const cid = notifSql.parseNotifId(String(userId));
+    if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
+
+    if (req.body?.all === true) {
+      const deleted = await notifSql.deleteAll(cid);
+      logger.info("deleteNotifications success (all)", { traceId, customerId: userId, deleted });
+      return res.status(200).json({ success: true, deleted, message: "Notifications deleted." });
+    }
+
+    const raw = Array.isArray(req.body?.ids) ? req.body.ids : null;
+    if (!raw || raw.length === 0) return res.status(400).json({ success: false, message: "Provide `ids` (non-empty array) or `all: true`." });
+    const ids = raw.map((x: any) => notifSql.parseNotifId(String(x))).filter((n: number | null): n is number => n != null);
+    if (ids.length === 0) return res.status(400).json({ success: false, message: "No valid ids." });
+
+    const deleted = await notifSql.deleteMany(cid, ids);
+    logger.info("deleteNotifications success (ids)", { traceId, customerId: userId, requested: ids.length, deleted });
+    return res.status(200).json({ success: true, deleted, message: "Notifications deleted." });
+  } catch (e: any) {
+    logger.error("deleteNotifications failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
 // GET /api/v1/client/image-notifications — active in-app banners
 export const listActiveImageNotifications = async (_req: Request, res: Response) => {
   const traceId = _req.traceId;

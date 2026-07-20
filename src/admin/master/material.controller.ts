@@ -4,7 +4,8 @@ import * as master from "../../modules/admin-master/admin-master.service";
 
 export const getMaterials = async (req: Request, res: Response) => {
   try {
-    return res.status(200).json({ success: true, data: await master.pcmList() });
+    const { data } = await master.pcmList();
+    return res.status(200).json({ success: true, data });
   } catch (error: any) {
     res.status(500).json({ success: false, message: error.message });
   }

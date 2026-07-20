@@ -2028,7 +2028,9 @@ model Notification {
   id             Int       @id @default(autoincrement())
   customerId     Int?      @map("customer_id")
   title          String
+  titleHtml      String?   @map("title_html") @db.Text
   body           String    @db.Text
+  bodyHtml       String?   @map("body_html") @db.Text
   image          String?
   type           String    @default("general")
   deepLink       String?   @map("deep_link")
@@ -2046,6 +2048,20 @@ model Notification {
   updatedAt      DateTime? @map("updated_at")
 
   @@map("ws_notification")
+}
+
+// Per-customer "delete from my feed" marker. Presence of a row = the customer has
+// dismissed that notification; the client feed + unread count exclude it. Broadcast
+// rows are shared, so dismissal is tracked here rather than hard-deleting the source.
+model NotificationDismissal {
+  id             Int       @id @default(autoincrement())
+  customerId     Int       @map("customer_id")
+  notificationId Int       @map("notification_id")
+  createdAt      DateTime? @map("created_at")
+
+  @@unique([customerId, notificationId], name: "uniq_notif_dismissal")
+  @@index([customerId], map: "idx_notif_dismissal_customer")
+  @@map("ws_notification_dismissal")
 }
 
 model Folder {
