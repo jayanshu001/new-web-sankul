@@ -24,12 +24,15 @@ const SEED_GUARDS = GUARDS; // ["web", "educator", "promoter"]
 async function syncPermissionCatalogSql(): Promise<void> {
   const groups = Array.from(new Set(PERMISSION_CATALOG.map((m) => m.group)));
   const categoryIdByGroup = new Map<string, number>();
+  const catNow = new Date();
   for (let i = 0; i < groups.length; i++) {
     const title = groups[i];
     const slug = slugify(title);
     const cat = await prisma.permissionCategoryRow.upsert({
       where: { slug },
-      create: { title, slug, orderBy: i, status: true },
+      // Explicit timestamps on insert so ws_permission_category rows are never
+      // NULL either; existing rows are kept untouched (mirror $setOnInsert).
+      create: { title, slug, orderBy: i, status: true, createdAt: catNow, updatedAt: catNow },
       update: {}, // keep existing (mirror $setOnInsert)
     });
     categoryIdByGroup.set(title, cat.id);
@@ -46,18 +49,55 @@ async function syncPermissionCatalogSql(): Promise<void> {
       select: { name: true },
     });
     const existingNames = new Set(existing.map((r) => r.name));
-    const toCreate: { name: string; guardName: string; categoryId: number | null }[] = [];
+    // Existing rows are REUSED as-is (matched by name+guard); only genuinely
+    // missing keys are created. New rows carry explicit created_at/updated_at so
+    // the columns are never NULL — the Prisma timestamp middleware would fill
+    // them too, but rows seeded before that middleware existed came out NULL, so
+    // we set them here explicitly (and backfill the legacy NULLs below).
+    const now = new Date();
+    const toCreate: {
+      name: string;
+      guardName: string;
+      categoryId: number | null;
+      createdAt: Date;
+      updatedAt: Date;
+    }[] = [];
     for (const m of PERMISSION_CATALOG) {
       if (m.guard !== guard) continue; // seed under the module's own guard only
       const categoryId = categoryIdByGroup.get(m.group) ?? null;
       for (const p of m.permissions) {
-        if (!existingNames.has(p.key)) toCreate.push({ name: p.key, guardName: guard, categoryId });
+        if (!existingNames.has(p.key)) {
+          toCreate.push({ name: p.key, guardName: guard, categoryId, createdAt: now, updatedAt: now });
+        }
       }
     }
     if (toCreate.length) {
       const res = await prisma.adminPermissionRow.createMany({ data: toCreate, skipDuplicates: true });
       inserted += res.count;
     }
+  }
+
+  // Self-heal legacy NULL timestamps. Rows (permissions + categories) seeded
+  // before the Prisma timestamp middleware existed have NULL created_at/updated_at.
+  // Stamp them once with the current time (flows through the IST write-shift like
+  // any other Prisma write). Idempotent: after the first run the filters match
+  // zero rows. `updatedAt: null` in `data` is preserved by the middleware only
+  // when we DON'T pass it — so we set both explicitly here.
+  const healNow = new Date();
+  const [permHeal, catHeal] = await Promise.all([
+    prisma.adminPermissionRow.updateMany({
+      where: { OR: [{ createdAt: null }, { updatedAt: null }] },
+      data: { createdAt: healNow, updatedAt: healNow },
+    }),
+    prisma.permissionCategoryRow.updateMany({
+      where: { OR: [{ createdAt: null }, { updatedAt: null }] },
+      data: { createdAt: healNow, updatedAt: healNow },
+    }),
+  ]);
+  if (permHeal.count || catHeal.count) {
+    logger.info(
+      `[permissions] backfilled NULL timestamps — permissions: ${permHeal.count}, categories: ${catHeal.count}`
+    );
   }
 
   // Deprecated = DB rows whose (guard, name) pair isn't a live catalog entry for

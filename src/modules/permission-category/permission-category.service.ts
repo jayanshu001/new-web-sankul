@@ -139,12 +139,15 @@ export const createCategory = async (
   });
   if (exists) return { ok: false, code: "slug_exists" };
 
+  const now = new Date();
   const row = await prisma.permissionCategoryRow.create({
     data: {
       title: input.title,
       slug: input.slug,
       orderBy: input.order,
       status: input.status,
+      createdAt: now,
+      updatedAt: now,
     },
   });
   return { ok: true, data: toDto(row, 0) };

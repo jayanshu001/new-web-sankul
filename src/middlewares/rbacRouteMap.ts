@@ -34,7 +34,11 @@ const R = (method: string, path: string, ...keys: string[]): void => {
   rules.push({ methods, re, keys });
 };
 
-const view = (m: string): string[] => [`${m}.view`, `${m}.list`];
+// Read access gates on `<m>.view` only. `list` was dropped from the `web` catalog
+// 2026-07-20 (the admin UI gates every list screen on `view`), so it must not be
+// enforced here either — otherwise the cleanup would keep the now-orphan `.list`
+// rows alive in the catalog API response.
+const view = (m: string): string[] => [`${m}.view`];
 
 /**
  * Standard CRUD rules for a REST resource mounted at `base` and gated by module
@@ -58,7 +62,7 @@ crud("/administrators", "administrators");
 
 // ── /roles → roles ─────────────────────────────────────────────────────────
 R("GET", "/roles/:id/permissions", ...view("roles"));
-R("PUT", "/roles/:id/permissions", "roles.assign-permissions");
+R("PUT", "/roles/:id/permissions", "roles.edit"); // was roles.assign-permissions
 crud("/roles", "roles");
 
 // ── /permissions → permissions (read-only catalog) ─────────────────────────
@@ -72,12 +76,14 @@ crud("/permission-categories", "permission-categories");
 // ── /guards → guards (read-only) ───────────────────────────────────────────
 R("GET", "/guards", ...view("guards"));
 
-// ── /video-categories → video-categories ───────────────────────────────────
-R("GET", "/video-categories/pre-requisites", ...view("video-categories"));
-R("GET", "/video-categories/:id/courses", ...view("video-categories"));
-R("GET", "/video-categories/:id/videos", ...view("video-categories"));
-R("POST", "/video-categories/:id/duplicate", "video-categories.duplicate");
-crud("/video-categories", "video-categories");
+// ── /video-categories → videos.categories ──────────────────────────────────
+// Collapsed 2026-07-20: the legacy `video-categories` catalog module was dropped
+// (keep-list keeps `videos.categories`); these routes now gate on that key.
+R("GET", "/video-categories/pre-requisites", ...view("videos.categories"));
+R("GET", "/video-categories/:id/courses", ...view("videos.categories"));
+R("GET", "/video-categories/:id/videos", ...view("videos.categories"));
+R("POST", "/video-categories/:id/duplicate", "videos.categories.create"); // was .duplicate
+crud("/video-categories", "videos.categories");
 
 // ── /videos → videos ───────────────────────────────────────────────────────
 R("GET", "/videos/pre-requisites", ...view("videos"));
@@ -88,28 +94,31 @@ crud("/videos", "videos");
 crud("/goals", "goals");
 
 // ── /courses → courses (+ nested video-categories, materials, plans, videos) ─
+// Nested course sub-resources (video-categories, materials, videos, plans)
+// collapsed 2026-07-20 into the parent `courses` key — the admin panel gates the
+// whole Courses section on `courses.*`, so those sub-namespaces were dropped.
 R("GET", "/courses/pre-requisites", ...view("courses"));
-R("GET|POST", "/courses/video-category-relations", "courses.video-categories.edit");
-R("PUT|DELETE", "/courses/video-category-relations/:id", "courses.video-categories.edit");
-R("GET", "/courses/video-categories", ...view("courses.video-categories"));
-R("POST", "/courses/video-categories", "courses.video-categories.create");
-R("PUT", "/courses/video-categories/:id", "courses.video-categories.edit");
-R("DELETE", "/courses/video-categories/:id", "courses.video-categories.delete");
-R("GET", "/courses/materials", ...view("courses.materials"));
-R("POST", "/courses/materials", "courses.materials.create");
-R("PUT", "/courses/materials/:id", "courses.materials.edit");
-R("DELETE", "/courses/materials/:id", "courses.materials.delete");
-R("GET", "/courses/videos", ...view("courses.videos"));
-R("POST", "/courses/videos/reorder", "courses.videos.edit");
-R("POST", "/courses/videos", "courses.videos.create");
-R("GET", "/courses/videos/:id", ...view("courses.videos"));
-R("PUT", "/courses/videos/:id", "courses.videos.edit");
-R("DELETE", "/courses/videos/:id", "courses.videos.delete");
-R("GET", "/courses/plans/:id", ...view("courses.plans"));
-R("PUT", "/courses/plans/:id", "courses.plans.edit");
-R("DELETE", "/courses/plans/:id", "courses.plans.delete");
-R("GET", "/courses/:id/plans", ...view("courses.plans"));
-R("POST", "/courses/:id/plans", "courses.plans.create");
+R("GET|POST", "/courses/video-category-relations", "courses.edit");
+R("PUT|DELETE", "/courses/video-category-relations/:id", "courses.edit");
+R("GET", "/courses/video-categories", ...view("courses"));
+R("POST", "/courses/video-categories", "courses.create");
+R("PUT", "/courses/video-categories/:id", "courses.edit");
+R("DELETE", "/courses/video-categories/:id", "courses.delete");
+R("GET", "/courses/materials", ...view("courses"));
+R("POST", "/courses/materials", "courses.create");
+R("PUT", "/courses/materials/:id", "courses.edit");
+R("DELETE", "/courses/materials/:id", "courses.delete");
+R("GET", "/courses/videos", ...view("courses"));
+R("POST", "/courses/videos/reorder", "courses.edit");
+R("POST", "/courses/videos", "courses.create");
+R("GET", "/courses/videos/:id", ...view("courses"));
+R("PUT", "/courses/videos/:id", "courses.edit");
+R("DELETE", "/courses/videos/:id", "courses.delete");
+R("GET", "/courses/plans/:id", ...view("courses"));
+R("PUT", "/courses/plans/:id", "courses.edit");
+R("DELETE", "/courses/plans/:id", "courses.delete");
+R("GET", "/courses/:id/plans", ...view("courses"));
+R("POST", "/courses/:id/plans", "courses.create");
 R("GET", "/courses/:id/promocodes", ...view("courses"));
 R("GET", "/courses/:id/exam-categories", ...view("courses"));
 R("GET", "/courses/:id/material-categories", ...view("courses"));
@@ -134,10 +143,10 @@ R("DELETE", "/master/materials/:id", "materials.delete");
 
 // ── /pc-materials → pc-materials (Master Data) ─────────────────────────────
 crud("/pc-materials", "pc-materials");
-R("GET", "/master/video-categories", ...view("video-categories"));
-R("POST", "/master/video-categories", "video-categories.create");
-R("PUT", "/master/video-categories/:id", "video-categories.edit");
-R("DELETE", "/master/video-categories/:id", "video-categories.delete");
+R("GET", "/master/video-categories", ...view("videos.categories"));
+R("POST", "/master/video-categories", "videos.categories.create");
+R("PUT", "/master/video-categories/:id", "videos.categories.edit");
+R("DELETE", "/master/video-categories/:id", "videos.categories.delete");
 R("GET", "/master/package-categories", ...view("package-categories"));
 R("POST", "/master/package-categories", "package-categories.create");
 R("PUT", "/master/package-categories/:id", "package-categories.edit");
@@ -149,42 +158,49 @@ R("GET", "/ebooks/pdf-jobs/:id", ...view("ebooks"));
 R("POST", "/ebooks/:id/pdf", "ebooks.edit");
 R("PATCH", "/ebooks/:id/trending", "ebooks.edit");
 R("GET", "/ebooks/subscriptions/list", ...view("ebooks.subscriptions"));
-R("POST", "/ebooks/subscriptions", "ebooks.subscriptions.create");
+// ebooks.subscriptions is a view-only report; its write routes gate on parent `ebooks`.
+R("POST", "/ebooks/subscriptions", "ebooks.create");
 R("GET", "/ebooks/subscriptions/:id", ...view("ebooks.subscriptions"));
-R("PUT", "/ebooks/subscriptions/:id", "ebooks.subscriptions.edit");
-R("DELETE", "/ebooks/subscriptions/:id", "ebooks.subscriptions.delete");
-R("GET", "/ebooks/plans/:id", ...view("ebooks.plans"));
-R("PUT", "/ebooks/plans/:id", "ebooks.plans.edit");
-R("DELETE", "/ebooks/plans/:id", "ebooks.plans.delete");
-R("GET", "/ebooks/:id/plans", ...view("ebooks.plans"));
-R("POST", "/ebooks/:id/plans", "ebooks.plans.create");
-R("GET", "/ebooks/:id/prices", ...view("ebooks.plans"));
+R("PUT", "/ebooks/subscriptions/:id", "ebooks.edit");
+R("DELETE", "/ebooks/subscriptions/:id", "ebooks.delete");
+// ebooks.plans collapsed 2026-07-20 into parent `ebooks`.
+R("GET", "/ebooks/plans/:id", ...view("ebooks"));
+R("PUT", "/ebooks/plans/:id", "ebooks.edit");
+R("DELETE", "/ebooks/plans/:id", "ebooks.delete");
+R("GET", "/ebooks/:id/plans", ...view("ebooks"));
+R("POST", "/ebooks/:id/plans", "ebooks.create");
+R("GET", "/ebooks/:id/prices", ...view("ebooks"));
 R("GET", "/ebooks/:id/promocodes", ...view("ebooks"));
 crud("/ebooks", "ebooks");
 
 // ── /customers → customers (+ addresses, course/ebook subscriptions) ───────
 R("GET", "/customers/pre-requisites", ...view("customers"));
 R("GET", "/customers/states/:id/districts", ...view("customers"));
-R("GET", "/customers/:id/details", "customers.view-details", "customers.view");
-R("GET", "/customers/:id/addresses", ...view("customers.addresses"));
-R("GET", "/customers/:id/course-subscriptions", ...view("customers.course-subscriptions"));
-R("PUT", "/customers/:id/course-subscriptions/:sid", "customers.course-subscriptions.edit");
-R("GET", "/customers/:id/ebook-subscriptions", ...view("customers.ebook-subscriptions"));
+R("GET", "/customers/:id/details", ...view("customers")); // was customers.view-details
+// customers sub-resources (addresses, course/ebook subscriptions) collapsed
+// 2026-07-20 into the parent `customers` key.
+R("GET", "/customers/:id/addresses", ...view("customers"));
+R("GET", "/customers/:id/course-subscriptions", ...view("customers"));
+R("PUT", "/customers/:id/course-subscriptions/:sid", "customers.edit");
+R("GET", "/customers/:id/ebook-subscriptions", ...view("customers"));
 crud("/customers", "customers");
 
-// ── /customer-masters → districts / educations / target-goals ──────────────
-R("GET", "/customer-masters/districts", ...view("customer-masters.districts"));
-R("POST", "/customer-masters/districts", "customer-masters.districts.create");
-R("PUT", "/customer-masters/districts/:id", "customer-masters.districts.edit");
-R("DELETE", "/customer-masters/districts/:id", "customer-masters.districts.delete");
-R("GET", "/customer-masters/educations", ...view("customer-masters.educations"));
-R("POST", "/customer-masters/educations", "customer-masters.educations.create");
-R("PUT", "/customer-masters/educations/:id", "customer-masters.educations.edit");
-R("DELETE", "/customer-masters/educations/:id", "customer-masters.educations.delete");
-R("GET", "/customer-masters/target-goals", ...view("customer-masters.target-goals"));
-R("POST", "/customer-masters/target-goals", "customer-masters.target-goals.create");
-R("PUT", "/customer-masters/target-goals/:id", "customer-masters.target-goals.edit");
-R("DELETE", "/customer-masters/target-goals/:id", "customer-masters.target-goals.delete");
+// ── /customer-masters → collapsed into `customers` ─────────────────────────
+// The `customer-masters.*` catalog modules were dropped 2026-07-20 (keep-list:
+// "the panel uses customers.*, never customer-masters"). These master-data routes
+// now gate on the parent `customers` key.
+R("GET", "/customer-masters/districts", ...view("customers"));
+R("POST", "/customer-masters/districts", "customers.create");
+R("PUT", "/customer-masters/districts/:id", "customers.edit");
+R("DELETE", "/customer-masters/districts/:id", "customers.delete");
+R("GET", "/customer-masters/educations", ...view("customers"));
+R("POST", "/customer-masters/educations", "customers.create");
+R("PUT", "/customer-masters/educations/:id", "customers.edit");
+R("DELETE", "/customer-masters/educations/:id", "customers.delete");
+R("GET", "/customer-masters/target-goals", ...view("customers"));
+R("POST", "/customer-masters/target-goals", "customers.create");
+R("PUT", "/customer-masters/target-goals/:id", "customers.edit");
+R("DELETE", "/customer-masters/target-goals/:id", "customers.delete");
 
 // ── /referrals → referrers / report / transactions / terms / faqs ──────────
 // NOTE: "programs" has no catalog module yet — mapped to referrals.settings as
@@ -194,11 +210,13 @@ R("POST|PUT|DELETE", "/referrals/programs", "referrals.settings.edit");
 R("POST|PUT|DELETE", "/referrals/programs/:id", "referrals.settings.edit");
 R("GET", "/referrals/referrers", ...view("referrals.referrers"));
 R("GET", "/referrals/transactions", ...view("referrals.transactions"));
-R("PATCH", "/referrals/transactions/:id", "referrals.transactions.edit");
-R("POST", "/referrals/transactions", "referrals.transactions.create");
-R("GET", "/referrals/withdrawals/csv", "referrals.report.export", "referrals.report.view");
+// referrals.transactions + referrals.report are view-only reports; their write
+// actions (approve/process transactions & withdrawals) gate on referrals.settings.edit.
+R("PATCH", "/referrals/transactions/:id", "referrals.settings.edit");
+R("POST", "/referrals/transactions", "referrals.settings.edit");
+R("GET", "/referrals/withdrawals/csv", ...view("referrals.report")); // was report.export
 R("GET", "/referrals/withdrawals", ...view("referrals.report"));
-R("POST", "/referrals/withdrawals/:id", "referrals.transactions.edit");
+R("POST", "/referrals/withdrawals/:id", "referrals.settings.edit");
 R("GET", "/referrals/terms", ...view("referrals.terms"));
 R("POST", "/referrals/terms", "referrals.terms.create");
 R("GET", "/referrals/terms/:id", ...view("referrals.terms"));
@@ -219,9 +237,9 @@ R("GET", "/books/settings", "cms.free-delivery.view");
 R("PUT", "/books/settings", "cms.free-delivery.edit");
 R("GET", "/books/orders/list", ...view("books.orders"));
 R("GET", "/books/orders/:id", ...view("books.orders"));
-R("PATCH", "/books/orders/:id/status", "books.orders.update-status");
-R("PATCH", "/books/orders/:id/tracking", "books.orders.update-status");
-R("POST", "/books/orders/:id/tracking/events", "books.orders.update-status");
+R("PATCH", "/books/orders/:id/status", "books.edit");
+R("PATCH", "/books/orders/:id/tracking", "books.edit");
+R("POST", "/books/orders/:id/tracking/events", "books.edit");
 R("PATCH", "/books/:id/trending", "books.edit");
 crud("/books", "books");
 
@@ -234,18 +252,20 @@ R("POST", "/quizzes/categories", "quizzes.categories.create");
 R("GET", "/quizzes/categories/:id", ...view("quizzes.categories"));
 R("PUT", "/quizzes/categories/:id", "quizzes.categories.edit");
 R("DELETE", "/quizzes/categories/:id", "quizzes.categories.delete");
-R("GET", "/quizzes/questions/list", ...view("quizzes.questions"));
-R("POST", "/quizzes/questions/bulk", "quizzes.questions.import");
-R("POST", "/quizzes/questions/reorder", "quizzes.questions.edit");
-R("POST", "/quizzes/questions", "quizzes.questions.create");
-R("GET", "/quizzes/questions/:id", ...view("quizzes.questions"));
-R("PUT", "/quizzes/questions/:id", "quizzes.questions.edit");
-R("DELETE", "/quizzes/questions/:id", "quizzes.questions.delete");
-R("GET", "/quizzes/:id/submissions", ...view("quizzes.submissions"));
-R("GET", "/quizzes/:id/analytics", ...view("quizzes.analytics"));
-R("GET", "/quizzes/results/:id", ...view("quizzes.submissions"));
-R("PATCH", "/quizzes/results/:id/invalidate", "quizzes.submissions.invalidate");
-R("GET", "/quizzes/analytics/customer/:id", ...view("quizzes.analytics"));
+// quizzes sub-resources (questions, submissions, analytics) collapsed 2026-07-20
+// into the parent `quizzes` key.
+R("GET", "/quizzes/questions/list", ...view("quizzes"));
+R("POST", "/quizzes/questions/bulk", "quizzes.edit");
+R("POST", "/quizzes/questions/reorder", "quizzes.edit");
+R("POST", "/quizzes/questions", "quizzes.create");
+R("GET", "/quizzes/questions/:id", ...view("quizzes"));
+R("PUT", "/quizzes/questions/:id", "quizzes.edit");
+R("DELETE", "/quizzes/questions/:id", "quizzes.delete");
+R("GET", "/quizzes/:id/submissions", ...view("quizzes"));
+R("GET", "/quizzes/:id/analytics", ...view("quizzes"));
+R("GET", "/quizzes/results/:id", ...view("quizzes"));
+R("PATCH", "/quizzes/results/:id/invalidate", "quizzes.edit");
+R("GET", "/quizzes/analytics/customer/:id", ...view("quizzes"));
 R("POST", "/quizzes/reorder", "quizzes.edit");
 crud("/quizzes", "quizzes");
 
@@ -254,7 +274,7 @@ crud("/quizzes", "quizzes");
 // master-data "Materials" lives under /master/materials above.
 R("GET", "/materials/categories", ...view("study-materials.categories"));
 R("POST", "/materials/categories/reorder", "study-materials.categories.edit");
-R("POST", "/materials/categories/:id/duplicate", "study-materials.categories.duplicate");
+R("POST", "/materials/categories/:id/duplicate", "study-materials.categories.create"); // was .duplicate
 R("GET", "/materials/categories/:id/courses", ...view("study-materials.categories"));
 R("GET", "/materials/categories/:id/materials", ...view("study-materials.categories"));
 R("PATCH", "/materials/categories/:id/status", "study-materials.categories.toggle-status");
@@ -273,9 +293,10 @@ R("POST", "/packages/types", "packages.types.create");
 R("PUT", "/packages/types/:id", "packages.types.edit");
 R("DELETE", "/packages/types/:id", "packages.types.delete");
 R("POST", "/packages/reorder", "packages.edit");
-R("GET", "/packages/:id/plans", ...view("packages.plans"));
-R("POST", "/packages/:id/plans/attach", "packages.plans.attach");
-R("DELETE", "/packages/:id/plans/:pid", "packages.plans.detach");
+// packages.plans collapsed 2026-07-20 into parent `packages` (attach/detach → edit).
+R("GET", "/packages/:id/plans", ...view("packages"));
+R("POST", "/packages/:id/plans/attach", "packages.edit");
+R("DELETE", "/packages/:id/plans/:pid", "packages.edit");
 R("PATCH", "/packages/:id/specific-subjects/reorder", "packages.edit");
 R("PATCH", "/packages/:id/material-categories/reorder", "packages.edit");
 R("PATCH", "/packages/:id/exam-categories/reorder", "packages.edit");
@@ -308,8 +329,8 @@ R("POST", "/plan-popularity/recompute", "plans.edit");
 
 // ── /promocodes → promocodes ───────────────────────────────────────────────
 R("GET", "/promocodes/plans", ...view("promocodes"));
-R("POST", "/promocodes/bulk-status", "promocodes.bulk-status");
-R("POST", "/promocodes/bulk-delete", "promocodes.bulk-delete");
+R("POST", "/promocodes/bulk-status", "promocodes.toggle-status"); // was .bulk-status
+R("POST", "/promocodes/bulk-delete", "promocodes.delete"); // was .bulk-delete
 crud("/promocodes", "promocodes");
 
 // ── /subscriptions → subscriptions (+ reports, customer addresses) ─────────
@@ -319,10 +340,11 @@ R("GET", "/subscriptions/reports/by-ebook", ...view("subscriptions.reports"));
 R("GET", "/subscriptions/reports/book-orders", ...view("subscriptions.reports"));
 R("GET", "/subscriptions/ebook", ...view("subscriptions"));
 R("GET", "/subscriptions/plans", ...view("subscriptions"));
-R("GET", "/subscriptions/customer-addresses/:id", ...view("customers.addresses"));
-R("POST", "/subscriptions/customer-addresses", "customers.addresses.create");
-R("PUT", "/subscriptions/customer-addresses/:id", "customers.addresses.edit");
-R("DELETE", "/subscriptions/customer-addresses/:id", "customers.addresses.delete");
+// customers.addresses collapsed 2026-07-20 into parent `customers`.
+R("GET", "/subscriptions/customer-addresses/:id", ...view("customers"));
+R("POST", "/subscriptions/customer-addresses", "customers.create");
+R("PUT", "/subscriptions/customer-addresses/:id", "customers.edit");
+R("DELETE", "/subscriptions/customer-addresses/:id", "customers.delete");
 crud("/subscriptions", "subscriptions");
 
 // ── /cms → cms.* (one sub-resource per key) ────────────────────────────────
@@ -353,9 +375,9 @@ R("DELETE", "/inquiries/:id", "inquiries.delete");
 crud("/departments", "departments");
 
 // ── /notifications → notifications ─────────────────────────────────────────
-R("POST", "/notifications/broadcast", "notifications.send");
+R("POST", "/notifications/broadcast", "notifications.create"); // was notifications.send
 R("GET", "/notifications/target-options", ...view("notifications"));
-R("POST", "/notifications/bulk-delete", "notifications.bulk-delete");
+R("POST", "/notifications/bulk-delete", "notifications.delete"); // was .bulk-delete
 R("POST", "/notifications/:id/cancel", "notifications.edit");
 R("GET", "/notifications/images", ...view("notifications"));
 R("POST", "/notifications/images", "notifications.create");
@@ -375,10 +397,10 @@ R("GET", "/offline/batch-enquiries", ...view("offline.enquiries"));
 R("DELETE", "/offline/batch-enquiries/:id", "offline.enquiries.delete");
 
 // ── /promoters → promoters (+ subscriptions, dashboard) ────────────────────
-R("GET", "/promoters/dashboard", "promoters.view-dashboard", "promoters.view");
-R("GET", "/promoters/:id/dashboard", "promoters.view-dashboard", "promoters.view");
+R("GET", "/promoters/dashboard", ...view("promoters")); // was promoters.view-dashboard
+R("GET", "/promoters/:id/dashboard", ...view("promoters")); // was promoters.view-dashboard
 R("GET", "/promoters/:id/promocodes", ...view("promoters"));
-R("GET", "/promoters/:id/subscriptions", ...view("promoters.subscriptions"));
+R("GET", "/promoters/:id/subscriptions", ...view("promoters")); // collapsed from promoters.subscriptions 2026-07-20
 crud("/promoters", "promoters");
 
 // ── /dashboard → dashboard (read-only) ─────────────────────────────────────
@@ -400,28 +422,30 @@ R("DELETE", "/exam-countdowns/categories/:id", "exam-countdowns.categories.delet
 crud("/exam-countdowns", "exam-countdowns");
 
 // ── /live-polls → live-sessions.polls ──────────────────────────────────────
-R("POST", "/live-polls", "live-sessions.polls.create");
-R("GET", "/live-polls/:id/results", ...view("live-sessions.polls"));
-R("GET", "/live-polls/:id", ...view("live-sessions.polls"));
+// live-sessions.polls collapsed 2026-07-20 into parent `live-sessions`.
+R("POST", "/live-polls", "live-sessions.create");
+R("GET", "/live-polls/:id/results", ...view("live-sessions"));
+R("GET", "/live-polls/:id", ...view("live-sessions"));
 
 // ── /live-chat → live-sessions.chat ────────────────────────────────────────
-R("POST", "/live-chat/message", "live-sessions.chat.moderate");
+// live-sessions.chat.moderate dropped 2026-07-20 → standard actions on the chat module.
+R("POST", "/live-chat/message", "live-sessions.chat.create");
 R("GET", "/live-chat/bans", ...view("live-sessions.chat"));
-R("POST", "/live-chat/bans", "live-sessions.chat.moderate");
-R("DELETE", "/live-chat/bans/:id", "live-sessions.chat.moderate");
-R("DELETE", "/live-chat/messages/:id", "live-sessions.chat.moderate");
+R("POST", "/live-chat/bans", "live-sessions.chat.create");
+R("DELETE", "/live-chat/bans/:id", "live-sessions.chat.delete");
+R("DELETE", "/live-chat/messages/:id", "live-sessions.chat.delete");
 R("GET", "/live-chat/:id/history", ...view("live-sessions.chat"));
 R("GET", "/live-chat/:id/settings", ...view("live-sessions.chat"));
-R("PATCH", "/live-chat/:id/settings", "live-sessions.chat.moderate");
+R("PATCH", "/live-chat/:id/settings", "live-sessions.chat.edit");
 
 // ── /live-sessions (live) → live-sessions (+ streamos) ─────────────────────
 // streamos/webhook is an external callback → UNMAPPED (allowed; it has its own
 // verification and no per-user permission concept).
 R("GET", "/live-sessions/streamos/org", ...view("live-sessions.streamos"));
 R("GET", "/live-sessions/streamos/recordings/:id", ...view("live-sessions.streamos"));
-R("POST", "/live-sessions/end", "live-sessions.end");
+R("POST", "/live-sessions/end", "live-sessions.edit"); // was live-sessions.end
 R("POST", "/live-sessions/:id/provision", "live-sessions.edit");
-R("POST", "/live-sessions/:id/start", "live-sessions.start");
+R("POST", "/live-sessions/:id/start", "live-sessions.edit"); // was live-sessions.start
 R("POST", "/live-sessions/:id/promote-recording", "live-sessions.edit");
 R("GET", "/live-sessions/:id/attendance", ...view("live-sessions"));
 R("GET", "/live-sessions/:id/recording-health", ...view("live-sessions"));
@@ -429,36 +453,38 @@ R("GET", "/live-sessions", ...view("live-sessions"));
 R("POST", "/live-sessions", "live-sessions.create");
 R("GET", "/live-sessions/:id", ...view("live-sessions"));
 R("PATCH", "/live-sessions/:id", "live-sessions.edit");
-R("DELETE", "/live-sessions/:id", "live-sessions.cancel", "live-sessions.delete");
+R("DELETE", "/live-sessions/:id", "live-sessions.delete"); // was cancel|delete
 
 // ── /live-courses → live-courses (+ plans, folders, videos, subscriptions) ─
-R("GET", "/live-courses/plans/:id", ...view("live-courses.plans"));
-R("PUT", "/live-courses/plans/:id", "live-courses.plans.edit");
-R("DELETE", "/live-courses/plans/:id", "live-courses.plans.delete");
-R("GET", "/live-courses/subscriptions", ...view("live-courses.subscriptions"));
-R("GET", "/live-courses/subscriptions/:id", ...view("live-courses.subscriptions"));
-R("PUT", "/live-courses/subscriptions/:id", "live-courses.subscriptions.edit");
-R("DELETE", "/live-courses/subscriptions/:id", "live-courses.subscriptions.delete");
+// live-courses sub-resources (plans, folders, videos, subscriptions) collapsed
+// 2026-07-20 into the parent `live-courses` key.
+R("GET", "/live-courses/plans/:id", ...view("live-courses"));
+R("PUT", "/live-courses/plans/:id", "live-courses.edit");
+R("DELETE", "/live-courses/plans/:id", "live-courses.delete");
+R("GET", "/live-courses/subscriptions", ...view("live-courses"));
+R("GET", "/live-courses/subscriptions/:id", ...view("live-courses"));
+R("PUT", "/live-courses/subscriptions/:id", "live-courses.edit");
+R("DELETE", "/live-courses/subscriptions/:id", "live-courses.delete");
 R("GET", "/live-courses/:id/sessions", ...view("live-courses"));
-R("GET", "/live-courses/:id/plans", ...view("live-courses.plans"));
-R("POST", "/live-courses/:id/plans", "live-courses.plans.create");
-R("GET", "/live-courses/:id/subscriptions", ...view("live-courses.subscriptions"));
-R("POST", "/live-courses/:id/grant", "live-courses.subscriptions.create");
+R("GET", "/live-courses/:id/plans", ...view("live-courses"));
+R("POST", "/live-courses/:id/plans", "live-courses.create");
+R("GET", "/live-courses/:id/subscriptions", ...view("live-courses"));
+R("POST", "/live-courses/:id/grant", "live-courses.create");
 R("PATCH", "/live-courses/:id/popular", "live-courses.edit");
 R("PATCH", "/live-courses/:id/schedule-entries", "live-courses.edit");
 R("DELETE", "/live-courses/:id/schedule-folders/:fid", "live-courses.edit");
 R("DELETE", "/live-courses/:id/schedule-folders/:fid/entries/:eid", "live-courses.edit");
-R("POST", "/live-courses/:id/folders/:fid/videos/reorder", "live-courses.videos.edit");
-R("POST", "/live-courses/:id/folders/:fid/videos/from-recording", "live-courses.videos.create");
-R("GET", "/live-courses/:id/folders/:fid/videos", ...view("live-courses.videos"));
-R("POST", "/live-courses/:id/folders/:fid/videos", "live-courses.videos.create");
-R("GET", "/live-courses/:id/folders/:fid/videos/:vid", ...view("live-courses.videos"));
-R("PUT", "/live-courses/:id/folders/:fid/videos/:vid", "live-courses.videos.edit");
-R("DELETE", "/live-courses/:id/folders/:fid/videos/:vid", "live-courses.videos.delete");
-R("GET", "/live-courses/:id/folders", ...view("live-courses.folders"));
-R("POST", "/live-courses/:id/folders", "live-courses.folders.create");
-R("PATCH", "/live-courses/:id/folders/:fid", "live-courses.folders.edit");
-R("DELETE", "/live-courses/:id/folders/:fid", "live-courses.folders.delete");
+R("POST", "/live-courses/:id/folders/:fid/videos/reorder", "live-courses.edit");
+R("POST", "/live-courses/:id/folders/:fid/videos/from-recording", "live-courses.create");
+R("GET", "/live-courses/:id/folders/:fid/videos", ...view("live-courses"));
+R("POST", "/live-courses/:id/folders/:fid/videos", "live-courses.create");
+R("GET", "/live-courses/:id/folders/:fid/videos/:vid", ...view("live-courses"));
+R("PUT", "/live-courses/:id/folders/:fid/videos/:vid", "live-courses.edit");
+R("DELETE", "/live-courses/:id/folders/:fid/videos/:vid", "live-courses.delete");
+R("GET", "/live-courses/:id/folders", ...view("live-courses"));
+R("POST", "/live-courses/:id/folders", "live-courses.create");
+R("PATCH", "/live-courses/:id/folders/:fid", "live-courses.edit");
+R("DELETE", "/live-courses/:id/folders/:fid", "live-courses.delete");
 crud("/live-courses", "live-courses");
 
 // ── /test-series → test-series (+ prices/plans, subscriptions) ─────────────
@@ -466,20 +492,21 @@ R("PUT", "/test-series/content-categories/:id", "test-series.edit");
 R("DELETE", "/test-series/content-categories/:id", "test-series.edit");
 R("PUT", "/test-series/papers/:id", "test-series.edit");
 R("DELETE", "/test-series/papers/:id", "test-series.edit");
-R("PUT", "/test-series/prices/:id", "test-series.plans.edit");
-R("DELETE", "/test-series/prices/:id", "test-series.plans.delete");
-R("GET", "/test-series/subscriptions", ...view("test-series.subscriptions"));
-R("GET", "/test-series/subscriptions/:id", ...view("test-series.subscriptions"));
-R("PUT", "/test-series/subscriptions/:id", "test-series.subscriptions.edit");
-R("DELETE", "/test-series/subscriptions/:id", "test-series.subscriptions.delete");
+// test-series.plans + test-series.subscriptions collapsed 2026-07-20 into `test-series`.
+R("PUT", "/test-series/prices/:id", "test-series.edit");
+R("DELETE", "/test-series/prices/:id", "test-series.delete");
+R("GET", "/test-series/subscriptions", ...view("test-series"));
+R("GET", "/test-series/subscriptions/:id", ...view("test-series"));
+R("PUT", "/test-series/subscriptions/:id", "test-series.edit");
+R("DELETE", "/test-series/subscriptions/:id", "test-series.delete");
 R("GET", "/test-series/orders", ...view("test-series"));
 R("GET", "/test-series/:id/content-categories", ...view("test-series"));
 R("POST", "/test-series/:id/content-categories", "test-series.edit");
 R("GET", "/test-series/:id/papers", ...view("test-series"));
 R("POST", "/test-series/:id/papers", "test-series.edit");
-R("GET", "/test-series/:id/prices", ...view("test-series.plans"));
-R("POST", "/test-series/:id/prices", "test-series.plans.create");
-R("POST", "/test-series/:id/grant", "test-series.subscriptions.create");
+R("GET", "/test-series/:id/prices", ...view("test-series"));
+R("POST", "/test-series/:id/prices", "test-series.create");
+R("POST", "/test-series/:id/grant", "test-series.create");
 crud("/test-series", "test-series");
 
 // ── /uploads → presigned upload helper (no dedicated module) UNMAPPED ──────
@@ -501,3 +528,16 @@ export const resolveRequiredKeys = (
 
 /** Total rule count — exposed for a boot-time sanity log / tests. */
 export const RBAC_RULE_COUNT = rules.length;
+
+/**
+ * Every catalog permission key referenced by an enforcement rule (deduped).
+ *
+ * This is the authoritative set of keys the backend actually gates routes on.
+ * A cleanup that prunes the permission catalog/DB MUST protect these — deleting
+ * a key that still appears here would make the mapped route deny every
+ * non-super-admin the moment `RBAC_ENFORCE` is turned on (no grantable id).
+ * Consumed by scripts/cleanup-web-permissions.ts.
+ */
+export const RBAC_ROUTE_KEYS: ReadonlySet<string> = new Set(
+  rules.flatMap((r) => r.keys)
+);

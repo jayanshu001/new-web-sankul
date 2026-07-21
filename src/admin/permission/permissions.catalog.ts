@@ -17,7 +17,7 @@
 
 import type { Guard } from "./permission.validation";
 
-export const CATALOG_VERSION = "2026.07.11-1";
+export const CATALOG_VERSION = "2026.07.20-2";
 
 export type CatalogAction =
   | "view" | "list" | "create" | "edit" | "delete" | "toggle-status"
@@ -46,9 +46,11 @@ export interface CatalogModule {
   permissions: CatalogPermission[];
 }
 
-const STANDARD_6: { action: string; suffix: string; verb: string }[] = [
+// The `web` catalog exposes only these 5 core actions per module (2026-07-20).
+// `list` was dropped (the admin UI gates list screens on `view`) and all
+// sub-feature/extra actions were removed — the admin frontend checks none of them.
+const STANDARD_5: { action: string; suffix: string; verb: string }[] = [
   { action: "view",          suffix: "view",          verb: "View"           },
-  { action: "list",          suffix: "list",          verb: "List"           },
   { action: "create",        suffix: "create",        verb: "Create"         },
   { action: "edit",          suffix: "edit",          verb: "Edit"           },
   { action: "delete",        suffix: "delete",        verb: "Delete"         },
@@ -56,8 +58,9 @@ const STANDARD_6: { action: string; suffix: string; verb: string }[] = [
 ];
 
 /**
- * Build a module entry. Pass `standard: false` to skip the standard 6 actions
- * (for read-only modules like Dashboard / Analytics / Tracking).
+ * Build a module entry. Pass `standard: false` to skip the standard actions
+ * (for read-only modules like Dashboard / Tracking), or a subset array (e.g.
+ * `["view"]` for reports, `["view","edit"]` for settings).
  */
 const mod = (
   key: string,
@@ -72,12 +75,12 @@ const mod = (
 ): CatalogModule => {
   const standard = opts.standard ?? true;
   const want = standard === true
-    ? STANDARD_6.map((s) => s.action)
+    ? STANDARD_5.map((s) => s.action)
     : standard === false
       ? []
       : standard;
 
-  const base: CatalogPermission[] = STANDARD_6
+  const base: CatalogPermission[] = STANDARD_5
     .filter((s) => want.includes(s.action))
     .map((s) => ({
       key: `${key}.${s.suffix}`,
@@ -97,7 +100,7 @@ const mod = (
 
 /**
  * Define a module with an explicit, hand-listed permission set (keys that don't
- * follow the STANDARD_6 `{key}.{view|list|create|...}` shape). Used for the
+ * follow the STANDARD_5 `{key}.{view|list|create|...}` shape). Used for the
  * promoter/educator portal permissions, whose historical keys are e.g.
  * `promoter`, `promoter.customers.read`.
  */
@@ -110,35 +113,26 @@ const rawMod = (
   description?: string
 ): CatalogModule => ({ key, label, group, guard, description, permissions });
 
-const extra = (
-  moduleKey: string,
-  action: string,
-  label: string,
-  subResource?: string
-): CatalogPermission => ({
-  key: `${moduleKey}.${action}`,
-  label,
-  action,
-  ...(subResource ? { subResource } : {}),
-});
+// NOTE: the `web` catalog is capped at the 5 STANDARD_5 actions per module — no
+// per-module `extras` (2026-07-20). The `extra()` helper was removed with them; if
+// a future non-web guard needs bespoke keys, use `rawMod()` instead.
 
 export const PERMISSION_CATALOG: CatalogModule[] = [
   // ── Master Data ──────────────────────────────────────────────────────────
   mod("goals", "Goals", "Master Data"),
   mod("educators", "Educators", "Master Data"),
-  mod("materials", "Materials", "Master Data", {
-    extras: [extra("materials", "duplicate", "Duplicate materials")],
-  }),
+  mod("materials", "Materials", "Master Data"),
   mod("pc-materials", "PC Materials", "Master Data"),
   mod("subject-categories", "Course Categories", "Master Data"),
-  mod("video-categories", "Video Categories", "Master Data", {
-    extras: [extra("video-categories", "duplicate", "Duplicate video categories")],
-  }),
   mod("package-categories", "Package Categories", "Master Data"),
-  mod("customer-masters.states", "Customer Master — States", "Master Data"),
-  mod("customer-masters.districts", "Customer Master — Districts", "Master Data"),
-  mod("customer-masters.educations", "Customer Master — Educations", "Master Data"),
-  mod("customer-masters.target-goals", "Customer Master — Target Goals", "Master Data"),
+  // Removed 2026-07-20 (keep-list reconciliation, guard `web`):
+  //   • `video-categories` — legacy duplicate of the kept `videos.categories`;
+  //     its /video-categories + /master/video-categories routes now gate on
+  //     `videos.categories.*` in rbacRouteMap.
+  //   • `customer-masters.*` (states/districts/educations/target-goals) — the
+  //     admin panel gates these under `customers.*`; their /customer-masters/*
+  //     routes were re-pointed to `customers.*` in rbacRouteMap.
+  // See docs/backend-requests/permission-catalog-keep-list-web-guard-RESPONSE.md.
 
   // ── Address ──────────────────────────────────────────────────────────────
   mod("address.states", "States", "Address"),
@@ -146,157 +140,85 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
 
   // ── Courses ──────────────────────────────────────────────────────────────
   mod("courses", "Courses", "Courses"),
-  mod("courses.plans", "Course Plans", "Courses"),
-  mod("courses.video-categories", "Course Video Categories", "Courses"),
-  mod("courses.videos", "Course Videos", "Courses"),
-  mod("courses.materials", "Course Materials", "Courses"),
+  // courses.{plans,video-categories,videos,materials} removed 2026-07-20 — the
+  // admin panel gates all Courses actions on `courses.*`; nested routes collapsed
+  // into the parent key in rbacRouteMap.
 
   // ── Live Courses ─────────────────────────────────────────────────────────
   mod("live-courses", "Live Courses", "Live Courses"),
-  mod("live-courses.plans", "Live Course Plans", "Live Courses"),
-  mod("live-courses.folders", "Live Course Folders", "Live Courses"),
-  mod("live-courses.videos", "Live Course Videos", "Live Courses"),
-  mod("live-courses.subscriptions", "Live Course Subscriptions", "Live Courses"),
+  // live-courses.{plans,folders,videos,subscriptions} removed 2026-07-20 —
+  // collapsed into the parent `live-courses` key in rbacRouteMap.
 
   // ── Live Sessions ────────────────────────────────────────────────────────
-  mod("live-sessions", "Live Sessions", "Live Sessions", {
-    extras: [
-      extra("live-sessions", "start", "Start live session"),
-      extra("live-sessions", "end", "End live session"),
-      extra("live-sessions", "cancel", "Cancel live session"),
-    ],
-  }),
-  mod("live-sessions.chat", "Live Session Chat", "Live Sessions", {
-    extras: [extra("live-sessions.chat", "moderate", "Moderate live session chat")],
-  }),
-  mod("live-sessions.polls", "Live Session Polls", "Live Sessions", {
-    extras: [extra("live-sessions.polls", "publish", "Publish live session poll")],
-  }),
+  mod("live-sessions", "Live Sessions", "Live Sessions"),
+  mod("live-sessions.chat", "Live Session Chat", "Live Sessions"),
+  // live-sessions.polls removed 2026-07-20 — collapsed into `live-sessions`.
   mod("live-sessions.streamos", "StreamOS Config", "Live Sessions"),
 
   // ── Test Series ──────────────────────────────────────────────────────────
   mod("test-series", "Test Series", "Test Series"),
-  mod("test-series.plans", "Test Series Plans", "Test Series"),
-  mod("test-series.subscriptions", "Test Series Subscriptions", "Test Series"),
+  // test-series.{plans,subscriptions} removed 2026-07-20 — collapsed into `test-series`.
 
   // ── Ebooks / Books ───────────────────────────────────────────────────────
   mod("ebooks", "Ebooks", "Ebooks / Books"),
-  mod("ebooks.plans", "Ebook Plans", "Ebooks / Books"),
-  mod("ebooks.subscriptions", "Ebook Subscriptions", "Ebooks / Books"),
+  // ebooks.plans removed 2026-07-20 — collapsed into `ebooks`.
+  // Reports → view only; their write routes gate on the parent module in rbacRouteMap.
+  mod("ebooks.subscriptions", "Ebook Subscriptions", "Ebooks / Books", { standard: ["view"] }),
   mod("books", "Books", "Ebooks / Books"),
-  mod("books.orders", "Book Orders", "Ebooks / Books", {
-    extras: [extra("books.orders", "update-status", "Update book order status")],
-  }),
+  mod("books.orders", "Book Orders", "Ebooks / Books", { standard: ["view"] }),
 
   // ── Packages ─────────────────────────────────────────────────────────────
   mod("packages", "Packages", "Packages"),
   mod("packages.types", "Package Types", "Packages"),
-  mod("packages.plans", "Package Plans", "Packages", {
-    extras: [
-      extra("packages.plans", "attach", "Attach package plan"),
-      extra("packages.plans", "detach", "Detach package plan"),
-    ],
-  }),
+  // packages.plans removed 2026-07-20 — collapsed into `packages` (attach/detach → edit).
   mod("plans", "Standalone Plans", "Packages"),
 
   // ── Study Materials ──────────────────────────────────────────────────────
   mod("study-materials", "Study Materials", "Study Materials"),
-  mod("study-materials.categories", "Study Material Categories", "Study Materials", {
-    extras: [extra("study-materials.categories", "duplicate", "Duplicate study material categories")],
-  }),
+  mod("study-materials.categories", "Study Material Categories", "Study Materials"),
 
   // ── Exam Countdowns ──────────────────────────────────────────────────────
   mod("exam-countdowns", "Exam Countdowns", "Exam Countdowns"),
   mod("exam-countdowns.categories", "Exam Countdown Categories", "Exam Countdowns"),
 
   // ── Quizzes ──────────────────────────────────────────────────────────────
-  mod("quizzes", "Quizzes", "Quizzes", {
-    extras: [
-      extra("quizzes", "publish", "Publish quiz"),
-      extra("quizzes", "unpublish", "Unpublish quiz"),
-    ],
-  }),
+  mod("quizzes", "Quizzes", "Quizzes"),
   mod("quizzes.categories", "Quiz Categories", "Quizzes"),
-  mod("quizzes.questions", "Quiz Questions", "Quizzes", {
-    extras: [
-      extra("quizzes.questions", "import", "Import quiz questions"),
-      extra("quizzes.questions", "export", "Export quiz questions"),
-    ],
-  }),
-  mod("quizzes.submissions", "Quiz Submissions", "Quizzes", {
-    extras: [extra("quizzes.submissions", "invalidate", "Invalidate quiz submission")],
-  }),
-  mod("quizzes.analytics", "Quiz Analytics", "Quizzes", { standard: ["view", "list"] }),
+  // quizzes.{questions,submissions,analytics} removed 2026-07-20 — collapsed into
+  // the parent `quizzes` key in rbacRouteMap.
 
   // ── Videos ───────────────────────────────────────────────────────────────
   mod("videos", "Videos", "Videos"),
-  mod("videos.categories", "Video Categories", "Videos", {
-    extras: [extra("videos.categories", "duplicate", "Duplicate video categories")],
-  }),
+  mod("videos.categories", "Video Categories", "Videos"),
 
   // ── Customers ────────────────────────────────────────────────────────────
-  mod("customers", "Customers", "Customers", {
-    extras: [extra("customers", "view-details", "View customer details")],
-  }),
-  mod("customers.addresses", "Customer Addresses", "Customers"),
-  mod("customers.course-subscriptions", "Customer Course Subscriptions", "Customers", {
-    extras: [
-      extra("customers.course-subscriptions", "extend", "Extend customer course subscription"),
-      extra("customers.course-subscriptions", "revoke", "Revoke customer course subscription"),
-    ],
-  }),
-  mod("customers.ebook-subscriptions", "Customer Ebook Subscriptions", "Customers", {
-    extras: [
-      extra("customers.ebook-subscriptions", "extend", "Extend customer ebook subscription"),
-      extra("customers.ebook-subscriptions", "revoke", "Revoke customer ebook subscription"),
-    ],
-  }),
+  mod("customers", "Customers", "Customers"),
+  // customers.{addresses,course-subscriptions,ebook-subscriptions} removed
+  // 2026-07-20 — collapsed into the parent `customers` key in rbacRouteMap.
 
   // ── Subscriptions (admin-wide) ───────────────────────────────────────────
   mod("subscriptions", "Subscriptions", "Subscriptions"),
-  mod("subscriptions.reports", "Subscription Reports", "Subscriptions", {
-    standard: ["view", "list"],
-    extras: [extra("subscriptions.reports", "export", "Export subscription reports")],
-  }),
+  mod("subscriptions.reports", "Subscription Reports", "Subscriptions", { standard: ["view"] }),
 
   // ── RBAC ─────────────────────────────────────────────────────────────────
-  mod("administrators", "Administrators", "RBAC", {
-    extras: [
-      extra("administrators", "assign-role", "Assign role to administrator"),
-      extra("administrators", "reset-password", "Reset administrator password"),
-    ],
-  }),
-  mod("roles", "Roles", "RBAC", {
-    extras: [extra("roles", "assign-permissions", "Assign permissions to role")],
-  }),
-  mod("permissions", "Permissions", "RBAC", { standard: ["view", "list"] }),
-  mod("permission-categories", "Permission Categories", "RBAC", { standard: ["view", "list"] }),
-  mod("guards", "Guards", "RBAC", { standard: ["view", "list"] }),
+  mod("administrators", "Administrators", "RBAC"),
+  mod("roles", "Roles", "RBAC"),
+  mod("permissions", "Permissions", "RBAC"),
+  mod("permission-categories", "Permission Categories", "RBAC"),
+  mod("guards", "Guards", "RBAC", { standard: ["view"] }),
 
   // ── Referrals ────────────────────────────────────────────────────────────
   mod("referrals.referrers", "Referral Referrers", "Referrals"),
-  mod("referrals.report", "Referral Report", "Referrals", {
-    standard: ["view", "list"],
-    extras: [extra("referrals.report", "export", "Export referral report")],
-  }),
-  mod("referrals.transactions", "Referral Transactions", "Referrals"),
+  mod("referrals.report", "Referral Report", "Referrals", { standard: ["view"] }),
+  mod("referrals.transactions", "Referral Transactions", "Referrals", { standard: ["view"] }),
   mod("referrals.terms", "Referral Terms", "Referrals"),
   mod("referrals.faqs", "Referral FAQs", "Referrals"),
   mod("referrals.settings", "Referral Settings", "Referrals", { standard: ["view", "edit"] }),
 
   // ── Promoters / Promocodes ───────────────────────────────────────────────
-  mod("promoters", "Promoters", "Promoters / Promocodes", {
-    extras: [extra("promoters", "view-dashboard", "View promoter dashboard")],
-  }),
-  mod("promoters.subscriptions", "Promoter Subscriptions", "Promoters / Promocodes", {
-    standard: ["view", "list"],
-  }),
-  mod("promocodes", "Promocodes", "Promoters / Promocodes", {
-    extras: [
-      extra("promocodes", "bulk-delete", "Bulk delete promocodes"),
-      extra("promocodes", "bulk-status", "Bulk update promocode status"),
-    ],
-  }),
+  mod("promoters", "Promoters", "Promoters / Promocodes"),
+  // promoters.subscriptions removed 2026-07-20 — collapsed into `promoters`.
+  mod("promocodes", "Promocodes", "Promoters / Promocodes"),
 
   // ── CMS ──────────────────────────────────────────────────────────────────
   mod("cms.banners", "Banners", "CMS"),
@@ -320,33 +242,18 @@ export const PERMISSION_CATALOG: CatalogModule[] = [
   mod("offline.cities", "Offline Cities", "Offline"),
   mod("offline.centers", "Offline Centres", "Offline"),
   mod("offline.batches", "Offline Batches", "Offline"),
-  mod("offline.enquiries", "Offline Enquiries", "Offline", {
-    extras: [
-      extra("offline.enquiries", "update-status", "Update offline enquiry status"),
-      extra("offline.enquiries", "assign", "Assign offline enquiry"),
-    ],
-  }),
+  mod("offline.enquiries", "Offline Enquiries", "Offline"),
 
   // ── Departments / Inquiries ──────────────────────────────────────────────
   mod("departments", "Departments", "Departments / Inquiries"),
-  mod("inquiries", "Inquiries", "Departments / Inquiries", {
-    extras: [
-      extra("inquiries", "update-status", "Update inquiry status"),
-      extra("inquiries", "assign", "Assign inquiry"),
-    ],
-  }),
+  mod("inquiries", "Inquiries", "Departments / Inquiries"),
   mod("inquiries.mobile-app", "Mobile App Inquiries", "Departments / Inquiries"),
 
   // ── Notifications ────────────────────────────────────────────────────────
-  mod("notifications", "Notifications", "Notifications", {
-    extras: [
-      extra("notifications", "send", "Send notification"),
-      extra("notifications", "bulk-delete", "Bulk delete notifications"),
-    ],
-  }),
+  mod("notifications", "Notifications", "Notifications"),
 
   // ── Tracking ─────────────────────────────────────────────────────────────
-  mod("tracking", "Tracking", "Tracking", { standard: ["view", "list"] }),
+  mod("tracking", "Tracking", "Tracking", { standard: ["view"] }),
 
   // ── Dashboard ────────────────────────────────────────────────────────────
   mod("dashboard", "Dashboard", "Dashboard", { standard: ["view"] }),

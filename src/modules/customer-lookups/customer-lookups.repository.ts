@@ -84,12 +84,13 @@ export const customerLookupsRepository = {
 
   // ── Districts as admin "cities" (/admin/address/cities → ws_customer_distict) ──
   // Admin list includes inactive; optional status + state filter + name search,
-  // name order, paginated when skip/take given. State included for the city DTO.
+  // newest-first order (no timestamp column → PK id desc as creation proxy),
+  // paginated when skip/take given. State included for the city DTO.
   listAdminDistricts: (opts?: { status?: boolean; stateId?: number; search?: string; skip?: number; take?: number }) =>
     prisma.customerDistict.findMany({
       where: adminDistrictWhere(opts),
       include: { state: { select: { id: true, name: true, state_code: true } } },
-      orderBy: { name: "asc" },
+      orderBy: { id: "desc" },
       ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
       ...(opts?.take !== undefined ? { take: opts.take } : {}),
     }),

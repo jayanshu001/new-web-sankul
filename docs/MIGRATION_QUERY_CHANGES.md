@@ -15,6 +15,139 @@
 
 ---
 
+## 2026-07-20 — `web` permission catalog: cap every module to 5 core actions
+
+> **Code + DB-data change (no DDL).** Drops `list` + all extra actions from the `web`
+> catalog; DB rows pruned by the cleanup script at deploy.
+
+Follow-up to the keep-list reconciliation (req: `permission-catalog-minimal-actions-web.md`).
+Each `web` module now exposes only `view, create, edit, delete, toggle-status` (reports →
+`view`; settings → `view, edit`). `list` and every extra (`duplicate`, `publish`,
+`moderate`, `start/end/cancel`, `send`, `bulk-*`, `view-details`, `view-dashboard`,
+`update-status`, `assign`, `assign-role`, `reset-password`, `assign-permissions`, `export`,
+`import`, `attach/detach`, `invalidate`) were removed.
+
+- **`permissions.catalog.ts`:** `STANDARD_6`→`STANDARD_5` (dropped `list`); removed all
+  `extras` and the `extra()` helper; reports (`books.orders`, `ebooks.subscriptions`,
+  `subscriptions.reports`, `referrals.report`, `referrals.transactions`) → `["view"]`;
+  `tracking`/`guards` → `["view"]`; `permissions`/`permission-categories` → standard 5
+  (per keep-list §2 — also clears the earlier pre-existing not-in-catalog flag).
+- **`rbacRouteMap.ts`:** `view()` helper now gates on `<m>.view` only (no `.list`), so
+  `.list` is no longer enforced/protected and gets pruned. Re-pointed every extra-gated
+  route to a standard-5 key: report writes → parent (`books.orders`→`books.edit`,
+  `ebooks.subscriptions`→`ebooks.*`, `referrals.transactions`/withdrawals→
+  `referrals.settings.edit`); `bulk-status`→`toggle-status`, `bulk-delete`/`send`→
+  `delete`/`create`, `assign-permissions`/`assign-role`/`view-details`/`view-dashboard`/
+  `moderate`/`start`/`end`/`cancel`/`duplicate`/`update-status` → their CRUD equivalent.
+- **Invariant re-verified:** all 265 enforced keys exist in the catalog (no lockout);
+  every web module ≤5 actions.
+- **DB:** the now-orphan `.list`/extra rows are deleted by
+  `scripts/cleanup-web-permissions.ts` (prunes rows outside `catalog ∪ route-keys ∪ *`).
+
+FE impact: none code-wise (FE groups the Role modal by module; ≤5 actions each). No API
+envelope change.
+
+---
+
+## 2026-07-20 — `web` permission catalog: full keep-list reconciliation (collapse nested keys)
+
+> **Code + DB-data change (no DDL).** Removes ~26 sub-namespace modules from the `web`
+> catalog and re-points their enforcement to parent keys; DB rows deleted by the cleanup
+> script at deploy.
+
+Reconciles the `web` catalog to the admin-frontend keep-list
+(`docs/backend-requests/permission-catalog-keep-list-web-guard.md`). The frontend gates
+each area on its **parent** module key, but `rbacRouteMap.ts` gated many routes on finer
+sub-namespaces. Deleting those would lock the routes out under `RBAC_ENFORCE`, so each was
+**collapsed into its parent** instead of dropped.
+
+- **`rbacRouteMap.ts`:** re-pointed every rule on a removed sub-namespace to the kept
+  parent — `courses.{plans,videos,materials,video-categories}`→`courses`,
+  `customers.{addresses,course/ebook-subscriptions}`+`customer-masters.*`→`customers`,
+  `live-courses.{plans,folders,videos,subscriptions}`→`live-courses`,
+  `quizzes.{questions,submissions,analytics}`→`quizzes`,
+  `test-series.{plans,subscriptions}`→`test-series`, `ebooks.plans`→`ebooks`,
+  `packages.plans`→`packages`, `live-sessions.polls`→`live-sessions`,
+  `promoters.subscriptions`→`promoters`, `video-categories`→`videos.categories`.
+- **`permissions.catalog.ts`:** removed those modules. Invariant verified — all 344
+  enforced keys still exist in the catalog (no ungrantable/lockout keys introduced).
+- **Retained + flagged (no parent to collapse into):** `subscriptions` (mgmt, §4 verify),
+  `cms.app-version`, `cms.app-update`, `offline.banners`, `inquiries` (general),
+  `tracking`, `guards` — kept enforced pending FE confirmation.
+- **DB:** removed keys are deleted + unassigned from roles by the existing
+  `scripts/cleanup-web-permissions.ts` (it prunes rows outside `catalog ∪ route-keys ∪ *`).
+
+FE impact: `docs/admin/PERMISSION_CATALOG_KEEPLIST_FRONTEND.md`. No API envelope change.
+
+---
+
+## 2026-07-20 — `ws_permissions` / `ws_permission_category`: populate & backfill `created_at` / `updated_at`
+
+> **DB data change (no DDL).** Sets timestamps on new rows and backfills legacy NULLs.
+
+Rows seeded before the Prisma timestamp middleware existed (pre-2026-07-16) have NULL
+`created_at`/`updated_at`. Fixed on both the write and the existing-data side:
+
+- **Create path (`permissions.seeder.ts`):** the catalog sync now **reuses** existing rows
+  by (name, guard) as before, and stamps `createdAt`/`updatedAt` **explicitly** on every
+  newly-created permission (`createMany`) and category (`upsert.create`) — no longer
+  relying solely on the middleware.
+- **Self-heal backfill (`permissions.seeder.ts`):** after seeding, one `updateMany` per
+  table sets `createdAt`/`updatedAt = now()` where either is NULL. Idempotent (0 rows after
+  first run); flows through the IST write-shift like any Prisma write.
+- **Admin create (`permission-category.service.ts`):** the create-category endpoint now sets
+  explicit timestamps too (matches `admin-rbac.repository.ts`, which already did).
+
+No response-shape change: the catalog endpoint doesn't surface timestamps; the RBAC/category
+admin lists already returned `created_at`/`updated_at` (type `Date | null`) — values simply go
+from `null` → populated. See `docs/admin/PERMISSION_TIMESTAMPS_ADMIN.md`.
+
+---
+
+## 2026-07-20 — `web` permission catalog cleanup: prune legacy/non-catalog `ws_permissions` rows
+
+> **DB data change (no DDL).** Deletes rows from `ws_permissions` (+ dependent grants in
+> `ws_role_has_permissions` / `ws_model_has_permissions`) for guard `web`. Run at deploy.
+
+Reconciles the `web`-guard permission catalog toward the admin frontend keep-list
+(`docs/backend-requests/permission-catalog-keep-list-web-guard.md`). The catalog endpoint
+renders from `ws_permissions` rows, not the in-code registry, so removal requires a DB
+cleanup, not just a registry edit.
+
+- **Registry:** removed module `customer-masters.states` from `PERMISSION_CATALOG`
+  (`src/admin/permission/permissions.catalog.ts`) — the only removal candidate that was
+  both unlisted by the frontend **and** not enforced by `rbacRouteMap`. `CATALOG_VERSION`
+  → `2026.07.20-1`.
+- **Cleanup script:** `scripts/cleanup-web-permissions.ts` (dry-run default, `--apply`).
+  Deletes `web` `ws_permissions` rows whose name ∉ `catalogKeysForGuard("web") ∪
+  RBAC_ROUTE_KEYS ∪ {"*"}`, unassigning them from role/model grant pivots first. Clears
+  legacy pre-registry keys (bulk of the reported 661) with no enforcement impact.
+- **New export:** `RBAC_ROUTE_KEYS` from `src/middlewares/rbacRouteMap.ts` (deduped set of
+  every enforced key) so the cleanup computes its protected set from the enforcement map.
+- **Deliberately NOT removed:** ~31 namespaces the frontend keep-list omits but the backend
+  route map still gates (e.g. `courses.plans`, `live-courses.*`, `test-series.*`,
+  `inquiries`, `subscriptions`) — deleting them would deny non-super-admins once
+  `RBAC_ENFORCE` flips on. Pending cross-team decision; see the `-RESPONSE.md` doc.
+
+**Deploy:** `npx tsx scripts/cleanup-web-permissions.ts` (review) → `--apply`.
+
+---
+
+## 2026-07-20 — Admin `/admin/address/cities` list: newest-first (id desc) instead of name asc
+
+> **No schema/DDL change.** Query-order change only. Post-migration bugfix on an
+> already-SQL module (customer-lookups).
+
+`src/modules/customer-lookups/customer-lookups.repository.ts` `listAdminDistricts` changed
+`orderBy` from `{ name: "asc" }` to `{ id: "desc" }` so last-created cities appear at the top
+of the admin list. Cities are sourced from `ws_customer_distict`, which has **no timestamp
+column** (DTO returns `createdAt: null`), so the auto-increment PK `id` is used as the
+creation-order proxy. Scoped to the admin list (`listAdminDistricts`) only — the client
+`/client/address/cities` path (`listActiveDistricts`) still orders `name: "asc"`. Response
+shape unchanged; pagination (`countAdminDistricts`) unaffected.
+
+---
+
 ## 2026-07-20 — FCM: reverted per-platform HTML tray split → PLAIN on both Android + iOS
 
 > **No schema/DDL change.** Push-payload shape only. `title_html`/`body_html` columns and
