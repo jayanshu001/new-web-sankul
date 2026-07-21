@@ -99,7 +99,7 @@ _(2 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "9",
+    "_id": "8",
     "module": "book",
     "terms": "before",
     "freeShippingMinimumOrderAmount": 250,
@@ -137,7 +137,7 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "9",
+    "_id": "8",
     "module": "book",
     "terms": "after",
     "freeShippingMinimumOrderAmount": 0,

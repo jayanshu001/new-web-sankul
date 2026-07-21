@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate, { requireRole, optionalAuthenticate } from "../../middlewares/authenticate";
+import { cacheRoute } from "../../middlewares/cacheRoute";
 import {
   getOfflineDashboard,
   // listCities,            // moved to /api/v1/client/address/cities
@@ -20,10 +21,12 @@ router.get("/", getOfflineDashboard);
 // router.get("/cities", listCities);
 // router.get("/cities/:cityId/centers", listCentersByCity);
 // Centers + batches require an authenticated customer (Bearer token).
-router.get("/centers", authenticate, requireRole("customer"), listCenters);
-router.get("/batches", authenticate, requireRole("customer"), listBatches);
-router.get("/centers/:id", authenticate, requireRole("customer"), getCenterDetail);
-router.get("/batches/:id", authenticate, requireRole("customer"), getBatchDetail);
+// Center/batch masters are the same for every customer → Tier-1 shared. No
+// dedicated entity tag → "misc", medium TTL. The dashboard "/" is per-user (uncached).
+router.get("/centers", authenticate, requireRole("customer"), cacheRoute({ ttl: 86400, scope: "shared" }), listCenters);
+router.get("/batches", authenticate, requireRole("customer"), cacheRoute({ ttl: 86400, scope: "shared" }), listBatches);
+router.get("/centers/:id", authenticate, requireRole("customer"), cacheRoute({ ttl: 86400, scope: "shared" }), getCenterDetail);
+router.get("/batches/:id", authenticate, requireRole("customer"), cacheRoute({ ttl: 86400, scope: "shared" }), getBatchDetail);
 
 // Enquiry accepts both anonymous and authenticated — attach userId when a valid
 // token is present; a stale/invalid token must NOT block this public route.

@@ -22,6 +22,7 @@ import {
   verifyLiveCourseOrderMysql,
 } from "../../modules/live-course-order/live-course-order.service";
 import * as tsOrderSql from "../../modules/test-series-order/test-series-order.service";
+import { flushUserRouteCache } from "../../middlewares/autoFlush";
 
 const verifySchema = z.object({
   razorpay_order_id: z.string().min(1),
@@ -101,6 +102,9 @@ export const verifyPayment = async (req: Request, res: Response) => {
           razorpay_payment_id,
           endAt: subscription.endAt?.toISOString?.(),
         });
+        // Entitlement changed → clear THIS buyer's cached catalog reads so the
+        // next fetch shows isPurchased=true immediately (long TTL stays correct).
+        await flushUserRouteCache(customerIdInt);
         return res.status(200).json({
           success: true,
           data: { kind: "course", subscription },
@@ -123,6 +127,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         }
         const subscription = await verifyPackageOrderMysql(mysqlPackageOrder, razorpay_payment_id);
         logger.info("verifyPayment: package subscription activated (mysql)", { orderId: mysqlPackageOrder.id, subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
+        await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true, data: { kind: "package", subscription } });
       }
       // miss → fall through to the next order-type check.
@@ -151,6 +156,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
           razorpay_order_id,
           razorpay_payment_id,
         });
+        await flushUserRouteCache(customerIdInt);
         return res.status(200).json({
           success: true,
           data: { kind: "ebook", order },
@@ -181,6 +187,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
           razorpay_order_id,
           razorpay_payment_id,
         });
+        await flushUserRouteCache(customerIdInt);
         return res.status(200).json({
           success: true,
           data: { kind: "book", order },
@@ -202,6 +209,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         }
         const subscription = await verifyLiveCourseOrderMysql(mysqlLiveSub, razorpay_payment_id);
         logger.info("verifyPayment: live-course subscription activated (mysql)", { subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
+        await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true, data: { kind: "live-course", subscription } });
       }
       // miss → fall through to the next order-type check.
@@ -220,6 +228,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
         }
         const subscription = await tsOrderSql.verifyOrderMysql(mysqlTsOrder, razorpay_payment_id);
         logger.info("verifyPayment: test-series subscription activated (mysql)", { orderId: mysqlTsOrder.id, subscriptionId: subscription._id, customerId: subscription.customerId, razorpay_order_id, razorpay_payment_id, endAt: subscription.endAt?.toISOString?.() });
+        await flushUserRouteCache(customerIdInt);
         return res.status(200).json({ success: true, data: { kind: "test-series", subscription } });
       }
       // miss → no MySQL order owns this razorpay id → not found.

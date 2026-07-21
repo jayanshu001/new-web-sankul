@@ -107,7 +107,7 @@ _(2 calls captured for this endpoint; first shown.)_
 ### Request body
 ```json
 {
-  "name": "migration-api-test-1782835532478",
+  "name": "migration-api-test-1784629945094",
   "title": "before",
   "description": "desc before",
   "rating": 3
@@ -119,8 +119,8 @@ _(2 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "10",
-    "name": "migration-api-test-1782835532478",
+    "_id": "8",
+    "name": "migration-api-test-1784629945094",
     "title": "before",
     "description": "desc before",
     "rating": 3
@@ -155,8 +155,8 @@ _(2 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "10",
-    "name": "migration-api-test-1782835532478",
+    "_id": "8",
+    "name": "migration-api-test-1784629945094",
     "title": "after",
     "description": "desc after",
     "rating": 5
@@ -236,7 +236,13 @@ _(2 calls captured for this endpoint; first shown.)_
       "description": "Helpful Application for GPSC 1-2.Helpful Application for GPSC 1-2.Helpful Application for GPSC 1-2,Application for GPSC 1-2",
       "rating": 4
     }
-  ]
+  ],
+  "pagination": {
+    "total": 5,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
 }
 ```
 

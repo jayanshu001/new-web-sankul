@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { cacheRoute } from "../../middlewares/cacheRoute";
 import { checkAppVersionHandler } from "./app-version.controller";
 
 const router = Router();
@@ -10,6 +11,8 @@ const router = Router();
 //
 // Query is validated inside the controller (not via `validate({ query })`):
 // Express 5 makes `req.query` getter-only, so the middleware's reassignment throws.
-router.get("/check", checkAppVersionHandler);
+// Tier-1 shared config; query params (platform/version) are auto-keyed by the
+// cache's normalized-query handling. No entity tag → "misc", short TTL.
+router.get("/check", cacheRoute({ ttl: 86400, scope: "shared" }), checkAppVersionHandler);
 
 export default router;

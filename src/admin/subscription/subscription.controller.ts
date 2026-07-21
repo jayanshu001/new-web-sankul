@@ -18,6 +18,7 @@ import {
 } from "../../modules/customer-address/customer-address.service";
 import type { AddressCreateInput, AddressUpdateInput } from "../../modules/customer-address/customer-address.types";
 import { getCustomer as sqlGetCustomer } from "../../modules/admin-customer/admin-customer.service";
+import { flushUserRouteCache } from "../../middlewares/autoFlush";
 import { resolveCityName } from "../../modules/offline-city/offline-city.service";
 
 // Status code for a caught error, honoring a thrown HttpError's own 4xx (e.g. the
@@ -164,6 +165,9 @@ export const createCourseSubscription = async (req: Request, res: Response) => {
       if (r.reason === "package_mismatch") return res.status(400).json({ success: false, message: "Plan does not belong to the selected package." });
       return res.status(400).json({ success: false, message: "Shipping address (customerShippingId) is required when withMaterial is true." });
     }
+    // Admin granted access → clear that customer's cached catalog reads so their
+    // isPurchased flips immediately (keeps the long per-user TTL correct).
+    await flushUserRouteCache(customerId);
     return res.status(r.extended ? 200 : 201).json({ success: true, data: r.data, ...(r.extended ? { extended: true } : {}) });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });

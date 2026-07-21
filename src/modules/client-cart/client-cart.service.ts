@@ -136,6 +136,10 @@ export const attachShipping = async (
     const city = await resolveCityName(address.cityId);
     cityName = city?.name ?? "";
   }
+  // Legacy addresses (created before the city-picker) have cityId = NULL but DO
+  // carry the city as a free-text string on the row itself. Fall back to it so
+  // old customers can check out without being forced to re-edit their address.
+  if (!cityName) cityName = (address.city ?? "").trim();
   if (!cityName) return { ok: false, reason: "city" };
 
   const existing = await repo.findShipping(customerId, address.name, phone, address.address, address.pincode);

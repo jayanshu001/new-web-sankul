@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { createEbookSubscriptionSqlSchema, updateEbookSubscriptionSchema } from "./ebook.validation";
 import * as adminEbook from "../../modules/admin-ebook/admin-ebook.service";
 import { isReportStatus, REPORT_STATUSES } from "../../utils/reportFilters";
+import { flushUserRouteCache } from "../../middlewares/autoFlush";
 
 // Shared filter mapping for the report list + its CSV/Excel exports, so all three
 // honor the identical param contract. Returns a 400 message on invalid ids/method.
@@ -135,6 +136,8 @@ export const createEbookSubscription = async (req: Request, res: Response) => {
       const msg = result.reason === "ebook" ? "Ebook not found" : "Plan not found";
       return res.status(404).json({ success: false, message: msg });
     }
+    // Admin granted an ebook → clear that customer's cached catalog reads.
+    await flushUserRouteCache(d.customerId);
     return res.status(201).json({ success: true, data: result.data });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });

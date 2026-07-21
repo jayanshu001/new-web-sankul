@@ -23,64 +23,46 @@
   "success": true,
   "data": [
     {
-      "_id": "5",
-      "name": "Classroom Course",
-      "order": 0,
-      "active": true,
-      "createdAt": "2023-02-27T08:45:55.000Z",
-      "updatedAt": "2023-02-27T08:45:55.000Z"
-    },
-    {
       "_id": "3",
-      "name": "Educator wise Course",
-      "order": 0,
-      "active": true,
-      "createdAt": "2023-02-27T08:44:56.000Z",
-      "updatedAt": "2023-02-27T08:44:56.000Z"
-    },
-    {
-      "_id": "6",
-      "name": "Live Classes",
-      "order": 0,
-      "active": true,
-      "createdAt": "2023-02-27T08:45:55.000Z",
-      "updatedAt": "2023-02-27T08:45:55.000Z"
-    },
-    {
-      "_id": "4",
       "name": "Planner Course",
       "order": 0,
       "active": true,
-      "createdAt": "2023-02-27T08:44:56.000Z",
-      "updatedAt": "2023-02-27T08:44:56.000Z"
+      "createdAt": "2023-02-27T14:14:56.000+05:30",
+      "updatedAt": "2026-07-11T11:59:15.000+05:30"
     },
     {
       "_id": "1",
-      "name": "Recorded Course",
+      "name": "Single Course",
       "order": 0,
       "active": true,
-      "createdAt": "2023-02-27T08:44:10.000Z",
-      "updatedAt": "2023-02-27T08:44:10.000Z"
+      "createdAt": "2023-02-27T14:14:10.000+05:30",
+      "updatedAt": "2026-07-11T11:54:04.000+05:30"
+    },
+    {
+      "_id": "4",
+      "name": "Smart Course",
+      "order": 0,
+      "active": true,
+      "createdAt": "2023-02-27T14:14:56.000+05:30",
+      "updatedAt": "2026-07-11T11:59:20.000+05:30"
     },
     {
       "_id": "2",
       "name": "Subject wise Course",
       "order": 0,
       "active": true,
-      "createdAt": "2023-02-27T08:44:10.000Z",
-      "updatedAt": "2023-02-27T08:44:10.000Z"
+      "createdAt": "2023-02-27T14:14:10.000+05:30",
+      "updatedAt": "2023-02-27T14:14:10.000+05:30"
     }
   ],
   "pagination": {
-    "total": 6,
+    "total": 4,
     "page": 1,
     "limit": 20,
     "totalPages": 1
   }
 }
 ```
-
-_(2 calls captured for this endpoint; first shown.)_
 
 ---
 
@@ -107,8 +89,8 @@ _(2 calls captured for this endpoint; first shown.)_
       "parent": 0,
       "order": 2,
       "status": true,
-      "createdAt": "2025-08-01T11:49:16.000Z",
-      "updatedAt": "2025-08-01T11:49:16.000Z",
+      "createdAt": "2025-08-01T17:19:16.000+05:30",
+      "updatedAt": "2026-07-16T14:12:48.000+05:30",
       "courseCount": 1
     }
   ],
@@ -120,8 +102,6 @@ _(2 calls captured for this endpoint; first shown.)_
   }
 }
 ```
-
-_(2 calls captured for this endpoint; first shown.)_
 
 ---
 
@@ -141,120 +121,56 @@ _(2 calls captured for this endpoint; first shown.)_
   "success": true,
   "data": [
     {
-      "_id": "75",
-      "name": "test",
-      "description": "<div><br></div>",
-      "image": "twitter-image.png",
-      "shareableLink": "http://",
-      "withMaterial": "1",
-      "withoutMaterial": "1",
-      "level": "1",
-      "order": 1,
+      "_id": "114",
+      "name": "Course 1",
+      "description": "<p>Description</p>",
+      "image": "https://websankul-staging.blr1.digitaloceanspaces.com/admin/profiles/1782896413235-image.jpeg",
+      "shareableLink": "",
+      "withMaterial": "0",
+      "withoutMaterial": "0",
+      "level": "2",
+      "order": 0,
       "status": true,
-      "isPopular": true,
-      "isPaid": false,
+      "isPopular": false,
+      "isPaid": true,
       "courseSubjectCategoryId": {
         "_id": "774",
         "title": "test"
       },
       "courseEducatorId": {
-        "_id": "20",
-        "name": "Priyanka Soni"
+        "_id": "77",
+        "name": "Darshit Goswami"
       },
       "videoCategoryId": {
-        "_id": "15",
-        "title": "History"
+        "_id": "283",
+        "title": "Computer"
       },
       "pcMaterialId": null,
-      "createdAt": "2025-08-01T12:05:27.000Z",
-      "updatedAt": "2025-08-01T12:05:27.000Z",
+      "createdAt": "2026-07-01T14:30:14.000+05:30",
+      "updatedAt": "2026-07-16T14:15:28.000+05:30",
       "plans": {
         "withMaterial": [],
         "withoutMaterial": [
           {
-            "_id": "885",
+            "_id": "1440",
             "packageId": null,
-            "courseId": "75",
+            "courseId": "114",
             "ebookId": null,
-            "name": "1 Month",
-            "duration": 30,
-            "price": 898,
-            "withMaterial": false,
-            "materialPrice": 0,
-            "isDefault": true,
-            "status": true,
-            "isMostPopular": false,
-            "createdAt": "2023-03-06T15:29:57.000Z",
-            "updatedAt": "2023-10-12T14:19:24.000Z"
-          },
-          {
-            "_id": "1435",
-            "packageId": null,
-            "courseId": "75",
-            "ebookId": null,
-            "name": "30day",
-            "duration": 40,
-            "price": 2000,
+            "name": null,
+            "duration": 60,
+            "price": 699,
             "withMaterial": false,
             "materialPrice": 0,
             "isDefault": false,
             "status": true,
             "isMostPopular": false,
-            "createdAt": "2025-08-01T12:04:44.000Z",
-            "updatedAt": "2025-08-01T12:05:27.000Z"
-          },
-          {
-            "_id": "887",
-            "packageId": null,
-            "courseId": "75",
-            "ebookId": null,
-            "name": "3 month",
-            "duration": 90,
-            "price": 1398,
-            "withMaterial": false,
-            "materialPrice": 0,
-            "isDefault": false,
-            "status": true,
-            "isMostPopular": false,
-            "createdAt": "2023-03-06T15:30:21.000Z",
-            "updatedAt": "2023-10-12T14:19:30.000Z"
-          },
-          {
-            "_id": "888",
-            "packageId": null,
-            "courseId": "75",
-            "ebookId": null,
-            "name": "6 month",
-            "duration": 180,
-            "price": 1998,
-            "withMaterial": false,
-            "materialPrice": 0,
-            "isDefault": false,
-            "status": true,
-            "isMostPopular": false,
-            "createdAt": "2023-03-06T15:30:28.000Z",
-            "updatedAt": "2023-10-12T14:19:35.000Z"
-          },
-          {
-            "_id": "889",
-            "packageId": null,
-            "courseId": "75",
-            "ebookId": null,
-            "name": "12 Month",
-            "duration": 365,
-            "price": 2598,
-            "withMaterial": false,
-            "materialPrice": 0,
-            "isDefault": false,
-            "status": true,
-            "isMostPopular": false,
-            "createdAt": "2023-03-06T15:30:40.000Z",
-            "updatedAt": "2023-10-12T14:19:40.000Z"
+            "createdAt": "2026-07-01T14:30:14.000+05:30",
+            "updatedAt": "2026-07-21T15:14:32.000+05:30"
           }
         ]
       },
-      "isPurchased": false,
-      "daysLeft": null
+      "isPurchased": true,
+      "daysLeft": 82
     }
   ],
   "pagination": {
@@ -265,7 +181,5 @@ _(2 calls captured for this endpoint; first shown.)_
   }
 }
 ```
-
-_(2 calls captured for this endpoint; first shown.)_
 
 ---

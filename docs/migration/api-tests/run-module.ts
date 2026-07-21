@@ -27,6 +27,9 @@ import { runCustomerLookupsClientApiTests } from "./customer-lookups/client.api.
 import { runOfflineCityClientApiTests } from "./offline-city/client.api.test.js";
 import { runCatalogClientApiTests } from "./catalog/client.api.test.js";
 import { runCatalogEbookClientApiTests } from "./catalog-ebook/client.api.test.js";
+import { runEbookAdminApiTests } from "./ebook/admin.api.test.js";
+import { runBookAdminApiTests } from "./book/admin.api.test.js";
+import { runPackageAdminApiTests } from "./package/admin.api.test.js";
 import { runCatalogMaterialClientApiTests } from "./catalog-material/client.api.test.js";
 import { runCatalogExamClientApiTests } from "./catalog-exam/client.api.test.js";
 import { runCatalogBookClientApiTests } from "./catalog-book/client.api.test.js";
@@ -59,7 +62,12 @@ const runners: Record<string, (() => Promise<boolean>)[]> = {
   "customer-lookups": [runCustomerLookupsClientApiTests],
   "offline-city": [runOfflineCityClientApiTests],
   catalog: [runCatalogClientApiTests],
+  // Whole eBook module smoke test — admin surface + client catalog surface together.
+  ebook: [runEbookAdminApiTests, runCatalogEbookClientApiTests],
   "catalog-ebook": [runCatalogEbookClientApiTests],
+  // Cache smoke tests for two more entities migrated in the route-cache sweep.
+  book: [runBookAdminApiTests, runCatalogBookClientApiTests],
+  package: [runPackageAdminApiTests],
   "catalog-material": [runCatalogMaterialClientApiTests],
   "catalog-exam": [runCatalogExamClientApiTests],
   "catalog-book": [runCatalogBookClientApiTests],

@@ -24,23 +24,22 @@
   "data": [
     {
       "_id": "50",
-      "image": "fhw_mphw_si_new_banner.jpg",
-      "key": "Packages",
-      "keyRef": "Package",
+      "image": "https://websankul-staging.blr1.digitaloceanspaces.com/admin/profiles/1783409561976-image.jpeg",
+      "key": "Book",
+      "keyRef": "Book",
       "keyId": null,
       "orderBy": 2,
-      "createdAt": "2023-03-06T17:59:18.000Z",
-      "updatedAt": "2026-01-01T13:59:04.000Z"
+      "createdAt": "2023-03-06T23:29:18.000+05:30",
+      "updatedAt": "2026-07-07T13:27:07.000+05:30"
     },
     {
       "_id": "55",
-      "image": "gcert_smart_course_new_banner.jpeg",
-      "key": "Courses",
-      "keyRef": "Course",
+      "image": "https://websankul-staging.blr1.digitaloceanspaces.com/admin/profiles/1783411044684-image.jpg",
+      "key": "Explore",
       "keyId": null,
       "orderBy": 3,
-      "createdAt": "2025-07-30T18:53:32.000Z",
-      "updatedAt": "2026-01-01T14:00:00.000Z"
+      "createdAt": "2025-07-31T00:23:32.000+05:30",
+      "updatedAt": "2026-07-07T13:27:26.000+05:30"
     }
   ]
 }
@@ -66,13 +65,13 @@ _(2 calls captured for this endpoint; first shown.)_
   "success": true,
   "data": {
     "_id": "50",
-    "image": "fhw_mphw_si_new_banner.jpg",
-    "key": "Packages",
-    "keyRef": "Package",
+    "image": "https://websankul-staging.blr1.digitaloceanspaces.com/admin/profiles/1783409561976-image.jpeg",
+    "key": "Book",
+    "keyRef": "Book",
     "keyId": null,
     "orderBy": 2,
-    "createdAt": "2023-03-06T17:59:18.000Z",
-    "updatedAt": "2026-01-01T13:59:04.000Z"
+    "createdAt": "2023-03-06T23:29:18.000+05:30",
+    "updatedAt": "2026-07-07T13:27:07.000+05:30"
   }
 }
 ```
@@ -95,7 +94,7 @@ _(3 calls captured for this endpoint; first shown.)_
 ### Request body
 ```json
 {
-  "image": "migration-api-test-1782835532317.jpg",
+  "image": "migration-api-test-1784629945034.jpg",
   "key": "Packages",
   "orderBy": 99
 }
@@ -106,14 +105,14 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "60",
-    "image": "migration-api-test-1782835532317.jpg",
+    "_id": "58",
+    "image": "migration-api-test-1784629945034.jpg",
     "key": "Packages",
     "keyRef": "Package",
     "keyId": null,
     "orderBy": 99,
-    "createdAt": "2026-06-30T16:05:32.000Z",
-    "updatedAt": "2026-06-30T16:05:32.000Z"
+    "createdAt": "2026-07-21T16:02:25.000+05:30",
+    "updatedAt": "2026-07-21T16:02:25.000+05:30"
   }
 }
 ```
@@ -144,14 +143,14 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "60",
-    "image": "migration-api-test-1782835532317.jpg",
+    "_id": "58",
+    "image": "migration-api-test-1784629945034.jpg",
     "key": "Courses",
     "keyRef": "Course",
     "keyId": null,
     "orderBy": 98,
-    "createdAt": "2026-06-30T16:05:32.000Z",
-    "updatedAt": "2026-06-30T16:05:32.000Z"
+    "createdAt": "2026-07-21T16:02:25.000+05:30",
+    "updatedAt": "2026-07-21T16:02:25.000+05:30"
   }
 }
 ```
@@ -174,7 +173,7 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "orders": [
     {
-      "id": "60",
+      "id": "58",
       "orderBy": 50
     }
   ]
@@ -228,25 +227,30 @@ _(3 calls captured for this endpoint; first shown.)_
   "data": [
     {
       "_id": "50",
-      "image": "fhw_mphw_si_new_banner.jpg",
-      "key": "Packages",
-      "keyRef": "Package",
+      "image": "https://websankul-staging.blr1.digitaloceanspaces.com/admin/profiles/1783409561976-image.jpeg",
+      "key": "Book",
+      "keyRef": "Book",
       "keyId": null,
       "orderBy": 2,
       "createdAt": "2023-03-06T17:59:18.000Z",
-      "updatedAt": "2026-01-01T13:59:04.000Z"
+      "updatedAt": "2026-07-07T07:57:07.000Z"
     },
     {
       "_id": "55",
-      "image": "gcert_smart_course_new_banner.jpeg",
-      "key": "Courses",
-      "keyRef": "Course",
+      "image": "https://websankul-staging.blr1.digitaloceanspaces.com/admin/profiles/1783411044684-image.jpg",
+      "key": "Explore",
       "keyId": null,
       "orderBy": 3,
       "createdAt": "2025-07-30T18:53:32.000Z",
-      "updatedAt": "2026-01-01T14:00:00.000Z"
+      "updatedAt": "2026-07-07T07:57:26.000Z"
     }
-  ]
+  ],
+  "pagination": {
+    "total": 2,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
 }
 ```
 

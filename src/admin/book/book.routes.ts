@@ -1,6 +1,8 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3Mixed, enforceMixedSizeLimits } from "../../middlewares/upload";
+import { autoFlushGroup, autoFlush } from "../../middlewares/autoFlush";
+import { cacheRoute } from "../../middlewares/cacheRoute";
 import {
   getBooks,
   getBookById,
@@ -32,16 +34,21 @@ const bookUploadFields = uploadS3Mixed.fields([
 ]);
 
 // Books CRUD
-router.get("/", getBooks);
-router.post("/", bookUploadFields, enforceMixedSizeLimits, createBook);
-router.post("/reorder", reorderBooks);
+// Writes call autoFlushGroup("book") so an edit (incl. price columns) instantly
+// clears every cached read that embeds book data — book/catalog-book/dashboard/
+// exam-countdown AND the client cart (see flushGroups.ts). Otherwise a price
+// change would only surface after the cached read's TTL lapses.
+router.get("/", cacheRoute({ ttl: 86400, entity: "book" }), getBooks);
+router.post("/", bookUploadFields, enforceMixedSizeLimits, autoFlushGroup("book"), createBook);
+router.post("/reorder", autoFlushGroup("book"), reorderBooks);
 router.get("/settings", getSettings);
-router.put("/settings", updateSettings);
-router.get("/:id", getBookById);
-router.put("/:id", bookUploadFields, enforceMixedSizeLimits, updateBook);
-router.delete("/:id", deleteBook);
-router.patch("/:id/status", toggleBookStatus);
-router.patch("/:id/trending", toggleBookTrending);
+// Settings drives the free-shipping threshold used by the cart total → flush cart.
+router.put("/settings", autoFlush("cart"), updateSettings);
+router.get("/:id", cacheRoute({ ttl: 86400, entity: "book" }), getBookById);
+router.put("/:id", bookUploadFields, enforceMixedSizeLimits, autoFlushGroup("book"), updateBook);
+router.delete("/:id", autoFlushGroup("book"), deleteBook);
+router.patch("/:id/status", autoFlushGroup("book"), toggleBookStatus);
+router.patch("/:id/trending", autoFlushGroup("book"), toggleBookTrending);
 
 // Orders
 router.get("/orders/list", getOrders);

@@ -177,7 +177,7 @@ _(3 calls captured for this endpoint; first shown.)_
 ### Request body
 ```json
 {
-  "name": "migration-api-test-1782835532588",
+  "name": "migration-api-test-1784629945138",
   "description": "desc before",
   "order": 99,
   "active": true,
@@ -198,8 +198,8 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "9",
-    "name": "migration-api-test-1782835532588",
+    "_id": "7",
+    "name": "migration-api-test-1784629945138",
     "description": "desc before",
     "order": 99,
     "active": true,
@@ -257,8 +257,8 @@ _(3 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "9",
-    "name": "migration-api-test-1782835532588",
+    "_id": "7",
+    "name": "migration-api-test-1784629945138",
     "description": "desc after",
     "order": 99,
     "active": true,

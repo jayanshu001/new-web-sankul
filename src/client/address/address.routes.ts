@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
+import { cacheRoute } from "../../middlewares/cacheRoute";
 import {
   getMyAddresses,
   getAddressById,
@@ -17,13 +18,15 @@ import {
 
 const router = Router();
 
-// Public location dropdowns (no auth required)
-router.get("/states", getStates);
+// Public location dropdowns (no auth required). Tier-1 shared reference data;
+// no dedicated entity tag → "misc", long TTL. Address CRUD below is per-user.
+const REF = { ttl: 86400, scope: "shared" as const };
+router.get("/states", cacheRoute(REF), getStates);
 // router.get("/states/:stateId/districts", getDistrictsByState); // deprecated
-router.get("/cities", listCities);
-router.get("/cities/:cityId/centers", listCentersByCity);
-router.get("/educations", getEducations);
-router.get("/characteristic", getCharacteristic);
+router.get("/cities", cacheRoute(REF), listCities);
+router.get("/cities/:cityId/centers", cacheRoute(REF), listCentersByCity);
+router.get("/educations", cacheRoute(REF), getEducations);
+router.get("/characteristic", cacheRoute(REF), getCharacteristic);
 
 // Address CRUD (auth required)
 router.get("/", authenticate, getMyAddresses);

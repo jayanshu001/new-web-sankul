@@ -69,7 +69,7 @@
     },
     {
       "_id": "13",
-      "name": "Gujarat",
+      "name": "Gujarat ઇવેન્ટ્સ",
       "stateCode": "GJ"
     },
     {
@@ -208,7 +208,152 @@ _(3 calls captured for this endpoint; first shown.)_
         "name": "Post Graduate in Non Medical Sciences"
       }
     ],
-    "goals": []
+    "goals": [
+      {
+        "_id": "18",
+        "title": "ACF|RFO",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "11",
+        "title": "BinSachivalay",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "6",
+        "title": "Constable",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "19",
+        "title": "Defence",
+        "image": "",
+        "labels": [
+          {
+            "_id": "1",
+            "name": "Teaching"
+          },
+          {
+            "_id": "2",
+            "name": "Teaching 2"
+          }
+        ]
+      },
+      {
+        "_id": "2",
+        "title": "Dy.So",
+        "image": "https://www.gpsconline.com/uploads/qcategory/history.png",
+        "labels": []
+      },
+      {
+        "_id": "10",
+        "title": "FHW|MPHW",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "16",
+        "title": "Forest Guard",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "17",
+        "title": "Forester",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "20",
+        "title": "Government",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "1",
+        "title": "GPSC Class 1/2",
+        "image": "https://www.gpsconline.com/uploads/qcategory/history.png",
+        "labels": []
+      },
+      {
+        "_id": "7",
+        "title": "GSSSB",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "14",
+        "title": "Hd.Clerk",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "13",
+        "title": "Jr.Clerk",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "4",
+        "title": "PI",
+        "image": "https://www.gpsconline.com/uploads/qcategory/history.png",
+        "labels": []
+      },
+      {
+        "_id": "5",
+        "title": "PSI",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "12",
+        "title": "Sr.Clerk",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "3",
+        "title": "STI",
+        "image": "https://www.gpsconline.com/uploads/qcategory/history.png",
+        "labels": []
+      },
+      {
+        "_id": "15",
+        "title": "STO",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "8",
+        "title": "Talati",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "9",
+        "title": "TET and TAT",
+        "image": "",
+        "labels": []
+      },
+      {
+        "_id": "21",
+        "title": "UPSCS",
+        "image": "https://websankul-staging.blr1.digitaloceanspaces.com/admin/profiles/1782893335006-image.jpg",
+        "labels": [
+          {
+            "_id": "2",
+            "name": "Dy"
+          },
+          {
+            "_id": "1",
+            "name": "Dy.so"
+          }
+        ]
+      }
+    ]
   }
 }
 ```

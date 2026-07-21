@@ -62,10 +62,16 @@ export async function getCustomerToken(): Promise<string> {
   return mintCustomerToken();
 }
 
+/**
+ * Legacy per-module MySQL gate. Mongo removal is complete, so every module now
+ * runs on MySQL and this check is always satisfied. Retained (as a no-op unless an
+ * explicit MIGRATION_MYSQL_MODULES CSV narrows the run) so the many test files that
+ * call it keep compiling and reading clearly.
+ */
 export function requireMysqlModule(moduleKey: string): void {
   if (!config.mysqlModules.includes(moduleKey)) {
     throw new Error(
-      `MIGRATION_MYSQL_MODULES must include "${moduleKey}" (current: ${config.mysqlModules.join(", ") || "(empty)"}). Restart yarn dev after .env change.`
+      `MIGRATION_MYSQL_MODULES was set but does not include "${moduleKey}" (current: ${config.mysqlModules.join(", ")}). Unset it to run all modules.`
     );
   }
 }

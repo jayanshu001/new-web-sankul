@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
+import { cacheRoute } from "../../middlewares/cacheRoute";
 import {
   listBooks,
   listTrendingBooks,
@@ -16,10 +17,14 @@ import {
 const router = Router();
 
 // Catalogue — auth required so we can decorate with cart + isPurchased.
-router.get("/", authenticate, listBooks);
-router.get("/trending", authenticate, listTrendingBooks);
-router.get("/trending/books", authenticate, listTrendingBooksOnly);
-router.get("/trending/ebooks", authenticate, listTrendingEbooksOnly);
+// List + detail embed cart qty / isPurchased → Tier-2, cached per-user + short
+// TTL (ebook precedent). entity:"catalog-book" → admin book writes flush these.
+router.get("/", authenticate, cacheRoute({ ttl: 86400, entity: "catalog-book", scope: "user" }), listBooks);
+// Tier-1: trending lists add only shareableLink — no per-user state.
+const TRENDING = { ttl: 86400, entity: "catalog-book" as const, scope: "shared" as const };
+router.get("/trending", authenticate, cacheRoute(TRENDING), listTrendingBooks);
+router.get("/trending/books", authenticate, cacheRoute(TRENDING), listTrendingBooksOnly);
+router.get("/trending/ebooks", authenticate, cacheRoute(TRENDING), listTrendingEbooksOnly);
 
 // Cart endpoints have moved to /api/v1/client/cart (see src/client/cart/*)
 
@@ -33,6 +38,6 @@ router.get("/orders/:id/tracking", authenticate, getMyOrderTracking);
 router.get("/orders/:id", authenticate, getMyOrderById);
 
 // Book detail — must be last so it doesn't match /cart, /shipping, /order etc.
-router.get("/:id", authenticate, getBookDetail);
+router.get("/:id", authenticate, cacheRoute({ ttl: 86400, entity: "catalog-book", scope: "user" }), getBookDetail);
 
 export default router;

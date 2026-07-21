@@ -2,6 +2,8 @@ import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
 import { validate } from "../../middlewares/validate";
+import { cacheRoute } from "../../middlewares/cacheRoute";
+import { autoFlushGroup } from "../../middlewares/autoFlush";
 import { createPackageTypeSchema, updatePackageTypeSchema } from "./package.validation";
 import {
   listPackageTypes,
@@ -39,30 +41,35 @@ const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
+// Route-level response cache + autoFlushGroup on every write (see docs/CACHING.md).
+// Master reads (types/list/detail) are cached; each write clears the entity + the
+// client caches that embed it (package → catalog-package/dashboard/free/… ; the
+// package-type group is separate).
+
 // Package Types (small master)
-router.get("/types", listPackageTypes);
-router.post("/types", validate({ body: createPackageTypeSchema }), createPackageType);
-router.put("/types/:id", validate({ body: updatePackageTypeSchema }), updatePackageType);
-router.delete("/types/:id", deletePackageType);
+router.get("/types", cacheRoute({ ttl: 86400, entity: "package-type" }), listPackageTypes);
+router.post("/types", validate({ body: createPackageTypeSchema }), autoFlushGroup("package-type"), createPackageType);
+router.put("/types/:id", validate({ body: updatePackageTypeSchema }), autoFlushGroup("package-type"), updatePackageType);
+router.delete("/types/:id", autoFlushGroup("package-type"), deletePackageType);
 
 // Packages
-router.get("/", listPackages);
-router.post("/", uploadS3.single("image"), createPackage);
-router.post("/reorder", reorderPackages);
-router.get("/:id", getPackageById);
-router.put("/:id", uploadS3.single("image"), updatePackage);
-router.delete("/:id", deletePackage);
-router.patch("/:id/status", togglePackageStatus);
+router.get("/", cacheRoute({ ttl: 86400, entity: "package" }), listPackages);
+router.post("/", uploadS3.single("image"), autoFlushGroup("package"), createPackage);
+router.post("/reorder", autoFlushGroup("package"), reorderPackages);
+router.get("/:id", cacheRoute({ ttl: 86400, entity: "package" }), getPackageById);
+router.put("/:id", uploadS3.single("image"), autoFlushGroup("package"), updatePackage);
+router.delete("/:id", autoFlushGroup("package"), deletePackage);
+router.patch("/:id/status", autoFlushGroup("package"), togglePackageStatus);
 
 // Embedded reorders
-router.patch("/:id/specific-subjects/reorder", reorderSpecificSubjects);
-router.patch("/:id/material-categories/reorder", reorderMaterialCategories);
-router.patch("/:id/exam-categories/reorder", reorderExamCategories);
+router.patch("/:id/specific-subjects/reorder", autoFlushGroup("package"), reorderSpecificSubjects);
+router.patch("/:id/material-categories/reorder", autoFlushGroup("package"), reorderMaterialCategories);
+router.patch("/:id/exam-categories/reorder", autoFlushGroup("package"), reorderExamCategories);
 
 // Plans
 router.get("/:id/plans", listPackagePlans);
-router.post("/:id/plans/attach", attachPlans);
-router.delete("/:id/plans/:planId", detachPlan);
+router.post("/:id/plans/attach", autoFlushGroup("package"), attachPlans);
+router.delete("/:id/plans/:planId", autoFlushGroup("package"), detachPlan);
 
 // Subscribers + promoted codes + linked physical books (material tab)
 router.get("/:id/subscribers", listSubscribers);
@@ -74,10 +81,10 @@ router.get("/:id/books", listBooks);
 
 // Video-category relation management (descendant fan-out)
 router.get("/:id/video-relations", listVideoRelations);
-router.put("/:id/video-relations", setVideoRelations);
-router.post("/:id/video-relations/expand", expandSubjectsToRelations);
+router.put("/:id/video-relations", autoFlushGroup("package"), setVideoRelations);
+router.post("/:id/video-relations/expand", autoFlushGroup("package"), expandSubjectsToRelations);
 
-// Chat
+// Chat (per-subscriber, not cached — no flush)
 router.get("/:id/chat", listChatMessages);
 router.post("/:id/chat", postChatMessage);
 router.delete("/chat/:messageId", deleteChatMessage);

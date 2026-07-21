@@ -1,5 +1,6 @@
 import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
+import { cacheRoute } from "../../middlewares/cacheRoute";
 import {
   getRewardsOverview,
   getMyTransactions,
@@ -34,9 +35,10 @@ router.post("/bank-accounts", createBankAccount);
 router.put("/bank-accounts/:id", updateBankAccount);
 router.delete("/bank-accounts/:id", deleteBankAccount);
 
-// Refer & Earn content
+// Refer & Earn content. /status is per-user (uncached); terms + faqs are Tier-1
+// shared, flushed by admin terms/faq writes (see docs/CACHING.md).
 router.get("/status", getReferralStatus);
-router.get("/terms", getTerms);
-router.get("/faqs", getFaqs);
+router.get("/terms", cacheRoute({ ttl: 86400, entity: "terms", scope: "shared" }), getTerms);
+router.get("/faqs", cacheRoute({ ttl: 86400, entity: "faq", scope: "shared" }), getFaqs);
 
 export default router;

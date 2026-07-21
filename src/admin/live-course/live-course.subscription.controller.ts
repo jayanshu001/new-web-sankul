@@ -3,6 +3,7 @@ import { z } from "zod";
 import { success, failure, failureFrom, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
+import { flushUserRouteCache } from "../../middlewares/autoFlush";
 import { PaymentMethod } from "../../shared/enums";
 import { assertReportStatus } from "../../utils/reportFilters";
 
@@ -170,6 +171,8 @@ export const grantLiveCourseSubscription = async (req: Request, res: Response) =
       const code = r.code === "course" || r.code === "customer" || r.code === "plan" ? 404 : 422;
       return failure(res, r.msg, code);
     }
+    // Admin granted live-course access → clear that customer's cached catalog reads.
+    await flushUserRouteCache(v.customerId);
     return success(res, { subscription: r.data }, r.created ? "Subscription granted." : "Subscription extended.", r.created ? 201 : 200);
   } catch (err) {
     logger.error("grantLiveCourseSubscription failed", { traceId, liveCourseId, error: getErrorMessage(err), stack: (err as Error).stack });

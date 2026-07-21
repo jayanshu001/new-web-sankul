@@ -23,26 +23,35 @@
   "success": true,
   "data": [
     {
-      "_id": "2",
-      "name": "Ahmedabad",
-      "image": "https://planetgujarat.com/wp-content/uploads/Banner-Bhavnagar-1.jpg",
+      "_id": "36",
+      "name": "Ahmedabad ઇવેન્ટ્સ",
+      "image": "",
       "status": true,
       "order": 0,
-      "stateId": null,
-      "createdAt": "2023-03-06T11:02:26.000Z",
-      "updatedAt": "2023-03-06T11:02:26.000Z"
+      "stateId": {
+        "_id": "10",
+        "name": "Goa",
+        "stateCode": "GA"
+      },
+      "createdAt": null,
+      "updatedAt": null
     },
     {
-      "_id": "1",
-      "name": "Gandhinagar",
-      "image": "https://gpsconline.com/uploads/popup_notification/E5sw4bUUcAYYLve.jpeg",
+      "_id": "3",
+      "name": "Amreli",
+      "image": "",
       "status": true,
       "order": 0,
-      "stateId": null,
-      "createdAt": "2023-03-06T11:02:26.000Z",
-      "updatedAt": "2023-03-06T11:02:26.000Z"
+      "stateId": {
+        "_id": "13",
+        "name": "Gujarat ઇવેન્ટ્સ",
+        "stateCode": "GJ"
+      },
+      "createdAt": null,
+      "updatedAt": null
     }
-  ]
+  ],
+  "_note": "array truncated for docs — 33 items total; first 2 shown"
 }
 ```
 

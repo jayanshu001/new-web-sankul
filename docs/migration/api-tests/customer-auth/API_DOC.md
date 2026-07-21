@@ -75,7 +75,7 @@ _(5 calls captured for this endpoint; first shown.)_
       "emailAddress": "piysu@gmail.com",
       "profilePicture": "twitter-image.png",
       "phone2": "0",
-      "dob": "1970-01-01T00:00:00.000Z",
+      "dob": "1970-01-01T00:00:00.000+05:30",
       "gender": "male",
       "stateId": "13",
       "districtId": "1",
@@ -92,8 +92,8 @@ _(5 calls captured for this endpoint; first shown.)_
       "isNewUser": false,
       "isProfileCompleted": true
     },
-    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjgzNTUzMywiZXhwIjoxNzgzNDQwMzMzfQ.60Wgl8vyup2EdzVpbbV72_y593KMA5qw46h_3RysvMw",
-    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjgzNTUzMywiZXhwIjoxNzg4MDE5NTMzfQ.W0_3bXRQ3SfZQiszv6LlZAf7AYtqf5Xu7zUhTqmKqeE",
+    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4NDYyOTk0NSwiZXhwIjoxNzg1MjM0NzQ1fQ.pFLvZAytcuFuc71JXS6OQRPDWopXKBwhaS9m0H1JqDw",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4NDYyOTk0NSwiZXhwIjoxNzg5ODEzOTQ1fQ.clKuHfIRshXIUTFl60xtm3m8GrO38d3UGnfI76mypoU",
     "isNewUser": false
   },
   "message": "Login successful.",
@@ -128,33 +128,7 @@ _(4 calls captured for this endpoint; first shown.)_
   "success": true,
   "data": [
     {
-      "_id": "1",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "એપ્લિકેશનમાં કોર્સ કઈ રીતે ખરીદી શકાય?\n",
-      "answer": "તમે એપ્લિકેશન માંથી જે કોર્સે ખરીદવો હોય એ ઓપન કરી અને ત્યાંથી પેમેન્ટ કરી ને કોર્સ ખરીદી કરી શકો .",
-      "isExpand": false,
-      "createdAt": "2023-02-10T17:35:43.000Z",
-      "updatedAt": "2023-02-10T17:35:43.000Z"
-    },
-    {
-      "_id": "2",
-      "type": "general",
-      "typeId": {
-        "_id": "general",
-        "title": "General"
-      },
-      "question": "શું તમે Login Details Change કરી શકશો ?",
-      "answer": "જેટલા સમય માટે તમે App Buy કરો છો તેટલા સમય સુધી તમે Login Details Change કરી શકશો નહિ.",
-      "isExpand": false,
-      "createdAt": "2023-02-10T17:35:43.000Z",
-      "updatedAt": "2023-02-10T17:35:43.000Z"
-    },
-    {
-      "_id": "6",
+      "_id": "8",
       "type": "general",
       "typeId": {
         "_id": "general",
@@ -180,7 +154,7 @@ _(4 calls captured for this endpoint; first shown.)_
       "updatedAt": "2023-02-10T17:35:43.000Z"
     },
     {
-      "_id": "8",
+      "_id": "6",
       "type": "general",
       "typeId": {
         "_id": "general",
@@ -191,8 +165,40 @@ _(4 calls captured for this endpoint; first shown.)_
       "isExpand": false,
       "createdAt": "2023-02-10T17:35:43.000Z",
       "updatedAt": "2023-02-10T17:35:43.000Z"
+    },
+    {
+      "_id": "2",
+      "type": "general",
+      "typeId": {
+        "_id": "general",
+        "title": "General"
+      },
+      "question": "શું તમે Login Details Change કરી શકશો ?",
+      "answer": "જેટલા સમય માટે તમે App Buy કરો છો તેટલા સમય સુધી તમે Login Details Change કરી શકશો નહિ.",
+      "isExpand": false,
+      "createdAt": "2023-02-10T17:35:43.000Z",
+      "updatedAt": "2023-02-10T17:35:43.000Z"
+    },
+    {
+      "_id": "1",
+      "type": "general",
+      "typeId": {
+        "_id": "general",
+        "title": "General"
+      },
+      "question": "એપ્લિકેશનમાં કોર્સ કઈ રીતે ખરીદી શકાય?\n",
+      "answer": "તમે એપ્લિકેશન માંથી જે કોર્સે ખરીદવો હોય એ ઓપન કરી અને ત્યાંથી પેમેન્ટ કરી ને કોર્સ ખરીદી કરી શકો .",
+      "isExpand": false,
+      "createdAt": "2023-02-10T17:35:43.000Z",
+      "updatedAt": "2023-02-10T17:35:43.000Z"
     }
-  ]
+  ],
+  "pagination": {
+    "total": 5,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
 }
 ```
 
@@ -213,7 +219,7 @@ _(2 calls captured for this endpoint; first shown.)_
 ### Request body
 ```json
 {
-  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjgzNTUzMywiZXhwIjoxNzg4MDE5NTMzfQ.W0_3bXRQ3SfZQiszv6LlZAf7AYtqf5Xu7zUhTqmKqeE"
+  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4NDYyOTk0NSwiZXhwIjoxNzg5ODEzOTQ1fQ.clKuHfIRshXIUTFl60xtm3m8GrO38d3UGnfI76mypoU"
 }
 ```
 
@@ -232,7 +238,7 @@ _(2 calls captured for this endpoint; first shown.)_
       "emailAddress": "piysu@gmail.com",
       "profilePicture": "twitter-image.png",
       "phone2": "0",
-      "dob": "1970-01-01T00:00:00.000Z",
+      "dob": "1970-01-01T00:00:00.000+05:30",
       "gender": "male",
       "stateId": "13",
       "districtId": "1",
@@ -249,8 +255,8 @@ _(2 calls captured for this endpoint; first shown.)_
       "isNewUser": false,
       "isProfileCompleted": true
     },
-    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjgzNTUzMywiZXhwIjoxNzgzNDQwMzMzfQ.60Wgl8vyup2EdzVpbbV72_y593KMA5qw46h_3RysvMw",
-    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4MjgzNTUzMywiZXhwIjoxNzg4MDE5NTMzfQ.W0_3bXRQ3SfZQiszv6LlZAf7AYtqf5Xu7zUhTqmKqeE",
+    "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4NDYyOTk0NSwiZXhwIjoxNzg1MjM0NzQ1fQ.pFLvZAytcuFuc71JXS6OQRPDWopXKBwhaS9m0H1JqDw",
+    "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpZCI6IjQ3MjMzNSIsInBob25lIjoiOTY2NDc5NjM3NiIsInJvbGUiOiJjdXN0b21lciIsInR5cGUiOiJjdXN0b21lciIsImlhdCI6MTc4NDYyOTk0NSwiZXhwIjoxNzg5ODEzOTQ1fQ.clKuHfIRshXIUTFl60xtm3m8GrO38d3UGnfI76mypoU",
     "isNewUser": false
   },
   "message": "Token refreshed successfully.",

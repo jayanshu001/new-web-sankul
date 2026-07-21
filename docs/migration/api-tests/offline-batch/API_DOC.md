@@ -24,7 +24,7 @@
   "data": [
     {
       "_id": "3",
-      "name": "Bhavnagar",
+      "name": "Bhavnagars",
       "images": [
         "https://planetgujarat.com/wp-content/uploads/Banner-Bhavnagar-1.jpg"
       ],
@@ -34,30 +34,11 @@
       "phone": "9099665555",
       "cityId": "2",
       "status": true,
-      "createdAt": "2023-03-06T11:06:58.000Z",
-      "updatedAt": "2023-03-06T11:06:58.000Z",
+      "createdAt": "2023-03-06T16:36:58.000+05:30",
+      "updatedAt": "2026-07-17T14:15:29.000+05:30",
       "city": {
         "_id": "2",
         "name": "Ahmedabad"
-      }
-    },
-    {
-      "_id": "2",
-      "name": "Sangeet Circle",
-      "images": [
-        "https://gpsconline.com/uploads/banner_images/books_banner.webp"
-      ],
-      "address": "311, Shalin Galleria, sangeet circle, G1, Gandhinagar",
-      "latitude": 6.6666666,
-      "longitude": 6.6666666,
-      "phone": "1234567890",
-      "cityId": "1",
-      "status": true,
-      "createdAt": "2023-03-06T11:06:58.000Z",
-      "updatedAt": "2023-03-06T11:06:58.000Z",
-      "city": {
-        "_id": "1",
-        "name": "Gandhinagar"
       }
     },
     {
@@ -72,18 +53,22 @@
       "phone": "987654321",
       "cityId": "1",
       "status": true,
-      "createdAt": "2023-03-06T11:04:29.000Z",
-      "updatedAt": "2023-03-06T11:04:29.000Z",
+      "createdAt": "2023-03-06T16:34:29.000+05:30",
+      "updatedAt": "2023-03-06T16:34:29.000+05:30",
       "city": {
         "_id": "1",
         "name": "Gandhinagar"
       }
     }
-  ]
+  ],
+  "pagination": {
+    "total": 2,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
 }
 ```
-
-_(2 calls captured for this endpoint; first shown.)_
 
 ---
 
@@ -103,81 +88,19 @@ _(2 calls captured for this endpoint; first shown.)_
   "success": true,
   "data": [
     {
-      "_id": "2",
-      "name": "GPSC Crash Course Batch",
-      "image": "https://gpsconline.com/uploads/banner_images/books_banner.webp",
-      "description": "For GPSC Mains 23 Exam",
-      "startAt": "1899-12-31T00:00:00.000Z",
-      "duration": "1 Year",
-      "centerId": "2",
-      "status": true,
-      "createdAt": "2023-03-06T11:31:01.000Z",
-      "updatedAt": "2023-03-06T11:31:01.000Z",
-      "center": {
-        "_id": "2",
-        "name": "Sangeet Circle",
-        "images": [
-          "https://gpsconline.com/uploads/banner_images/books_banner.webp"
-        ],
-        "address": "311, Shalin Galleria, sangeet circle, G1, Gandhinagar",
-        "latitude": 6.6666666,
-        "longitude": 6.6666666,
-        "phone": "1234567890",
-        "cityId": "1",
-        "status": true,
-        "createdAt": "2023-03-06T11:06:58.000Z",
-        "updatedAt": "2023-03-06T11:06:58.000Z",
-        "city": {
-          "_id": "1",
-          "name": "Gandhinagar"
-        }
-      }
-    },
-    {
-      "_id": "1",
-      "name": "GPSC Crash Course Batch",
-      "image": "https://gpsconline.com/uploads/banner_images/books_banner.webp",
-      "description": "For GPSC Mains 23 Exam",
-      "startAt": "2023-04-15T00:00:00.000Z",
-      "duration": "1 Year",
-      "centerId": "1",
-      "status": true,
-      "createdAt": "2023-03-06T11:31:01.000Z",
-      "updatedAt": "2023-03-06T11:31:01.000Z",
-      "center": {
-        "_id": "1",
-        "name": "Sargasan Cross Road",
-        "images": [
-          "https://planetgujarat.com/wp-content/uploads/Banner-Bhavnagar-1.jpg"
-        ],
-        "address": "Sargasan cross road",
-        "latitude": 6.6666666,
-        "longitude": 6.6666666,
-        "phone": "987654321",
-        "cityId": "1",
-        "status": true,
-        "createdAt": "2023-03-06T11:04:29.000Z",
-        "updatedAt": "2023-03-06T11:04:29.000Z",
-        "city": {
-          "_id": "1",
-          "name": "Gandhinagar"
-        }
-      }
-    },
-    {
-      "_id": "3",
-      "name": "PSI",
-      "image": "https://gpsconline.com/uploads/banner_images/books_banner.webp",
-      "description": "For Police Sub Inspector 23 Exam",
-      "startAt": "2023-05-01T00:00:00.000Z",
-      "duration": "1 Year",
+      "_id": "4",
+      "name": "GPSC Batchs",
+      "image": "https://websankul-staging.blr1.digitaloceanspaces.com/admin/profiles/1784015362633-image.jpeg",
+      "description": "Nothing Nothing",
+      "startAt": "2026-10-21T05:30:00.000+05:30",
+      "duration": "6 months",
       "centerId": "3",
       "status": true,
-      "createdAt": "2023-03-06T11:31:01.000Z",
-      "updatedAt": "2023-03-06T11:31:01.000Z",
+      "createdAt": "2026-07-14T13:19:23.000+05:30",
+      "updatedAt": "2026-07-17T14:15:21.000+05:30",
       "center": {
         "_id": "3",
-        "name": "Bhavnagar",
+        "name": "Bhavnagars",
         "images": [
           "https://planetgujarat.com/wp-content/uploads/Banner-Bhavnagar-1.jpg"
         ],
@@ -187,18 +110,22 @@ _(2 calls captured for this endpoint; first shown.)_
         "phone": "9099665555",
         "cityId": "2",
         "status": true,
-        "createdAt": "2023-03-06T11:06:58.000Z",
-        "updatedAt": "2023-03-06T11:06:58.000Z",
+        "createdAt": "2023-03-06T16:36:58.000+05:30",
+        "updatedAt": "2026-07-17T14:15:29.000+05:30",
         "city": {
           "_id": "2",
           "name": "Ahmedabad"
         }
       }
     }
-  ]
+  ],
+  "pagination": {
+    "total": 1,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
+  }
 }
 ```
-
-_(2 calls captured for this endpoint; first shown.)_
 
 ---

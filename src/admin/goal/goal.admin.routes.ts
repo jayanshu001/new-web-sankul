@@ -8,6 +8,8 @@ import {
 } from "./goal.admin.controller";
 import authenticate from "../../middlewares/authenticate";
 import { uploadS3 } from "../../middlewares/upload";
+import { cacheRoute } from "../../middlewares/cacheRoute";
+import { autoFlushGroup } from "../../middlewares/autoFlush";
 
 const router = Router();
 
@@ -22,19 +24,20 @@ const router = Router();
  * ignored catalog grants — see goals-403-despite-granted-permission.md.)
  */
 
+// Cache goal reads; every write flushes "goal" (+ the client caches embedding it).
 // Create a new goal (supports multipart/form-data for image)
-router.post("/", authenticate, uploadS3.single("image"), createGoalHandler);
+router.post("/", authenticate, uploadS3.single("image"), autoFlushGroup("goal"), createGoalHandler);
 
 // Read all goals natively built for dashboard
-router.get("/", authenticate, getGoalsHandler);
+router.get("/", authenticate, cacheRoute({ ttl: 86400, entity: "goal" }), getGoalsHandler);
 
 // Read a single goal by id (with its labels — for server-searched pickers)
-router.get("/:id", authenticate, getGoalByIdHandler);
+router.get("/:id", authenticate, cacheRoute({ ttl: 86400, entity: "goal" }), getGoalByIdHandler);
 
 // Update specific goal
-router.put("/:id", authenticate, uploadS3.single("image"), updateGoalHandler);
+router.put("/:id", authenticate, uploadS3.single("image"), autoFlushGroup("goal"), updateGoalHandler);
 
 // Delete goal
-router.delete("/:id", authenticate, deleteGoalHandler);
+router.delete("/:id", authenticate, autoFlushGroup("goal"), deleteGoalHandler);
 
 export default router;

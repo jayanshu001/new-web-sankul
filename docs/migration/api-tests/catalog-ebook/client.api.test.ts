@@ -58,11 +58,13 @@ export async function runCatalogEbookClientApiTests(): Promise<boolean> {
       },
     },
     {
-      name: "[catalog-ebook ON] /ebooks?language=English returns empty (staging ebooks are Gujarati)",
+      name: "[catalog-ebook ON] /ebooks?language=English returns only English ebooks",
       skip: !ebookMysql,
       fn: async () => {
         const data = (await requestOk("GET", "/api/v1/client/ebooks?language=English", { token })).data as { ebooks: EbookListItem[] };
-        if (data.ebooks.length !== 0) throw new Error("expected 0 English ebooks in staging");
+        for (const e of data.ebooks) {
+          if (e.language !== "English") throw new Error(`language filter leaked a ${e.language} ebook`);
+        }
       },
     },
   ]);

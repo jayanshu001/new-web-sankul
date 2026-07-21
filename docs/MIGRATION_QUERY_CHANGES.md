@@ -15,6 +15,137 @@
 
 ---
 
+## 2026-07-21 — Cache TTLs → 24h + per-user purchase flush — NO DB change
+
+> **No DDL, no query/schema/index change.** Route-cache tuning only (Redis).
+> Recorded because `src/` files changed. Nothing to backfill.
+
+- **New helper `flushUserRouteCache(userId, role="customer")`** in
+  `middlewares/autoFlush.ts` — SCANs and deletes only ONE user's per-user cache
+  keys (identity segment of the key) across all entities. Unlike entity-wide
+  `flushEntity`, it doesn't wipe other users' caches.
+- **Wired at every entitlement grant** so a buyer's `isPurchased` flips instantly:
+  `payment/verify.controller` (all 6 kinds: course, package, ebook, book,
+  live-course, test-series) and the admin grant controllers (admin/subscription
+  `createCourseSubscription`, admin/ebook `createEbookSubscription`,
+  admin/live-course `grantLiveCourseSubscription`).
+- **All route TTLs bumped to 24h (`86400`)** across 38 route files, EXCEPT
+  `GET /client/cart` (30s) and the dashboards (60s). Safe because content is
+  flushed on admin edit and per-user `isPurchased` is flushed on purchase/grant.
+- **Accepted caveat:** `isPurchased` `true→false` from subscription expiry or
+  admin revoke reflects on the catalog card within the TTL (content access is
+  gated live, so it's cosmetic). Admin subscription update/delete do NOT yet call
+  the per-user flush.
+
+`yarn typecheck` green. No response shapes changed.
+
+## 2026-07-21 — Cart shipping accepts legacy addresses (cityId NULL) — NO DB change
+
+> **No DDL, no query/schema/index change, NO backfill.** Recorded because files under
+> `src/` changed (on-disk migration-doc mtime protocol). Post-migration bugfix on the
+> already-SQL client-cart module.
+
+- **Symptom:** old customers got *"Address is missing a city. Please update the address
+  before using it for delivery."* when attaching a saved address at checkout.
+- **Cause:** `ws_customer_address` has BOTH a legacy `city` free-text string and the newer
+  nullable `cityId`. Addresses created before the city-picker have `city` populated but
+  `cityId = NULL`. `attachShipping` (client-cart.service.ts) resolved the city name ONLY
+  from `cityId`, so legacy rows failed the `reason:"city"` guard despite having a valid city.
+- **Fix:** `src/modules/client-cart/client-cart.service.ts` — after the `cityId` lookup,
+  fall back to the row's own `address.city` string (`(address.city ?? "").trim()`) before
+  rejecting. No data migration required — the value was already on the row. New addresses
+  (cityId set) are unchanged; the offline-city resolution still wins when present.
+
+## 2026-07-21 — Project-wide route-cache sweep (admin + client) — NO DB change
+
+> **No DDL, no query/schema/index change.** Route-level response caching only
+> (Redis), following `docs/CACHING.md`. Recorded because many `src/**/*.routes.ts`
+> files changed. Nothing to backfill or regression-test at the DB layer.
+
+Applied `cacheRoute` to read routes and `autoFlushGroup`/`autoFlush` to the matching
+writes across the whole API, per the tiering rules in `docs/CACHING.md`:
+
+- **Admin master reads cached + all writes flush** (were previously unflushed): book,
+  package (+ package-type), exam (+ exam-category + questions), material (+ material-
+  category), video, videoCategory, goal, examCountdown, promocode, plan, live-course,
+  cms (faq/popup/banner/testimonial/social-link/current-affair/terms), master
+  (educator/subject-category/material/video-category/package-category). course gained
+  video-sub-route caching + video-category/material relation flushes. plan-popularity
+  pin/recompute now `autoFlush("plan")`.
+- **Client Tier-1 shared reads cached:** examCountdown, goal `/`, promocode `/`,
+  referral `/terms`+`/faqs`, inquiry `/contactus`, notification `/image-notifications`,
+  address dropdowns, app-version `/check`, offline center/batch masters.
+- **Client Tier-2 product list/detail** (per-user `isPurchased` overlay) cached
+  `scope:"user"` 60s with catalog-* entity, extending the ebook precedent: book,
+  course, package, catalog materials, categories listings, material, exam, free,
+  educator, testSeries, recently-added, live-course discovery feeds.
+- **Security fix:** `GET /client/free/free-videos` was cached `scope:"shared"` but
+  mints a customer-bound `mediaToken` per row (`shapeVideo` → `cust:id`) — a shared
+  key served one user's token to all. Changed to `scope:"user"`. `free-materials`
+  verified safe (its customerId arg is unused) and left `shared`.
+
+`yarn typecheck` green throughout. No response shapes changed (cache is transparent).
+
+## 2026-07-21 — Cart cache now flushed on admin book price edits — NO DB change
+
+> **No DDL, no query/schema/index change.** Recorded because files under `src/` changed
+> (on-disk migration-doc mtime protocol). Post-migration cache-invalidation bugfix on the
+> already-SQL book + client-cart modules; nothing to backfill or regression-test at the DB
+> layer. The cart already reads book prices LIVE (Prisma join, no stored snapshot) — this
+> only fixes when the cached HTTP response refreshes.
+
+- **`src/middlewares/flushGroups.ts`** — added `"cart"` to `FLUSH_GROUPS.book`. The client
+  cart embeds live book price columns (`discounted_price` / `list_price` / `shipping_price`),
+  so an admin book edit must stale cached `GET /client/cart` reads (`entity:"cart"`), not
+  just the book/catalog-book/dashboard caches.
+- **`src/admin/book/book.routes.ts`** — book write routes previously flushed NOTHING. Wired
+  `autoFlushGroup("book")` onto create / update / delete / `:id/status` / `:id/trending` /
+  reorder (matching `admin/ebook`), and `autoFlush("cart")` onto `PUT /settings` (it changes
+  the free-shipping threshold the cart total depends on). An admin price change now sweeps
+  the cart cache immediately instead of waiting out the 30s TTL.
+
+## 2026-07-21 — Client eBook route caching + ebook smoke-test harness — NO DB change
+
+> **No DDL, no query/schema/index change.** Recorded because files under `src/` changed
+> (on-disk migration-doc mtime protocol). Post-migration change on the already-SQL ebook
+> module; nothing to backfill or regression-test at the DB layer.
+
+- **`src/client/ebook/ebook.routes.ts`** — added route-level response caching to the two
+  Tier-2 reads: `GET /client/ebooks` and `GET /client/ebooks/:id` now use
+  `cacheRoute({ ttl: 60, entity: "catalog-ebook", scope: "user" })` (per-user key,
+  short TTL, `isPurchased` overlay). Invalidation already wired: admin ebook writes call
+  `autoFlushGroup("ebook")` → flush map clears `catalog-ebook`. Tier-3 routes
+  (subscriptions / invoice / downloads) left uncached. `docs/CACHING.md` updated.
+- **Test harness** — new admin ebook smoke test (`docs/migration/api-tests/ebook/admin.api.test.ts`),
+  single `ebook` module key (admin + client) in `run-module.ts`, `yarn migration:api:ebook`
+  script. Legacy `MIGRATION_MYSQL_MODULES` gate in `_lib/{env,auth}.ts` made a no-op
+  (Mongo removal complete → all modules on MySQL). Brittle staging-snapshot assertion in
+  `catalog-ebook/client.api.test.ts` changed to a contract check (language filter returns
+  only that language). Added `scripts/seed-dummy-ebooks.ts` (test-only `ws_ebook` seeder,
+  `DUMMY_SEED`-tagged, `--clean` to remove).
+
+## 2026-07-21 — Merged `caching_management` branch (route-level response cache) — NO DB change
+
+> **No DDL, no query/schema/index change.** Recorded only because merging the branch
+> touched files under `src/` (satisfies the on-disk migration-doc mtime protocol);
+> there is nothing to backfill or regression-test at the DB layer.
+
+Pulled GitHub `origin/caching_management` into the working branch. Adds **route-level HTTP
+response caching** (serialized responses cached in Redis, opt-in per route, invalidated on
+write). Does **not** alter any Prisma query, table, column, or index, and does not change
+any API response shape (a cache HIT returns the same JSON the handler would).
+
+- New middleware: `src/middlewares/cacheRoute.ts`, `autoFlush.ts`, `flushGroups.ts`
+  (`CacheEntity` union + admin→client flush map).
+- New admin surface: `src/admin/cache/` (`POST /admin/cache/flush`, `GET /stats`), wired as
+  `adminCacheRoutes`.
+- eBook reads tagged `entity:"ebook"`; eBook writes call `autoFlushGroup("ebook")`.
+- Authoritative doc: `docs/CACHING.md`. Redis outage = fail-open.
+- **Not a Mongo→SQL migration** — no changes to `MONGO_ONLY_MIGRATION_PLAN.md`,
+  `MIGRATION_TRACKER.md`, or `MIGRATION_TEST_LOG.md`.
+
+---
+
 ## 2026-07-20 — `web` permission catalog: cap every module to 5 core actions
 
 > **Code + DB-data change (no DDL).** Drops `list` + all extra actions from the `web`

@@ -3,7 +3,7 @@
 > Auto-generated from a passing `migration:api` run for **popup**.
 > Each endpoint shows a real captured request (headers + params/body) and response. Bearer tokens are redacted.
 
-**Endpoints covered:** 6
+**Endpoints covered:** 5
 
 ---
 
@@ -29,10 +29,10 @@
       "image": "twitter-image.png",
       "discount": "80",
       "promocode": "PADAPADI",
-      "promoExpireAt": "2023-03-20T00:00:00.000Z",
+      "promoExpireAt": "2023-03-20T00:00:00.000+05:30",
       "status": false,
-      "createdAt": "2023-02-21T16:56:58.000Z",
-      "updatedAt": "2025-08-01T13:47:34.000Z"
+      "createdAt": "2023-02-21T22:26:58.000+05:30",
+      "updatedAt": "2025-08-01T19:17:34.000+05:30"
     },
     {
       "_id": "1",
@@ -41,10 +41,10 @@
       "image": "2_days_left.jpeg",
       "discount": "50%",
       "promocode": "WEBSANKUL",
-      "promoExpireAt": "2024-11-01T00:00:00.000Z",
+      "promoExpireAt": "2024-11-01T00:00:00.000+05:30",
       "status": false,
-      "createdAt": "2023-01-01T00:00:00.000Z",
-      "updatedAt": "2023-02-21T17:01:14.000Z"
+      "createdAt": "2023-01-01T05:30:00.000+05:30",
+      "updatedAt": "2023-02-21T22:31:14.000+05:30"
     }
   ],
   "_note": "array truncated for docs — 36 items total; first 2 shown"
@@ -76,10 +76,10 @@ _(2 calls captured for this endpoint; first shown.)_
     "image": "twitter-image.png",
     "discount": "80",
     "promocode": "PADAPADI",
-    "promoExpireAt": "2023-03-20T00:00:00.000Z",
+    "promoExpireAt": "2023-03-20T00:00:00.000+05:30",
     "status": false,
-    "createdAt": "2023-02-21T16:56:58.000Z",
-    "updatedAt": "2025-08-01T13:47:34.000Z"
+    "createdAt": "2023-02-21T22:26:58.000+05:30",
+    "updatedAt": "2025-08-01T19:17:34.000+05:30"
   }
 }
 ```
@@ -102,12 +102,12 @@ _(2 calls captured for this endpoint; first shown.)_
 ### Request body
 ```json
 {
-  "title": "migration-api-test-1782835532998",
+  "title": "migration-api-test-1784629945347",
   "description": "desc",
   "image": "test-popup.jpg",
   "discount": "10%",
   "promocode": "TESTCODE",
-  "promoExpireAt": "2026-07-30",
+  "promoExpireAt": "2026-08-20",
   "status": true
 }
 ```
@@ -117,21 +117,19 @@ _(2 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "71",
-    "title": "migration-api-test-1782835532998",
+    "_id": "63",
+    "title": "migration-api-test-1784629945347",
     "description": "desc",
     "image": "test-popup.jpg",
     "discount": "10%",
     "promocode": "TESTCODE",
-    "promoExpireAt": "2026-07-30T00:00:00.000Z",
+    "promoExpireAt": "2026-08-20T00:00:00.000+05:30",
     "status": true,
-    "createdAt": "2026-06-30T16:05:33.000Z",
-    "updatedAt": "2026-06-30T16:05:33.000Z"
+    "createdAt": "2026-07-21T16:02:25.000+05:30",
+    "updatedAt": "2026-07-21T16:02:25.000+05:30"
   }
 }
 ```
-
-_(4 calls captured for this endpoint; first shown.)_
 
 ---
 
@@ -151,7 +149,7 @@ _(4 calls captured for this endpoint; first shown.)_
 {
   "discount": "25%",
   "status": false,
-  "promoExpireAt": "2026-08-29"
+  "promoExpireAt": "2026-09-19"
 }
 ```
 
@@ -160,16 +158,16 @@ _(4 calls captured for this endpoint; first shown.)_
 {
   "success": true,
   "data": {
-    "_id": "71",
-    "title": "migration-api-test-1782835532998",
+    "_id": "63",
+    "title": "migration-api-test-1784629945347",
     "description": "desc",
     "image": "test-popup.jpg",
     "discount": "25%",
     "promocode": "TESTCODE",
-    "promoExpireAt": "2026-08-29T00:00:00.000Z",
+    "promoExpireAt": "2026-09-19T00:00:00.000+05:30",
     "status": false,
-    "createdAt": "2026-06-30T16:05:33.000Z",
-    "updatedAt": "2026-06-30T16:05:33.000Z"
+    "createdAt": "2026-07-21T16:02:25.000+05:30",
+    "updatedAt": "2026-07-21T16:02:25.000+05:30"
   }
 }
 ```
@@ -193,29 +191,5 @@ _(4 calls captured for this endpoint; first shown.)_
   "message": "Deleted."
 }
 ```
-
-_(4 calls captured for this endpoint; first shown.)_
-
----
-
-## GET /api/v1/client/popup
-
-### Request headers
-```json
-{
-  "Accept": "application/json",
-  "Authorization": "Bearer <token>"
-}
-```
-
-### Response (`200`)
-```json
-{
-  "success": true,
-  "data": null
-}
-```
-
-_(2 calls captured for this endpoint; first shown.)_
 
 ---

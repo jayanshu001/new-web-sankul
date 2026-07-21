@@ -33,10 +33,10 @@
         "questionCount": 1,
         "positiveMarks": 1,
         "negativeMarks": -1,
-        "startAt": "2026-07-10T12:37:51.000Z",
-        "endAt": "2026-08-09T13:37:51.000Z",
+        "startAt": "2026-07-21T15:02:26.000+05:30",
+        "endAt": "2026-08-20T16:02:26.000+05:30",
         "orderBy": 2,
-        "createdAt": "2025-07-31T14:45:26.000Z",
+        "createdAt": "2025-07-31T20:15:26.000+05:30",
         "isCompleted": false,
         "lastResult": null
       }
@@ -87,10 +87,10 @@ _(3 calls captured for this endpoint; first shown.)_
         "questionCount": 1,
         "positiveMarks": 1,
         "negativeMarks": -1,
-        "startAt": "2026-07-10T12:37:51.000Z",
-        "endAt": "2026-08-09T13:37:51.000Z",
+        "startAt": "2026-07-21T15:02:26.000+05:30",
+        "endAt": "2026-08-20T16:02:26.000+05:30",
         "orderBy": 2,
-        "createdAt": "2025-07-31T14:45:26.000Z",
+        "createdAt": "2025-07-31T20:15:26.000+05:30",
         "isCompleted": false,
         "lastResult": null
       }
@@ -139,18 +139,28 @@ _(2 calls captured for this endpoint; first shown.)_
       "type": "subject",
       "isPaid": false,
       "categoryId": "1637",
+      "categoryIds": [
+        {
+          "_id": "6",
+          "name": "Indian Polity(Beginner)"
+        },
+        {
+          "_id": "12",
+          "name": "Gujarat Culture(Intermediate)"
+        }
+      ],
       "durationMinutes": 1,
       "questionCount": 1,
       "positiveMarks": 1,
       "negativeMarks": -1,
       "solutionPdfUrl": "sample-local-pdf.pdf",
       "solutionPdfName": null,
-      "startAt": "2026-07-10T12:37:51.000Z",
-      "endAt": "2026-08-09T13:37:51.000Z",
+      "startAt": "2026-07-21T15:02:26.000+05:30",
+      "endAt": "2026-08-20T16:02:26.000+05:30",
       "status": true,
       "orderBy": 2,
-      "createdAt": "2025-07-31T14:45:26.000Z",
-      "updatedAt": "2026-07-10T13:36:22.000Z"
+      "createdAt": "2025-07-31T20:15:26.000+05:30",
+      "updatedAt": "2026-07-21T16:02:26.000+05:30"
     }
   ],
   "pagination": {
@@ -189,8 +199,8 @@ _(2 calls captured for this endpoint; first shown.)_
       "parent": 0,
       "order": 1,
       "status": true,
-      "createdAt": "2020-08-28T06:37:39.000Z",
-      "updatedAt": "2020-08-28T06:37:39.000Z"
+      "createdAt": "2020-08-28T12:07:39.000+05:30",
+      "updatedAt": "2020-08-28T12:07:39.000+05:30"
     },
     "list": []
   },
@@ -234,19 +244,28 @@ _(2 calls captured for this endpoint; first shown.)_
     "description": null,
     "type": "subject",
     "isPaid": false,
-    "categoryId": "6",
+    "categoryId": {
+      "_id": "6",
+      "name": "Indian Polity(Beginner)"
+    },
+    "categoryIds": [
+      {
+        "_id": "6",
+        "name": "Indian Polity(Beginner)"
+      }
+    ],
     "durationMinutes": 1,
     "questionCount": 1,
     "positiveMarks": 1,
     "negativeMarks": -1,
     "solutionPdfUrl": "sample-local-pdf.pdf",
     "solutionPdfName": null,
-    "startAt": "2026-07-10T12:37:51.000Z",
-    "endAt": "2026-08-09T13:37:51.000Z",
+    "startAt": "2026-07-21T15:02:26.000+05:30",
+    "endAt": "2026-08-20T16:02:26.000+05:30",
     "status": true,
     "orderBy": 2,
-    "createdAt": "2025-07-31T14:45:26.000Z",
-    "updatedAt": "2026-07-10T13:37:51.000Z"
+    "createdAt": "2025-07-31T20:15:26.000+05:30",
+    "updatedAt": "2026-07-21T16:02:26.000+05:30"
   }
 }
 ```

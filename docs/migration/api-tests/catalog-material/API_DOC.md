@@ -50,8 +50,8 @@
       "parent": 0,
       "order": 192,
       "status": true,
-      "createdAt": "2023-03-22T15:27:57.000Z",
-      "updatedAt": "2023-03-22T15:27:57.000Z"
+      "createdAt": "2023-03-22T20:57:57.000+05:30",
+      "updatedAt": "2023-03-22T20:57:57.000+05:30"
     },
     "list": [
       {
@@ -63,13 +63,19 @@
           "parent": 270,
           "order": 11,
           "status": true,
-          "createdAt": "2025-07-31T16:55:34.000Z",
-          "updatedAt": "2025-07-31T17:46:55.000Z",
-          "count": 0,
+          "createdAt": "2025-07-31T22:25:34.000+05:30",
+          "updatedAt": "2026-07-16T19:56:19.000+05:30",
+          "count": 2,
           "havingChildDirectory": false
         }
       }
     ]
+  },
+  "pagination": {
+    "total": 1,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 1
   }
 }
 ```
