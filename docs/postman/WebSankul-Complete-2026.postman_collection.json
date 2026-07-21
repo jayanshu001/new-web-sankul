@@ -8694,6 +8694,41 @@
               "response": []
             },
             {
+              "name": "GET /notifications/count",
+              "request": {
+                "method": "GET",
+                "header": [
+                  {
+                    "key": "Content-Type",
+                    "value": "application/json"
+                  }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/client/notifications/count",
+                  "host": [
+                    "{{base_url}}"
+                  ],
+                  "path": [
+                    "client",
+                    "notifications",
+                    "count"
+                  ]
+                },
+                "auth": {
+                  "type": "bearer",
+                  "bearer": [
+                    {
+                      "key": "token",
+                      "value": "{{client_token}}",
+                      "type": "string"
+                    }
+                  ]
+                },
+                "description": "Lightweight unread badge count. Returns { success, unreadCount } — visible, unread, not-dismissed notifications only. Stays in sync with read/read-all/delete. Doc: docs/client/NOTIFICATION_UNREAD_COUNT_FRONTEND.md"
+              },
+              "response": []
+            },
+            {
               "name": "POST /notifications/:id/read",
               "request": {
                 "method": "POST",

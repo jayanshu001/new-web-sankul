@@ -17,6 +17,10 @@ import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { fetchTrendingBooksOnly, fetchTrendingEbooksOnly } from "../client-trending/client-trending.service";
 import { listRecentlyAdded } from "../client-recently-added/client-recently-added.service";
+// Reuse the notification module's dismissal-aware unread count so the dashboard
+// badge (`unreadNotifications`) matches GET /client/notifications/count and the
+// feed badge exactly — i.e. excludes read AND deleted/dismissed notifications.
+import { unreadCount as notificationUnreadCount } from "../client-notification/client-notification.service";
 
 const COURSE_CATEGORY_LIMIT = 20;
 const EXAM_COUNTDOWN_LIMIT = 2;
@@ -107,7 +111,7 @@ export const buildHomeDashboard = async (customerId: number | null) => {
     prisma.courseSubjectCategory.findMany({ where: { status: true }, orderBy: { id: "asc" }, take: COURSE_CATEGORY_LIMIT }),
     fetchPrioritizedCountdowns(customerId, EXAM_COUNTDOWN_LIMIT),
     prisma.exam.findFirst({ where: { type: "daily" as any, status: true, startAt: { lte: now }, endAt: { gte: now } }, orderBy: { startAt: "desc" } }),
-    customerId ? prisma.notification.count({ where: { isRead: false, OR: [{ customerId }, { broadcast: true }] } }).catch(() => 0) : 0,
+    customerId ? notificationUnreadCount(customerId).catch(() => 0) : 0,
   ]);
 
   // exam countdown categories (manual join)

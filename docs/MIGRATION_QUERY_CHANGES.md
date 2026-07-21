@@ -148,6 +148,31 @@ shape unchanged; pagination (`countAdminDistricts`) unaffected.
 
 ---
 
+## 2026-07-21 — Client dashboard: `unreadNotifications` now dismissal-aware (badge sync fix)
+
+> **No schema/DDL change.** Query-shape fix only.
+
+`buildHomeDashboard` (`client-dashboard.service.ts`) counted `notification.count({ isRead:false,
+OR:[{customerId},{broadcast}] })` — it did **not** exclude dismissed ids, so after a client
+delete (`/notifications/delete`) the home dashboard badge stayed lit while the feed +
+`/notifications/count` had already dropped it. Fixed by reusing
+`client-notification.service.unreadCount(customerId)`, which excludes `ws_notification_dismissal`
+ids. All three badge sources (dashboard `unreadNotifications`, feed `unreadCount`, and
+`GET /notifications/count`) now use the identical filter and stay in sync.
+
+## 2026-07-21 — Client: new lightweight unread-count endpoint `GET /client/notifications/count`
+
+> **No schema/DDL change.** New read-only route + controller only. Doc:
+> `docs/client/NOTIFICATION_UNREAD_COUNT_FRONTEND.md`.
+
+Added `GET /api/v1/client/notifications/count` (`getUnreadCount` controller) so the app can
+refresh the bell badge without re-fetching the full paginated feed. It wraps the existing
+`client-notification.service.ts → unreadCount(customerId)`, which counts
+`(customerId = me OR broadcast) AND isRead = false AND id NOT IN (dismissed)`. Because it
+reuses the same filter as the feed's `unreadCount` and excludes dismissed ids, the badge
+stays in sync across mark-read / mark-all / delete. Route registered **before**
+`/notifications/:id/read` so `count` isn't captured as an `:id`. Postman updated.
+
 ## 2026-07-20 — FCM: reverted per-platform HTML tray split → PLAIN on both Android + iOS
 
 > **No schema/DDL change.** Push-payload shape only. `title_html`/`body_html` columns and

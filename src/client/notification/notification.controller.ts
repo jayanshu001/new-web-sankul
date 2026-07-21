@@ -26,6 +26,28 @@ export const listMyNotifications = async (req: Request, res: Response) => {
   }
 };
 
+// GET /api/v1/client/notifications/count — lightweight unread badge count.
+// Purpose-built so the client can refresh the bell badge WITHOUT re-fetching the
+// full paginated feed. Stays in sync with every action: it counts only visible,
+// unread, NOT-dismissed notifications, so mark-read / mark-all / delete all move it.
+export const getUnreadCount = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const userId = req.user?.id;
+  logger.info("getUnreadCount invoked", { traceId, path: req.originalUrl, customerId: userId });
+
+  try {
+    if (!userId) { logger.warn("getUnreadCount unauthorized", { traceId }); return res.status(401).json({ success: false, message: "Unauthorized." }); }
+
+    const cid = notifSql.parseNotifId(String(userId));
+    if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
+    const unreadCount = await notifSql.unreadCount(cid);
+    return res.status(200).json({ success: true, unreadCount });
+  } catch (e: any) {
+    logger.error("getUnreadCount failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
+    return res.status(500).json({ success: false, message: e.message });
+  }
+};
+
 // POST /api/v1/client/notifications/:id/read
 export const markAsRead = async (req: Request, res: Response) => {
   const traceId = req.traceId;

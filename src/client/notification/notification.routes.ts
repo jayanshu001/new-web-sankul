@@ -2,6 +2,7 @@ import { Router } from "express";
 import authenticate from "../../middlewares/authenticate";
 import {
   listMyNotifications,
+  getUnreadCount,
   markAsRead,
   markAllAsRead,
   deleteNotifications,
@@ -15,6 +16,9 @@ router.get("/image-notifications", listActiveImageNotifications);
 
 // Authenticated feed
 router.get("/notifications", authenticate, listMyNotifications);
+// Lightweight unread badge count — kept BEFORE the "/:id/read" param route so
+// "count" is never captured as an :id. Refreshes the bell without the full feed.
+router.get("/notifications/count", authenticate, getUnreadCount);
 router.post("/notifications/read-all", authenticate, markAllAsRead);
 router.post("/notifications/:id/read", authenticate, markAsRead);
 
