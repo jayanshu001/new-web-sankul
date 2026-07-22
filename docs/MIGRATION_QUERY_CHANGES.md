@@ -15,6 +15,111 @@
 
 ---
 
+## 2026-07-22 — Dead-code sweep: 19 unreachable files + 2 orphan handlers deleted — NO DB change
+
+> **No DDL, no query/schema/index change, no route added or removed.** Every file
+> deleted was proven unreachable from `src/index.ts` by a full import-graph BFS
+> (616 files → 597 reachable; the 19 unreachable are the deletions). `yarn typecheck`
+> green before and after; a re-run of the BFS now reports 0 unreachable files.
+
+Deleted orphan modules (Phase-3a dual-path builds that were never wired to a route,
+and whose "flip the flag later" premise died with the Mongo removal on 2026-07-01):
+
+- `src/modules/client-orders/**` — the legacy `/client/orders/*` surface it backed was
+  removed 2026-07-01 (see `src/client/client.routes.ts`); superseded by SQL `/client/payment/*`.
+- `src/modules/commerce-promocode/**` — superseded by `src/modules/promo-code` (C5), which
+  carries the `appliesTo`/`discountValue` contract this module documented as unresolvable.
+- `src/modules/commerce-educator/**` — superseded by `src/modules/client-educator`.
+- `src/modules/commerce-promoter/**` — superseded by `src/modules/admin-promoter` + `promoter-data`.
+
+Deleted orphan utilities (each had a live replacement):
+
+- `src/utils/cache.ts` → duplicate of `src/libs/cache.ts` (the one `middlewares/cacheRoute.ts` uses).
+- `src/utils/pdfCourseReceipt.ts` → superseded by `src/libs/core/generate.ts` (EJS + Puppeteer;
+  `buildCourseReceiptHtml`), which serves all four receipt kinds. **`pdfkit` is now an unused
+  dependency in `package.json`** — left installed, safe to drop separately.
+- `src/utils/categoryTree.ts` → Mongo-shaped (`_id` / `childCategoryIds`), unusable post-Mongo.
+- `src/config/storageConfig.ts` → local-disk multer; real uploads go through
+  `middlewares/upload.ts` (memory → Spaces). Also removed its import-time `mkdir uploads/` side effect.
+- `src/client/learning/collapseProgress.ts` → per-video progress collapsing now lives in
+  `src/modules/client-lecture-progress`.
+
+Follow-up in the same sweep — stale tooling that referenced the deleted modules:
+
+- **`docs/migration/api-tests/commerce-{promoter,promocode,educator}/`** — retired. Each suite
+  contained only `skip: true` informational stubs and made **zero HTTP calls**, so they asserted
+  nothing. Unwired from `run-all.ts`, `run-module.ts`, and `modules.manifest.ts` (26 entries left).
+  `yarn migration:api` still loads; no per-module yarn script existed for these three.
+- **`scripts/generate-schema-comparison.ts` + `scripts/generate-field-comparison.ts`** — deleted,
+  along with their `docs:schema-comparison` / `docs:field-comparison` package.json entries. Both
+  were Mongoose↔MySQL comparison generators that crashed on startup (`ENOENT src/models`) ever
+  since the Mongo removal on 2026-07-01, and one also required an external sibling checkout
+  (`../websankul-staging/database/websankul_staging.sql`). Their last generated output
+  (`SCHEMA_COMPARISON.md` / `FIELD_COMPARISON.md`) is kept as a historical record.
+- **`scripts/generate-migrated-modules.ts`** — the four entries for the deleted modules are
+  **kept for history** (they record why those tables were migrated) but their `code:` paths now
+  read "module DELETED 2026-07-22 — superseded by …" instead of pointing at directories that no
+  longer exist, each with a matching note. `yarn docs:migrated-modules` runs clean (67 modules).
+
+Deleted orphan handlers (exported but bound to no route):
+
+- `createPermissionCategory` + its `createPermissionCategorySchema` — `POST /admin/permission-categories`
+  deliberately returns **410** inline (categories derive from the code catalog). Behaviour unchanged;
+  only the unused handler is gone. `permission-category.service.createCategory` was left in place.
+- `lookupBookThumbnails` in `client/purchase-history/receipts.controller.ts` — last caller removed earlier.
+
+---
+
+## 2026-07-22 — Admin e-book `link` made optional — NO DB change
+
+> **No DDL, no query/schema/index change.** Validator relaxation only.
+
+- `src/admin/ebook/ebook.validation.ts` — `createEbookSchema.link` changed from
+  `z.string().min(1, "Link is required")` to `z.string().optional().nullable()`.
+  `updateEbookSchema` is `createEbookSchema.partial()`, so this covers
+  `POST /admin/ebooks` and `PATCH|PUT /admin/ebooks/:id`. No URL-format check
+  exists on the field, so an empty string passes validation and clears the link.
+- **Write path unchanged** — `admin-ebook.service.ts` already coerced
+  `d.link ?? ""` on create and `if (d.link !== undefined) data.shareableLink = d.link ?? ""`
+  on update. Omitting `link` on update still leaves the stored value untouched.
+- **Column stays as-is:** `ws_ebook.link` is `varchar(255) NOT NULL` with no
+  default, so a cleared link is persisted as `''`, **not** NULL. Making it
+  nullable would require an `ALTER` plus a `schema.prisma` edit and would turn
+  `EBook.shareableLink` nullable across the client catalog transformers — not
+  done; revisit only if the NULL representation is explicitly required.
+- **Response contract unchanged:** `toEbookDto` (list + detail) and
+  `catalog-ebook.transformer` emit `link` unconditionally, so a cleared ebook
+  returns `"link": ""` rather than omitting the key.
+
+---
+
+## 2026-07-22 — Client API payload slimming (Phase 1) — NO DB change
+
+> **No DDL, no query/schema/index change.** Response-shape trims only, applied at
+> the CLIENT controller edge via `utils/pick.ts` (`pick`/`pickList`). Shared module
+> transformers are UNTOUCHED, so admin/other surfaces keep their full DTO shape.
+> Source: `docs/api-optimization` audit (Phase 1, low-risk, backend-only). Pagination
+> envelope preserved on every list (standing client-list rule). Nothing to backfill.
+
+- **New util `utils/pick.ts`** — shallow keep-list projection; absent keys skipped.
+- **CMS (`client/cms/cms.controller.ts`)** — client responses now project:
+  - `GET /client/faqs` → `_id, typeId, question, answer` (drop `type,isExpand,createdAt,updatedAt`)
+  - `GET /client/social-links` → `_id, title, link, typeId` (drop `icon,order,status,timestamps`)
+  - `GET /client/live-banners` → `_id, image, liveCourseId, orderBy` (drop timestamps)
+  - `GET /client/testimonials` → `_id, name, description, rating` (drop `title`)
+- **Notifications (`client/notification/notification.controller.ts`)** —
+  `GET /client/notifications` rows → `_id, title, titleHtml, body, bodyHtml, image,
+  type, isRead, createdAt` (drop `customerId, deepLink, data, readAt, broadcast,
+  status, updatedAt`). Envelope `unreadCount` + `pagination` KEPT.
+- **Address (`client/address/address.controller.ts`)** —
+  - `GET /client/address` → identity/display fields only (drop `phone, alternatePhone,
+    email, customerId, status, createdAt, updatedAt`)
+  - `GET /client/address/states` → `{_id, name}` (drop `stateCode`)
+  - `GET /client/address/cities` → `{_id, name}` (drop `image, status, order, timestamps, stateId` obj)
+- **Progress heartbeats → ack-only** (fire-and-forget, body ignored by player):
+  - `POST /client/courses/lectures/:videoId/progress` → `{success, data:null}`
+  - `POST /client/free-videos/:videoId/progress` → `{success, data:null}`
+
 ## 2026-07-21 — Cache TTLs → 24h + per-user purchase flush — NO DB change
 
 > **No DDL, no query/schema/index change.** Route-cache tuning only (Redis).

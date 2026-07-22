@@ -7,7 +7,6 @@ import {
   parseLpId,
   reportContainerProgress,
   listMyCoursesForResume as sqlListMyCoursesForResume,
-  toProgressDto,
 } from "../../modules/client-lecture-progress/client-lecture-progress.service";
 
 // SQL id-space variant of the heartbeat body — ids are positive ints, not 24-hex.
@@ -56,7 +55,8 @@ export const reportLectureProgress = async (req: Request, res: Response) => {
       return res.status(result.status).json({ success: false, message: result.message });
     }
     logger.info("reportLectureProgress (sql) success", { traceId, userId, videoId: vid, scope, positionSec, durationSec });
-    return res.status(200).json({ success: true, data: toProgressDto(result.row) });
+    // Fire-and-forget heartbeat: the mobile player ignores the body. Ack only.
+    return res.status(200).json({ success: true, data: null });
   } catch (e: any) {
     if (e.issues) {
       logger.warn("reportLectureProgress validation failed", { traceId, userId, issues: e.issues });

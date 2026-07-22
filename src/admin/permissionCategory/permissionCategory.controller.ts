@@ -1,6 +1,5 @@
 import { Request, Response } from "express";
 import {
-  createPermissionCategorySchema,
   updatePermissionCategorySchema,
   listQuerySchema,
 } from "./permissionCategory.validation";
@@ -8,7 +7,6 @@ import {
   parsePcatId,
   listCategories as sqlListCategories,
   getCategory as sqlGetCategory,
-  createCategory as sqlCreateCategory,
   updateCategory as sqlUpdateCategory,
   deleteCategory as sqlDeleteCategory,
 } from "../../modules/permission-category/permission-category.service";
@@ -68,36 +66,6 @@ export const getPermissionCategory = async (req: Request, res: Response) => {
     }
     return res.status(200).json({ success: true, data });
   } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// POST /api/v1/admin/permission-categories
-export const createPermissionCategory = async (req: Request, res: Response) => {
-  try {
-    const parsed = createPermissionCategorySchema.safeParse(req.body);
-    if (!parsed.success) {
-      return res.status(422).json({
-        success: false,
-        message: "Validation failed",
-        errors: formatZodErrors(parsed.error.issues),
-      });
-    }
-    const { title, slug, order, status } = parsed.data;
-
-    const result = await sqlCreateCategory({ title, slug, order, status });
-    if (!result.ok) {
-      return res.status(409).json({ success: false, message: `Slug '${slug}' already exists` });
-    }
-    return res.status(201).json({
-      success: true,
-      message: "Permission category created successfully",
-      data: result.data,
-    });
-  } catch (error: any) {
-    if (error.code === 11000) {
-      return res.status(409).json({ success: false, message: "Slug already exists" });
-    }
     return res.status(500).json({ success: false, message: error.message });
   }
 };

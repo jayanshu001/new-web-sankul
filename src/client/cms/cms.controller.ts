@@ -18,6 +18,15 @@ import {
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { pickList } from "../../utils/pick";
+
+// Client-only field projections (mobile app reads a subset of each DTO). Applied
+// at the controller edge so the shared module transformers — and the admin
+// responses that reuse them — keep their full shape. See docs/api-optimization.
+const FAQ_CLIENT_FIELDS = ["_id", "typeId", "question", "answer"] as const;
+const SOCIAL_LINK_CLIENT_FIELDS = ["_id", "title", "link", "typeId"] as const;
+const LIVE_BANNER_CLIENT_FIELDS = ["_id", "image", "liveCourseId", "orderBy"] as const;
+const TESTIMONIAL_CLIENT_FIELDS = ["_id", "name", "description", "rating"] as const;
 
 // GET /api/v1/client/faqs[?typeId=…]
 export const listFaqs = async (req: Request, res: Response) => {
@@ -37,7 +46,7 @@ export const listFaqs = async (req: Request, res: Response) => {
     logger.info("listFaqs success", { traceId, count: data.length });
     return res.status(200).json({
       success: true,
-      data,
+      data: pickList(data, FAQ_CLIENT_FIELDS),
       pagination: buildPagination(total, page, limit),
     });
   } catch (e: any) {
@@ -117,7 +126,7 @@ export const listLiveBanners = async (req: Request, res: Response) => {
     logger.info("listLiveBanners success", { traceId, count: data.length });
     return res.status(200).json({
       success: true,
-      data,
+      data: pickList(data, LIVE_BANNER_CLIENT_FIELDS),
       pagination: buildPagination(total, page, limit),
     });
   } catch (e: any) {
@@ -137,7 +146,7 @@ export const listTestimonials = async (req: Request, res: Response) => {
     logger.info("listTestimonials success", { traceId, count: data.length });
     return res.status(200).json({
       success: true,
-      data,
+      data: pickList(data, TESTIMONIAL_CLIENT_FIELDS),
       pagination: buildPagination(total, page, limit),
     });
   } catch (e: any) {
@@ -157,7 +166,7 @@ export const listSocialLinks = async (req: Request, res: Response) => {
     logger.info("listSocialLinks success", { traceId, count: data.length });
     return res.status(200).json({
       success: true,
-      data,
+      data: pickList(data, SOCIAL_LINK_CLIENT_FIELDS),
       pagination: buildPagination(total, page, limit),
     });
   } catch (e: any) {

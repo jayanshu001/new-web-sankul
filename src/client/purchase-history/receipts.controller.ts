@@ -221,20 +221,3 @@ export const getSubscriptionTrackingLive = async (req: Request, res: Response) =
     return res.status(502).json({ success: false, message: "Failed to fetch live tracking." });
   }
 };
-
-// Helper kept for the books-tab thumbnail lookup so the list endpoint stays lean.
-// MySQL read (ws_book): SQL ids are ints; map keyed by string id → thumbnail||image||null.
-export const lookupBookThumbnails = async (bookIds: string[]) => {
-  if (!bookIds.length) return new Map<string, string | null>();
-  const ids = bookIds
-    .map((b) => Number(b))
-    .filter((n) => Number.isInteger(n) && n > 0);
-  if (!ids.length) return new Map<string, string | null>();
-  const books = await prisma.book.findMany({
-    where: { id: { in: ids } },
-    select: { id: true, thumbnail: true, image: true },
-  });
-  return new Map<string, string | null>(
-    books.map((b) => [String(b.id), b.thumbnail || b.image || null])
-  );
-};

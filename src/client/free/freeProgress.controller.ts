@@ -52,7 +52,7 @@ export const reportFreeVideoProgress = async (req: Request, res: Response) => {
       logger.warn("reportFreeVideoProgress(SQL) not a free video", { traceId, userId, videoId: vid });
       return res.status(403).json({ success: false, message: "This lecture is not a free video." });
     }
-    const row = await sqlUpsertVideoProgress({
+    await sqlUpsertVideoProgress({
       customerId: Number(userId),
       videoId: vid,
       source: "free",
@@ -60,7 +60,8 @@ export const reportFreeVideoProgress = async (req: Request, res: Response) => {
       durationSec,
     });
     logger.info("reportFreeVideoProgress(SQL) success", { traceId, userId, videoId: vid, positionSec, durationSec });
-    return res.status(200).json({ success: true, data: row });
+    // Fire-and-forget heartbeat: the free player ignores the body. Ack only.
+    return res.status(200).json({ success: true, data: null });
   } catch (e: any) {
     if (e.issues) {
       logger.warn("reportFreeVideoProgress validation failed", { traceId, userId, issues: e.issues });

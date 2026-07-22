@@ -33,9 +33,6 @@ import { runOfflineBatchClientApiTests } from "./offline-batch/client.api.test.j
 import { runCommercePriceClientApiTests } from "./commerce-price/client.api.test.js";
 import { runCommerceSubscriptionClientApiTests } from "./commerce-subscription/client.api.test.js";
 import { runCommerceEbookSubClientApiTests } from "./commerce-ebook-sub/client.api.test.js";
-import { runCommercePromoterClientApiTests } from "./commerce-promoter/client.api.test.js";
-import { runCommercePromocodeClientApiTests } from "./commerce-promocode/client.api.test.js";
-import { runCommerceEducatorClientApiTests } from "./commerce-educator/client.api.test.js";
 import { runCommerceOrderClientApiTests } from "./commerce-order/client.api.test.js";
 import { runEbookOrderClientApiTests } from "./ebook-order/client.api.test.js";
 import { runBookOrderClientApiTests } from "./book-order/client.api.test.js";
@@ -78,9 +75,6 @@ async function main() {
     runCommercePriceClientApiTests,
     runCommerceSubscriptionClientApiTests,
     runCommerceEbookSubClientApiTests,
-    runCommercePromoterClientApiTests,
-    runCommercePromocodeClientApiTests,
-    runCommerceEducatorClientApiTests,
     runCommerceOrderClientApiTests,
     runEbookOrderClientApiTests,
     runBookOrderClientApiTests,

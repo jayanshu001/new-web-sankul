@@ -5,18 +5,6 @@ export const objectIdSchema = z.string().regex(objectIdRegex, "Invalid id");
 
 const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-export const createPermissionCategorySchema = z.object({
-  title: z.string().trim().min(1, "Title is required").max(255),
-  slug: z
-    .string()
-    .trim()
-    .min(1, "Slug is required")
-    .max(255)
-    .regex(slugRegex, "Slug must be lowercase, alphanumeric, hyphen-separated"),
-  order: z.coerce.number().int().min(0).optional().default(0),
-  status: z.coerce.boolean().optional().default(true),
-});
-
 export const updatePermissionCategorySchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
   slug: z.string().trim().min(1).max(255).regex(slugRegex).optional(),

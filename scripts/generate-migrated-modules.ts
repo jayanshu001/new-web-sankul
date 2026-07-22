@@ -658,12 +658,13 @@ const MIGRATED_REGISTRY = [
     prismaModel: "Promoter",
     mysqlTable: "ws_promoter",
     mongoCollection: "ws_promoter",
-    code: "src/modules/commerce-promoter",
+    code: "—  (module DELETED 2026-07-22 — never wired to a route; superseded by src/modules/admin-promoter + promoter-data)",
     adminRoutes: "—",
     clientRoutes: "—  (READ master; not wired; flag OFF)",
     testScript: "—  (flag OFF; verified via live-DB tsx test)",
     rowCountHint: "114 promoters in staging",
     transformerNotes: [
+      "⚠ REMOVED 2026-07-22: src/modules/commerce-promoter was deleted in the dead-code sweep. It was a flag-OFF Phase-3a build that no route ever imported, and its \"flips with catalog + 3a\" premise died with the Mongo removal (2026-07-01). ws_promoter is now served by admin-promoter + promoter-data. Entry kept for history.",
       "FLAG OFF + READ-ONLY: promocode owner master. int (MySQL) vs ObjectId (Mongo) ids join still-Mongo promocode/subscription consumers → flips with catalog + 3a",
       "SECURITY: `password` exists on the row (full entity, like ws_course_educator) but is NEVER surfaced in the DTO (Mongo model marks it select:false)",
       "SCHEMA FIX: full_name/email/phone are nullable in the DDL but Prisma typed them non-nullable String → relaxed to String? (no NULLs in current data; guards a future NULL)",
@@ -679,12 +680,13 @@ const MIGRATED_REGISTRY = [
     prismaModel: "Promocode / PromotedPackageCourseEbook",
     mysqlTable: "ws_promocode / ws_promoted_package_course_ebook",
     mongoCollection: "ws_promo_codes / (embedded)",
-    code: "src/modules/commerce-promocode",
+    code: "—  (module DELETED 2026-07-22 — never wired to a route; superseded by src/modules/promo-code)",
     adminRoutes: "—",
     clientRoutes: "—  (SQL-faithful reads built; CANNOT serve client applyPromocode; flag OFF)",
     testScript: "—  (flag OFF; verified via live-DB tsx test)",
     rowCountHint: "2 promocodes + 5 promoted plans in staging",
     transformerNotes: [
+      "⚠ REMOVED 2026-07-22: src/modules/commerce-promocode was deleted in the dead-code sweep. The appliesTo/discountValue reconciliation this entry deferred was delivered by src/modules/promo-code (C5), which serves the client contract; the SQL-faithful build was never wired. Entry kept for history.",
       "⚠ MODEL DIVERGENCE: the live Mongo PromoCode (ws_promo_codes) uses discountType/discountValue + appliesTo{type,ids[]}; the SQL tables have NONE of those — the discount is a per-plan promoter%/customer% split in ws_promoted_package_course_ebook (keyed by pcb_price_id=plan). The client applyPromocode/listPromocodes read the Mongo appliesTo shape, which CANNOT be reproduced from SQL. So this builds SQL-faithful reads ONLY, flag OFF (decision 2026-06-12); appliesTo reconciliation is a later effort",
       "SCHEMA FIX: promocode/promo_start_at/promo_expire_at are nullable in the DDL but Prisma typed them non-nullable → relaxed to optional. title/description NOT NULL in DDL but Prisma optional (safe direction)",
       "Valid = status=true AND promo_start_at<now<promo_expire_at; public listings add type='public', soonest-to-expire first. Code lookup uppercases (Mongo parity). Promoted plans included on single-promocode reads",
@@ -699,12 +701,13 @@ const MIGRATED_REGISTRY = [
     prismaModel: "CourseEducator",
     mysqlTable: "ws_course_educator",
     mongoCollection: "ws_course_educators",
-    code: "src/modules/commerce-educator",
+    code: "—  (module DELETED 2026-07-22 — never wired to a route; superseded by src/modules/client-educator)",
     adminRoutes: "—",
     clientRoutes: "—  (READ master + ref projection; not wired; flag OFF)",
     testScript: "—  (flag OFF; verified via live-DB tsx test)",
     rowCountHint: "56 educators in staging",
     transformerNotes: [
+      "⚠ REMOVED 2026-07-22: src/modules/commerce-educator was deleted in the dead-code sweep. It was a flag-OFF Phase-3a build no route imported; ws_course_educator is now served by client-educator. Entry kept for history.",
       "FLAG OFF + READ-ONLY: a FULL entity (email/password/about/view/last_seen_at), NOT a join table (it was mis-grouped as a 'catalog relation' earlier). int (MySQL) vs ObjectId (Mongo) ids join still-Mongo course/educator consumers → flips with catalog + 3a (final 3a read module)",
       "SECURITY: `password` (NOT NULL) on the row but NEVER surfaced — the client educator path does `.select('-password')`. DTO excludes it; the ref projection is `{_id,name,image}` only",
       "⚠ LATENT RISK (logged, deliberately NOT fixed): `id` is `bigint unsigned` but Prisma maps it `Int`. Current ids 20–85 (56 rows) → no overflow. Changing to BigInt would ripple into the Course.courseEducatorId FK + the built catalog-course module for zero present benefit — revisit (educator + Course FK together) only if ids approach 2^31",
@@ -1202,12 +1205,13 @@ const MIGRATED_REGISTRY = [
     prismaModel: "PackageCourseSubscription / EBookSubscription / BookOrder (+ course/package/plan/ebook)",
     mysqlTable: "ws_package_course_subscription / ws_ebook_subscription / ws_book_order (read-aggregation, no new tables)",
     mongoCollection: "packagecoursesubscriptions / ebooksubscriptions / bookorders",
-    code: "src/modules/client-orders (branches src/client/orders/orders.controller.ts listMyOrders)",
+    code: "—  (module DELETED 2026-07-22 — the /client/orders surface was removed 2026-07-01; superseded by SQL /client/payment/*)",
     adminRoutes: "—",
     clientRoutes: "GET `/client/orders` (listMyOrders). Writes POST /course /ebook /verify-payment stay Mongo.",
     testScript: "—  (verified via live-DB tsx)",
     rowCountHint: "staging: cust 472341 (1 course sub, 4 book orders), 472335 (1+1+1)",
     transformerNotes: [
+      "⚠ REMOVED 2026-07-22: src/modules/client-orders was deleted in the dead-code sweep. The legacy /client/orders/* surface it branched was removed 2026-07-01 (see src/client/client.routes.ts) and is superseded by the SQL /client/payment/* flow, so nothing imported this module. Entry kept for history.",
       "Wave 7 finalizer (5th). listMyOrders — all of a customer's course/package subs + ebook subs + book orders (unfiltered, newest-first), matching the Mongo `{ courseSubscriptions, ebookSubscriptions, bookOrders }` shape. Same drift family as client-purchase-history but distinct contract (unpaginated, all-statuses, raw-ish docs) → own module.",
       "⚠ Mongo populates courseId→{name,thumbnail} and packageId→the price/plan doc; SQL maps Course.image→thumbnail, resolves package_id directly, hydrates the plan via planId (→ packageId field carries the plan DTO). ws_book_order: items from the order_items JSON column, AWB from tracking_id (BIGINT), customer keyed by user_id (→customer_id). withMaterial inferred from pc_material_id.",
       "⚠ STAY Mongo (no SQL branch): placeCourseOrder / placeEbookOrder / verifyPayment — the payment-write path (Razorpay order+verify + subscription grant + PromoCode.appliesTo + ReferralProgram crediting) → payment wave. Verified vs live DB (flag ON): cust 472341 → 1 package sub (plan 88/90d/₹7500) + 4 book orders (items parsed, AWB resolved, verified/pending), 472335 → 1 course sub + 1 ebook + 1 book order.",
@@ -1402,7 +1406,9 @@ function main() {
     sections += `| **Prisma model** | \`${m.prismaModel}\` |\n`;
     sections += `| **MySQL table** | \`${m.mysqlTable}\` |\n`;
     sections += `| **Mongo collection (legacy app)** | \`${m.mongoCollection}\` |\n`;
-    sections += `| **Code** | \`${m.code}/\` |\n`;
+    // The trailing "/" marks a module directory. Entries whose code is a prose
+    // note (e.g. a removed module) already read as a sentence — don't suffix those.
+    sections += `| **Code** | \`${m.code.startsWith("—") ? m.code : m.code + "/"}\` |\n`;
     sections += `| **Data** | ${m.rowCountHint} |\n`;
     sections += `| **Smoke test** | \`${m.testScript}\` |\n`;
     sections += `| **Admin API** | ${m.adminRoutes} |\n`;

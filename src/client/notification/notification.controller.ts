@@ -2,7 +2,14 @@ import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { pickList } from "../../utils/pick";
 import * as notifSql from "../../modules/client-notification/client-notification.service";
+
+// Mobile feed reads only these row fields; drop customerId/deepLink/data/readAt/
+// broadcast/status/updatedAt metadata. Envelope unreadCount + pagination kept.
+const NOTIFICATION_CLIENT_FIELDS = [
+  "_id", "title", "titleHtml", "body", "bodyHtml", "image", "type", "isRead", "createdAt",
+] as const;
 import * as adminNotifSql from "../../modules/admin-notification/admin-notification.service";
 
 // GET /api/v1/client/notifications — feed for current customer (personal + broadcast)
@@ -19,7 +26,7 @@ export const listMyNotifications = async (req: Request, res: Response) => {
     const cid = notifSql.parseNotifId(String(userId));
     if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
     const { data, total, unreadCount } = await notifSql.listNotifications(cid, skip, limit, search);
-    return res.status(200).json({ success: true, data, unreadCount, pagination: buildPagination(total, page, limit) });
+    return res.status(200).json({ success: true, data: pickList(data, NOTIFICATION_CLIENT_FIELDS), unreadCount, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {
     logger.error("listMyNotifications failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

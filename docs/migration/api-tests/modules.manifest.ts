@@ -235,43 +235,6 @@ export const MIGRATED_API_MODULES = [
     yarnScript: "migration:api:commerce-ebook-sub",
   },
   {
-    // Commerce 3a · Promoter READ (commerce-promoter) — flag OFF, read-only
-    // promocode owner master over ws_promoter (114). No standalone HTTP endpoint
-    // (ids hydrate promocode owners). `password` never surfaced. Verified via tsx.
-    key: "commerce-promoter",
-    testFiles: ["commerce-promoter/client.api.test.ts"],
-    endpoints: [
-      "(no standalone HTTP endpoint — READ owner master verified via tsx; flips with catalog + 3a)",
-    ],
-    yarnScript: "migration:api:commerce-promoter",
-  },
-  {
-    // Commerce 3a · Promocode READ (commerce-promocode) — flag OFF, SQL-faithful
-    // over ws_promocode (2) + ws_promoted_package_course_ebook (5). The SQL
-    // tables do NOT carry the Mongo appliesTo/discountValue model the client
-    // applyPromocode reads → CANNOT serve that contract this wave; appliesTo
-    // reconciliation is a later effort. Verified via tsx.
-    key: "commerce-promocode",
-    testFiles: ["commerce-promocode/client.api.test.ts"],
-    endpoints: [
-      "(no standalone HTTP endpoint — SQL-faithful reads verified via tsx; NOT the client appliesTo contract; flips with catalog + 3a)",
-    ],
-    yarnScript: "migration:api:commerce-promocode",
-  },
-  {
-    // Commerce 3a · Educator READ (commerce-educator) — flag OFF, read-only full
-    // entity master over ws_course_educator (56). The FINAL 3a read module. No
-    // standalone HTTP endpoint of its own (served via the Mongo educator
-    // controller; ids embed in course listings). `password` never surfaced;
-    // bigint-unsigned id mapped Int (latent risk logged). Verified via tsx.
-    key: "commerce-educator",
-    testFiles: ["commerce-educator/client.api.test.ts"],
-    endpoints: [
-      "(no standalone HTTP endpoint — READ master + {_id,name,image} ref verified via tsx; flips with catalog + 3a)",
-    ],
-    yarnScript: "migration:api:commerce-educator",
-  },
-  {
     // Commerce 3b · Order WRITE (commerce-order) — flag OFF, FIRST write path
     // (course purchase). Wired across create-order/course + the verify course
     // branch. One Mongo doc → three SQL tables (order/subscription/tracking);

@@ -7,6 +7,14 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { matchesAllTokens } from "../../utils/searchFilter";
+import { pickList } from "../../utils/pick";
+
+// Mobile reads identity + display fields only; drop phone/alternatePhone/email/
+// customerId/status/timestamps. City picker rows need id+name only.
+const ADDRESS_CLIENT_FIELDS = [
+  "_id", "name", "label", "isDefault", "address", "address2", "city", "cityId", "stateId", "pincode",
+] as const;
+const CITY_CLIENT_FIELDS = ["_id", "name"] as const;
 import {
   parseOfflineId,
   getCentersWithBatchesByCities as getCentersWithBatchesByCitiesMysql,
@@ -83,7 +91,7 @@ export const getMyAddresses = async (req: Request, res: Response) => {
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
     const addresses = await svcListAddresses(cid);
     logger.info("getMyAddresses success", { traceId, customerId, count: addresses.length, source: "mysql" });
-    return res.status(200).json({ success: true, data: addresses });
+    return res.status(200).json({ success: true, data: pickList(addresses, ADDRESS_CLIENT_FIELDS) });
   } catch (error: any) {
     logger.error("getMyAddresses failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -273,8 +281,8 @@ export const getStates = async (req: Request, res: Response) => {
     const term = search;
 
     const rows = await lookupListStates({ activeOnly: true, search: term });
-    // Project to the exact Mongo contract: { _id, name, stateCode }
-    const states = rows.map((s) => ({ _id: s._id, name: s.name, stateCode: s.stateCode }));
+    // Mobile picker reads { _id, name } only (stateCode unused across the app).
+    const states = rows.map((s) => ({ _id: s._id, name: s.name }));
     logger.info("getStates success", { traceId, count: states.length, source: "mysql" });
     return res.status(200).json({ success: true, data: states });
   } catch (error: any) {
@@ -308,7 +316,7 @@ export const listCities = async (req: Request, res: Response) => {
     // offline-city contract — same fields/filters as before.
     const data = await svcListCityDistricts(search, stateNum);
     logger.info("listCities success", { traceId, count: data.length, source: "mysql", stateId: stateNum ?? null });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data: pickList(data, CITY_CLIENT_FIELDS) });
   } catch (e: any) {
     logger.error("listCities failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

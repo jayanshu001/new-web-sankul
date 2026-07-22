@@ -56,7 +56,11 @@ export const createEbookSchema = z.object({
   bookUrl: z.preprocess((v) => (v === "" ? null : v), z.string().optional().nullable()),
   demoFileName: z.preprocess((v) => (v === "" ? null : v), z.string().optional().nullable()),
   bookFileName: z.preprocess((v) => (v === "" ? null : v), z.string().optional().nullable()),
-  link: z.string().min(1, "Link is required"),
+  // Optional on both create and update (the admin Add/Edit modal no longer
+  // requires it). An empty string is accepted and clears an existing link — no
+  // URL-format check here, the frontend validates non-empty values. Stored as ""
+  // because ws_ebook.link is NOT NULL; `link` is always present in responses.
+  link: z.string().optional().nullable(),
   termsAndConditions: z.string().optional().nullable(),
   isTrending: zBool.optional().default(false),
   isPaid: zBool.optional().default(true),
