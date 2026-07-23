@@ -18,7 +18,7 @@ import {
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
-import { pickList } from "../../utils/pick";
+import { pickList, omit } from "../../utils/pick";
 
 // Client-only field projections (mobile app reads a subset of each DTO). Applied
 // at the controller edge so the shared module transformers — and the admin
@@ -83,7 +83,12 @@ export const getActivePopup = async (_req: Request, res: Response) => {
   try {
     const data = await getActivePopupService();
     logger.info("getActivePopup success", { traceId, hasPopup: !!data });
-    return res.status(200).json({ success: true, data: data ?? null });
+    // PromoPopupModal reads display columns only — drop status/timestamps
+    // (see docs/api-optimization/GET_client_popup.md).
+    return res.status(200).json({
+      success: true,
+      data: data ? omit(data as Record<string, any>, ["status", "createdAt", "updatedAt"]) : null,
+    });
   } catch (e: any) {
     logger.error("getActivePopup failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

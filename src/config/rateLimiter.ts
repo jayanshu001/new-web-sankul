@@ -74,6 +74,22 @@ export const globalLimiter = gate(rateLimit({
   store: redisStore("rl:global:"),
 }));
 
+// Public share / deep-link pages (/share/*). Unauthenticated and the most
+// crawler-exposed surface we have — link-preview bots fan out on every message
+// a user forwards. Generous (these are real taps) but bounded; keyed by IP
+// since there is no user on this path.
+export const shareLimiter = gate(rateLimit({
+  windowMs: 1 * 60 * 1000,
+  max: parsePositiveInt(process.env.RATE_LIMIT_SHARE_MAX, 120),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    message: "Too many requests, please try again later.",
+  },
+  store: redisStore("rl:share:"),
+}));
+
 // Client surface (mobile + student web) — burst-friendly for screens that fire
 // 6–8 parallel API calls. Keys by customer id when a valid Bearer token is
 // present so NAT/shared-IP users don't share one bucket; falls back to IP for

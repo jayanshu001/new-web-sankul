@@ -23,6 +23,9 @@ import { listRecentlyAdded } from "../client-recently-added/client-recently-adde
 import { unreadCount as notificationUnreadCount } from "../client-notification/client-notification.service";
 
 const COURSE_CATEGORY_LIMIT = 20;
+// Safety ceiling only — the table holds a handful of rows in practice. Set well
+// above any realistic banner count so the response is unchanged today.
+const BANNER_LIMIT = 50;
 const EXAM_COUNTDOWN_LIMIT = 2;
 // Home dashboard trims every non-banner section to its latest N items (response
 // size + client perf). The banner carousel keeps its full set.
@@ -99,7 +102,10 @@ const resolveOwnedEndAt = async (customerId: number | null, courseIds: number[],
 export const buildHomeDashboard = async (customerId: number | null) => {
   const now = new Date();
   const [banners, recentlyAddedFeed, courses, trendingBooks, trendingEbooks, testimonials, courseCategories, examCountdownsRaw, dailyTest, unreadNotifications] = await Promise.all([
-    prisma.bannerSlider.findMany({ orderBy: { orderBy: "asc" } }),
+    // Bounded like every other section here. ws_banner_slider has no status
+    // column, so there is nothing to filter — the cap exists purely so the home
+    // route can never be forced into an unbounded read as the table grows.
+    prisma.bannerSlider.findMany({ orderBy: { orderBy: "asc" }, take: BANNER_LIMIT }),
     // "Recently Added" = newest Planner packages + Smart packages + live courses,
     // merged by created date desc (kind-tagged). Capped to the section limit here;
     // the full paginated + searchable feed lives at GET /client/recently-added.

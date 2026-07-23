@@ -156,6 +156,9 @@ const bookDto = (b: any, ownedBookIds: Set<string>) => ({
   image: b.image ?? null,
   thumbnail: b.thumbnail ?? null,
   language: b.language ?? null,
+  // FE renders a strike-through original price → needs listPrice alongside the
+  // discounted one (same column the trending book card reads). FE↔BE mismatch fix.
+  listPrice: b.list_price ?? b.listPrice ?? null,
   discountedPrice: b.discounted_price ?? null,
   isCombo: b.isCombo,
   isTrending: b.isTrending,

@@ -15,6 +15,409 @@
 
 ---
 
+## 2026-07-23 — Catalog video listing: per-category fan-out → 3 batched queries + `ws_video_category_relation` indexes
+
+**DDL:** `docs/migration/schema-changes/2026-07-23_video_category_relation_indexes.sql`
+(adds `idx_vcr_parent`, `idx_vcr_child`). **Apply on deploy.**
+
+`catalogVideos()` (`src/modules/client-catalog/client-catalog.service.ts`) ran, for EVERY
+selected category: one recursive-CTE subtree walk (`descendantsOf([cat.id])`) + a
+`video.count` over that subtree + a `videoCategoryRelation.count`. A package with 20
+subject categories issued **60 queries for one request**, which is what saturates the
+Prisma pool under concurrency.
+
+Query shape now — constant regardless of category count:
+1. `descendantsByRoot(selectedIds)` — NEW helper in
+   `catalog-category-tree/category-tree.service.ts`. Same recursive CTE, but carries the
+   seed `root` through the recursion so one query returns every `(root, descendant)` pair;
+   buckets by root in JS. Semantics identical to calling `descendantsOf([root])` per root
+   (root included, deduped, same `MAX_DEPTH`).
+2. `video.groupBy({ by: ["videoCategoryId"] })` over the union of subtrees — per-category
+   tallies summed per subtree. Equals the old per-subtree `count()` exactly, because a
+   video belongs to exactly one category.
+3. `videoCategoryRelation.groupBy({ by: ["parent"] })` over the selected ids.
+
+`totals.items` is now summed from (2) instead of a fourth round-trip. The flat `course`
+path also gained an explicit `select` (7 fields) instead of reading every column of the
+wide legacy `ws_video`.
+
+**Measured on staging:** package with 20 categories — **5 queries total, vs 60 for the
+counts alone** before. 4 categories → 5 vs 12. 1 category → 5 vs 3 (marginally more for
+trivial cases; flat thereafter).
+
+**Indexes:** `ws_video_category_relation` had ONLY a PRIMARY KEY, so every parent/child
+lookup — including each level of the recursive CTE — was a full scan. Verified before:
+`type: ALL, key: NULL, rows: 2456`; after: `type: range, key: idx_vcr_parent, rows: 5,
+Using index`.
+
+Response contract unchanged — verified by differential test across 20 responses
+(10 course/package/live-course ids × logged-in and anonymous): `category.count`,
+`havingChildDirectory`, and `totals.items` identical to the pre-refactor logic, 0 mismatches.
+
+---
+
+## 2026-07-23 — Notification token collection: single unbounded read → PK-paged + id-chunked
+
+`collectTokens()` (`src/modules/admin-notification/admin-notification.service.ts`) loaded
+every matching `ws_customer` row in one `findMany` — on a ~600k-row customer base a
+broadcast materialised the entire result set at once, and a large targeted audience bound
+every id into a single `IN (...)` big enough to threaten `max_allowed_packet`.
+
+Query shape now: PK-ordered pages of 5,000 (`cursor` + `skip: 1`), and targeted audiences
+chunked 1,000 ids per statement. Dedup is global across pages via a `Set`, so the token
+set is identical to the previous single-query behaviour (and `sendPush` already deduped
+downstream anyway). No schema change; FCM batching in `utils/fcm.ts` is untouched.
+
+Verified: token set identical to the legacy query for both broadcast and targeted
+audiences, including with the page size forced to 3 to exercise the cursor across ~11 pages.
+
+---
+
+## 2026-07-23 — Lecture-progress heartbeat: find-then-create → race-safe upsert — NO schema change
+
+`upsertVideoProgress` / `upsertLiveSessionProgress`
+(`src/modules/client-lecture-progress/client-lecture-progress.service.ts`) previously ran
+`findFirst` → `update`-by-id or `create`. That is a read-modify-write on the platform's
+**highest-frequency write** (every playing student heartbeats on an interval, and the same
+student may have two players open), so two concurrent heartbeats for one
+`(customer, video)` could both observe "no row" and both INSERT — the loser dying on
+P2002 and surfacing as a **500 mid-video**.
+
+Query shape now: `prisma.lectureProgress.upsert()` keyed on the existing unique indexes
+`uniq_customer_video` / `uniq_customer_live_session`, wrapped in `upsertRacingSafe()`
+which catches P2002 and retries as an `update` by the same unique key.
+
+**Why the wrapper is required:** Prisma only compiles `upsert()` into a native
+`INSERT ... ON DUPLICATE KEY UPDATE` when the model carries a *single* unique constraint.
+`ws_lecture_progress` has two, so Prisma falls back to select-then-insert and the race
+survives. Measured on the staging DB: 12 concurrent heartbeats for one key produced
+**11 P2002 failures** with bare `upsert()`, and **0 failures / exactly 1 row** with the
+wrapper.
+
+No schema or index change — both unique indexes already exist
+(`docs/migration/schema-changes/2026-06-18_create_wave7_blocked_tables.sql:27-28`,
+verified present on `ws_lecture_progress`). Read paths and the returned row shape are
+unchanged; `set` semantics (additive container pointer, never un-completes) are byte-for-byte
+the same as before.
+
+Regression QA: play the same video from two devices/tabs for one customer and confirm no
+500s and a single `ws_lecture_progress` row.
+
+---
+
+## 2026-07-23 — Profile dashboard `activePlans` now counts live-course subs — NO schema change
+
+`GET /client/profile/dashboard` under-reported `activePlans`: `countActiveSubscriptions`
+queried only `ws_package_course_subscription`, `ws_test_series_subscription` and
+`ws_ebook_subscription`, while the `course` tab of `GET /client/my-subscriptions` merges
+recorded course/package cards **with live-course cards**. Net effect: a live-course
+purchase appeared in My Subscriptions but never moved the profile badge — read to the
+user as "the count doesn't sync after purchase". Count semantics change only; no DDL,
+no backfill, no response-shape change (`activePlans` is still the single headline int).
+
+- `src/modules/customer-profile/profile-dashboard.sql.ts`
+  - `countActiveSubscriptions` — added a 4th parallel query on
+    `prisma.liveCourseSubscription`, folded into the `course` bucket and deduped
+    per `live_course_id` (`l:<id>`), matching `buildLiveCourseCards`.
+  - Predicate deliberately mirrors
+    `client-my-subscriptions.repository.activeLiveCourseSubs` (and the entitlement
+    checks in `client-lecture-progress`, `client-search`, `exam-countdown`):
+    `status = true AND payment_status = 'verified' AND (end_at IS NULL OR end_at > now)`.
+    - `payment_status = 'verified'` is REQUIRED — the live-course row is created at
+      ORDER time with `status = true, payment_status = 'pending'`, so omitting it
+      would over-count unpaid orders.
+    - `end_at IS NULL` is REQUIRED — live-course subs can be LIFETIME; the plain
+      `end_at > now` used by the other three tables would drop them.
+
+QA: buy a live course → verify payment → `activePlans` increments by 1 and matches the
+card count on the `course` tab. A *pending* (unverified) live order must NOT increment it.
+Extension of an existing live course must NOT increment it (dedup per live_course_id).
+
+Indexes: none added — `ws_live_course_subscription` is already read with this exact
+`(customer_id, status, payment_status, end_at)` shape by the endpoints listed above.
+
+---
+
+## 2026-07-23 — Quiz DTO gaps restored: `solutionText`, `attemptNumber`, `inProgress` — NO schema change
+
+RN client verification of the API-slimming work came back FAIL on three quiz fields the
+app reads but the SQL DTOs never emitted (pre-existing gaps, not caused by the slimming).
+All three already exist as columns — additive DTO fields only, no query/schema change.
+
+- `src/modules/client-exam/client-exam.service.ts`
+  - `toResultDto` (+`attemptNumber` from `ws_exam_result.qresult_attempt_number`,
+    +`inProgress` from `qresult_in_progress`, defaulting to `false`). Surfaces on
+    `GET /client/quizzes/my/attempts`, `GET /client/quizzes/:id/solution/analytics`, and
+    the `lastResult` decoration on the exam-category / daily-test listings.
+  - `getSolution` per-question row (+`solutionText` from
+    `ws_exam_question.solution_text`) for `GET /client/quizzes/:id/solution`.
+    `solution_image` stays unsent — confirmed unread by the client.
+
+No repository change was needed: both `resultsForCustomerExams`/`myResults` and
+`questionsByIds` already `findMany` full rows (no `select`), so the columns were being
+fetched and simply dropped at the DTO. Controller `omit` lists were checked and do not
+strip any of the three. `attemptNumber` on `POST /:id/attempts/start` and
+`inProgress` on `GET /:id/attempts` were already present via `toAttemptDto`.
+
+---
+
+## 2026-07-23 — Audio-note `durationSec`: floor before the INT write — NO schema change
+
+> **No DDL, no new query, no index.** Validation-level fix on an already-SQL module.
+
+Audit of the "accept & return `durationSec` on lecture audio notes" request found the
+feature already complete end-to-end — `ws_lecture_audio_note.duration_sec INT NULL`
+exists (`2026-06-19_create_lecture_note_tables.sql`), the controller passes the field
+through, and `audioNoteDto` returns it on both create and list for `recorded` and
+`live` alike. One real defect was found and fixed:
+
+- `createAudioNoteBodySchema.durationSec` was `z.coerce.number()` with **no `.int()`**,
+  while the column is `INT`. A fractional multipart value (`durationSec=42.7`, which is
+  what a client measuring recording length naturally produces) passed Zod and then threw
+  at the `prisma.lectureAudioNote.create` write. That lands in the handler's catch, which
+  runs best-effort S3 orphan cleanup — so the **just-uploaded recording was deleted** and
+  the caller got a 500. Data loss, not just a dropped duration.
+- Fix: `.transform(Math.floor)` on the schema (`lecture-audio-note.validation.ts`),
+  matching the spec's "integer seconds (floor)" rule. Rows written before this fix are
+  unaffected — the bad path never persisted anything.
+- Deviation from the spec's stated `1…86400` range: the lower bound stays `0`. Rejecting
+  `0` would 400 the whole upload and bin the file for a sub-second note that floored to
+  zero, which is worse than the spec's own "not `0` unless truly zero-length" intent.
+
+**Response contract unchanged** — `durationSec` was already in the DTO; it is `null` when
+absent, never `0`.
+
+**QA:** `POST /client/lecture-audio-notes` multipart with `durationSec=42.7` → 201 and the
+note stores/echoes `42` (previously 500 + lost audio); omit the field → stored `null`;
+`GET /client/lecture-audio-notes?lectureType=recorded&videoId=…` and the `live` variant
+both return `durationSec` per note.
+
+---
+
+## 2026-07-23 — `hasNotes` flag on the category videos listing (+ 2 new indexes)
+
+> **DDL:** `docs/migration/schema-changes/2026-07-23_lecture_note_customer_video_index.sql`
+> (index-only, additive). No column or table change.
+
+`GET /client/video-categories/:id/videos` now returns `hasNotes: boolean` per list item —
+true when the calling customer has **at least one** saved note on that video, text
+(`ws_lecture_note`) or audio (`ws_lecture_audio_note`).
+
+- **New queries** — `videosWithNotes()` in `client-category-video.service.ts`: two
+  `distinct` `findMany`s over the page's video ids,
+  `WHERE customer_id = ? AND video_id IN (...)`, selecting `video_id` only. Two queries
+  per request regardless of page size — not per row. Anonymous/unresolvable user id
+  short-circuits to an empty set (flag is always `false`).
+- **Deliberately unscoped by `lecture_type` and `course_id`.** The notes-list endpoint
+  filters on `(customer, lectureType, videoId)` and ignores the container; scoping the
+  flag tighter would report `hasNotes: false` on a video that still opens with notes in
+  it. `video_id` is only ever populated on recorded-video notes, so the id filter is
+  already the correct cut.
+- **Indexes:** `idx_lecture_note_customer_video (customer_id, video_id)` and
+  `idx_lecture_audio_note_customer_video (customer_id, video_id)`. Neither note table
+  had *any* secondary index before, so without these every listing request full-scans
+  both. Mirrored into `prisma/schema.prisma` as `@@index` on `LectureNote` /
+  `LectureAudioNote` (client regenerated).
+- **Response contract:** additive only — one new key on each `list[]` item. `progress`,
+  `mediaToken`, `qualities`, `recordings` and the pagination envelope are unchanged.
+  The route is not `cacheRoute`-wrapped, so the per-customer flag cannot leak across users.
+
+**Deploy order:** apply the DDL first (or accept full scans until it lands), then ship.
+
+**QA:** save a text note on one video and an audio note on another in the same category →
+both come back `hasNotes: true`, the rest `false`; delete every note on a video → flips
+back to `false`; call as a customer with no notes → all `false`.
+
+---
+
+## 2026-07-23 — Global search now covers Test Series (6th entity type)
+
+> **No DDL, no schema change, no new index.** Query-level only: `GET /client/search`
+> gained a sixth searched entity type.
+
+`src/modules/client-search/client-search.service.ts`:
+
+- `SEARCH_TYPES` / `SearchType` extended with `"testSeries"`. Untyped (`?type=` omitted)
+  requests now fan out over 6 types instead of 5, so the `results` map has a new
+  `testSeries` key and `total` is a 6-way sum.
+- **New queries** (all `status = true`, page-scoped):
+  - `ws_test_series` — `findMany`/`count`, token search on **`title`** (not `name`;
+    the column simply doesn't exist there) via the shared `buildPrismaSearch` helper,
+    ordered `order_by ASC, created_at DESC` — same ordering as the test-series listing.
+  - `ws_test_series_price` — active plans for the page's series ids,
+    ordered `is_default DESC, duration_days ASC` (default plan first).
+  - `ws_test_series_subscription` — active subs for the current customer
+    (`status = true AND end_at > now()`), latest `end_at` per series → `daysLeft`.
+- `isPaid` for test series = `NOT is_free` (mirrors `/client/test-series`).
+- Card shape: `title` is mirrored into `name` when the row has no `name` column, and
+  `title`/`paperCount`/`isFree` were added to the card field pick-list. Existing five
+  types are byte-for-byte unchanged (they own a real `name`, so the mirror never fires).
+
+**QA:** search a known test-series title with and without `?type=testSeries`; confirm
+`isPurchased`/`daysLeft` flip for a customer with an active subscription, and that the
+other five buckets are unaffected.
+
+---
+
+## 2026-07-22 — Client API slimming: bucket C + PAYMENT — NO DB change
+
+> **No DDL, no query/schema/index change.** Final tranche: the safe leftovers +
+> payment response-shape trims. Controller-edge only; no payment LOGIC touched
+> (signature/HMAC verify, order creation, amount computation all unchanged).
+
+- **educators/:id** (`client/educator/educator.controller.ts`) — dropped
+  `educator.view`, top-level `totalCourses`, per-course `courseEducatorId`/
+  `courseSubjectCategoryId`/`shareableLink` (top-level shareableLink kept).
+- **contactus** (`client/inquiry/inquiry.controller.ts`) — dropped
+  `order`/`active`/`isCallAvailable`/`isWhatsAppAvailable` at department + contact levels.
+- **free-courses** (`client/free/free.controller.ts`) — card DTO only
+  (`kind,_id,id,name,title,image,isPurchased`), dropped the Prisma spread.
+- **exam-countdown/:id/packages** (`client/categories/categories.controller.ts`
+  `listProductsByCountdown`) — dropped the `examCountdown` wrapper + package/live meta
+  noise. (The look-alike `listPackagesByExamCountdownCategory` = dead endpoint, untouched.)
+- **PAYMENT create-order ×6** (`client/payment/{payment,course,ebook,package,
+  live-course,test-series}-payment.controller.ts`) — wrapped each `data` object in
+  `omit(..., PAYMENT_ORDER_ECHO_KEYS)` (new shared const in `payment/razorpay.ts`),
+  dropping order-id/subscriptionId/receiptId/entity-echo/plan/promo. `razorpay` +
+  `amountInRupees` + `breakdown` PRESERVED by construction (omit cannot remove them).
+  ⚠️ MEDIUM — the doc says verify no web/analytics consumer reads these echoes first.
+- **PAYMENT verify** (`client/payment/verify.controller.ts`) — all 6 success returns
+  now `{ success: true }` (dropped `data:{kind,subscription/order}`). Fulfillment logic
+  untouched. ⚠️ Confirm post-payment navigation does NOT read `data.kind`/`subscription`.
+
+## 2026-07-22 — Client API slimming: long-tail P2 sweep — NO DB change
+
+> **No DDL, no query/schema/index change.** Controller-edge response-shape trims
+> across the remaining client list/detail endpoints (books, ebooks, purchase-history,
+> subscriptions, packages/categories, courses/catalog/free, live-courses, profile/
+> quizzes/exam-countdown/offline/referral-lists). Each endpoint drops ONLY the fields
+> its `docs/api-optimization/*.md` marks under "Fields Safe To Remove", via
+> `utils/pick` (`omit`/`omitList`/`pick`) at the `src/client/**` controller edge.
+> Shared `src/modules` transformers UNTOUCHED (admin unaffected). Pagination envelopes
+> preserved. Payment / media-resolve / video-URL / auth endpoints NOT touched.
+> Applied via parallel domain-scoped agents; integrated `yarn typecheck` gate.
+
+- **Books** (`client/book/book.controller.ts`) — list/detail metadata + trending-ebook
+  card slim + order-tracking hub/pincode trims. Live courier-tracking shape untouched.
+- **All domains complete** (integrated `yarn typecheck` green). Endpoints slimmed:
+  ebooks (list/detail/downloads), purchase-history (books/ebooks/subscriptions),
+  my-subscriptions, packages (list/types/goal), package-categories(+/:id/packages),
+  material/video/exam category listings, courses (list), catalog (materials/tests/
+  videos), free-videos/resume, live-courses (list/recently-added/:id/recordings/
+  session-recordings/my/my-schedule/upcoming-sessions/live-now/:id/schedule),
+  live-sessions/:id, live-reminders, profile, profile/dashboard, goals/my-goals,
+  quizzes (detail/questions/attempts/aggregate/solution-analytics), exam-countdowns,
+  popup, referral (status/terms/faqs/transactions/bank-accounts).
+- **⚠️ Higher-attention drops needing FE confirmation** (aggressive/structural, easily
+  reverted): `GET /client/profile` (dropped dob/gender/city/goals/educationId/etc — if
+  the edit screen prefills from here it breaks); `GET /client/free-videos/resume`
+  (dropped the `cards[]` list, kept only `resumeNext`); `GET /client/live-sessions/:id`
+  (dropped `canJoin`/`scheduledAt`); `GET /client/live-courses/:id/session-recordings`
+  (dropped `scheduledAt`/`locked`).
+- Skipped (ambiguous non-enumerated removal specs, or dead/out-of-scope handlers):
+  free-courses, free-tests, free-videos, quizzes/daily, exam-countdown categories,
+  courses/lecture, various tracking-live (courier shape protected), educators/:id,
+  contactus, exam-countdown/:id/packages.
+
+## 2026-07-22 — Client API slimming: search + quiz (Phase 4 cont.) — NO DB change
+
+> **No DDL, no query/schema/index change.** Search card projection (source, client-
+> only) + quiz controller-edge omits. Source: `docs/api-optimization`.
+
+- **Search (`modules/client-search/client-search.service.ts`)** — replaced the raw
+  full-row spread (`...r`) in `attachPurchaseState` with a SearchCardDto keep-list
+  (`utils/pick`): identity + book/ebook meta + price columns only; computed
+  `_id/isPaid/isNew/plans/isPurchased/daysLeft` layered on after. Envelope
+  (type/page/limit/total/hasMore) KEPT to avoid breaking any paging. ~70–85% smaller.
+- **Quiz my-attempts (`client/exam/exam.controller.ts` `listMyResults`)** — dropped
+  unused `ratting` per row (controller-edge omit; shared service DTO untouched).
+- **Quiz solution (`getSolutionByExam`)** — dropped unused question `image` +
+  `answers[].image` (text-only solution UI).
+- NOTE: speculative additions (`solutionText`, attempt `attemptNumber`/`inProgress`)
+  NOT added — the audit only *conditionally* suggested them and did not confirm the
+  FE shape; adding blind risked wrong data.
+
+## 2026-07-22 — Client API FE↔BE mismatch fixes (Phase 4, partial) — NO DB change
+
+> **No DDL, no query/schema/index change.** Additive DTO fixes — add fields the RN
+> app already expects but the SQL DTO omitted. Source: `docs/api-optimization`
+> (FE↔BE mismatches). Additive → low risk (no existing consumer loses a field).
+
+- **Cart shipping (`modules/client-cart/client-cart.service.ts` `attachShipping`)** —
+  the returned `shipping` snapshot now includes `phone` (validated BigInt → String);
+  was `{_id, city}` only. Checkout reads `shipping.phone`.
+- **Exam-countdown books (`modules/exam-countdown/exam-countdown.client.ts` `bookDto`)** —
+  added `listPrice` (`ws_book.list_price`) alongside `discountedPrice` for the FE
+  strike-through original price.
+- **DEFERRED Phase 4 items:** (a) explicit-`select` hardening — HIGH runtime-break
+  risk (any-typed rows, no test runner, shared repos) and payload already won at the
+  controller edge → low ROI now; (b) mobile-DTO contract tests — project has NO test
+  runner (infra decision needed); (c) remaining mismatches — quiz `solutionText` /
+  attempt `attemptNumber`/`submittedAt`/`inProgress` (need data-source check), live
+  session `educator`/`canJoin` (video-adjacent — needs care), apply-promo `breakdown`/
+  `validUntil` (payment-adjacent — needs sign-off).
+
+## 2026-07-22 — Client API payload slimming (Phase 3, partial) — NO DB change
+
+> **No DDL, no query/schema/index change.** Response-shape trims at the CLIENT
+> controller edge via `utils/pick.ts` (`pick`/`omit`). Shared module builders
+> UNTOUCHED. Source: `docs/api-optimization` Phase 3 (Detail & commerce).
+
+- **Course detail (`client/course/course.controller.ts`)** —
+  `GET /client/courses/:id` — dropped nested `videos`/`materials`/`tests` +
+  `availablePromoCode` (RN loads tabs via /client/catalog/…). course/scope/plans/
+  shareableLink kept. Course OBJECT field-slim (Prisma spill/educator extras)
+  DEFERRED — courseDto is a full Prisma spread; needs FE confirm of isPaid/
+  shareableLink placement before projecting. ⚠️ MEDIUM — confirm no web consumer.
+- **Package detail (`client/package/package.controller.ts`)** —
+  `GET /client/packages/:id` — dropped nested `videos`/`materials`/`tests` +
+  `availablePromoCode`; slimmed the (explicit, safe) package DTO: dropped
+  `packageType`, `goal`, `isPopular`, `subtitle`, `examCountdownCategoryIds`,
+  `examCountdownIds`. scope + plans kept. ⚠️ MEDIUM — confirm no web consumer.
+- **Material token refresh (`client/material/material.controller.ts`)** —
+  `GET /client/materials/:id` → `{_id, mediaToken, isDirectLink}` (token-refresh
+  path; RN reads only mediaToken). mediaToken contract preserved.
+- **Referral rewards (`client/referral/referral.controller.ts`)** —
+  `GET /client/referral/rewards` → `{customer:{rewardPoints, referralCode}}`
+  (dropped customer identity fields + program[]).
+- **DEFERRED (payment flows — require sign-off per project rules):** create-order
+  family + `POST /client/payment/verify` response trims NOT done.
+
+## 2026-07-22 — Share links pinned to `SHARE_BASE_URL` — NO DB change
+
+> **No DDL, no query/schema/index change, no API response-shape change.** `shareableLink` keeps its
+> key and type on every endpoint; only the generated value changes. Verified locally end-to-end.
+
+- **New `src/utils/shareBase.ts`** — `shareBase()` / `shareHostname()`. Share links are now built
+  from `SHARE_BASE_URL` only, never from the request `Host` header (client-supplied, so a missing
+  env var previously let a caller choose the domain share links point at).
+- `src/deeplinking/shareRedirect.ts` — `buildShareUrl` uses `shareBase()`; its third parameter is
+  accepted-and-ignored so the ~20 existing call sites keep compiling.
+- `src/config/env.ts` — `SHARE_BASE_URL` added to `REQUIRED_IN_PROD` (fails fast in production).
+- `src/config/rateLimiter.ts` — new `shareLimiter` (120/min/IP, `RATE_LIMIT_SHARE_MAX`,
+  `rl:share:` Redis prefix). `/share/*` previously had **no** limiter of any kind.
+- `src/app.ts` — `/share` now runs `shareLimiter` + a host gate: requests arriving on any host other
+  than the share host get a **301** to `SHARE_BASE_URL` so links already sent to users keep working.
+  Compares `req.hostname` against `URL.hostname` (**not** `.host`) — `req.hostname` strips the port,
+  so a `.host` comparison would redirect-loop on any non-443 local setup.
+- `public/.well-known/apple-app-site-association` — narrowed from `"components": ["*"], "paths":
+  ["*"]` (which claimed **every** URL on the API host, including `/api/v1/*`) to `/share/*`.
+- `.env` / `.env.example` — `SHARE_BASE_URL` documented; local value `http://localhost:4001`.
+
+Local verification: share page 200 on the share host; 301 + correct `Location` from another host;
+invalid id still 400; `com.gpscvideo.gpsc://course/123` emitted; live API response returned
+`"shareableLink":"http://localhost:4001/share/ebooks/550"` (was following `ORIGIN`).
+
+**Deferred (cleanup only):** the request-derived `base`/`baseUrl` argument is still threaded through
+~8 controllers and their module services. It is now inert — `buildShareUrl` ignores it — so this is
+tidy-up, not a behaviour fix, and it touches many service signatures. Tracked in
+`docs/SHARE_DOMAIN_SEPARATION.md` §3.8.
+
+Docs: `docs/SHARE_DOMAIN_SEPARATION.md` (backend/infra plan),
+`docs/client/SHARE_DEEPLINK_FRONTEND.md` (app + web integration).
+
+---
+
 ## 2026-07-22 — Dead-code sweep: 19 unreachable files + 2 orphan handlers deleted — NO DB change
 
 > **No DDL, no query/schema/index change, no route added or removed.** Every file
@@ -92,6 +495,35 @@ Deleted orphan handlers (exported but bound to no route):
   returns `"link": ""` rather than omitting the key.
 
 ---
+
+## 2026-07-22 — Client API payload slimming (Phase 2, partial) — NO DB change
+
+> **No DDL, no query/schema/index change.** Response-shape trims at the CLIENT
+> controller edge via `utils/pick.ts` (`pick`/`pickList`/`omit`/`omitList`). Shared
+> module builders/transformers UNTOUCHED. Source: `docs/api-optimization` Phase 2.
+> Pagination envelope preserved. Nothing to backfill.
+
+- **`utils/pick.ts`** — added `omit`/`omitList` (inverse of pick).
+- **Dashboard (`client/dashboard/dashboard.controller.ts`)**
+  - `GET /client/dashboard` — dropped top-level `todayDate`, `logo`,
+    `unreadNotifications`; removed dashboard sections `type=course` +
+    `type=courseCategory` (RN never renders them; badge uses /notifications/count).
+    ⚠️ MEDIUM risk — confirm no web client reads popularSubjects/courseCategory.
+    Per-section nested card slimming (banner/daily-test/trending) DEFERRED.
+  - `GET /client/free-dashboard` — kept ONLY the `free-ebook` section (dropped
+    trending-book/trending-ebook/video sections); slimmed free-ebook cards to
+    `_id,name,author,thumbnail,image,isPurchased,daysLeft`; dropped top-level
+    `todayDate`/`logo`. (buildFreeDashboard still computes dropped sections — a
+    follow-up compute optimization, payload already slim.)
+- **Recently Added (`client/recently-added/recently-added.controller.ts`)** —
+  `GET /client/recently-added` — dropped per-card `packageType` + envelope `kinds`.
+- **Upcoming batches (`client/live-course/live-course.controller.ts`)** —
+  `GET /client/live-courses/upcoming-batches` — batch cards → `_id,name,image`;
+  category chips → `_id,title,count`; dropped `selectedCategoryId` + the per-batch
+  `shareableLink` (no longer computed). allCount/total/page/limit kept.
+- **DEFERRED — `GET /client/search`**: the card-DTO reshape (P0, ~70–85%) needs RN
+  confirmation of exact card fields (esp. book/ebook price keys) before projecting;
+  not done blind. Medium risk per audit.
 
 ## 2026-07-22 — Client API payload slimming (Phase 1) — NO DB change
 

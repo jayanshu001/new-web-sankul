@@ -1,24 +1,41 @@
 /**
  * Global search — SQL branch for GET /client/search. Gated behind
- * `isMysqlModule("client-search")`. Searches 5 entity types (courses, packages,
- * liveCourses, books, ebooks) by name + enabled flag, attaches isPaid / plans /
+ * `isMysqlModule("client-search")`. Searches 6 entity types (courses, packages,
+ * liveCourses, books, ebooks, testSeries) by name + enabled flag, attaches isPaid / plans /
  * isNew / per-customer purchase state — mirroring search.controller exactly.
  *
  * Field drift handled: Package uses `active` (not status); Course isPaid =
  * purchase≠'0'; LiveCourse/Book/Ebook per their own flags (Book paid =
- * discounted_price>0; Ebook isPaid via price>0 fallback). Subscriptions:
+ * discounted_price>0; Ebook isPaid via price>0 fallback; TestSeries paid = !is_free,
+ * searched on `title`). Subscriptions:
  * ws_package_course_subscription has no payment_status col → status=true.
  */
 import { prisma } from "../../config/prisma";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { isNewItem } from "../../utils/isNew";
 import { buildPrismaSearch } from "../../utils/searchFilter";
+import { pick } from "../../utils/pick";
+
+// SearchCardDto — the raw-row card fields the RN SearchScreen renders (identity +
+// image + book/ebook meta + price columns). Everything else on the Prisma row
+// (descriptions, schedules, FKs, share links, status, timestamps, feature flags)
+// is dropped to stop full-row over-fetch/leak. The computed fields (_id, isPaid,
+// isNew, plans, isPurchased, daysLeft) are layered on AFTER this pick, below.
+// A key absent on a given type's row is simply skipped. See docs/api-optimization.
+const SEARCH_CARD_RAW_FIELDS = [
+  "id", "name", "image", "thumbnail",
+  "author", "publisher", "language", "pages",
+  "price", "discounted_price", "list_price", "shipping_price",
+  // testSeries-only card meta (ws_test_series has `title`, not `name` — the
+  // card below mirrors it into `name` so the RN list renders uniformly).
+  "title", "paperCount", "isFree",
+] as const;
 
 export const CLIENT_SEARCH_MODULE = "client-search";
 export const isClientSearchMysql = (): boolean => true;
 
-export type SearchType = "courses" | "packages" | "liveCourses" | "books" | "ebooks";
-export const SEARCH_TYPES: SearchType[] = ["courses", "packages", "liveCourses", "books", "ebooks"];
+export type SearchType = "courses" | "packages" | "liveCourses" | "books" | "ebooks" | "testSeries";
+export const SEARCH_TYPES: SearchType[] = ["courses", "packages", "liveCourses", "books", "ebooks", "testSeries"];
 
 const parseId = (id: string): number | null => {
   const n = Number(id);
@@ -70,6 +87,17 @@ const fetchType = async (type: SearchType, q: string, skip: number, take: number
       ]);
       return { rows, total };
     }
+    case "testSeries": {
+      // ws_test_series names the display column `title` (every other searched
+      // entity uses `name`), so the token search targets it explicitly.
+      const titleSearch = buildPrismaSearch(name, ["title"]);
+      const where: any = { status: true, ...(titleSearch ?? {}) };
+      const [rows, total] = await Promise.all([
+        prisma.testSeries.findMany({ where, orderBy: [{ orderBy: "asc" }, { createdAt: "desc" }], skip, take }),
+        prisma.testSeries.count({ where }),
+      ]);
+      return { rows, total };
+    }
   }
 };
 
@@ -80,6 +108,7 @@ const isPaidMap = async (type: SearchType, rows: any[]): Promise<Map<number, boo
   else if (type === "packages") for (const r of rows) m.set(r.id, true);
   else if (type === "liveCourses") for (const r of rows) m.set(r.id, r.isPaid ?? true);
   else if (type === "books") for (const r of rows) m.set(r.id, (r.discounted_price ?? 0) > 0);
+  else if (type === "testSeries") for (const r of rows) m.set(r.id, !r.isFree);
   else if (type === "ebooks") {
     // No isPaid col on ws_ebook → price>0 fallback (active price plan).
     const ids = rows.map((r) => r.id);
@@ -115,6 +144,10 @@ const plansMap = async (type: SearchType, rows: any[]): Promise<Map<number, any>
     const plans = await prisma.packageCourseEbookPrice.findMany({ where: { ebookId: { in: ids }, status: true }, orderBy: { duration: "asc" } });
     for (const r of rows) out.set(r.id, []);
     for (const p of plans as any[]) out.get(p.ebookId)?.push(p);
+  } else if (type === "testSeries") {
+    const plans = await prisma.testSeriesPrice.findMany({ where: { testSeriesId: { in: ids }, status: true }, orderBy: [{ isDefault: "desc" }, { durationDays: "asc" }] });
+    for (const r of rows) out.set(r.id, []);
+    for (const p of plans as any[]) out.get(p.testSeriesId)?.push(p);
   } else {
     for (const r of rows) out.set(r.id, []); // books: price inline
   }
@@ -126,7 +159,10 @@ const attachPurchaseState = async (type: SearchType, rows: any[], customerId: nu
   const now = new Date();
   const [paidBy, plansBy] = await Promise.all([isPaidMap(type, rows), plansMap(type, rows)]);
   const base = rows.map((r) => ({
-    ...r, _id: String(r.id),
+    ...pick(r, SEARCH_CARD_RAW_FIELDS), id: r.id, _id: String(r.id),
+    // testSeries rows carry `title`; every consumer of a search card reads
+    // `name`, so mirror it without dropping the native field.
+    ...(r.name == null && r.title != null ? { name: r.title } : {}),
     isPaid: paidBy.get(r.id) ?? true,
     isNew: isNewItem(r.createdAt ?? r.created_at ?? null, now),
     plans: plansBy.get(r.id) ?? (type === "courses" || type === "packages" ? { withMaterial: [], withoutMaterial: [] } : []),
@@ -150,6 +186,13 @@ const attachPurchaseState = async (type: SearchType, rows: any[], customerId: nu
     const subs = await prisma.eBookSubscription.findMany({ where: { customerId, ebookId: { in: ids }, status: true, endAt: { gt: now } }, select: { ebookId: true, endAt: true }, orderBy: { endAt: "desc" } });
     const latest = new Map<number, Date>();
     for (const s of subs) if (s.ebookId != null && !latest.has(s.ebookId)) latest.set(s.ebookId, s.endAt!);
+    return base.map((it) => { const e = latest.get(it.id) ?? null; return { ...it, isPurchased: !!e, daysLeft: e ? computeDaysLeft(e, now) : null }; });
+  }
+
+  if (type === "testSeries") {
+    const subs = await prisma.testSeriesSubscription.findMany({ where: { customerId, testSeriesId: { in: ids }, status: true, endAt: { gt: now } }, select: { testSeriesId: true, endAt: true }, orderBy: { endAt: "desc" } });
+    const latest = new Map<number, Date>();
+    for (const s of subs) if (!latest.has(s.testSeriesId) && s.endAt) latest.set(s.testSeriesId, s.endAt);
     return base.map((it) => { const e = latest.get(it.id) ?? null; return { ...it, isPurchased: !!e, daysLeft: e ? computeDaysLeft(e, now) : null }; });
   }
 

@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
+import { shareBase } from "../utils/shareBase";
 
 const TEMPLATE_PATH = path.join(
   process.cwd(),
@@ -33,21 +34,22 @@ const APP_STORE_URL =
   process.env.APP_STORE_URL || "https://apps.apple.com/us/app/gpsc/id6751284655";
 const FALLBACK_URL = process.env.SHARE_FALLBACK_URL || "https://www.gpscvideo.com/";
 
-const SHARE_BASE_URL = (process.env.SHARE_BASE_URL || "").replace(/\/+$/, "");
-
 /**
  * Build the public share URL for a resource, e.g. buildShareUrl("courses", id)
- * → "https://api.example.com/share/courses/<id>". Reads SHARE_BASE_URL from env;
- * caller can pass a request-derived base as a fallback.
+ * → "https://share.example.com/share/courses/<id>".
+ *
+ * The origin comes from `shareBase()` (SHARE_BASE_URL) — never from the request.
+ * `fallbackBase` is accepted-and-ignored so the existing call sites keep
+ * compiling while the request-derived `base` threading is unwound; do not pass
+ * it in new code.
  */
 export function buildShareUrl(
   resource: string,
   id: string,
-  fallbackBase?: string
+  _fallbackBase?: string
 ): string {
-  const base = SHARE_BASE_URL || (fallbackBase || "").replace(/\/+$/, "");
   const cleanResource = resource.replace(/^\/+|\/+$/g, "");
-  return `${base}/share/${cleanResource}/${id}`;
+  return `${shareBase()}/share/${cleanResource}/${id}`;
 }
 
 export interface RenderedShare {

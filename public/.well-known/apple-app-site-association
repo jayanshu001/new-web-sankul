@@ -5,10 +5,9 @@
             {
                 "appID": "4RYQ6JBR5B.com.websankul.ios",
                 "components": [
-                    "*"
-                ],
-                "paths": [
-                    "*"
+                    {
+                        "/": "/share/*"
+                    }
                 ]
             }
         ]

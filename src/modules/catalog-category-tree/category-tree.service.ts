@@ -65,6 +65,50 @@ export const descendantsOf = async (rootIds: number[]): Promise<number[]> => {
 };
 
 /**
+ * Same down-walk as `descendantsOf`, but keeps per-root attribution and resolves
+ * EVERY root in ONE recursive CTE instead of one round-trip per root.
+ *
+ * Callers that need a subtree for each of N categories (the catalog listing does
+ * this for every selected category) were issuing N recursive CTEs per request.
+ * The CTE carries the seed `root` through the recursion, so a single query
+ * returns every (root, descendant) pair; we then bucket by root in JS.
+ *
+ * Semantics are identical to calling `descendantsOf([root])` per root: the root
+ * itself is always included, ids are deduped, and the same depth cap applies.
+ */
+export const descendantsByRoot = async (
+  rootIds: number[]
+): Promise<Map<number, number[]>> => {
+  const roots = [...new Set(rootIds.filter((n) => Number.isInteger(n) && n > 0))];
+  const out = new Map<number, number[]>();
+  if (!roots.length) return out;
+
+  // Every root starts as its own descendant at depth 0 (matches descendantsOf).
+  const seed = roots
+    .map((id) => `SELECT ${id} AS root, ${id} AS id, 0 AS depth`)
+    .join(" UNION ALL ");
+  const rows = await prisma.$queryRawUnsafe<{ root: number; id: number }[]>(
+    `WITH RECURSIVE tree (root, id, depth) AS (
+       ${seed}
+       UNION
+       SELECT t.root, e.child_id, t.depth + 1
+         FROM tree t
+         JOIN (${PARENT_TO_CHILD_EDGES}) e ON e.node = t.id
+        WHERE t.depth < ${MAX_DEPTH}
+     )
+     SELECT DISTINCT root, id FROM tree`
+  );
+
+  const acc = new Map<number, Set<number>>(roots.map((r) => [r, new Set([r])]));
+  for (const r of rows) {
+    const bucket = acc.get(Number(r.root));
+    if (bucket) bucket.add(Number(r.id));
+  }
+  for (const [root, ids] of acc) out.set(root, [...ids]);
+  return out;
+};
+
+/**
  * All ancestor category ids of the given leaves (INCLUSIVE), walking UP
  * (child → parent) over both the pivot DAG and the self-FK column. Mirrors the
  * bounded up-walk in `resolveVideoCourse`/`resolveVideoScope`'s ancestorChain.

@@ -8,6 +8,7 @@ import {
   freeEbooks as freeEbooksSql,
   freeCourses as freeCoursesSql,
 } from "../../modules/client-free/client-free.service";
+import { pickList } from "../../utils/pick";
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -227,8 +228,11 @@ export const listFreeCourses = async (req: Request, res: Response) => {
       page: pageNum, limit: limitNum, skip, shareBase: baseUrl,
     });
     logger.info("listFreeCourses success (sql)", { traceId, type: wantPaid ? "paid" : "free", total, returned: data.length });
+    // Card DTO only — RN reads kind/_id/id/name/title/image/isPurchased. Drops the
+    // full Prisma spread (plans/educator/subjects/shareableLink). See docs/api-optimization.
     return res.status(200).json({
-      success: true, data,
+      success: true,
+      data: pickList(data as any[], ["kind", "_id", "id", "name", "title", "image", "isPurchased"]),
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (e: any) {

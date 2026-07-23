@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { getActiveGoals, getMySelectedGoals, updateMyGoals } from "./goal.client.service";
 import logger from "../../utils/logger";
+import { omit, omitList } from "../../utils/pick";
 
 /**
  * GET /api/v1/client/goals
@@ -66,7 +67,14 @@ export const fetchMySelectedGoalsHandler = async (req: Request, res: Response) =
       count: result.data?.length,
     });
 
-    return success(res, result.data, "My Selected Goals fetched successfully.", 200);
+    // my-goals is used only to resolve selected goal ids + label ids — the RN app
+    // reads neither title/image nor label names here (see docs/api-optimization).
+    const slimmed = (result.data ?? []).map((g: any) => ({
+      ...omit(g, ["title", "image"]),
+      labels: omitList(g.labels, ["name"]),
+    }));
+
+    return success(res, slimmed, "My Selected Goals fetched successfully.", 200);
   } catch (err) {
     logger.error("fetchMySelectedGoalsHandler failed", {
       traceId,

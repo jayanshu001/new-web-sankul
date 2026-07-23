@@ -1,6 +1,16 @@
 import Razorpay from "razorpay";
 import { callOutbound } from "../../libs/outbound";
 
+// Create-order response echoes the mobile app never reads — it only round-trips
+// the razorpay order id to /verify. Slimmed via `omit()` at each handler's edge,
+// preserving the critical `razorpay` / `amountInRupees` / `breakdown` fields.
+// See docs/api-optimization (create-order family). NOTE: verify no web/analytics
+// consumer reads these echoes before enabling in prod.
+export const PAYMENT_ORDER_ECHO_KEYS = [
+  "bookOrderId", "ebookOrderId", "testSeriesOrderId", "subscriptionId", "receiptId",
+  "course", "ebook", "package", "liveCourse", "testSeries", "plan", "promo",
+] as const;
+
 let cached: Razorpay | null = null;
 
 // Returns a Razorpay client built from env, or null if creds are missing.

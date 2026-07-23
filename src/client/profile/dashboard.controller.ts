@@ -72,12 +72,6 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
         savedAddresses,
         downloads,
         activePlans,
-        subscriptionsByType: {
-          course: subscriptions.course,
-          test_series: subscriptions.test_series,
-          ebook: subscriptions.ebook,
-        },
-        unreadNotifications,
         pastExams,
       },
     });

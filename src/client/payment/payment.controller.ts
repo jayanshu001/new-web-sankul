@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
-import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
+import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
+import { omit } from "../../utils/pick";
 import logger from "../../utils/logger";
 import {
   previewBookOrderFromCartMysql,
@@ -95,7 +96,7 @@ const createBookOrderMysqlPath = async (
   logger.info("createBookOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount });
   return res.status(201).json({
     success: true,
-    data: {
+    data: omit({
       bookOrderId: String(orderId),
       receiptId,
       razorpay: razorpayResponseFor(rzpOrder),
@@ -106,6 +107,6 @@ const createBookOrderMysqlPath = async (
         shipping: breakdown.shipping,
         shippingWaived: breakdown.shippingWaived,
       },
-    },
+    }, PAYMENT_ORDER_ECHO_KEYS),
   });
 };

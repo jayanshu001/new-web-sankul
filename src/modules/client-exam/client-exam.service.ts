@@ -33,6 +33,10 @@ const toExamDto = (e: any) => ({
 const toResultDto = (r: any) => ({
   _id: String(r.id),
   examId: r.examId != null ? String(r.examId) : null,
+  // FE reads attemptNumber/inProgress on my-attempts, daily lastResult and the
+  // solution analytics header (confirmed by RN client) — keep them on the DTO.
+  attemptNumber: r.attemptNumber ?? null,
+  inProgress: r.inProgress ?? false,
   total: r.total,
   attempt: r.attempt,
   skip: r.skip,
@@ -412,7 +416,9 @@ export const getSolution = async (customerId: number, examId: number, attemptId?
         isSelect: d.answerId === o.id,
         isCorrect: norm(q.answer) === norm(o.name),
       }));
-      return { _id: String(q.id), title: q.name, image: q.image ?? null, answers, result: d.result, point: num(d.point) };
+      // solutionText = ws_exam_question.solution_text (HTML explanation shown on
+      // TestResultScreen). solution_image stays dropped — FE does not read it.
+      return { _id: String(q.id), title: q.name, image: q.image ?? null, solutionText: q.solutionDescription ?? null, answers, result: d.result, point: num(d.point) };
     });
 };
 

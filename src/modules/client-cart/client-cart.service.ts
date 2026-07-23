@@ -157,7 +157,10 @@ export const attachShipping = async (
   const cart = await repo.ensureCart(customerId);
   await repo.attachShipping(cart.id, shipping.id);
   const fresh = await repo.findActiveCartBare(customerId);
-  return { ok: true, cart: toCartDto(fresh), shipping: { _id: String(shipping.id), city: cityName } };
+  // FE (Checkout) reads shipping.phone for display; the snapshot previously sent
+  // only {_id, city}. phone is the validated BigInt above → emit as a string.
+  // See docs/api-optimization (FE↔BE mismatch fix).
+  return { ok: true, cart: toCartDto(fresh), shipping: { _id: String(shipping.id), city: cityName, phone: String(phone) } };
 };
 
 export { toCartDto };

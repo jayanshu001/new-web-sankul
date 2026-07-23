@@ -7,7 +7,12 @@ const objectId = z.string().regex(/^([0-9a-fA-F]{24}|\d+)$/, "Invalid id");
 // Body fields arrive as strings because of multipart/form-data. We coerce
 // here rather than relying on JSON parsing.
 const timestampSec = z.coerce.number().int().min(0).max(60 * 60 * 24);
-const durationSec = z.coerce.number().min(0).max(60 * 60 * 24);
+// Audio-note length in seconds. FE measures the recording and may report a
+// fractional value ("42.7"); `duration_sec` is an INT column, so floor here —
+// an unfloored float reached Prisma as a non-integer and blew up the whole
+// create (500 + the just-uploaded file cleaned off S3). 0 stays legal: a
+// sub-second note floors to 0 and must not cost the user the recording.
+const durationSec = z.coerce.number().min(0).max(60 * 60 * 24).transform(Math.floor);
 const title = z.string().trim().max(200);
 
 export const createAudioNoteBodySchema = z

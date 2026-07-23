@@ -6,6 +6,7 @@ import {
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery } from "../../utils/listQuery";
+import { omit, omitList, pickList } from "../../utils/pick";
 import * as phSql from "../../modules/client-purchase-history/client-purchase-history.service";
 
 // GET /api/v1/client/purchase-history/subscriptions
@@ -32,7 +33,14 @@ export const listSubscriptionsHistory = async (req: Request, res: Response) => {
     // separate joined name tables (course/package/live/test-series), so a single
     // searchable where-clause isn't feasible; ?search is not applied here.
     const { data, pagination } = await phSql.listSubscriptions(cid, skip, limitNum, pageNum, limitNum);
-    return res.status(200).json({ success: true, data, pagination });
+    // Slim to fields the RN PurchaseHistory screen reads (see
+    // docs/api-optimization/GET_client_purchase_history_subscriptions.md). Keeps
+    // tracking.trackingId (AWB); drops tracking.courier + unused card meta.
+    const slim = (data as any[]).map((r) => ({
+      ...omit(r, ["thumbnail", "kind", "startAt", "endAt", "meta"]),
+      tracking: r.tracking ? omit(r.tracking, ["courier"]) : r.tracking,
+    }));
+    return res.status(200).json({ success: true, data: slim, pagination });
   } catch (e: any) {
     logger.error("listSubscriptionsHistory failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -62,7 +70,15 @@ export const listBooksHistory = async (req: Request, res: Response) => {
     const cid = phSql.parsePhId(String(userId));
     if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
     const { data, pagination } = await phSql.listBooks(cid, BOOK_SUCCESS_STATUSES as string[], skip, limitNum, pageNum, limitNum, search);
-    return res.status(200).json({ success: true, data, pagination });
+    // Slim to fields the RN PurchaseHistory screen reads (see
+    // docs/api-optimization/GET_client_purchase_history_books.md). Keeps
+    // tracking.trackingId (AWB) + books[].name; drops the rest.
+    const slim = (data as any[]).map((r) => ({
+      ...omit(r, ["thumbnail"]),
+      books: pickList(r.books, ["name"]),
+      tracking: r.tracking ? omit(r.tracking, ["courier"]) : r.tracking,
+    }));
+    return res.status(200).json({ success: true, data: slim, pagination });
   } catch (e: any) {
     logger.error("listBooksHistory failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -84,7 +100,9 @@ export const listEbooksHistory = async (req: Request, res: Response) => {
     const cid = phSql.parsePhId(String(userId));
     if (!cid) return res.status(200).json({ success: true, data: [], pagination: { total: 0, page: pageNum, limit: limitNum, totalPages: 0 } });
     const { data, pagination } = await phSql.listEbooks(cid, PackageCourseEbookOrderStatus.COMPLETE, skip, limitNum, pageNum, limitNum, search);
-    return res.status(200).json({ success: true, data, pagination });
+    // Slim to fields the RN PurchaseHistory screen reads (see
+    // docs/api-optimization/GET_client_purchase_history_ebooks.md).
+    return res.status(200).json({ success: true, data: omitList(data, ["thumbnail", "meta"]), pagination });
   } catch (e: any) {
     logger.error("listEbooksHistory failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

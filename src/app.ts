@@ -9,7 +9,8 @@ import path from "path";
 import requestLogger from "./utils/requestLogger";
 import notFoundMiddleware from "./middlewares/notFound";
 import errorHandler from "./middlewares/errorHandler";
-import { clientLimiter, globalLimiter } from "./config/rateLimiter";
+import { clientLimiter, globalLimiter, shareLimiter } from "./config/rateLimiter";
+import { shareBase, shareHostname } from "./utils/shareBase";
 import {
   initCrashReporter,
   captureCrashContextMiddleware,
@@ -89,7 +90,29 @@ app.get(
 // --- Public deep-link / share routes ---------------------------------------
 // Mounted OUTSIDE /api/v1/* so they stay unauthenticated and rate-limit-light.
 // Add new share surfaces in src/deeplinking/deeplinking.routes.ts.
-app.use("/share", deeplinkingRoutes);
+// Share links are generated on SHARE_BASE_URL (utils/shareBase.ts). Links that
+// were already sent to users point at the API host, so requests arriving on any
+// host other than the share host are permanently redirected rather than served
+// — those links must keep resolving forever.
+//
+// NB: a 301'd link never becomes a Universal/App Link (iOS and Android do not
+// re-evaluate domain association across a server redirect). The redirect target
+// still opens the app via the page's custom-scheme handoff, so old links keep
+// working with the browser bounce. Only newly generated links open directly.
+const SHARE_HOSTNAME = shareHostname();
+
+app.use(
+  "/share",
+  shareLimiter,
+  (req, res, next) => {
+    if (SHARE_HOSTNAME && req.hostname !== SHARE_HOSTNAME) {
+      // req.originalUrl already carries the /share prefix.
+      return res.redirect(301, `${shareBase()}${req.originalUrl}`);
+    }
+    return next();
+  },
+  deeplinkingRoutes
+);
 
 // 2b) Live-course demo harness — served same-origin to dodge the file:// CORS trap.
 // The page uses an inline <script> + two CDN scripts (hls.js, socket.io), both of
@@ -181,29 +204,66 @@ app.use(metricsMiddleware);
 // A) RAW routes FIRST (e.g., Stripe webhooks need raw body). Example:
 //    app.post("/webhooks/stripe", express.raw({ type: "application/json" }), stripeWebhookHandler);
 
+// Body-size ceiling for parsed bodies. Deliberately SMALL: large uploads never
+// pass through these parsers — ebook PDFs (<=500MB) go direct-to-Spaces via
+// `/admin/uploads/presign`, and multipart uploads are handled by multer, which
+// streams. A high limit here buys nothing and costs everything: one request can
+// allocate the whole limit, and `JSON.parse` on a huge body blocks the event
+// loop for seconds, stalling every other request on the worker. Override per
+// environment via BODY_LIMIT only if a real payload (bulk admin import) needs it.
+const BODY_LIMIT = process.env.BODY_LIMIT || "1mb";
+
+// Only these prefixes need the raw body retained for HMAC signature checks.
+// Keeping the capture scoped means we don't hold a SECOND full copy of every
+// JSON body on every request just so two webhook routes can verify a signature.
+// NOTE: this runs BEFORE the repeated-slash normalizer below, so collapse
+// slashes here too — `//api/v1/webhooks/...` must still be recognised.
+const RAW_BODY_PATHS = ["/api/v1/webhooks/", "/api/v1/client/webhook"];
+const needsRawBody = (url: string): boolean => {
+  const path = url.replace(/\/{2,}/g, "/");
+  return RAW_BODY_PATHS.some((p) => path.startsWith(p));
+};
+
+// Accept application/json, application/*+json, text/json.
+// NOTE: do NOT parse when Content-Type is missing. A no-CT fallback here
+// drains the request stream for ANY body-less-CT POST/PUT/PATCH — including
+// multipart/form-data uploads whose CT was stripped by a proxy — leaving
+// multer with an empty stream (req.file === undefined) and silently
+// dropping file uploads. Only parse when the CT explicitly says JSON.
+const isJsonContentType = (req: { headers: Record<string, any> }): boolean => {
+  const ct = req.headers["content-type"] || "";
+  return (
+    ct.includes("application/json") ||
+    ct.includes("+json") ||
+    ct.includes("text/json")
+  );
+};
+
+// B0) Genuinely-large JSON routes, mounted BEFORE the global parser so they get
+// their own ceiling (once a body is parsed here, the global parser below is a
+// no-op for that request). Bulk question import is the only known JSON payload
+// that can legitimately exceed the global limit — a few thousand questions of
+// Gujarati text. Everything else large is multipart (multer) or presigned.
+const BULK_BODY_LIMIT = process.env.BULK_BODY_LIMIT || "25mb";
+app.use(
+  "/api/v1/admin/quizzes/questions/bulk",
+  express.json({ limit: BULK_BODY_LIMIT, type: isJsonContentType, strict: true })
+);
+
 // B) JSON: accept typical JSON + JSON-without-correct-CT + JSON subtypes
 app.use(
   express.json({
-    limit: "500mb",
-    // Accept application/json, application/*+json, text/json.
-    // NOTE: do NOT parse when Content-Type is missing. A no-CT fallback here
-    // drains the request stream for ANY body-less-CT POST/PUT/PATCH — including
-    // multipart/form-data uploads whose CT was stripped by a proxy — leaving
-    // multer with an empty stream (req.file === undefined) and silently
-    // dropping file uploads. Only parse when the CT explicitly says JSON.
-    type: (req) => {
-      const ct = req.headers["content-type"] || "";
-      return (
-        ct.includes("application/json") ||
-        ct.includes("+json") ||
-        ct.includes("text/json")
-      );
-    },
+    limit: BODY_LIMIT,
+    type: isJsonContentType,
     // Graceful JSON parse error -> let our middleware catch it
     strict: true,
-    // Stash raw body for routes that need HMAC signature verification (e.g. Razorpay payout webhook).
+    // Stash raw body ONLY for the routes that HMAC-verify it (Razorpay payout
+    // webhook + client payment webhook). Every other route gets the parsed body
+    // alone — see RAW_BODY_PATHS above.
     verify: (req, _res, buf) => {
-      (req as any).rawBody = buf;
+      if (needsRawBody(req.url || "")) {
+        (req as any).rawBody = buf;
+      }
     },
   })
 );
@@ -212,7 +272,7 @@ app.use(
 app.use(
   express.urlencoded({
     extended: true,
-    limit: "500mb",
+    limit: BODY_LIMIT,
   })
 );
 

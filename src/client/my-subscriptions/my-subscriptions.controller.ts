@@ -3,6 +3,7 @@ import { z } from "zod";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { matchesAllTokens } from "../../utils/searchFilter";
+import { omit } from "../../utils/pick";
 import * as mySubSql from "../../modules/client-my-subscriptions/client-my-subscriptions.service";
 import * as tsOrderSql from "../../modules/test-series-order/test-series-order.service";
 
@@ -96,10 +97,17 @@ export const listMySubscriptions = async (req: Request, res: Response) => {
     const total = cards.length;
     const data = cards.slice(skip, skip + limitNum);
 
+    // Slim each card to what MySubscriptions/Home read (see
+    // docs/api-optimization/GET_client_my_subscriptions.md): keep nav ids in
+    // `action` (minus planId); drop unused card meta. Pagination is untouched.
+    const slim = data.map((c) => ({
+      ...omit(c, ["_id", "author", "startAt", "endAt", "meta"]),
+      action: omit(c.action, ["planId"]),
+    }));
     logger.info("listMySubscriptions success", { traceId, customerId: userId, type, total, returned: data.length });
     return res.status(200).json({
       success: true,
-      data,
+      data: slim,
       pagination: {
         total,
         page: pageNum,

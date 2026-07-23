@@ -4,8 +4,8 @@ import * as searchHistory from "../../modules/client-search-history/client-searc
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 
-// GET /api/v1/client/search?q=&type=courses|packages|liveCourses|books|ebooks&page=&limit=
-// Omit `type` (or pass an unknown one) to search ALL five entity types at once.
+// GET /api/v1/client/search?q=&type=courses|packages|liveCourses|books|ebooks|testSeries&page=&limit=
+// Omit `type` (or pass an unknown one) to search ALL six entity types at once.
 export const globalSearch = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   logger.info("globalSearch invoked", { traceId, path: req.originalUrl, userId: req.user?.id, q: req.query.q, type: req.query.type });

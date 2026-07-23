@@ -2366,6 +2366,7 @@ model LectureNote {
   createdAt     DateTime? @map("created_at")
   updatedAt     DateTime? @map("updated_at")
 
+  @@index([customerId, videoId], name: "idx_lecture_note_customer_video")
   @@map("ws_lecture_note")
 }
 
@@ -2387,5 +2388,6 @@ model LectureAudioNote {
   createdAt     DateTime? @map("created_at")
   updatedAt     DateTime? @map("updated_at")
 
+  @@index([customerId, videoId], name: "idx_lecture_audio_note_customer_video")
   @@map("ws_lecture_audio_note")
 }

@@ -4,6 +4,7 @@ import { getErrorMessage } from "../../utils/httpResponse";
 import { computeDaysLeft } from "../../utils/planDuration";
 import { matchesAllTokens } from "../../utils/searchFilter";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { omit, omitList } from "../../utils/pick";
 import {
   parsePackageId,
   listPackageTypes as listPackageTypesMysql,
@@ -39,8 +40,16 @@ export const getPackageDetail = async (req: Request, res: Response) => {
     const cid = req.user?.id ? Number(req.user.id) : null;
     const detailSql = await buildPackageDetailSql(pid, Number.isInteger(cid) ? cid : null, resolveBase(req));
     if (!detailSql) { logger.warn("getPackageDetail not found (mysql)", { traceId, packageId: id }); return res.status(404).json({ success: false, message: "Package not found." }); }
+    // Drop nested catalog trees (RN loads tabs via GET /client/catalog/…) + empty
+    // promo list; slim the package DTO (packageType/goal/isPopular/subtitle/
+    // examCountdown* unused). scope + plans kept. See docs/api-optimization Phase 3.
+    const { videos, materials, tests, availablePromoCode, package: pkg, ...restDetail } = detailSql as any;
+    const slimDetail = {
+      ...restDetail,
+      package: omit(pkg, ["packageType", "goal", "isPopular", "subtitle", "examCountdownCategoryIds", "examCountdownIds"]),
+    };
     logger.info("getPackageDetail success (mysql)", { traceId, packageId: id });
-    return res.status(200).json({ success: true, data: detailSql });
+    return res.status(200).json({ success: true, data: slimDetail });
   } catch (error: any) {
     logger.error("getPackageDetail failed", { traceId, packageId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -79,10 +88,12 @@ export const listPackages = async (req: Request, res: Response) => {
       take: limitNum,
     });
     const dataSql = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, resolveBase(req));
+    // Drop FE-unused FK/meta fields from each card (see docs/api-optimization).
+    const slimData = omitList(dataSql, ["goalLabelId", "active", "pcMaterialId", "examId", "packageTypeId", "goalId", "order"]);
     logger.info("listPackages success (mysql)", { traceId, total: totalSql, returned: dataSql.length });
     return res.status(200).json({
       success: true,
-      data: dataSql,
+      data: slimData,
       pagination: { total: totalSql, page: pageNum, limit: limitNum, totalPages: Math.ceil(totalSql / limitNum) },
     });
   } catch (error: any) {
@@ -255,7 +266,7 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
         const { rows, total } = goalId != null
           ? await listPackagesByGoalLabelScopedSql(goalId, ref.labelId, { search, skip, take: limit })
           : await listPackagesByGoalLabelSql(ref.labelId, { search, skip, take: limit });
-        const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, base);
+        const enriched = omitList(await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, base), ["goalLabelId", "active", "pcMaterialId", "examId", "packageTypeId", "goalId", "order"]);
         return {
           entry: {
             label: {
@@ -275,7 +286,7 @@ export const listPackagesByGoal = async (req: Request, res: Response) => {
     const goalGroups = await Promise.all(
       goalIntIds.map(async (gid) => {
         const { rows, total } = await listPackagesByGoalIndividualSql(gid, { search, skip, take: limit });
-        const enriched = await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, base);
+        const enriched = omitList(await enrichPackagesSql(rows, Number.isInteger(cid) ? cid : null, base), ["goalLabelId", "active", "pcMaterialId", "examId", "packageTypeId", "goalId", "order"]);
         return { entry: { goal: { _id: String(gid), title: goalById.get(gid)?.name ?? null, packages: enriched } }, total };
       })
     );
@@ -300,8 +311,9 @@ export const listPackageTypes = async (req: Request, res: Response) => {
     // ws_package_type has no `order`/`active` cols; the service synthesizes
     // `order:0` + `active:true` so the response JSON stays shape-compatible.
     const { data: types, total } = await listPackageTypesMysql({ search, skip, take: limit });
+    const slimTypes = omitList(types, ["order", "active", "createdAt", "updatedAt"]);
     logger.info("listPackageTypes success", { traceId, count: types.length, total, source: "mysql" });
-    return res.status(200).json({ success: true, data: types, pagination: buildPagination(total, page, limit) });
+    return res.status(200).json({ success: true, data: slimTypes, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listPackageTypes failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

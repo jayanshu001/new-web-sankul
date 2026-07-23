@@ -26,3 +26,23 @@ export const pickList = <T extends Record<string, any>>(
   rows: T[] | null | undefined,
   keys: readonly string[]
 ): Partial<T>[] => (rows ?? []).map((r) => pick(r, keys));
+
+/** Inverse of {@link pick}: return a shallow copy with the given keys removed. */
+export const omit = <T extends Record<string, any>>(
+  obj: T | null | undefined,
+  keys: readonly string[]
+): Partial<T> => {
+  const out: Partial<T> = {};
+  if (obj == null) return out;
+  const drop = new Set(keys);
+  for (const k of Object.keys(obj)) {
+    if (!drop.has(k)) (out as any)[k] = (obj as any)[k];
+  }
+  return out;
+};
+
+/** Remove the given keys from every row in a list (see {@link omit}). */
+export const omitList = <T extends Record<string, any>>(
+  rows: T[] | null | undefined,
+  keys: readonly string[]
+): Partial<T>[] => (rows ?? []).map((r) => omit(r, keys));

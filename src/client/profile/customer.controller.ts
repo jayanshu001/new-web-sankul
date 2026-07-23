@@ -11,6 +11,26 @@ import {
   unregisterDeviceToken,
 } from "./customer.service";
 import logger from "../../utils/logger";
+import { omit } from "../../utils/pick";
+
+// Fields the RN app never reads on GET /profile — dropped at the controller edge
+// to slim the mobile payload (see docs/api-optimization/GET_client_profile.md).
+const PROFILE_DROP_FIELDS = [
+  "phone2",
+  "dob",
+  "gender",
+  "stateId",
+  "districtId",
+  "city",
+  "educationId",
+  "language",
+  "goals",
+  "referralCode",
+  "rewardPoints",
+  "osType",
+  "isNewUser",
+  "isProfileCompleted",
+] as const;
 
 export const updateProfileHandler = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -76,7 +96,7 @@ export const getProfileHandler = async (req: Request, res: Response) => {
     }
 
     logger.info("getProfileHandler success", { traceId, userId });
-    return success(res, result.data, result.message, 200);
+    return success(res, omit(result.data as Record<string, any>, PROFILE_DROP_FIELDS as unknown as string[]), result.message, 200);
   } catch (err) {
     logger.error("getProfileHandler failed", {
       traceId,

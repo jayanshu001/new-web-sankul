@@ -127,7 +127,15 @@ export const catalogVideos = async (opts: {
     const videoWhere: any = { videoCategoryId: { in: subtree }, status: true };
     const flatSearch = buildPrismaSearch(opts.search, ["title"]);
     if (flatSearch) videoWhere.AND = flatSearch.AND;
-    const videos = await prisma.video.findMany({ where: videoWhere, orderBy: { order: "asc" } });
+    // Explicit `select`: ws_video is a wide legacy table (urls, descriptions,
+    // per-quality columns) and this path can return every video in a course
+    // subtree. Fetch only the seven fields the DTO below actually reads —
+    // same rows, same order, a fraction of the bytes off the wire.
+    const videos = await prisma.video.findMany({
+      where: videoWhere,
+      orderBy: { order: "asc" },
+      select: { id: true, title: true, topic: true, platform: true, priceType: true, videoCategoryId: true, order: true },
+    });
     let progByVideo = new Map<number, any>();
     if (opts.customerId && videos.length) {
       const rows = await prisma.lectureProgress.findMany({ where: { customerId: opts.customerId, videoId: { in: videos.map((v) => v.id) } }, select: { videoId: true, positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true } });
@@ -155,14 +163,54 @@ export const catalogVideos = async (opts: {
     return { list: flat };
   }
 
+  // Batched pre-pass. This block used to run INSIDE the per-category map below,
+  // costing 3 queries per selected category (one recursive-CTE subtree walk + two
+  // counts). A package with 30 subject categories issued 90 queries for a single
+  // request, which is what saturated the Prisma pool under concurrency. It is now
+  // 3 queries total, regardless of category count:
+  //   1. every subtree in one recursive CTE (descendantsByRoot)
+  //   2. one groupBy for active video counts across the union of all subtrees
+  //   3. one groupBy for active child-edge counts across all selected categories
+  const { descendantsByRoot } = await import("../catalog-category-tree/category-tree.service");
+  const selectedIds = selected.map((c) => c.id);
+  const subtreeByCat = await descendantsByRoot(selectedIds);
+  const unionSubtree = [...new Set([...subtreeByCat.values()].flat())];
+
+  const [videoCountRows, childCountRows] = await Promise.all([
+    unionSubtree.length
+      ? prisma.video.groupBy({
+          by: ["videoCategoryId"],
+          where: { videoCategoryId: { in: unionSubtree }, status: true },
+          _count: { _all: true },
+        })
+      : Promise.resolve([] as any[]),
+    // Only count edges whose child category still exists AND is active — dangling
+    // edges (child row deleted) must not inflate havingChildDirectory / count.
+    selectedIds.length
+      ? prisma.videoCategoryRelation.groupBy({
+          by: ["parent"],
+          where: { parent: { in: selectedIds }, childVideoCategory: { is: { status: true } } },
+          _count: { _all: true },
+        })
+      : Promise.resolve([] as any[]),
+  ]);
+
+  // videos-per-category, then summed over each category's subtree. Summing the
+  // per-category tallies reproduces the old `count({ videoCategoryId: { in: subtree } })`
+  // exactly, because a video belongs to exactly one category.
+  const videosPerCat = new Map<number, number>();
+  for (const r of videoCountRows as any[]) {
+    if (r.videoCategoryId != null) videosPerCat.set(r.videoCategoryId, r._count._all);
+  }
+  const childCountByCat = new Map<number, number>();
+  for (const r of childCountRows as any[]) {
+    if (r.parent != null) childCountByCat.set(r.parent, r._count._all);
+  }
+
   const list = await Promise.all(selected.map(async (cat) => {
-    const subtree = await descendantsOf([cat.id]);
-    const [videoCount, childCount] = await Promise.all([
-      prisma.video.count({ where: { videoCategoryId: { in: subtree }, status: true } }),
-      // Only count edges whose child category still exists AND is active — dangling
-      // edges (child row deleted) must not inflate havingChildDirectory / count.
-      prisma.videoCategoryRelation.count({ where: { parent: cat.id, childVideoCategory: { is: { status: true } } } }),
-    ]);
+    const subtree = subtreeByCat.get(cat.id) ?? [cat.id];
+    const videoCount = subtree.reduce((sum, id) => sum + (videosPerCat.get(id) ?? 0), 0);
+    const childCount = childCountByCat.get(cat.id) ?? 0;
     const havingChildDirectory = childCount > 0;
 
     if (!inlineList) {
@@ -204,8 +252,10 @@ export const catalogVideos = async (opts: {
     return { category: { _id: String(cat.id), title: cat.title, image: cat.image, havingChildDirectory, count: videoCount }, list: videoList, _subtree: subtree };
   }));
 
+  // Summed from the batched groupBy above rather than a fourth round-trip — the
+  // union of the selected subtrees is exactly what `videosPerCat` was built over.
   const union = [...new Set(list.flatMap((g) => g._subtree))];
-  const totalItems = union.length ? await prisma.video.count({ where: { videoCategoryId: { in: union }, status: true } }) : 0;
+  const totalItems = union.reduce((sum, id) => sum + (videosPerCat.get(id) ?? 0), 0);
   const responseList = list.map(({ _subtree, ...rest }) => rest);
   return { list: responseList, availableCategories, totals: { categories: responseList.length, items: totalItems } };
 };

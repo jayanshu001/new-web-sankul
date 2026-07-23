@@ -5,6 +5,7 @@ import * as clientExamSql from "../../modules/client-exam/client-exam.service";
 import { parseEcId } from "../../modules/exam-countdown/exam-countdown.service";
 import * as ecClientSql from "../../modules/exam-countdown/exam-countdown.client";
 import { signMediaToken, MediaScope } from "../../utils/mediaToken";
+import { omit, omitList } from "../../utils/pick";
 import { defaultListingQualities } from "../../utils/videoQualities";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
@@ -76,7 +77,11 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
     const scope = scopes[0] ?? null;
 
     const uid = cvSql.parseCvId(String(req.user?.id ?? ""));
-    const progMap = uid != null ? await cvSql.progressByVideo(uid, rows.map((v) => v.id)) : new Map<number, any>();
+    const videoIds = rows.map((v) => v.id);
+    // Progress + saved-note presence for this page, both keyed on (customer, video).
+    const [progMap, notedVideoIds] = uid != null
+      ? await Promise.all([cvSql.progressByVideo(uid, videoIds), cvSql.videosWithNotes(uid, videoIds)])
+      : [new Map<number, any>(), new Set<number>()];
 
     // Entitlement gate: paid videos only get a (playable) media token when the caller
     // holds an active subscription for ANY of this category's owning containers (a video
@@ -92,7 +97,9 @@ export const listVideosByCategory = async (req: Request, res: Response) => {
       return {
         _id: String(v.id), title: v.title, topic: v.topic, platform: v.platform,
         isPaid,
-        progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
+        progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed } : null,
+        // At least one saved note (text or audio) by this customer on this video.
+        hasNotes: notedVideoIds.has(v.id),
         recordings: [], // SQL videos carry no live-session back-link
         qualities: defaultListingQualities(),
         mediaToken: mediaTokenForVideo(v, entitled, uid, entitledScope),
@@ -147,7 +154,7 @@ export const getVideoByCategory = async (req: Request, res: Response) => {
       : signMediaToken({ k: "video", id: v.id, free: true, cust: uid });
     return res.status(200).json({
       success: true,
-      data: { _id: String(v.id), title: v.title ?? "", topic: v.topic ?? "", platform: v.platform, priceType: v.priceType, scope: sc, mediaToken },
+      data: { _id: String(v.id), title: v.title ?? "", platform: v.platform, priceType: v.priceType, scope: sc, mediaToken },
       message: "Video fetched.",
     });
   } catch (error: any) {
@@ -174,7 +181,7 @@ export const listMaterialsByCategory = async (req: Request, res: Response) => {
     logger.info("listMaterialsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
     return res.status(200).json({
       success: true,
-      data: { category: r.category, list: r.list },
+      data: { category: r.category, list: omitList(r.list, ["file", "directLink", "fileSize", "language", "isPreview", "downloadCount", "thumbnail", "order", "status", "createdAt"]) },
       pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
     });
   } catch (error: any) {
@@ -199,7 +206,7 @@ export const listExamsByCategory = async (req: Request, res: Response) => {
     logger.info("listExamsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
     return res.status(200).json({
       success: true,
-      data: { category: r.category, list: r.list },
+      data: { category: omit(r.category, ["_id", "orderBy"]), list: r.list },
       pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
     });
   } catch (error: any) {
@@ -357,9 +364,16 @@ export const listProductsByExamCountdown = async (req: Request, res: Response) =
     const userNum = parseEcId(String(req.user?.id ?? ""));
     const r = await ecClientSql.listProductsByCountdown(ecId, userNum, { skip, take: limitNum, search });
     if (!r) return res.status(404).json({ success: false, message: "Exam countdown not found." });
+    // Card list only — drop the unused examCountdown wrapper + package/live meta
+    // noise (RN reads _id/name/image/plans/isPurchased/daysLeft). See docs/api-optimization.
+    const ITEM_DROP = [
+      "description", "withMaterial", "withoutMaterial", "withMaterialText", "withoutMaterialText",
+      "subtitle", "packageTypeId", "goalId", "examId", "order", "ordered", "isPopular",
+      "classType", "educator", "courseEducatorId", "courseSubjectCategoryId", "createdAt", "updatedAt",
+    ];
     return res.status(200).json({
       success: true,
-      data: { examCountdown: r.examCountdown, list: r.list },
+      data: { list: omitList(r.list, ITEM_DROP) },
       pagination: { total: r.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(r.total / limitNum) },
     });
   } catch (error: any) {
@@ -436,7 +450,8 @@ export const listPackageCategories = async (req: Request, res: Response) => {
       liveOnly, search: search || null, skip, limitNum, pageNum,
     });
     logger.info("listPackageCategories success (sql)", { traceId, total: result.pagination.total, returned: result.data.length, liveOnly });
-    return res.status(200).json({ success: true, ...result });
+    const { data, ...restResult } = result;
+    return res.status(200).json({ success: true, data: omitList(data, ["packageId"]), ...restResult });
   } catch (error: any) {
     logger.error("listPackageCategories failed", { traceId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -460,7 +475,7 @@ export const listPackagesByCategory = async (req: Request, res: Response) => {
     logger.info("listPackagesByCategory success (sql)", { traceId, categoryId: id, tab, recordedCount: data.recorded.length, liveCount: data.live.length, total: data.total });
     return res.status(200).json({
       success: true,
-      data: { tab: data.tab, recorded: data.recorded, live: data.live, counts: data.counts },
+      data: { tab: data.tab, recorded: omitList(data.recorded, ["packageTypeId", "goalId", "educatorId"]), live: data.live, counts: data.counts },
       pagination: { total: data.total, page: pageNum, limit: limitNum, totalPages: Math.ceil(data.total / limitNum) },
     });
   } catch (error: any) {

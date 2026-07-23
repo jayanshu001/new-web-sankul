@@ -7,8 +7,8 @@ import {
 import { io, roomKey } from "../../socket/livechat.socket";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { signMediaToken } from "../../utils/mediaToken";
+import { omitList } from "../../utils/pick";
 import logger from "../../utils/logger";
-import { formatScheduledAt } from "../../utils/displayTime";
 import * as liveSql from "../../modules/admin-live-course/admin-live-course.service";
 import * as adminLive from "../../modules/admin-live/admin-live.service";
 
@@ -71,14 +71,14 @@ export const getLiveSessionForClient = async (req: Request, res: Response) => {
         : null;
 
     logger.info("getLiveSessionForClient success (mysql)", { traceId, userId, sessionId: s.id, status, accessLevel: preview.accessLevel });
+    // Slim playback DTO: keep streamId/isLive/mediaToken/accessLevel/previewSecondsRemaining
+    // + purchaseOptions upsell (liveCourseId/name/image). Drop unused metadata + nested plans.
     return success(res, {
-      id: String(s.id), title: s.title, status, canJoin: status === "CREATED",
-      scheduledAt: s.scheduledAt ?? null, scheduledAtDisplay: formatScheduledAt(s.scheduledAt), streamId: s.streamId ?? null,
-      liveCourseIds: liveCourseIds.map(String), isLive,
+      title: s.title, streamId: s.streamId ?? null, isLive,
       mediaToken,
-      liveClassId: s.streamId != null ? String(s.streamId) : null,
-      accessLevel: preview.accessLevel, previewSeconds: preview.accessLevel === "full" ? null : liveSql.PREVIEW_SECONDS,
-      previewExpiresAt: preview.previewExpiresAt, previewSecondsRemaining: preview.previewSecondsRemaining, purchaseOptions,
+      accessLevel: preview.accessLevel,
+      previewSecondsRemaining: preview.previewSecondsRemaining,
+      purchaseOptions: omitList(purchaseOptions, ["plans"]),
     }, "Live session fetched.");
   } catch (err) {
     logger.error("getLiveSessionForClient failed", { traceId, userId, id, error: getErrorMessage(err), stack: (err as Error).stack });

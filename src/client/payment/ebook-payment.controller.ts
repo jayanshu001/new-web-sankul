@@ -2,7 +2,8 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
-import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
+import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
+import { omit } from "../../utils/pick";
 import logger from "../../utils/logger";
 import { formatZodError } from "../../utils/httpResponse";
 import { ZodError } from "zod";
@@ -160,7 +161,7 @@ const createEbookOrderMysqlPath = async (
   logger.info("createEbookOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
   return res.status(201).json({
     success: true,
-    data: {
+    data: omit({
       ebookOrderId: String(orderId),
       receiptId,
       razorpay: razorpayResponseFor(rzpOrder),
@@ -177,6 +178,6 @@ const createEbookOrderMysqlPath = async (
       promo: promocodeIdNum
         ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount }
         : null,
-    },
+    }, PAYMENT_ORDER_ECHO_KEYS),
   });
 };

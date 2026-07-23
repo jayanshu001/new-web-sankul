@@ -3,6 +3,7 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import * as dlSql from "../../modules/client-ebook-download/client-ebook-download.service";
 import { signMediaToken } from "../../utils/mediaToken";
+import { omitList } from "../../utils/pick";
 
 function userId(req: Request): string | null {
   return (req as any).user?.id ?? null;
@@ -61,7 +62,9 @@ export const listEbookDownloads = async (req: Request, res: Response) => {
     if (cid == null) return res.status(400).json({ success: false, message: "Invalid customer." });
     const data = await dlSql.listDownloads(cid);
     logger.info("listEbookDownloads success (sql)", { traceId, customerId: uid, count: data.length });
-    return res.status(200).json({ success: true, data });
+    // Downloads hub reads only _id/ebookId/name/mediaToken (see
+    // docs/api-optimization/GET_client_ebooks_downloads.md); mediaToken preserved.
+    return res.status(200).json({ success: true, data: omitList(data, ["author", "image", "thumbnail", "language", "downloadedAt"]) });
   } catch (error: any) {
     logger.error("listEbookDownloads failed", { traceId, customerId: uid, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

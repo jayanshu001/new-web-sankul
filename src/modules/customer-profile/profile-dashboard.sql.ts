@@ -18,13 +18,29 @@ export const savedAddressCount = (customerId: number) =>
 
 /**
  * Deduped active-subscription counts matching the My Subscriptions screen:
- * course (course+package, deduped by course/package id), test_series, ebook.
+ * course (course+package+live-course, deduped by target id), test_series, ebook.
+ *
+ * The `course` tab of /client/my-subscriptions merges recorded course/package
+ * cards with LIVE-course cards, so this count must span the same four tables or
+ * the profile badge silently under-reports every live-course purchase.
+ * Live-course entitlement additionally requires payment_status = "verified"
+ * (the row is created at ORDER time as pending) and may be LIFETIME (end_at
+ * NULL) — mirrors client-my-subscriptions.repository.activeLiveCourseSubs.
  */
 export const countActiveSubscriptions = async (customerId: number, now: Date) => {
-  const [cpRows, tsRows, ebRows] = await Promise.all([
+  const [cpRows, lcRows, tsRows, ebRows] = await Promise.all([
     prisma.packageCourseSubscription.findMany({
       where: { customerId, status: true, endAt: { gt: now } },
       select: { id: true, courseId: true, packageId: true },
+    }),
+    prisma.liveCourseSubscription.findMany({
+      where: {
+        customerId,
+        status: true,
+        paymentStatus: "verified",
+        OR: [{ endAt: null }, { endAt: { gt: now } }],
+      },
+      select: { id: true, liveCourseId: true },
     }),
     prisma.testSeriesSubscription.findMany({
       where: { customerId, status: true, endAt: { gt: now } },
@@ -41,9 +57,11 @@ export const countActiveSubscriptions = async (customerId: number, now: Date) =>
     for (const r of rows) seen.add(keyOf(r));
     return seen.size;
   };
-  const course = dedup(cpRows, (s) =>
-    s.courseId ? `c:${s.courseId}` : s.packageId ? `p:${s.packageId}` : `s:${s.id}`
-  );
+  // course tab = recorded course/package + live course, deduped per target.
+  const course =
+    dedup(cpRows, (s) =>
+      s.courseId ? `c:${s.courseId}` : s.packageId ? `p:${s.packageId}` : `s:${s.id}`
+    ) + dedup(lcRows, (s) => (s.liveCourseId ? `l:${s.liveCourseId}` : `ls:${s.id}`));
   const test_series = dedup(tsRows, (s) => `t:${s.testSeriesId}`);
   const ebook = dedup(ebRows, (s) => `e:${s.ebookId}`);
   return { total: course + test_series + ebook, course, test_series, ebook };

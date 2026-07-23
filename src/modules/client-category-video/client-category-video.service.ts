@@ -68,6 +68,28 @@ export const progressByVideo = async (customerId: number, videoIds: number[]): P
   return new Map(rows.map((r) => [r.videoId!, r]));
 };
 
+/**
+ * Video ids (of the page) the customer has at least one saved note on — text
+ * (`ws_lecture_note`) OR audio (`ws_lecture_audio_note`). Two `findMany`s over the
+ * page's ids, not one query per row.
+ *
+ * Deliberately NOT filtered by `lecture_type` or `course_id`: the notes-list
+ * endpoint keys on (customer, lectureType, videoId) and ignores the container, so
+ * scoping the flag tighter than the list would flag `hasNotes: false` on a video
+ * that still opens with notes in it. `video_id` is only ever set on recorded-video
+ * notes, so the id filter alone is already the right cut.
+ */
+export const videosWithNotes = async (customerId: number, videoIds: number[]): Promise<Set<number>> => {
+  if (!videoIds.length) return new Set();
+  const [text, audio] = await Promise.all([
+    prisma.lectureNote.findMany({ where: { customerId, videoId: { in: videoIds } }, select: { videoId: true }, distinct: ["videoId"] }),
+    prisma.lectureAudioNote.findMany({ where: { customerId, videoId: { in: videoIds } }, select: { videoId: true }, distinct: ["videoId"] }),
+  ]);
+  const out = new Set<number>();
+  for (const r of [...text, ...audio]) if (r.videoId != null) out.add(r.videoId);
+  return out;
+};
+
 /** Owning-container scope ({kind, id}) for a category — SQL DAG resolver (FIRST owner). */
 export const scopeForCategory = async (categoryId: number) => {
   const { resolveVideoScope } = await import("../catalog-category-tree/category-tree.service");

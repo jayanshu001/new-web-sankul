@@ -97,7 +97,8 @@ export const listFreeVideoResume = async (req: Request, res: Response) => {
 
     const { search, page, limit, skip } = parseListQuery(req.query);
     const { cards, resumeNext, total } = await sqlListFreeResume(Number(userId), { search, skip, limit });
-    const data = { cards, resumeNext };
+    // Drop unused `cards` list — FE reads only `resumeNext` (docs/api-optimization).
+    const data = { resumeNext };
     logger.info("listFreeVideoResume(SQL) success", { traceId, userId, total, cardCount: cards.length, hasResume: !!resumeNext });
     return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (e: any) {

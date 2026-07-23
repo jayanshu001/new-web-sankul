@@ -11,6 +11,7 @@ import { createContact, createFundAccount, createPayout } from "../payment/razor
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { pick, omit, omitList } from "../../utils/pick";
 import {
   parseBankAccountId,
   listBankAccounts as svcListBankAccounts,
@@ -48,7 +49,12 @@ export const getRewardsOverview = async (req: Request, res: Response) => {
     if (!cid) return res.status(404).json({ success: false, message: "Invalid user." });
     const data = await svcRewardsOverview(cid);
     if (!data) return res.status(404).json({ success: false, message: "Invalid user." });
-    return res.status(200).json({ success: true, data });
+    // RN reads only customer.rewardPoints + referralCode (identity fields +
+    // program[] unused). See docs/api-optimization Phase 3.
+    return res.status(200).json({
+      success: true,
+      data: { customer: pick(data.customer as any, ["rewardPoints", "referralCode"]) },
+    });
   } catch (error: any) {
     logger.error("getRewardsOverview failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -73,9 +79,15 @@ export const getMyTransactions = async (req: Request, res: Response) => {
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const { items, total } = await svcListTransactions(cid, { type, search, page: pageNum, limit: limitNum });
     logger.info("getMyTransactions success (sql)", { traceId, customerId, total });
+    // MyRewards reads _id/coin/status/createdAt + bankAccount.{bankName,accountNumber}
+    // only (see docs/api-optimization/GET_client_referral_transactions.md).
+    const data = (items ?? []).map((t: any) => ({
+      ...omit(t, ["orderId", "customerId", "type", "description", "providerRef", "failureReason", "updatedAt"]),
+      bankAccount: t.bankAccount ? pick(t.bankAccount, ["bankName", "accountNumber"]) : null,
+    }));
     return res.status(200).json({
       success: true,
-      data: items,
+      data,
       pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
     });
   } catch (error: any) {
@@ -230,7 +242,10 @@ export const listBankAccounts = async (req: Request, res: Response) => {
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized" });
     const { items, total } = await svcListBankAccounts(cid, { search, skip, take: limit });
     logger.info("listBankAccounts success", { traceId, customerId, count: items.length, source: "mysql" });
-    return res.status(200).json({ success: true, data: items, pagination: buildPagination(total, page, limit) });
+    // BankDetails renders _id/accountHolderName/accountNumber/bankName only
+    // (see docs/api-optimization/GET_client_referral_bank_accounts.md).
+    const data = omitList(items, ["ifscCode", "customerId", "branchName", "city", "createdAt", "updatedAt"]);
+    return res.status(200).json({ success: true, data, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listBankAccounts failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

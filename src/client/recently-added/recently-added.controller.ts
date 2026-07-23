@@ -3,6 +3,7 @@ import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import logger from "../../utils/logger";
 import * as recentSql from "../../modules/client-recently-added/client-recently-added.service";
+import { omitList } from "../../utils/pick";
 
 // GET /api/v1/client/recently-added?kind=planner,smart,live-course&search=&page=&limit=
 // The "View All" feed behind the dashboard's Recently Added section: newest
@@ -19,9 +20,11 @@ export const listRecentlyAdded = async (req: Request, res: Response) => {
     const customerId = recentSql.parseCustomerId(String(req.user?.id ?? ""));
     const r = await recentSql.listRecentlyAdded(customerId, { kinds, search: search ?? null, page, limit });
     logger.info("listRecentlyAdded success", { traceId, total: r.total, returned: r.data.length, kinds });
+    // Drop the unused `packageType` per card + the write-only `kinds` envelope
+    // field (RN reads neither). See docs/api-optimization Phase 2.
     return success(
       res,
-      { data: r.data, kinds, pagination: buildPagination(r.total, r.page, r.limit) },
+      { data: omitList(r.data, ["packageType"]), pagination: buildPagination(r.total, r.page, r.limit) },
       "Recently added items fetched."
     );
   } catch (err) {

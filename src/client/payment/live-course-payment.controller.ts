@@ -3,7 +3,8 @@ import { z } from "zod";
 import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadLivePlanDiscountsSql, resolveReferralCode, referralCovers } from "../../modules/promo-code/promo-code.service";
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { computePromoDiscount } from "../promocode/applies-to";
-import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
+import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
+import { omit } from "../../utils/pick";
 import logger from "../../utils/logger";
 import { getErrorMessage, formatZodError } from "../../utils/httpResponse";
 import { ZodError } from "zod";
@@ -307,12 +308,12 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       logger.info("createLiveCourseOrderPayment[mysql] success", { traceId, customerId, subscriptionId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
       return res.status(201).json({
         success: true,
-        data: {
+        data: omit({
           subscriptionId: String(subscriptionId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
           liveCourse: { _id: String(planSql.liveCourseId), name: courseSql.name },
           plan: { _id: String(body.planId), duration: planSql.duration, price: planSql.price },
           promo: promocodeIdNum ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount } : null,
-        },
+        }, PAYMENT_ORDER_ECHO_KEYS),
       });
     }
   } catch (e: any) {

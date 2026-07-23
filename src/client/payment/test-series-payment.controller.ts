@@ -4,7 +4,8 @@ import { resolvePromoForPlanSql, findActiveByCode, promoCovers, loadTestSeriesPl
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { computePromoDiscount } from "../promocode/applies-to";
 import { _shared } from "../testSeries/testSeries.controller";
-import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
+import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
+import { omit } from "../../utils/pick";
 import logger from "../../utils/logger";
 import { getErrorMessage, formatZodError } from "../../utils/httpResponse";
 import { ZodError } from "zod";
@@ -245,11 +246,11 @@ export const createTestSeriesOrderPayment = async (req: Request, res: Response) 
       });
       const { orderId } = await tsSql.createOrderMysql({ customerId: customerIdInt, testSeriesId: plan.testSeriesId, planId: body.planId, bd, promocodeId: promocodeIdNum, razorpayOrderId: rzpOrder.id, referrerId: referrerIdNum, coin: walletUsage.coin });
       logger.info("createTestSeriesOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: bd.totalAmount });
-      return res.status(201).json({ success: true, data: {
+      return res.status(201).json({ success: true, data: omit({
         testSeriesOrderId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: bd.totalAmount, breakdown: bd,
         testSeries: { _id: String(series.id), title: series.title },
         plan: { _id: String(body.planId), durationDays: plan.durationDays, price: plan.price, originalPrice: plan.originalPrice },
-      }});
+      }, PAYMENT_ORDER_ECHO_KEYS)});
     }
   } catch (e: any) {
     if (e instanceof ZodError) {

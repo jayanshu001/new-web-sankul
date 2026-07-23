@@ -7,6 +7,7 @@ import {
 } from "./live-reminder.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { omit } from "../../utils/pick";
 import { matchesAllTokens } from "../../utils/searchFilter";
 import logger from "../../utils/logger";
 import { formatScheduledAt } from "../../utils/displayTime";
@@ -163,7 +164,12 @@ export const listMyLiveSessionReminders = async (req: Request, res: Response) =>
     const total = reminders.length;
     reminders = reminders.slice(skip, skip + limit);
     logger.info("listMyLiveSessionReminders success", { traceId, customerId, total, upcomingOnly });
-    return success(res, { reminders, total, limit, pagination: buildPagination(total, page, limit) }, "Reminders fetched.");
+    // Minimal reminder map: keep liveSessionId/minutesBefore (drives toggle state);
+    // drop unused reminder/session metadata. `pagination` is preserved.
+    const slim = reminders.map((r) =>
+      omit(r, ["id", "liveCourseId", "remindAt", "remindAtDisplay", "status", "fired", "session", "createdAt", "updatedAt"])
+    );
+    return success(res, { reminders: slim, total, limit, pagination: buildPagination(total, page, limit) }, "Reminders fetched.");
   } catch (err) {
     logger.error("listMyLiveSessionReminders failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch reminders.", 500);

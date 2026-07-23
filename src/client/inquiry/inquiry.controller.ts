@@ -3,6 +3,7 @@ import { z } from "zod";
 import { listActiveContactDepartments } from "../../modules/department/department.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { omit } from "../../utils/pick";
 import { submitInquiry as sqlSubmitInquiry } from "../../modules/inquiry/inquiry.service";
 
 const submitSchema = z.object({
@@ -54,10 +55,18 @@ export const getContactUs = async (_req: Request, res: Response) => {
   try {
     const filtered = await listActiveContactDepartments();
 
+    // Slim: RN reads department _id/name/description + contacts[].mobile only.
+    // Drop order/active/isCallAvailable/isWhatsAppAvailable (unused; call+WhatsApp
+    // always shown). Applied at both levels; missing keys are skipped safely.
+    const DROP = ["order", "active", "isCallAvailable", "isWhatsAppAvailable"];
+    const departments = filtered.map((d: any) => ({
+      ...omit(d, DROP),
+      ...(Array.isArray(d.contacts) ? { contacts: d.contacts.map((c: any) => omit(c, DROP)) } : {}),
+    }));
     logger.info("getContactUs success", { traceId, count: filtered.length });
     return res.status(200).json({
       success: true,
-      data: { departments: filtered },
+      data: { departments },
     });
   } catch (e: any) {
     logger.error("getContactUs failed", { traceId, error: getErrorMessage(e), stack: e.stack });

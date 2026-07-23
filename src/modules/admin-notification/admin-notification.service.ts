@@ -124,22 +124,60 @@ export async function resolveAudience(filter: AudienceFilter): Promise<ResolvedA
   return { isAll: false, customerIds: customers.map((c) => c.id) };
 }
 
-/** All device tokens for the given customers (broadcast → all live accounts). */
+// How many ws_customer rows to pull per page when collecting device tokens, and
+// how many customer ids to bind into one `IN (...)` for targeted sends. Both
+// bound a query that would otherwise scale with the entire customer base.
+const TOKEN_PAGE_SIZE = 5_000;
+const TOKEN_ID_CHUNK = 1_000;
+
+/**
+ * All device tokens for the given customers (broadcast → all live accounts).
+ *
+ * Read in PK-ordered pages rather than one findMany. A broadcast on a ~600k-row
+ * ws_customer previously materialised every row object in a single result set
+ * (and, for large targeted audiences, bound every id into one `IN (...)` big
+ * enough to threaten max_allowed_packet). Paging keeps peak memory to one page
+ * of rows plus the deduped token strings.
+ *
+ * Dedup is global across pages — identical to the previous single-query
+ * behaviour, so the same device is never pushed twice when two accounts share a
+ * token. Result order is PK order, as before.
+ */
 async function collectTokens(audience: ResolvedAudience): Promise<string[]> {
+  const seen = new Set<string>();
+
+  const drain = async (where: any): Promise<void> => {
+    let cursorId: number | undefined;
+    for (;;) {
+      const rows = await prisma.customer.findMany({
+        where,
+        select: { id: true, firebaseToken: true },
+        orderBy: { id: "asc" },
+        take: TOKEN_PAGE_SIZE,
+        ...(cursorId != null ? { cursor: { id: cursorId }, skip: 1 } : {}),
+      });
+      if (!rows.length) return;
+      for (const r of rows) {
+        if (r.firebaseToken) seen.add(r.firebaseToken);
+      }
+      if (rows.length < TOKEN_PAGE_SIZE) return;
+      cursorId = rows[rows.length - 1].id;
+    }
+  };
+
   if (audience.isAll) {
     // Broadcast: every token whose owner is a live, non-deleted customer.
-    const rows = await prisma.customer.findMany({
-      where: { isAccountDeleted: false, status: true, firebaseToken: { not: null } },
-      select: { firebaseToken: true },
-    });
-    return rows.map((r) => r.firebaseToken!).filter(Boolean);
+    await drain({ isAccountDeleted: false, status: true, firebaseToken: { not: null } });
+    return [...seen];
   }
+
   if (audience.customerIds.length === 0) return [];
-  const rows = await prisma.customer.findMany({
-    where: { id: { in: audience.customerIds } },
-    select: { firebaseToken: true },
-  });
-  return rows.map((r) => r.firebaseToken!).filter(Boolean);
+  // Targeted: chunk the id list so no single statement carries the whole audience.
+  for (let i = 0; i < audience.customerIds.length; i += TOKEN_ID_CHUNK) {
+    const chunk = audience.customerIds.slice(i, i + TOKEN_ID_CHUNK);
+    await drain({ id: { in: chunk } });
+  }
+  return [...seen];
 }
 
 /**

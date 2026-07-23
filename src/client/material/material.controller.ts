@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { pick } from "../../utils/pick";
 import * as matSql from "../../modules/client-material/client-material.service";
 
 // ─── Endpoints ────────────────────────────────────────────────────────────────
@@ -49,7 +50,9 @@ export const getMaterialDetail = async (req: Request, res: Response) => {
     const userNum = matSql.parseMatId(String(req.user?.id ?? ""));
     const data = await matSql.getMaterialDetail(mid, userNum);
     if (!data) return res.status(404).json({ success: false, message: "Material not found." });
-    return res.status(200).json({ success: true, data });
+    // This endpoint is the mediaToken-refresh path (410/401 re-fetch). RN reads
+    // only mediaToken (+ _id / isDirectLink). See docs/api-optimization Phase 3.
+    return res.status(200).json({ success: true, data: pick(data as any, ["_id", "mediaToken", "isDirectLink"]) });
   } catch (error: any) {
     logger.error("getMaterialDetail failed", { traceId, materialId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

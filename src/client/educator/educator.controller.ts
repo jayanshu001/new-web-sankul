@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
 import logger from "../../utils/logger";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { omit, omitList } from "../../utils/pick";
 import {
   isClientEducatorMysql,
   parseEducatorId,
@@ -36,8 +37,17 @@ export const getEducatorWithCoursesHandler = async (
     const base = resolveBase(req);
     const data = await getEducatorWithCourses(eid, cid, (kind, id) => buildShareUrl(kind, id, base));
     if (!data) return failure(res, "Educator not found", 404);
-    logger.info("getEducatorWithCoursesHandler success (sql)", { traceId, userId, educatorId, totalCourses: data.totalCourses });
-    return success(res, data, "Educator details fetched successfully.", 200);
+    logger.info("getEducatorWithCoursesHandler success (sql)", { traceId, userId, educatorId, totalCourses: (data as any).totalCourses });
+    // Slim: drop educator.view (server counter), top-level totalCourses, and per-
+    // course courseEducatorId/courseSubjectCategoryId/shareableLink (RN reads only
+    // the top-level shareableLink). See docs/api-optimization.
+    const d = data as any;
+    const slim = {
+      ...omit(d, ["totalCourses"]),
+      educator: omit(d.educator, ["view"]),
+      courses: omitList(d.courses, ["courseEducatorId", "courseSubjectCategoryId", "shareableLink"]),
+    };
+    return success(res, slim, "Educator details fetched successfully.", 200);
   } catch (err) {
     logger.error("getEducatorWithCoursesHandler failed", {
       traceId,

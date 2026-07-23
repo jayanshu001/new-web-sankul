@@ -25,6 +25,18 @@ import {
   fetchTrendingBooksOnly as fetchTrendingBooksOnlySql,
   fetchTrendingEbooksOnly as fetchTrendingEbooksOnlySql,
 } from "../../modules/client-trending/client-trending.service";
+import { pick, pickList, omit, omitList } from "../../utils/pick";
+
+// Client payload slimming (api-optimization audit) — drop fields the RN app never reads.
+const BOOK_LIST_OMIT = [
+  "qty", "isPurchased", "weight", "dynamicLink", "orderBy",
+  "isTrending", "status", "key", "isPaid", "daysLeft", "updatedAt",
+] as const;
+const BOOK_DETAIL_OMIT = [
+  "isMagazine", "isCombo", "isNew", "isPurchased", "weight", "dynamicLink",
+  "orderBy", "isTrending", "status", "key", "isPaid", "daysLeft", "updatedAt",
+] as const;
+const TRENDING_EBOOK_KEEP = ["_id", "name", "image", "thumbnail"] as const;
 
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
@@ -73,7 +85,7 @@ export const listBooks = async (req: Request, res: Response) => {
       isPurchased: purchasedSet.has(b._id),
     }));
     logger.info("listBooks success (mysql)", { traceId, customerId, type, count: decoratedMysql.length });
-    return res.status(200).json({ success: true, data: { cartId, books: decoratedMysql }, pagination: buildPagination(total, page, limit) });
+    return res.status(200).json({ success: true, data: { books: omitList(decoratedMysql, BOOK_LIST_OMIT) }, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listBooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -165,11 +177,8 @@ export const listTrendingEbooksOnly = async (req: Request, res: Response) => {
     const { search, page, limit, skip } = parseListQuery(req.query);
     const result = await fetchTrendingEbooksOnlySql({ type, search, language, limit, skip });
 
-    const base = resolveBase(req);
-    const items = result.items.map((item) => ({
-      ...item,
-      shareableLink: buildShareUrl("ebooks", String(item._id), base),
-    }));
+    // Ultra-slim free ebook cards — RN reads only _id/name/image/thumbnail.
+    const items = pickList(result.items, TRENDING_EBOOK_KEEP);
 
     logger.info("listTrendingEbooksOnly success", { traceId, type: result.type, count: items.length });
     return res.status(200).json({
@@ -211,7 +220,7 @@ export const getBookDetail = async (req: Request, res: Response) => {
       isPurchased = purchased.has(dto._id);
     }
     logger.info("getBookDetail success (mysql)", { traceId, customerId, id, isPurchased });
-    return res.status(200).json({ success: true, data: { ...dto, isPurchased } });
+    return res.status(200).json({ success: true, data: omit({ ...dto, isPurchased }, BOOK_DETAIL_OMIT) });
   } catch (error: any) {
     logger.error("getBookDetail failed", { traceId, customerId, id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -355,7 +364,16 @@ export const getMyOrderTracking = async (req: Request, res: Response) => {
     if (oid == null || cid == null) return res.status(400).json({ success: false, message: "Invalid order id." });
     const data = await getOrderTrackingMysql(oid, cid);
     if (!data) return res.status(404).json({ success: false, message: "Order not found." });
-    return res.status(200).json({ success: true, data: { ...data, trackingUrl: buildTrackingUrl(data.awb ?? undefined) } });
+    // Slim tracking DTO — drop fields the RN app never reads (trackingUrl/receiptId/courier/hubs/pincode/shipped/delivered/orderStatus).
+    const { from, to, ...rest } = data;
+    return res.status(200).json({
+      success: true,
+      data: {
+        ...omit(rest, ["receiptId", "courier", "shippedAt", "deliveredAt", "orderStatus"]),
+        from: pick(from, ["city"]),
+        to: pick(to, ["city"]),
+      },
+    });
   } catch (error: any) {
     logger.error("getMyOrderTracking failed", { traceId, customerId, orderId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

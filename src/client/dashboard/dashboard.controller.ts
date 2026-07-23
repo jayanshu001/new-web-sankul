@@ -4,6 +4,17 @@ import * as clientTrendingSql from "../../modules/client-trending/client-trendin
 import * as lpHubSql from "../../modules/client-lecture-progress/client-lecture-progress.service";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { pickList } from "../../utils/pick";
+
+// Home dashboard sections the RN app never renders (course → written to
+// popularSubjects with zero selectors; courseCategory → zero FE matches).
+const DASHBOARD_DROP_SECTIONS = new Set(["course", "courseCategory"]);
+// Free dashboard: RN only renders the free-ebook section (trending-book/
+// trending-ebook/video are fetched via dedicated APIs).
+const FREE_DASHBOARD_KEEP_SECTIONS = new Set(["free-ebook"]);
+const FREE_EBOOK_CARD_FIELDS = [
+  "_id", "name", "author", "thumbnail", "image", "isPurchased", "daysLeft",
+] as const;
 
 // GET /api/v1/client/dashboard
 export const getDashboard = async (req: Request, res: Response) => {
@@ -14,9 +25,12 @@ export const getDashboard = async (req: Request, res: Response) => {
   try {
     const uid = Number(userId);
     const cid = Number.isInteger(uid) ? uid : null;
-    const { unreadNotifications, dashboard, testimonial } = await clientDashSql.buildHomeDashboard(cid);
-    logger.info("getDashboard success (sql)", { traceId, customerId: userId, sections: dashboard.length });
-    return res.status(200).json({ todayDate: new Date().toISOString().slice(0, 10), logo: process.env.APP_LOGO_URL ?? "", unreadNotifications, dashboard, testimonial });
+    const { dashboard, testimonial } = await clientDashSql.buildHomeDashboard(cid);
+    // Drop sections RN never renders. Top-level todayDate/logo/unreadNotifications
+    // are also dropped (typed-only / write-only; badge uses /notifications/count).
+    const slimSections = dashboard.filter((s: any) => !DASHBOARD_DROP_SECTIONS.has(s.type));
+    logger.info("getDashboard success (sql)", { traceId, customerId: userId, sections: slimSections.length });
+    return res.status(200).json({ dashboard: slimSections, testimonial });
   } catch (e: any) {
     logger.error("getDashboard failed", { traceId, customerId: userId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });
@@ -69,8 +83,13 @@ export const getFreeDashboard = async (_req: Request, res: Response) => {
     const uid = Number(_req.user?.id);
     const cid = Number.isInteger(uid) ? uid : null;
     const dashboard = await clientTrendingSql.buildFreeDashboard(cid);
-    logger.info("getFreeDashboard success (sql)", { traceId, sections: dashboard.length });
-    return res.status(200).json({ todayDate: new Date().toISOString().slice(0, 10), logo: process.env.APP_LOGO_URL ?? "", dashboard });
+    // RN renders only the free-ebook section; keep it, slim its cards, and drop
+    // the unused top-level todayDate/logo. See docs/api-optimization Phase 2.
+    const slimDashboard = dashboard
+      .filter((s: any) => FREE_DASHBOARD_KEEP_SECTIONS.has(s.type))
+      .map((s: any) => ({ ...s, data: pickList(s.data as any[], FREE_EBOOK_CARD_FIELDS) }));
+    logger.info("getFreeDashboard success (sql)", { traceId, sections: slimDashboard.length });
+    return res.status(200).json({ dashboard: slimDashboard });
   } catch (e: any) {
     logger.error("getFreeDashboard failed", { traceId, error: getErrorMessage(e), stack: e.stack });
     return res.status(500).json({ success: false, message: e.message });

@@ -66,6 +66,35 @@ export const toProgressDto = (r: any) => ({
 });
 
 /**
+ * Concurrency-safe upsert for the heartbeat writes below.
+ *
+ * `prisma.upsert()` alone is NOT enough here. Prisma only compiles an upsert
+ * down to a native `INSERT ... ON DUPLICATE KEY UPDATE` when the model has a
+ * single unique constraint; ws_lecture_progress has TWO (`uniq_customer_video`
+ * and `uniq_customer_live_session`), so Prisma falls back to select-then-insert
+ * and two simultaneous heartbeats for the same key both try to INSERT — one
+ * dies on P2002. Verified experimentally: 12 concurrent heartbeats produced 11
+ * P2002 failures without this wrapper.
+ *
+ * On P2002 the row provably exists now (a concurrent insert won the race), so
+ * updating by the same unique key is always correct and terminal — no loop.
+ */
+const upsertRacingSafe = async (
+  where: any,
+  update: any,
+  create: any
+): Promise<any> => {
+  try {
+    return await prisma.lectureProgress.upsert({ where, update, create });
+  } catch (e: any) {
+    if (e?.code === "P2002") {
+      return prisma.lectureProgress.update({ where, data: update });
+    }
+    throw e;
+  }
+};
+
+/**
  * Heartbeat upsert keyed by (customer, video). Stamps the current container
  * pointer additively; never un-completes. Mirrors the Mongo findOneAndUpdate.
  */
@@ -76,15 +105,22 @@ export const upsertVideoProgress = async (input: {
 }): Promise<any> => {
   const now = new Date();
   const completedNow = isComplete(input.positionSec, input.durationSec);
-  const existing = await prisma.lectureProgress.findFirst({ where: { customerId: input.customerId, videoId: input.videoId } });
   const set: any = { positionSec: input.positionSec, durationSec: input.durationSec, lastWatchedAt: now, updatedAt: now };
   if (input.courseId) set.courseId = input.courseId;
   if (input.packageId) set.packageId = input.packageId;
   if (input.liveCourseId) set.liveCourseId = input.liveCourseId;
   if (input.source) set.source = input.source;
   if (completedNow) { set.completed = true; set.completedAt = now; }
-  if (existing) return prisma.lectureProgress.update({ where: { id: existing.id }, data: set });
-  return prisma.lectureProgress.create({ data: { customerId: input.customerId, videoId: input.videoId, ...set, createdAt: now, completed: !!completedNow } });
+  // Keyed on the `uniq_customer_video` unique index. This is the highest-
+  // frequency write on the platform (every playing student, on an interval, and
+  // the same student may have two players open), so the old find-then-create
+  // path could have two heartbeats both miss and both INSERT — one dying on
+  // P2002 and surfacing as a 500 mid-video. See upsertRacingSafe.
+  return upsertRacingSafe(
+    { uniq_customer_video: { customerId: input.customerId, videoId: input.videoId } },
+    set,
+    { customerId: input.customerId, videoId: input.videoId, ...set, createdAt: now, completed: !!completedNow }
+  );
 };
 
 /** Heartbeat upsert keyed by (customer, liveSession). */
@@ -94,12 +130,15 @@ export const upsertLiveSessionProgress = async (input: {
 }): Promise<any> => {
   const now = new Date();
   const completedNow = isComplete(input.positionSec, input.durationSec);
-  const existing = await prisma.lectureProgress.findFirst({ where: { customerId: input.customerId, liveSessionId: input.liveSessionId } });
   const set: any = { positionSec: input.positionSec, durationSec: input.durationSec, lastWatchedAt: now, updatedAt: now };
   if (input.liveCourseId) set.liveCourseId = input.liveCourseId;
   if (completedNow) { set.completed = true; set.completedAt = now; }
-  if (existing) return prisma.lectureProgress.update({ where: { id: existing.id }, data: set });
-  return prisma.lectureProgress.create({ data: { customerId: input.customerId, liveSessionId: input.liveSessionId, ...set, createdAt: now, completed: !!completedNow } });
+  // Keyed on `uniq_customer_live_session` — same race as the video heartbeat.
+  return upsertRacingSafe(
+    { uniq_customer_live_session: { customerId: input.customerId, liveSessionId: input.liveSessionId } },
+    set,
+    { customerId: input.customerId, liveSessionId: input.liveSessionId, ...set, createdAt: now, completed: !!completedNow }
+  );
 };
 
 /**

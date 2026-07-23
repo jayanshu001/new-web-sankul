@@ -4,6 +4,7 @@ import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { omit, omitList } from "../../utils/pick";
 import {
   isEbookMysql,
   listEbooksWithPlans,
@@ -44,8 +45,16 @@ export const listEbooks = async (req: Request, res: Response) => {
       },
       (id) => buildShareUrl("ebooks", id, base)
     );
+    // Slim the client list DTO to the fields the RN app actually reads (see
+    // docs/api-optimization/GET_client_ebooks.md). Drops unused top-level meta +
+    // unused nested plan/detail keys; pagination envelope is untouched.
+    const slimEbooks = (ebooks as any[]).map((e) => ({
+      ...omit(e, ["order", "link", "status", "isTrending", "updatedAt", "subscriptionEndAt"]),
+      plans: omitList(e.plans, ["ebookId", "status", "isMostPopular"]),
+      details: omitList(e.details, ["id"]),
+    }));
     logger.info("listEbooks success", { traceId, customerId, count: ebooks.length, total, source: "mysql" });
-    return res.status(200).json({ success: true, data: { ebooks }, pagination: buildPagination(total, page, limit) });
+    return res.status(200).json({ success: true, data: { ebooks: slimEbooks }, pagination: buildPagination(total, page, limit) });
   } catch (error: any) {
     logger.error("listEbooks failed", { traceId, customerId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -110,9 +119,12 @@ export const getEbookDetail = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, message: "Ebook not found." });
     }
     logger.info("getEbookDetail success", { traceId, customerId, ebookId: id, isPurchased: ebookData.isPurchased, source: "mysql" });
+    // availablePromoCode is always [] for ebooks (not in the promocode appliesTo
+    // model) and `isNew` is unused on the detail screen — drop both (see
+    // docs/api-optimization/GET_client_ebooks_id.md).
     return res.status(200).json({
       success: true,
-      data: { ebook: ebookData, availablePromoCode: [] },
+      data: { ebook: omit(ebookData as any, ["isNew"]) },
     });
   } catch (error: any) {
     logger.error("getEbookDetail failed", { traceId, customerId, ebookId: id, error: getErrorMessage(error), stack: error.stack });

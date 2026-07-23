@@ -3,7 +3,12 @@
 **Goal:** move public share links off the API domain.
 
 `https://websankul-api.4tysixapplabs.com/share/courses/123`
-→ `https://share.gpscvideo.com/share/courses/123`
+→ `https://<SHARE_HOST>/share/courses/123`
+
+> `<SHARE_HOST>` is a placeholder for the share subdomain, which is **not decided yet**
+> (e.g. `share.<your-domain>` or `links.<your-domain>`). Replace every occurrence once the
+> name is chosen — it appears in DNS, the TLS cert, the web-server config, `SHARE_BASE_URL`,
+> the iOS Associated Domains entitlement and the Android intent-filter.
 
 **Why:** the API domain is currently registered as an App/Universal Link domain for both apps with a
 total wildcard (`"paths": ["*"]` / `handle_all_urls`), so the OS treats *every* URL on it —
@@ -19,11 +24,11 @@ header.
 ## 1. Requirements
 
 **Domain & infra**
-- Subdomain `share.gpscvideo.com`, DNS → same load balancer as the API.
+- Subdomain `<SHARE_HOST>`, DNS → same load balancer as the API.
 - Valid TLS certificate. App/Universal Links fail on a bad cert **or any redirect** on
   `/.well-known/*`.
 - Host routing to the same backend:
-  - `share.*` → `/share/*`, `/.well-known/*`
+  - `<SHARE_HOST>` → `/share/*`, `/.well-known/*`
   - `api.*` → `/api/v1/*`, `/uploads/*`, health (unchanged)
 - The share host must **not** serve `/api/v1/*`.
 - `.well-known` files must return **HTTP 200, `application/json`, no redirect, no auth**.
@@ -88,11 +93,11 @@ user-agent (`templates/share-redirect.html`).
 
 ### 2.3 What happens after the move
 
-Identical, except the link is `https://share.gpscvideo.com/share/courses/123`, that host serves the
+Identical, except the link is `https://<SHARE_HOST>/share/courses/123`, that host serves the
 page, and iOS's Universal Link association points at the **share** host instead of the API host.
 
 ```
-app  →  GET /api/v1/... (API host)  →  shareableLink = https://share.gpscvideo.com/share/courses/123
+app  →  GET /api/v1/... (API host)  →  shareableLink = https://<SHARE_HOST>/share/courses/123
                                                               │
 recipient taps ──────────────────────────────────────────────┘
    iOS + installed      → Universal Link (share host AASA)      → app opens directly
@@ -161,7 +166,7 @@ export function buildShareUrl(resource: string, id: string, _fallbackBase?: stri
 
 ```bash
 # .env
-SHARE_BASE_URL=https://share.gpscvideo.com
+SHARE_BASE_URL=https://<SHARE_HOST>
 # .env.example
 SHARE_BASE_URL=http://localhost:4001
 ```
@@ -237,7 +242,7 @@ type.
 
 ### iOS — **required before cutover**
 
-- Xcode → Signing & Capabilities → Associated Domains → add `applinks:share.gpscvideo.com`.
+- Xcode → Signing & Capabilities → Associated Domains → add `applinks:<SHARE_HOST>`.
   **Keep** `applinks:websankul-api.4tysixapplabs.com` until old links stop mattering.
 - Confirm `appID` = `TEAMID.bundleID` of the shipping build (see §1).
 - Keep the existing `CFBundleURLTypes` custom-scheme handler.
@@ -269,7 +274,7 @@ Add alongside the existing custom-scheme filter:
     <action android:name="android.intent.action.VIEW" />
     <category android:name="android.intent.category.DEFAULT" />
     <category android:name="android.intent.category.BROWSABLE" />
-    <data android:scheme="https" android:host="share.gpscvideo.com" android:pathPrefix="/share" />
+    <data android:scheme="https" android:host="<SHARE_HOST>" android:pathPrefix="/share" />
 </intent-filter>
 ```
 
@@ -294,19 +299,29 @@ intent?.data?.pathSegments?.let { seg ->                  // ["share","courses",
 
 ## 5. Order
 
-| # | Step | Where |
-|---|---|---|
-| 1 | Narrow the AASA wildcard (3.7) | backend |
-| 2 | DNS + TLS + host routing | infra |
-| 3 | Deploy backend (3.1–3.6) with `SHARE_BASE_URL` **unset**; `.well-known` live on **both** hosts | backend |
-| 4 | **iOS release** with `applinks:share…` (+ Android if wanted) | apps |
-| 5 | **Wait for adoption** — installed iOS users on old builds still need the API host | — |
-| 6 | Set `SHARE_BASE_URL` in staging, verify §6 | infra |
-| 7 | **Set `SHARE_BASE_URL` in production ← cutover** | infra |
-| 8 | Cleanup (3.8) | backend |
-| 9 | Remove `.well-known` from the API host — long after step 5 | backend |
+> ⚠ **`SHARE_BASE_URL` is now deploy-blocking in production.** It is in `REQUIRED_IN_PROD`, and
+> `validateEnvOrExit()` calls `process.exit(1)` on a missing required var. **Add the env var to the
+> production config before (or with) the deploy in step 1** — otherwise the service refuses to boot.
+>
+> Set it initially to the **current API host**:
+> `SHARE_BASE_URL=https://websankul-api.4tysixapplabs.com`
+> That reproduces today's behaviour exactly — same links, and the host gate matches so nothing
+> redirects. The subdomain is not needed to ship the backend; it is only needed at step 5.
 
-Steps 4→5→7 are the part that cannot be reordered.
+| # | Step | Where | Needs the subdomain? |
+|---|---|---|---|
+| 1 | Deploy backend (3.1–3.7) with `SHARE_BASE_URL` = **current API host** | backend | no |
+| 2 | Provision `<SHARE_HOST>`: DNS + TLS + host routing; `.well-known` live on **both** hosts | infra | **yes — this is the setup step** |
+| 3 | Verify `.well-known` on the share host: 200, `application/json`, no redirect, valid cert | infra | yes |
+| 4 | **iOS release** with `applinks:share…` (+ Android if wanted) | apps | yes — Apple/Google fetch the new host to verify |
+| 5 | **Wait for adoption** — installed iOS users on old builds still need the API host | — | — |
+| 6 | Point `SHARE_BASE_URL` at the share host in **staging**, verify §6 | infra | yes |
+| 7 | Point `SHARE_BASE_URL` at the share host in **production ← cutover** | infra | yes |
+| 8 | Cleanup (3.8) | backend | no |
+| 9 | Remove `.well-known` from the API host — long after step 5 | backend | no |
+
+Steps 2 → 4 → 5 → 7 cannot be reordered: the subdomain must be live and serving `.well-known`
+before the app release, because device-side link verification fetches it at install/update.
 
 ---
 
@@ -317,16 +332,16 @@ Steps 4→5→7 are the part that cannot be reordered.
 curl -s -H "Authorization: Bearer $TOKEN" "$API/api/v1/client/ebooks" \
   | grep -o '"shareableLink":"[^"]*"' | head
 
-curl -sI https://share.gpscvideo.com/share/courses/1                              # 200 + CSP
+curl -sI https://<SHARE_HOST>/share/courses/1                              # 200 + CSP
 curl -sI https://websankul-api.4tysixapplabs.com/share/courses/1 | grep -i "^HTTP\|^location"  # 301
-curl -sI https://share.gpscvideo.com/.well-known/assetlinks.json                  # 200, no redirect
-curl -sI https://share.gpscvideo.com/.well-known/apple-app-site-association       # 200, no redirect
-curl -s -o/dev/null -w "%{http_code}\n" https://share.gpscvideo.com/api/v1/client/ebooks  # 404
-curl -s -o/dev/null -w "%{http_code}\n" https://share.gpscvideo.com/share/courses/abc     # 400
+curl -sI https://<SHARE_HOST>/.well-known/assetlinks.json                  # 200, no redirect
+curl -sI https://<SHARE_HOST>/.well-known/apple-app-site-association       # 200, no redirect
+curl -s -o/dev/null -w "%{http_code}\n" https://<SHARE_HOST>/api/v1/client/ebooks  # 404
+curl -s -o/dev/null -w "%{http_code}\n" https://<SHARE_HOST>/share/courses/abc     # 400
 ```
 
 ```bash
-adb shell am start -a android.intent.action.VIEW -d "https://share.gpscvideo.com/share/courses/123"
+adb shell am start -a android.intent.action.VIEW -d "https://<SHARE_HOST>/share/courses/123"
 adb shell pm get-app-links com.gpscvideo.gpsc     # expect: verified
 ```
 

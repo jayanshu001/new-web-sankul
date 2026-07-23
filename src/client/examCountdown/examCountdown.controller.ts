@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { omit } from "../../utils/pick";
 import * as ecSql from "../../modules/exam-countdown/exam-countdown.service";
 
 // UTC midnight of "now" — anchor for daysLeft math (timezone-stable).
@@ -50,8 +51,12 @@ export const listCountdowns = async (req: Request, res: Response) => {
       skip, limitNum: limit, pageNum: page, todayUTC: todayUTC(),
     });
     logger.info("listCountdowns success (sql)", { traceId, total: r.total });
+    // ExamCountdownListing cards never read category._id (see docs/api-optimization).
+    const data = (r.data ?? []).map((row: any) =>
+      row?.category ? { ...row, category: omit(row.category, ["_id"]) } : row
+    );
     return res.status(200).json({
-      success: true, data: r.data,
+      success: true, data,
       pagination: buildPagination(r.total, page, limit),
     });
   } catch (error: any) {

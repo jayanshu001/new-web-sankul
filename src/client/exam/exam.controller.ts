@@ -7,6 +7,7 @@ import {
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
 import { parseListQuery, buildPagination } from "../../utils/listQuery";
+import { omit, omitList } from "../../utils/pick";
 import {
   parseExamId,
   listExamsByCategory as svcListExamsByCategory,
@@ -161,7 +162,15 @@ export const getExamQuestions = async (req: Request, res: Response) => {
     const data = await svcGetExamQuestions(numId);
     if (!data) return res.status(404).json({ success: false, message: "Exam not found or not published." });
     logger.info("getExamQuestions success (sql)", { traceId, examId: id, questionCount: data.questions.length });
-    return res.status(200).json({ success: true, data });
+    // TestScreen renders MCQ text only: drop the exam wrapper, per-question
+    // image/orderBy and answer image/isSelect (see docs/api-optimization).
+    const slim = {
+      questions: (data.questions ?? []).map((q: any) => ({
+        ...omit(q, ["image", "orderBy"]),
+        answers: (q.answers ?? []).map((a: any) => omit(a, ["image", "isSelect"])),
+      })),
+    };
+    return res.status(200).json({ success: true, data: slim });
   } catch (error: any) {
     logger.error("getExamQuestions failed", { traceId, examId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -234,8 +243,14 @@ export const getSolutionByExam = async (req: Request, res: Response) => {
     const attemptId = req.query.attemptId ? parseExamId(String(req.query.attemptId)) ?? undefined : undefined;
     const data = await svcGetSolution(cid, eid, attemptId);
     if (!data) return res.status(404).json({ success: false, message: "No submitted attempt found." });
+    // Drop unused question `image` + `answers[].image` (TestResultScreen renders
+    // text-only solution). See docs/api-optimization.
+    const slim = data.map((q: any) => ({
+      ...omit(q, ["image"]),
+      ...(Array.isArray(q.answers) ? { answers: q.answers.map((a: any) => omit(a, ["image"])) } : {}),
+    }));
     logger.info("getSolutionByExam success (sql)", { traceId, customerId, examId, questionCount: data.length });
-    return res.status(200).json({ success: true, data });
+    return res.status(200).json({ success: true, data: slim });
   } catch (error: any) {
     logger.error("getSolutionByExam failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -261,7 +276,11 @@ export const getSolutionAnalyticsByExam = async (req: Request, res: Response) =>
     const attemptId = req.query.attemptId ? parseExamId(String(req.query.attemptId)) ?? undefined : undefined;
     const data = await svcGetSolutionAnalytics(cid, eid, attemptId);
     if (!data) return res.status(404).json({ success: false, message: "No submitted attempt found." });
-    return res.status(200).json({ success: true, data });
+    // TestScoreScreen reads the analytics numbers only (see docs/api-optimization).
+    return res.status(200).json({
+      success: true,
+      data: omit(data, ["_id", "examId", "ratting", "createdAt"]),
+    });
   } catch (error: any) {
     logger.error("getSolutionAnalyticsByExam failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -330,7 +349,7 @@ export const listMyResults = async (req: Request, res: Response) => {
     logger.info("listMyResults success (sql)", { traceId, customerId, total });
     return res.status(200).json({
       success: true,
-      data: items,
+      data: omitList(items, ["ratting"]), // unused typo'd field
       pagination: buildPagination(total, page, limit),
     });
   } catch (error: any) {
@@ -444,7 +463,12 @@ export const getExamDetail = async (req: Request, res: Response) => {
     const data = await svcGetExamDetail(numId);
     if (!data) return res.status(404).json({ success: false, message: "Exam not found or not published." });
     logger.info("getExamDetail success (sql)", { traceId, examId: id });
-    return res.status(200).json({ success: true, data });
+    // Instruction DTO only — TestInstruction reads title/duration/counts/marks
+    // (see docs/api-optimization/GET_client_quizzes_id_detail.md).
+    return res.status(200).json({
+      success: true,
+      data: omit(data, ["_id", "type", "isPaid", "startAt", "endAt", "orderBy", "createdAt"]),
+    });
   } catch (error: any) {
     logger.error("getExamDetail failed", { traceId, examId: id, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -576,7 +600,13 @@ export const listAttempts = async (req: Request, res: Response) => {
     const r = await svcListAttempts(cid, eid, { skip, take: limit });
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
     logger.info("listAttempts success (sql)", { traceId, customerId, examId });
-    return res.status(200).json({ success: true, data: r.data, pagination: buildPagination(r.total, page, limit) });
+    // ExamAnalytics reads exam.title + attempt core scores/inProgress/dates only
+    // (see docs/api-optimization/GET_client_quizzes_id_attempts.md).
+    const slim = {
+      exam: omit(r.data.exam, ["_id", "type", "durationMinutes"]),
+      attempts: omitList(r.data.attempts, ["examId", "ratting", "status"]),
+    };
+    return res.status(200).json({ success: true, data: slim, pagination: buildPagination(r.total, page, limit) });
   } catch (error: any) {
     logger.error("listAttempts failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });
@@ -604,7 +634,14 @@ export const getAttemptsAggregate = async (req: Request, res: Response) => {
     const r = await svcGetAttemptsAggregate(cid, eid);
     if (!r.ok) return res.status(r.status).json({ success: false, message: r.message });
     logger.info("getAttemptsAggregate success (sql)", { traceId, customerId, examId });
-    return res.status(200).json({ success: true, data: r.data });
+    // ExamAnalytics reads exam.title, rank and the used summary fields only
+    // (see docs/api-optimization/GET_client_quizzes_id_attempts_aggregate.md).
+    const slim = {
+      exam: omit(r.data.exam, ["_id", "questionCount"]),
+      summary: omit(r.data.summary, ["attemptsCount", "scoreSum", "avgScore", "accuracy", "lastSubmittedAt"]),
+      rank: r.data.rank,
+    };
+    return res.status(200).json({ success: true, data: slim });
   } catch (error: any) {
     logger.error("getAttemptsAggregate failed", { traceId, customerId, examId, error: getErrorMessage(error), stack: error.stack });
     return res.status(500).json({ success: false, message: error.message });

@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z, ZodError } from "zod";
-import { getRazorpay, razorpayResponseFor, createRazorpayOrder } from "./razorpay";
+import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
+import { omit } from "../../utils/pick";
 import logger from "../../utils/logger";
 import { formatZodError } from "../../utils/httpResponse";
 import { prisma } from "../../config/prisma";
@@ -118,12 +119,12 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       logger.info("createPackageOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
       return res.status(201).json({
         success: true,
-        data: {
+        data: omit({
           subscriptionId: String(orderId), receiptId, razorpay: razorpayResponseFor(rzpOrder), amountInRupees: chargeAmount,
           package: { _id: String(pkgSql.id), name: pkgSql.name },
           plan: { _id: String(body.packageId), duration: planSql.duration, price: planSql.price },
           promo: promocodeIdNum ? { promocodeId: String(promocodeIdNum), originalAmount, discountAmount, finalAmount: chargeAmount } : null,
-        },
+        }, PAYMENT_ORDER_ECHO_KEYS),
       });
     }
   } catch (e: any) {

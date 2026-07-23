@@ -11,6 +11,7 @@ import {
   getOrderDetailsForUser,
 } from "./course.service";
 import { buildShareUrl } from "../../deeplinking/shareRedirect";
+import { omit, omitList } from "../../utils/pick";
 import { buildCourseDetailsSql } from "../../modules/catalog-course/course-detail.sql";
 import {
   listCourseCategoriesWithCounts,
@@ -60,7 +61,9 @@ export const listCoursesHandler = async (req: Request, res: Response) => {
       toMysqlCourseOptions(req.query as Record<string, string>, userId)
     );
     logger.info("listCoursesHandler success", { traceId, userId, total: result.pagination.total, source: "mysql" });
-    return res.status(200).json({ success: true, ...result });
+    // Drop list-unused course fields (docs/api-optimization GET_client_courses).
+    const data = omitList(result.data as any[], ["withMaterial", "withoutMaterial", "order", "status", "videoCategoryId", "pcMaterialId"]);
+    return res.status(200).json({ success: true, data, pagination: result.pagination });
   } catch (err) {
     logger.error("listCoursesHandler failed", {
       traceId,
@@ -153,7 +156,11 @@ export const getCourseByIdHandler = async (req: Request, res: Response) => {
       });
     });
     logger.info("getCourseByIdHandler success (sql)", { traceId, userId, courseId });
-    return success(res, sqlResponse, "Course details fetched successfully.", 200);
+    // Drop the nested catalog trees + empty promo list — RN loads tab content via
+    // GET /client/catalog/:type/:id/{videos|materials|tests}. Keeps course/scope/
+    // plans/shareableLink. See docs/api-optimization Phase 3.
+    const slimResponse = omit(sqlResponse as any, ["videos", "materials", "tests", "availablePromoCode"]);
+    return success(res, slimResponse, "Course details fetched successfully.", 200);
   } catch (err) {
     logger.error("getCourseByIdHandler failed", {
       traceId,
