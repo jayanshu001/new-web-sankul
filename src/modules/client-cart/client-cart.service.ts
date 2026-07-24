@@ -1,5 +1,4 @@
 import { clientCartRepository as repo } from "./client-cart.repository";
-import { isOfflineCityMysql, resolveCityName } from "../offline-city/offline-city.service";
 import { getFreeShippingMin } from "../book-order/book-order.service";
 
 export const CLIENT_CART_MODULE = "client-cart";
@@ -131,15 +130,8 @@ export const attachShipping = async (
   }
   if (!phone) return { ok: false, reason: "phone" };
 
-  let cityName = "";
-  if (address.cityId && isOfflineCityMysql()) {
-    const city = await resolveCityName(address.cityId);
-    cityName = city?.name ?? "";
-  }
-  // Legacy addresses (created before the city-picker) have cityId = NULL but DO
-  // carry the city as a free-text string on the row itself. Fall back to it so
-  // old customers can check out without being forced to re-edit their address.
-  if (!cityName) cityName = (address.city ?? "").trim();
+  // The address carries the city as a plain name string on the row itself.
+  const cityName = (address.city ?? "").trim();
   if (!cityName) return { ok: false, reason: "city" };
 
   const existing = await repo.findShipping(customerId, address.name, phone, address.address, address.pincode);

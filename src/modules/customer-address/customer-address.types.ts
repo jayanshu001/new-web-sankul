@@ -2,18 +2,17 @@
  * Customer address — MySQL (Prisma) branch types.
  *
  * NOTE ON CONTRACT DIVERGENCE (why this DTO differs from the Mongo one):
- * - Mongo stores `stateId`/`cityId` as ObjectIds and `.populate()`s them into
- *   nested `{ _id, name, ... }` objects; phones/pincode are strings; `label`
- *   is an enum (home|work|other).
- * - MySQL (`ws_customer_address`) stores `state`/`city_id` as integer FKs,
+ * - Mongo stored `stateId` as an ObjectId and `.populate()`d it into a nested
+ *   `{ _id, name, ... }` object; phones/pincode were strings; `label` was an
+ *   enum (home|work|other).
+ * - MySQL (`ws_customer_address`) stores `state` as an integer FK,
  *   `phone`/`alternate_phone` as BIGINT, `pincode` as INT, `label` as free
- *   VARCHAR(20). `city_id` references the (still-Mongo) OfflineCity id space.
+ *   VARCHAR(20). The city is stored as a plain **name string** (`city` column) —
+ *   there is no city id reference.
  *
  * The MySQL DTO therefore returns **string ids** (to stay shape-compatible with
- * the Mongo `_id`/`stateId`/`cityId` string fields the client reads) and string
- * phones/pincode, but does NOT populate nested state/city objects. This module
- * is intentionally NOT enabled in `MIGRATION_MYSQL_MODULES` until OfflineCity +
- * cart checkout migrate (cart resolves `cityId` → `OfflineCity.name`).
+ * the Mongo `_id`/`stateId` string fields the client reads) and string
+ * phones/pincode, but does NOT populate a nested state object.
  */
 
 export interface AddressDto {
@@ -24,11 +23,9 @@ export interface AddressDto {
   email: string | null;
   address: string;
   address2: string;
-  /** Freeform city name — `city` column is NOT NULL and is what legacy data populates. */
+  /** Freeform city name — `city` column is NOT NULL. */
   city: string;
   stateId: string | null;
-  /** Numeric OfflineCity FK; NULL in legacy data (city name is used instead). */
-  cityId: string | null;
   pincode: string;
   label: string | null;
   isDefault: boolean;
@@ -50,7 +47,6 @@ export interface AddressCreateInput {
   /** Freeform city name (required — `city` column is NOT NULL). */
   city: string;
   stateId?: number | null;
-  cityId?: number | null;
   pincode: string;
   label?: string | null;
   status?: boolean;

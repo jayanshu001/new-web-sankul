@@ -1,7 +1,6 @@
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { shareBase } from "../utils/shareBase";
 
 const TEMPLATE_PATH = path.join(
   process.cwd(),
@@ -35,21 +34,20 @@ const APP_STORE_URL =
 const FALLBACK_URL = process.env.SHARE_FALLBACK_URL || "https://www.gpscvideo.com/";
 
 /**
- * Build the public share URL for a resource, e.g. buildShareUrl("courses", id)
- * → "https://share.example.com/share/courses/<id>".
+ * Build the public share URL for a resource, e.g. buildShareUrl("courses", id, base)
+ * → "<base>/share/courses/<id>".
  *
- * The origin comes from `shareBase()` (SHARE_BASE_URL) — never from the request.
- * `fallbackBase` is accepted-and-ignored so the existing call sites keep
- * compiling while the request-derived `base` threading is unwound; do not pass
- * it in new code.
+ * `base` is the request-derived origin (the `ORIGIN` env var, or the request
+ * host) resolved by each controller's `resolveBase(req)`.
  */
 export function buildShareUrl(
   resource: string,
   id: string,
-  _fallbackBase?: string
+  base?: string
 ): string {
   const cleanResource = resource.replace(/^\/+|\/+$/g, "");
-  return `${shareBase()}/share/${cleanResource}/${id}`;
+  const cleanBase = (base || "").replace(/\/+$/, "");
+  return `${cleanBase}/share/${cleanResource}/${id}`;
 }
 
 export interface RenderedShare {

@@ -1,11 +1,8 @@
 /**
- * Customer address service — dual-path (MySQL/Prisma ↔ Mongo/Mongoose).
+ * Customer address service (MySQL/Prisma).
  *
- * The MySQL branch is gated behind `isMysqlModule("customer-address")`. It is
- * intentionally NOT enabled in `MIGRATION_MYSQL_MODULES` until OfflineCity + the
- * cart checkout flow migrate, because cart resolves `cityId` → `OfflineCity.name`
- * and the two backends use different id spaces (ObjectId vs int FK). See
- * `customer-address.types.ts` for the contract-divergence notes.
+ * The city is stored as a plain name string on `ws_customer_address.city`; there
+ * is no city id reference. See `customer-address.types.ts` for the contract notes.
  *
  * Callers (the controller) keep doing zod validation; this service only decides
  * the backend and returns a uniform `{ ok, status, message?, data? }` envelope

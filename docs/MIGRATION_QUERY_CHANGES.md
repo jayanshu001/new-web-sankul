@@ -15,6 +15,61 @@
 
 ---
 
+## 2026-07-24 — `ws_customer_address.city_id` dropped — city is a plain name string
+
+**DDL:** `docs/migration/schema-changes/2026-07-24_drop_customer_address_city_id.sql`
+(idempotent `ALTER TABLE ws_customer_address DROP COLUMN city_id`). **Applied on
+staging (`websankul_staging_1`) 2026-07-24; still pending on production** — apply after
+the backend build below.
+
+Customer addresses no longer reference a city id. The `city` column (NOT NULL
+VARCHAR(20)) already stores the city name for every row, so the `city_id` FK is
+redundant and removed. Clients/admin now send `city` as a string; there is no more
+`cityId` → OfflineCity name resolution on the address write or cart shipping paths.
+
+- `prisma/schema.prisma` — `CustomerAddress.cityId` field removed (regenerated client).
+- `src/modules/customer-address/*` — `cityId` dropped from DTO (`AddressDto`), create
+  input, transformer, and repository create/update.
+- `src/client/address/address.controller.ts` + `address.validation.ts` — `cityId`
+  removed from the create/update schemas and handlers; **`city` is now a required
+  string** on create; the `cityId`→name `resolveCityForStore` helper is gone. The
+  legacy Mongo-era `createAddressSchema`/`updateAddressSchema` (unused) were deleted.
+- `src/admin/subscription/subscription.controller.ts` + `subscription.validation.ts`
+  (admin create/update customer address) — `cityId` replaced by a required `city`
+  string; `resolveCityName` import removed.
+- `src/modules/admin-customer/admin-customer-details.transformer.ts` — `cityId`
+  removed from the admin customer-detail address DTO.
+- `src/modules/client-cart/client-cart.service.ts` — shipping snapshot reads
+  `address.city` directly (dropped the `cityId`→OfflineCity resolution + import).
+
+**Response contract change (intended):** the `cityId` field is removed from address
+objects in client (`GET /client/address`, `GET /client/address/:id`) and admin
+(customer-detail addresses, `/admin/subscriptions/customer-addresses`) responses.
+`city` (string) is unchanged. Frontend cutover docs: `docs/client/ADDRESS_CITY_STRING_FRONTEND.md`
+and `docs/admin/ADDRESS_CITY_STRING_FRONTEND.md`.
+
+The offline-center `cityId` (`OfflineCenter.city_id`) and the city dropdown endpoints
+(`GET /client/address/cities`, `/cities/:cityId/centers`) are a **separate** feature and
+are untouched.
+
+## 2026-07-24 — `SHARE_BASE_URL` removed — share links revert to request origin — NO DB change
+
+The dedicated share-host / domain-separation concept (`SHARE_BASE_URL`) is removed as no
+longer needed. Share URLs are again built from the request-derived origin (`ORIGIN` env, or
+the request host) — the `base` each controller already threads via `resolveBase(req)`.
+
+- `src/utils/shareBase.ts` — **deleted** (was the `SHARE_BASE_URL` reader + share-host detector).
+- `src/deeplinking/shareRedirect.ts` — `buildShareUrl(resource, id, base)` now uses the
+  passed-in `base` again (previously accepted-and-ignored while pinned to `shareBase()`).
+- `src/app.ts` — removed the `/share` 301 redirect that forced requests onto the share host;
+  `/share` is now served directly on whatever host it arrives on.
+- `src/config/env.ts` — `SHARE_BASE_URL` removed from `REQUIRED_IN_PROD` (no longer boot-blocking).
+- `.env` / `.env.example` — `SHARE_BASE_URL` removed.
+- Docs `SHARE_DOMAIN_SEPARATION.md` + `infra/SHARE_SUBDOMAIN_SETUP.md` deleted; `DEEPLINKING_SHARE.md` updated.
+
+**Response contract unchanged:** `shareableLink` still resolves to `<origin>/share/<resource>/<id>`.
+No schema, index, or query change.
+
 ## 2026-07-23 — Catalog video listing: per-category fan-out → 3 batched queries + `ws_video_category_relation` indexes
 
 **DDL:** `docs/migration/schema-changes/2026-07-23_video_category_relation_indexes.sql`

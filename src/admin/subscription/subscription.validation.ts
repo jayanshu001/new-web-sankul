@@ -88,7 +88,8 @@ export const adminCreateAddressSchema = z.object({
   email: z.string().email().max(100).optional().nullable(),
   address: z.string().min(1).max(255),
   address2: z.string().max(255).optional().default(""),
-  cityId: objectIdSchema.optional().nullable(),
+  // City is a plain name string stored on ws_customer_address.city (VARCHAR(20)).
+  city: z.string().min(1, "City is required").max(20),
   stateId: objectIdSchema.optional().nullable(),
   pincode: z.string().min(4).max(10),
   label: z.enum(["home", "work", "other"]).optional().default("home"),
@@ -105,7 +106,7 @@ export const adminUpdateAddressSchema = z.object({
   email: z.string().email().max(100).optional().nullable(),
   address: z.string().min(1).max(255).optional(),
   address2: z.string().max(255).optional(),
-  cityId: objectIdSchema.optional().nullable(),
+  city: z.string().min(1, "City is required").max(20).optional(),
   stateId: objectIdSchema.optional().nullable(),
   pincode: z.string().min(4).max(10).optional(),
   label: z.enum(["home", "work", "other"]).optional(),

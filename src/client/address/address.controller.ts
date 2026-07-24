@@ -12,7 +12,7 @@ import { pickList } from "../../utils/pick";
 // Mobile reads identity + display fields only; drop phone/alternatePhone/email/
 // customerId/status/timestamps. City picker rows need id+name only.
 const ADDRESS_CLIENT_FIELDS = [
-  "_id", "name", "label", "isDefault", "address", "address2", "city", "cityId", "stateId", "pincode",
+  "_id", "name", "label", "isDefault", "address", "address2", "city", "stateId", "pincode",
 ] as const;
 const CITY_CLIENT_FIELDS = ["_id", "name"] as const;
 import {
@@ -37,15 +37,11 @@ import type {
   AddressCreateInput,
   AddressUpdateInput,
 } from "../../modules/customer-address/customer-address.types";
-import {
-  resolveCityName as svcResolveCityName,
-} from "../../modules/offline-city/offline-city.service";
 import { getActiveGoals } from "../goal/goal.client.service";
 
 /**
  * Map the validated zod body → the MySQL service's normalized input.
- * MySQL ids are integers (cityId/stateId), unlike the Mongo ObjectId space — the
- * zod schema's objectId regex is bypassed on the MySQL branch (see each handler).
+ * `stateId` is an integer FK; `city` is a plain name string.
  */
 const toAddressCreateInput = (body: any, customerId: number): AddressCreateInput => ({
   customerId,
@@ -57,27 +53,10 @@ const toAddressCreateInput = (body: any, customerId: number): AddressCreateInput
   address2: body.address2 ?? "",
   city: body.city,
   stateId: body.stateId != null && body.stateId !== "" ? Number(body.stateId) : null,
-  cityId: body.cityId != null && body.cityId !== "" ? Number(body.cityId) : null,
   pincode: body.pincode,
   label: body.label ?? null,
   status: body.status ?? true,
 });
-
-/**
- * Resolve the denormalized city NAME for storage. Clients send the dropdown
- * `cityId` (from `GET /client/address/cities`) rather than the city name, so when
- * `city` is omitted we look the name up from `cityId` (same resolution the cart
- * shipping snapshot uses). Returns "" when neither yields a name.
- */
-const resolveCityForStore = async (city?: string | null, cityId?: unknown): Promise<string> => {
-  const explicit = (city ?? "").trim();
-  if (explicit) return explicit;
-  if (cityId != null && cityId !== "") {
-    const resolved = await svcResolveCityName(cityId as string | number);
-    if (resolved?.name) return resolved.name;
-  }
-  return "";
-};
 
 // ─── Addresses ────────────────────────────────────────────────────────────────
 
@@ -135,13 +114,13 @@ export const createAddress = async (req: Request, res: Response) => {
     if (!cid) return res.status(401).json({ success: false, message: "Unauthorized." });
     // MySQL ids are integers, not ObjectIds — validate with the int-id schema.
     const data = createAddressSchemaMysql.parse(req.body);
-    // `city` (VARCHAR NOT NULL) is derived from `cityId` when the client omits it.
-    const city = await resolveCityForStore(data.city, data.cityId);
+    // `city` (VARCHAR NOT NULL) is the plain city name the client sends.
+    const city = (data.city ?? "").trim();
     if (!city) {
       logger.warn("createAddress missing city", { traceId, customerId });
       return res.status(400).json({
         success: false,
-        message: "City is required. Provide `city` or a valid `cityId`.",
+        message: "City is required.",
       });
     }
     const input: AddressCreateInput = toAddressCreateInput({ ...data, city }, cid);
@@ -173,12 +152,12 @@ export const updateAddress = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, message: "Invalid Address ID" });
     }
     const data = updateAddressSchemaMysql.parse(req.body);
-    // If the client changes `cityId` without sending `city`, refresh the stored
-    // city NAME from the new id (city column is NOT NULL — never write empty).
+    // `city` is a plain name string; only overwrite when a non-empty value is
+    // sent (city column is NOT NULL — never write empty).
     let cityUpdate: string | undefined;
-    if (data.city !== undefined || data.cityId !== undefined) {
-      const resolved = await resolveCityForStore(data.city, data.cityId);
-      if (resolved) cityUpdate = resolved;
+    if (data.city !== undefined) {
+      const trimmed = (data.city ?? "").trim();
+      if (trimmed) cityUpdate = trimmed;
     }
     const input: AddressUpdateInput = {
       ...(data.name !== undefined ? { name: data.name } : {}),
@@ -190,9 +169,6 @@ export const updateAddress = async (req: Request, res: Response) => {
       ...(cityUpdate !== undefined ? { city: cityUpdate } : {}),
       ...(data.stateId !== undefined
         ? { stateId: data.stateId != null ? Number(data.stateId) : null }
-        : {}),
-      ...(data.cityId !== undefined
-        ? { cityId: data.cityId != null ? Number(data.cityId) : null }
         : {}),
       ...(data.pincode !== undefined ? { pincode: data.pincode } : {}),
       ...(data.label !== undefined ? { label: data.label } : {}),

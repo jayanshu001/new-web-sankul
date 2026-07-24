@@ -19,7 +19,6 @@ import {
 import type { AddressCreateInput, AddressUpdateInput } from "../../modules/customer-address/customer-address.types";
 import { getCustomer as sqlGetCustomer } from "../../modules/admin-customer/admin-customer.service";
 import { flushUserRouteCache } from "../../middlewares/autoFlush";
-import { resolveCityName } from "../../modules/offline-city/offline-city.service";
 
 // Status code for a caught error, honoring a thrown HttpError's own 4xx (e.g. the
 // 422 from assertReportStatus) instead of flattening every failure to 500. These
@@ -213,11 +212,9 @@ export const adminCreateCustomerAddress = async (req: Request, res: Response) =>
     if (!(await sqlGetCustomer(cid)))
       return res.status(404).json({ success: false, message: "Customer not found." });
 
-    const cityId = data.cityId != null && data.cityId !== "" ? Number(data.cityId) : null;
     const stateId = data.stateId != null && data.stateId !== "" ? Number(data.stateId) : null;
-    // `ws_customer_address.city` is NOT NULL VARCHAR(20) — fill the freeform name
-    // from the selected cityId (truncated to the column width).
-    const cityName = cityId ? ((await resolveCityName(cityId))?.name ?? "").slice(0, 20) : "";
+    // `ws_customer_address.city` is NOT NULL VARCHAR(20) — store the name string.
+    const cityName = (data.city ?? "").trim().slice(0, 20);
 
     const input: AddressCreateInput = {
       customerId: cid,
@@ -229,7 +226,6 @@ export const adminCreateCustomerAddress = async (req: Request, res: Response) =>
       address2: data.address2 ?? "",
       city: cityName,
       stateId,
-      cityId,
       pincode: data.pincode,
       status: true,
     };
@@ -260,11 +256,10 @@ export const adminUpdateCustomerAddress = async (req: Request, res: Response) =>
     if (data.stateId !== undefined) input.stateId = data.stateId != null && data.stateId !== "" ? Number(data.stateId) : null;
     if (data.label !== undefined) input.label = data.label;
     if (data.status !== undefined) input.status = data.status;
-    if (data.cityId !== undefined) {
-      const cityId = data.cityId != null && data.cityId !== "" ? Number(data.cityId) : null;
-      input.cityId = cityId;
-      // Keep the NOT-NULL `city` name column in sync with the selected city.
-      input.city = cityId ? ((await resolveCityName(cityId))?.name ?? "").slice(0, 20) : "";
+    if (data.city !== undefined) {
+      // `city` is NOT NULL VARCHAR(20) — only overwrite with a non-empty value.
+      const c = (data.city ?? "").trim().slice(0, 20);
+      if (c) input.city = c;
     }
 
     const r = await sqlUpdateAddress(aid, cid, input);

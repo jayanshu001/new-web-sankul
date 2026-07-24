@@ -19,7 +19,6 @@ export const toAddressDto = (row: CustomerAddress): AddressDto => ({
   address2: row.address_2 ?? "",
   city: row.city,
   stateId: idStr(row.state),
-  cityId: idStr(row.cityId),
   pincode: String(row.pincode),
   label: row.label ?? null,
   isDefault: row.isDefault ?? false,

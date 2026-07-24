@@ -29,9 +29,6 @@ const REQUIRED_IN_PROD = [
   "RAZORPAY_WEBHOOK_SECRET",
   "REDIS_HOST",
   "REDIS_PORT",
-  // Public origin for share / deep-link URLs. Required so share links can never
-  // fall back to the client-supplied Host header — see utils/shareBase.ts.
-  "SHARE_BASE_URL",
   // Note: METRICS_TOKEN is required if the /metrics endpoint is mounted; the
   // mount itself is conditional, so we don't list it here.
 ] as const;

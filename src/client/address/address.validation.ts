@@ -1,26 +1,8 @@
 import { z } from "zod";
 
-const objectIdRegex = /^([0-9a-fA-F]{24}|[1-9]\d*)$/;
-
-export const createAddressSchema = z.object({
-  name: z.string().min(1, "Name is required").max(50),
-  phone: z.string().min(10).max(15).optional().nullable(),
-  alternatePhone: z.string().max(15).optional().nullable(),
-  email: z.string().email("Invalid email").max(100).optional().nullable(),
-  address: z.string().min(1, "Address is required").max(255),
-  address2: z.string().max(255).optional().default(""),
-  cityId: z.string().regex(objectIdRegex, "Invalid cityId"),
-  stateId: z.string().regex(objectIdRegex, "Invalid stateId").optional().nullable(),
-  pincode: z.string().min(4).max(10),
-  label: z.enum(["home", "work", "other"]).optional().default("home"),
-  status: z.boolean().optional().default(true),
-});
-
-export const updateAddressSchema = createAddressSchema.partial();
-
-// ─── MySQL (customer-address) variants ────────────────────────────────────────
-// MySQL FKs are integers, not ObjectIds: `cityId`/`stateId` are numeric ids
-// (accepted as number or numeric string) and `label` is a free VARCHAR(20).
+// ─── customer-address (MySQL) schemas ─────────────────────────────────────────
+// `stateId` is a numeric FK (accepted as number or numeric string); `city` is a
+// plain name string and `label` is a free VARCHAR(20).
 const numericId = z.union([
   z.number().int().positive(),
   z.string().regex(/^\d+$/, "Invalid id"),
@@ -33,11 +15,9 @@ export const createAddressSchemaMysql = z.object({
   email: z.string().email("Invalid email").max(100).optional().nullable(),
   address: z.string().min(1, "Address is required").max(255),
   address2: z.string().max(255).optional().default(""),
-  // `city` is the denormalized city NAME (ws_customer_address.city VARCHAR(20)).
-  // The client sends the dropdown `cityId`; the controller resolves the name from
-  // it when `city` is omitted, so this stays optional to preserve that contract.
-  city: z.string().min(1, "City is required").max(20).optional().nullable(),
-  cityId: numericId.optional().nullable(),
+  // `city` is the city NAME stored on ws_customer_address.city (VARCHAR(20)).
+  // Sent directly by the client as a string — there is no city id reference.
+  city: z.string().min(1, "City is required").max(20),
   stateId: numericId.optional().nullable(),
   pincode: z.string().min(4).max(10),
   label: z.string().max(20).optional().nullable(),

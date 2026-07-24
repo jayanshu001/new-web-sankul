@@ -182,7 +182,7 @@ export const toPhysicalBookDto = (
 type AddressRow = {
   id: number; name: string; phone: bigint; alternate_phone: bigint | null;
   email: string; address: string; address_2: string; city: string;
-  state: number | null; cityId: number | null; pincode: number;
+  state: number | null; pincode: number;
   label: string | null; isDefault: boolean | null; created_at: Date | null;
 };
 
@@ -201,7 +201,6 @@ export const toAddressDto = (
     line1: a.address,
     line2: a.address_2,
     city: a.city,
-    cityId: a.cityId != null ? String(a.cityId) : null,
     stateId: ref(a.state, st && { name: st.name, stateCode: st.state_code }),
     pincode: a.pincode,
     label: a.label ?? null,

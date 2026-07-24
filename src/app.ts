@@ -10,7 +10,6 @@ import requestLogger from "./utils/requestLogger";
 import notFoundMiddleware from "./middlewares/notFound";
 import errorHandler from "./middlewares/errorHandler";
 import { clientLimiter, globalLimiter, shareLimiter } from "./config/rateLimiter";
-import { shareBase, shareHostname } from "./utils/shareBase";
 import {
   initCrashReporter,
   captureCrashContextMiddleware,
@@ -90,29 +89,7 @@ app.get(
 // --- Public deep-link / share routes ---------------------------------------
 // Mounted OUTSIDE /api/v1/* so they stay unauthenticated and rate-limit-light.
 // Add new share surfaces in src/deeplinking/deeplinking.routes.ts.
-// Share links are generated on SHARE_BASE_URL (utils/shareBase.ts). Links that
-// were already sent to users point at the API host, so requests arriving on any
-// host other than the share host are permanently redirected rather than served
-// — those links must keep resolving forever.
-//
-// NB: a 301'd link never becomes a Universal/App Link (iOS and Android do not
-// re-evaluate domain association across a server redirect). The redirect target
-// still opens the app via the page's custom-scheme handoff, so old links keep
-// working with the browser bounce. Only newly generated links open directly.
-const SHARE_HOSTNAME = shareHostname();
-
-app.use(
-  "/share",
-  shareLimiter,
-  (req, res, next) => {
-    if (SHARE_HOSTNAME && req.hostname !== SHARE_HOSTNAME) {
-      // req.originalUrl already carries the /share prefix.
-      return res.redirect(301, `${shareBase()}${req.originalUrl}`);
-    }
-    return next();
-  },
-  deeplinkingRoutes
-);
+app.use("/share", shareLimiter, deeplinkingRoutes);
 
 // 2b) Live-course demo harness — served same-origin to dodge the file:// CORS trap.
 // The page uses an inline <script> + two CDN scripts (hls.js, socket.io), both of
