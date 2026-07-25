@@ -1,8 +1,14 @@
 /**
- * OTP auto-unblock sweep. After OTP_MAX_ATTEMPTS wrong OTP entries a customer is
- * blocked (status=false, otpBlockedAt=now) by validateOtp. This lightweight
- * setInterval sweep restores any account whose block is older than OTP_BLOCK_HOURS
- * (default 24h): status=true, otpBlockedAt=null, triedOtp=0.
+ * Customer-auth housekeeping sweep. Two independent, idempotent passes:
+ *
+ *  1. OTP auto-unblock. After OTP_MAX_ATTEMPTS wrong OTP entries a customer is
+ *     blocked (status=false, otpBlockedAt=now) by validateOtp. This restores any
+ *     account whose block is older than OTP_BLOCK_HOURS (default 24h):
+ *     status=true, otpBlockedAt=null, triedOtp=0.
+ *  2. `is_login` reconciliation. The flag is set on login and cleared on logout,
+ *     but token EXPIRY runs no code and an uninstall never reaches the logout
+ *     route — so without this pass the flag would report customers as logged in
+ *     forever. Clears it for anyone holding no live token.
  *
  * Deliberately NOT BullMQ and NOT guarded by a Redis "is-running" flag — the whole
  * sweep is a single atomic, idempotent `updateMany`, so running it twice (or from
@@ -26,6 +32,17 @@ async function runOnce(): Promise<void> {
     if (count > 0) logger.info("[otp-unblock] auto-unblocked accounts", { count });
   } catch (err) {
     logger.error("[otp-unblock] sweep failed", { error: (err as Error).message });
+  }
+
+  // `is_login` reconciliation shares this sweep: it is the same shape of problem
+  // (derived state nothing else resets) and the same safety properties — one
+  // atomic idempotent updateMany. Kept in its own try so a failure here can never
+  // stop the OTP unblock above, and vice versa.
+  try {
+    const { count } = await customerAuthRepository.reconcileLoggedOut(new Date());
+    if (count > 0) logger.info("[is-login] cleared stale logged-in flags", { count });
+  } catch (err) {
+    logger.error("[is-login] reconcile failed", { error: (err as Error).message });
   }
 }
 

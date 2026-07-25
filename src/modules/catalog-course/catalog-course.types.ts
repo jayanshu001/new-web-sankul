@@ -6,11 +6,12 @@
  * SCOPE / DRIFT NOTES (verified against the live DDL on 2026-06-11):
  *
  *  - `ws_course.image` is NULLABLE in the DDL but the Prisma model declared it
- *    NOT NULL → fixed to `String?`. `name`, `vcategory_id`, `pc_material_id`,
- *    `featured_order` are also nullable.
+ *    NOT NULL → fixed to `String?`. `name`, `vcategory_id`, `pc_material_id`
+ *    are also nullable. (`featured_order` was dropped entirely on 2026-07-25 —
+ *    never read or written by any code path.)
  *
  *  - Columns in `ws_course` with NO Prisma mapping: `is_featured` (enum 0/1),
- *    `purchase` (enum 0/1), `featured_order` (int). The Mongo `Course` carries
+ *    `purchase` (enum 0/1). The Mongo `Course` carries
  *    the conceptual equivalents `isPopular` / `isPaid` (booleans) plus Mongo-only
  *    `subtitle` + embedded `materialCategories[]`/`examCategories[]`. These SQL
  *    enums are NOT surfaced here (no consumer reads them off the migrated row);

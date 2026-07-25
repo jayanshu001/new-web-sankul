@@ -587,8 +587,6 @@ model BookSetting {
   supportPhone               String?   @map("support_phone")
   termsAndConditions         Json?     @map("terms_and_conditions")
   gstRate                    Float     @map("gst_rate")
-  originCity                 String?   @map("origin_city")
-  originHub                  String?   @map("origin_hub")
   createdAt                  DateTime? @map("created_at")
   updatedAt                  DateTime? @map("updated_at")
 
@@ -598,6 +596,7 @@ model BookSetting {
 model BookCart {
   id               Int               @id @default(autoincrement())
   cart_id          String
+  userIpAddress    String?           @map("user_ip_address") @db.VarChar(50)
   Customer         Customer?         @relation(fields: [userId], references: [id])
   userId           Int?              @map("user_id")
   CustomerShipping CustomerShipping? @relation(fields: [shippingId], references: [id])
@@ -1193,7 +1192,6 @@ model Course {
   level                     String
   purchase                  CourseFlag01?               @map("purchase")
   is_featured               CourseFlag01?               @map("is_featured")
-  featured_order            Int?                        @map("featured_order")
   status                    Boolean
   createdAt                 DateTime?                   @map("created_at")
   updatedAt                 DateTime?                   @map("updated_at")
@@ -1345,6 +1343,7 @@ model PackageCourseSubscription {
   updatedAt                         DateTime?                          @map("updated_at")
 
   @@index([promoterId, createdAt], name: "idx_pcs_promoter")
+  @@index([createdAt, courseId, amount], name: "idx_pcs_created_course_amount")
   @@map("ws_package_course_subscription")
 }
 

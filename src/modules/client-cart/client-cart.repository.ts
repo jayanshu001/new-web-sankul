@@ -28,12 +28,27 @@ export const clientCartRepository = {
       orderBy: { id: "desc" },
     }),
 
-  /** Get-or-create the customer's active cart; returns the cart row. */
-  ensureCart: async (customerId: number) => {
+  /**
+   * Get-or-create the customer's active cart; returns the cart row.
+   *
+   * `user_ip_address` holds the last address the cart was acted from. A cart
+   * outlives a session, so it is refreshed when the caller's IP differs from
+   * the stored one — that also fills the column on carts created before it was
+   * mapped. The extra UPDATE only fires on an actual change, never per read.
+   */
+  ensureCart: async (customerId: number, userIpAddress: string | null = null) => {
     const existing = await prisma.bookCart.findFirst({ where: { userId: customerId, active: true }, orderBy: { id: "desc" } });
-    if (existing) return existing;
+    if (existing) {
+      if (userIpAddress && existing.userIpAddress !== userIpAddress) {
+        return prisma.bookCart.update({
+          where: { id: existing.id },
+          data: { userIpAddress, updated_at: new Date() },
+        });
+      }
+      return existing;
+    }
     return prisma.bookCart.create({
-      data: { cart_id: genCartId(), userId: customerId, active: true, created_at: new Date(), updated_at: new Date() },
+      data: { cart_id: genCartId(), userId: customerId, userIpAddress, active: true, created_at: new Date(), updated_at: new Date() },
     });
   },
 

@@ -99,6 +99,12 @@ export const customerAuthRepository = {
         isPhoneVerified: true,
         verified: true,
         triedOtp: 0,
+        // `lastLogin` rides along on the existing UPDATE: a successful validateOtp
+        // IS the login, and `login_count` was already being maintained without a
+        // matching timestamp (you could see how often someone logged in, never
+        // when). Stamped here rather than in a separate query.
+        lastLogin: new Date(),
+        isLoggedIn: true,
         ...(osType ? { os_type: osType as never } : {}),
       },
     }),
@@ -107,7 +113,46 @@ export const customerAuthRepository = {
   clearTried: (id: number, osType?: string) =>
     prisma.customer.update({
       where: { id },
-      data: { triedOtp: 0, ...(osType ? { os_type: osType as never } : {}) },
+      data: { triedOtp: 0, lastLogin: new Date(), isLoggedIn: true, ...(osType ? { os_type: osType as never } : {}) },
+    }),
+
+  /**
+   * Clear the `is_login` flag on an explicit logout.
+   *
+   * Deliberately NOT folded into `deactivateTokens`: that runs mid-login too
+   * (validateOtp deactivates the previous token before issuing the new one), so
+   * clearing the flag there would immediately undo the login stamp above.
+   */
+  markLoggedOut: (id: number) =>
+    prisma.customer.update({ where: { id }, data: { isLoggedIn: false } }),
+
+  /**
+   * Reconcile stale `is_login` flags.
+   *
+   * `is_login` is derived state, so it drifts: a token simply expiring runs no
+   * code, and an uninstall or a crash never reaches the logout route. Without
+   * this sweep the flag would report customers as logged in indefinitely. Clears
+   * it for anyone flagged `true` who no longer holds a live token (active,
+   * not-deleted, unexpired).
+   *
+   * NOTE: customers may hold several concurrent device sessions (the single-device
+   * gate in authenticate.ts is disabled for them), so this is "has at least one
+   * live session", which is the only thing one boolean can honestly express.
+   *
+   * Atomic + idempotent `updateMany` — safe to run concurrently from several
+   * workers. Returns the affected count.
+   */
+  reconcileLoggedOut: (now: Date) =>
+    prisma.customer.updateMany({
+      where: {
+        isLoggedIn: true,
+        NOT: {
+          customerAccessToken: {
+            some: { active: true, deleted: false, expires_at: { gt: now } },
+          },
+        },
+      },
+      data: { isLoggedIn: false },
     }),
 
   /**

@@ -8,11 +8,14 @@
  *       MySQL value: "package"  | "course"  | "book" | "ebook"
  *     The transformer maps MySQL → Mongo casing so the API JSON is unchanged.
  *
- *  2. `keyId` population:
- *       Mongo `.populate("keyId")` embeds the referenced Package/Course/... doc.
- *       MySQL `ws_banner_slider.key_id` is a nullable int and the referenced
- *       catalog modules are not migrated yet, so `keyId` is served as `null`
- *       (every row in the staging dump has key_id = NULL).
+ *  2. `keyId` — the banner's deep-link target:
+ *       Mongo `.populate("keyId")` embedded the referenced Package/Course/...
+ *       doc. On MySQL it is served as the scalar `ws_banner_slider.key_id` int:
+ *       `key`/`keyRef` already tell the client WHICH collection to open, so the
+ *       id alone is enough to deep-link, and populating would cost a per-banner
+ *       lookup across four tables on a hot cached route.
+ *       Required whenever `key` is one of the four collection keys; always null
+ *       for `Explore`, which is a standalone CTA with no target.
  */
 
 export const BANNER_KEYS = ["Packages", "Courses", "Book", "EBook", "Explore"] as const;
@@ -29,6 +32,14 @@ export const BANNER_KEY_TO_MODEL: Partial<Record<BannerKey, string>> = {
   Book: "Book",
   EBook: "Ebook",
 };
+
+/**
+ * A key points at a catalog row (and therefore needs `keyId`) exactly when it
+ * has a `keyRef` model. Derived from BANNER_KEY_TO_MODEL so the validation and
+ * the transformer can never disagree about which keys require a target.
+ */
+export const bannerKeyNeedsTarget = (key: BannerKey): boolean =>
+  BANNER_KEY_TO_MODEL[key] !== undefined;
 
 /** MySQL lowercase `ws_banner_slider.key` → Mongo-cased enum. */
 export const MYSQL_KEY_TO_BANNER_KEY: Record<string, BannerKey> = {
@@ -54,8 +65,8 @@ export interface BannerSliderDto {
   _id: string;
   image: string;
   key?: BannerKey;
-  /** Populated reference doc when available; null when served from MySQL. */
-  keyId: unknown | null;
+  /** Deep-link target id in the `keyRef` collection; null for Explore / unset. */
+  keyId: number | null;
   keyRef?: string;
   orderBy: number;
   createdAt?: Date;
@@ -65,14 +76,14 @@ export interface BannerSliderDto {
 export interface BannerCreateInput {
   image: string;
   key?: BannerKey;
-  keyId?: string;
+  keyId?: string | number;
   orderBy?: number;
 }
 
 export interface BannerUpdateInput {
   image?: string;
   key?: BannerKey;
-  keyId?: string;
+  keyId?: string | number;
   orderBy?: number;
 }
 

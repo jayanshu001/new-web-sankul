@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import logger from "../../utils/logger";
 import { getErrorMessage } from "../../utils/httpResponse";
+import { getClientIp } from "../../utils/clientIp";
 import * as cartSql from "../../modules/client-cart/client-cart.service";
 
 // On the SQL branch ids are numeric strings, not ObjectIds.
@@ -30,7 +31,7 @@ export const addToCart = async (req: Request, res: Response) => {
     const { bookId, qty } = sqlAddSchema.parse(req.body);
     const numBook = cartSql.parseCartId(bookId);
     if (!cid || !numBook) return res.status(400).json({ success: false, message: "Invalid id." });
-    const r = await cartSql.addToCart(cid, numBook, qty);
+    const r = await cartSql.addToCart(cid, numBook, qty, getClientIp(req));
     if (!r.ok) return res.status(404).json({ success: false, message: "Book not found." });
     return res.status(r.created ? 201 : 200).json({ success: true, data: r.data, message: r.created ? "Added to cart." : "Quantity updated." });
   } catch (e: any) {
@@ -120,7 +121,7 @@ export const attachShippingToCart = async (req: Request, res: Response) => {
     const cid = cartSql.parseCartId(userId);
     const numAddr = cartSql.parseCartId(String((req.body ?? {}).addressId ?? ""));
     if (!cid || !numAddr) return res.status(400).json({ success: false, message: "Invalid address id." });
-    const r = await cartSql.attachShipping(cid, numAddr);
+    const r = await cartSql.attachShipping(cid, numAddr, getClientIp(req));
     if (!r.ok) {
       if (r.reason === "address") return res.status(404).json({ success: false, message: "Address not found." });
       if (r.reason === "phone") return res.status(400).json({ success: false, message: "No phone number on file. Please update your profile before using this address for delivery." });

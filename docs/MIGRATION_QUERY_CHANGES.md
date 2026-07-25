@@ -15,6 +15,403 @@
 
 ---
 
+## 2026-07-25 — `ws_material_category_package` timestamps backfilled
+
+**DDL:** none. **Backfill:** `scripts/backfill-material-category-package-timestamps.ts` —
+**run on the local staging clone 2026-07-25; pending on staging and production.**
+
+Structural twin of the `ws_exam_category_package` entry below — same pivot shape, written
+by adjacent code in the same repository (`admin-package.repository.ts:108/110/125/140/198`),
+same legacy gap, same fix. 15 of 16 rows were NULL on both columns; the single populated
+row (id 1317, package 90, `2025-08-01 17:54:13`) carries the **same** timestamp as the exam
+pivot's one populated row (id 2226) — one legacy write event created both.
+
+**Forward path needs no fix** — verified 2026-07-25 by writing through the real
+`createMany`-inside-`$transaction()` shape: the probe row received both timestamps. The
+NULLs are simply rows written before the middleware landed 2026-07-16.
+
+**Source:** parent `ws_package.updated_at`, clamped to the 2026-07-16 cutover, floored at
+the package's `created_at` (identical logic and rationale to the exam pivot). Result:
+package 3 → its real `2026-07-10 19:18:12`; packages 88/89/91/990092/990093 → the clamp
+marker `2026-07-16 05:30:00` IST. Row 1317 untouched. Idempotent; re-run is a no-op.
+
+⚠ Same semantics caveat: `created_at` means "when this pivot row was last written", not
+"when the link was first made" — the delete-then-recreate write path resets it on every
+package edit that includes material categories.
+
+---
+
+## 2026-07-25 — `ws_exam_category_package` timestamps backfilled (table CONFIRMED in active use)
+
+**DDL:** none. **Backfill:** `scripts/backfill-exam-category-package-timestamps.ts` — **run
+on the local staging clone 2026-07-25; pending on staging and production.**
+
+**Removal was considered and rejected — the table is actively used.** It is the
+Package ↔ ExamCategory pivot (with a per-package display `order`), with 12 call sites:
+- **reads** — `client-free.service.ts:77`, `catalog-exam.repository.ts:114`,
+  `catalog-package.detail.sql.ts:80`, `client-catalog.service.ts:414`,
+  `admin-package.repository.ts:61/74/76`
+- **writes** — `admin-package.repository.ts:113/115/126/142/200`
+
+**The forward path already works — no code change needed.** The columns *are* mapped on
+`model ExamCategoryPackage`, and the central timestamp middleware *does* handle
+`createMany` (it iterates the array — `src/config/prisma.ts:109-116`). Verified 2026-07-25
+by writing through the real `createMany` path: `13:03:34Z` stored as `18:33:34` IST,
+matching the wall clock. The 68 NULL rows were simply all written **before** the middleware
+landed on 2026-07-16 (commit `de0233e`). As with `ws_customer`, the one row that *did* have
+a timestamp was the oldest (id 2226, 2025-08-01), from the legacy writer.
+
+**Backfill source:** the parent `ws_package.updated_at` — the write path REPLACES pivots
+(`deleteMany` + `createMany`), so rows were last recreated when the package was last
+edited. **Clamped to the 2026-07-16 cutover**, because a pivot written after it would
+already carry timestamps, so any later parent `updated_at` provably overshoots. Package
+990093 is the proof: updated 2026-07-21 yet its pivots were NULL, because the pivot replace
+at `admin-package.repository.ts:113` is *conditional* on `examCategories` being present in
+the payload. Floored at the package's `created_at`. Result: package 3 → its real
+`2026-07-10 19:18:12`; packages 88/89/990092/990093 → the clamp marker
+`2026-07-16 05:30:00` IST (= cutover UTC midnight; an approximate marker, not a real edit
+time). Row 2226 left untouched. Idempotent; re-run is a no-op.
+
+**Implementation note worth keeping:** `model Package` does **not** map
+`created_at`/`updated_at` (the columns exist in MySQL but were never added to the model),
+so the script reads them with `$queryRawUnsafe`. Verified that `$queryRaw` **results still
+pass through the IST read shift** (`ws_package.id=3` reads `18:19:44` IST as `12:49:44Z`),
+so those Dates are in the same UTC app-space as Prisma reads and can be written back
+through Prisma without double-shifting. This contradicts the narrower reading of the
+`src/config/prisma.ts` comment that raw queries "bypass Prisma middleware" — that holds for
+write ARGS, not for result shifting.
+
+⚠ **Semantics:** `created_at` on this table does **not** mean "when this link was first
+made". The delete-then-recreate write path resets it on every package edit that includes
+exam categories. It means "when this pivot row was last written" — true of live rows, not
+just backfilled ones.
+
+---
+
+## 2026-07-25 — `ws_customer.created_at` backfilled + `last_login_date` now stamped on login
+
+**DDL:** none. **Backfill:** `scripts/backfill-customer-created-at.ts` — **run on the local
+staging clone (`websankul_staging_1`) 2026-07-25; pending on staging and production.**
+
+### 1. `created_at` was NULL on pre-2026-07-16 customers
+
+The schema is introspected, so `created_at` has no `@default(now())`, and
+`customerAuthRepository.createStub` never passed it. Every customer created **before the
+central timestamp middleware landed** (`src/config/prisma.ts`, commit `de0233e`,
+2026-07-16 — the IST migration) got NULL. Locally that was 5 of 31 rows, and
+counter-intuitively the **newest** ids (472366–472370), because older rows came from the
+legacy import which did carry the column.
+
+**New signups are already correct** — verified by creating a customer through the real
+`createStub` path: `created_at = 2026-07-25 17:42:22`, matching the IST wall clock, so the
+middleware + IST write-shift both work. No code change was needed for the forward path.
+
+**Why the NULLs mattered** (not cosmetic):
+- `admin-customer.repository.ts:27-29` filters `createdAt: { gte, lte }` — NULL never
+  matches a comparison, so those customers were **invisible in every date-filtered admin
+  customer report**.
+- Same file orders by `createdAt desc`; MySQL sorts NULLs last, so the newest customers
+  appeared at the **bottom** of a "newest first" list.
+- `referral.repository.ts:354` aliases this column as `referralCodeCreatedAt` → null in
+  referral reporting.
+
+**Backfill source** (best-effort — the true signup instant was never recorded):
+`MIN(ws_customer_access_token.created_at)` (first login) per customer, falling back to
+`updated_at`, and never producing a value later than `updated_at`. All 5 local rows
+resolved from a first token, matching to the second. `updatedAt` is passed explicitly on
+the write so the timestamp middleware does **not** bump it — a historical repair must not
+look like a fresh edit. Idempotent (only touches `created_at IS NULL`); re-run confirmed a
+no-op. Reads/writes go through Prisma so the IST shift round-trips — **must not** be
+rewritten as raw SQL, which bypasses it.
+
+### 2. `last_login_date` was never written
+
+`login_count` **was** being maintained (`createStub` seeds it, `setOtpForLogin` bumps it)
+while `last_login_date` and `is_login` stayed NULL on all 31 rows — you could see how
+often a customer logged in but never when.
+
+**Query-level change:** `lastLogin: new Date()` added to both successful-login branches in
+`customer-auth.repository.ts` — `markVerified` (new/unverified user) and `clearTried`
+(returning user). Both are pre-existing `prisma.customer.update` calls on the same row in
+`validateOtp`, so this adds **no extra query**. Verified on both paths, and it advances on
+a subsequent login.
+
+**Backfill:** `scripts/backfill-customer-last-login.ts` — **run on the local staging clone
+2026-07-25; pending on staging and production.** Source is
+`MAX(ws_customer_access_token.created_at)` per customer. Locally: 28 of 31 filled, 3 left
+NULL because they have no token history (never completed a login — NULL is the correct
+value there, not a gap). Same `updatedAt`-passed-explicitly guard as the `created_at`
+backfill; idempotent (`last_login_date IS NULL` only).
+
+⚠ **The backfilled values are a proxy, not exact.** A token row is inserted on a
+successful OTP login (`auth.service.ts:287`) **and** on a token refresh (`:372`), and the
+two are indistinguishable by column — so a backfilled value means "last token issued":
+the last login or the last silent refresh, whichever is later. It is an upper bound on the
+last interactive login. Rows stamped by the live code path from 2026-07-25 onward are
+exact.
+
+Sanity note for anyone reading this data: `login_count` and token count **do not agree**
+(e.g. id 472335 has `login_count=29` against 18 token rows) because `login_count` is bumped
+at OTP *generation* (`setOtpForLogin`) whereas a token row is written only on successful
+validation — plus refreshes. Neither is a clean count of interactive logins.
+
+**No API contract change** — neither field is surfaced in the customer DTO.
+
+### 3. `is_login` now maintained (was NULL on every row)
+
+Laravel-era session scaffolding that no code wrote. Now maintained live, on user
+instruction — with the caveat below recorded deliberately.
+
+**Query-level changes** (`customer-auth.repository.ts`):
+- `markVerified` / `clearTried` — set `isLoggedIn: true` alongside `lastLogin` (same
+  pre-existing UPDATE, still no extra query).
+- **new** `markLoggedOut(id)` — sets `isLoggedIn: false`. Called from `logoutCustomer`
+  (`DELETE /client/auth/logout`) and the `/logout-all-devices` teardown.
+  ⚠ Deliberately **NOT** folded into `deactivateTokens`: that also runs mid-login
+  (`validateOtp` deactivates the prior token before issuing the new one), so clearing the
+  flag there would immediately undo the login stamp.
+- **new** `reconcileLoggedOut(now)` — `updateMany` clearing the flag for anyone marked
+  `true` who holds no live token (`active AND NOT deleted AND expires_at > now`). Atomic,
+  idempotent, safe from multiple PM2 workers.
+
+**New sweep pass:** `otp-unblock.scheduler.ts` now runs `reconcileLoggedOut` alongside the
+OTP unblock (same 5-min interval, own try/catch so neither pass can break the other). This
+is required, not optional: token **expiry runs no code**, and an uninstall or crash never
+reaches the logout route, so without it the flag would report customers logged in forever.
+
+**Seed:** `scripts/backfill-customer-is-login.ts` — **run on the local staging clone
+2026-07-25; pending on staging and production.** Derives the initial value from token
+liveness: 5 TRUE (the 5 customers holding a live token), 26 FALSE. Verified zero
+flag↔token mismatches afterwards. `updatedAt` preserved on every write. Idempotent
+(re-run: 31 already correct, 0 writes).
+
+⚠ **`is_login` is DERIVED state, not a fact — do not gate access on it.** Customers may
+hold several concurrent device sessions (the single-device gate in `authenticate.ts:146-151`
+is commented out for customers), so one boolean can only mean "has at least one live
+session" and can never express per-device state. It is also eventually-consistent: an
+expired session still reads TRUE until the next sweep (≤5 min). The authoritative sources
+remain `ws_customer_access_token` (active/deleted/expires_at), the JWT, and
+`libs/tokenRevocation.ts`. Treat this column as reporting-only.
+
+**Still open on this table:** `last_login_ip` holds the literal **string** `'null'` on
+every row (the column's `DEFAULT` is the string, not SQL NULL) — a legacy Laravel artifact
+that reads as data; `getClientIp` (`src/utils/clientIp.ts`) now exists if it is ever wired
+up. `facebook_id` is `'0'` on every row (no social-login route exists at all). Both remain
+unwritten and are drop candidates.
+
+---
+
+## 2026-07-25 — `ws_course.featured_order` dropped (dead column)
+
+**DDL:** `docs/migration/schema-changes/2026-07-25_drop_course_featured_order.sql`
+(`ALTER TABLE ws_course DROP COLUMN featured_order`; idempotent guard). **Applied on the
+local staging clone (`websankul_staging_1`) 2026-07-25; pending on staging and
+production.** Re-run verified as a clean no-op.
+
+**Audit finding:** zero code paths touched this column — no read, no write, no filter, no
+`orderBy`. Its only repo references were three comments (two doc-comments in
+`src/modules/catalog-course/`, one historical note in
+`scripts/generate-migrated-modules.ts`) plus the Prisma mapping itself.
+`catalog-course.transformer.ts` stated it outright: *"mapped in Prisma but not surfaced
+(no consumer reads it)."* `ws_course` was the only table in the schema carrying the name.
+
+It implied a "featured course display order" capability that was never built.
+`ws_course.is_featured` **is** live (surfaced as the `isPopular` boolean, filterable on
+the course listing) — only the ordering half was missing, so featured courses have no
+defined order. If that ordering is ever wanted, it comes back as a deliberate feature
+rather than a dormant column.
+
+**Data:** NULL on every row, including the one row with `is_featured='1'`. Nothing lost.
+
+**Code changes** (deployed BEFORE the DDL):
+- `prisma/schema.prisma` — removed `featured_order Int? @map("featured_order")` from
+  `model Course` + `yarn prisma:generate`.
+- `catalog-course.transformer.ts` / `catalog-course.types.ts` — stale drift-notes
+  referencing the column updated.
+
+**No API contract change** — the column was never surfaced in any DTO.
+
+**Verified post-drop:** course reads work, `is_featured`→`isPopular` and
+`purchase`→`isPaid` still surface correctly, utf8mb4 (Gujarati) names intact, and the
+relation includes still resolve.
+
+**Related, NOT fixed here** — two other `ws_course` findings from the same audit:
+1. `shareable_link` is `''` on every row. `GET /client/courses/:id` overwrites it with a
+   computed `buildShareUrl(...)` (`course.controller.ts:152`), but the shared
+   `toCourseDto` returns the stored `''` — so the four surfaces built on it
+   (catalog list/detail, recently-added, educator details, admin customer details)
+   return an empty share link for the same course. Real inconsistency, still open.
+2. `ws_course.course_category_id = 0` on course 990115 — a `NOT NULL` FK holding sentinel
+   `0` with no matching `ws_course_subject_category` row. Prisma resolves the optional
+   relation to `null` (no crash), but that course has no subject category.
+
+---
+
+## 2026-07-25 — `ws_book_setting` origin columns removed (dead config)
+
+**DDL:** `docs/migration/schema-changes/2026-07-25_drop_book_setting_origin_cols.sql`
+(`ALTER TABLE ws_book_setting DROP COLUMN origin_city`, `DROP COLUMN origin_hub`;
+idempotent guards on both). **Applied on the local staging clone
+(`websankul_staging_1`) 2026-07-25; pending on staging and production.** Re-run verified
+as a clean no-op (guards hold).
+
+**Audit finding:** of this table's 7 non-id columns, only
+`free_shipping_min_order_amount` is consumed by business logic (`getFreeShippingMin()`,
+`book-order.service.ts:48` → checkout shipping waiver). `origin_city` / `origin_hub` had
+**zero** consumers: the courier integration (`src/config/courier.ts`,
+`src/libs/courier/tracking.ts`) has no origin/pickup/hub concept whatsoever, so there was
+nothing to wire them to. They were created with the table
+(`2026-06-22_book_setting.sql`) for a feature that was never built, and the admin
+settings CRUD merely echoed them back — settable, stored, never read.
+
+**Retained deliberately** (also unconsumed today, but not deleted):
+- `gst_rate` — books are taxable; likely a real future requirement. No GST calculation
+  exists anywhere yet (the book order breakdown has no tax line), so setting it is
+  currently a no-op.
+- `support_phone`, `terms_and_conditions` — customer-facing content with **no client
+  endpoint to deliver it**. These need a client route, not deletion.
+
+**Code changes** (must deploy BEFORE the DDL runs):
+- `prisma/schema.prisma` — dropped `originCity` / `originHub` from `model BookSetting`
+  + `yarn prisma:generate`. Prisma names its columns explicitly rather than `SELECT *`,
+  so the build is safe to run against a DB where the columns still exist — verified.
+- `admin-book.service.ts` — removed from `toBookSettingDto`, from the
+  `updateBookSettings` input type, and from both the `update` and `create` halves of the
+  upsert.
+- `admin/book/book.validation.ts` — removed from `updateSettingsSchema`.
+
+**API contract change (deliberate):** `originCity` and `originHub` no longer appear in
+`GET /admin/books/settings` or `PUT /admin/books/settings` responses, and `PUT` no longer
+accepts them (unknown keys are stripped by Zod, so an admin panel still sending them gets
+a 200 with the fields ignored rather than a 422). **The admin panel's settings form
+should drop these two inputs.**
+
+**Deploy order:** deploy the backend build first, then apply the DDL. Reversing the order
+leaves a build selecting columns that no longer exist.
+
+**Note:** `scripts/generate-migrated-modules.ts:1020` still carries a stale claim that
+there is "NO `ws_book_setting` table at all" — predates the table's creation, left
+unchanged here.
+
+---
+
+## 2026-07-25 — `ws_book_cart.user_ip_address` now captured
+
+**DDL:** none. The column (`user_ip_address VARCHAR(50) NULL`) is legacy and already
+exists; it was simply **absent from the Prisma `BookCart` model**, so no write could ever
+reach it and MySQL's `DEFAULT NULL` applied to every row (0/10 populated).
+
+**Schema:** hand-added `userIpAddress String? @map("user_ip_address") @db.VarChar(50)` to
+`model BookCart` in `prisma/schema.prisma` + `yarn prisma:generate`. (Hand-edited one
+model — **not** `db:pull`, which rewrites the curated schema.)
+
+**Note this was not silent data loss** — unlike `ws_banner_slider.key_id`, nothing was
+being submitted and discarded. The field existed in no request, DTO, or model. The
+column is a Laravel-era artifact for identifying an anonymous **guest cart** by IP; that
+premise died when `/api/v1/client/cart` went behind `authenticate` (`cart.routes.ts:15`),
+so every cart is keyed on `user_id` (0 guest rows). It is now captured for abuse/fraud
+review rather than identity.
+
+**Query-level changes:**
+- `clientCartRepository.ensureCart(customerId, userIpAddress = null)` — writes the IP on
+  create, and **refreshes it on an existing cart when it differs** from the stored value.
+  A cart outlives a session, so this keeps a last-acted-from address and also fills the
+  column on carts created before the mapping existed. The extra `UPDATE` fires only on an
+  actual change, never per read.
+- Threaded through the two service entry points that can create a cart:
+  `addToCart(..., userIpAddress)` and `attachShipping(..., userIpAddress)`; both default
+  to `null` so existing callers are unaffected.
+- Controller (`client/cart/cart.controller.ts`) supplies it on `POST /client/cart` and
+  the shipping-attach route.
+
+**New util** `src/utils/clientIp.ts` — `getClientIp(req, maxLength = 45)`. Reads `req.ip`
+(correct because `app.set("trust proxy", 1)`, `app.ts:42`) rather than the raw
+`X-Forwarded-For` header, which is a client-prependable hop list and can overflow a short
+column. Unwraps the IPv4-mapped IPv6 form (`::ffff:1.2.3.4`) and clamps to the column
+width. The three pre-existing sites that read the raw header directly
+(`admin.auth.controller.ts:30`, `tracking.controller.ts:37`,
+`promoter.auth.controller.ts:20`) were **left unchanged** — they are candidates to adopt
+this helper later.
+
+**No API contract change** — `user_ip_address` is not exposed in any cart DTO.
+
+**Data note:** the 10 existing carts stay `NULL` until their owner next acts on the cart,
+at which point `ensureCart` fills them. No backfill is possible; the addresses were never
+recorded.
+
+---
+
+## 2026-07-25 — `ws_banner_slider.key_id` un-stubbed (banner deep-link target now persists)
+
+**DDL:** none. The column (`key_id INT NULL`) and the Prisma field
+(`BannerSlider.keyId Int? @map("key_id")`) already existed and were correctly typed —
+the value was being discarded in application code, not rejected by the schema.
+
+**Bug:** `key_id` was `NULL` on every row and could never be anything else.
+`banner-slider.transformer.ts` hardcoded `keyId: null` in `toPrismaBannerCreate` **and**
+in `toBannerDto`, and omitted `keyId` entirely from `toPrismaBannerUpdate`. Validation
+(`bannerCreateSchema`) accepted `keyId`, so an admin sending a target got a **200 OK with
+silent data loss** — no error, nothing written. Introduced as a deliberate migration stub
+(comment in `banner-slider.types.ts`: *"the referenced catalog modules are not migrated
+yet"*); that premise stopped being true once the catalog modules went MySQL-only, but the
+stub was never removed.
+
+**Query-level changes:**
+- **WRITE** `toPrismaBannerCreate` now persists `key_id` from input (was: always `NULL`).
+- **WRITE** `toPrismaBannerUpdate` now writes `key_id`; `key` and `key_id` always move
+  together so re-keying a banner re-points or clears its target in the same statement —
+  a row can never retain a target belonging to the previous collection. An update that
+  touches neither still leaves `key_id` untouched.
+- **READ** `toBannerDto` returns `row.keyId` (was: always `null`). Serving the **scalar
+  int**, not a populated document: `key`/`keyRef` already identify the collection, and
+  populating would add a per-banner lookup across four tables on a 1h/24h-cached route.
+
+**API contract change (deliberate):** `keyId` in the banner DTO changes from a
+permanently-`null` `unknown` to `number | null`. Affects `GET /client/cms/banners`,
+`GET /admin/cms/banners`, `GET /admin/cms/banners/:id`, and the banner block of
+`GET /client/dashboard` (`client-dashboard.service.ts` reads `prisma.bannerSlider`
+directly). Existing rows all read `null` as before until re-saved — no backfill possible,
+the original targets were never stored.
+
+**Validation tightened** (`cms.validation.ts`): `keyId` is now **required** when `key` is
+`Packages|Courses|Book|EBook`, **rejected** when `key` is `Explore` (standalone CTA, no
+target), and must accompany `key` on update. New banner-only `bannerTargetId` accepts a
+positive integer as either a string (multipart, what the admin panel sends) or a number
+(a JSON client) — the shared `bannerRefId` still accepts a legacy 24-hex ObjectId and is
+**left unchanged**, as live-course banners depend on it.
+
+**Not touched:** `ws_live_banner_slider` / live-course banner routes and schemas.
+
+**QA:** admin create/update a banner per key; confirm `key_id` persists, that `Explore`
+stores `NULL`, that switching a banner to `Explore` clears a previous target, and that
+the client banner + dashboard responses return the id. Cache is flushed automatically by
+`autoFlushGroup("banner")` on all five write routes.
+
+---
+
+## 2026-07-24 — `ws_package_course_subscription` covering index (admin dashboard/analytics)
+
+**DDL:** `docs/migration/schema-changes/2026-07-24_pcs_created_at_index.sql`
+(`CREATE INDEX idx_pcs_created_course_amount ON ws_package_course_subscription
+(created_at, course_id, amount)`). **Applied on staging clone (`websankul_staging_1`)
+2026-07-24 during k6 load testing; pending on production.** Mirrored in
+`prisma/schema.prisma` as `@@index([createdAt, courseId, amount], name: "idx_pcs_created_course_amount")`.
+
+**Why:** k6 Phase-7 profiling (slow query log under cold-cache load) showed the admin
+dashboard + subscription-aggregate queries full-scanning all ~598,743 rows of
+`ws_package_course_subscription`. They filter `created_at` range (+ `course_id IS [NOT]
+NULL`) and aggregate `amount`; the pre-existing indexes (`PRIMARY(id)`,
+`idx_pcs_promoter(promoter_id, created_at)`) couldn't serve a bare `created_at` range.
+
+**Effect:** date-bounded aggregates go `type=ALL rows=598743` → `type=range rows=1 Using
+index`. Measured on the identical cold k6 scenario (PM2 2-worker): **group:analytics p95
+4.84s → 343ms (~14×), global p95 2.33s → 355ms (~6.6×), dashboard p95 2.02s → 406ms
+(~5×)**. No API/response-shape change — pure read-path speedup.
+
+**Follow-up (not covered by this index):** the admin subscription *list* query uses a
+wide/absent date range and still scans the table; a non-selective range can't use the
+index. Needs app-level date-scoping / pagination.
+
 ## 2026-07-24 — `ws_customer_address.city_id` dropped — city is a plain name string
 
 **DDL:** `docs/migration/schema-changes/2026-07-24_drop_customer_address_city_id.sql`

@@ -1,0 +1,3 @@
+# Result exports are run artifacts, not source (§9).
+*
+!.gitignore

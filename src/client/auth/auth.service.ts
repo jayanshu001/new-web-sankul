@@ -320,6 +320,7 @@ export async function logoutCustomer(customerId: string, traceId?: string): Prom
   const numId = Number(customerId);
   if (Number.isInteger(numId) && numId > 0) {
     await customerAuthRepository.deactivateTokens(numId);
+    await customerAuthRepository.markLoggedOut(numId);
   }
   await redisClient.del(`customer_session:${customerId}`);
   logger.info("logoutCustomer service completed", { traceId, customerId });

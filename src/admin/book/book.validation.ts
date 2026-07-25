@@ -103,6 +103,4 @@ export const updateSettingsSchema = z.object({
   supportPhone: z.string().max(20).optional(),
   termsAndConditions: z.array(z.string()).optional(),
   gstRate: z.number().min(0).optional(),
-  originCity: z.string().max(50).optional(),
-  originHub: z.string().max(100).optional(),
 });

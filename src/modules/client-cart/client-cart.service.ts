@@ -22,9 +22,9 @@ const toCartDto = (cart: any) => ({
 });
 
 // ─── add / update / remove ────────────────────────────────────────────────────
-export const addToCart = async (customerId: number, bookId: number, qty: number) => {
+export const addToCart = async (customerId: number, bookId: number, qty: number, userIpAddress: string | null = null) => {
   if (!(await repo.bookExists(bookId))) return { ok: false as const, reason: "book_not_found" as const };
-  const cart = await repo.ensureCart(customerId);
+  const cart = await repo.ensureCart(customerId, userIpAddress);
   const existing = await repo.findCartItem(cart.id, bookId);
   if (existing) {
     await repo.incrementItem(existing.id, qty);
@@ -115,7 +115,8 @@ export const getCart = async (customerId: number) => {
 // ─── attach shipping ──────────────────────────────────────────────────────────
 export const attachShipping = async (
   customerId: number,
-  addressId: number
+  addressId: number,
+  userIpAddress: string | null = null
 ): Promise<{ ok: false; reason: "address" | "phone" | "city" } | { ok: true; cart: any; shipping: any }> => {
   const address = await repo.findAddress(addressId, customerId);
   if (!address) return { ok: false, reason: "address" };
@@ -146,7 +147,7 @@ export const attachShipping = async (
     ? await repo.updateShipping(existing.id, shipData)
     : await repo.createShipping(shipData);
 
-  const cart = await repo.ensureCart(customerId);
+  const cart = await repo.ensureCart(customerId, userIpAddress);
   await repo.attachShipping(cart.id, shipping.id);
   const fresh = await repo.findActiveCartBare(customerId);
   // FE (Checkout) reads shipping.phone for display; the snapshot previously sent

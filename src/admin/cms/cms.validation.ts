@@ -46,13 +46,68 @@ export const currentAffairUpdateSchema = currentAffairCreateSchema.partial();
 // ─── Banner ──
 const bannerRefId = z.string().regex(refIdRegex, "Invalid id");
 
-export const bannerCreateSchema = z.object({
+// `ws_banner_slider.key_id` is a plain int column — unlike bannerRefId this
+// rejects a legacy ObjectId outright rather than accepting an id that could
+// never be stored. Accepts a number as well as a string: these routes are
+// multipart (everything arrives as a string) but a JSON client would send an
+// int, and both must reach the same positive-integer check.
+const bannerTargetId = z
+  .union([z.string(), z.number()])
+  .refine((v) => /^[1-9]\d*$/.test(String(v)), "Invalid keyId");
+
+/** Collection keys that deep-link to a row and therefore require `keyId`. */
+const BANNER_KEYS_NEEDING_TARGET = ["Packages", "Courses", "Book", "EBook"] as const;
+
+const bannerBaseSchema = z.object({
   image: z.string().min(1).max(500),
   key: z.enum(["Packages", "Courses", "Book", "EBook", "Explore"]).optional(),
-  keyId: bannerRefId.optional(),
+  keyId: bannerTargetId.optional(),
   orderBy: z.number().int().default(0),
 });
-export const bannerUpdateSchema = bannerCreateSchema.partial();
+
+/**
+ * `keyId` is mandatory whenever `key` selects a collection, and forbidden for
+ * `Explore` (a standalone CTA with no target). Enforced here so a banner can't
+ * be saved as a deep link that points nowhere.
+ */
+const refineBannerTarget = (
+  data: { key?: string; keyId?: string | number },
+  ctx: z.RefinementCtx
+) => {
+  const needsTarget =
+    data.key !== undefined &&
+    (BANNER_KEYS_NEEDING_TARGET as readonly string[]).includes(data.key);
+
+  if (needsTarget && data.keyId === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["keyId"],
+      message: `keyId is required when key is ${data.key}.`,
+    });
+  }
+  if (data.key === "Explore" && data.keyId !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["keyId"],
+      message: "keyId is not allowed when key is Explore.",
+    });
+  }
+  // On update `key` and `keyId` must travel together: a lone keyId can't be
+  // validated against the stored key, so it would risk stranding a target on an
+  // Explore banner.
+  if (data.key === undefined && data.keyId !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["key"],
+      message: "key is required when keyId is provided.",
+    });
+  }
+};
+
+export const bannerCreateSchema = bannerBaseSchema.superRefine(refineBannerTarget);
+export const bannerUpdateSchema = bannerBaseSchema
+  .partial()
+  .superRefine(refineBannerTarget);
 
 // ─── Live Banner ──
 export const liveBannerCreateSchema = z.object({

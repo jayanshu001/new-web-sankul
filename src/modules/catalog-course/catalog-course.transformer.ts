@@ -54,9 +54,8 @@ const toIsPaid = (v: Course["purchase"]): boolean => v !== "no";
 /**
  * `ws_course` row → DTO (flag OFF). The SQL enums `is_featured`/`purchase` are
  * now surfaced as the Mongo booleans `isPopular`/`isPaid` (needed by the course
- * listing's filter + response). `featured_order` is mapped in Prisma but not
- * surfaced (no consumer reads it). Other Mongo-only fields and the commerce
- * joins are produced by the composition service, not here.
+ * listing's filter + response). Other Mongo-only fields and the commerce joins
+ * are produced by the composition service, not here.
  */
 export const toCourseDto = (row: Course): CourseDto => ({
   _id: String(row.id),

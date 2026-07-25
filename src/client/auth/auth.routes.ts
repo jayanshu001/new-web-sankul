@@ -68,6 +68,7 @@ router.post(
       const numId = Number(customerId);
       if (Number.isInteger(numId) && numId > 0) {
         await customerAuthRepository.deactivateTokens(numId);
+        await customerAuthRepository.markLoggedOut(numId);
       }
     },
   })
