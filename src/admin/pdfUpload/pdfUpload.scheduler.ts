@@ -62,12 +62,20 @@ function buildConnection(): RedisType {
   });
 }
 
-export function getPdfUploadQueue(): Queue<PdfUploadJobData> {
-  if (!queue)
-    throw new Error(
-      "PDF upload scheduler not initialised. Call initPdfUploadScheduler() first."
-    );
+// Ensure a producer queue exists so jobs can be enqueued from HTTP handlers.
+// In split PM2 deployments the API runs with WORKER_ENABLED=false, yet POST
+// /admin/pdf-upload still calls enqueuePdfUploadJob. Idempotent — the worker's
+// initPdfUploadScheduler reuses whatever this created.
+function ensureProducer(): Queue<PdfUploadJobData> {
+  if (!queue) {
+    connection = connection ?? buildConnection();
+    queue = new Queue<PdfUploadJobData>(QUEUE_NAME, { connection });
+  }
   return queue;
+}
+
+export function getPdfUploadQueue(): Queue<PdfUploadJobData> {
+  return ensureProducer();
 }
 
 // The health endpoint reads these without throwing — a null queue/worker just
@@ -86,8 +94,8 @@ export function getPdfUploadWorkerOrNull(): Worker<PdfUploadJobData> | null {
  * Jobs run FIFO at concurrency 1, so the batch processes in insertion order.
  */
 export async function enqueuePdfUploadJob(jobRecordId: string): Promise<void> {
-  if (!queue) throw new Error("PDF upload scheduler not initialised.");
-  await queue.add(
+  const q = ensureProducer();
+  await q.add(
     "upload",
     { jobRecordId },
     {
@@ -291,8 +299,8 @@ export async function initPdfUploadScheduler(): Promise<void> {
   if (started) return;
   started = true;
 
-  connection = buildConnection();
-  queue = new Queue<PdfUploadJobData>(QUEUE_NAME, { connection });
+  // Reuse the producer queue if enqueue already lazily created it in this process.
+  ensureProducer();
 
   worker = new Worker<PdfUploadJobData>(
     QUEUE_NAME,

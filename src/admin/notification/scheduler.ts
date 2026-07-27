@@ -67,9 +67,22 @@ function buildConnection(): RedisType {
   });
 }
 
-export function getNotificationQueue(): Queue<NotificationJobData> {
-  if (!queue) throw new Error("Notification scheduler not initialised. Call initNotificationScheduler() first.");
+// Ensure a producer queue exists so jobs can be enqueued from HTTP handlers.
+// In split PM2 deployments the API runs with WORKER_ENABLED=false (so
+// initNotificationScheduler / the worker never run there), yet scheduled
+// broadcasts and live reminders still call scheduleNotificationJob from the
+// API process. Also covers the boot-race window before startWorkers() finishes
+// in single-process dev. Idempotent — initNotificationScheduler reuses it.
+function ensureProducer(): Queue<NotificationJobData> {
+  if (!queue) {
+    connection = connection ?? buildConnection();
+    queue = new Queue<NotificationJobData>(QUEUE_NAME, { connection });
+  }
   return queue;
+}
+
+export function getNotificationQueue(): Queue<NotificationJobData> {
+  return ensureProducer();
 }
 
 /**
@@ -103,13 +116,13 @@ export async function scheduleNotificationJob(
   scheduledAt: Date,
   options: ScheduleOptions = {}
 ): Promise<void> {
-  if (!queue) throw new Error("Notification scheduler not initialised.");
+  const q = ensureProducer();
   const delay = Math.max(0, scheduledAt.getTime() - Date.now());
 
   // Backpressure check. Cheap — single Redis HGETALL via BullMQ.
   if (!options.bypassBackpressure) {
     try {
-      const counts = await queue.getJobCounts("waiting", "delayed");
+      const counts = await q.getJobCounts("waiting", "delayed");
       const depth = (counts.waiting ?? 0) + (counts.delayed ?? 0);
       if (depth >= QUEUE_DEPTH_LIMIT) {
         logger.warn("Notification queue depth exceeded; rejecting new schedule.", {
@@ -129,14 +142,14 @@ export async function scheduleNotificationJob(
   // Remove any stale job for the same id (e.g. user rescheduled). BullMQ will
   // throw if a job with the same id already exists in a different state.
   try {
-    const existing = await queue.getJob(jobIdFor(notificationId));
+    const existing = await q.getJob(jobIdFor(notificationId));
     if (existing) await existing.remove();
   } catch {
     // ignore — getJob can throw if job is in a locked state; add() below will
     // either succeed or surface the real error.
   }
 
-  await queue.add(
+  await q.add(
     "dispatch",
     { notificationId },
     {
@@ -154,8 +167,8 @@ export async function scheduleNotificationJob(
  * Remove a scheduled job (cancel path). Safe to call if the job no longer exists.
  */
 export async function cancelNotificationJob(notificationId: string): Promise<void> {
-  if (!queue) return;
-  const job = await queue.getJob(jobIdFor(notificationId));
+  const q = ensureProducer();
+  const job = await q.getJob(jobIdFor(notificationId));
   if (job) {
     try {
       await job.remove();
@@ -230,9 +243,8 @@ export async function initNotificationScheduler(): Promise<void> {
   if (started) return;
   started = true;
 
-  connection = buildConnection();
-
-  queue = new Queue<NotificationJobData>(QUEUE_NAME, { connection });
+  // Reuse the producer queue if enqueue already lazily created it in this process.
+  ensureProducer();
   // DLQ: when a job exhausts its retries we push a copy here with the last
   // error attached. The DLQ has no worker — it's a forensics inbox you can
   // drain manually via the admin tooling (or replay back into the main
