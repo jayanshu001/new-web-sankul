@@ -8,7 +8,7 @@ export function search(token) {
   const g = 'search';
   const term = encodeURIComponent(pick(searchTerms) || 'gpsc');
 
-  const global = getJSON(`/search?search=${term}&page=1&limit=10`, token, g);
+  const global = getJSON(`/search?q=${term}&page=1&limit=10`, token, g);
   envelopeOk.add(checkEnvelope(global, 'global search'));
   sleep(1);
 

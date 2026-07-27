@@ -228,11 +228,31 @@ const hydrateCourseSubRows = async (rows: Awaited<ReturnType<typeof repo.listCou
   });
 };
 
+// Default a bounded created_at window for unscoped list queries so the admin
+// subscription report doesn't full-scan ~600k rows when no date/filter is sent
+// (k6 J7, dashboard widgets). Export keeps caller-supplied filters unchanged.
+const withListDateDefaults = (q: CourseSubReportQuery): CourseSubReportQuery => {
+  const hasDate = q.dateFrom || q.dateTo;
+  const hasNarrow =
+    q.customerId ||
+    q.courseId ||
+    q.packageId ||
+    q.search ||
+    q.promoterId ||
+    q.promocodeId;
+  if (hasDate || hasNarrow) return q;
+  const to = new Date();
+  const from = new Date(to);
+  from.setDate(from.getDate() - 90);
+  const isoDay = (d: Date) => d.toISOString().slice(0, 10);
+  return { ...q, dateFrom: isoDay(from), dateTo: isoDay(to) };
+};
+
 export const listCourseSubscriptions = async (q: CourseSubReportQuery & { page: number; limit: number }) => {
   const now = new Date();
   const emptyPage = { summary: { totalCount: 0, totalRevenue: 0, activeCount: 0, expiredCount: 0 }, data: [], pagination: { total: 0, page: q.page, limit: q.limit, totalPages: 0 } };
 
-  const resolved = await resolveCourseSubWhere(q, now);
+  const resolved = await resolveCourseSubWhere(withListDateDefaults(q), now);
   if (!resolved) return emptyPage;
   const { listWhere, sortBy, sortDir } = resolved;
 
@@ -262,7 +282,7 @@ export const listCourseSubscriptions = async (q: CourseSubReportQuery & { page: 
 const EXPORT_BATCH = 5_000;
 
 async function* iterateCourseSubExportRows(q: CourseSubReportQuery, now: Date) {
-  const resolved = await resolveCourseSubWhere(q, now);
+  const resolved = await resolveCourseSubWhere(withListDateDefaults(q), now);
   if (!resolved) return;
   const { listWhere } = resolved;
   let beforeId: number | undefined;

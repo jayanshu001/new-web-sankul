@@ -658,6 +658,7 @@ model BookOrder {
   createdAt        DateTime?         @map("created_at")
   updatedAt        DateTime?         @map("updated_at")
 
+  @@index([createdAt, status], name: "idx_book_order_created_status")
   @@map("ws_book_order")
 }
 
@@ -1344,6 +1345,7 @@ model PackageCourseSubscription {
 
   @@index([promoterId, createdAt], name: "idx_pcs_promoter")
   @@index([createdAt, courseId, amount], name: "idx_pcs_created_course_amount")
+  @@index([customerId, status, endAt], name: "idx_pcs_customer_status_endat")
   @@map("ws_package_course_subscription")
 }
 
@@ -1389,6 +1391,7 @@ model EBookOrder {
   updatedAt               DateTime?                     @updatedAt @map("updated_at")
   eBookSubscription       EBookSubscription[]
 
+  @@index([createdAt, status], name: "idx_ebook_order_created_status")
   @@map("ws_ebook_order")
 }
 
@@ -1412,6 +1415,7 @@ model EBookSubscription {
   created_by   Int?
   updated_by   Int?
 
+  @@index([customerId, status, endAt], name: "idx_ebook_sub_customer_status_endat")
   @@map("ws_ebook_subscription")
 }
 
@@ -1818,6 +1822,7 @@ model LiveCourseSubscription {
   created_by        Int?
   updated_by        Int?
 
+  @@index([createdAt, paymentStatus], name: "idx_lcs_created_payment")
   @@map("ws_live_course_subscription")
 }
 
@@ -2304,6 +2309,7 @@ model TestSeriesSubscription {
   created_by   Int?
   updated_by   Int?
 
+  @@index([createdAt], name: "idx_tss_created")
   @@map("ws_test_series_subscription")
 }
 

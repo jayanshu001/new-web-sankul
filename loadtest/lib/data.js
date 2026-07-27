@@ -1,7 +1,8 @@
 // Seeded, STABLE test data. SharedArray is mandatory (§9) — without it every VU
 // copies the dataset and the generator OOMs at high VU counts.
 //
-// IDs harvested 2026-07-24 from the local staging-clone DB via the client API.
+// IDs harvested from staging DB via the client API.
+// examIds updated 2026-07-27 — 300002 was unpublished on staging; use 300001.
 // Re-harvest if the target dataset changes (see loadtest/README.md).
 import { SharedArray } from 'k6/data';
 
@@ -11,7 +12,7 @@ export const packageIds = new SharedArray('packageIds', () => [
   990093, 990092, 94, 91, 88,
 ]);
 
-export const examIds = new SharedArray('examIds', () => [300002]);
+export const examIds = new SharedArray('examIds', () => [300001]);
 
 export const examCategoryIds = new SharedArray('examCategoryIds', () => [
   147, 146, 59, 137, 133, 138, 87, 80, 79, 85,

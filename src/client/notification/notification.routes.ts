@@ -19,9 +19,8 @@ router.get("/image-notifications", cacheRoute({ ttl: 86400, scope: "shared" }), 
 
 // Authenticated feed
 router.get("/notifications", authenticate, listMyNotifications);
-// Lightweight unread badge count — kept BEFORE the "/:id/read" param route so
-// "count" is never captured as an :id. Refreshes the bell without the full feed.
-router.get("/notifications/count", authenticate, getUnreadCount);
+// Lightweight unread badge count — short TTL so dashboard fan-out doesn't hit DB every second under load.
+router.get("/notifications/count", authenticate, cacheRoute({ ttl: 15, scope: "user" }), getUnreadCount);
 router.post("/notifications/read-all", authenticate, markAllAsRead);
 router.post("/notifications/:id/read", authenticate, markAsRead);
 
