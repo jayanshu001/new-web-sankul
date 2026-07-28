@@ -14,7 +14,11 @@ const objectIdSchema = z.coerce.string().refine(
 const baseShape = {
   name: z.string().min(1, "Name is required").max(255),
   slug: z.string().min(1, "Slug is required").max(255),
-  order: z.coerce.number().int().min(0).optional().default(0),
+  // No `.default(0)`: an omitted order must stay undefined so the service can
+  // assign the TOP slot (utils/listOrdering). Defaulting to 0 would tie the new
+  // row with every existing order=0 video and the id tie-break would bury it.
+  // An explicit order is still honoured as-is.
+  order: z.coerce.number().int().optional(),
   topic: z.string().max(500).optional().default(""),
   type: z.enum(["free", "paid"]).optional().default("free"),
   videoCategoryId: objectIdSchema,
@@ -69,7 +73,7 @@ export const updateVideoSchema = z
   .object({
     name: z.string().min(1).max(255).optional(),
     slug: z.string().min(1).max(255).optional(),
-    order: z.coerce.number().int().min(0).optional(),
+    order: z.coerce.number().int().optional(),
     topic: z.string().max(500).optional(),
     type: z.enum(["free", "paid"]).optional(),
     videoCategoryId: objectIdSchema.optional(),

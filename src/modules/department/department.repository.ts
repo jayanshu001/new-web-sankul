@@ -3,13 +3,16 @@ import type {
   DepartmentCreateInput,
   DepartmentUpdateInput,
 } from "./department.types";
+import { topSlotOrder } from "../../utils/listOrdering";
 import {
   toPrismaContactData,
   toPrismaDepartmentScalars,
 } from "./department.transformer";
 
+// ws_department / ws_department_contact carry no created_at, so the client
+// catalog rule (order ASC, created_at ASC) falls back to `id ASC` here.
 const withContacts = {
-  contacts: { orderBy: { order: "asc" as const } },
+  contacts: { orderBy: [{ order: "asc" as const }, { id: "asc" as const }] },
 };
 
 export const departmentRepository = {
@@ -20,7 +23,7 @@ export const departmentRepository = {
   findMany: (opts?: { active?: boolean; skip?: number; take?: number }) =>
     prisma.department.findMany({
       where: opts?.active !== undefined ? { active: opts.active } : undefined,
-      orderBy: { order: "asc" },
+      orderBy: [{ order: "asc" }, { id: "asc" }],
       include: withContacts,
       skip: opts?.skip,
       take: opts?.take,
@@ -37,11 +40,13 @@ export const departmentRepository = {
 
   /** Create department + its contacts in one transaction. */
   create: async (input: DepartmentCreateInput) => {
+    // No explicit order → TOP slot (see utils/listOrdering).
+    const order = input.order ?? topSlotOrder((await prisma.department.aggregate({ _min: { order: true } }))._min.order);
     const dept = await prisma.department.create({
       data: {
         name: input.name,
         decscription: input.description,
-        order: input.order ?? 0,
+        order,
         active: input.active ?? true,
       },
     });

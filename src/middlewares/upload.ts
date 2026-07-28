@@ -34,6 +34,17 @@ const s3Storage = multerS3({
   },
 });
 
+/**
+ * multer 2.x decodes multipart field/file names as **latin1** by default
+ * (node_modules/multer/index.js:22). A Gujarati or Hindi file name therefore
+ * arrives on `file.originalname` already mojibake — before any DB write — and
+ * the garbled bytes then fail the insert. Every `multer({...})` instance below
+ * must spread this so `originalname` is real UTF-8.
+ */
+const MULTER_UTF8: Pick<multer.Options, "defParamCharset"> = {
+  defParamCharset: "utf8",
+};
+
 const IMAGE_FIELDS = new Set(["image", "thumbnail", "profilePicture"]);
 const PDF_FIELDS = new Set(["demoUrl", "bookUrl", "file", "solutionPdfUrl"]);
 const IMAGE_TYPES = /jpeg|jpg|png|webp/;
@@ -41,6 +52,7 @@ const PDF_TYPES = /pdf/;
 const AUDIO_TYPES = /mp3|mpeg|m4a|aac|wav|webm|ogg|opus/;
 
 export const uploadS3 = multer({
+  ...MULTER_UTF8,
   storage: s3Storage,
   limits: {
     fileSize: 3 * 1024 * 1024, // 3 MB ceiling
@@ -70,6 +82,7 @@ const IMAGE_MAX_BYTES = 3 * 1024 * 1024;
 const PDF_MAX_BYTES = 50 * 1024 * 1024;
 
 export const uploadS3Mixed = multer({
+  ...MULTER_UTF8,
   storage: s3Storage,
   limits: {
     fileSize: PDF_MAX_BYTES,
@@ -143,6 +156,7 @@ const audioStorage = multerS3({
 });
 
 export const uploadS3Audio = multer({
+  ...MULTER_UTF8,
   storage: audioStorage,
   limits: {
     // ~20MB is plenty for short lecture-note recordings (≈40 min at 64 kbps).
@@ -178,6 +192,7 @@ const questionImageStorage = multerS3({
 });
 
 export const uploadQuestionImages = multer({
+  ...MULTER_UTF8,
   storage: questionImageStorage,
   limits: { fileSize: 2 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {

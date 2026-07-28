@@ -79,14 +79,14 @@ type LiveSub = {
 
 export const toLiveCourseDto = (
   s: LiveSub,
-  liveCourses: Lookup<{ name: string | null; image: string | null; level: string | null }>,
+  liveCourses: Lookup<{ name: string | null; image: string | null }>,
   plans: Lookup<{ name: string | null; duration: number; price: unknown }>,
   now: Date
 ) => {
   const live = liveCourses.get(s.liveCourseId);
   return {
     _id: String(s.id),
-    liveCourseId: ref(s.liveCourseId, live && { name: live.name, image: live.image, level: live.level }),
+    liveCourseId: ref(s.liveCourseId, live && { name: live.name, image: live.image }),
     planId: planRef(s.planId, s.planId != null ? plans.get(s.planId) : undefined),
     paidAmount: s.paidAmount ?? null,
     discountAmount: s.discountAmount ?? null,

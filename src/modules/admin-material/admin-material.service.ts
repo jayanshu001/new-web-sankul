@@ -1,4 +1,6 @@
 import { adminMaterialRepository as repo, ROOT } from "./admin-material.repository";
+import { topSlotOrder } from "../../utils/listOrdering";
+import { prisma } from "../../config/prisma";
 import { buildPagination } from "../../utils/listQuery";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import type { MaterialCategory, Material } from "@prisma/client";
@@ -113,12 +115,17 @@ export const createCategory = async (d: CategoryWriteInput) => {
   const now = new Date();
   // root = parent 0 sentinel (ws_material_category.parent is NOT NULL).
   const parent = d.parent ? parseMaterialId(d.parent) ?? ROOT : ROOT;
+  // No explicit order → TOP slot of the sibling list (scoped to the same parent, which
+  // is exactly how the list is filtered). See utils/listOrdering.
+  const catOrder = d.order ?? topSlotOrder(
+    (await prisma.materialCategory.aggregate({ where: { parent }, _min: { order_by: true } }))._min.order_by,
+  );
   const created = await repo.createCategory({
     name: d.title ?? "",
     slug: d.slug || slugify(d.title ?? ""),
     image: d.image ?? null,
     parent,
-    order_by: d.order ?? 0,
+    order_by: catOrder,
     status: d.status ?? true,
     created_at: now, updated_at: now,
   });
@@ -207,10 +214,36 @@ export const getCategoryCourses = async (
   return { data, pagination: buildPagination(total, q.page, q.limit) };
 };
 
-export const getCategoryMaterials = async (id: number, page: number, limit: number) => {
+/**
+ * Every product linked to this material category — courses, packages and live
+ * courses — in one paginated list, each row tagged with its `type` so the admin
+ * can tell them apart and link through to the right detail page.
+ *
+ * The older `getCategoryCourses` (GET .../courses) returns plain courses only and
+ * is kept for existing callers.
+ */
+export const getCategoryLinkedProducts = async (
+  id: number,
+  q: { search?: string; skip: number; take: number; page: number; limit: number },
+) => {
   const [rows, total] = await Promise.all([
-    repo.materialsForCategory(id, (page - 1) * limit, limit),
-    repo.countMaterials({ materialCategoryId: id }),
+    repo.linkedProductsForCategory(id, { search: q.search, skip: q.skip, take: q.take }),
+    repo.countLinkedProductsForCategory(id, q.search),
+  ]);
+  const data = rows.map((r) => ({
+    _id: String(r.id),
+    name: r.name ?? null,
+    image: r.image ?? null,
+    type: r.type,
+    status: Boolean(r.status),
+  }));
+  return { data, pagination: buildPagination(total, q.page, q.limit) };
+};
+
+export const getCategoryMaterials = async (id: number, page: number, limit: number, search?: string) => {
+  const [rows, total] = await Promise.all([
+    repo.materialsForCategory(id, (page - 1) * limit, limit, search),
+    repo.countMaterials({ materialCategoryId: id, search }),
   ]);
   return { data: rows.map((r) => toMaterialDto(r as MatRow)), total };
 };
@@ -241,13 +274,18 @@ export const createMaterial = async (d: MaterialWriteInput): Promise<"category" 
   // free material. See docs/client (study-materials-always-paid). The remaining
   // Mongo-only fields (description/thumbnail/fileSize/fileMime/language/isPreview/
   // downloadCount) are still dropped on this admin write path.
+  // No explicit order → TOP slot within its category (the list is filtered by
+  // materialCategoryId). See utils/listOrdering.
+  const matOrder = d.order ?? topSlotOrder(
+    (await prisma.material.aggregate({ where: { materialCategoryId: catId }, _min: { order_by: true } }))._min.order_by,
+  );
   const created = await repo.createMaterial({
     materialCategoryId: catId,
     name: d.title ?? "",
     file: d.file ?? "",
     fileName: d.fileName ?? null,
     direct_link: d.directLink ?? null,
-    order_by: d.order ?? 0,
+    order_by: matOrder,
     status: d.status ?? true,
     isPaid: true, // hard rule: every study material is paid
     created_at: now, updated_at: now,

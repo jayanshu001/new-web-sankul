@@ -13,6 +13,7 @@ import {
   reorderCategories,
   duplicateCategory,
   getCategoryCourses,
+  getCategoryLinkedProducts,
   getCategoryMaterials,
   listMaterials,
   getMaterialById,
@@ -42,6 +43,7 @@ router.delete("/categories/:id", autoFlushGroup("material-category"), deleteCate
 router.patch("/categories/:id/status", autoFlushGroup("material-category"), toggleCategoryStatus);
 router.post("/categories/:id/duplicate", autoFlushGroup("material-category"), duplicateCategory);
 router.get("/categories/:id/courses", getCategoryCourses);
+router.get("/categories/:id/products", getCategoryLinkedProducts);
 router.get("/categories/:id/materials", getCategoryMaterials);
 
 // Leaf materials

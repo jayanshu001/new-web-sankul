@@ -1,5 +1,6 @@
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
+import { extractNotificationRouting } from "../../utils/notificationTarget";
 
 /**
  * Client-facing notification reads on SQL (Wave 7 — net-new ws_notification).
@@ -36,12 +37,21 @@ const dismissedIdsFor = async (customerId: number): Promise<number[]> => {
   return rows.map((r) => r.notificationId);
 };
 
+// Routing fields (viewType / deepLink / clickAction / screen / params / live ids)
+// are spread in LAST and only when the row actually carries them, so a plain
+// announcement has no routing keys at all — the app's tap router checks presence,
+// and a `null` placeholder would read as "this has a destination".
+//
+// `deepLink` is intentionally spread over the explicit `deepLink: n.deepLink`
+// below it: extract() already prefers the column and falls back to data.deepLink,
+// so the spread is the more complete value, never a weaker one.
 const dto = (n: any) => ({
   _id: String(n.id), customerId: n.customerId != null ? String(n.customerId) : null,
   title: n.title, titleHtml: n.titleHtml ?? null, body: n.body, bodyHtml: n.bodyHtml ?? null,
   image: n.image ?? null, type: n.type, deepLink: n.deepLink ?? null,
   data: n.data ?? {}, isRead: n.isRead, readAt: n.readAt ?? null, broadcast: n.broadcast,
   status: n.status, createdAt: n.createdAt ?? null, updatedAt: n.updatedAt ?? null,
+  ...extractNotificationRouting({ deepLink: n.deepLink, data: n.data }),
 });
 
 export const listNotifications = async (

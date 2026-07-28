@@ -1,5 +1,6 @@
 import { bannerSliderRepository } from "./banner-slider.repository";
 import { toBannerDto, resolveBannerKey } from "./banner-slider.transformer";
+import { topSlotOrder } from "../../utils/listOrdering";
 import type {
   BannerCreateInput,
   BannerKey,
@@ -71,7 +72,13 @@ export const getBannerById = async (
 export const createBanner = async (
   input: BannerCreateInput
 ): Promise<BannerSliderDto> => {
-  const row = await bannerSliderRepository.create(input);
+  // No explicit orderBy → land on TOP of this key's list (utils/listOrdering),
+  // so a newly created banner is visible without a drag. An explicit value is
+  // honoured as-is.
+  const orderBy =
+    input.orderBy ??
+    topSlotOrder(await bannerSliderRepository.minOrderBy(input.key));
+  const row = await bannerSliderRepository.create({ ...input, orderBy });
   return toBannerDto(row);
 };
 

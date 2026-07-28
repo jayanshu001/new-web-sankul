@@ -1,12 +1,16 @@
+import fs from "fs";
+import path from "path";
 import { PrismaClient, Prisma } from "@prisma/client";
 import logger from "../utils/logger";
 import { incrementContext } from "../utils/requestContext";
+import { logPrismaSchemaDrift } from "../utils/prismaSchemaDrift";
 
 const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;
   prismaTimingInstalled?: boolean;
   prismaTimestampsInstalled?: boolean;
   prismaIstShiftInstalled?: boolean;
+  prismaDriftLogInstalled?: boolean;
 };
 
 // ── Auto-populate created/updated timestamps ────────────────────────────────
@@ -141,14 +145,86 @@ if (!globalForPrisma.prismaIstShiftInstalled) {
   globalForPrisma.prismaIstShiftInstalled = true;
 }
 
+// ── Schema-drift diagnostics ────────────────────────────────────────────────
+// Installed LAST so it wraps every other middleware and sees the error exactly
+// as the caller will. Its only job is to name the fault: a stale generated
+// client and an unapplied DDL both surface as an opaque
+// "Something went wrong. Please try again later." 500 from the controllers,
+// and they have different fixes. See utils/prismaSchemaDrift.ts for the
+// incident that motivated this.
+//
+// STRICTLY OBSERVATIONAL — the error is rethrown untouched. Callers must keep
+// seeing the original failure: endpoints like /client/downloads/encryption-key
+// treat 404 as "no key, mint one", so softening a drift error into anything
+// non-5xx would make the app mint a duplicate key and orphan a user's
+// already-downloaded files.
+if (!globalForPrisma.prismaDriftLogInstalled) {
+  prisma.$use(async (params, next) => {
+    try {
+      return await next(params);
+    } catch (err) {
+      logPrismaSchemaDrift(err, {
+        model: params.model,
+        action: params.action,
+      });
+      throw err;
+    }
+  });
+  globalForPrisma.prismaDriftLogInstalled = true;
+}
+
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.prisma = prisma;
 }
+
+/**
+ * Boot guard for the "stale generated client" fault.
+ *
+ * `prisma generate` writes into node_modules, which does NOT trip `tsx watch` —
+ * so editing prisma/schema.prisma, regenerating, and NOT restarting leaves a
+ * running dev server querying fields its client has never heard of. Every such
+ * request 500s while the database is perfectly healthy. That cost a round-trip
+ * bug report on 2026-07-28.
+ *
+ * Comparing mtimes catches it at startup, when it is one command to fix, rather
+ * than per-request in a stack trace. Warn-only and non-production-only: a fresh
+ * `npm ci` can legitimately leave node_modules newer or older than the schema,
+ * and this must never be able to block a deploy.
+ */
+const warnIfGeneratedClientIsStale = (): void => {
+  if (process.env.NODE_ENV === "production") return;
+  try {
+    const schemaPath = path.resolve(process.cwd(), "prisma", "schema.prisma");
+    const clientPath = path.resolve(
+      process.cwd(),
+      "node_modules",
+      ".prisma",
+      "client",
+      "index.d.ts"
+    );
+    const schemaAt = fs.statSync(schemaPath).mtimeMs;
+    const clientAt = fs.statSync(clientPath).mtimeMs;
+    if (schemaAt > clientAt) {
+      logger.warn(
+        "PRISMA CLIENT MAY BE STALE — prisma/schema.prisma is newer than the generated client. " +
+          "Queries against newly added fields will fail with PrismaClientValidationError (HTTP 500) " +
+          "even though the database is fine. FIX: run `yarn prisma:generate`, then restart this process.",
+        {
+          schemaModifiedAt: new Date(schemaAt).toISOString(),
+          clientGeneratedAt: new Date(clientAt).toISOString(),
+        }
+      );
+    }
+  } catch {
+    // Missing files / restricted fs — this is a convenience check, never fatal.
+  }
+};
 
 export const connectPrisma = async (): Promise<void> => {
   try {
     await prisma.$connect();
     logger.info("MySQL connected (Prisma).");
+    warnIfGeneratedClientIsStale();
   } catch (error) {
     logger.error("MySQL (Prisma) connection error:", error);
     throw error;

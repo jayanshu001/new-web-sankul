@@ -1,7 +1,9 @@
 import ExcelJS from "exceljs";
+import { topSlotOrder } from "../../utils/listOrdering";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import type { ReportSource } from "../../utils/reportStream";
+import { Prisma } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminBookRepository as repo } from "./admin-book.repository";
@@ -43,9 +45,10 @@ const DEFAULT_DELIVERY_ETA = "5-7 days";
  * (no SQL column/table).
  *
  * examCountdownIds / examCountdownCategoryIds are stored as JSON int-arrays on
- * ws_book (C6). This base DTO returns them UNPOPULATED ([]) for list/order
- * surfaces; the single-book detail (`getBook`) resolves them to the Mongo
- * `.populate()` shape via `populateExamCountdowns`.
+ * ws_book (C6). This base DTO returns the raw ID ARRAYS — the columns are already
+ * on the row (`repo.list` uses no `select`), so emitting them costs no extra
+ * query. The single-book detail (`getBook`) overlays the Mongo `.populate()`
+ * shape (ids → {_id, name, …}) via `populateExamCountdowns` on top of these.
  */
 // ws_book.thumbnail is NOT NULL, so create stores a " " (space) sentinel when no
 // thumbnail is given. Normalise blank/whitespace back to null on read so the API
@@ -53,41 +56,48 @@ const DEFAULT_DELIVERY_ETA = "5-7 days";
 const blankToNull = (v: string | null | undefined): string | null =>
   v != null && v.trim() !== "" ? v : null;
 
-export const toBookDto = (row: Book) => ({
-  _id: String(row.id),
-  name: row.name,
-  examCountdownCategoryId: null,
-  examCountdownCategoryIds: [],
-  examCountdownIds: [],
-  packageIds: [],
-  thumbnail: blankToNull(row.thumbnail),
-  author: row.author ?? null,
-  image: row.image ?? null,
-  description: row.description ?? null,
-  termsAndConditions: null,
-  demoUrl: row.demo_url ?? null,
-  bookUrl: null,
-  // Original demo-PDF upload name (books have no full-book PDF, so bookFileName
-  // stays null). Columns: demo_file_name.
-  demoFileName: blankToNull(row.demoFileName),
-  bookFileName: null,
-  weight: row.weight ?? 0,
-  pages: row.pages ?? 0,
-  dynamicLink: row.dynamic_link ?? null,
-  listPrice: row.list_price,
-  discountedPrice: row.discounted_price,
-  shippingPrice: row.shipping_price,
-  orderBy: row.order_by ?? 0,
-  language: row.language,
-  isMagazine: row.is_magazine,
-  isCombo: row.isCombo,
-  publication: DEFAULT_PUBLICATION,
-  deliveryEta: DEFAULT_DELIVERY_ETA,
-  isTrending: row.isTrending,
-  status: row.active,
-  createdAt: row.created_at ?? null,
-  updatedAt: row.updated_at ?? null,
-});
+export const toBookDto = (row: Book) => {
+  // Ids go out as strings to match the populated shape's `_id` (and every other
+  // id this API emits) — the admin drops non-string ids when normalising.
+  const countdownCategoryIds = parseIdArray(row.examCountdownCategoryIds).map(String);
+  const countdownIds = parseIdArray(row.examCountdownIds).map(String);
+  return {
+    _id: String(row.id),
+    name: row.name,
+    // Legacy single field mirrors the first category, same rule as `getBook`.
+    examCountdownCategoryId: countdownCategoryIds[0] ?? null,
+    examCountdownCategoryIds: countdownCategoryIds,
+    examCountdownIds: countdownIds,
+    packageIds: [],
+    thumbnail: blankToNull(row.thumbnail),
+    author: row.author ?? null,
+    image: row.image ?? null,
+    description: row.description ?? null,
+    termsAndConditions: null,
+    demoUrl: row.demo_url ?? null,
+    bookUrl: null,
+    // Original demo-PDF upload name (books have no full-book PDF, so bookFileName
+    // stays null). Columns: demo_file_name.
+    demoFileName: blankToNull(row.demoFileName),
+    bookFileName: null,
+    weight: row.weight ?? 0,
+    pages: row.pages ?? 0,
+    dynamicLink: row.dynamic_link ?? null,
+    listPrice: row.list_price,
+    discountedPrice: row.discounted_price,
+    shippingPrice: row.shipping_price,
+    orderBy: row.order_by ?? 0,
+    language: row.language,
+    isMagazine: row.is_magazine,
+    isCombo: row.isCombo,
+    publication: DEFAULT_PUBLICATION,
+    deliveryEta: DEFAULT_DELIVERY_ETA,
+    isTrending: row.isTrending,
+    status: row.active,
+    createdAt: row.created_at ?? null,
+    updatedAt: row.updated_at ?? null,
+  };
+};
 
 // ── customer / shipping / item DTOs (order surfaces) ───────────────────────────
 const toCustomerDto = (c: { id: number; fullName: string | null; phoneNumber: string; emailAddress?: string | null } | null) => {
@@ -113,18 +123,37 @@ const toShippingDto = (s: any | null) => {
 };
 
 // ── books: list / get ──────────────────────────────────────────────────────────
+/**
+ * Sortable columns exposed as `?sortBy=`. Anything else (or nothing) falls back
+ * to the curated manual order — order_by asc, then newest first.
+ */
+const BOOK_SORT_COLUMNS: Record<string, keyof Prisma.BookOrderByWithRelationInput> = {
+  name: "name",
+  createdAt: "created_at",
+  updatedAt: "updated_at",
+  orderBy: "order_by",
+  listPrice: "list_price",
+  discountedPrice: "discounted_price",
+};
+
 export const listBooks = async (q: {
   search?: string;
   language?: string;
   isMagazine?: boolean;
   isCombo?: boolean;
   status?: boolean;
+  sortBy?: string;
+  sortOrder?: string;
   page: number;
   limit: number;
 }) => {
   const opts = { search: q.search, language: q.language, isMagazine: q.isMagazine, isCombo: q.isCombo, status: q.status };
+  const column = q.sortBy ? BOOK_SORT_COLUMNS[q.sortBy] : undefined;
+  const direction: Prisma.SortOrder = q.sortOrder === "asc" ? "asc" : "desc";
+  // `id` breaks ties so paging stays stable when the sort column repeats.
+  const orderBy = column ? [{ [column]: direction }, { id: direction }] as Prisma.BookOrderByWithRelationInput[] : undefined;
   const [rows, total] = await Promise.all([
-    repo.list({ ...opts, skip: (q.page - 1) * q.limit, take: q.limit }),
+    repo.list({ ...opts, skip: (q.page - 1) * q.limit, take: q.limit, orderBy }),
     repo.count(opts),
   ]);
   return { data: rows.map(toBookDto), total };
@@ -173,6 +202,9 @@ const SENTINEL = { name: "", thumbnail: " ", pages: 0, dynamic_link: "", weight:
 
 export const createBook = async (d: BookWriteInput) => {
   const now = new Date();
+  // No explicit order → TOP slot so the new row lands first in the `order ASC`
+  // list instead of tying with every existing 0. See utils/listOrdering.
+  const bookOrder = d.orderBy ?? topSlotOrder((await prisma.book.aggregate({ _min: { order_by: true } }))._min.order_by);
   const created = await repo.create({
     name: d.name ?? SENTINEL.name,
     thumbnail: d.thumbnail ?? SENTINEL.thumbnail,
@@ -187,7 +219,7 @@ export const createBook = async (d: BookWriteInput) => {
     list_price: d.listPrice ?? 0,
     discounted_price: d.discountedPrice ?? 0,
     shipping_price: d.shippingPrice ?? SENTINEL.shipping_price,
-    order_by: d.orderBy ?? SENTINEL.order_by,
+    order_by: bookOrder,
     language: d.language ?? "Gujarati",
     is_magazine: d.isMagazine ?? false,
     isCombo: d.isCombo ?? false,

@@ -20,7 +20,7 @@ export const catalogMaterialRepository = {
   listActiveChildren: (parentId: number, opts?: { search?: string; skip?: number; take?: number }) =>
     prisma.materialCategory.findMany({
       where: catalogMaterialRepository.activeChildrenWhere(parentId, opts),
-      orderBy: [{ order_by: "asc" }, { id: "asc" }],
+      orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
       ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
       ...(opts?.take !== undefined ? { take: opts.take } : {}),
     }),

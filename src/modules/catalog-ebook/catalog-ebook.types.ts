@@ -44,8 +44,22 @@ export interface EbookDto {
    *  absent or unauthenticated. Always available to logged-in users (sample is free). */
   demoMediaToken: string | null;
   /** Media token for the BOOK PDF — resolve at /media/resolve. null unless the
-   *  customer has purchased the ebook (unpurchased users get null — no URL). */
+   *  customer has purchased the ebook (unpurchased users get null — no URL).
+   *  Also null when the ebook simply has no PDF attached — use `hasBookFile` to
+   *  tell the two apart. */
   bookMediaToken: string | null;
+  /**
+   * Whether a full book PDF is attached to this ebook (`ws_ebook.book_url`
+   * non-empty). Describes the ebook, NOT the caller's entitlement, so it is the
+   * same for every viewer.
+   *
+   * Purpose: `bookMediaToken` is null for two very different reasons — "you have
+   * not purchased this" vs "admin has not uploaded the PDF yet". Without this the
+   * client shows a purchased user "not available", which reads as a broken order.
+   *   isPurchased && !hasBookFile → PDF not uploaded yet (content gap, not payment)
+   *   isPurchased && hasBookFile  → bookMediaToken is non-null
+   */
+  hasBookFile: boolean;
   /** SQL `link` — usually overridden by a per-request deep link in the handler. */
   link: string;
   status: boolean;

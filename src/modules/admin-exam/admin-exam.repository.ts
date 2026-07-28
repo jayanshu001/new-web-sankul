@@ -124,7 +124,7 @@ export const adminExamRepository = {
     const search = buildPrismaSearch(opts.search, ["name"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
-    return prisma.examQuestion.findMany({ where, orderBy: [{ order_by: "asc" }, { createdAt: "asc" }], skip: opts.skip, take: opts.take });
+    return prisma.examQuestion.findMany({ where, orderBy: [{ order_by: "asc" }, { createdAt: "asc" }, { id: "asc" }], skip: opts.skip, take: opts.take });
   },
   countQuestions: (opts: { examId?: number; search?: string; status?: boolean }) => {
     const where: Prisma.ExamQuestionWhereInput = {};

@@ -49,7 +49,7 @@ export const listVideos = async (opts: {
   if (search) where.AND = search.AND;
   if (opts.priceType) where.priceType = opts.priceType;
   const [rows, total] = await Promise.all([
-    prisma.video.findMany({ where, orderBy: { order: "asc" }, skip: opts.skip, take: opts.limitNum, select: videoSelect }),
+    prisma.video.findMany({ where, orderBy: [{ order: "asc" }, { created_at: "asc" }], skip: opts.skip, take: opts.limitNum, select: videoSelect }),
     prisma.video.count({ where }),
   ]);
   return { rows, total };

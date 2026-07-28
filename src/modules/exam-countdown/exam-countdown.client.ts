@@ -42,7 +42,7 @@ const matchingIds = async (
     `SELECT id FROM ${table} WHERE status = 1 ` +
     `AND JSON_CONTAINS(${jsonCol}, CAST(? AS JSON))` +
     (nameSearch ? ` AND ${nameSearch.sql}` : ``) +
-    ` ORDER BY ${orderCol} ASC, id DESC`;
+    ` ORDER BY ${orderCol} ASC, created_at ASC`;
   const params: any[] = nameSearch ? [id, ...nameSearch.params] : [id];
   const rows = await prisma.$queryRawUnsafe<{ id: number }[]>(sql, ...params);
   return rows.map((r) => Number(r.id));
@@ -106,7 +106,6 @@ const liveDto = (c: any, plans: any[], subCount: number, endAt: Date | null, now
   ordered: c.ordered,
   isPaid: c.isPaid,
   isPopular: c.isPopular,
-  level: c.level ?? null,
   classType: c.classType,
   withMaterial: c.withMaterial ?? null,
   withoutMaterial: c.withoutMaterial ?? null,

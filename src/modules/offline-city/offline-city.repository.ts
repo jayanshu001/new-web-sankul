@@ -22,7 +22,7 @@ export const offlineCityRepository = {
         ...(opts?.stateId ? { state: opts.stateId } : {}),
       },
       include: stateInclude,
-      orderBy: [{ order: "asc" }, { name: "asc" }],
+      orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     }),
 
   /** Single city by id (cart `cityId` → name resolution + center listing). */

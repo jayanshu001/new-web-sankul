@@ -1,4 +1,6 @@
 import ExcelJS from "exceljs";
+import { topSlotOrder } from "../../utils/listOrdering";
+import { prisma } from "../../config/prisma";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import type { ReportSource } from "../../utils/reportStream";
@@ -41,13 +43,23 @@ export const parseDateBound = (v: string | undefined, end: boolean): Date | unde
  * terms_and_conditions→termsAndConditions, order_by→order, demo_url→demoUrl,
  * book_url→bookUrl, link→link, book_file_name→bookFileName,
  * demo_file_name→demoFileName (original PDF upload names). SQL-absent fields
- * read from ws_ebook.is_trending; the PDF-upload status fields
- * (book/demoUploadStatus/Progress) are omitted (Mongo-only).
+ * read from ws_ebook.is_trending.
  *
- * examCountdown* are stored as JSON int-arrays on ws_ebook (C6) and populated on
- * DETAIL reads via `populateExamCountdowns` — pass the resolved DTOs as `ec`.
- * List/write paths leave them empty (no per-row populate fan-out).
+ * PDF-upload status (book/demoUploadStatus + Progress) IS exposed — the async
+ * pipeline persists it onto ws_ebook precisely so the admin list/edit screens can
+ * render queued → in_progress → completed after a refresh, without depending on
+ * the per-session Socket.io room. (These were previously dropped here as
+ * "Mongo-only"; the columns are real SQL columns and always were populated.)
+ *
+ * examCountdown* are stored as JSON int-arrays on ws_ebook (C6). DETAIL reads
+ * pass the resolved DTOs as `ec` to get the Mongo `.populate()` shape; without
+ * `ec` the raw ID ARRAYS are emitted instead of nothing — the columns are already
+ * on the row, so list rows carry the ids at no extra query cost (matches
+ * ws_package, see admin-package.service.ts `jsonIdsToStrings`).
  */
+const jsonIdsToStrings = (v: unknown): string[] =>
+  Array.isArray(v) ? v.map((x) => String(x)) : [];
+
 export const toEbookDto = (
   row: EBook,
   ec?: {
@@ -57,9 +69,11 @@ export const toEbookDto = (
 ) => ({
   _id: String(row.id),
   name: row.name,
-  examCountdownCategoryId: ec ? ec.examCountdownCategoryIds[0] ?? null : null,
-  examCountdownCategoryIds: ec ? ec.examCountdownCategoryIds : [],
-  examCountdownIds: ec ? ec.examCountdownIds : [],
+  examCountdownCategoryId: ec
+    ? ec.examCountdownCategoryIds[0] ?? null
+    : jsonIdsToStrings(row.examCountdownCategoryIds)[0] ?? null,
+  examCountdownCategoryIds: ec ? ec.examCountdownCategoryIds : jsonIdsToStrings(row.examCountdownCategoryIds),
+  examCountdownIds: ec ? ec.examCountdownIds : jsonIdsToStrings(row.examCountdownIds),
   thumbnail: row.thumbnail,
   image: row.image,
   description: row.description ?? null,
@@ -74,6 +88,14 @@ export const toEbookDto = (
   // show the same name. Columns: book_file_name / demo_file_name.
   demoFileName: row.demoFileName ?? null,
   bookFileName: row.bookFileName ?? null,
+  // Async PDF-upload progress, written by the BullMQ pipeline (pdfUpload.scheduler).
+  // status ∈ queued | in_progress | completed | failed; null = never uploaded here.
+  // Clearing a URL resets its whole slot (url + fileName + status + progress) in
+  // updateEbook, so "completed" here always means the matching url IS set.
+  bookUploadStatus: row.bookUploadStatus ?? null,
+  bookUploadProgress: row.bookUploadProgress ?? 0,
+  demoUploadStatus: row.demoUploadStatus ?? null,
+  demoUploadProgress: row.demoUploadProgress ?? 0,
   link: row.shareableLink,
   isTrending: row.isTrending,
   status: row.active,
@@ -123,7 +145,8 @@ export const listEbooks = async (query: ListEbooksQuery) => {
     repo.count(opts),
   ]);
   // NB: wrap (not bare `rows.map(toEbookDto)`) so Array.map's index arg can't be
-  // mistaken for the optional `ec` populate param. List rows leave examCountdown* empty.
+  // mistaken for the optional `ec` populate param. List rows carry the raw
+  // examCountdown* ids (no populate fan-out); only detail resolves names.
   return { data: rows.map((r) => toEbookDto(r)), pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } };
 };
 
@@ -142,6 +165,8 @@ export const getEbookById = async (id: number) => {
 // ws_ebook NOT-NULL columns with no DB default → write-time sentinels.
 export const createEbook = async (d: any) => {
   const now = new Date();
+  // No explicit order → TOP slot (see utils/listOrdering).
+  const ebookOrder = d.order ?? topSlotOrder((await prisma.eBook.aggregate({ _min: { orderby: true } }))._min.orderby);
   const created = await repo.create({
     name: d.name,
     thumbnail: d.thumbnail ?? "",
@@ -150,10 +175,14 @@ export const createEbook = async (d: any) => {
     termsAndConditions: d.termsAndConditions ?? "",
     author: d.author ?? null,
     publisher: d.publisher ?? null,
-    orderby: d.order ?? 0,
+    orderby: ebookOrder,
     language: d.language,
     bookDemoUrl: d.demoUrl ?? "",
     bookUrl: d.bookUrl ?? "",
+    // Keep the original PDF names the controller lifted off the multipart parts;
+    // an empty slot must not carry a name (same rule as updateEbook).
+    demoFileName: d.demoUrl ? d.demoFileName ?? null : null,
+    bookFileName: d.bookUrl ? d.bookFileName ?? null : null,
     shareableLink: d.link ?? "",
     active: d.status ?? true,
     isTrending: d.isTrending ?? false,
@@ -178,8 +207,32 @@ export const updateEbook = async (id: number, d: any): Promise<ReturnType<typeof
   if (d.publisher !== undefined) data.publisher = d.publisher;
   if (d.order !== undefined) data.orderby = d.order;
   if (d.language !== undefined) data.language = d.language;
-  if (d.demoUrl !== undefined) data.bookDemoUrl = d.demoUrl ?? "";
-  if (d.bookUrl !== undefined) data.bookUrl = d.bookUrl ?? "";
+  // Clearing a PDF slot resets the WHOLE slot in one write — url, file name,
+  // upload status and progress — so the stored state can never contradict
+  // itself (e.g. bookUrl:"" with bookUploadStatus:"completed", which made every
+  // consumer trusting the status believe a PDF was attached). `null` and `""`
+  // both mean "cleared": the admin UI sends JSON null (no File in the payload →
+  // not multipart) and the multipart form sends "". Mirrors
+  // admin-book.service.ts's demoUrl handling, which has no status columns.
+  if (d.demoUrl !== undefined) {
+    data.bookDemoUrl = d.demoUrl ?? "";
+    if (!d.demoUrl) {
+      if (d.demoFileName === undefined) data.demoFileName = null;
+      data.demoUploadStatus = null;
+      data.demoUploadProgress = 0;
+    }
+  }
+  if (d.bookUrl !== undefined) {
+    data.bookUrl = d.bookUrl ?? "";
+    if (!d.bookUrl) {
+      if (d.bookFileName === undefined) data.bookFileName = null;
+      data.bookUploadStatus = null;
+      data.bookUploadProgress = 0;
+    }
+  }
+  // Only ever written here and by the async upload pipeline (pdfUpload.scheduler).
+  if (d.demoFileName !== undefined) data.demoFileName = d.demoFileName ?? null;
+  if (d.bookFileName !== undefined) data.bookFileName = d.bookFileName ?? null;
   if (d.link !== undefined) data.shareableLink = d.link ?? "";
   if (d.status !== undefined) data.active = d.status;
   if (d.isTrending !== undefined) data.isTrending = d.isTrending;

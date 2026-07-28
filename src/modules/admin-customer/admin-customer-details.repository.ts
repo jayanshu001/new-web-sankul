@@ -23,8 +23,10 @@ export const adminCustomerDetailsRepository = {
     prisma.eBookSubscription.findMany({ where: { customerId }, orderBy: { createdAt: "desc" } }),
   bookOrders: (customerId: number) =>
     prisma.bookOrder.findMany({ where: { userId: customerId }, orderBy: { createdAt: "desc" } }),
+  // `status: true` = not soft-deleted. DELETE /admin/subscriptions/customer-addresses/:id
+  // flips status to false; these reads must match that predicate or deleted rows reappear.
   addresses: (customerId: number) =>
-    prisma.customerAddress.findMany({ where: { userId: customerId }, orderBy: { created_at: "desc" } }),
+    prisma.customerAddress.findMany({ where: { userId: customerId, status: true }, orderBy: { created_at: "desc" } }),
 
   // ── hydration (by id) ───────────────────────────────────────────────────────
   coursesByIds: (ids: number[]) =>
@@ -34,7 +36,7 @@ export const adminCustomerDetailsRepository = {
   plansByIds: (ids: number[]) =>
     ids.length ? prisma.packageCourseEbookPrice.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, duration: true, price: true } }) : Promise.resolve([]),
   liveCoursesByIds: (ids: number[]) =>
-    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, level: true } }) : Promise.resolve([]),
+    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true } }) : Promise.resolve([]),
   liveCoursePlansByIds: (ids: number[]) =>
     ids.length ? prisma.liveCoursePlan.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, duration: true, price: true } }) : Promise.resolve([]),
   testSeriesByIds: (ids: number[]) =>
@@ -85,8 +87,10 @@ export const adminCustomerDetailsRepository = {
   pageBookOrders: (customerId: number, skip: number, take: number) =>
     prisma.bookOrder.findMany({ where: { userId: customerId }, orderBy: { createdAt: "desc" }, skip, take }),
 
+  // Soft-delete aware (see `addresses` above). Count and page MUST share the same
+  // predicate, otherwise the pagination envelope drifts from the rows returned.
   countAddresses: (customerId: number) =>
-    prisma.customerAddress.count({ where: { userId: customerId } }),
+    prisma.customerAddress.count({ where: { userId: customerId, status: true } }),
   pageAddresses: (customerId: number, skip: number, take: number) =>
-    prisma.customerAddress.findMany({ where: { userId: customerId }, orderBy: { created_at: "desc" }, skip, take }),
+    prisma.customerAddress.findMany({ where: { userId: customerId, status: true }, orderBy: { created_at: "desc" }, skip, take }),
 };

@@ -79,7 +79,7 @@ export const adminCourseRepository = {
     prisma.examCategoryCourse.findMany({
       where: { courseId, ...examCatNameSearch(opts.search) },
       include: { ExamCategory: { select: { id: true, name: true, image: true, status: true } } },
-      orderBy: { order: "asc" },
+      orderBy: [{ order: "asc" }, { id: "asc" }],
       skip: opts.skip,
       take: opts.take,
     }),
@@ -91,7 +91,7 @@ export const adminCourseRepository = {
     prisma.materialCategoryCourse.findMany({
       where: { courseId, ...materialCatNameSearch(opts.search) },
       include: { MaterialCategory: { select: { id: true, name: true, image: true, status: true } } },
-      orderBy: { order: "asc" },
+      orderBy: [{ order: "asc" }, { id: "asc" }],
       skip: opts.skip,
       take: opts.take,
     }),
@@ -107,7 +107,7 @@ export const adminCourseRepository = {
     prisma.courseBook.findMany({
       where: { courseId, ...courseBookNameSearch(opts.search) },
       include: { Book: true },
-      orderBy: { order: "asc" },
+      orderBy: [{ order: "asc" }, { id: "asc" }],
       skip: opts.skip,
       take: opts.take,
     }),
@@ -225,7 +225,7 @@ export const adminCourseRepository = {
 
   // ── video categories (global ws_video_category — courseId scope dropped) ──────
   listVideoCategories: (opts: { skip: number; take: number }) =>
-    prisma.videoCategory.findMany({ where: { status: true }, orderBy: [{ order_by: "asc" }, { created_at: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.videoCategory.findMany({ where: { status: true }, orderBy: [{ order_by: "asc" }, { created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
   countVideoCategories: () => prisma.videoCategory.count({ where: { status: true } }),
   findVideoCategoryBare: (id: number) => prisma.videoCategory.findUnique({ where: { id } }),
   createVideoCategory: (data: Prisma.VideoCategoryUncheckedCreateInput) => prisma.videoCategory.create({ data }),
@@ -278,7 +278,10 @@ function courseSortCol(sortBy: string): string {
   if (sortBy === "name") return "name";
   if (sortBy === "order" || sortBy === "ordered" || sortBy === "order_by") return "ordered";
   if (sortBy === "updatedAt" || sortBy === "updated_at") return "updatedAt";
-  return "createdAt";
+  if (sortBy === "createdAt" || sortBy === "created_at") return "createdAt";
+  // Default is the curated manual order (admins set ws_course.ordered; negatives float
+  // to the top), not recency — an explicit ?sortBy= still overrides it.
+  return "ordered";
 }
 
 function buildCourseWhere(opts: { search?: string; status?: boolean; isPaid?: boolean; isPopular?: boolean }): Prisma.CourseWhereInput {

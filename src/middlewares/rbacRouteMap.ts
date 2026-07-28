@@ -276,6 +276,7 @@ R("GET", "/materials/categories", ...view("study-materials.categories"));
 R("POST", "/materials/categories/reorder", "study-materials.categories.edit");
 R("POST", "/materials/categories/:id/duplicate", "study-materials.categories.create"); // was .duplicate
 R("GET", "/materials/categories/:id/courses", ...view("study-materials.categories"));
+R("GET", "/materials/categories/:id/products", ...view("study-materials.categories"));
 R("GET", "/materials/categories/:id/materials", ...view("study-materials.categories"));
 R("PATCH", "/materials/categories/:id/status", "study-materials.categories.toggle-status");
 R("POST", "/materials/categories", "study-materials.categories.create");
@@ -416,6 +417,7 @@ crud("/address/cities", "address.cities");
 
 // ── /exam-countdowns → exam-countdowns (+ categories) ──────────────────────
 R("GET", "/exam-countdowns/categories", ...view("exam-countdowns.categories"));
+R("GET", "/exam-countdowns/categories/:id", ...view("exam-countdowns.categories"));
 R("POST", "/exam-countdowns/categories", "exam-countdowns.categories.create");
 R("PUT", "/exam-countdowns/categories/:id", "exam-countdowns.categories.edit");
 R("DELETE", "/exam-countdowns/categories/:id", "exam-countdowns.categories.delete");
@@ -481,6 +483,9 @@ R("POST", "/live-courses/:id/folders/:fid/videos", "live-courses.create");
 R("GET", "/live-courses/:id/folders/:fid/videos/:vid", ...view("live-courses"));
 R("PUT", "/live-courses/:id/folders/:fid/videos/:vid", "live-courses.edit");
 R("DELETE", "/live-courses/:id/folders/:fid/videos/:vid", "live-courses.delete");
+// Bulk drag-and-drop reorder — an edit, and it must be declared BEFORE crud()
+// (first match wins) so it isn't left unmatched.
+R("POST", "/live-courses/reorder", "live-courses.edit");
 R("GET", "/live-courses/:id/folders", ...view("live-courses"));
 R("POST", "/live-courses/:id/folders", "live-courses.create");
 R("PATCH", "/live-courses/:id/folders/:fid", "live-courses.edit");

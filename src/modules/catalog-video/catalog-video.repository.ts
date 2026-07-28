@@ -15,11 +15,11 @@ export const catalogVideoRepository = {
   findVideoById: (id: number) =>
     prisma.video.findFirst({ where: { id, status: true } }),
 
-  /** Active videos in a category, ordered by `order_by` then id (Mongo parity). */
+  /** Active videos in a category, ordered by `order_by` then oldest-first. */
   listActiveVideosByCategory: (videoCategoryId: number) =>
     prisma.video.findMany({
       where: { status: true, videoCategoryId },
-      orderBy: [{ order: "asc" }, { id: "asc" }],
+      orderBy: [{ order: "asc" }, { created_at: "asc" }],
     }),
 
   /** Count active videos in a category (catalog group counts). */
@@ -35,11 +35,11 @@ export const catalogVideoRepository = {
   findCategoryByIdAny: (id: number) =>
     prisma.videoCategory.findFirst({ where: { id } }),
 
-  /** Active categories, ordered by `order_by` then title. */
+  /** Active categories, ordered by `order_by` then oldest-first. */
   listActiveCategories: () =>
     prisma.videoCategory.findMany({
       where: { status: true },
-      orderBy: [{ order_by: "asc" }, { title: "asc" }],
+      orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
     }),
 
   /**
@@ -52,7 +52,7 @@ export const catalogVideoRepository = {
     if (!childIds.length) return [];
     return prisma.videoCategory.findMany({
       where: catalogVideoRepository.activeChildrenWhere(childIds, opts),
-      orderBy: [{ order_by: "asc" }, { title: "asc" }],
+      orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
       ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
       ...(opts?.take !== undefined ? { take: opts.take } : {}),
     });

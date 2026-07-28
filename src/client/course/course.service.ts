@@ -109,7 +109,10 @@ export async function upsertCourseOrderShipping(
   };
 
   // ── CustomerAddress (address book side-effect) ──
-  const address = await prisma.customerAddress.findFirst({ where: match });
+  // Only an ACTIVE row counts as "already in the book". Without `status: true` a
+  // previously soft-deleted address matches here, create is skipped, and the address
+  // never comes back into the customer's list.
+  const address = await prisma.customerAddress.findFirst({ where: { ...match, status: true } });
   if (!address) {
     // Reuse the customer-address repo's create (owns the address-column write).
     await customerAddressRepository.create({

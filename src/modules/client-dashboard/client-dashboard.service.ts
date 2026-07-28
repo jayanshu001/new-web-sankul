@@ -105,18 +105,20 @@ export const buildHomeDashboard = async (customerId: number | null) => {
     // Bounded like every other section here. ws_banner_slider has no status
     // column, so there is nothing to filter — the cap exists purely so the home
     // route can never be forced into an unbounded read as the table grows.
-    prisma.bannerSlider.findMany({ orderBy: { orderBy: "asc" }, take: BANNER_LIMIT }),
+    prisma.bannerSlider.findMany({ orderBy: [{ orderBy: "asc" }, { created_at: "asc" }], take: BANNER_LIMIT }),
     // "Recently Added" = newest Planner packages + Smart packages + live courses,
     // merged by created date desc (kind-tagged). Capped to the section limit here;
     // the full paginated + searchable feed lives at GET /client/recently-added.
     listRecentlyAdded(customerId, { page: 1, limit: DASHBOARD_SECTION_LIMIT }),
-    prisma.course.findMany({ where: { status: true }, orderBy: { createdAt: "desc" }, take: DASHBOARD_SECTION_LIMIT }),
+    prisma.course.findMany({ where: { status: true }, orderBy: [{ ordered: "asc" }, { createdAt: "asc" }], take: DASHBOARD_SECTION_LIMIT }),
     fetchTrendingBooksOnly({ type: "paid", customerId }),
     fetchTrendingEbooksOnly({ type: "paid" }),
     prisma.testimonial.findMany({ orderBy: { rating: "desc" }, take: DASHBOARD_SECTION_LIMIT }),
-    prisma.courseSubjectCategory.findMany({ where: { status: true }, orderBy: { id: "asc" }, take: COURSE_CATEGORY_LIMIT }),
+    prisma.courseSubjectCategory.findMany({ where: { status: true }, orderBy: [{ order: "asc" }, { createdAt: "asc" }], take: COURSE_CATEGORY_LIMIT }),
     fetchPrioritizedCountdowns(customerId, EXAM_COUNTDOWN_LIMIT),
-    prisma.exam.findFirst({ where: { type: "daily" as any, status: true, startAt: { lte: now }, endAt: { gte: now } }, orderBy: { startAt: "desc" } }),
+    // `endAt: null` = open-ended (no end date) — still live, so it must match here
+    // too, otherwise an open-ended daily test never surfaces on the dashboard.
+    prisma.exam.findFirst({ where: { type: "daily" as any, status: true, startAt: { lte: now }, OR: [{ endAt: null }, { endAt: { gte: now } }] }, orderBy: { startAt: "desc" } }),
     customerId ? notificationUnreadCount(customerId).catch(() => 0) : 0,
   ]);
 
@@ -166,8 +168,9 @@ export const buildHomeDashboard = async (customerId: number | null) => {
       for (const s of subs) { if (s.ebookId == null || s.endAt == null) continue; const prev = ebookEndAt.get(s.ebookId); if (!prev || s.endAt > prev) ebookEndAt.set(s.ebookId, s.endAt); }
     }
   }
-  const trendingBookData = trendingBooks.items.map((b: any) => ({ ...b, isPaid: (b.price ?? 0) > 0, isPurchased: ownedBookSet.has(Number(b._id)), daysLeft: null }));
-  const trendingEbookData = trendingEbooks.items.map((e: any) => { const endAt = ebookEndAt.get(Number(e._id)) ?? null; return { ...e, isPaid: !e.isFree, isPurchased: !!endAt, daysLeft: endAt ? computeDaysLeft(endAt, now) : null }; });
+  // `orderBy` is an internal sort key on the trending DTO — strip before emitting.
+  const trendingBookData = trendingBooks.items.map(({ orderBy: _o, ...b }: any) => ({ ...b, isPaid: (b.price ?? 0) > 0, isPurchased: ownedBookSet.has(Number(b._id)), daysLeft: null }));
+  const trendingEbookData = trendingEbooks.items.map(({ orderBy: _o, ...e }: any) => { const endAt = ebookEndAt.get(Number(e._id)) ?? null; return { ...e, isPaid: !e.isFree, isPurchased: !!endAt, daysLeft: endAt ? computeDaysLeft(endAt, now) : null }; });
 
   // daily test attempt state
   let dailyTestSection: any = null;

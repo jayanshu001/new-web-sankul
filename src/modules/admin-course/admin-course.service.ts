@@ -1,4 +1,6 @@
 import { adminCourseRepository as repo } from "./admin-course.repository";
+import { topSlotOrder } from "../../utils/listOrdering";
+import { prisma } from "../../config/prisma";
 import { parseIdArray, populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
 import { buildPagination } from "../../utils/listQuery";
 import type { Course } from "@prisma/client";
@@ -153,12 +155,15 @@ const pivotRows = (refs?: Array<{ category: number; order: number }>) =>
 
 export const createCourse = async (d: CourseWriteInput) => {
   const now = new Date();
+  // No explicit order → TOP slot so the new row lands first in the `order ASC`
+  // list instead of tying with every existing 0. See utils/listOrdering.
+  const courseOrder = d.ordered ?? topSlotOrder((await prisma.course.aggregate({ _min: { ordered: true } }))._min.ordered);
   const course = await repo.createCourse({
     data: {
       name: d.name ?? null,
       description: d.description ?? "",
       image: d.image ?? null,
-      ordered: d.ordered ?? 0,
+      ordered: courseOrder,
       shareableLink: d.shareableLink ?? "",
       withMaterial: d.withMaterial ?? "0",
       withoutMaterial: d.withoutMaterial ?? "0",

@@ -37,18 +37,25 @@ const buildBannerWhere = (opts: BannerListOpts) => {
 };
 
 export const bannerSliderRepository = {
-  /** Legacy API sorts by orderBy asc; optional `key` filter (client). */
+  /** Client list: `order_by ASC, created_at ASC`; optional `key` filter. */
   findMany: (opts?: { key?: BannerKey }) =>
     prisma.bannerSlider.findMany({
       where: opts?.key ? { key: BANNER_KEY_TO_MYSQL[opts.key] } : undefined,
-      orderBy: { orderBy: "asc" },
+      orderBy: [{ orderBy: "asc" }, { created_at: "asc" }],
     }),
 
-  /** Admin paginated + search list. */
+  /**
+   * Paginated + search list — backs BOTH the admin list (sortBy/sortDir) and the
+   * client `/client/cms/banners` page. `created_at ASC` is appended as the
+   * tiebreaker so the client's default `order_by ASC` page is deterministic.
+   */
   findPage: (opts: BannerListOpts) =>
     prisma.bannerSlider.findMany({
       where: buildBannerWhere(opts),
-      orderBy: { [BANNER_SORT_COLUMNS[opts.sortBy ?? ""] ?? "orderBy"]: opts.sortDir ?? "asc" },
+      orderBy: [
+        { [BANNER_SORT_COLUMNS[opts.sortBy ?? ""] ?? "orderBy"]: opts.sortDir ?? "asc" },
+        { created_at: "asc" },
+      ],
       ...(opts.skip != null ? { skip: opts.skip } : {}),
       ...(opts.take != null ? { take: opts.take } : {}),
     }),
@@ -57,6 +64,21 @@ export const bannerSliderRepository = {
     prisma.bannerSlider.count({ where: buildBannerWhere(opts) }),
 
   findById: (id: number) => prisma.bannerSlider.findUnique({ where: { id } }),
+
+  /**
+   * Smallest `orderBy` within ONE banner list — the input to the top-slot
+   * calculation on create (see utils/listOrdering). Scoped by `key` because each
+   * key (Packages/Courses/Book/EBook/Explore) is its own independently ordered
+   * list in the admin UI; a global minimum would put a new Courses banner above
+   * rows it never shares a screen with.
+   */
+  minOrderBy: async (key?: BannerKey): Promise<number | null> =>
+    (
+      await prisma.bannerSlider.aggregate({
+        where: key ? { key: BANNER_KEY_TO_MYSQL[key] } : { key: null },
+        _min: { orderBy: true },
+      })
+    )._min.orderBy ?? null,
 
   create: (input: BannerCreateInput) =>
     prisma.bannerSlider.create({ data: toPrismaBannerCreate(input) }),

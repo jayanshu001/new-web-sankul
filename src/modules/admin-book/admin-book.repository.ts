@@ -15,10 +15,12 @@ import { buildPrismaSearch, buildLikeTokens } from "../../utils/searchFilter";
  */
 export const adminBookRepository = {
   // ── books: list / get ──────────────────────────────────────────────────────
-  list: (opts: { search?: string; language?: string; isMagazine?: boolean; isCombo?: boolean; status?: boolean; skip: number; take: number }) =>
+  list: (opts: { search?: string; language?: string; isMagazine?: boolean; isCombo?: boolean; status?: boolean; skip: number; take: number; orderBy?: Prisma.BookOrderByWithRelationInput[] }) =>
     prisma.book.findMany({
       where: buildWhere(opts),
-      orderBy: [{ order_by: "asc" }, { created_at: "desc" }, { id: "desc" }],
+      // Default is the curated manual order; `orderBy` overrides it when the
+      // caller passed an explicit sortBy (e.g. ?sortBy=updatedAt&sortOrder=desc).
+      orderBy: opts.orderBy ?? [{ order_by: "asc" }, { created_at: "desc" }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
     }),
@@ -65,7 +67,7 @@ export const adminBookRepository = {
         user: { select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } },
         shipping: true,
       },
-      orderBy: { [orderSortCol(opts.sortBy)]: opts.sortDir },
+      orderBy: [{ [orderSortCol(opts.sortBy)]: opts.sortDir }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
     }),

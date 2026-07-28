@@ -317,6 +317,13 @@ model Customer {
   // write path exists). Default "0" matches the dump's column default.
   facebookId                String?                     @default("0") @map("facebook_id") @db.VarChar(255)
   firebaseToken             String?                     @map("device") @db.Text
+  // AES-256 key (64 hex chars) the mobile app uses to encrypt/decrypt its
+  // offline downloads (`.wsenc`). Generated ONCE per user by the app and parked
+  // here so it survives logout / reinstall. SECRET — same handling class as
+  // `password` / `otp`: never log it, never put it in a DTO, and only ever
+  // return it to the authenticated owner via /client/downloads/encryption-key.
+  // NULL = this user has never stored a key (the API's documented 404 state).
+  downloadKeyHex            String?                     @map("download_key_hex") @db.VarChar(64)
   os_type                   OsType                      @default(android)
   lastLogin                 DateTime?                   @map("last_login_date")
   lastLoginIp               String?                     @map("last_login_ip") @db.VarChar(255)
@@ -760,6 +767,7 @@ model ExamQuestion {
   answers             ExamQuestionOption[]
   examResultDetail    ExamResultDetail[]
 
+  @@index([exam, status], map: "idx_exam_question_exam_status")
   @@map("ws_exam_question")
 }
 
@@ -798,6 +806,8 @@ model ExamResult {
   status           Boolean?           @map("qresult_status")
   examResultDetail ExamResultDetail[]
 
+  @@index([customerId, examId, status], map: "idx_exam_result_cust_exam_status")
+  @@index([examId, status, customerId], map: "idx_exam_result_exam_status")
   @@map("ws_exam_result")
 }
 
@@ -816,6 +826,7 @@ model ExamResultDetail {
   result             ExamResultType      @map("qresult_detail_result")
   point              Decimal             @map("qresult_detail_point")
 
+  @@index([examResultId, questionId], map: "idx_exam_result_detail_attempt_question")
   @@map("ws_exam_result_detail")
 }
 
@@ -831,6 +842,7 @@ model ExamResultDetailAnalytics {
   failed     Int
   score      Decimal
 
+  @@index([customerId], map: "idx_exam_result_analytics_user")
   @@map("ws_exam_result_detail_analytics")
 }
 
@@ -1737,7 +1749,6 @@ model LiveCourse {
   shareableLink            String?   @map("shareable_link")
   withMaterial             String?   @map("with_material")
   withoutMaterial          String?   @map("without_material")
-  level                    String?
   classType                String    @default("live") @map("class_type")
   status                   Boolean   @default(true)
   isPaid                   Boolean   @default(true) @map("is_paid")

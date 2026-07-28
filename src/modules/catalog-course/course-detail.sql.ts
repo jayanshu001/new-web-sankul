@@ -25,6 +25,7 @@ import { listActivePricesByCourses } from "../commerce-price/commerce-price.serv
 import { listActiveForCoursesOrPlans } from "../commerce-subscription/commerce-subscription.service";
 import { populateExamCountdowns } from "../exam-countdown/exam-countdown.service";
 import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
+import { byOrderThenCreatedAt } from "../../utils/catalogOrder";
 
 const sid = (n: number | null | undefined) => (n == null ? null : String(n));
 
@@ -72,7 +73,7 @@ export const buildCourseDetailsSql = async (
       const [count, childCount, list] = await Promise.all([
         prisma.video.count({ where: { videoCategoryId: { in: [...reachable] }, status: true } }),
         prisma.videoCategoryRelation.count({ where: { parent: videoCat.id } }),
-        prisma.video.findMany({ where: { videoCategoryId: videoCat.id, status: true }, orderBy: { order: "asc" } }),
+        prisma.video.findMany({ where: { videoCategoryId: videoCat.id, status: true }, orderBy: [{ order: "asc" }, { created_at: "asc" }] }),
       ]);
       let progByVideo = new Map<number, any>();
       if (customerId && list.length) {
@@ -94,7 +95,7 @@ export const buildCourseDetailsSql = async (
   }
 
   // ── Materials: pivot → active categories + subtree material counts ──
-  const matRefs = [...course.materialCategoryCourse].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const matRefs = [...course.materialCategoryCourse].sort(byOrderThenCreatedAt);
   const matCatIds = matRefs.map((r) => r.materialCategoryId).filter((n): n is number => n != null);
   const matCats = matCatIds.length
     ? await prisma.materialCategory.findMany({ where: { id: { in: matCatIds }, status: true } })
@@ -114,7 +115,7 @@ export const buildCourseDetailsSql = async (
   }
 
   // ── Tests: pivot → active exam categories + subtree published-exam counts ──
-  const examRefs = [...course.examCategoryCourse].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const examRefs = [...course.examCategoryCourse].sort(byOrderThenCreatedAt);
   const examCatIds = examRefs.map((r) => r.examCategoryId).filter((n): n is number => n != null);
   const examCats = examCatIds.length
     ? await prisma.examCategory.findMany({ where: { id: { in: examCatIds }, status: true } })

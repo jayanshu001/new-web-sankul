@@ -32,7 +32,7 @@ export const catalogExamRepository = {
   /**
    * List exam categories with optional parent / name-search / status filters.
    * Always excludes soft-deleted rows (Mongo parity — deleted docs don't exist
-   * in Mongo). Ordered by `order_by, name` to match the Mongo `{ orderBy:1, name:1 }`.
+   * in Mongo). Ordered by `order_by ASC, created_at ASC` (client catalog ordering).
    * `parentRoot` selects top-level rows (parent_id = 0, the SQL root sentinel).
    * When `skip`/`take` are provided the result is paginated.
    */
@@ -51,7 +51,7 @@ export const catalogExamRepository = {
       where,
       orderBy: opts.newestFirst
         ? [{ created_at: "desc" }, { id: "desc" }]
-        : [{ order_by: "asc" }, { name: "asc" }],
+        : [{ order_by: "asc" }, { created_at: "asc" }],
       ...(opts.skip !== undefined ? { skip: opts.skip } : {}),
       ...(opts.take !== undefined ? { take: opts.take } : {}),
     });
@@ -85,7 +85,7 @@ export const catalogExamRepository = {
   listAllActive: () =>
     prisma.examCategory.findMany({
       where: { status: true, deleted: false },
-      orderBy: [{ order_by: "asc" }, { name: "asc" }],
+      orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
     }),
 
   /** Packages linked to a category via ws_exam_category_package (paginated). */
@@ -165,7 +165,7 @@ export const catalogExamRepository = {
   listActiveChildren: (parentId: number, opts?: { search?: string; skip?: number; take?: number }) =>
     prisma.examCategory.findMany({
       where: catalogExamRepository.activeChildrenWhere(parentId, opts),
-      orderBy: [{ order_by: "asc" }, { id: "asc" }],
+      orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
       ...(opts?.skip !== undefined ? { skip: opts.skip } : {}),
       ...(opts?.take !== undefined ? { take: opts.take } : {}),
     }),

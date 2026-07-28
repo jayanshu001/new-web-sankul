@@ -34,9 +34,13 @@ const applyEbookUploads = (req: Request) => {
       }
     }
   }
+  // A cleared PDF slot must clear its file name too. The multipart form sends ""
+  // but the admin UI's Remove button sends JSON `null` (there is no File in the
+  // payload, so the request isn't multipart at all) — both mean "cleared".
   for (const urlField of ["demoUrl", "bookUrl"] as const) {
-    if (req.body[urlField] === "") {
-      req.body[NAME_FIELD_BY_URL[urlField]] = "";
+    const url = req.body[urlField];
+    if (url === "" || url === null) {
+      req.body[NAME_FIELD_BY_URL[urlField]] = null;
     }
   }
   if (typeof req.body.order === "string") req.body.order = Number(req.body.order);

@@ -150,16 +150,29 @@ export const getCategoryCourses = async (req: Request, res: Response) => {
   }
 };
 
+export const getCategoryLinkedProducts = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+    const numId = adminMaterial.parseMaterialId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
+    const { search, page, limit, skip } = parseListQuery(req.query, { defaultLimit: 10, maxLimit: 500 });
+    const { data, pagination } = await adminMaterial.getCategoryLinkedProducts(numId, { search, page, limit, skip, take: limit });
+    return res.status(200).json({ success: true, data, pagination });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 export const getCategoryMaterials = async (req: Request, res: Response) => {
   try {
     const id = req.params.id as string;
-    const { page = "1", limit = "50" } = req.query as Record<string, string>;
+    const { page = "1", limit = "50", search } = req.query as Record<string, string>;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.max(parseInt(limit, 10) || 50, 1);
 
     const numId = adminMaterial.parseMaterialId(id);
     if (!numId) return res.status(400).json({ success: false, message: "Invalid category id." });
-    const { data, total } = await adminMaterial.getCategoryMaterials(numId, pageNum, limitNum);
+    const { data, total } = await adminMaterial.getCategoryMaterials(numId, pageNum, limitNum, search);
     return res.status(200).json({ success: true, data, pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });

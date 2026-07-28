@@ -1,4 +1,5 @@
 import { prisma } from "../../config/prisma";
+import { topSlotOrder } from "../../utils/listOrdering";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const PERMISSION_CATEGORY_MODULE = "permission-category";
@@ -83,7 +84,7 @@ export const listCategories = async (
   const [rows, total] = await Promise.all([
     prisma.permissionCategoryRow.findMany({
       where,
-      orderBy: { [orderField]: sortDir },
+      orderBy: [{ [orderField]: sortDir }, { id: "desc" }],
       skip,
       take: per_page,
     }),
@@ -140,11 +141,13 @@ export const createCategory = async (
   if (exists) return { ok: false, code: "slug_exists" };
 
   const now = new Date();
+  // No explicit order → TOP slot (see utils/listOrdering).
+  const orderBy = input.order ?? topSlotOrder((await prisma.permissionCategoryRow.aggregate({ _min: { orderBy: true } }))._min.orderBy);
   const row = await prisma.permissionCategoryRow.create({
     data: {
       title: input.title,
       slug: input.slug,
-      orderBy: input.order,
+      orderBy,
       status: input.status,
       createdAt: now,
       updatedAt: now,

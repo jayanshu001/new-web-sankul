@@ -1,5 +1,6 @@
 import { adminVideoRepository as repo } from "./admin-video.repository";
 import { resolveAncestors } from "../../utils/categoryAncestors";
+import { topSlotOrder } from "../../utils/listOrdering";
 
 export const ADMIN_VIDEO_MODULE = "admin-video";
 export const isAdminVideoMysql = (): boolean => true;
@@ -95,15 +96,19 @@ export const getVideo = async (id: number) => {
 };
 
 // ── create / update ─────────────────────────────────────────────────────────
-export interface VideoCreateInput { videoCategoryId: string; name: string; slug: string; topic: string; order: number; type: "free" | "paid"; youtube?: boolean; vimeo?: boolean; aws?: boolean; youtubeId?: string | null; vimeoId?: string | null; awsId?: string | null; status: boolean }
+export interface VideoCreateInput { videoCategoryId: string; name: string; slug: string; topic: string; order?: number; type: "free" | "paid"; youtube?: boolean; vimeo?: boolean; aws?: boolean; youtubeId?: string | null; vimeoId?: string | null; awsId?: string | null; status: boolean }
 
 export const createVideo = async (d: VideoCreateInput): Promise<{ ok: false; reason: "category" } | { ok: true; data: any }> => {
   const catId = parseVideoId(d.videoCategoryId);
   if (!catId || !(await repo.categoryExists(catId))) return { ok: false, reason: "category" };
   const slug = await uniqueSlug(d.slug);
   const platform = pickPlatform(d)!;
+  // No explicit order → land on TOP of the list. Without this the row ties with
+  // every existing order=0 video and the `{ id: "asc" }` tie-break in
+  // repo.list sends the newest one to the BOTTOM.
+  const order = d.order ?? topSlotOrder(await repo.minOrder());
   const created = await repo.create({
-    videoCategoryId: catId, title: d.name, slug, topic: d.topic, order: d.order, priceType: d.type, platform,
+    videoCategoryId: catId, title: d.name, slug, topic: d.topic, order, priceType: d.type, platform,
     youtube_id: platform === "youtube" ? d.youtubeId ?? null : null,
     vimeo_id: platform === "vimeo" ? d.vimeoId ?? null : null,
     aws_id: platform === "aws" ? d.awsId ?? null : null,

@@ -39,6 +39,8 @@ import { runBookOrderClientApiTests } from "./book-order/client.api.test.js";
 import { runOfflineEnquiryClientApiTests } from "./offline-enquiry/client.api.test.js";
 import { runPackageChatClientApiTests } from "./package-chat/client.api.test.js";
 import { runExamCategoryPivotApiTests } from "./exam-category-pivot/pivot.api.test.js";
+import { runDownloadKeyClientApiTests } from "./download-key/client.api.test.js";
+import { runNotificationRoutingClientApiTests } from "./notification-routing/client.api.test.js";
 
 async function main() {
   console.log("Migrated modules:", MIGRATED_API_MODULES.map((m) => m.key).join(", "));
@@ -81,6 +83,8 @@ async function main() {
     runOfflineEnquiryClientApiTests,
     runPackageChatClientApiTests,
     runExamCategoryPivotApiTests,
+    runDownloadKeyClientApiTests,
+    runNotificationRoutingClientApiTests,
   ];
 
   let ok = true;

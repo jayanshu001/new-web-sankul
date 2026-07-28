@@ -73,7 +73,7 @@ export const listVideos = async (opts: { videoCategoryId?: number; status?: bool
   const [rows, total] = await Promise.all([
     prisma.video.findMany({
       where,
-      orderBy: [{ order: "asc" }, { created_at: "desc" }],
+      orderBy: [{ order: "asc" }, { created_at: "desc" }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
       select: videoSelect,

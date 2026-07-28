@@ -43,6 +43,8 @@ import { runBookOrderClientApiTests } from "./book-order/client.api.test.js";
 import { runOfflineEnquiryClientApiTests } from "./offline-enquiry/client.api.test.js";
 import { runPackageChatClientApiTests } from "./package-chat/client.api.test.js";
 import { runExamCategoryPivotApiTests } from "./exam-category-pivot/pivot.api.test.js";
+import { runDownloadKeyClientApiTests } from "./download-key/client.api.test.js";
+import { runNotificationRoutingClientApiTests } from "./notification-routing/client.api.test.js";
 
 const moduleKey = process.argv[2]?.trim().toLowerCase();
 
@@ -78,6 +80,8 @@ const runners: Record<string, (() => Promise<boolean>)[]> = {
   "offline-enquiry": [runOfflineEnquiryClientApiTests],
   "package-chat": [runPackageChatClientApiTests],
   "exam-category-pivot": [runExamCategoryPivotApiTests],
+  "download-key": [runDownloadKeyClientApiTests],
+  "notification-routing": [runNotificationRoutingClientApiTests],
 };
 
 async function main() {

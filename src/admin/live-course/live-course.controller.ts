@@ -12,6 +12,7 @@ import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import {
   createLiveCourseSqlSchema,
   updateLiveCourseSqlSchema,
+  reorderLiveCoursesSchema,
 } from "./live-course.validation";
 import * as liveCourseService from "./live-course.service";
 
@@ -65,6 +66,24 @@ export const createLiveCourse = asyncHandler(async (req: Request, res: Response)
 
   const data = await liveCourseService.createLiveCourse(validated, req.user?.id);
   return success(res, data, "Live course created with default folder.", 201);
+});
+
+// POST /api/v1/admin/live-courses/reorder
+// Body: { orders: [{ id: "12", ordered: 0 }, ...] }
+// Bulk drag-and-drop persist, mirroring POST /admin/cms/banners/reorder:
+// returns the number of rows written, 400 when no id in the batch parses.
+export const reorderLiveCourses = asyncHandler(async (req: Request, res: Response) => {
+  let validated: { orders: { id: string; ordered: number }[] };
+  try {
+    validated = reorderLiveCoursesSchema.parse(req.body);
+  } catch (err) {
+    if (err instanceof z.ZodError) return zodIssueResponse(res, err);
+    throw err;
+  }
+
+  const count = await liveCourseService.reorderLiveCourses(validated.orders);
+  if (!count) return failure(res, "No valid ids.", 400);
+  return success(res, { count }, "Live courses reordered.");
 });
 
 export const listLiveCourses = asyncHandler(async (req: Request, res: Response) => {
@@ -130,7 +149,7 @@ const folderCreateSchema = z
   .object({
     title:  z.string().trim().min(1, "title is required").max(80),
     image:  z.string().trim().max(2048).nullable().optional(),
-    order:  z.number().int().min(0).optional(),
+    order:  z.number().int().optional(),
     status: z.boolean().optional(),
   })
   .strict();
@@ -139,7 +158,7 @@ const folderPatchSchema = z
   .object({
     title:  z.string().trim().min(1, "title is required").max(80).optional(),
     image:  z.string().trim().max(2048).nullable().optional(),
-    order:  z.number().int().min(0).optional(),
+    order:  z.number().int().optional(),
     status: z.boolean().optional(),
   })
   .strict()
@@ -154,7 +173,7 @@ const entryCreateSchema = z
     date:    z.coerce.date(),
     subject: z.string().trim().min(1, "subject is required").max(120),
     time:    z.string().trim().min(1, "time is required").max(40),
-    order:   z.number().int().min(0).optional(),
+    order:   z.number().int().optional(),
   })
   .strict();
 
@@ -163,7 +182,7 @@ const entryPatchSchema = z
     date:    z.coerce.date().optional(),
     subject: z.string().trim().min(1, "subject is required").max(120).optional(),
     time:    z.string().trim().min(1, "time is required").max(40).optional(),
-    order:   z.number().int().min(0).optional(),
+    order:   z.number().int().optional(),
   })
   .strict()
   .refine((p) => Object.keys(p).length > 0, { message: "At least one field is required." });

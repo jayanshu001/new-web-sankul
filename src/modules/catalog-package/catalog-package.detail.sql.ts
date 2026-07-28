@@ -38,7 +38,7 @@ const videoGroups = async (packageId: number) => {
   const subs = await prisma.packageSpecificSubject.findMany({
     where: { packageId, status: true },
     select: { subjectId: true, order_by: true },
-    orderBy: { order_by: "asc" },
+    orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
   });
   const ids = subs.map((s) => s.subjectId).filter((n): n is number => n != null);
   if (!ids.length) return [];
@@ -58,7 +58,7 @@ const videoGroups = async (packageId: number) => {
 };
 
 const materialGroups = async (packageId: number) => {
-  const refs = await prisma.materialCategoryPackage.findMany({ where: { packageId }, orderBy: { order: "asc" } });
+  const refs = await prisma.materialCategoryPackage.findMany({ where: { packageId }, orderBy: [{ order: "asc" }, { created_at: "asc" }] });
   const ids = refs.map((r) => r.materialCategoryId).filter((n): n is number => n != null);
   if (!ids.length) return [];
   const cats = await prisma.materialCategory.findMany({ where: { id: { in: ids }, status: true } });
@@ -77,7 +77,7 @@ const materialGroups = async (packageId: number) => {
 };
 
 const examGroups = async (packageId: number) => {
-  const refs = await prisma.examCategoryPackage.findMany({ where: { packageId }, orderBy: { order: "asc" } });
+  const refs = await prisma.examCategoryPackage.findMany({ where: { packageId }, orderBy: [{ order: "asc" }, { created_at: "asc" }] });
   const ids = refs.map((r) => r.examCategoryId).filter((n): n is number => n != null);
   if (!ids.length) return [];
   const cats = await prisma.examCategory.findMany({ where: { id: { in: ids }, status: true } });
@@ -231,7 +231,7 @@ export const listPackagesPaginatedSql = async (opts: {
   if (opts.packageTypeId != null) where.packageTypeId = opts.packageTypeId;
   if (opts.goalId != null) where.goalId = opts.goalId;
   const [rows, total] = await Promise.all([
-    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], skip: opts.skip, take: opts.take }),
     prisma.package.count({ where }),
   ]);
   return { rows, total };
@@ -247,7 +247,7 @@ const withSearch = (where: any, opts?: ListOpts) =>
 export const listPackagesByTypeSql = async (packageTypeId: number, opts: ListOpts = {}) => {
   const where = withSearch({ active: true, packageTypeId }, opts);
   const [rows, total] = await Promise.all([
-    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], skip: opts.skip, take: opts.take }),
     prisma.package.count({ where }),
   ]);
   return { rows, total };
@@ -256,7 +256,7 @@ export const listPackagesByTypeSql = async (packageTypeId: number, opts: ListOpt
 export const listPackagesByGoalLabelSql = async (goalLabelId: number, opts: ListOpts = {}) => {
   const where = withSearch({ active: true, goalLabelId }, opts);
   const [rows, total] = await Promise.all([
-    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], skip: opts.skip, take: opts.take }),
     prisma.package.count({ where }),
   ]);
   return { rows, total };
@@ -268,7 +268,7 @@ export const listPackagesByGoalLabelSql = async (goalLabelId: number, opts: List
 export const listPackagesByGoalLabelScopedSql = async (goalId: number, goalLabelId: number, opts: ListOpts = {}) => {
   const where = withSearch({ active: true, goalId, goalLabelId }, opts);
   const [rows, total] = await Promise.all([
-    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], skip: opts.skip, take: opts.take }),
     prisma.package.count({ where }),
   ]);
   return { rows, total };
@@ -278,7 +278,7 @@ export const listPackagesByGoalLabelScopedSql = async (goalId: number, goalLabel
 export const listPackagesByGoalIndividualSql = async (goalId: number, opts: ListOpts = {}) => {
   const where = withSearch({ active: true, goalId, isIndividual: true }, opts);
   const [rows, total] = await Promise.all([
-    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.package.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], skip: opts.skip, take: opts.take }),
     prisma.package.count({ where }),
   ]);
   return { rows, total };

@@ -49,7 +49,7 @@ export const createEbookSchema = z.object({
   author: z.string().min(1, "Author is required"),
   publisher: z.string().min(1, "Publisher is required"),
   language: z.enum(Object.values(EBookLanguage) as [string, ...string[]]),
-  order: z.coerce.number().int().nonnegative().optional().default(0),
+  order: z.coerce.number().int().optional().default(0),
   image: z.string().optional().nullable(),
   thumbnail: z.string().optional().nullable(),
   demoUrl: z.preprocess((v) => (v === "" ? null : v), z.string().optional().nullable()),

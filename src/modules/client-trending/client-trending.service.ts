@@ -37,7 +37,7 @@ export const fetchTrendingBooksOnly = async (opts: TrendingOpts = {}) => {
 
   // findMany + count over the IDENTICAL where — total drives the pagination envelope.
   const [books, total] = await Promise.all([
-    prisma.book.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "desc" }], skip, take: limitNum }),
+    prisma.book.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], skip, take: limitNum }),
     prisma.book.count({ where }),
   ]);
   const items = books.map((b: any) => ({
@@ -49,6 +49,9 @@ export const fetchTrendingBooksOnly = async (opts: TrendingOpts = {}) => {
     isTrending: b.isTrending, isCombo: b.isCombo ?? false, isMagazine: b.isMagazine ?? false,
     listPrice: b.list_price ?? b.listPrice ?? null, discountedPrice: b.discounted_price, shippingPrice: b.shipping_price ?? null,
     pages: b.pages ?? 0, price: b.discounted_price, isFree: b.discounted_price === 0, isNew: isNewItem(b.created_at), createdAt: b.created_at,
+    // Exposed so the combined book+ebook trending feed (GET /client/books/trending)
+    // can re-apply `order_by ASC, created_at ASC` across both types in memory.
+    orderBy: b.order_by ?? 0,
   }));
   return { type: wantFree ? "free" : "paid", items, total };
 };
@@ -61,7 +64,7 @@ export const fetchTrendingEbooksOnly = async (opts: TrendingOpts = {}) => {
   const search = buildPrismaSearch(opts.search, ["name", "author"]);
   if (search) where.AND = search.AND;
 
-  const ebooks = await prisma.eBook.findMany({ where, orderBy: [{ orderby: "asc" }, { createdAt: "desc" }] });
+  const ebooks = await prisma.eBook.findMany({ where, orderBy: [{ orderby: "asc" }, { createdAt: "asc" }] });
   const ids = ebooks.map((e) => e.id);
   const plans = ids.length ? await prisma.packageCourseEbookPrice.findMany({ where: { ebookId: { in: ids }, status: true }, orderBy: { duration: "asc" } }) : [];
   const plansByEbook = new Map<number, any[]>();
@@ -79,6 +82,8 @@ export const fetchTrendingEbooksOnly = async (opts: TrendingOpts = {}) => {
       type: "ebook" as const, _id: String(e.id), name: e.name, description: e.description ?? null, author: e.author ?? null,
       publisher: e.publisher ?? null, language: e.language, image: e.image ?? null, thumbnail: e.thumbnail ?? null, demoUrl: e.demoUrl ?? null,
       isTrending: e.isTrending, price: minPrice, isFree, isNew: isNewItem(e.createdAt), plans: ePlans, createdAt: e.createdAt,
+      // See the book DTO above — needed for the combined trending merge.
+      orderBy: e.orderby ?? 0,
     };
   }).filter(Boolean) as any[];
   const total = filtered.length;
@@ -130,7 +135,7 @@ export const buildFreeDashboard = async (customerId: number | null) => {
   // Free ebooks: those whose min active plan price is 0 (price-derived, since
   // ws_ebook has no isPaid). Reuse the trending-free-ebook items? No — this is
   // the full free-ebook section, not trending-only. Resolve directly.
-  const allEbooks = await prisma.eBook.findMany({ where: { active: true }, orderBy: [{ orderby: "asc" }, { createdAt: "desc" }], take: 100 });
+  const allEbooks = await prisma.eBook.findMany({ where: { active: true }, orderBy: [{ orderby: "asc" }, { createdAt: "asc" }], take: 100 });
   const ebookIds = allEbooks.map((e) => e.id);
   const plans = ebookIds.length ? await prisma.packageCourseEbookPrice.findMany({ where: { ebookId: { in: ebookIds }, status: true }, orderBy: { duration: "asc" } }) : [];
   const plansByEbook = new Map<number, any[]>();
@@ -153,7 +158,7 @@ export const buildFreeDashboard = async (customerId: number | null) => {
   // Free videos: in a free video-category OR priceType=free.
   const videoWhere: any = { status: true, OR: [{ priceType: "free" as any }] };
   if (freeCats.videoCategoryIds.length) videoWhere.OR.push({ videoCategoryId: { in: freeCats.videoCategoryIds } });
-  const freeVideos = (await prisma.video.findMany({ where: videoWhere, orderBy: { order: "asc" }, take: FREE_LIMIT, select: { id: true, title: true, topic: true, priceType: true, videoCategoryId: true, VideoCategory: { select: { id: true, title: true, image: true } } } }))
+  const freeVideos = (await prisma.video.findMany({ where: videoWhere, orderBy: [{ order: "asc" }, { created_at: "asc" }], take: FREE_LIMIT, select: { id: true, title: true, topic: true, priceType: true, videoCategoryId: true, VideoCategory: { select: { id: true, title: true, image: true } } } }))
     .map((v) => ({ _id: String(v.id), title: v.title, topic: v.topic, priceType: v.priceType, videoCategoryId: v.VideoCategory ? { _id: String(v.VideoCategory.id), title: v.VideoCategory.title, image: v.VideoCategory.image } : null }));
 
   // Every section is always present; empty array as `data` when unavailable so

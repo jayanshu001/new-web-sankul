@@ -89,7 +89,7 @@ export const listTestSeriesMysql = async (opts: ListOpts) => {
   const [rows, total] = await Promise.all([
     prisma.testSeries.findMany({
       where,
-      orderBy: [{ orderBy: "asc" }, { createdAt: "desc" }],
+      orderBy: [{ orderBy: "asc" }, { createdAt: "asc" }],
       skip: (opts.page - 1) * opts.limit,
       take: opts.limit,
       select: {
@@ -189,7 +189,7 @@ export const getTestSeriesDetailMysql = async (opts: DetailOpts) => {
   const [contentCategories, prices] = await Promise.all([
     prisma.testSeriesContentCategory.findMany({
       where: { testSeriesId: opts.id, status: true },
-      orderBy: [{ orderBy: "asc" }, { name: "asc" }],
+      orderBy: [{ orderBy: "asc" }, { createdAt: "asc" }],
     }),
     prisma.testSeriesPrice.findMany({
       where: { testSeriesId: opts.id, status: true },
@@ -327,7 +327,7 @@ export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
   const [links, papersTotal] = await Promise.all([
     prisma.testSeriesExam.findMany({
       where: linkWhere,
-      orderBy: [{ orderBy: "asc" }, { id: "asc" }],
+      orderBy: [{ orderBy: "asc" }, { createdAt: "asc" }],
       skip: opts.skip,
       take: opts.limit,
     }),
@@ -384,7 +384,7 @@ export const listSeriesPapersMysql = async (opts: SeriesPapersOpts) => {
 
   const categories = await prisma.testSeriesContentCategory.findMany({
     where: { testSeriesId: opts.id, status: true },
-    orderBy: [{ orderBy: "asc" }, { name: "asc" }],
+    orderBy: [{ orderBy: "asc" }, { createdAt: "asc" }],
   });
 
   const grouped = categories.map((cat) => {

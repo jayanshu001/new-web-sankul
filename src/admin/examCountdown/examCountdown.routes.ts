@@ -4,6 +4,7 @@ import { cacheRoute } from "../../middlewares/cacheRoute";
 import { autoFlushGroup } from "../../middlewares/autoFlush";
 import {
   adminListCategories,
+  adminGetCategory,
   adminCreateCategory,
   adminUpdateCategory,
   adminDeleteCategory,
@@ -20,6 +21,7 @@ router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level st
 // Route-level response cache + autoFlushGroup on writes (see docs/CACHING.md).
 // Categories
 router.get("/categories", cacheRoute({ ttl: 86400, entity: "exam-countdown" }), adminListCategories);
+router.get("/categories/:id", cacheRoute({ ttl: 86400, entity: "exam-countdown" }), adminGetCategory);
 router.post("/categories", autoFlushGroup("exam-countdown"), adminCreateCategory);
 router.put("/categories/:id", autoFlushGroup("exam-countdown"), adminUpdateCategory);
 router.delete("/categories/:id", autoFlushGroup("exam-countdown"), adminDeleteCategory);

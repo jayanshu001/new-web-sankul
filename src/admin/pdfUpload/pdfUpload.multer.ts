@@ -38,6 +38,10 @@ const pdfOnly: multer.Options["fileFilter"] = (_req, file, cb) => {
 // One PDF under field `file` — used by the Edit-Ebook screen's Book/Demo PDF
 // field. Staged to disk, then processed by the BullMQ worker with live progress.
 export const uploadSinglePdfToDisk = multer({
+  // multer 2.x decodes multipart names as latin1 by default, which mojibakes
+  // Gujarati/Hindi PDF file names on `originalname` before they ever reach the
+  // DB. Mirrors MULTER_UTF8 in middlewares/upload.ts.
+  defParamCharset: "utf8",
   storage,
   limits: { fileSize: PDF_MAX_BYTES, files: 1 },
   fileFilter: pdfOnly,

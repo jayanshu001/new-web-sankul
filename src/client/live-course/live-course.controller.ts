@@ -23,7 +23,7 @@ export const listLiveCoursesForClient = async (req: Request, res: Response) => {
     // Slim card DTO: drop toCourseDto fields the RN app never reads (audit).
     const liveCourses = r.liveCourses.map((c: any) =>
       omit({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }, [
-        "description", "ordered", "withMaterial", "withoutMaterial", "level", "status", "isPaid",
+        "description", "ordered", "withMaterial", "withoutMaterial", "status", "isPaid",
         "courseEducatorId", "courseSubjectCategoryId", "videoCategoryId", "packageCategoryId",
         "scheduleEntries", "scheduleFolders", "examCountdownCategoryIds", "examCountdownIds",
         "examCategories", "createdAt", "updatedAt", "purchaseCount",
@@ -47,7 +47,7 @@ export const listRecentlyAddedLiveCourses = async (req: Request, res: Response) 
     const { search, page, limit } = parseListQuery(req.query);
     const r = await liveSql.listRecentLiveCourses(liveSql.parseLiveId(String(req.user?.id ?? "")), { search, page, limit });
     const base = resolveBase(req);
-    // Slim card DTO — keep level/isPaid (used on this rail), drop other non-card fields.
+    // Slim card DTO — keep isPaid (used on this rail), drop other non-card fields.
     const liveCourses = r.liveCourses.map((c: any) =>
       omit({ ...c, shareableLink: buildShareUrl("live-courses", c._id, base) }, [
         "description", "ordered", "withMaterial", "withoutMaterial", "status", "courseEducatorId",
@@ -442,9 +442,9 @@ export const listMyScheduleByCategory = async (req: Request, res: Response) => {
     if (cid == null) return success(res, { liveCourses: [], totalLiveCourses: 0 }, "Your schedule fetched.");
     const r = await liveSql.listMyScheduleForClient(cid);
     logger.info("listMyScheduleByCategory success (sql)", { traceId, customerId, totalLiveCourses: r.totalLiveCourses });
-    // Nav-only DTO: drop course image/level/daysLeft + folder image/order/entryCount.
+    // Nav-only DTO: drop course image/daysLeft + folder image/order/entryCount.
     const liveCourses = (r.liveCourses ?? []).map((c: any) => ({
-      ...omit(c, ["image", "level", "daysLeft"]),
+      ...omit(c, ["image", "daysLeft"]),
       scheduleFolders: omitList(c.scheduleFolders, ["image", "order", "entryCount"]),
     }));
     return success(res, { ...r, liveCourses }, "Your schedule fetched.");

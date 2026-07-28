@@ -19,7 +19,6 @@ export const createLiveCourseSchema = z
     shareableLink:   z.string().trim().optional(),
     withMaterial:    z.string().trim().optional(),
     withoutMaterial: z.string().trim().optional(),
-    level:           z.string().trim().min(1, "Level is required"),
     classType:       z.enum(["live", "live_offline", "offline"]).optional(),
     status:        z.boolean(),
     isPaid:        z.boolean().optional(),
@@ -50,11 +49,13 @@ export const createLiveCourseSqlSchema = z
     subtitle:      z.string().trim().optional(),
     description:   z.string().trim().min(1, "Description is required"),
     image:           z.string().url("Image must be a valid URL"),
-    ordered:         z.coerce.number().int("Ordered must be an integer"),
+    // Optional since 2026-07-27: omitted → the service assigns the TOP slot
+    // (utils/listOrdering) so a new live course is visible without a drag. An
+    // explicit value is still honoured, so this only relaxes the contract.
+    ordered:         z.coerce.number().int("Ordered must be an integer").optional(),
     shareableLink:   z.string().trim().optional(),
     withMaterial:    z.string().trim().optional(),
     withoutMaterial: z.string().trim().optional(),
-    level:           z.string().trim().min(1, "Level is required"),
     classType:       z.enum(["live", "live_offline", "offline"]).optional(),
     status:        z.boolean(),
     isPaid:        z.boolean().optional(),
@@ -75,3 +76,15 @@ export const updateLiveCourseSqlSchema = createLiveCourseSqlSchema
   .partial()
   .strict()
   .refine((v) => Object.keys(v).length > 0, { message: "Provide at least one field to update." });
+
+/**
+ * Bulk drag-and-drop reorder body. Same shape as the banners reorder
+ * (cms.validation.reorderSchema), with `ordered` instead of `orderBy` to match
+ * the ws_live_course column. Ids stay strings — the whole admin API addresses
+ * live courses by string id.
+ */
+export const reorderLiveCoursesSchema = z.object({
+  orders: z
+    .array(z.object({ id: z.string().min(1), ordered: z.number().int() }))
+    .min(1, "orders array is required"),
+});

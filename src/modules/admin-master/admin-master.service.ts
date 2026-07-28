@@ -1,4 +1,6 @@
 import { adminMasterRepository as repo } from "./admin-master.repository";
+import { topSlotOrder } from "../../utils/listOrdering";
+import { prisma } from "../../config/prisma";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { matchesAllTokens } from "../../utils/searchFilter";
 import { primaryParentMap } from "../../utils/videoCategoryRelation";
@@ -34,7 +36,14 @@ export const subjList = async (q?: { search?: string; status?: boolean; sortBy?:
   return { data: rows.map(toSubjDto), total };
 };
 export const subjGet = async (id: number) => { const c = await repo.subjFind(id); return c ? toSubjDto(c) : null; };
-export const subjCreate = async (d: any) => toSubjDto(await repo.subjCreate({ title: d.title, slug: d.slug, image: d.image, parent: toInt(d.parent), order: toInt(d.order), status: d.status ?? true }));
+export const subjCreate = async (d: any) => {
+  const parent = toInt(d.parent);
+  // No explicit order → TOP slot among its siblings (see utils/listOrdering).
+  const order = d.order !== undefined && d.order !== null && d.order !== ""
+    ? toInt(d.order)
+    : topSlotOrder((await prisma.courseSubjectCategory.aggregate({ where: { parent }, _min: { order: true } }))._min.order);
+  return toSubjDto(await repo.subjCreate({ title: d.title, slug: d.slug, image: d.image, parent, order, status: d.status ?? true }));
+};
 export const subjUpdate = async (id: number, d: any) => {
   if (!(await repo.subjFind(id))) return null;
   const data: Record<string, unknown> = {};
@@ -91,7 +100,10 @@ export const vcList = async (opts: { search?: string; limit?: number } = {}) => 
 };
 export const vcCreate = async (d: any) => {
   const parent = d.parent !== undefined ? toInt(d.parent) : 0;
-  const order = toInt(d.order_by);
+  // No explicit order → TOP slot among its siblings (see utils/listOrdering).
+  const order = d.order_by !== undefined && d.order_by !== null && d.order_by !== ""
+    ? toInt(d.order_by)
+    : topSlotOrder((await prisma.videoCategory.aggregate({ where: { parent }, _min: { order_by: true } }))._min.order_by);
   const created = await repo.vcCreate({ title: d.title, slug: d.slug, image: d.image, parent, order_by: order, status: d.status ?? true, educatorId: d.educatorId ? toInt(d.educatorId) : 0, pdf: d.pdf ?? "" });
   // Mirror the parent link into the pivot the client catalog reads.
   if (parent > 0) {

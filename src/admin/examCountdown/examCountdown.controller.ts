@@ -46,8 +46,15 @@ export const adminListCategories = async (req: Request, res: Response) => {
     const limitNum = Math.max(parseInt(String(req.query.limit ?? "20"), 10) || 20, 1);
     const skip = (pageNum - 1) * limitNum;
 
+    // `status` is opt-in: absent → every category (legacy contract); "true"/"false"
+    // filters. Pickers send status=true so a page of 10 is 10 selectable categories.
+    const rawStatus = req.query.status;
+    const status =
+      rawStatus === undefined || rawStatus === "" ? undefined : String(rawStatus) !== "false";
+
     const { data, total } = await ecSql.listCategoriesAdmin({
       search: search || null,
+      status,
       skip: paginate ? skip : undefined,
       take: paginate ? limitNum : undefined,
     });
@@ -61,12 +68,26 @@ export const adminListCategories = async (req: Request, res: Response) => {
   }
 };
 
+// GET /admin/exam-countdowns/categories/:id
+export const adminGetCategory = async (req: Request, res: Response) => {
+  try {
+    const id = ecSql.parseEcId(String(req.params.id));
+    if (!id) return res.status(400).json({ success: false, message: "Invalid category id." });
+    const data = await ecSql.getCategoryAdmin(id);
+    if (!data) return res.status(404).json({ success: false, message: "Category not found." });
+    return res.status(200).json({ success: true, data });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // POST /admin/exam-countdowns/categories
 export const adminCreateCategory = async (req: Request, res: Response) => {
   try {
     const name = (req.body?.name ?? "").toString().trim();
     const colorHex = (req.body?.colorHex ?? "").toString().trim();
-    const order = Number.isFinite(Number(req.body?.order)) ? Number(req.body.order) : 0;
+    // undefined (not 0) when the admin left Order blank, so the service can top-slot it.
+    const order = Number.isFinite(Number(req.body?.order)) ? Number(req.body.order) : undefined;
     const status = req.body?.status === undefined ? true : Boolean(req.body.status);
 
     if (!name) return res.status(400).json({ success: false, message: "name is required." });

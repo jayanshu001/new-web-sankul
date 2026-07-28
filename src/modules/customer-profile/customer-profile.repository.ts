@@ -55,11 +55,19 @@ export const customerProfileRepository = {
   updateById: (id: number, data: Record<string, unknown>) =>
     prisma.customer.update({ where: { id }, data }),
 
-  /** Soft-delete: mark account deleted + inactive. updateMany → count for 404. */
+  /**
+   * Soft-delete: mark account deleted + inactive. updateMany → count for 404.
+   *
+   * Also clears `download_key_hex` in the same statement. The row survives the
+   * soft delete, so secret key material would otherwise sit there forever; and
+   * nothing can legitimately ask for it back — a soft-deleted customer can never
+   * authenticate again, and a re-signup on the same phone lands on a NEW
+   * customer id.
+   */
   softDelete: (id: number) =>
     prisma.customer.updateMany({
       where: { id, isAccountDeleted: false },
-      data: { isAccountDeleted: true, status: false, updatedAt: new Date() },
+      data: { isAccountDeleted: true, status: false, downloadKeyHex: null, updatedAt: new Date() },
     }),
 
   /** Set profile picture column. */

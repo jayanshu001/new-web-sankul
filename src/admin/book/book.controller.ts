@@ -26,6 +26,8 @@ export const getBooks = async (req: Request, res: Response) => {
       language,
       isMagazine,
       isCombo,
+      sortBy,
+      sortOrder,
       page = "1",
       limit = "20",
     } = req.query as Record<string, string>;
@@ -39,6 +41,8 @@ export const getBooks = async (req: Request, res: Response) => {
       isMagazine: isMagazine === "true" ? true : isMagazine === "false" ? false : undefined,
       isCombo: isCombo === "true" ? true : isCombo === "false" ? false : undefined,
       status: status === "true" ? true : status === "false" ? false : undefined,
+      sortBy,
+      sortOrder,
       page: pageNum,
       limit: limitNum,
     });

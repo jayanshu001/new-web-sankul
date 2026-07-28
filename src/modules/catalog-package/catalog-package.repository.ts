@@ -36,20 +36,20 @@ export const catalogPackageRepository = {
   findPackageById: (id: number) =>
     prisma.package.findFirst({ where: { id, active: true } }),
 
-  /** Active packages, ordered by `order_by` then id. Optional name search. */
+  /** Active packages, ordered by `order_by` then oldest-first. Optional name search. */
   listActivePackages: (opts?: { search?: string }) =>
     prisma.package.findMany({
       where: {
         active: true,
         ...(buildPrismaSearch(opts?.search, ["name"]) ?? {}),
       },
-      orderBy: [{ order_by: "asc" }, { id: "desc" }],
+      orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
     }),
 
   /** Active packages for a given package type. */
   listActivePackagesByType: (packageTypeId: number) =>
     prisma.package.findMany({
       where: { active: true, packageTypeId },
-      orderBy: [{ order_by: "asc" }, { id: "desc" }],
+      orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
     }),
 };

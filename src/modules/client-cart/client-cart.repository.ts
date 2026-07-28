@@ -79,8 +79,10 @@ export const clientCartRepository = {
   createShipping: (data: any) => prisma.customerShipping.create({ data }),
   updateShipping: (id: number, data: any) => prisma.customerShipping.update({ where: { id }, data }),
 
+  /** Owner-scoped delivery address; `status: true` skips soft-deleted rows so a
+   *  removed address can't be re-selected at checkout. */
   findAddress: (id: number, userId: number) =>
-    prisma.customerAddress.findFirst({ where: { id, userId } }),
+    prisma.customerAddress.findFirst({ where: { id, userId, status: true } }),
 
   findCustomerContact: (id: number) =>
     prisma.customer.findUnique({ where: { id }, select: { phoneNumber: true, emailAddress: true } }),

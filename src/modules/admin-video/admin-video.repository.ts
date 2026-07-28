@@ -13,10 +13,7 @@ export const adminVideoRepository = {
     prisma.video.findMany({
       where: buildWhere(opts),
       include: { VideoCategory: { select: { id: true, title: true, slug: true } } },
-      // Stable secondary sort on id (asc) so rows that tie on the primary key
-      // (e.g. many share order=0) always come back in ascending-id order — the
-      // DB's natural order — matching the legacy/Mongo response exactly.
-      orderBy: [{ [sortCol(opts.sortBy)]: opts.sortDir }, { id: "asc" }],
+      orderBy: buildOrderBy(opts.sortBy, opts.sortDir),
       skip: opts.skip,
       take: opts.take,
     }),
@@ -60,6 +57,15 @@ export const adminVideoRepository = {
   slugTaken: (slug: string, exceptId?: number) =>
     prisma.video.findFirst({ where: { slug, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true } }),
 
+  /**
+   * Smallest `order` across all videos — the input to the top-slot calculation
+   * on create (see utils/listOrdering). Deliberately NOT scoped to a category:
+   * the admin screen is one list with an optional category filter, and a global
+   * minimum puts the new row on top of BOTH the filtered and unfiltered views.
+   */
+  minOrder: async (): Promise<number | null> =>
+    (await prisma.video.aggregate({ _min: { order: true } }))._min.order ?? null,
+
   create: (data: Prisma.VideoUncheckedCreateInput) => prisma.video.create({ data, include: { VideoCategory: { select: { id: true, title: true, slug: true } } } }),
   update: (id: number, data: Prisma.VideoUncheckedUpdateInput) => prisma.video.update({ where: { id }, data, include: { VideoCategory: { select: { id: true, title: true, slug: true } } } }),
   delete: (id: number) => prisma.video.delete({ where: { id } }),
@@ -67,10 +73,39 @@ export const adminVideoRepository = {
   setOrder: (id: number, order: number) => prisma.video.update({ where: { id }, data: { order, updated_at: new Date() } }),
 };
 
+/**
+ * Admin list ordering. RECENCY IS THE CONTRACT here: the newest video is always
+ * row #1, whatever `ws_video.order` says.
+ *
+ * `sort_by=order` (the default, and what the admin UI sends) therefore maps to
+ * `created_at DESC` — NOT to the `order` column. `sort_dir` is deliberately
+ * ignored in that case: the requirement is "newest on top", so honouring
+ * `sort_dir=asc` (which the UI does send) would invert exactly what was asked
+ * for. Every other `sort_by` still sorts by its own column in the requested
+ * direction.
+ *
+ * Consequence, on purpose: manual reordering is INVISIBLE on this screen. The
+ * `order` column is still written — top-slot-on-create (`MIN(order) - 1`) and
+ * `setOrder` both keep maintaining it, and the client catalog still sorts by it
+ * (`order ASC, created_at ASC`) — but nothing here reads it. To restore curated
+ * ordering, return `[{ order: sortDir }, { id: "desc" }]` for the "order" case.
+ *
+ * The trailing `id DESC` is the stable tiebreaker: `created_at` is a datetime and
+ * bulk-created rows can share a value, which would otherwise page unpredictably.
+ */
+function buildOrderBy(
+  sortBy: string,
+  sortDir: "asc" | "desc"
+): Prisma.VideoOrderByWithRelationInput[] {
+  if (sortBy === "order") return [{ created_at: "desc" }, { id: "desc" }];
+  return [{ [sortCol(sortBy)]: sortDir }, { id: "desc" }];
+}
+
 function sortCol(sortBy: string): string {
   if (sortBy === "name" || sortBy === "title") return "title";
-  if (sortBy === "order") return "order";
   if (sortBy === "updatedAt" || sortBy === "updated_at") return "updated_at";
+  if (sortBy === "createdAt" || sortBy === "created_at") return "created_at";
+  // "order" never reaches here — buildOrderBy intercepts it (see above).
   return "created_at";
 }
 

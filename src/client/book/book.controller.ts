@@ -26,6 +26,7 @@ import {
   fetchTrendingEbooksOnly as fetchTrendingEbooksOnlySql,
 } from "../../modules/client-trending/client-trending.service";
 import { pick, pickList, omit, omitList } from "../../utils/pick";
+import { byOrderThenCreatedAt } from "../../utils/catalogOrder";
 
 // Client payload slimming (api-optimization audit) — drop fields the RN app never reads.
 const BOOK_LIST_OMIT = [
@@ -103,22 +104,24 @@ export const listTrendingBooks = async (req: Request, res: Response) => {
     const wantFree = type === "free";
 
     // ── SQL branch (client-trending) ─────────────────────────────────────────
-    // Combined trending: fetch books + ebooks from SQL (capped), merge by
-    // createdAt desc — the merge is in-memory, so paginate the resolved array
-    // via skip/take with `total` = full merged length.
+    // Combined trending: fetch books + ebooks from SQL (capped), merge by the
+    // client catalog rule (order_by ASC, created_at ASC) — the merge is
+    // in-memory, so paginate the resolved array via skip/take with `total` =
+    // full merged length.
     const custIdForToken = Number.isInteger(Number(req.user?.id)) ? Number(req.user?.id) : null;
     const [bookRes, ebookRes] = await Promise.all([
       fetchTrendingBooksOnlySql({ type, search, language, limit: 100, customerId: custIdForToken }),
       fetchTrendingEbooksOnlySql({ type, search, language, limit: 100 }),
     ]);
     const base = resolveBase(req);
-    const mergedAll = [...bookRes.items, ...ebookRes.items]
-      .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime());
+    const mergedAll = [...bookRes.items, ...ebookRes.items].sort(byOrderThenCreatedAt);
     const total = mergedAll.length;
     const items = mergedAll
       .slice(skip, skip + limit)
       .map((item) => ({
-        ...item,
+        // `orderBy` exists on the DTO only to drive the merge sort above — drop
+        // it so the trending response shape is unchanged.
+        ...omit(item as any, ["orderBy"]),
         shareableLink: buildShareUrl(
           item.type === "ebook" ? "ebooks" : "books",
           String(item._id),
@@ -150,7 +153,8 @@ export const listTrendingBooksOnly = async (req: Request, res: Response) => {
     const result = await fetchTrendingBooksOnlySql({ type, search, language, limit, skip, customerId: custIdForToken });
 
     const base = resolveBase(req);
-    const items = result.items.map((item) => ({
+    // `orderBy` is an internal sort key on the trending DTO — never emitted.
+    const items = omitList(result.items as any[], ["orderBy"]).map((item: any) => ({
       ...item,
       shareableLink: buildShareUrl("books", String(item._id), base),
     }));

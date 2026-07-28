@@ -11,9 +11,9 @@ const activeWhere = (opts?: { search?: string; language?: EBookLanguage }) => ({
 
 /**
  * Prisma persistence for the catalog · ebook READ branch (`ws_ebook`, flag OFF).
- * Active ebooks, ordered by `order_by` then newest — mirrors the Mongo
- * `find({status:true}).sort({order:1, createdAt:-1})`. Optional name/author
- * search + language filter.
+ * Active ebooks, ordered by the admin display order then oldest-first
+ * (`order_by ASC, created_at ASC`) — the standard client catalog ordering.
+ * Optional name/author search + language filter.
  */
 export const catalogEbookRepository = {
   /** Single active ebook by id. */
@@ -28,7 +28,7 @@ export const catalogEbookRepository = {
   listActive: (opts?: { search?: string; language?: EBookLanguage; skip?: number; take?: number }) =>
     prisma.eBook.findMany({
       where: activeWhere(opts),
-      orderBy: [{ orderby: "asc" }, { createdAt: "desc" }, { id: "desc" }],
+      orderBy: [{ orderby: "asc" }, { createdAt: "asc" }],
       ...(opts?.skip != null ? { skip: opts.skip } : {}),
       ...(opts?.take != null ? { take: opts.take } : {}),
     }),

@@ -12,6 +12,7 @@ import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession, P
 import { getVodStreamMeta } from "../../admin/live/streamos.service";
 import { redisClient } from "../../config/redis";
 import { buildPagination } from "../../utils/listQuery";
+import { topSlotOrder } from "../../utils/listOrdering";
 import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
 
 export const LIVE_COURSE_MODULE = "live-course";
@@ -40,7 +41,6 @@ export const toCourseDto = (row: LiveCourse) => ({
   shareableLink: row.shareableLink ?? "",
   withMaterial: row.withMaterial ?? "",
   withoutMaterial: row.withoutMaterial ?? "",
-  level: row.level ?? null,
   classType: row.classType,
   status: row.status,
   isPaid: row.isPaid,
@@ -116,10 +116,14 @@ export const getLiveCourseById = async (id: number): Promise<"not_found" | { liv
 export const createLiveCourse = async (v: any, createdById?: string) => {
   const now = new Date();
   // Root-folder automation (VideoCategory{liveCourseId}) is Mongo-only — skipped.
+  // No explicit `ordered` → land on TOP of the list (utils/listOrdering). Both
+  // the admin and client lists sort [{ ordered: asc }, { createdAt: desc }], so
+  // this is what makes a new live course visible without a drag.
+  const ordered = v.ordered ?? topSlotOrder(await repo.minOrdered());
   const created = await repo.create({
     name: v.name, subtitle: v.subtitle ?? null, description: v.description ?? null, image: v.image ?? null,
-    ordered: v.ordered ?? 0, shareableLink: v.shareableLink ?? null, withMaterial: v.withMaterial ?? null,
-    withoutMaterial: v.withoutMaterial ?? null, level: v.level ?? null, classType: v.classType ?? "live",
+    ordered, shareableLink: v.shareableLink ?? null, withMaterial: v.withMaterial ?? null,
+    withoutMaterial: v.withoutMaterial ?? null, classType: v.classType ?? "live",
     status: v.status !== false, isPaid: v.isPaid !== false, isPopular: !!v.isPopular,
     educatorId: v.courseEducatorId ? parseLiveId(v.courseEducatorId) : null,
     courseSubjectCategoryId: v.courseSubjectCategoryId ? parseLiveId(v.courseSubjectCategoryId) : null,
@@ -137,6 +141,26 @@ export const createLiveCourse = async (v: any, createdById?: string) => {
   return { liveCourse: toCourseDto(created), rootFolder: null };
 };
 
+/**
+ * Bulk drag-and-drop reorder. Mirrors the banners contract
+ * (banner-slider.service.reorderBanners): unparseable ids are skipped, the
+ * returned count is how many rows were written, and 0 means "no valid ids" —
+ * which the controller turns into a 400.
+ *
+ * One transaction for the whole batch: a 20-row drag must not be 20 independent
+ * requests that can half-apply.
+ */
+export const reorderLiveCourses = async (
+  orders: { id: string; ordered: number }[]
+): Promise<number> => {
+  const ops = orders
+    .map((o) => ({ id: parseLiveId(o.id), ordered: o.ordered }))
+    .filter((o): o is { id: number; ordered: number } => o.id !== null);
+  if (!ops.length) return 0;
+  await repo.reorder(ops);
+  return ops.length;
+};
+
 export const updateLiveCourse = async (id: number, v: any): Promise<"not_found" | { liveCourse: any }> => {
   if (!(await repo.exists(id))) return "not_found";
   const data: any = { updatedAt: new Date() };
@@ -148,7 +172,6 @@ export const updateLiveCourse = async (id: number, v: any): Promise<"not_found" 
   if (v.shareableLink !== undefined) data.shareableLink = v.shareableLink;
   if (v.withMaterial !== undefined) data.withMaterial = v.withMaterial;
   if (v.withoutMaterial !== undefined) data.withoutMaterial = v.withoutMaterial;
-  if (v.level !== undefined) data.level = v.level;
   if (v.classType !== undefined) data.classType = v.classType;
   if (v.status !== undefined) data.status = v.status;
   if (v.isPaid !== undefined) data.isPaid = v.isPaid;
@@ -1226,7 +1249,7 @@ export const listMyLiveCoursesForClient = async (
       subscriptionId: String(s.id),
       liveCourse: c
         ? {
-            _id: String(c.id), name: c.name, image: c.image, level: c.level, isPaid: c.isPaid, status: c.status,
+            _id: String(c.id), name: c.name, image: c.image, isPaid: c.isPaid, status: c.status,
             educatorId: edu ? String(edu.id) : null,
             educatorName: edu?.name ?? null,
             shareableLink: buildShareUrl("live-courses", String(c.id), baseUrl),
@@ -1771,7 +1794,7 @@ export const listMyScheduleForClient = async (customerId: number) => {
   const [courses, daysLeftMap] = await Promise.all([
     prisma.liveCourse.findMany({
       where: { id: { in: ownedIds }, status: true },
-      select: { id: true, name: true, image: true, level: true, scheduleFolders: true },
+      select: { id: true, name: true, image: true, scheduleFolders: true },
     }),
     getDaysLeftMap(customerId, ownedIds),
   ]);
@@ -1792,7 +1815,6 @@ export const listMyScheduleForClient = async (customerId: number) => {
       _id: String(c.id),
       name: c.name,
       image: c.image,
-      level: c.level,
       scheduleFolders: folders,
       daysLeft: daysLeftMap.has(key) ? daysLeftMap.get(key) ?? null : null,
     };
@@ -2003,7 +2025,7 @@ export const lcListVideosInFolder = async (
   const [rows, total] = await Promise.all([
     prisma.video.findMany({
       where: { videoCategoryId: folderId },
-      orderBy: [{ order: "asc" }, { created_at: "asc" }],
+      orderBy: [{ order: "asc" }, { created_at: "asc" }, { id: "asc" }],
       select: lcVideoSelect,
       skip: opts?.skip,
       take: opts?.take,

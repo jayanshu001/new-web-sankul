@@ -94,7 +94,7 @@ export const catalogVideos = async (opts: {
       select: { id: true, title: true, image: true },
     });
   } else {
-    const subs = await prisma.packageSpecificSubject.findMany({ where: { packageId: opts.id, status: true }, select: { subjectId: true, order_by: true }, orderBy: { order_by: "asc" } });
+    const subs = await prisma.packageSpecificSubject.findMany({ where: { packageId: opts.id, status: true }, select: { subjectId: true, order_by: true }, orderBy: [{ order_by: "asc" }, { created_at: "asc" }] });
     const subIds = subs.map((s) => s.subjectId).filter((n): n is number => n != null);
     if (subIds.length) {
       const cats = await prisma.videoCategory.findMany({ where: { id: { in: subIds }, status: true }, select: { id: true, title: true, image: true } });
@@ -133,7 +133,7 @@ export const catalogVideos = async (opts: {
     // same rows, same order, a fraction of the bytes off the wire.
     const videos = await prisma.video.findMany({
       where: videoWhere,
-      orderBy: { order: "asc" },
+      orderBy: [{ order: "asc" }, { created_at: "asc" }],
       select: { id: true, title: true, topic: true, platform: true, priceType: true, videoCategoryId: true, order: true },
     });
     let progByVideo = new Map<number, any>();
@@ -223,7 +223,7 @@ export const catalogVideos = async (opts: {
     const videoWhere: any = { videoCategoryId: cat.id, status: true };
     const catSearch = buildPrismaSearch(opts.search, ["title"]);
     if (catSearch) videoWhere.AND = catSearch.AND;
-    const videos = await prisma.video.findMany({ where: videoWhere, orderBy: { order: "asc" } });
+    const videos = await prisma.video.findMany({ where: videoWhere, orderBy: [{ order: "asc" }, { created_at: "asc" }] });
     let progByVideo = new Map<number, any>();
     if (opts.customerId && videos.length) {
       const rows = await prisma.lectureProgress.findMany({ where: { customerId: opts.customerId, videoId: { in: videos.map((v) => v.id) } }, select: { videoId: true, positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true } });
@@ -340,10 +340,10 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
   // via the row's material_categories JSON.
   let catIds: number[];
   if (opts.type === "course") {
-    const refs = await prisma.materialCategoryCourse.findMany({ where: { courseId: opts.id }, orderBy: { order: "asc" } });
+    const refs = await prisma.materialCategoryCourse.findMany({ where: { courseId: opts.id }, orderBy: [{ order: "asc" }, { created_at: "asc" }] });
     catIds = refs.map((r) => r.materialCategoryId).filter((n): n is number => n != null);
   } else if (opts.type === "package") {
-    const refs = await prisma.materialCategoryPackage.findMany({ where: { packageId: opts.id }, orderBy: { order: "asc" } });
+    const refs = await prisma.materialCategoryPackage.findMany({ where: { packageId: opts.id }, orderBy: [{ order: "asc" }, { created_at: "asc" }] });
     catIds = refs.map((r) => r.materialCategoryId).filter((n): n is number => n != null);
   } else {
     catIds = await liveCourseCategoryIds(opts.id, "materialCategories");
@@ -367,7 +367,7 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
     await Promise.all(ordered.map(async (cat) => {
       const mats = await prisma.material.findMany({
         where: { materialCategoryId: cat.id, status: true },
-        orderBy: [{ order_by: "asc" }, { created_at: "desc" }],
+        orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
       });
       directByCat.set(cat.id, mats);
       allDirect.push(...mats);
@@ -408,10 +408,10 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
 export const catalogTests = async (opts: { type: "course" | "package" | "live-course"; id: number; search: string | null }) => {
   let catIds: number[];
   if (opts.type === "course") {
-    const refs = await prisma.examCategoryCourse.findMany({ where: { courseId: opts.id }, orderBy: { order: "asc" } });
+    const refs = await prisma.examCategoryCourse.findMany({ where: { courseId: opts.id }, orderBy: [{ order: "asc" }, { created_at: "asc" }] });
     catIds = refs.map((r) => r.examCategoryId).filter((n): n is number => n != null);
   } else if (opts.type === "package") {
-    const refs = await prisma.examCategoryPackage.findMany({ where: { packageId: opts.id }, orderBy: { order: "asc" } });
+    const refs = await prisma.examCategoryPackage.findMany({ where: { packageId: opts.id }, orderBy: [{ order: "asc" }, { created_at: "asc" }] });
     catIds = refs.map((r) => r.examCategoryId).filter((n): n is number => n != null);
   } else {
     catIds = await liveCourseCategoryIds(opts.id, "examCategories");

@@ -5,9 +5,10 @@ import { buildPrismaSearch } from "../../utils/searchFilter";
 
 /**
  * Prisma persistence for the catalog · book READ branch (`ws_book`, flag OFF).
- * Active books, ordered by `order_by` then newest — mirrors the Mongo
- * `find({status:true}).sort({orderBy:1, createdAt:-1})`. Optional name/author
- * search + language filter + `type` bucket (magazine/combo/regular) + paging.
+ * Active books, ordered by the admin display order then oldest-first
+ * (`order_by ASC, created_at ASC`) — the standard client catalog ordering.
+ * Optional name/author search + language filter + `type` bucket
+ * (magazine/combo/regular) + paging.
  */
 const buildWhere = (opts?: ListBooksOptions): Prisma.BookWhereInput => {
   const where: Prisma.BookWhereInput = { active: true };
@@ -35,7 +36,7 @@ export const catalogBookRepository = {
   listActive: (opts?: ListBooksOptions) =>
     prisma.book.findMany({
       where: buildWhere(opts),
-      orderBy: [{ order_by: "asc" }, { created_at: "desc" }, { id: "desc" }],
+      orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
       skip: opts?.skip,
       take: opts?.take,
     }),

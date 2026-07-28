@@ -13,6 +13,7 @@
 import { prisma } from "../../config/prisma";
 import * as liveSql from "../admin-live-course/admin-live-course.service";
 import { buildPrismaSearch } from "../../utils/searchFilter";
+import { topSlotOrder } from "../../utils/listOrdering";
 
 export const PACKAGE_CATEGORY_MODULE = "package-category";
 export const isPackageCategoryMysql = (): boolean => true;
@@ -132,7 +133,7 @@ export const listPackagesAndLiveByCategory = async (
   const counts = { recorded: recordedTotal, live: liveTotal };
 
   if (tab === "recorded") {
-    const packages = await prisma.package.findMany({ where: pkgWhere, orderBy: { order_by: "asc" }, skip, take });
+    const packages = await prisma.package.findMany({ where: pkgWhere, orderBy: [{ order_by: "asc" }, { created_at: "asc" }, { id: "desc" }], skip, take });
     const plans = packages.length
       ? await prisma.packageCourseEbookPrice.findMany({ where: { packageId: { in: packages.map((p) => p.id) }, status: true } })
       : [];
@@ -145,7 +146,7 @@ export const listPackagesAndLiveByCategory = async (
     };
   }
 
-  const liveCourses = await prisma.liveCourse.findMany({ where: liveWhere, orderBy: { ordered: "asc" }, skip, take });
+  const liveCourses = await prisma.liveCourse.findMany({ where: liveWhere, orderBy: [{ ordered: "asc" }, { createdAt: "asc" }, { id: "desc" }], skip, take });
   const liveIds = liveCourses.map((c) => c.id);
   const [liveDaysLeft, liveOwned, livePlans] = await Promise.all([
     liveSql.getDaysLeftMap(customerId, liveIds),
@@ -193,8 +194,10 @@ export const listAll = async (q?: { search?: string; sortBy?: string; sortDir?: 
 };
 
 export const create = async (input: { title: string; slug: string; image?: string; order?: number; status?: boolean }) => {
+  // No explicit order → TOP slot (see utils/listOrdering).
+  const order = input.order ?? topSlotOrder((await prisma.packageCategory.aggregate({ _min: { order: true } }))._min.order);
   const row = await prisma.packageCategory.create({
-    data: { title: input.title, slug: input.slug, image: input.image ?? null, order: input.order ?? 0, status: input.status ?? true },
+    data: { title: input.title, slug: input.slug, image: input.image ?? null, order, status: input.status ?? true },
   });
   return toPkgCatDto(row);
 };
@@ -262,7 +265,7 @@ export const listClientPackageCategories = async (opts: {
 
   if (!opts.liveOnly) {
     const [rawList, total] = await Promise.all([
-      prisma.packageCategory.findMany({ where, orderBy: { order: "asc" }, skip: opts.skip, take: opts.limitNum }),
+      prisma.packageCategory.findMany({ where, orderBy: [{ order: "asc" }, { createdAt: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.limitNum }),
       prisma.packageCategory.count({ where }),
     ]);
     const ids = rawList.map((c) => c.id);
@@ -275,7 +278,7 @@ export const listClientPackageCategories = async (opts: {
   }
 
   // live filter: keep only categories with ≥1 active live course, count = live count.
-  const categories = await prisma.packageCategory.findMany({ where, orderBy: { order: "asc" } });
+  const categories = await prisma.packageCategory.findMany({ where, orderBy: [{ order: "asc" }, { createdAt: "asc" }] });
   const liveMap = await liveCourseCountFor(categories.map((c) => c.id));
   const filtered = categories.filter((c) => (liveMap.get(c.id) ?? 0) > 0);
   const total = filtered.length;

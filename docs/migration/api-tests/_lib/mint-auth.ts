@@ -38,10 +38,21 @@ export async function mintAdminToken(): Promise<string> {
 }
 
 export async function mintCustomerToken(): Promise<string> {
+  return mintCustomerTokenFor(process.env.MIGRATION_TEST_CUSTOMER_ID ?? "507f1f77bcf86cd799439011");
+}
+
+/**
+ * Mint a customer JWT for an ARBITRARY customer id (+ prime its Redis session).
+ *
+ * Needed by cross-tenant isolation tests, which have to hold two distinct
+ * identities at once to prove endpoint A cannot read customer B's data. The id
+ * must be a real, active `ws_customer` row — `authenticate` rejects tokens whose
+ * customer no longer exists.
+ */
+export async function mintCustomerTokenFor(customerId: string): Promise<string> {
   const secret = process.env.JWT_ACCESS_SECRET;
   if (!secret) throw new Error("JWT_ACCESS_SECRET required for minted customer token");
 
-  const customerId = process.env.MIGRATION_TEST_CUSTOMER_ID ?? "507f1f77bcf86cd799439011";
   const phone = config.customerPhone || "9999999999";
   const token = jwt.sign(
     { id: customerId, phone, role: "customer", type: "customer" },

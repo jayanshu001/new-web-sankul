@@ -21,7 +21,7 @@ const courseInclude = undefined; // refs (educator/category) have no FK rows on 
 export const adminLiveCourseRepository = {
   // ── courses ───────────────────────────────────────────────────────────────
   list: (opts: { search?: string; status?: boolean; skip: number; take: number }) =>
-    prisma.liveCourse.findMany({ where: buildWhere(opts), orderBy: [{ ordered: "asc" }, { createdAt: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.liveCourse.findMany({ where: buildWhere(opts), orderBy: [{ ordered: "asc" }, { createdAt: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
   count: (opts: { search?: string; status?: boolean }) => prisma.liveCourse.count({ where: buildWhere(opts) }),
   findById: (id: number) => prisma.liveCourse.findUnique({ where: { id } }),
   exists: (id: number) => prisma.liveCourse.findUnique({ where: { id }, select: { id: true } }),
@@ -32,13 +32,32 @@ export const adminLiveCourseRepository = {
   findPackageCategory: (id: number) =>
     prisma.packageCategory.findUnique({ where: { id }, select: { id: true, title: true, slug: true, image: true } }),
   coursesSlimByIds: (ids: number[]) =>
-    prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, level: true, isPaid: true, status: true, educatorId: true } }),
+    prisma.liveCourse.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, image: true, isPaid: true, status: true, educatorId: true } }),
   myLiveCourseSubs: (customerId: number, filterStatus: string, now: Date) => {
     const where: any = { customerId, paymentStatus: "verified" };
     if (filterStatus === "active") { where.status = true; where.OR = [{ endAt: null }, { endAt: { gte: now } }]; }
     else if (filterStatus === "expired") { where.OR = [{ status: false }, { endAt: { lt: now } }]; }
     return prisma.liveCourseSubscription.findMany({ where, orderBy: { createdAt: "desc" } });
   },
+  /** Smallest `ordered` — input to the top-slot calc on create (utils/listOrdering). */
+  minOrdered: async (): Promise<number | null> =>
+    (await prisma.liveCourse.aggregate({ _min: { ordered: true } }))._min.ordered ?? null,
+
+  /**
+   * Bulk reorder: set `ordered` per id in ONE transaction, so a 20-row drag is a
+   * single atomic write instead of 20 independent PUTs. Mirrors
+   * banner-slider.repository.reorder.
+   */
+  reorder: (ops: { id: number; ordered: number }[]) =>
+    prisma.$transaction(
+      ops.map((o) =>
+        prisma.liveCourse.update({
+          where: { id: o.id },
+          data: { ordered: o.ordered, updatedAt: new Date() },
+        })
+      )
+    ),
+
   create: (data: Prisma.LiveCourseUncheckedCreateInput) => prisma.liveCourse.create({ data }),
   update: (id: number, data: Prisma.LiveCourseUncheckedUpdateInput) => prisma.liveCourse.update({ where: { id }, data }),
   delete: (id: number) =>
@@ -129,7 +148,7 @@ export const adminLiveCourseRepository = {
   countClientCourses: (opts: { search?: string; upcomingOnly?: boolean; packageCategoryId?: number; now: Date }) =>
     prisma.liveCourse.count({ where: clientCourseWhere(opts) }),
   coursesByIdsActive: (ids: number[]) =>
-    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids }, status: true }, orderBy: [{ ordered: "asc" }, { createdAt: "desc" }] }) : Promise.resolve([]),
+    ids.length ? prisma.liveCourse.findMany({ where: { id: { in: ids }, status: true }, orderBy: [{ ordered: "asc" }, { createdAt: "asc" }] }) : Promise.resolve([]),
   activePlansForCourses: (ids: number[]) =>
     ids.length ? prisma.liveCoursePlan.findMany({ where: { liveCourseId: { in: ids }, status: true }, orderBy: { price: "asc" } }) : Promise.resolve([]),
   /** Per-category upcoming-batch counts (tab bar). */

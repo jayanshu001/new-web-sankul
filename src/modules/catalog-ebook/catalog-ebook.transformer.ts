@@ -17,8 +17,11 @@ export const toEbookDto = (
   // the BOOK PDF gets one only when the customer has purchased it (else null).
   // Both are exchanged at /media/resolve for a short-lived presigned URL.
   const cust = opts.customerId ?? null;
+  // `book_url` is NOT NULL in SQL, so "no PDF attached" is stored as "" (admin
+  // create writes `d.bookUrl ?? ""`). Treat empty as absent.
+  const hasBookFile = !!row.bookUrl;
   const demoMediaToken = cust != null && row.bookDemoUrl ? signMediaToken({ k: "ebookDemo", id: row.id, free: true, cust }) : null;
-  const bookMediaToken = cust != null && opts.entitled && row.bookUrl ? signMediaToken({ k: "ebook", id: row.id, scope: { kind: "ebook", id: row.id }, cust }) : null;
+  const bookMediaToken = cust != null && opts.entitled && hasBookFile ? signMediaToken({ k: "ebook", id: row.id, scope: { kind: "ebook", id: row.id }, cust }) : null;
   return {
   _id: String(row.id),
   name: row.name,
@@ -32,6 +35,7 @@ export const toEbookDto = (
   order: row.orderby,
   demoMediaToken,
   bookMediaToken,
+  hasBookFile,
   link: row.shareableLink,
   status: row.active,
   isTrending: false,

@@ -164,7 +164,7 @@ export const offlineBatchRepository = {
     prisma.offlineBatch.update({ where: { id }, data: { deletedAt: new Date() } }),
 
   // ── offline banner (OfflineBannerSlider) ────────────────────────────────────
-  listBanners: () => prisma.offlineBannerSlider.findMany({ orderBy: { orderBy: "asc" } }),
+  listBanners: () => prisma.offlineBannerSlider.findMany({ orderBy: [{ orderBy: "asc" }, { createdAt: "asc" }] }),
   findBannerById: (id: number) => prisma.offlineBannerSlider.findUnique({ where: { id }, select: { id: true } }),
   createBanner: (data: { image: string; key: string | null; keyId: number | null; orderBy: number }) => {
     const now = new Date();

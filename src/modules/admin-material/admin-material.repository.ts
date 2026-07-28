@@ -59,12 +59,43 @@ export const adminMaterialRepository = {
   countCoursesForCategory: (categoryId: number, search?: string) =>
     prisma.materialCategoryCourse.count({ where: buildCategoryCourseWhere(categoryId, search) }),
 
+  /**
+   * Every product linked to this material category, across all three product
+   * types, as one sortable+pageable set. Raw SQL because the three links have
+   * nothing in common structurally:
+   *   course       → pivot ws_material_category_course
+   *   package      → pivot ws_material_category_package
+   *   live course  → JSON column ws_live_course.material_categories, holding
+   *                  [{ category, order }] where `category` may be a JSON string
+   *                  ("12") or a number (12) depending on which admin build
+   *                  wrote it — hence the CAST-to-UNSIGNED comparison.
+   * Paging a UNION in application code would be wrong (each source would get its
+   * own offset), so the union is paged in SQL.
+   */
+  linkedProductsForCategory: (categoryId: number, opts: { search?: string; skip: number; take: number }) => {
+    const { sql, params } = buildLinkedProductsQuery(categoryId, opts.search);
+    return prisma.$queryRawUnsafe<LinkedProductRow[]>(
+      `SELECT u.type, u.id, u.name, u.image, u.status FROM (${sql}) u ORDER BY u.name ASC, u.id ASC LIMIT ? OFFSET ?`,
+      ...params,
+      opts.take,
+      opts.skip,
+    );
+  },
+  countLinkedProductsForCategory: async (categoryId: number, search?: string) => {
+    const { sql, params } = buildLinkedProductsQuery(categoryId, search);
+    const rows = await prisma.$queryRawUnsafe<{ total: bigint | number }[]>(
+      `SELECT COUNT(*) AS total FROM (${sql}) u`,
+      ...params,
+    );
+    return Number(rows[0]?.total ?? 0);
+  },
+
   // ── materials (leaf) ──────────────────────────────────────────────────────
   listMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean; skip: number; take: number }) =>
-    prisma.material.findMany({ where: buildMatWhere(opts), include: { MaterialCategory: { select: { id: true, name: true } } }, orderBy: [{ order_by: "asc" }, { created_at: "desc" }], skip: opts.skip, take: opts.take }),
+    prisma.material.findMany({ where: buildMatWhere(opts), include: { MaterialCategory: { select: { id: true, name: true } } }, orderBy: [{ order_by: "asc" }, { created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
   countMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean }) => prisma.material.count({ where: buildMatWhere(opts) }),
-  materialsForCategory: (categoryId: number, skip: number, take: number) =>
-    prisma.material.findMany({ where: { materialCategoryId: categoryId }, orderBy: [{ order_by: "asc" }, { created_at: "desc" }], skip, take }),
+  materialsForCategory: (categoryId: number, skip: number, take: number, search?: string) =>
+    prisma.material.findMany({ where: buildMatWhere({ materialCategoryId: categoryId, search }), orderBy: [{ order_by: "asc" }, { created_at: "desc" }], skip, take }),
 
   findMaterialById: (id: number) => prisma.material.findUnique({ where: { id }, include: { MaterialCategory: { select: { id: true, name: true } } } }),
   findMaterialBare: (id: number) => prisma.material.findUnique({ where: { id } }),
@@ -222,6 +253,54 @@ function buildCatWhere(opts: { parent?: number | "root"; search?: string; status
   if (search) Object.assign(where, search);
   if (opts.status !== undefined) where.status = opts.status;
   return where;
+}
+
+export type LinkedProductType = "course" | "package" | "live-course";
+export type LinkedProductRow = {
+  type: LinkedProductType;
+  id: number;
+  name: string | null;
+  image: string | null;
+  /** MySQL returns TINYINT(1) for these BOOLEAN columns, so 0/1 rather than a JS boolean. */
+  status: number | boolean | null;
+};
+
+/**
+ * The three-way UNION plus its search filter, as one parameterised statement.
+ * Search is applied per branch (not once over the union) so each branch can use
+ * its own name index instead of filtering a materialised temp table.
+ * `ws_package.status` is the `active` field in Prisma — same column name in SQL.
+ */
+function buildLinkedProductsQuery(categoryId: number, search?: string): { sql: string; params: unknown[] } {
+  const toks = searchTokens(search);
+  const nameFilter = toks.map(() => "AND {alias}.name LIKE ?").join(" ");
+  const tokParams = toks.map((t) => `%${t}%`);
+  const branch = (alias: string) => nameFilter.replace(/\{alias\}/g, alias);
+
+  const sql = `
+    SELECT 'course' AS type, c.id AS id, c.name AS name, c.image AS image, c.status AS status
+      FROM ws_material_category_course mcc
+      JOIN ws_course c ON c.id = mcc.course_id
+     WHERE mcc.mcategory_id = ? ${branch("c")}
+    UNION ALL
+    SELECT 'package' AS type, p.id AS id, p.name AS name, p.image AS image, p.status AS status
+      FROM ws_material_category_package mcp
+      JOIN ws_package p ON p.id = mcp.package_id
+     WHERE mcp.mcategory_id = ? ${branch("p")}
+    UNION ALL
+    SELECT 'live-course' AS type, lc.id AS id, lc.name AS name, lc.image AS image, lc.status AS status
+      FROM ws_live_course lc
+      JOIN JSON_TABLE(
+             COALESCE(lc.material_categories, JSON_ARRAY()),
+             '$[*]' COLUMNS (category JSON PATH '$.category')
+           ) jt ON CAST(JSON_UNQUOTE(jt.category) AS UNSIGNED) = ?
+     WHERE 1 = 1 ${branch("lc")}
+  `;
+
+  return {
+    sql,
+    params: [categoryId, ...tokParams, categoryId, ...tokParams, categoryId, ...tokParams],
+  };
 }
 
 function buildCategoryCourseWhere(categoryId: number, search?: string): Prisma.MaterialCategoryCourseWhereInput {

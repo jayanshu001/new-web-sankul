@@ -475,7 +475,7 @@ export async function listAdminLog(opts: {
   const [data, total] = await Promise.all([
     prisma.notification.findMany({
       where,
-      orderBy: { [field]: opts.sortOrder },
+      orderBy: [{ [field]: opts.sortOrder }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
     }),

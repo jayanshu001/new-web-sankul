@@ -35,7 +35,9 @@ export const adminPackageRepository = {
 
   // ── packages: list / get ────────────────────────────────────────────────────
   list: (opts: { search?: string; active?: boolean; packageTypeId?: number; skip: number; take: number }) =>
-    prisma.package.findMany({ where: buildWhere(opts), include: pkgInclude, orderBy: { created_at: "desc" }, skip: opts.skip, take: opts.take }),
+    // Curated manual order first (admins set ws_package.order_by, negatives float to
+    // the top), then newest. Matches the client catalog, which already sorted this way.
+    prisma.package.findMany({ where: buildWhere(opts), include: pkgInclude, orderBy: [{ order_by: "asc" }, { created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
   count: (opts: { search?: string; active?: boolean; packageTypeId?: number }) => prisma.package.count({ where: buildWhere(opts) }),
   findById: (id: number) => prisma.package.findUnique({ where: { id }, include: pkgInclude }),
   findBare: (id: number) => prisma.package.findUnique({ where: { id } }),
@@ -63,15 +65,15 @@ export const adminPackageRepository = {
   // Paginated variants of the three category pivots for the package-detail tabs
   // (same include/orderBy as the embedded-array loaders above; add skip/take + count).
   specificSubjectsForPaged: (packageId: number, skip: number, take: number) =>
-    prisma.packageSpecificSubject.findMany({ where: { packageId }, include: { VideoCategory: { select: { id: true, title: true, image: true } } }, orderBy: { order_by: "asc" }, skip, take }),
+    prisma.packageSpecificSubject.findMany({ where: { packageId }, include: { VideoCategory: { select: { id: true, title: true, image: true } } }, orderBy: [{ order_by: "asc" }, { id: "asc" }], skip, take }),
   countSpecificSubjectsFor: (packageId: number) =>
     prisma.packageSpecificSubject.count({ where: { packageId } }),
   materialCategoriesForPaged: (packageId: number, skip: number, take: number) =>
-    prisma.materialCategoryPackage.findMany({ where: { packageId }, include: { MaterialCategory: { select: { id: true, name: true, image: true } } }, orderBy: { order: "asc" }, skip, take }),
+    prisma.materialCategoryPackage.findMany({ where: { packageId }, include: { MaterialCategory: { select: { id: true, name: true, image: true } } }, orderBy: [{ order: "asc" }, { id: "asc" }], skip, take }),
   countMaterialCategoriesFor: (packageId: number) =>
     prisma.materialCategoryPackage.count({ where: { packageId } }),
   examCategoriesForPaged: (packageId: number, skip: number, take: number) =>
-    prisma.examCategoryPackage.findMany({ where: { packageId }, include: { ExamCategory: { select: { id: true, name: true, image: true } } }, orderBy: { order: "asc" }, skip, take }),
+    prisma.examCategoryPackage.findMany({ where: { packageId }, include: { ExamCategory: { select: { id: true, name: true, image: true } } }, orderBy: [{ order: "asc" }, { id: "asc" }], skip, take }),
   countExamCategoriesFor: (packageId: number) =>
     prisma.examCategoryPackage.count({ where: { packageId } }),
 

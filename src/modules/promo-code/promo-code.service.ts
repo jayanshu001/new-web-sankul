@@ -1188,14 +1188,15 @@ const resolveReferralForPlanSql = async (
 /**
  * SQL delivery-address ownership check (replaces the Mongo `CustomerAddress`
  * lookup in the payment SQL branches — Mongo can't cast the int customerId).
- * Returns true iff address `addressId` belongs to customer `customerId`.
+ * Returns true iff address `addressId` belongs to customer `customerId` and is not
+ * soft-deleted (`status: true`) — a removed address must not be usable at checkout.
  */
 export const addressBelongsToCustomerSql = async (
   addressId: number,
   customerId: number
 ): Promise<boolean> => {
   const row = await prisma.customerAddress.findFirst({
-    where: { id: addressId, userId: customerId },
+    where: { id: addressId, userId: customerId, status: true },
     select: { id: true },
   });
   return !!row;

@@ -29,7 +29,7 @@ export const toCourseDto = (c: CourseRow, counts: CountMap) => ({
 });
 
 type LiveCourseRow = {
-  id: number; name: string; image: string | null; level: string | null;
+  id: number; name: string; image: string | null;
   classType: string; status: boolean; ordered: number; createdAt: Date | null;
 };
 
@@ -37,7 +37,6 @@ export const toLiveCourseDto = (lc: LiveCourseRow, counts: CountMap) => ({
   _id: String(lc.id),
   name: lc.name,
   image: lc.image,
-  level: lc.level,
   classType: lc.classType,
   status: lc.status,
   ordered: lc.ordered,

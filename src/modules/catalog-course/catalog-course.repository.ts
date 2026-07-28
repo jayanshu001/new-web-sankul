@@ -12,11 +12,11 @@ import { buildPrismaSearch } from "../../utils/searchFilter";
  */
 export const catalogCourseRepository = {
   // ── subject category (ws_course_subject_category) ────────────────────────
-  /** Active subject categories, by `order_by` then title (mirrors Mongo sort). */
+  /** Active subject categories, by `order_by ASC` then `created_at ASC`. */
   listActiveCategories: () =>
     prisma.courseSubjectCategory.findMany({
       where: { status: true },
-      orderBy: [{ order: "asc" }, { title: "asc" }],
+      orderBy: [{ order: "asc" }, { createdAt: "asc" }],
     }),
 
   /**
@@ -32,7 +32,7 @@ export const catalogCourseRepository = {
     return Promise.all([
       prisma.courseSubjectCategory.findMany({
         where,
-        orderBy: [{ order: "asc" as const }, { title: "asc" as const }],
+        orderBy: [{ order: "asc" as const }, { createdAt: "asc" as const }],
         skip: args.skip,
         take: args.take,
       }),
@@ -56,21 +56,21 @@ export const catalogCourseRepository = {
   findCourseById: (id: number) =>
     prisma.course.findFirst({ where: { id, status: true } }),
 
-  /** Active courses, ordered by `order_by` then id. Optional name/desc search. */
+  /** Active courses, `order_by ASC, created_at ASC`. Optional name/desc search. */
   listActiveCourses: (opts?: { search?: string }) =>
     prisma.course.findMany({
       where: {
         status: true,
         ...(buildPrismaSearch(opts?.search, ["name", "description"]) ?? {}),
       },
-      orderBy: [{ ordered: "asc" }, { id: "desc" }],
+      orderBy: [{ ordered: "asc" }, { createdAt: "asc" }],
     }),
 
   /** Active courses inside a given subject category. */
   listActiveCoursesByCategory: (categoryId: number) =>
     prisma.course.findMany({
       where: { status: true, courseSubjectCategoryId: categoryId },
-      orderBy: [{ ordered: "asc" }, { id: "desc" }],
+      orderBy: [{ ordered: "asc" }, { createdAt: "asc" }],
     }),
 
   /**
@@ -103,7 +103,12 @@ export const catalogCourseRepository = {
     return Promise.all([
       prisma.course.findMany({
         where,
-        orderBy: [{ [args.orderBy.field]: args.orderBy.dir }, { id: "desc" }],
+        // Client catalog ordering: the chosen field first, then `created_at ASC`
+        // as the tiebreaker (falling back to id when the field IS createdAt).
+        orderBy: [
+          { [args.orderBy.field]: args.orderBy.dir },
+          args.orderBy.field === "createdAt" ? { id: "asc" as const } : { createdAt: "asc" as const },
+        ],
         skip: args.skip,
         take: args.take,
         include: {

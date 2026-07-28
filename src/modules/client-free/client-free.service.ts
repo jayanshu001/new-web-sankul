@@ -39,6 +39,7 @@ import { signMediaToken } from "../../utils/mediaToken";
 import { descendantsOf } from "../catalog-category-tree/category-tree.service";
 import { examInCategoriesWhere } from "../catalog-exam/exam-category-pivot.where";
 import { searchTokens, buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
+import { byOrderThenCreatedAt } from "../../utils/catalogOrder";
 
 export const CLIENT_FREE_MODULE = "client-free";
 export const isClientFreeMysql = (): boolean => true;
@@ -183,7 +184,7 @@ export const freeTests = async (opts: {
   const [exams, total] = await Promise.all([
     prisma.exam.findMany({
       where,
-      orderBy: [{ order_by: "asc" }, { startAt: "desc" }],
+      orderBy: [{ order_by: "asc" }, { createAt: "asc" }],
       skip: opts.skip, take: opts.limit,
       include: { ExamCategory: { select: { id: true, name: true, image: true } } },
     }),
@@ -305,8 +306,9 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
   // from ws_video_category_relation edges (restricted to the reachable set).
   const allIds = await descendantsOf(allRootIds);
   const [cats, edges] = await Promise.all([
-    prisma.videoCategory.findMany({ where: { id: { in: allIds }, status: true }, orderBy: [{ order_by: "asc" }, { title: "asc" }], select: { id: true, title: true, image: true } }),
-    prisma.videoCategoryRelation.findMany({ where: { parent: { in: allIds }, child: { in: allIds } }, orderBy: { order: "asc" }, select: { parent: true, child: true } }),
+    prisma.videoCategory.findMany({ where: { id: { in: allIds }, status: true }, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], select: { id: true, title: true, image: true } }),
+    // ws_video_category_relation has no created_at → id ASC is the tiebreaker.
+    prisma.videoCategoryRelation.findMany({ where: { parent: { in: allIds }, child: { in: allIds } }, orderBy: [{ order: "asc" }, { id: "asc" }], select: { parent: true, child: true } }),
   ]);
   const catById = new Map<number, any>();
   for (const c of cats) catById.set(c.id, { _id: c.id, title: c.title, image: c.image });
@@ -316,7 +318,7 @@ export const freeVideos = async (opts: { search: string | null; page: number; li
   // Free videos across the whole set, grouped by category.
   const catIds = [...catById.keys()];
   const videos = catIds.length
-    ? await prisma.video.findMany({ where: { videoCategoryId: { in: catIds }, status: true, priceType: "free" as any }, orderBy: [{ order: "asc" }, { created_at: "desc" }] })
+    ? await prisma.video.findMany({ where: { videoCategoryId: { in: catIds }, status: true, priceType: "free" as any }, orderBy: [{ order: "asc" }, { created_at: "asc" }] })
     : [];
   const videosByCat = new Map<number, any[]>();
   for (const v of videos) {
@@ -361,7 +363,7 @@ export const freeEbooks = async (opts: { customerId: number | null; search: stri
 
   // Free is price-derived, so we can't paginate at the DB. Load active ebooks,
   // filter by min-plan-price==0, then paginate in memory.
-  const allEbooks = await prisma.eBook.findMany({ where, orderBy: [{ orderby: "asc" }, { createdAt: "desc" }] });
+  const allEbooks = await prisma.eBook.findMany({ where, orderBy: [{ orderby: "asc" }, { createdAt: "asc" }] });
   const allIds = allEbooks.map((e) => e.id);
   const allPlans = allIds.length ? await prisma.packageCourseEbookPrice.findMany({ where: { ebookId: { in: allIds }, status: true }, orderBy: { duration: "asc" } }) : [];
   const plansByEbook = new Map<number, any[]>();
@@ -421,7 +423,7 @@ export const freeCourses = async (opts: { customerId: number | null; search: str
   const [courses, packages] = await Promise.all([
     prisma.course.findMany({
       where: courseWhere,
-      orderBy: [{ ordered: "asc" }, { createdAt: "desc" }],
+      orderBy: [{ ordered: "asc" }, { createdAt: "asc" }],
       include: {
         educator: { select: { id: true, name: true } },
         subject: { select: { id: true, title: true } },
@@ -429,7 +431,7 @@ export const freeCourses = async (opts: { customerId: number | null; search: str
       },
     }),
     packageWhere
-      ? prisma.package.findMany({ where: packageWhere, orderBy: [{ order_by: "asc" }, { created_at: "desc" }], include: { packageType: { select: { id: true, name: true } } } })
+      ? prisma.package.findMany({ where: packageWhere, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], include: { packageType: { select: { id: true, name: true } } } })
       : Promise.resolve([] as any[]),
   ]);
 
@@ -438,9 +440,9 @@ export const freeCourses = async (opts: { customerId: number | null; search: str
     enrichPackages(packages, opts.customerId, opts.shareBase),
   ]);
 
-  const merged = [...enrichedCourses, ...enrichedPackages].sort(
-    (a, b) => new Date(b.createdAt ?? b.created_at ?? 0).getTime() - new Date(a.createdAt ?? a.created_at ?? 0).getTime()
-  );
+  // Courses (`ordered`) and packages (`order_by`) are interleaved into one list;
+  // the shared comparator applies the client catalog rule across both spellings.
+  const merged = [...enrichedCourses, ...enrichedPackages].sort(byOrderThenCreatedAt);
   const total = merged.length;
   const data = merged.slice(opts.skip, opts.skip + opts.limit);
   return { data, total };

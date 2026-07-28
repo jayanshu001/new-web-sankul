@@ -43,6 +43,7 @@ import clientLearningRoutes from "./learning/learning.routes";
 import clientCatalogRoutes from "./catalog/catalog.routes";
 import clientRecentlyAddedRoutes from "./recently-added/recently-added.routes";
 import clientAppVersionRoutes from "./app-version/app-version.routes";
+import clientDownloadsRoutes from "./downloads/downloads.routes";
 
 const router = Router();
 
@@ -101,5 +102,6 @@ router.use("/test-series", clientTestSeriesRoutes); // -> /api/v1/client/test-se
 router.use("/learning", clientLearningRoutes);      // -> /api/v1/client/learning/* (unified Resume-Learning feed + live-session progress)
 router.use("/catalog", clientCatalogRoutes);        // -> /api/v1/client/catalog/:type/:id/{videos|materials|tests}
 router.use("/app-version", clientAppVersionRoutes); // -> /api/v1/client/app-version/check (PUBLIC: store vs. installed + force-update gate, pre-login)
+router.use("/downloads", clientDownloadsRoutes);    // -> /api/v1/client/downloads/encryption-key (GET/PUT per-user offline AES key)
 
 export default router;

@@ -15,6 +15,871 @@
 
 ---
 
+## 2026-07-28 (later 6) — Admin video list: recency becomes the PRIMARY sort
+
+**DDL:** none. **Backfill:** none. **Schema:** unchanged. **Query-level:** primary
+`ORDER BY` replaced on the admin video list (`admin-video.repository.ts` → `list`,
+new `buildOrderBy`). **Supersedes "later 5" below**, which only flipped the tiebreaker.
+
+`GET /admin/videos` now sorts `created_at DESC, id DESC` whenever `sort_by=order`
+(the zod default, and what the admin UI sends). `sort_dir` is ignored for that case by
+design — the requirement is "newest always on top", and the UI sends `sort_dir=asc`,
+which would invert it. Any other `sort_by` (`name` / `created_at` / `updated_at`) still
+sorts by its own column in the requested direction, with `id DESC` as the stable
+tiebreaker.
+
+**Deliberate consequence:** manual reordering is now invisible on this screen. The
+`order` column is still maintained — top-slot-on-create (`MIN(order) - 1`) and `setOrder`
+both keep writing it — and the CLIENT catalog still sorts by it
+(`order ASC, created_at ASC`, `catalog-video.repository.ts:22` and
+`client-category-video.service.ts:52`), so admin and client now order videos differently
+on purpose. Requested explicitly after the "later 5" tiebreaker fix proved insufficient
+(a curated row could still outrank a newer one). To revert, return
+`[{ order: sortDir }, { id: "desc" }]` from `buildOrderBy` for the `"order"` case.
+
+Verified on the local clone: id 990152 (`order = 3`, newest) is row #1; the whole page is
+`created_at` descending; `sort_by=name` still sorts by title.
+
+---
+
+## 2026-07-28 (later 5) — Admin video list: newest-first tiebreaker
+
+**DDL:** none. **Backfill:** none. **Schema:** unchanged. **Query-level:** secondary
+`ORDER BY` flipped on the admin video list (`admin-video.repository.ts` → `list`).
+
+`GET /admin/videos` sorted `order ASC, id ASC`. Since almost every row sits at `order = 0`
+(6 of the top-5 order values on the staging clone are that single bucket), the tiebreaker
+*was* the sort for practical purposes, and ascending id put each newly created video at the
+bottom of the list. Now `order ASC, id DESC`.
+
+The **primary** sort is untouched — still the curated `order` column, so manual reordering
+and the top-slot-on-create behaviour (`MIN(order) - 1`) remain fully visible. Only the run
+of rows that tie on `order` changed direction. `id` is the autoincrement PK, so `id DESC`
+is create-order DESC and needs no sort of the non-indexed `created_at`.
+
+Verified on the local clone: newest row (id 990151) is now row #1; the `order = 1..3` rows
+still sort below it in their curated positions.
+
+---
+
+## 2026-07-28 (later 4) — FCM push payload: full APNs rich-media field set
+
+**DDL:** none. **Backfill:** none. **Schema:** unchanged. **Query-level:** none — outbound
+push payload only (`src/utils/fcm.ts` → `buildMessage`).
+
+iOS was still rendering text-only banners when the app was backgrounded/killed. The APNs
+fields added earlier today (`apns.fcm_options.image` + `aps.mutable-content`) were correct
+but **had not been deployed** — `src/utils/fcm.ts` is still an uncommitted working-tree
+change on `migration`, so staging/prod were running the pre-fix payload. This entry closes
+the remaining gaps against the client integration doc so the payload is exhaustive:
+
+| Field | Before | Now |
+| --- | --- | --- |
+| `notification.image` (top-level `imageUrl`) | absent | set when an image exists |
+| `data.image` | absent | set (string) alongside `data.imageUrl` |
+| `data.imageUrl` | set | unchanged |
+| `android.notification.image` | set | unchanged |
+| `apns.fcm_options.image` | set (undeployed) | unchanged |
+| `aps.mutable-content` | set (undeployed) | unchanged |
+| `apns.headers` | absent | `apns-push-type: alert`, `apns-priority: 10` |
+
+`apns-push-type` is now explicit because a push classified as `background` never wakes the
+iOS Notification Service Extension, which silently drops the attachment. All `data` values
+remain plain strings — no nested `fcm_options` object is ever sent from here (the
+`fcm_options` key the client sees inside `data` on iOS is injected by FCM/APNs itself when
+`notification.image` is set, not by this service).
+
+**Deploy:** ship `src/utils/fcm.ts`. No DB work. Image URLs must be public HTTPS and
+≲1 MB — the NSE downloads them with no app credentials and a ~30s budget.
+
+---
+
+## 2026-07-28 (later 3) — List ordering sweep: curated manual order becomes the default
+
+**DDL:** none. **Backfill:** none. **Schema:** unchanged. **Query-level:** `ORDER BY`
+changed on ~70 list queries across the client catalog surface (plus the admin-side changes
+noted separately below), and one new shared helper (`src/utils/catalogOrder.ts`).
+
+> **Superseded snapshot corrected 2026-07-28.** An earlier version of this entry was written
+> while the sweep was mid-flight and listed only ~14 files. The client sweep is now complete
+> and the file list below is the closed set. The admin-side rows (`admin-course`,
+> `admin-video`, `admin-package`, `admin-testseries`, `referral-content` admin list) were
+> pre-existing working-tree changes from a prior session, not part of the client sweep —
+> they are kept in the table because they share the theme.
+
+### The convention (now written down in code)
+
+`src/utils/catalogOrder.ts` states it explicitly, which makes it the reference rather than
+this entry:
+
+> Every **client** list whose table carries an admin-managed display-order column sorts by
+> that column **ASC**, then `created_at` **ASC** as the tiebreaker. Tables with a display-
+> order column but **no** `created_at` (`ws_video_category_relation`, `ws_department`) use
+> `id ASC` instead, since id is monotonic and approximates insertion order.
+
+Explicitly **out of scope** per that file: user-owned/activity data — notifications,
+purchase history, cart, wishlist, progress, subscriptions — which stays newest-first.
+
+The column name varies per table (`order_by` / `orderby` / `order` / `ordered` / `orderBy`),
+so call sites spell the Prisma `orderBy` inline. The file exports one comparator,
+`byOrderThenCreatedAt`, for the few places that sort already-fetched pivot rows in memory
+instead of in SQL.
+
+### What changed
+
+The theme: the **admin-curated manual order column** becomes the primary sort, where
+several lists previously sorted by recency and ignored it. Admins set these columns
+(negatives float to the top) and the ordering was not being honoured.
+
+| File | Before | After |
+|---|---|---|
+| `admin-course.repository.ts` | default sort col `createdAt` | default sort col `ordered` |
+| `admin-video.repository.ts` | default sort col `created_at` | default sort col `order` |
+| `admin-package.repository.ts` | `created_at desc` | `order_by asc, created_at desc, id desc` |
+| `admin-testseries.service.ts` | `createdAt desc, id desc` | `orderBy asc, createdAt desc, id desc` |
+| `referral-content.service.ts` | `createdAt desc, id desc` | `orderBy asc, createdAt desc, id desc` |
+**Client catalog layer** (`src/modules/catalog-*`):
+
+| File | Before | After |
+|---|---|---|
+| `catalog-book.repository.ts` | `order_by asc, created_at desc, id desc` | `order_by asc, created_at asc` |
+| `catalog-ebook.repository.ts` | `orderby asc, createdAt desc, id desc` | `orderby asc, createdAt asc` |
+| `catalog-package.repository.ts` (×2) | `order_by asc, id desc` | `order_by asc, created_at asc` |
+| `catalog-package.detail.sql.ts` (×5 package lists) | `order_by asc, id desc` | `order_by asc, created_at asc` |
+| `catalog-package.detail.sql.ts` (×3 pivots) | `order asc` / `order_by asc` | `+ created_at asc` tiebreaker |
+| `catalog-video.repository.ts` (videos) | `order asc, id asc` | `order asc, created_at asc` |
+| `catalog-video.repository.ts` (categories ×2) | `order_by asc, title asc` | `order_by asc, created_at asc` |
+| `catalog-material.repository.ts` | `order_by asc, id asc` | `order_by asc, created_at asc` |
+| `catalog-exam.repository.ts` (×3 client reads) | `order_by asc, name asc` / `, id asc` | `order_by asc, created_at asc` |
+| `catalog-course.repository.ts` (categories ×2) | `order asc, title asc` | `order asc, createdAt asc` |
+| `catalog-course.repository.ts` (courses ×2) | `ordered asc, id desc` | `ordered asc, createdAt asc` |
+| `catalog-course.repository.ts` (paginated) | `<field> <dir>, id desc` | `<field> <dir>`, then `createdAt asc` (or `id asc` when the field IS `createdAt`) |
+| `course-detail.sql.ts` (videos) | `order asc` | `order asc, created_at asc` |
+| `course-detail.sql.ts` (material + exam pivots) | in-memory `(a.order ?? 0) - (b.order ?? 0)` | in-memory `byOrderThenCreatedAt` |
+
+**Client service layer** (`src/modules/client-*`):
+
+| File | Change |
+|---|---|
+| `client-catalog.service.ts` (×8) | subjects/videos/material+exam pivots/course materials → `+ created_at asc`; the materials list flipped `created_at desc` → `asc` |
+| `client-material.service.ts` (×3) | child categories `name asc` → `created_at asc`; both material lists → `order_by asc, created_at asc` |
+| `client-category-video.service.ts` | `order asc` → `order asc, created_at asc` |
+| `client-testseries.service.ts` (×4) | series `createdAt desc` → `asc`; content categories `name asc` → `createdAt asc`; paper links `id asc` → `createdAt asc` |
+| `client-exam.repository.ts` (×3) | sub-categories `name asc` → `created_at asc`; both exam lists `createAt desc` → `asc` |
+| `client-trending.service.ts` (×4) | books/ebooks/videos tiebreak `desc` → `asc` |
+| `client-free.service.ts` (×7) | free exams `startAt desc` → `createAt asc`; categories/videos/ebooks/courses/packages → `created_at asc`; `videoCategoryRelation` → `order asc, id asc` (no `created_at` on that table); the merged course+package list now uses `byOrderThenCreatedAt` instead of `createdAt desc` |
+| `client-dashboard.service.ts` (×3) | banners `+ created_at asc`; **courses `createdAt desc` → `ordered asc, createdAt asc`**; course categories `id asc` → `order asc, createdAt asc` |
+
+**Shared modules reached from client routes:**
+
+| File | Change |
+|---|---|
+| `package-category.service.ts` (×4) | packages / live courses / category lists → `+ created_at asc` |
+| `banner-slider.repository.ts` (×2) | client `findMany` → `+ created_at asc`; `findPage` (shared admin+client) gained `created_at asc` as a stable trailing key |
+| `offline-city.repository.ts` | `order asc, name asc` → `order asc, createdAt asc` |
+| `offline-batch.repository.ts` | banners `orderBy asc` → `+ createdAt asc` |
+| `department.repository.ts` (×2) | departments + contacts → `order asc, id asc` (**no `created_at` on these tables**) |
+| `cms-extra.service.ts` (×3) | client social links (list + paged) and client live banners → `+ createdAt asc` |
+| `exam-countdown.service.ts` (×2) | client categories `name asc` → `createdAt asc`; client countdowns `examDate asc` → `+ createdAt asc` (no order column — `examDate` is the domain sort, `created_at` only stabilises paging) |
+| `exam-countdown.client.ts` (raw SQL) | `ORDER BY <col> ASC, id DESC` → `ORDER BY <col> ASC, created_at ASC` |
+| `admin-live-course.repository.ts` (×2) | the **client** course reads (`listClientCourses`, `coursesByIdsActive`) `ordered asc, createdAt desc` → `asc` |
+| `client/book/book.controller.ts` | merged trending books+ebooks `createdAt desc` → `byOrderThenCreatedAt` |
+
+In `admin-course` / `admin-video` only the *default* changed — an explicit
+`?sortBy=createdAt` still works, and both files gained an explicit `createdAt` branch so
+the option stays reachable now that it is no longer the fallback.
+
+### Deliberately NOT changed
+
+- **All admin list endpoints** keep their own ordering (including
+  `catalog-exam.repository.ts` `listCategoryPackages`/`listCategoryCourses` and
+  `exam-countdown` `listCategoriesAdmin`, which are admin-only despite living in shared files).
+- **`/client/search`** still sorts every entity `createdAt desc`. It therefore does **not**
+  match catalog order — a known, accepted divergence, explicitly excluded from this sweep.
+- **Recency feeds stay newest-first by design:** `/client/recently-added` and
+  `getRecentMaterials` (`client-material.service.ts`) — inverting them would defeat the feature.
+- **User-owned/activity data** — notifications, purchase history, cart, wishlist, folders,
+  ebook downloads, lecture progress, subscriptions, addresses, search history — unchanged.
+- **Domain-natural sorts** unchanged: pricing plans `duration asc` / `isDefault desc, price asc`,
+  lecture notes `timestampSec asc`, my-subscriptions soonest-expiring-first, testimonials `rating desc`.
+
+### `/client/course` default sort changed
+
+`GET /client/course` previously defaulted to `sortBy=createdAt&sortOrder=desc` (newest
+first). It now defaults to the curated `ordered asc, createdAt asc`. **The query params
+still work** — `?sortBy=createdAt&sortOrder=desc` restores the old behaviour exactly. This
+is the one client endpoint where the change is visible as a *default* rather than only as a
+tiebreak.
+
+### One additive DTO field, stripped before it reaches the wire
+
+`fetchTrendingBooksOnly` / `fetchTrendingEbooksOnly` now return `orderBy` on each item so the
+combined trending feed can interleave books and ebooks by the shared rule. It is removed at
+all three emit sites (`listTrendingBooks`, `listTrendingBooksOnly`, dashboard trending
+sections); `listTrendingEbooksOnly` already whitelists via `pickList`. **No response shape
+changed.**
+
+### Index note (no DDL shipped)
+
+The old client catalog sorts were mixed-direction (`order_by ASC, created_at DESC`), which
+MySQL cannot satisfy from a plain composite index. The new all-ASC form
+(`order_by ASC, created_at ASC`) *is* index-satisfiable, so this is a mild planner
+improvement, not a regression. None of the catalog tables currently declare a
+`(order_col, created_at)` composite index — adding one for the hot paginated lists
+(`ws_book`, `ws_ebook`, `ws_package`, `ws_material`, `ws_video`, `ws_test_series`) is a
+worthwhile follow-up but is **not** required by this change and no DDL was written for it.
+
+### Two asymmetries, noted so they are not "fixed" by accident
+
+1. **Tiebreak direction differs by surface — deliberate.** Admin lists tiebreak
+   `createdAt desc` (newest first within an order bucket); client catalog lists tiebreak
+   `created_at asc` (oldest first). Admins want recent work on top; the catalog wants a
+   stable shelf. Read the surface before copying either.
+2. **Client catalog lists end at `created_at asc` with no final `id`.** This follows the
+   stated convention, so it is intentional — but note the consequence: if two rows tie on
+   both the order column *and* `created_at`, MySQL ordering is unspecified, which on a
+   paginated endpoint can duplicate or skip rows between pages. Checked against the current
+   database: `ws_package` (10 rows), `ws_book` (15), `ws_ebook` (506) have **zero**
+   `(order, created_at)` ties and **zero** NULL `created_at` — so this is latent, not live.
+   It holds by data shape, not by construction; two items created in the same second with
+   the same order value would surface it. `catalog-course` already guards against the
+   equivalent case by appending `id asc`.
+
+### Response-shape impact
+
+None — only row order changes. No field added, removed, or retyped. Client-visible effect
+is that catalog lists and the admin course / video / package / test-series /
+referral-content lists now return in the admin's configured order.
+
+`yarn typecheck` green.
+
+---
+## 2026-07-28 (later 2) — Notification feed exposes tap-routing fields (read projection only)
+
+**DDL:** none. **Backfill:** none. **DB queries:** unchanged — `listNotifications` still
+issues the same `findMany` + two `count`s. This is a **response-projection** change.
+
+### Why
+
+`GET /client/notifications` returned only display fields, so tapping a row in the in-app
+Notification screen could only open the detail modal — while tapping the *push* for the
+same event routed correctly.
+
+The routing was never missing from the database. `ws_notification.deep_link` + `.data` have
+carried it since the deep-link work, and all four write paths persist it:
+`dispatchAudience` (targeted, per-recipient rows), `createImmediateLog` (broadcast),
+`createScheduled`, and `notifyBuyersOnStart` (live-class-started, which also stores
+`sessionId`/`streamId`/`liveCourseId`). The loss was at the very last step —
+`NOTIFICATION_CLIENT_FIELDS` in `client/notification/notification.controller.ts` is a
+`pickList` keep-list, and it dropped `deepLink`/`data` as "metadata".
+
+### What changed
+
+- **`utils/notificationTarget.ts`** — added `extractNotificationRouting(row)`, the exact
+  inverse of the existing `buildNotificationRouting(target)`. Both directions deliberately
+  live in the same file: the FE contract requires "list and push must match for the same
+  event", and that only holds if the two projections are defined together.
+- **`modules/client-notification/client-notification.service.ts`** — the feed DTO spreads
+  the extracted routing (`viewType`, `deepLink`, `clickAction`, `screen`, `params`,
+  `liveCourseId`, `sessionId`, `streamId`), each key present only when the row carries it.
+- **`client/notification/notification.controller.ts`** — keep-list extended with those
+  eight keys, plus `dropEmptyRouting` to strip nullish ones. The DTO sets
+  `deepLink: … ?? null` unconditionally, so without this an unrouted announcement would
+  ship `"deepLink": null`; the app's router is presence-based and the FE contract says
+  "omit a field when unused; do not invent placeholders".
+
+### Type mapping (the non-obvious part)
+
+FCM forces every `data` value to be a string, so the stored blob holds `params` as a JSON
+string and ids as numeric strings. The list API has no such constraint and returns real
+types: `params` decoded to an **object**, and `liveCourseId`/`sessionId` to **numbers** —
+but **only when lossless** (`/^\d+$/` and `Number.isSafeInteger`). `streamId` is a StreamOS
+token, not a SQL id, so a non-numeric value stays a string. Never coerce it blindly.
+
+The raw `data` blob stays **out** of the client feed: it duplicates the same information in
+stringified form, and exposing both would let the app read whichever it found first and
+disagree with the push.
+
+### Response-shape impact
+
+Additive only. Envelope (`data` array + `unreadCount` + `pagination`) unchanged — the
+spec's example showed `data.notifications`/`total`/`totalPages`, which was **not** adopted
+because the shipped app already parses the current shape. All existing display fields keep
+their values and their `null`s; `customerId`/`readAt`/`broadcast`/`status`/`updatedAt`
+remain hidden. `POST /notifications/:id/read` returns the full DTO and now also carries the
+flattened routing (it previously already exposed `deepLink`/`data`).
+
+Old notifications sent before the admin target picker existed have `deep_link = NULL` and
+an empty `data`; they correctly return zero routing keys and keep opening the detail modal.
+No backfill is possible or needed — they never had a destination.
+
+### Verification
+
+New permanent suite `docs/migration/api-tests/notification-routing/client.api.test.ts` —
+**13/13** against local MySQL. Seeds one row per mode **through `buildNotificationRouting`
+itself**, so list/push parity is enforced by construction rather than by asserting
+hand-written literals twice. Covers Modes A–D, live-now id typing (numeric SQL ids vs
+string StreamOS token), the zero-routing-keys case for a plain announcement, `data` staying
+withheld, and the display fields + envelope being untouched. Suite added because the
+original defect was a one-line edit to a field allow-list: no type error, no failing build,
+invisible in review. `yarn typecheck` green.
+
+---
+
+## 2026-07-28 (later) — Prisma schema-drift diagnostics (no query/schema change)
+
+**DDL:** none. **Backfill:** none. **DB queries:** unchanged — this is observability only.
+
+### Why
+
+`GET /client/downloads/encryption-key` returned 500 for every caller for ~8 minutes. The
+database was healthy and the column existed; the running process held a Prisma client
+generated **before** `Customer.downloadKeyHex` was added. `prisma generate` writes into
+`node_modules`, which does not trip `tsx watch`, so the dev server never picked it up. The
+only evidence was a `PrismaClientValidationError` inside a stack trace behind a generic
+`"Something went wrong. Please try again later."`, and the frontend team filed a bug report
+guessing at a missing table.
+
+Two different faults produce that same opaque 500 and they have **different fixes**:
+
+| Kind | Meaning | Fix |
+|---|---|---|
+| `CLIENT_STALE` | generated client is behind `prisma/schema.prisma` | `yarn prisma:generate` **+ restart** |
+| `DDL_MISSING` | schema/client know a table/column the DATABASE lacks | apply the pending DDL in `docs/migration/schema-changes/` |
+
+### What was added
+
+- **`src/utils/prismaSchemaDrift.ts`** — `detectPrismaSchemaDrift(err)` classifies an error
+  as one of the two kinds (or `null`), naming the exact subject
+  (`Customer.downloadKeyHex`, `ws_customer_download_key`, …) and the command that fixes it.
+  Covers `PrismaClientValidationError` "Unknown field/arg" (which carries **no** error code —
+  the field name only exists in the message), undefined model accessors
+  (`Cannot read properties of undefined`), Prisma `P2021`/`P2022`, and the raw-SQL
+  equivalents MySQL `1054` / `1146` that `$queryRaw` produces.
+- **A `$use` middleware in `config/prisma.ts`**, installed last so it wraps the others.
+  This is why the fix lives at the Prisma layer rather than in one controller: it covers
+  **every** query in the app, including the many controllers that catch locally and log
+  their own generic message.
+- **A boot guard** in `connectPrisma()` — warns when `prisma/schema.prisma` is newer than
+  the generated client, catching the exact condition above at startup, when it is one
+  command to fix, instead of per-request in a stack trace. Warn-only and
+  non-production-only: a fresh `npm ci` can legitimately reorder those mtimes, and this
+  must never block a deploy.
+
+### Explicitly NOT changed
+
+The drift middleware **rethrows the error untouched** — detection only, no control-flow
+change. Requests that failed still fail with the same status. That is deliberate:
+`/client/downloads/encryption-key` documents 404 as "no key stored, mint one", so softening
+a drift failure into anything non-5xx would tell the app to mint a **duplicate** key and
+orphan every file the user had already downloaded.
+
+Logging is deduped to one line per `kind:subject` per 5 minutes — drift is a deploy-state
+fault, not a per-request one, and a hot endpoint would otherwise bury every other log line.
+
+### Verification
+
+All four fault shapes replayed against live MySQL/Prisma and correctly classified
+(`CLIENT_STALE` × 2, `DDL_MISSING` × 2), plus three negative controls — `P2025` not-found,
+a plain `Error`, and a `P2002` unique-constraint violation — confirmed **not** flagged, so
+the loud diagnostic stays signal. Boot guard verified in both directions: it fires when the
+schema is newer, and stays silent after `prisma:generate`. `download-key` suite still
+**20/20**; `yarn typecheck` green.
+
+---
+
+## 2026-07-28 — `ws_customer.download_key_hex` (per-user offline-download AES key)
+
+**DDL:** `docs/migration/schema-changes/2026-07-28_customer_download_key_column.sql`
+(**must be applied before deploy** — the endpoints 500 without it). **Backfill:** none —
+the column starts NULL for everyone by design; every customer's first `GET` legitimately
+404s and the app then PUTs its self-generated key. **Prisma:** one hand-added field on
+`Customer`; `yarn prisma:generate` required.
+
+> **Superseded within the same day:** the first iteration of this work created a separate
+> `ws_customer_download_key` table. It was never deployed beyond local dev and has been
+> replaced by a column on `ws_customer`. The DDL file drops the table if present. Reason:
+> per-customer secrets already live on `ws_customer` (`password`, `otp`, `device`), and
+> "one key per account" is exactly what the customer primary key already guarantees — a
+> side table added a join and a second write path to re-enforce an invariant we get free.
+
+### Why
+
+The mobile app encrypts downloaded videos/PDFs on device (`.wsenc` = magic `WSENC001` +
+16-byte IV + AES-256-CTR). It mints one 32-byte key **per user, once**, and needs the
+server to hold it so the same key survives logout / reinstall / local-cache expiry. The
+server is **pure key custody** — it never decrypts and never needs to parse the container.
+
+### Schema
+
+```sql
+ALTER TABLE `ws_customer`
+  ADD COLUMN `download_key_hex` VARCHAR(64) NULL DEFAULT NULL AFTER `device`;
+```
+
+`NULL` = this user has never stored a key → the API's documented 404 state.
+
+### New queries (all keyed on the customer PK — nothing here can cross accounts)
+
+| Repository method | Query |
+|---|---|
+| `findByCustomer` | `SELECT download_key_hex WHERE id = ? AND is_account_deleted = 0` |
+| `setKey` | `UPDATE … SET download_key_hex = ?, updated_at = ? WHERE id = ? AND is_account_deleted = 0` |
+| `clearKey` | `UPDATE … SET download_key_hex = NULL WHERE id = ?` |
+
+Reads use an **explicit `select`** of the single column. Most customer reads in this
+codebase pull the whole row; this module has no reason to hold `password` / `otp` in
+memory to answer with 64 hex characters. `setKey`/`clearKey` use `updateMany` so a
+missing/soft-deleted customer returns `count: 0` instead of throwing P2025 — the caller
+turns that into a **401**, not a 500.
+
+### Query-level semantics worth knowing
+
+- **`PUT` is a true no-op when unchanged.** The service reads first and compares
+  case-insensitively; an identical key issues **no UPDATE at all**. This matters more on
+  a column than it would on a side table: the key shares `ws_customer.updated_at` with
+  the rest of the profile, so a churning re-PUT (the app retries after a failed sync)
+  would otherwise make the customer row look edited on every app launch.
+- **The stored value is byte-for-byte what the client submitted** — no case
+  normalization — so a later `GET` returns exactly what was PUT.
+- **404 is a state, not an error.** It is the app's trigger to generate its
+  one-and-only key, so a DB failure surfaces as **500** and never collapses into 404;
+  otherwise the app would mint a second key and orphan every already-downloaded file.
+  A vanished/soft-deleted account returns **401**, not 404, for the same reason.
+
+### Changed query: account soft-delete now clears the key
+
+`modules/customer-profile/customer-profile.repository.ts` → `softDelete` now also sets
+`download_key_hex = NULL` in the same `UPDATE` (no extra statement). The row survives the
+soft delete, so key material would otherwise sit there forever — and nothing can
+legitimately ask for it back, since a soft-deleted customer can never authenticate again
+and a re-signup on the same phone lands on a **new** `ws_customer` id.
+
+### API (both require Bearer + `requireRole("customer")`)
+
+| Method | Path | Result |
+|---|---|---|
+| `GET` | `/api/v1/client/downloads/encryption-key` | `200 {data:{key}}` · `404 "Download encryption key not found"` · `401` |
+| `PUT` | `/api/v1/client/downloads/encryption-key` | `200 {data:{key}}` · `400 "Invalid encryption key"` · `401` |
+
+Validation is parsed in the controller (not the shared `validate` middleware) so the
+FE-specified **400** contract holds — the shared middleware answers 422 with a field map,
+which this client does not understand. The body schema is `.strict()`, so a `userId` in
+the payload is rejected outright rather than merely ignored; identity comes from the token.
+
+Rate limiting is the existing per-user `clientLimiter` mounted on `/api/v1/client`. The
+routes are deliberately **not** wrapped in `cacheRoute` — a shared-scope cache entry over
+a per-user secret is exactly the bug that would hand one user another's key. Both
+responses set `Cache-Control: no-store, private`.
+
+### Secret handling
+
+`download_key_hex` is plaintext hex and belongs to the same handling class as `password` /
+`otp` on the same table:
+
+- `utils/scrub.ts` gained an **exact-match** tier (`SENSITIVE_EXACT_KEYS = ["key"]`) so the
+  request logger redacts the PUT body — a substring entry would have redacted every
+  `objectKey`/`subjectKey`/`keyword` in the app. Verified: the key appears **0 times** in
+  `logs/` after a full test run. Collateral: two admin bodies also use a plain `key` field
+  (cms enum, offline search term) and now log as `[REDACTED]`.
+- The module's transformer takes the **key string**, not a `Customer` row, so no careless
+  spread can return the account with it.
+- Customer transformers already pick fields explicitly (that is how `password`/`otp` stay
+  out of responses today), and a regression test asserts the key never appears in
+  `GET /client/profile`.
+- **If `ws_customer` is granted to a reporting/BI user, exclude this column.**
+
+### Verification
+
+`docs/migration/api-tests/download-key/client.api.test.ts` — **20/20 passed** against local
+MySQL (`websankul_staging_1`): per-user isolation (customer B 404s while A holds a key, and
+B's write does not clobber A's), key stability across repeated GETs, `updated_at`
+idempotency, the `no-store` header, and the profile-leak check. `yarn typecheck` green.
+
+---
+## 2026-07-27 (later 4) — admin ebook DTO exposes PDF-upload status; `book_url` wipe diagnosed
+
+**DDL:** none. **Backfill:** none (one pending data repair, see below). **DB queries:**
+unchanged — the four columns were already selected by the existing `findMany`/`findFirst`.
+
+### A. Admin DTO now returns the upload-status columns (additive)
+
+`modules/admin-ebook/admin-ebook.service.ts` → `toEbookDto` previously dropped
+`book_upload_status` / `book_upload_progress` / `demo_upload_status` /
+`demo_upload_progress`, with a comment calling them "Mongo-only". **That comment was
+stale** — they are real `ws_ebook` columns and the BullMQ pipeline has always written
+them. `pdfUpload.controller.ts` even persists `queued` on enqueue with the explicit
+intent "so the admin list reflects it immediately (and after a refresh), not just over
+the per-session socket" — that intent was unreachable through the API.
+
+Now exposed on `GET /admin/ebooks` + `GET /admin/ebooks/:id`:
+
+- `bookUploadStatus` / `demoUploadStatus` — `queued|in_progress|completed|failed|null`
+- `bookUploadProgress` / `demoUploadProgress` — int `0..100`
+
+Additive only; no existing field changed. This is the refresh-safe way to watch an
+upload — `GET /admin/ebooks/pdf-jobs/:batchId` requires a `batchId` that is only
+returned once, at upload time, and there is **no lookup of jobs by ebookId**.
+
+⚠ `bookUploadStatus === "completed"` does **not** imply `bookUrl` is set — see below.
+
+### B. Root cause of ebook 550's empty `book_url` (supersedes "never uploaded")
+
+The 2026-07-27 (later 3) entry concluded the PDF was never attached to ebook 550. The
+job table proves otherwise — **it was uploaded and then cleared**:
+
+```
+ws_pdf_upload_job #9  ebook=550 target=bookUrl "high-court-of.pdf"
+  status=completed progress=100  finished 15:04:10 IST
+  file_url=…/admin/ebooks/1785144849073-high-court-of.pdf   ← HEAD: EXISTS, 8061113 bytes, application/pdf
+ws_ebook 550: book_url='' book_file_name='high-court-of.pdf'
+  book_upload_status='completed' updated_at=15:04:13 IST     ← 3s AFTER the job finished
+```
+
+**Mechanism:** `admin/ebook/ebook.validation.ts` preprocesses `bookUrl: "" → null`, then
+`admin-ebook.service.ts` `updateEbook` does `if (d.bookUrl !== undefined) data.bookUrl =
+d.bookUrl ?? ""`. Since `null !== undefined`, an empty form field writes `''` — an
+implicit wipe. `updateEbook` never writes `bookFileName`, which is exactly why the
+filename survived while the URL did not.
+
+`ebook.controller.ts` treats `bookUrl === ""` as a deliberate "remove the PDF" (it also
+blanks `bookFileName`), so the Edit-Ebook form's empty file input is indistinguishable
+from a delete. Because the async pipeline exists FOR large PDFs, that input is empty by
+design after an async upload — so **the next save after any async PDF upload wipes the
+URL**. Compare the guard two lines below at `examCountdownIds` ("an update that omits
+countdowns must not wipe the stored ids"); `bookUrl`/`demoUrl` never got it.
+
+### Pending — NOT yet applied (both need sign-off)
+
+1. **Data repair for ebook 550** — object verified present, so restoring the pointer is
+   sufficient:
+   ```sql
+   UPDATE ws_ebook
+      SET book_url = 'https://websankul-staging.blr1.digitaloceanspaces.com/admin/ebooks/1785144849073-high-court-of.pdf'
+    WHERE id = 550 AND book_url = '';
+   ```
+2. **Stop the implicit wipe** — treat empty/absent `bookUrl`/`demoUrl` as *no change* and
+   add an explicit `removeBookPdf` / `removeDemoPdf` flag for intentional removal. This
+   is an admin API contract change (admin FE must be told). Related: the controller sets
+   `bookFileName = ""` on clear but `updateEbook` never writes it, so a genuine clear
+   leaves a stale filename — fold into the same change.
+
+**Note for the earlier `hasBookFile` entry:** `hasBookFile` correctly reported `false`
+for 550 — the column really was empty. The flag was right; the *reason* recorded in that
+entry ("never uploaded") was wrong.
+
+---
+
+## 2026-07-27 (later 3) — ebook DTO: new `hasBookFile` flag (additive; no query change)
+
+**DDL:** none. **Backfill:** none. **DB queries:** unchanged — reads the existing
+`ws_ebook.book_url` already selected by `repo.findActiveById` / `repo.listActive`.
+
+**Context — investigated "bookMediaToken is null for purchased ebooks" (ebook 550).**
+**Not a code bug.** `catalog-ebook.transformer.ts` mints the book token on
+`cust != null && entitled && bookUrl`. `entitled` cannot disagree with the response's
+`isPurchased` — `catalog-ebook.service.ts` derives BOTH from the same `endAt` (lines 72
+and 84). The failing conjunct was `bookUrl`: ebook 550 has `book_url = ''` and
+`book_file_name = NULL` — the full PDF was never uploaded (its demo was, which is why
+`demoMediaToken` worked). Staging scope: 3 of 507 active ebooks (ids 550, 49, 48 — all
+"EBook N" test rows, 1 live sub each). Resolution for those is a content upload via
+`POST /admin/ebooks/:id/pdf`, not a code change.
+
+Note `ws_ebook.book_url` is **NOT NULL**, so "no PDF" is stored as `''` (admin create
+writes `d.bookUrl ?? ''`) — always test it as falsy/`<> ''`, never `IS NULL`.
+
+**Change made:** `bookMediaToken: null` was ambiguous — "not purchased" and "no PDF
+uploaded" were indistinguishable, so the app showed a paying customer "not available",
+which reads as a broken order. Added to `EbookDto`:
+
+- `hasBookFile: boolean` — `!!row.bookUrl`. Describes the EBOOK, not the caller's
+  entitlement, so it is identical for every viewer (safe for anonymous responses: it
+  leaks no purchase state and no URL).
+
+Client rule: `isPurchased && !hasBookFile` → "PDF not uploaded yet", not "not available".
+
+**Additive only** — no existing field changed. Both client controllers use `omit`
+(denylist) not `pick`, so it flows through `GET /client/ebooks` and
+`GET /client/ebooks/:id` with no controller edit. Old clients ignore it.
+
+**Verified** against staging via the real service (not a mock):
+
+| case | isPurchased | hasBookFile | bookMediaToken |
+|---|---|---|---|
+| 550 as its live subscriber (no PDF) | `true` | `false` | `null` ← reported bug, now explained |
+| 550 anonymous | `false` | `false` | `null` |
+| 45 as its live subscriber (has PDF) | `true` | `true` | JWT present ← control |
+
+⚠ **Mobile dev must be told** `hasBookFile` exists, or this ticket gets re-filed —
+the doc's acceptance criterion "non-null `bookMediaToken` when `isPurchased`" is
+unsatisfiable while no PDF is attached.
+
+---
+
+## 2026-07-27 (later 2) — `ws_customer_address` soft-delete predicate applied to all reads
+
+**DDL:** none. **Backfill:** none (see caveat below). **DB queries:** filter contract changed
+on 6 reads. Semantics confirmed: address deletion **is** soft-delete (`status = false`) — the
+`status` column, `listByCustomer`, and the restore-via-update path all assume it. Kept as-is;
+`softDeleteOwned` was NOT converted to a hard `deleteMany`, because historical order/receipt
+reads still resolve `customer_shipping_id` → `ws_customer_address` and would lose the address.
+
+**Bug:** admin customer-detail read a different module than the delete wrote, and that module
+had no `status` predicate — so deleted addresses reappeared on reload with an unchanged tab count.
+
+Now filtering `status: true`:
+
+- `admin-customer/admin-customer-details.repository.ts` — `addresses`, `countAddresses`,
+  `pageAddresses`. Count + page changed **together**; splitting them drifts the pagination envelope.
+- `client-cart/client-cart.repository.ts` → `findAddress` — checkout delivery-address gate.
+- `promo-code/promo-code.service.ts` → `addressBelongsToCustomerSql` — course/package checkout gate.
+- `customer-address/customer-address.repository.ts` → **new** `findActiveOwned`; adopted by
+  `client/payment/live-course-payment.controller.ts` (live-course checkout gate). `findOwned` is
+  intentionally left unfiltered — `updateOwned` can set `status` back to true (restore) and
+  `updateAddress` reads the row back through `findOwned`, so it must still see deleted rows.
+- `client/course/course.service.ts` — address-book find-or-create. A soft-deleted row used to
+  match, so create was skipped and a re-entered address never returned to the customer's list.
+
+Deliberately **unchanged**: `client-purchase-history.repository.ts` → `customerAddressById`.
+That is historical order/tracking/receipt data and must resolve regardless of `status`, or a
+delivered order loses its shipping address.
+
+**Also fixed:** `softDeleteOwned` now clears `isDefault` alongside `status`. Deleting the default
+address previously left `is_default = 1` on a hidden row — the customer had a default that no
+list could display and no other address could take over from.
+
+⚠ **Pre-existing data:** rows soft-deleted before this change may still carry `is_default = 1`.
+Harmless (they are now filtered out of every list), but if a "no default address" report shows up,
+`UPDATE ws_customer_address SET is_default = 0 WHERE status = 0 AND is_default = 1;` clears it.
+
+**QA:** admin → customer detail → Addresses: delete → row disappears, count decrements, pagination
+consistent across pages. Checkout with a deleted address id → 400. Existing orders still show their
+delivery address. Client update with `status: true` on a deleted address still restores it.
+
+---
+
+## 2026-07-27 — "Newest on top" ordering: top-slot on create + live-course reorder
+
+**DDL:** none. **Backfill:** none. **List sorts:** deliberately UNCHANGED — see below.
+**New endpoint:** `POST /admin/live-courses/reorder`.
+
+Model (agreed with FE): lists keep sorting by their manual order column ASC; a newly created
+row is assigned the **top slot** = `MIN(existing order) - 1`, scoped to the list it joins. One
+cheap `_min` aggregate per create, no mass update of siblings, negative values sort fine (all four
+columns verified plain signed `int`). Sorting lists by `created_at DESC` instead would make
+drag-and-drop invisible, so **no list sort was touched.**
+
+Shared helper: `src/utils/listOrdering.ts` → `topSlotOrder(currentMin)`.
+
+| Endpoint | Column | Min scope | New repo query |
+|---|---|---|---|
+| `POST /admin/videos` | `ws_video.order` | **global** — one list screen with an optional category filter; a global min is top of both filtered and unfiltered views | `adminVideoRepository.minOrder` |
+| `POST /admin/cms/banners` | `ws_banner_slider.order_by` | **per `key`** — Packages/Courses/Book/EBook/Explore are independently ordered lists | `bannerSliderRepository.minOrderBy(key)` |
+| `POST /admin/cms/live-banners` | `ws_live_banner_slider.order_by` | global (single list) | inline `_min` aggregate |
+| `POST /admin/live-courses` | `ws_live_course.ordered` | global | `adminLiveCourseRepository.minOrdered` |
+
+**⚠ Contract change the FE must know:** the order field is now **optional and no longer defaults
+to 0** on create — omitting it is what triggers the top slot. An explicitly sent value is still
+honoured as-is, so a client that keeps sending `order: 0` will keep landing at the bottom.
+Affected: `video.validation.ts` baseShape `order` (dropped `.default(0)`), `cms.validation.ts`
+`bannerBaseSchema.orderBy` + `liveBannerCreateSchema.orderBy` (dropped `.default(0)`),
+`live-course.validation.ts` `ordered` (was **required**, now optional — a pure relaxation).
+
+**New: `POST /admin/live-courses/reorder`** — mirrors the banners contract.
+Body `{ orders: [{ id: "12", ordered: 0 }, ...] }`; returns `{ count }`; **400** when no id in the
+batch parses. `adminLiveCourseRepository.reorder` writes the whole batch in ONE
+`prisma.$transaction`, so a 20-row drag can't half-apply (the previous workaround would have been
+20 non-transactional `PUT /:id` calls). Route sits **above** `/:id` so "reorder" is never parsed as
+an id, carries `autoFlushGroup("live-course")`, and RBAC gets
+`R("POST", "/live-courses/reorder", "live-courses.edit")` declared **before** `crud()` (first match
+wins).
+
+**Verified** against the local clone: video `min 0 → new order -1`, sorts first; banner
+`min(key=course) 3 → new 2`, sorts first in its own list with the `ebook` list untouched;
+live-banner `min 0 → -1`; live-course `min 0 → -1`, sorts first under
+`[{ordered: asc},{createdAt: desc}]`; reorder returns `count=1` and writes, all-invalid ids return
+`0`, and a batch containing a nonexistent id **rolls the whole transaction back** (7→7).
+
+**Not done (reported, out of scope of the ask):** `GET /admin/master/video-categories` still
+ignores `sortBy`/`sortOrder` (reads only `search`/`limit`), and `admin-master.repository.ts` `vcList`
+still does an unbounded `findMany` over every video category and filters in memory.
+
+---
+
+## 2026-07-27 — `ws_book`/`ws_ebook` → utf8mb4 + PDF file-name clearing
+
+**DDL:** `docs/migration/schema-changes/2026-07-27_book_ebook_utf8mb4.sql` — **applied to the
+local staging clone 2026-07-27; PENDING on staging and production.**
+**Backfill/cleanup:** `scripts/cleanup-orphan-pdf-file-names.ts` (dry-run by default,
+`--apply` to write) — **pending everywhere.** **API contract:** unchanged.
+
+### 1. Gujarati/Hindi PDF file names were rejected
+
+Two independent causes, both needed fixing:
+
+**(a) Charset.** `ws_book` and `ws_ebook` were `latin1_swedish_ci` at the **table** level. With
+`STRICT_TRANS_TABLES`, writing Indic text throws (`ERROR 1366: Incorrect string value`) rather
+than truncating. Converted both tables whole — cleaner than column-by-column and it fixes the
+default for future columns. 13 latin1/utf8mb3 columns migrated, including `demo_url` / `book_url`
+(the async pipeline derives the Spaces key from the file name, so a non-ASCII name produced a
+non-ASCII URL hitting the same wall).
+
+- Collation used is **`utf8mb4_0900_ai_ci`, not `utf8mb4_unicode_ci` as requested** — 0900_ai_ci
+  is this DB's standard (see `2026-07-16_search_columns_utf8mb4.sql`, `utils/searchFilter.ts`).
+  Mixed collations make MySQL throw error 3988 on cross-column comparisons.
+- Verified safe: neither table has any index beyond `PRIMARY(id)`, so the 1→4 bytes-per-char
+  widening carries no index-length risk. `ROW_FORMAT=Dynamic`.
+- **`ws_book` has no `book_file_name` / `book_url`** — Book has only a demo PDF slot. The report
+  listed those columns; they do not exist.
+
+**(b) multer decode.** multer 2.2.0 defaults `defParamCharset` to `'latin1'`
+(`node_modules/multer/index.js:22`), so `file.originalname` was already mojibake before any DB
+write. Added `defParamCharset: "utf8"` to all five instances — `uploadS3`, `uploadS3Mixed`,
+`uploadS3Audio`, `uploadQuestionImages` (via a shared `MULTER_UTF8` in `middlewares/upload.ts`)
+and `uploadSinglePdfToDisk` (`admin/pdfUpload/pdfUpload.multer.ts`).
+
+**(c) S3 key.** `pdfUpload.scheduler.ts` put the raw file name into the object key and
+concatenated the public URL without encoding. The key is now ASCII-folded with the same rule as
+`utils/presignUpload.ts`'s `sanitizeName`; the pretty original name is still stored verbatim in
+`*_file_name` for display. No percent-encoding needed since the key can no longer be non-ASCII.
+
+### 2. Removing an Ebook PDF left the file name behind
+
+`admin-ebook.service.ts` `updateEbook` set `bookDemoUrl`/`bookUrl` but never wrote
+`demoFileName`/`bookFileName` — those columns were only ever written by the async upload
+pipeline. Now clears the name whenever the matching URL is cleared, treating `null` and `""`
+identically, mirroring `admin-book.service.ts:216`. `ebook.controller.ts` previously only cleared
+on `""`; the admin UI sends JSON `null` (no File → not multipart), so both are now handled.
+`createEbook` also silently dropped the name the controller had lifted off the multipart part —
+it now persists it, and refuses to store a name for an empty slot.
+
+### 2b. …and left `*_upload_status` / `*_upload_progress` stale
+
+Same trigger, one layer deeper: a cleared slot kept `book_upload_status = "completed"`,
+`book_upload_progress = 100`, so any consumer trusting the status believed a PDF was attached.
+This was the case merely *documented* in the `toEbookDto` comment ("a completed status does NOT
+guarantee bookUrl is still set"); the comment now states the opposite invariant because the code
+enforces it.
+
+`updateEbook` now resets the **whole slot in one write** when a URL is cleared —
+url + `*FileName` + `*UploadStatus` (→ null) + `*UploadProgress` (→ 0) — for both `demoUrl` and
+`bookUrl`, on `null` and `""` alike. `ws_book` needs no equivalent: it has no upload-status
+columns (its demo PDF doesn't go through the async pipeline).
+
+`scripts/cleanup-orphan-pdf-file-names.ts` extended to match: a slot is now "stale" if the URL is
+empty and **any** companion column still claims a file (leftover name, non-null status, or
+non-zero progress), and the reset clears all three. Still idempotent; never touches a slot with a
+real file.
+
+**⚠ Route-cache gotcha (cost an hour of confusion — read before running any data script):**
+`GET /admin/ebooks` and `/admin/ebooks/:id` are cached for **24h**
+(`cacheRoute({ ttl: 86400, entity: "ebook" })`). API writes clear that via
+`autoFlushGroup("ebook")`, but a **direct-SQL script bypasses the API and therefore the
+flush** — the admin list kept serving the orphan `book_file_name` for ~23.5h after the rows
+were already fixed. `cleanup-orphan-pdf-file-names.ts` now calls
+`flushEntity("ebook", "book")` itself after a successful `--apply`. **Any future out-of-band
+data script must sweep the entities it touches.**
+
+**Verified** on the local clone: 0 non-utf8mb4 columns remain on either table; Gujarati
+(`ગુજરાતી-પુસ્તક.pdf`) and Hindi (`हिंदी-पुस्तक.pdf`) names round-trip byte-identical through a
+Prisma-bound write+read; `updateEbook({demoUrl: null, bookUrl: ""})` nulls both name columns. The
+cleanup script found 1 pre-existing orphan (ebook 49, `high-court-of.pdf`).
+
+---
+
+## 2026-07-27 — Quiz submit path: 4 indexes + `createMany` + SQL-side rank
+
+**DDL:** `docs/migration/schema-changes/2026-07-27_exam_submit_indexes.sql` — **applied to
+the local staging clone 2026-07-27; PENDING on staging and production.** **Backfill:** none.
+**Response shapes:** unchanged (`rank` string computed identically).
+
+`POST /client/quizzes/:id/attempts/:attemptId/submit` was intermittently exceeding the
+gateway timeout (reported on exam 11779, attempt 2722063). Cause: **three full table scans
+per request plus one INSERT round-trip per unanswered question**, all growing with table
+size / question count.
+
+**Indexes added (pure additions, no column or data change):**
+
+| Table | Index | Fixes |
+|---|---|---|
+| `ws_exam_result_detail` | `idx_exam_result_detail_attempt_question (qresult_detail_qresult_id, qresult_detail_question_id)` | `detailsForResult` **and** `upsertAttemptDetail`'s probe — the table had ONLY a PRIMARY key, so every saved answer during a quiz also scanned it |
+| `ws_exam_question` | `idx_exam_question_exam_status (exam_id, status)` | `questionIdsForExam` scanned the whole question bank |
+| `ws_exam_result` | `idx_exam_result_exam_status (qresult_qtest_id, qresult_status, qresult_customer_id)` | rank counters. The pre-existing `idx_exam_result_cust_exam_status` leads with `qresult_customer_id` and so **cannot** serve an exam-only filter |
+| `ws_exam_result_detail_analytics` | `idx_exam_result_analytics_user (userId)` | per-submit analytics upsert scanned a one-row-per-customer table |
+
+**Query changes:**
+
+1. `finalizeAttempt` — serial `examResultDetail.create()` loop → one `createMany`. A 100-question
+   submit with nothing answered went from 100 sequential inserts (write txn held open) to 1.
+2. `bestScoresForExam` **removed**, replaced by `myBestScoreForExam` + `rankForExam`. The old
+   query returned one row **per candidate** to Node and ranked in JS — tens of thousands of rows
+   over the wire per submit on a popular quiz. Now two `COUNT` queries. Ties still share a rank
+   (`#strictly-better + 1`), so the `rank` string is byte-identical. Call sites updated:
+   `saveAnswers`, `submitAttempt`, `getAttemptsAggregate`.
+3. `recomputeAnalytics` — added `select: { id: true }` to the existence probe.
+
+**Verified** by `EXPLAIN` against the local clone: all 7 affected queries report `type=ref` on
+the intended index (4 of them `Using index`); no `type=ALL` remains on a base table.
+
+**⚠ Deploy note:** `ws_exam_result_detail` is the largest table here. MySQL 8 builds these
+indexes ONLINE, but check `TABLE_ROWS` first and run off-peak (or via
+`pt-online-schema-change`) if it is multi-million-row. `recomputeAnalytics` is still inline on
+the request — moving it to BullMQ is the remaining optional win, not needed for the timeout.
+
+---
+
+## 2026-07-27 (later) — Push image restored for iOS, now per-platform + flat `data.imageUrl`
+
+**DDL:** none. **Backfill:** none. **DB queries:** unchanged — `src/utils/fcm.ts` payload
+shape only. Supersedes the entry directly below (which removed the iOS image entirely).
+
+Requirement changed: iOS must ALSO receive the image, mirroring Android. `buildMessage()` now:
+
+- **android:** `android.notification.imageUrl` (unchanged).
+- **apns:** `apns.fcmOptions.imageUrl` + `aps.mutableContent = true` — both set only when an
+  image is present. `mutableContent` is what allows the iOS Notification Service Extension
+  to download and attach the image to the banner.
+- **data:** new flat `imageUrl` key on BOTH platforms, so the app has one field to read.
+
+**Client-side caveat (not fixable server-side):** iOS never exposes the image on the SDK's
+`notification` object — that object is built from `aps.alert`, which carries only
+title/body/subtitle. The URL arrives under `data.imageUrl` (and `data.fcm_options.image`).
+Rendering it in the tray requires a Notification Service Extension in the iOS app; without
+one the payload still arrives, the banner is just text-only.
+
+The top-level `notification.imageUrl` shortcut stays removed — the image is set explicitly
+per platform instead.
+
+---
+
+## 2026-07-27 — Push image dropped from the top-level FCM notification (iOS `fcm_options` fix)
+
+**DDL:** none. **Backfill:** none. **DB queries:** unchanged — this is a payload-shape fix
+in `src/utils/fcm.ts` only; no repository, transformer, or API response contract touched.
+
+`buildMessage()` used to set `notification.imageUrl` at the top level **and**
+`android.notification.imageUrl`. FCM translates the top-level field into an APNs
+`fcm_options.image`, which the iOS SDK surfaces **inside `data`** (plus `mutableContent: true`)
+while the `notification` object itself stays image-less — so iOS clients received a stray
+`data.fcm_options` blob they cannot render, and no image on the notification.
+
+**Change:** removed the top-level `notification.imageUrl` assignment. The image is now
+attached on the Android config only.
+
+- **Android:** unchanged — payload still carries `notification.android.imageUrl`.
+- **iOS:** now receives `notification: { title, body }` + the usual `data` keys
+  (`title`, `body`, `titleHtml`, `bodyHtml`) — no `fcm_options`, no `mutableContent`.
+
+`FcmPayload.image` is still accepted and still persisted wherever it was before; only the
+outbound APNs projection changed. `yarn typecheck` green.
+
+**Net effect for iOS clients:** no push image at all — neither in `notification` nor in
+`data`. If iOS should later *show* the image in the tray, that is the opposite change
+(keep `fcm_options.image` and add a Notification Service Extension in the iOS app to
+download and attach it); do not re-add the top-level `imageUrl` without that extension.
+
+---
+
 ## 2026-07-25 — `ws_material_category_package` timestamps backfilled
 
 **DDL:** none. **Backfill:** `scripts/backfill-material-category-package-timestamps.ts` —

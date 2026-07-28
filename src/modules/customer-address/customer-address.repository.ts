@@ -21,9 +21,18 @@ export const customerAddressRepository = {
       orderBy: { created_at: "desc" },
     }),
 
-  /** Single address scoped to its owner (prevents cross-customer reads). */
+  /**
+   * Single address scoped to its owner (prevents cross-customer reads).
+   * Deliberately NOT filtered on `status` — `updateOwned` can flip status back to
+   * true (restore), and updateAddress reads the row back through here, so it must
+   * see soft-deleted rows. Use `findActiveOwned` for selectability checks.
+   */
   findOwned: (id: number, customerId: number) =>
     prisma.customerAddress.findFirst({ where: { id, userId: customerId } }),
+
+  /** Owner-scoped AND not soft-deleted — for "may this address be used?" gates. */
+  findActiveOwned: (id: number, customerId: number) =>
+    prisma.customerAddress.findFirst({ where: { id, userId: customerId, status: true } }),
 
   create: (input: AddressCreateInput) =>
     prisma.customerAddress.create({
@@ -68,11 +77,15 @@ export const customerAddressRepository = {
       },
     }),
 
-  /** Soft-delete (status=false), owner-scoped. Returns count. */
+  /**
+   * Soft-delete (status=false), owner-scoped. Returns count.
+   * `isDefault` is cleared too: leaving it set on a now-hidden row would give the
+   * customer a default address that no list can show or replace.
+   */
   softDeleteOwned: (id: number, customerId: number) =>
     prisma.customerAddress.updateMany({
       where: { id, userId: customerId },
-      data: { status: false, updated_at: new Date() },
+      data: { status: false, isDefault: false, updated_at: new Date() },
     }),
 
   /**

@@ -258,7 +258,7 @@ export const createLiveCourseOrderPayment = async (req: Request, res: Response) 
       const withMaterialSql = planSql.withMaterial;
       let shippingIdSql: number | null = null;
       if (withMaterialSql && body.customerShippingId) {
-        const owned = await customerAddressRepository.findOwned(body.customerShippingId, customerIdInt);
+        const owned = await customerAddressRepository.findActiveOwned(body.customerShippingId, customerIdInt);
         if (!owned) {
           logger.warn("createLiveCourseOrderPayment[mysql] address not owned", { traceId, customerId, customerShippingId: body.customerShippingId });
           return res.status(400).json({ success: false, message: "Delivery address does not belong to this customer." });

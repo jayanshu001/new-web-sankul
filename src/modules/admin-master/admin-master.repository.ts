@@ -163,7 +163,7 @@ export const adminMasterRepository = {
     const search = buildPrismaSearch(opts.search, ["name"]);
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
-    return prisma.course.findMany({ where, select: { id: true, name: true, status: true, ordered: true }, orderBy: { ordered: "asc" }, skip: opts.skip, take: opts.take });
+    return prisma.course.findMany({ where, select: { id: true, name: true, status: true, ordered: true }, orderBy: [{ ordered: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take });
   },
   countCoursesForCategory: (categoryId: number, opts: { search?: string; status?: boolean }) => {
     const where: any = { videoCategoryId: categoryId };
@@ -178,7 +178,7 @@ export const adminMasterRepository = {
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.platform) where.platform = opts.platform;
-    return prisma.video.findMany({ where, select: { id: true, title: true, slug: true, status: true, order: true, platform: true }, orderBy: { order: "asc" }, skip: opts.skip, take: opts.take });
+    return prisma.video.findMany({ where, select: { id: true, title: true, slug: true, status: true, order: true, platform: true }, orderBy: [{ order: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take });
   },
   countVideosForCategory: (categoryId: number, opts: { search?: string; status?: boolean; platform?: string }) => {
     const where: any = { videoCategoryId: categoryId };

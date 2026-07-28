@@ -21,7 +21,7 @@ export const clientExamRepository = {
     prisma.examCategory.findMany({
       where: { parent: parentId, status: true, deleted: false },
       select: { id: true, name: true, image: true, order_by: true },
-      orderBy: [{ order_by: "asc" }, { name: "asc" }],
+      orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
     }),
 
   /**
@@ -39,7 +39,7 @@ export const clientExamRepository = {
           { OR: [{ type: "subject" }, { endAt: null }, { endAt: { gte: now } }] },
         ],
       },
-      orderBy: [{ order_by: "asc" }, { createAt: "desc" }],
+      orderBy: [{ order_by: "asc" }, { createAt: "asc" }],
     }),
 
   /** Single exam category (for the listing header). */
@@ -59,7 +59,7 @@ export const clientExamRepository = {
           { OR: [{ endAt: null }, { endAt: { gte: now } }] },
         ],
       },
-      orderBy: [{ order_by: "asc" }, { createAt: "desc" }],
+      orderBy: [{ order_by: "asc" }, { createAt: "asc" }],
       skip,
       take,
     }),
@@ -233,7 +233,12 @@ export const clientExamRepository = {
       skip: Number(a.skip) || 0, success: Number(a.success) || 0, failed: Number(a.failed) || 0,
       score: Number(a.score) || 0,
     };
-    const existing = await prisma.examResultDetailAnalytics.findFirst({ where: { customerId } });
+    // Needs idx_exam_result_analytics_user (userId) — without it this findFirst
+    // scans the whole one-row-per-customer table on every submit.
+    const existing = await prisma.examResultDetailAnalytics.findFirst({
+      where: { customerId },
+      select: { id: true },
+    });
     if (existing) {
       await prisma.examResultDetailAnalytics.update({ where: { id: existing.id }, data });
     } else {
@@ -241,13 +246,57 @@ export const clientExamRepository = {
     }
   },
 
-  /** Best score per customer for an exam (for rank). */
-  bestScoresForExam: (examId: number) =>
-    prisma.$queryRawUnsafe<any[]>(
-      `SELECT qresult_customer_id customerId, MAX(qresult_result) best
-       FROM ws_exam_result WHERE qresult_qtest_id=? AND qresult_status=1
-       GROUP BY qresult_customer_id`, examId
-    ),
+  /**
+   * This customer's best submitted score for an exam. Uses
+   * idx_exam_result_cust_exam_status (customer, exam, status) — index-only.
+   */
+  myBestScoreForExam: async (customerId: number, examId: number): Promise<number> => {
+    const r = await prisma.$queryRawUnsafe<any[]>(
+      `SELECT COALESCE(MAX(qresult_result),0) best
+       FROM ws_exam_result
+       WHERE qresult_customer_id=? AND qresult_qtest_id=? AND qresult_status=1`,
+      customerId, examId
+    );
+    return Number(r[0]?.best ?? 0);
+  },
+
+  /**
+   * Rank counters for an exam, aggregated IN SQL. Ties share a rank
+   * (rank = #customers strictly better + 1), matching the previous behaviour.
+   *
+   * ⚠ This replaced a `GROUP BY qresult_customer_id` that returned one row PER
+   * CANDIDATE to Node so the ranking could be done in JS — tens of thousands of
+   * rows over the wire per submit on a popular quiz. Both counts now need
+   * idx_exam_result_exam_status (qresult_qtest_id, qresult_status); the older
+   * (customer, exam, status) index cannot serve an exam-only filter because
+   * customer is its leading column.
+   */
+  rankForExam: async (
+    examId: number,
+    myBest: number
+  ): Promise<{ higher: number; candidates: number }> => {
+    const [candidates, higher] = await Promise.all([
+      prisma.$queryRawUnsafe<any[]>(
+        `SELECT COUNT(DISTINCT qresult_customer_id) c
+         FROM ws_exam_result WHERE qresult_qtest_id=? AND qresult_status=1`,
+        examId
+      ),
+      prisma.$queryRawUnsafe<any[]>(
+        `SELECT COUNT(*) c FROM (
+           SELECT qresult_customer_id
+           FROM ws_exam_result
+           WHERE qresult_qtest_id=? AND qresult_status=1
+           GROUP BY qresult_customer_id
+           HAVING MAX(qresult_result) > ?
+         ) t`,
+        examId, myBest
+      ),
+    ]);
+    return {
+      candidates: Number(candidates[0]?.c ?? 0),
+      higher: Number(higher[0]?.c ?? 0),
+    };
+  },
 
   // ─── Solution view ──────────────────────────────────────────────────────────
   latestResultForExam: (customerId: number, examId: number) =>
@@ -334,12 +383,16 @@ export const clientExamRepository = {
     score: number; timing: string; ratting: string | null; submittedAt: Date;
   }) =>
     prisma.$transaction(async (tx) => {
-      for (const qid of input.missingQuestionIds) {
-        await tx.examResultDetail.create({
-          data: {
+      // ONE multi-row INSERT, not one per question. This used to be a serial
+      // `create()` loop: a quiz submitted with 100 unanswered questions cost 100
+      // sequential round-trips with the write transaction held open the whole
+      // time — a large part of the submit latency / gateway timeouts.
+      if (input.missingQuestionIds.length) {
+        await tx.examResultDetail.createMany({
+          data: input.missingQuestionIds.map((qid) => ({
             examResultId: input.attemptId, customerId: input.customerId, examId: input.examId,
-            questionId: qid, answerId: null, result: "skip", point: 0,
-          },
+            questionId: qid, answerId: null, result: "skip" as const, point: 0,
+          })),
         });
       }
       return tx.examResult.update({

@@ -46,6 +46,11 @@ export const createLiveCourse = async (validated: any, createdById?: string) => 
   return sql.createLiveCourse(validated, createdById);
 };
 
+/** Bulk drag-and-drop reorder — returns how many rows were written. */
+export const reorderLiveCourses = async (orders: { id: string; ordered: number }[]) => {
+  return sql.reorderLiveCourses(orders);
+};
+
 export interface ListLiveCoursesQuery {
   search?: string;
   status?: string;

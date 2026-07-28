@@ -191,7 +191,7 @@ export const getCategoryContents = async (
   const current = await findCategory(categoryId);
   if (!current) return null;
 
-  const children = await prisma.materialCategory.findMany({ where: { parent: categoryId, status: true }, select: { id: true, name: true, image: true, order_by: true }, orderBy: [{ order_by: "asc" }, { name: "asc" }] });
+  const children = await prisma.materialCategory.findMany({ where: { parent: categoryId, status: true }, select: { id: true, name: true, image: true, order_by: true }, orderBy: [{ order_by: "asc" }, { created_at: "asc" }] });
   const subjects = await Promise.all(children.map(async (c) => {
     const [grandChildren, count, isNewlyAdded] = await Promise.all([
       prisma.materialCategory.count({ where: { parent: c.id, status: true } }),
@@ -207,7 +207,7 @@ export const getCategoryContents = async (
   const matsSearch = buildPrismaSearch(opts.search, ["name"]);
   if (matsSearch) matsWhere.AND = matsSearch.AND;
   const [matsRaw, materialsTotal] = await Promise.all([
-    prisma.material.findMany({ where: matsWhere, orderBy: { order_by: "asc" }, skip: opts.skip, take: opts.take, select: MAT_SELECT }),
+    prisma.material.findMany({ where: matsWhere, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], skip: opts.skip, take: opts.take, select: MAT_SELECT }),
     prisma.material.count({ where: matsWhere }),
   ]);
   const ownedIds = await getPurchasedMaterialIds(customerId, matsRaw.map(toLite));
@@ -247,7 +247,7 @@ export const listMaterialsByCategoryPaged = async (
   else if (opts.type === "paid") where.isPaid = true;
 
   const [matsRaw, total] = await Promise.all([
-    prisma.material.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "desc" }], skip: opts.skip, take: opts.take, select: MAT_SELECT }),
+    prisma.material.findMany({ where, orderBy: [{ order_by: "asc" }, { created_at: "asc" }], skip: opts.skip, take: opts.take, select: MAT_SELECT }),
     prisma.material.count({ where }),
   ]);
   const ownedIds = await getPurchasedMaterialIds(customerId, matsRaw.map(toLite));

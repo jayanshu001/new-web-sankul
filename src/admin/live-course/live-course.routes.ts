@@ -5,6 +5,7 @@ import { cacheRoute } from "../../middlewares/cacheRoute";
 import { autoFlushGroup } from "../../middlewares/autoFlush";
 import {
   createLiveCourse,
+  reorderLiveCourses,
   listLiveCourses,
   getLiveCourseById,
   updateLiveCourse,
@@ -81,6 +82,9 @@ router.delete("/subscriptions/:subscriptionId", deleteLiveCourseSubscription);
 // are per-buyer/live and stay uncached; grant mutates a subscription, not catalog.
 router.get("/",                              cacheRoute({ ttl: 86400, entity: "live-course" }), listLiveCourses);
 router.post("/",                             uploadS3.single("image"), autoFlushGroup("live-course"), createLiveCourse);
+// Bulk drag-and-drop reorder. MUST stay above the "/:id" routes so "reorder" is
+// never parsed as a course id. Flushes the cached lists like any other write.
+router.post("/reorder",                      autoFlushGroup("live-course"), reorderLiveCourses);
 router.get("/:id",                           cacheRoute({ ttl: 86400, entity: "live-course" }), getLiveCourseById);
 router.put("/:id",                           uploadS3.single("image"), autoFlushGroup("live-course"), updateLiveCourse);
 router.delete("/:id",                        autoFlushGroup("live-course"), deleteLiveCourse);

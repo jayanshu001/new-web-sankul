@@ -309,4 +309,37 @@ export const MIGRATED_API_MODULES = [
     ],
     yarnScript: "migration:api:package-chat",
   },
+  {
+    // Offline-download encryption key (download-key) — net-new column
+    // ws_customer.download_key_hex (one key per account comes free from the
+    // customer PK; NULL = never stored = the API's 404 state).
+    // Pure key custody for the mobile app's `.wsenc` offline files: the app mints
+    // the 64-hex AES-256 key once, PUTs it, and re-GETs it after logout/reinstall.
+    // No Mongo predecessor. Suite leans on isolation + stability because a wrong
+    // or rotated key permanently bricks a user's already-downloaded library, and
+    // asserts the column never leaks into the profile DTO.
+    key: "download-key",
+    testFiles: ["download-key/client.api.test.ts"],
+    endpoints: [
+      "GET client/downloads/encryption-key (404 when never stored)",
+      "PUT client/downloads/encryption-key (upsert, 64-hex, 400 on invalid)",
+    ],
+    yarnScript: "migration:api:download-key",
+  },
+  {
+    // Notification tap-routing (notification-routing) — read-projection only, no
+    // schema change. ws_notification.deep_link + .data have always carried the
+    // routing; the client controller's pickList keep-list dropped it, so an
+    // in-app tap could only open the detail modal while the same push routed
+    // correctly. Suite seeds through buildNotificationRouting (the push path's
+    // own builder) so "list and push must match" holds by construction, and
+    // guards the exact regression: a one-line edit to a field allow-list, with
+    // no type error and no failing build.
+    key: "notification-routing",
+    testFiles: ["notification-routing/client.api.test.ts"],
+    endpoints: [
+      "GET client/notifications (viewType/deepLink/clickAction/screen/params/live ids per item)",
+    ],
+    yarnScript: "migration:api:notification-routing",
+  },
 ] as const;

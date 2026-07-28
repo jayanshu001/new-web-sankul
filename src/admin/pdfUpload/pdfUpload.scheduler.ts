@@ -201,7 +201,17 @@ async function processPdf(job: Job<PdfUploadJobData>): Promise<void> {
 
   // Stream the staged file up to Spaces. We don't hold it in memory — large
   // book PDFs would blow the heap.
-  const key = `admin/ebooks/${Date.now()}-${path.basename(row.fileName)}`;
+  // Sanitize the name for the object key — same rule as utils/presignUpload.ts's
+  // sanitizeName. Non-ASCII names (Gujarati/Hindi) would otherwise produce a
+  // non-ASCII key, and the public URL below is built by string concatenation, so
+  // it would need percent-encoding to be usable. The PRETTY original name is
+  // still preserved verbatim in demo_file_name / book_file_name for display —
+  // only the storage key is ASCII-folded.
+  const safeName = path
+    .basename(row.fileName)
+    .replace(/[^\w.\-]+/g, "_")
+    .slice(-120);
+  const key = `admin/ebooks/${Date.now()}-${safeName}`;
   const body = createReadStream(row.tempPath);
   await s3Config.send(
     new PutObjectCommand({

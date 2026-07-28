@@ -183,9 +183,10 @@ export const createExam = async (input: ExamWriteInput): Promise<{ error: string
   // OR against the column (see examInCategoriesWhere); the pivot holds the full set.
   const catId = resolved.ids[0]!;
   const now = new Date();
-  // ws_exam.start_date / end_date are NOT NULL in the DB (even subject exams,
-  // which ignore the window, carry dates). Default both to now when absent so
-  // the insert satisfies the constraint; only 'daily' tests use the window.
+  // ws_exam.start_date is NOT NULL, so a missing start defaults to now.
+  // end_date is nullable (2026-07-27 migration): NULL means "no end date — the
+  // quiz stays open indefinitely". Never substitute a sentinel here — defaulting
+  // to now() used to make the quiz expire the instant it was created.
   const row = await repo.createExam({
     name: input.title ?? "",
     type: mapType(input.type),
@@ -198,7 +199,7 @@ export const createExam = async (input: ExamWriteInput): Promise<{ error: string
     solution: input.solutionPdfUrl ?? null,
     solutionName: input.solutionPdfName ?? null,
     startAt: input.startAt ?? now,
-    endAt: input.endAt ?? now,
+    endAt: input.endAt ?? null,
     status: input.status ?? false,
     order_by: 0,
     send_push: input.sendPush ?? false,

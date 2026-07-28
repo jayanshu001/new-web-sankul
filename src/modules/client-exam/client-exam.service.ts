@@ -381,11 +381,13 @@ export const saveAnswers = async (customerId: number, data: SaveAnswersInput): P
   await repo.recomputeAnalytics(customerId);
 
   // Rank by best score per customer (ties share a rank; higher = better).
-  const best = await repo.bestScoresForExam(data.examId);
-  const myBest = best.find((b) => Number(b.customerId) === customerId)?.best ?? result.score;
-  const myBestNum = num(myBest);
-  const higher = best.filter((b) => num(b.best) > myBestNum).length;
-  const rank = `${higher + 1}/${best.length}`;
+  // Counted in SQL — see repo.rankForExam.
+  const myBest = Math.max(
+    num(result.score),
+    await repo.myBestScoreForExam(customerId, data.examId)
+  );
+  const { higher, candidates } = await repo.rankForExam(data.examId, myBest);
+  const rank = `${higher + 1}/${candidates}`;
 
   return { ok: true, examResult: toResultDto(result), rank };
 };
@@ -603,10 +605,12 @@ export const submitAttempt = async (
 
   await repo.recomputeAnalytics(customerId);
 
-  const best = await repo.bestScoresForExam(examId);
-  const myBest = Math.max(num(updated.score), num(best.find((b) => Number(b.customerId) === customerId)?.best ?? 0));
-  const higher = best.filter((b) => num(b.best) > myBest).length;
-  const rank = `${higher + 1}/${best.length}`;
+  const myBest = Math.max(
+    num(updated.score),
+    await repo.myBestScoreForExam(customerId, examId)
+  );
+  const { higher, candidates } = await repo.rankForExam(examId, myBest);
+  const rank = `${higher + 1}/${candidates}`;
 
   return { ok: true as const, data: { examResult: toAttemptDto(updated), rank } };
 };
@@ -647,10 +651,8 @@ export const getAttemptsAggregate = async (customerId: number, examId: number) =
     accuracy: total > 0 ? Math.round((success / total) * 100 * 100) / 100 : 0,
     lastSubmittedAt: agg._max.submittedAt ?? null,
   };
-  const best = await repo.bestScoresForExam(examId);
-  const myBest = num(best.find((b) => Number(b.customerId) === customerId)?.best ?? 0);
-  const higher = best.filter((b) => num(b.best) > myBest).length;
-  const totalCandidates = best.length;
+  const myBest = await repo.myBestScoreForExam(customerId, examId);
+  const { higher, candidates: totalCandidates } = await repo.rankForExam(examId, myBest);
   return {
     ok: true as const,
     data: {

@@ -52,7 +52,7 @@ const parseChildIds = z
 export const createVideoCategorySchema = z.object({
   name: z.string().min(1, "Name is required").max(255),
   slug: z.string().min(1, "Slug is required").max(255),
-  order: z.coerce.number().int().min(0).optional().default(0),
+  order: z.coerce.number().int().optional().default(0),
   childCategoryIds: parseChildIds.optional().default([]),
   educatorId: bodyOptionalId,
   status: z.coerce.boolean().optional().default(true),
@@ -62,7 +62,7 @@ export const createVideoCategorySchema = z.object({
 export const updateVideoCategorySchema = z.object({
   name: z.string().min(1).max(255).optional(),
   slug: z.string().min(1).max(255).optional(),
-  order: z.coerce.number().int().min(0).optional(),
+  order: z.coerce.number().int().optional(),
   childCategoryIds: parseChildIds.optional(),
   educatorId: bodyOptionalId,
   status: z.coerce.boolean().optional(),

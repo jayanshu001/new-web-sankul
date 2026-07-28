@@ -62,7 +62,9 @@ export interface FcmSendResult {
 // show plain text first — raw <b>/<p> tags must never leak into a banner):
 //   • top-level notification → PLAIN.
 //   • android config         → PLAIN alert.
-//   • apns config            → PLAIN alert.
+//   • apns config            → PLAIN alert + fcmOptions.imageUrl + mutable-content
+//                              so the iOS Notification Service Extension can
+//                              download and attach the image to the banner.
 //   • data                   → carries plain + html; the in-app inbox uses the
 //                              html variant to render rich text when the
 //                              notification is opened. The tray never reads it.
@@ -72,6 +74,11 @@ function buildMessage(
   const plainTitle = payload.title;
   const plainBody = payload.body;
 
+  // Top-level `imageUrl` (serialized as `notification.image`) is the generic
+  // field FCM mirrors into whichever platform blocks it can. We ALSO set the
+  // image explicitly per-platform below (android.notification.imageUrl +
+  // apns.fcmOptions.imageUrl) — the explicit values win, and belt-and-braces is
+  // what the iOS integration doc asks for.
   const notification: admin.messaging.Notification = {
     title: plainTitle,
     body: plainBody,
@@ -91,6 +98,16 @@ function buildMessage(
   if (!("body" in data)) data.body = plainBody;
   if (payload.titleHtml) data.titleHtml = payload.titleHtml;
   if (payload.bodyHtml) data.bodyHtml = payload.bodyHtml;
+  // Flat, platform-neutral image keys. iOS never exposes the image on its
+  // `notification` object (that object is built from `aps.alert`, which carries
+  // only title/body/subtitle) — so the app reads the URL from here. Both
+  // spellings are sent because the foreground handlers differ per platform
+  // (Notifee reads `image`, the RN inbox reads `imageUrl`); every `data` value
+  // is a plain string, never a nested object.
+  if (payload.image) {
+    data.imageUrl = payload.image;
+    data.image = payload.image;
+  }
 
   const androidNotification: admin.messaging.AndroidNotification = {
     title: plainTitle,
@@ -99,9 +116,26 @@ function buildMessage(
   if (payload.image) androidNotification.imageUrl = payload.image;
 
   const android: admin.messaging.AndroidConfig = { notification: androidNotification };
+
+  // `mutableContent` is REQUIRED for an image: it is what lets the app's
+  // Notification Service Extension intercept the push, download the URL and
+  // attach it. Without the extension iOS still delivers the payload, it just
+  // renders a text-only banner.
+  // `apns-push-type: alert` + `apns-priority: 10` are stated explicitly rather
+  // than left to APNs inference: a push that gets classified as `background`
+  // never wakes the Notification Service Extension, so the image would silently
+  // never attach.
   const apns: admin.messaging.ApnsConfig = {
+    headers: { "apns-push-type": "alert", "apns-priority": "10" },
     payload: { aps: { alert: { title: plainTitle, body: plainBody } } },
   };
+  if (payload.image) {
+    // Serialized as `apns.fcm_options.image` — THE field iOS reads for the tray
+    // image when the app is backgrounded or killed.
+    apns.fcmOptions = { imageUrl: payload.image };
+    // Serialized as `aps.mutable-content: 1`.
+    apns.payload!.aps.mutableContent = true;
+  }
 
   return {
     notification,

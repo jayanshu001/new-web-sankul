@@ -17,7 +17,7 @@ export const educatorDetailsRepository = {
   liveCoursesByEducator: (educatorId: number) =>
     prisma.liveCourse.findMany({
       where: { educatorId },
-      select: { id: true, name: true, image: true, level: true, classType: true, status: true, ordered: true, createdAt: true },
+      select: { id: true, name: true, image: true, classType: true, status: true, ordered: true, createdAt: true },
       orderBy: { createdAt: "desc" },
     }),
   packagesByEducator: (educatorId: number) =>
@@ -72,7 +72,7 @@ export const educatorDetailsRepository = {
   pageLiveCoursesByEducator: (educatorId: number, skip: number, take: number) =>
     prisma.liveCourse.findMany({
       where: { educatorId },
-      select: { id: true, name: true, image: true, level: true, classType: true, status: true, ordered: true, createdAt: true },
+      select: { id: true, name: true, image: true, classType: true, status: true, ordered: true, createdAt: true },
       orderBy: { createdAt: "desc" }, skip, take,
     }),
 

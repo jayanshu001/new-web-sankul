@@ -12,6 +12,7 @@
  * the admin/client response contracts are unchanged.
  */
 import { prisma } from "../../config/prisma";
+import { topSlotOrder } from "../../utils/listOrdering";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const EXAM_COUNTDOWN_MODULE = "exam-countdown";
@@ -129,22 +130,31 @@ export const populateExamCountdowns = async (row: {
 // ── Category CRUD ──────────────────────────────────────────────────────────────
 // Pagination is opt-in: pass skip/take to page, omit to return the full list
 // (preserves the legacy "all categories" behaviour for non-paginating callers).
-export const listCategoriesAdmin = async (opts?: { search?: string | null; skip?: number; take?: number }) => {
+export const listCategoriesAdmin = async (opts?: { search?: string | null; status?: boolean; skip?: number; take?: number }) => {
   const where: any = {};
   const search = buildPrismaSearch(opts?.search, ["name"]);
   if (search) where.AND = search.AND;
+  if (opts?.status !== undefined) where.status = opts.status;
   const [rows, total] = await Promise.all([
-    prisma.examCountdownCategory.findMany({ where, orderBy: [{ order: "asc" }, { name: "asc" }], skip: opts?.skip, take: opts?.take }),
+    prisma.examCountdownCategory.findMany({ where, orderBy: [{ order: "asc" }, { name: "asc" }, { id: "asc" }], skip: opts?.skip, take: opts?.take }),
     prisma.examCountdownCategory.count({ where }),
   ]);
   return { data: rows.map(catDto), total };
 };
 
+/** Single category by id — lets pickers resolve a saved id to its label without paging the list. */
+export const getCategoryAdmin = async (id: number) => {
+  const row = await prisma.examCountdownCategory.findUnique({ where: { id } });
+  return row ? catDto(row) : null;
+};
+
 /** Returns {conflict:true} if the name already exists (→ 409). */
-export const createCategory = async (input: { name: string; colorHex: string; order: number; status: boolean }) => {
+export const createCategory = async (input: { name: string; colorHex: string; order?: number; status: boolean }) => {
   const dup = await prisma.examCountdownCategory.findFirst({ where: { name: input.name } });
   if (dup) return { conflict: true as const };
-  const row = await prisma.examCountdownCategory.create({ data: input });
+  // No explicit order → TOP slot (see utils/listOrdering).
+  const order = input.order ?? topSlotOrder((await prisma.examCountdownCategory.aggregate({ _min: { order: true } }))._min.order);
+  const row = await prisma.examCountdownCategory.create({ data: { ...input, order } });
   return { conflict: false as const, data: catDto(row) };
 };
 
@@ -263,7 +273,7 @@ export const listCategoriesClient = async (opts: { search: string | null; skip: 
   const search = buildPrismaSearch(opts.search, ["name"]);
   if (search) where.AND = search.AND;
   const [rows, total] = await Promise.all([
-    prisma.examCountdownCategory.findMany({ where, orderBy: [{ order: "asc" }, { name: "asc" }], skip: opts.skip, take: opts.limit }),
+    prisma.examCountdownCategory.findMany({ where, orderBy: [{ order: "asc" }, { createdAt: "asc" }, { id: "asc" }], skip: opts.skip, take: opts.limit }),
     prisma.examCountdownCategory.count({ where }),
   ]);
   const data = rows.map((r) => ({ _id: String(r.id), name: r.name, colorHex: r.colorHex, order: r.order }));
@@ -279,7 +289,9 @@ export const listCountdownsClient = async (opts: {
   if (titleSearch) where.AND = titleSearch.AND;
   if (!opts.includePast) where.examDate = { gte: opts.todayUTC };
   const [rows, total] = await Promise.all([
-    prisma.examCountdown.findMany({ where, orderBy: { examDate: "asc" }, skip: opts.skip, take: opts.limitNum }),
+    // ws_exam_countdown has no display-order column — examDate is the domain
+    // ordering; created_at ASC is appended so paging is deterministic.
+    prisma.examCountdown.findMany({ where, orderBy: [{ examDate: "asc" }, { createdAt: "asc" }], skip: opts.skip, take: opts.limitNum }),
     prisma.examCountdown.count({ where }),
   ]);
   const withCat = await attachCategories(rows);

@@ -135,3 +135,120 @@ export function buildNotificationRouting(target: NotificationTarget): BuiltRouti
       return { data: { viewType: "dialog" } };
   }
 }
+
+// ─── Reading routing back out (list API) ─────────────────────────────────────
+//
+// `buildNotificationRouting` above is the WRITE side: semantic target → the
+// `deepLink` column + stringified `data` blob persisted on ws_notification and
+// pushed via FCM. `extractNotificationRouting` below is its INVERSE, used by the
+// client feed so a tap in the in-app Notification list routes exactly like a tap
+// on the push that created it.
+//
+// Both directions live in this one file on purpose: the FE contract requires
+// "list and push must match for the same event", and that only holds if the two
+// projections are defined together. Adding a routing field to one side without
+// the other is the bug this co-location is meant to make obvious.
+//
+// Shape note: FCM `data` values must all be strings, so the persisted blob has
+// `params` as a JSON *string* and ids as numeric *strings*. The list API is
+// plain JSON with no such constraint, so we hand back real types — `params` as
+// an object, numeric ids as numbers — which is what the app expects from it.
+
+/**
+ * Routing fields as the LIST API exposes them: real JSON types, and every key
+ * omitted entirely when the notification does not use it. Absent ≠ null here —
+ * the app's router checks presence, so emitting `null` placeholders would make a
+ * plain announcement look like it has a destination.
+ */
+export interface NotificationRouting {
+  viewType?: "link" | "dialog";
+  deepLink?: string;
+  clickAction?: string;
+  screen?: string;
+  params?: Record<string, unknown>;
+  liveCourseId?: string | number;
+  sessionId?: string | number;
+  streamId?: string | number;
+}
+
+/** Prisma `Json` arrives as an object, but tolerate a stringified blob too. */
+const asDataRecord = (data: unknown): Record<string, unknown> => {
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    return data as Record<string, unknown>;
+  }
+  if (typeof data === "string" && data.trim()) {
+    try {
+      const parsed = JSON.parse(data);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+    } catch {
+      /* not JSON — no routing to recover */
+    }
+  }
+  return {};
+};
+
+/** Non-empty string, or undefined. Keeps `""` from being surfaced as a destination. */
+const str = (v: unknown): string | undefined =>
+  typeof v === "string" && v.trim() ? v : typeof v === "number" ? String(v) : undefined;
+
+/**
+ * Ids are persisted as strings (FCM constraint) but are SQL integers, so hand
+ * back a number when that is lossless. `streamId` is a StreamOS token that may
+ * be non-numeric, hence the pass-through — never coerce blindly, and never past
+ * the safe-integer boundary where a big id would silently change value.
+ */
+const idValue = (v: unknown): string | number | undefined => {
+  if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
+  const s = str(v);
+  if (s === undefined) return undefined;
+  if (/^\d+$/.test(s)) {
+    const n = Number(s);
+    if (Number.isSafeInteger(n)) return n;
+  }
+  return s;
+};
+
+/**
+ * Project a stored notification row into the routing fields the app's tap
+ * router reads. Pure and total: an unroutable row yields `{}`, which the client
+ * treats as "open the detail modal" (the documented no-routing fallback).
+ */
+export function extractNotificationRouting(row: {
+  deepLink?: string | null;
+  data?: unknown;
+}): NotificationRouting {
+  const data = asDataRecord(row.data);
+  const routing: NotificationRouting = {};
+
+  const viewType = str(data.viewType);
+  if (viewType === "link" || viewType === "dialog") routing.viewType = viewType;
+
+  // The column is authoritative; `data.deepLink` is the fallback for rows written
+  // by producers that only populated the blob.
+  const deepLink = str(row.deepLink) ?? str(data.deepLink);
+  if (deepLink) routing.deepLink = deepLink;
+
+  // Legacy alias. Surfaced only when actually stored — the app accepts either,
+  // so mirroring `deepLink` into it would be an invented placeholder.
+  const clickAction = str(data.clickAction);
+  if (clickAction) routing.clickAction = clickAction;
+
+  const screen = str(data.screen);
+  if (screen) routing.screen = screen;
+
+  const params = asDataRecord(data.params);
+  if (Object.keys(params).length) routing.params = params;
+
+  const liveCourseId = idValue(data.liveCourseId);
+  if (liveCourseId !== undefined) routing.liveCourseId = liveCourseId;
+
+  const sessionId = idValue(data.sessionId);
+  if (sessionId !== undefined) routing.sessionId = sessionId;
+
+  const streamId = idValue(data.streamId);
+  if (streamId !== undefined) routing.streamId = streamId;
+
+  return routing;
+}

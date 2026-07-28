@@ -8,7 +8,7 @@ const slugRegex = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const updatePermissionCategorySchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
   slug: z.string().trim().min(1).max(255).regex(slugRegex).optional(),
-  order: z.coerce.number().int().min(0).optional(),
+  order: z.coerce.number().int().optional(),
   status: z.coerce.boolean().optional(),
 });
 
