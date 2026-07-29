@@ -15,6 +15,251 @@
 
 ---
 
+## 2026-07-29 — Package-category `packageCount` served stale (cache flush-group gap)
+
+**Files:** `src/middlewares/flushGroups.ts`
+
+**Symptom:** `GET /api/v1/client/package-categories` reported `packageCount: 3` for
+"IPS Special" (id 3) when the DB held 3 active live courses **plus** 1 active package
+(`ws_package.id = 990096`, `package_category_id = 3`) — expected 4.
+
+**Not a query bug.** `listClientPackageCategories` already sums both sides
+(`packageCountFor` over `ws_package` + `liveCourseCountFor` over `ws_live_course`);
+calling the service directly returned 4. The endpoint is wrapped in
+`cacheRoute({ ttl: 86400, entity: "package-category", scope: "shared" })`, and the
+response was a **24-hour-old Redis hit** captured before the package was attached
+(verified: key `dev:route:v1:package-category:GET:/api/v1/client/package-categories:shared:*`
+held the old body; deleting it made the same request return 4).
+
+**Root cause:** `packageCount` is derived from `ws_package.package_category_id` and
+`ws_live_course.package_category_id`, but neither write path invalidated the category
+cache — `FLUSH_GROUPS.package` and `FLUSH_GROUPS["live-course"]` did not list
+`package-category`. So attaching/detaching a package or live course, or toggling its
+status, left the category listing stale for up to 24h.
+
+**Fix — flush groups widened:**
+- `package` += `package-category`
+- `live-course` += `package-category`, `catalog-package`
+  (`catalog-package` tags `GET /client/package-categories/:id/packages`, whose `live`
+  tab and `counts` are built from `ws_live_course` — same staleness class.)
+
+**Deploy note:** existing stale keys are not retroactively cleared by the code change.
+Sweep `{env}:route:v1:package-category:*` and `{env}:route:v1:catalog-package:*` once
+after deploy (or wait out the 24h TTL).
+
+**No DDL, no schema change, no query change.**
+
+---
+
+## 2026-07-29 — `ws_material` / `ws_exam` → utf8mb4 (Gujarati PDF file names)
+
+**DDL:** `docs/migration/schema-changes/2026-07-29_material_exam_utf8mb4.sql` (applied to
+local staging clone; **pending on staging/prod**). **Backfill:** none. **Schema:**
+`prisma/schema.prisma` unchanged — Prisma does not model collation, so no
+`prisma:generate`. **Query-level:** none. **Code:** none. **Response shape:** unchanged.
+
+Creating a material with a Gujarati file name blew up the whole request:
+
+```
+POST /api/v1/admin/materials
+Invalid `prisma.material.create()` invocation
+  → admin-material.repository.ts:105
+MysqlError 3988: Conversion from collation utf8mb4_general_ci into
+                 latin1_swedish_ci impossible for parameter
+```
+
+`ws_material` was still `DEFAULT CHARSET=latin1` at the table level, so
+`file`, `file_name`, `direct_link`, `file_mime`, `thumbnail` and `language` were all
+`latin1_swedish_ci` (`title`/`description` had been converted earlier). The Prisma
+driver binds parameters as utf8mb4, and MySQL refuses the bind outright rather than
+truncating — so a non-Latin file name fails the insert, not just the column.
+
+Identical defect to `2026-07-27_book_ebook_utf8mb4.sql`; this closes the tail. Swept
+`information_schema` for remaining latin1 file/name/title/link columns —
+`ws_exam.solution_pdf` + `solution_pdf_name` were the same landmine (Gujarati
+solution-PDF upload) and are converted in the same DDL. What is left is
+`ws_course.shareable_link`, `ws_customer.profile_picture`, `ws_tag.tag_name`, all
+system-generated / ASCII by construction.
+
+Full-table `CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci` on both — each
+has `PRIMARY(id)` and no other index, so the 1→4 bytes-per-char widening carries no
+index-length risk; both are small (staging: 231 / 6 rows), ROW_FORMAT=Dynamic.
+Collation is `utf8mb4_0900_ai_ci`, this DB's standard (see
+`2026-07-16_search_columns_utf8mb4.sql`, `src/utils/searchFilter.ts`) — mixing
+collations is what produces 3988 in the first place. `ws_exam.type`
+(`enum('daily','subject')`) has ASCII labels, so every stored value survives.
+
+Verified on the local clone: a `ગુજરાતી-સામગ્રી.pdf` insert into
+`ws_material.file`/`file_name` now succeeds and round-trips byte-identical.
+
+---
+
+## 2026-07-29 (later 2) — Audit: every client list with an `order` column sorts `order ASC`
+
+**DDL:** none. **Backfill:** none. **Schema:** unchanged. **Query-level:** none — audit
+only, no code changed. Recorded so the rule and its verified exceptions are on file.
+
+**Rule (client scope only):** every `/api/v1/client/*` list whose underlying table has an
+`order` / `order_by` column must sort by that column ASC. Admin screens are explicitly
+out of scope (see the entry below).
+
+Method: extracted all 36 Prisma models carrying an order column (the column name drifts —
+`order`, `order_by`, `orderBy`, `ordered`, `orderby`), then scanned every module reachable
+from `src/client/**` for `findMany` calls on them, keeping only **paginated** queries
+(`skip`/`take` present) — i.e. real listings, not hydration.
+
+Result: **12 candidates, 0 genuine violations in client-only modules.** Each was verified
+by reading the call site:
+
+| flagged | verdict |
+|---|---|
+| `catalog-book:50`, `catalog-ebook:43`, `client-purchase-history:129` | `findByIds` / `booksByIds` **bulk hydration**, not a list — sorting is irrelevant |
+| `catalog-exam:50` | already defaults to `[{ order_by: "asc" }, { created_at: "asc" }]`; the `created_at DESC` branch is the **admin** `newestFirst` opt-in |
+| `offline-city:39` (`listAll`) | **admin-only** function in a shared module (marked "── admin (Wave 8) ──") |
+| `client-exam:160` (`dailyInWindow*`) | daily-quiz calendar — `startAt DESC` **is** the semantic; no curated order |
+| `client-material:285` (`getRecentMaterials`) | `/client/materials/recent` — "last N days", recency **is** the feature |
+| `referral:42,147` | referral transaction history — recency is correct; `RefferalTransaction.order` is not a curation column |
+
+Confirmed already compliant: `catalog-course` `[{ order: "asc" }, { createdAt: "asc" }]`,
+`catalog-package` / `catalog-book` `[{ order_by: "asc" }, { created_at: "asc" }]`,
+`catalog-video` `[{ order: "asc" }, { created_at: "asc" }]` (76 such call sites total).
+
+**Open — blocked on a concurrent edit.** Five client-serving lists live in modules another
+session is editing right now, so they were not touched. They have an order column and no
+order sort; re-check once that work lands:
+
+```
+cms/cms-extra.service.ts:292            LiveBannerSlider.orderBy   → (none)
+exam-countdown/exam-countdown.service.ts:141  ExamCountdownCategory.order → createdAt desc
+package-category/package-category.service.ts:185  PackageCategory.order  → (none)
+referral-content/referral-content.service.ts:124  RefferalTerm.orderBy   → (none)
+referral-content/referral-content.service.ts:192  RefferalFaq.orderBy    → (none)
+```
+
+**Naming hazard worth fixing separately:** the order column has five different names
+across `ws_*` tables, so no single grep finds every curated list and a new module can
+easily pick the wrong field.
+
+---
+
+## 2026-07-29 (later) — Admin lists go recency-first; `order` create switches to append
+
+> Logged from the working-tree diff of an in-flight change set (34 files, not authored
+> in this session) so the changelog isn't left behind the code. Amend freely if the
+> author's intent differs from what the diff shows.
+
+**DDL:** none (the utf8mb4 DDL shipped alongside is logged in its own entry above).
+**Backfill:** none. **Schema:** unchanged. **Query-level:** default `ORDER BY` replaced
+across ~20 admin list repositories + `src/utils/listOrdering.ts` rewritten.
+
+**Generalises the 2026-07-28 "later 6" entry from `/admin/videos` to every admin list.**
+Default `orderBy` becomes `[{ created_at: "desc" }, { id: "desc" }]` where it was
+`[{ order_by: "asc" }, …]`. Touched: `admin-book`, `admin-course`, `admin-ebook`,
+`admin-live-course`, `admin-master`, `admin-material`, `admin-package`,
+`admin-testseries`, `admin-video`, `banner-slider`, `cms`, `department`,
+`exam-countdown`, `offline-batch`, `offline-city`, `package-category`,
+`permission-category`, `referral-content` (+ `admin/{cms,examCountdown,live-course,video}`
+validation comments).
+
+**Client/catalog is untouched and still sorts `order ASC`** — verified directly:
+`catalog-course` `[{ order: "asc" }, { createdAt: "asc" }]`, `catalog-package` /
+`catalog-book` `[{ order_by: "asc" }, { created_at: "asc" }]`, `catalog-video`
+`[{ order: "asc" }, { created_at: "asc" }]`. Per the new docblock, true sequences keep
+`order ASC` on the admin side too (exam questions; package contents; course
+videos/books/materials; live-course folder contents).
+
+**`topSlotOrder` → `nextOrder` (`MIN - 1` → `MAX + 1`).** New rows now append to the
+BOTTOM of the client catalog instead of jumping to the top. ⚠ The helper is documented
+as "MAX(existing order) + 1", but the repositories feed it `prevOrder` — the `order` of
+the **newest row** (`findFirst orderBy created_at desc, id desc`), not a `_max`
+aggregate. So the result is "newest row's order + 1", which is only the true maximum
+when order and recency agree. The docblock acknowledges the consequence: with the
+negative leftovers from the old `MIN - 1` era still in several tables, a new row **can
+collide** with an existing order value, and tied rows have no defined relative order in
+the client's `order ASC` list. Resolution is manual (type an explicit Order, or
+drag-reorder). Repository accessors renamed `minOrder` → `prevOrder`.
+
+**Deliberate consequence (carried over):** manual reordering is invisible on admin list
+screens. The `order` column is still written; the client catalog is now its only reader.
+
+**Deploy:** code-only, nothing to run.
+
+**Standing rule clarified 2026-07-29 (client scope only):** any **client** (`/api/v1/client/*`)
+list whose table has an `order` / `order_by` column sorts by that column ASC. That rule
+does **not** apply to admin screens, so the recency-first default above stands. An audit
+of every client list against the rule found no violations in client-only modules — see
+the entry below.
+
+---
+
+## 2026-07-29 — Invoice route accepts every purchase-history id form (fixes 404 / 400)
+
+**DDL:** none. **Backfill:** none. **Schema:** unchanged. **Query-level:** new read paths
+in `src/libs/core/generate.ts` + prefix dispatch in `client/course/course.controller.ts`
+(`getOrderInvoiceHandler`). No response-shape change — same PDF, same EJS template.
+
+`GET /client/courses/orders/:id/invoice` understood only two id forms (`lc_`, `ts_`,
+else plain) and resolved each against the wrong table for three of them. The id
+vocabulary is **defined by `GET /client/purchase-history/subscriptions`**, whose `_id`
+encodes which table the id belongs to (the PK spaces are separate and overlap
+numerically). Before/after:
+
+| list `_id` | source | was | now |
+|---|---|---|---|
+| plain | `ws_package_course_order.id` (`service.ts:111`) | looked up as a **subscription** id → 404 | sub first (back-compat), then **order** |
+| `lc_` | `ws_live_course_subscription.id` (`:146`) | ✅ worked | unchanged |
+| `ts_` | `ws_test_series_order.id` (`:183`) | looked up as a **subscription** id → 404 | **order** first, then sub |
+| `pcs_` | `ws_package_course_subscription.id`, orderless (`:220`) | prefix unknown → **400** "Please select valid package" | strict subscription lookup |
+| `tss_` | `ws_test_series_subscription.id`, orderless (`:248`) | prefix unknown → **400** | strict subscription lookup |
+
+Overlapping PK spaces made the plain case worse than a plain miss: on the local clone
+sub `526165` belongs to customer `472358` while order `526165` belongs to `472366`, so a
+customer's own order id matched a **different customer's** subscription and 404'd on the
+ownership check. Prefix matching is longest-first so `tss_` is tested before `ts_`.
+
+New/changed loaders in `generate.ts`:
+- `loadCourseReceiptFromSubMysql` (extracted, now returns `null` on miss) — **behaviour
+  change:** a sub with `order_id IS NULL` (legacy / offline / manual grant) now renders
+  from the subscription alone instead of throwing `Order has not been paid yet.` An order
+  that *exists* but isn't `complete` is still blocked. This is what makes `pcs_` work.
+- `loadCourseReceiptFromOrderMysql` (new) — `ws_package_course_order` by `id` +
+  `customer_id`, then `plan_id` → `ws_package_course_ebook_price` → `ws_course` /
+  `ws_package` for name/`duration`/`with_material`; razorpay ids, method and
+  `discount_price` off the order.
+- `loadTestSeriesReceiptFromOrderMysql` (new) — `ws_test_series_order` by `id` +
+  `customer_id`, `plan_id` → `ws_test_series_price.duration_days`, title via
+  `test_series_id`. Settled state is **`complete`**, matching the writer
+  (`test-series-order.service.ts:95`) and the list filter
+  (`client-purchase-history.repository.ts:104`) — *not* `verified`. Gating on status
+  alone lets free/manual ₹0 orders print.
+- `buildCourseReceiptHtmlBySub` / `buildTestSeriesReceiptHtmlBySub` (new exports) for
+  `pcs_` / `tss_` — strict, no cross-space fallback.
+
+Ownership (`customer_id`) is enforced on every path; `Order not found.` (404) and
+`Order has not been paid yet.` (404) are unchanged strings.
+
+**Known consequence — amounts can differ by which id is used.** The order path prints
+`ws_package_course_order.discount_price` (what was charged); the subscription path
+prefers `ws_package_course_subscription.amount`. On the local clone order `526164` → ₹299
+while its own sub `600026` → ₹897 (`course_amount` 149 + `material_amount` 150 = 299, so
+`amount` is cumulative there). The order path now **matches the purchase-history card**,
+which renders `amount: o.amount`. Left as-is deliberately; changing the sub path's amount
+preference is a separate decision.
+
+Verified on the local clone (`yarn typecheck` green):
+
+```
+pcs_594040 c472366 ✅ Course 1 | 365 days | ₹3799     ts_1  c472366 ✅ ₹699
+pcs_41     c472366 ✅ Package 1 | 270 days | ₹699     ts_3  c472366 ❌ not paid (pending)
+pcs_267    c472366 ✅ Course સિતારો | ₹2499           ts_4  c472369 ✅ ₹0 free order
+526165     c472366 ✅ (was 404)                       tss_1 c472366 ✅ ₹699
+526164     c472366 ✅ (was 404)                       lc_13 c472366 ✅ ₹487
+600026     c472366 ✅ sub-id path intact              lc_8  c472366 ✅ ₹2589
+pcs_594040 c472335 ❌ Order not found. (ownership)    888888888 / ts_999 ❌ 404
+```
+
+---
+
 ## 2026-07-28 (later 6) — Admin video list: recency becomes the PRIMARY sort
 
 **DDL:** none. **Backfill:** none. **Schema:** unchanged. **Query-level:** primary

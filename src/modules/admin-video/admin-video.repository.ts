@@ -58,13 +58,13 @@ export const adminVideoRepository = {
     prisma.video.findFirst({ where: { slug, ...(exceptId ? { id: { not: exceptId } } : {}) }, select: { id: true } }),
 
   /**
-   * Smallest `order` across all videos — the input to the top-slot calculation
+   * `order` of the PREVIOUS video (most recently created) — input to the +1 calc
    * on create (see utils/listOrdering). Deliberately NOT scoped to a category:
    * the admin screen is one list with an optional category filter, and a global
-   * minimum puts the new row on top of BOTH the filtered and unfiltered views.
+   * maximum keeps the value unique across BOTH the filtered and unfiltered views.
    */
-  minOrder: async (): Promise<number | null> =>
-    (await prisma.video.aggregate({ _min: { order: true } }))._min.order ?? null,
+  prevOrder: async (): Promise<number | null> =>
+    (await prisma.video.findFirst({ orderBy: [{ created_at: "desc" }, { id: "desc" }], select: { order: true } }))?.order ?? null,
 
   create: (data: Prisma.VideoUncheckedCreateInput) => prisma.video.create({ data, include: { VideoCategory: { select: { id: true, title: true, slug: true } } } }),
   update: (id: number, data: Prisma.VideoUncheckedUpdateInput) => prisma.video.update({ where: { id }, data, include: { VideoCategory: { select: { id: true, title: true, slug: true } } } }),
@@ -85,7 +85,7 @@ export const adminVideoRepository = {
  * direction.
  *
  * Consequence, on purpose: manual reordering is INVISIBLE on this screen. The
- * `order` column is still written — top-slot-on-create (`MIN(order) - 1`) and
+ * `order` column is still written — append-on-create (`MAX(order) + 1`) and
  * `setOrder` both keep maintaining it, and the client catalog still sorts by it
  * (`order ASC, created_at ASC`) — but nothing here reads it. To restore curated
  * ordering, return `[{ order: sortDir }, { id: "desc" }]` for the "order" case.

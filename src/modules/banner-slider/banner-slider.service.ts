@@ -1,6 +1,6 @@
 import { bannerSliderRepository } from "./banner-slider.repository";
 import { toBannerDto, resolveBannerKey } from "./banner-slider.transformer";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import type {
   BannerCreateInput,
   BannerKey,
@@ -34,7 +34,10 @@ export const listBannersPaged = async (q: {
   take?: number;
 }): Promise<{ items: BannerSliderDto[]; total: number }> => {
   const key = resolveBannerKey(q.key);
-  const opts = { key, search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take };
+  // "orderBy" and no-sort both mean newest-first here — RECENCY IS THE CONTRACT
+  // on admin lists (utils/listOrdering). Any other column sorts as requested.
+  const recency = !q.sortBy || q.sortBy === "orderBy";
+  const opts = { key, search: q.search, sortBy: q.sortBy, sortDir: q.sortDir, skip: q.skip, take: q.take, recency };
   const [rows, total] = await Promise.all([
     bannerSliderRepository.findPage(opts),
     bannerSliderRepository.count(opts),
@@ -72,12 +75,11 @@ export const getBannerById = async (
 export const createBanner = async (
   input: BannerCreateInput
 ): Promise<BannerSliderDto> => {
-  // No explicit orderBy → land on TOP of this key's list (utils/listOrdering),
-  // so a newly created banner is visible without a drag. An explicit value is
-  // honoured as-is.
+  // No explicit orderBy → previous row + 1 within this key's list
+  // (utils/listOrdering). An explicit value is honoured as-is.
   const orderBy =
     input.orderBy ??
-    topSlotOrder(await bannerSliderRepository.minOrderBy(input.key));
+    nextOrder(await bannerSliderRepository.prevOrderBy(input.key));
   const row = await bannerSliderRepository.create({ ...input, orderBy });
   return toBannerDto(row);
 };

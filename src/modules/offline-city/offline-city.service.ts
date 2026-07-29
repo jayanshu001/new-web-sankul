@@ -11,7 +11,7 @@
 import { offlineCityRepository as repo } from "./offline-city.repository";
 import { toCityDto, toCityNameDto } from "./offline-city.transformer";
 import type { CityDto, CityNameDto } from "./offline-city.types";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
 
 export const OFFLINE_CITY_MODULE = "offline-city";
@@ -67,9 +67,8 @@ export const getCityAdmin = async (id: number): Promise<CityDto | null> => {
 export const createCityAdmin = async (input: {
   name: string; image: string; order?: number; status?: boolean; stateId?: number | null;
 }): Promise<CityDto> => {
-  // No explicit order → TOP slot, so the new city lands first in the `order ASC`
-  // list instead of tying with every existing 0. See utils/listOrdering.
-  const order = input.order ?? topSlotOrder((await prisma.offlineCity.aggregate({ _min: { order: true } }))._min.order);
+  // No explicit order → previous row + 1 (see utils/listOrdering).
+  const order = input.order ?? nextOrder((await prisma.offlineCity.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { order: true } }))?.order);
   const row = await repo.create({
     name: input.name, image: input.image, order, status: input.status ?? true,
     state: input.stateId ?? null,

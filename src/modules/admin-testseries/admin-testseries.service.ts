@@ -24,7 +24,7 @@
  *   - TestSeriesOrder is read-only here (listOrders).
  */
 import ExcelJS from "exceljs";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import { buildPrismaSearch } from "../../utils/searchFilter";
@@ -229,9 +229,9 @@ export const listTestSeries = async (opts: ListSeriesOpts) => {
   const [rows, total] = await Promise.all([
     prisma.testSeries.findMany({
       where,
-      // Recently-added on top; id (autoincrement) is a deterministic tiebreaker
-      // for null/duplicate createdAt (migrated rows).
-      orderBy: [{ orderBy: "asc" }, { createdAt: "desc" }, { id: "desc" }],
+      // Recently-added on top (utils/listOrdering); id (autoincrement) is a
+      // deterministic tiebreaker for null/duplicate createdAt (migrated rows).
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: (opts.page - 1) * opts.limit,
       take: opts.limit,
     }),
@@ -357,9 +357,9 @@ export const createTestSeries = async (data: SeriesWrite, now: Date = new Date()
   // reads (admin dashboard) + sorts unpredictably. Same hazard as ws_test_series_order.
   set.createdAt = now;
   set.updatedAt = now;
-  // No explicit order → TOP slot (see utils/listOrdering).
+  // No explicit order → previous row + 1 (see utils/listOrdering).
   if (set.orderBy === undefined || set.orderBy === null) {
-    set.orderBy = topSlotOrder((await prisma.testSeries.aggregate({ _min: { orderBy: true } }))._min.orderBy);
+    set.orderBy = nextOrder((await prisma.testSeries.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
   }
   const created = await prisma.testSeries.create({ data: set });
   const catMap = await buildExamCategoryMap([created.examCategoryIds]);
@@ -454,10 +454,10 @@ const mapCategoryWrite = (data: ContentCategoryWrite): any => {
 
 export const createContentCategory = async (testSeriesId: number, data: ContentCategoryWrite) => {
   const mapped = mapCategoryWrite(data);
-  // No explicit order → TOP slot WITHIN this series (that is how the tab lists them).
+  // No explicit order → previous row + 1 WITHIN this series (that is how the tab lists them).
   if (mapped.orderBy === undefined || mapped.orderBy === null) {
-    mapped.orderBy = topSlotOrder(
-      (await prisma.testSeriesContentCategory.aggregate({ where: { testSeriesId }, _min: { orderBy: true } }))._min.orderBy,
+    mapped.orderBy = nextOrder(
+      (await prisma.testSeriesContentCategory.findFirst({ where: { testSeriesId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy,
     );
   }
   const cat = await prisma.testSeriesContentCategory.create({
@@ -567,9 +567,9 @@ export const linkPaper = async (
       testSeriesId,
       contentCategoryId: data.contentCategoryId,
       examId: data.examId,
-      // No explicit order → TOP slot WITHIN this series.
-      orderBy: data.orderBy ?? topSlotOrder(
-        (await prisma.testSeriesExam.aggregate({ where: { testSeriesId }, _min: { orderBy: true } }))._min.orderBy,
+      // No explicit order → previous row + 1 WITHIN this series.
+      orderBy: data.orderBy ?? nextOrder(
+        (await prisma.testSeriesExam.findFirst({ where: { testSeriesId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy,
       ),
       ...(data.status !== undefined ? { status: data.status } : {}),
     },

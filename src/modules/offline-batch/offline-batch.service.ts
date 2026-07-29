@@ -14,7 +14,7 @@ import {
   toOfflineCenterDto,
   toOfflineCityRef,
 } from "./offline-batch.transformer";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
 import type {
   OfflineBatchDto,
@@ -328,8 +328,8 @@ const bannerDto = (r: any) => ({
 export const listBanners = async () => (await repo.listBanners()).map(bannerDto);
 
 export const createBanner = async (input: { image: string; key?: string; keyId?: number; orderBy?: number }) => {
-  // No explicit order → TOP slot (see utils/listOrdering).
-  const orderBy = input.orderBy ?? topSlotOrder((await prisma.offlineBannerSlider.aggregate({ _min: { orderBy: true } }))._min.orderBy);
+  // No explicit order → previous row + 1 (see utils/listOrdering).
+  const orderBy = input.orderBy ?? nextOrder((await prisma.offlineBannerSlider.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
   const row = await repo.createBanner({
     image: input.image, key: input.key ?? null, keyId: input.keyId ?? null, orderBy,
   });

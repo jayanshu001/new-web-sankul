@@ -21,7 +21,8 @@ const courseInclude = undefined; // refs (educator/category) have no FK rows on 
 export const adminLiveCourseRepository = {
   // ── courses ───────────────────────────────────────────────────────────────
   list: (opts: { search?: string; status?: boolean; skip: number; take: number }) =>
-    prisma.liveCourse.findMany({ where: buildWhere(opts), orderBy: [{ ordered: "asc" }, { createdAt: "asc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    // Recency is the contract on admin lists — see utils/listOrdering.
+    prisma.liveCourse.findMany({ where: buildWhere(opts), orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
   count: (opts: { search?: string; status?: boolean }) => prisma.liveCourse.count({ where: buildWhere(opts) }),
   findById: (id: number) => prisma.liveCourse.findUnique({ where: { id } }),
   exists: (id: number) => prisma.liveCourse.findUnique({ where: { id }, select: { id: true } }),
@@ -39,9 +40,9 @@ export const adminLiveCourseRepository = {
     else if (filterStatus === "expired") { where.OR = [{ status: false }, { endAt: { lt: now } }]; }
     return prisma.liveCourseSubscription.findMany({ where, orderBy: { createdAt: "desc" } });
   },
-  /** Smallest `ordered` — input to the top-slot calc on create (utils/listOrdering). */
-  minOrdered: async (): Promise<number | null> =>
-    (await prisma.liveCourse.aggregate({ _min: { ordered: true } }))._min.ordered ?? null,
+  /** `ordered` of the PREVIOUS live course — input to the +1 calc (utils/listOrdering). */
+  prevOrdered: async (): Promise<number | null> =>
+    (await prisma.liveCourse.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { ordered: true } }))?.ordered ?? null,
 
   /**
    * Bulk reorder: set `ordered` per id in ONE transaction, so a 20-row drag is a

@@ -45,4 +45,3 @@ graphify-out/
 # of truth. Authoritative caching doc is docs/CACHING.md. Kept local for
 # reference, ignored so it doesn't clutter real diffs.
 /cache/
-/loadtest

@@ -86,7 +86,7 @@ export const adminCreateCategory = async (req: Request, res: Response) => {
   try {
     const name = (req.body?.name ?? "").toString().trim();
     const colorHex = (req.body?.colorHex ?? "").toString().trim();
-    // undefined (not 0) when the admin left Order blank, so the service can top-slot it.
+    // undefined (not 0) when the admin left Order blank, so the service can assign prev + 1.
     const order = Number.isFinite(Number(req.body?.order)) ? Number(req.body.order) : undefined;
     const status = req.body?.status === undefined ? true : Boolean(req.body.status);
 

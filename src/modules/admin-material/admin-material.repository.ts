@@ -92,10 +92,12 @@ export const adminMaterialRepository = {
 
   // ── materials (leaf) ──────────────────────────────────────────────────────
   listMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean; skip: number; take: number }) =>
-    prisma.material.findMany({ where: buildMatWhere(opts), include: { MaterialCategory: { select: { id: true, name: true } } }, orderBy: [{ order_by: "asc" }, { created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    // Recency is the contract on admin lists — see utils/listOrdering.
+    prisma.material.findMany({ where: buildMatWhere(opts), include: { MaterialCategory: { select: { id: true, name: true } } }, orderBy: [{ created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
   countMaterials: (opts: { search?: string; materialCategoryId?: number; status?: boolean }) => prisma.material.count({ where: buildMatWhere(opts) }),
+  // Same Materials list as above, scoped to one category → same recency contract.
   materialsForCategory: (categoryId: number, skip: number, take: number, search?: string) =>
-    prisma.material.findMany({ where: buildMatWhere({ materialCategoryId: categoryId, search }), orderBy: [{ order_by: "asc" }, { created_at: "desc" }], skip, take }),
+    prisma.material.findMany({ where: buildMatWhere({ materialCategoryId: categoryId, search }), orderBy: [{ created_at: "desc" }, { id: "desc" }], skip, take }),
 
   findMaterialById: (id: number) => prisma.material.findUnique({ where: { id }, include: { MaterialCategory: { select: { id: true, name: true } } } }),
   findMaterialBare: (id: number) => prisma.material.findUnique({ where: { id } }),
@@ -238,11 +240,12 @@ function slugify(input: string): string {
 
 export { ROOT };
 
+// RECENCY IS THE CONTRACT (utils/listOrdering): "order" and the no-sort default
+// both mean newest-first; `dir` is ignored for them on purpose.
 function catOrderBy(sortBy: string | undefined, dir: "asc" | "desc"): Prisma.MaterialCategoryOrderByWithRelationInput[] {
-  if (sortBy === "title" || sortBy === "name") return [{ name: dir }, { name: "asc" }];
-  if (sortBy === "createdAt") return [{ created_at: dir }, { name: "asc" }];
-  if (sortBy === "order") return [{ order_by: dir }, { name: "asc" }];
-  return [{ order_by: "asc" }, { name: "asc" }];
+  if (sortBy === "title" || sortBy === "name") return [{ name: dir }, { id: "desc" }];
+  if (sortBy === "createdAt") return [{ created_at: dir }, { id: "desc" }];
+  return [{ created_at: "desc" }, { id: "desc" }];
 }
 
 function buildCatWhere(opts: { parent?: number | "root"; search?: string; status?: boolean }): Prisma.MaterialCategoryWhereInput {

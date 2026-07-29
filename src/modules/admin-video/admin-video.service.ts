@@ -1,6 +1,6 @@
 import { adminVideoRepository as repo } from "./admin-video.repository";
 import { resolveAncestors } from "../../utils/categoryAncestors";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 
 export const ADMIN_VIDEO_MODULE = "admin-video";
 export const isAdminVideoMysql = (): boolean => true;
@@ -103,10 +103,10 @@ export const createVideo = async (d: VideoCreateInput): Promise<{ ok: false; rea
   if (!catId || !(await repo.categoryExists(catId))) return { ok: false, reason: "category" };
   const slug = await uniqueSlug(d.slug);
   const platform = pickPlatform(d)!;
-  // No explicit order → land on TOP of the list. Without this the row ties with
-  // every existing order=0 video and the `{ id: "asc" }` tie-break in
-  // repo.list sends the newest one to the BOTTOM.
-  const order = d.order ?? topSlotOrder(await repo.minOrder());
+  // No explicit order → previous row + 1 (utils/listOrdering). The admin list is
+  // unaffected either way — it sorts by recency; this only positions the row in the
+  // CLIENT catalog's `order ASC`.
+  const order = d.order ?? nextOrder(await repo.prevOrder());
   const created = await repo.create({
     videoCategoryId: catId, title: d.name, slug, topic: d.topic, order, priceType: d.type, platform,
     youtube_id: platform === "youtube" ? d.youtubeId ?? null : null,

@@ -47,7 +47,7 @@ export const adminCourseRepository = {
       include,
       // `id desc` tiebreaker so newest-added stays on top even when the primary
       // column ties or is null (migrated rows). Default sort is createdAt desc.
-      orderBy: [{ [courseSortCol(opts.sortBy)]: opts.sortDir }, { id: "desc" }],
+      orderBy: buildCourseOrderBy(opts.sortBy, opts.sortDir),
       skip: opts.skip,
       take: opts.take,
     }),
@@ -274,14 +274,25 @@ async function writePivots(
   }
 }
 
+/**
+ * Admin list ordering. RECENCY IS THE CONTRACT (see utils/listOrdering): the
+ * order request — which is also the default the admin UI sends — maps to
+ * `createdAt DESC, id DESC`, and `sortDir` is ignored for it on purpose. Every
+ * other sortBy still sorts by its own column in the requested direction.
+ * `ws_course.ordered` is still written and still drives the client catalog.
+ */
+function buildCourseOrderBy(sortBy: string, sortDir: "asc" | "desc"): Prisma.CourseOrderByWithRelationInput[] {
+  if (!sortBy || sortBy === "order" || sortBy === "ordered" || sortBy === "order_by")
+    return [{ createdAt: "desc" }, { id: "desc" }];
+  return [{ [courseSortCol(sortBy)]: sortDir }, { id: "desc" }];
+}
+
 function courseSortCol(sortBy: string): string {
   if (sortBy === "name") return "name";
-  if (sortBy === "order" || sortBy === "ordered" || sortBy === "order_by") return "ordered";
   if (sortBy === "updatedAt" || sortBy === "updated_at") return "updatedAt";
   if (sortBy === "createdAt" || sortBy === "created_at") return "createdAt";
-  // Default is the curated manual order (admins set ws_course.ordered; negatives float
-  // to the top), not recency — an explicit ?sortBy= still overrides it.
-  return "ordered";
+  // "order" never reaches here — buildCourseOrderBy intercepts it (see above).
+  return "createdAt";
 }
 
 function buildCourseWhere(opts: { search?: string; status?: boolean; isPaid?: boolean; isPopular?: boolean }): Prisma.CourseWhereInput {

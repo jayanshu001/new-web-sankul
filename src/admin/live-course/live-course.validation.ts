@@ -49,9 +49,9 @@ export const createLiveCourseSqlSchema = z
     subtitle:      z.string().trim().optional(),
     description:   z.string().trim().min(1, "Description is required"),
     image:           z.string().url("Image must be a valid URL"),
-    // Optional since 2026-07-27: omitted → the service assigns the TOP slot
-    // (utils/listOrdering) so a new live course is visible without a drag. An
-    // explicit value is still honoured, so this only relaxes the contract.
+    // Optional since 2026-07-27: omitted → the service assigns previous-row + 1
+    // (utils/listOrdering). An explicit value is still honoured, so this only
+    // relaxes the contract.
     ordered:         z.coerce.number().int("Ordered must be an integer").optional(),
     shareableLink:   z.string().trim().optional(),
     withMaterial:    z.string().trim().optional(),

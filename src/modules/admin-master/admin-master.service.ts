@@ -1,5 +1,5 @@
 import { adminMasterRepository as repo } from "./admin-master.repository";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
 import { resolveAncestors } from "../../utils/categoryAncestors";
 import { matchesAllTokens } from "../../utils/searchFilter";
@@ -38,10 +38,10 @@ export const subjList = async (q?: { search?: string; status?: boolean; sortBy?:
 export const subjGet = async (id: number) => { const c = await repo.subjFind(id); return c ? toSubjDto(c) : null; };
 export const subjCreate = async (d: any) => {
   const parent = toInt(d.parent);
-  // No explicit order → TOP slot among its siblings (see utils/listOrdering).
+  // No explicit order → previous row + 1 among its siblings (see utils/listOrdering).
   const order = d.order !== undefined && d.order !== null && d.order !== ""
     ? toInt(d.order)
-    : topSlotOrder((await prisma.courseSubjectCategory.aggregate({ where: { parent }, _min: { order: true } }))._min.order);
+    : nextOrder((await prisma.courseSubjectCategory.findFirst({ where: { parent }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { order: true } }))?.order);
   return toSubjDto(await repo.subjCreate({ title: d.title, slug: d.slug, image: d.image, parent, order, status: d.status ?? true }));
 };
 export const subjUpdate = async (id: number, d: any) => {
@@ -100,10 +100,10 @@ export const vcList = async (opts: { search?: string; limit?: number } = {}) => 
 };
 export const vcCreate = async (d: any) => {
   const parent = d.parent !== undefined ? toInt(d.parent) : 0;
-  // No explicit order → TOP slot among its siblings (see utils/listOrdering).
+  // No explicit order → previous row + 1 among its siblings (see utils/listOrdering).
   const order = d.order_by !== undefined && d.order_by !== null && d.order_by !== ""
     ? toInt(d.order_by)
-    : topSlotOrder((await prisma.videoCategory.aggregate({ where: { parent }, _min: { order_by: true } }))._min.order_by);
+    : nextOrder((await prisma.videoCategory.findFirst({ where: { parent }, orderBy: [{ created_at: "desc" }, { id: "desc" }], select: { order_by: true } }))?.order_by);
   const created = await repo.vcCreate({ title: d.title, slug: d.slug, image: d.image, parent, order_by: order, status: d.status ?? true, educatorId: d.educatorId ? toInt(d.educatorId) : 0, pdf: d.pdf ?? "" });
   // Mirror the parent link into the pivot the client catalog reads.
   if (parent > 0) {

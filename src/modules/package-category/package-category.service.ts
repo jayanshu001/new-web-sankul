@@ -13,7 +13,7 @@
 import { prisma } from "../../config/prisma";
 import * as liveSql from "../admin-live-course/admin-live-course.service";
 import { buildPrismaSearch } from "../../utils/searchFilter";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 
 export const PACKAGE_CATEGORY_MODULE = "package-category";
 export const isPackageCategoryMysql = (): boolean => true;
@@ -176,11 +176,11 @@ export const listAll = async (q?: { search?: string; sortBy?: string; sortDir?: 
   const where: any = {};
   const titleSearch = buildPrismaSearch(q?.search, ["title"]);
   if (titleSearch) where.AND = titleSearch.AND;
-  const col = q?.sortBy === "title" ? "title" : q?.sortBy === "createdAt" ? "createdAt" : "order";
-  // Newest-first tiebreaker so recently-added categories surface on top among
-  // equal sort-key rows (the common case: most share order=0). `id desc` mirrors
-  // the admin test-series / courses lists' "recently added on top" behavior.
-  const orderBy: any[] = [{ [col]: q?.sortDir ?? "asc" }, { id: "desc" }];
+  // RECENCY IS THE CONTRACT on admin lists (utils/listOrdering): the "order" sort
+  // and the no-sort default both mean newest-first, and sortDir is ignored for
+  // them. `order` is still written and still drives listClientPackageCategories.
+  const col = q?.sortBy === "title" ? "title" : q?.sortBy === "createdAt" ? "createdAt" : null;
+  const orderBy: any[] = col ? [{ [col]: q?.sortDir ?? "asc" }, { id: "desc" }] : [{ createdAt: "desc" }, { id: "desc" }];
   const [rows, total] = await Promise.all([
     prisma.packageCategory.findMany({
       where,
@@ -194,8 +194,8 @@ export const listAll = async (q?: { search?: string; sortBy?: string; sortDir?: 
 };
 
 export const create = async (input: { title: string; slug: string; image?: string; order?: number; status?: boolean }) => {
-  // No explicit order → TOP slot (see utils/listOrdering).
-  const order = input.order ?? topSlotOrder((await prisma.packageCategory.aggregate({ _min: { order: true } }))._min.order);
+  // No explicit order → previous row + 1 (see utils/listOrdering).
+  const order = input.order ?? nextOrder((await prisma.packageCategory.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { order: true } }))?.order);
   const row = await prisma.packageCategory.create({
     data: { title: input.title, slug: input.slug, image: input.image ?? null, order, status: input.status ?? true },
   });

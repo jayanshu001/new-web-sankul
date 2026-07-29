@@ -36,7 +36,7 @@ export const listDepartments = async (
   const skip = paginate ? (page - 1) * limit : undefined;
 
   const [rows, total] = await Promise.all([
-    departmentRepository.findMany({ active, skip, take: paginate ? limit : undefined }),
+    departmentRepository.findMany({ active, skip, take: paginate ? limit : undefined, recency: true }),
     departmentRepository.count({ active }),
   ]);
   return { items: rows.map(toDepartmentDto), total };

@@ -89,11 +89,19 @@ export const FLUSH_GROUPS: Partial<Record<CacheEntity, CacheEntity[]>> = {
   course: ["course", "catalog-course", "client-dashboard", "free", "exam-countdown", "categories"],
 
   // Package: client package detail/list + dashboard "recently added" + free +
-  // ec listings + package-category listings + category tabs.
-  package: ["package", "catalog-package", "client-dashboard", "free", "exam-countdown", "categories"],
+  // ec listings + package-category listings + category tabs. "package-category"
+  // is required: GET /client/package-categories derives `packageCount` from
+  // ws_package.package_category_id, so attaching/detaching a package (or
+  // toggling its status) restates every category card's count.
+  package: ["package", "catalog-package", "client-dashboard", "free", "exam-countdown", "categories", "package-category"],
 
   // Live course: merged into free-courses + dashboard-adjacent + category tabs.
-  "live-course": ["live-course", "catalog-course", "client-dashboard", "free", "categories"],
+  // Also the package-category pair, because live courses carry
+  // package_category_id: "package-category" is the OTHER half of that listing's
+  // `packageCount` (recorded + live), and "catalog-package" tags
+  // GET /client/package-categories/:id/packages, whose `live` tab and `counts`
+  // are built from live courses.
+  "live-course": ["live-course", "catalog-course", "client-dashboard", "free", "categories", "package-category", "catalog-package"],
 
   // ── Categories (widest fan-out: embedded as summaries+counts in BOTH package
   //    and course details, plus their own listings and tabs) ─────────────────

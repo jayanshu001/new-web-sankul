@@ -15,8 +15,8 @@ const baseShape = {
   name: z.string().min(1, "Name is required").max(255),
   slug: z.string().min(1, "Slug is required").max(255),
   // No `.default(0)`: an omitted order must stay undefined so the service can
-  // assign the TOP slot (utils/listOrdering). Defaulting to 0 would tie the new
-  // row with every existing order=0 video and the id tie-break would bury it.
+  // assign previous-row + 1 (utils/listOrdering). Defaulting to 0 would tie the
+  // new row with every existing order=0 video in the client catalog.
   // An explicit order is still honoured as-is.
   order: z.coerce.number().int().optional(),
   topic: z.string().max(500).optional().default(""),

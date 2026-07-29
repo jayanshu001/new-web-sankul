@@ -1,7 +1,7 @@
 import type { RefferalTerm, RefferalFaq } from "@prisma/client";
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 
 export const REFERRAL_CONTENT_MODULE = "referral-content";
 
@@ -105,13 +105,12 @@ export interface RcListOpts {
 const rcOrderBy = (opts: RcListOpts): any[] => {
   const dir = opts.sortDir ?? "asc";
   switch (opts.sortBy) {
-    case "order": return [{ orderBy: dir }, { id: "desc" }];
     case "createdAt": return [{ createdAt: dir }, { id: "desc" }];
     case "updatedAt": return [{ updatedAt: dir }, { id: "desc" }];
-    // Default: the curated manual order (admins set `orderBy`; negatives float to the
-    // top), then newest. Matches the non-paginated readers above, which always sorted
-    // this way — the paginated list defaulting to recency was the odd one out.
-    default: return [{ orderBy: "asc" }, { createdAt: "desc" }, { id: "desc" }];
+    // "order" and no-sort both mean newest-first — RECENCY IS THE CONTRACT on
+    // admin lists (utils/listOrdering). `orderBy` is still written, and the
+    // client readers above still sort by it.
+    default: return [{ createdAt: "desc" }, { id: "desc" }];
   }
 };
 
@@ -140,9 +139,8 @@ export const getTerm = async (id: number): Promise<TermDto | null> => {
 
 export const createTerm = async (input: TermInput): Promise<TermDto> => {
   const now = new Date();
-  // No explicit order → take the TOP slot so the new row lands first in the
-  // `orderBy ASC` list instead of tying with every existing 0. See utils/listOrdering.
-  const orderBy = input.order ?? topSlotOrder((await prisma.refferalTerm.aggregate({ _min: { orderBy: true } }))._min.orderBy);
+  // No explicit order → previous row + 1 (see utils/listOrdering).
+  const orderBy = input.order ?? nextOrder((await prisma.refferalTerm.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
   const row = await prisma.refferalTerm.create({
     data: {
       text: input.text ?? "",
@@ -209,7 +207,7 @@ export const getFaq = async (id: number): Promise<FaqDto | null> => {
 
 export const createFaq = async (input: FaqInput): Promise<FaqDto> => {
   const now = new Date();
-  const orderBy = input.order ?? topSlotOrder((await prisma.refferalFaq.aggregate({ _min: { orderBy: true } }))._min.orderBy);
+  const orderBy = input.order ?? nextOrder((await prisma.refferalFaq.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
   const row = await prisma.refferalFaq.create({
     data: {
       question: input.question ?? "",

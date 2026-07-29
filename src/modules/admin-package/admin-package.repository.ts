@@ -35,9 +35,9 @@ export const adminPackageRepository = {
 
   // ── packages: list / get ────────────────────────────────────────────────────
   list: (opts: { search?: string; active?: boolean; packageTypeId?: number; skip: number; take: number }) =>
-    // Curated manual order first (admins set ws_package.order_by, negatives float to
-    // the top), then newest. Matches the client catalog, which already sorted this way.
-    prisma.package.findMany({ where: buildWhere(opts), include: pkgInclude, orderBy: [{ order_by: "asc" }, { created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
+    // Recency is the contract on admin lists (see utils/listOrdering). ws_package.order_by
+    // is still written and still drives the CLIENT catalog — it just isn't read here.
+    prisma.package.findMany({ where: buildWhere(opts), include: pkgInclude, orderBy: [{ created_at: "desc" }, { id: "desc" }], skip: opts.skip, take: opts.take }),
   count: (opts: { search?: string; active?: boolean; packageTypeId?: number }) => prisma.package.count({ where: buildWhere(opts) }),
   findById: (id: number) => prisma.package.findUnique({ where: { id }, include: pkgInclude }),
   findBare: (id: number) => prisma.package.findUnique({ where: { id } }),

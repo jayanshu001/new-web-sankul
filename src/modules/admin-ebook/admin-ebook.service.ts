@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
@@ -165,8 +165,8 @@ export const getEbookById = async (id: number) => {
 // ws_ebook NOT-NULL columns with no DB default → write-time sentinels.
 export const createEbook = async (d: any) => {
   const now = new Date();
-  // No explicit order → TOP slot (see utils/listOrdering).
-  const ebookOrder = d.order ?? topSlotOrder((await prisma.eBook.aggregate({ _min: { orderby: true } }))._min.orderby);
+  // No explicit order → previous row + 1 (see utils/listOrdering).
+  const ebookOrder = d.order ?? nextOrder((await prisma.eBook.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderby: true } }))?.orderby);
   const created = await repo.create({
     name: d.name,
     thumbnail: d.thumbnail ?? "",
