@@ -12,7 +12,7 @@
  * the admin/client response contracts are unchanged.
  */
 import { prisma } from "../../config/prisma";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const EXAM_COUNTDOWN_MODULE = "exam-countdown";
@@ -136,7 +136,9 @@ export const listCategoriesAdmin = async (opts?: { search?: string | null; statu
   if (search) where.AND = search.AND;
   if (opts?.status !== undefined) where.status = opts.status;
   const [rows, total] = await Promise.all([
-    prisma.examCountdownCategory.findMany({ where, orderBy: [{ order: "asc" }, { name: "asc" }, { id: "asc" }], skip: opts?.skip, take: opts?.take }),
+    // Recency is the contract on admin lists — see utils/listOrdering. The client
+    // reader below still sorts by `order`.
+    prisma.examCountdownCategory.findMany({ where, orderBy: [{ createdAt: "desc" }, { id: "desc" }], skip: opts?.skip, take: opts?.take }),
     prisma.examCountdownCategory.count({ where }),
   ]);
   return { data: rows.map(catDto), total };
@@ -152,8 +154,8 @@ export const getCategoryAdmin = async (id: number) => {
 export const createCategory = async (input: { name: string; colorHex: string; order?: number; status: boolean }) => {
   const dup = await prisma.examCountdownCategory.findFirst({ where: { name: input.name } });
   if (dup) return { conflict: true as const };
-  // No explicit order → TOP slot (see utils/listOrdering).
-  const order = input.order ?? topSlotOrder((await prisma.examCountdownCategory.aggregate({ _min: { order: true } }))._min.order);
+  // No explicit order → previous row + 1 (see utils/listOrdering).
+  const order = input.order ?? nextOrder((await prisma.examCountdownCategory.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { order: true } }))?.order);
   const row = await prisma.examCountdownCategory.create({ data: { ...input, order } });
   return { conflict: false as const, data: catDto(row) };
 };

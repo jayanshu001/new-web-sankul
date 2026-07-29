@@ -63,7 +63,7 @@ const bannerBaseSchema = z.object({
   key: z.enum(["Packages", "Courses", "Book", "EBook", "Explore"]).optional(),
   keyId: bannerTargetId.optional(),
   // No `.default(0)`: an omitted orderBy must stay undefined so createBanner can
-  // assign the TOP slot of that key's list (utils/listOrdering). An explicit
+  // assign previous-row + 1 within that key's list (utils/listOrdering). An explicit
   // value is still honoured as-is.
   orderBy: z.number().int().optional(),
 });
@@ -116,7 +116,7 @@ export const bannerUpdateSchema = bannerBaseSchema
 export const liveBannerCreateSchema = z.object({
   image: z.string().min(1).max(500),
   liveCourseId: bannerRefId,
-  // Omitted → top slot on create, same as bannerBaseSchema above.
+  // Omitted → previous-row + 1 on create, same as bannerBaseSchema above.
   orderBy: z.number().int().optional(),
 });
 export const liveBannerUpdateSchema = liveBannerCreateSchema.partial();

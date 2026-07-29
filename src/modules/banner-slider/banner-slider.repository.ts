@@ -18,6 +18,13 @@ export type BannerListOpts = {
   sortDir?: "asc" | "desc";
   skip?: number;
   take?: number;
+  /**
+   * Admin-only: sort `created_at DESC, id DESC` and ignore sortBy/sortDir.
+   * RECENCY IS THE CONTRACT on admin lists (utils/listOrdering). The client page
+   * shares this query and must keep its curated `orderBy ASC`, so the flag is set
+   * by listBannersPaged and never by listBannersClientPaged.
+   */
+  recency?: boolean;
 };
 
 const BANNER_SORT_COLUMNS: Record<string, string> = {
@@ -52,10 +59,12 @@ export const bannerSliderRepository = {
   findPage: (opts: BannerListOpts) =>
     prisma.bannerSlider.findMany({
       where: buildBannerWhere(opts),
-      orderBy: [
-        { [BANNER_SORT_COLUMNS[opts.sortBy ?? ""] ?? "orderBy"]: opts.sortDir ?? "asc" },
-        { created_at: "asc" },
-      ],
+      orderBy: opts.recency
+        ? [{ created_at: "desc" as const }, { id: "desc" as const }]
+        : [
+            { [BANNER_SORT_COLUMNS[opts.sortBy ?? ""] ?? "orderBy"]: opts.sortDir ?? "asc" },
+            { created_at: "asc" },
+          ],
       ...(opts.skip != null ? { skip: opts.skip } : {}),
       ...(opts.take != null ? { take: opts.take } : {}),
     }),
@@ -66,19 +75,20 @@ export const bannerSliderRepository = {
   findById: (id: number) => prisma.bannerSlider.findUnique({ where: { id } }),
 
   /**
-   * Smallest `orderBy` within ONE banner list — the input to the top-slot
-   * calculation on create (see utils/listOrdering). Scoped by `key` because each
-   * key (Packages/Courses/Book/EBook/Explore) is its own independently ordered
-   * list in the admin UI; a global minimum would put a new Courses banner above
-   * rows it never shares a screen with.
+   * `orderBy` of the PREVIOUS row — the most recently created banner in this list
+   * — which is the input to the +1 calculation on create (see utils/listOrdering).
+   * Scoped by `key` because each key (Packages/Courses/Book/EBook/Explore) is its
+   * own independently ordered list in the admin UI, so "the previous banner" means
+   * the previous one on the same screen.
    */
-  minOrderBy: async (key?: BannerKey): Promise<number | null> =>
+  prevOrderBy: async (key?: BannerKey): Promise<number | null> =>
     (
-      await prisma.bannerSlider.aggregate({
+      await prisma.bannerSlider.findFirst({
         where: key ? { key: BANNER_KEY_TO_MYSQL[key] } : { key: null },
-        _min: { orderBy: true },
+        orderBy: [{ created_at: "desc" }, { id: "desc" }],
+        select: { orderBy: true },
       })
-    )._min.orderBy ?? null,
+    )?.orderBy ?? null,
 
   create: (input: BannerCreateInput) =>
     prisma.bannerSlider.create({ data: toPrismaBannerCreate(input) }),

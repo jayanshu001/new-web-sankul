@@ -4,7 +4,7 @@ import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import logger from "../../utils/logger";
 import { CRM_LEAD_TYPE } from "../../shared/enums";
 import { GenerateCRMLead } from "../../utils/crm";
-import { buildCourseReceiptHtml, buildLiveCourseReceiptHtml, buildTestSeriesReceiptHtml, renderPdfFromHtml } from "../../libs/core/generate";
+import { buildCourseReceiptHtml, buildCourseReceiptHtmlBySub, buildLiveCourseReceiptHtml, buildTestSeriesReceiptHtml, buildTestSeriesReceiptHtmlBySub, renderPdfFromHtml } from "../../libs/core/generate";
 import { shippingBodySchema } from "./course.validation";
 import {
   upsertCourseOrderShipping,
@@ -271,19 +271,25 @@ export const getOrderInvoiceHandler = async (req: Request, res: Response) => {
 
   try {
     if (!userId) return failure(res, "Unauthorized request.", 401);
-    // Same invoice route serves three subscription tables. Live-course ("lc_")
-    // and test-series ("ts_") ids are prefixed (their PK space is separate from
-    // the package/course subscription) — strip the prefix before validating and
-    // dispatch to the matching receipt builder. Unprefixed = course/package.
-    const LIVE_ID_PREFIX = "lc_";
-    const TS_ID_PREFIX = "ts_";
-    const isLive = orderId.startsWith(LIVE_ID_PREFIX);
-    const isTs = orderId.startsWith(TS_ID_PREFIX);
-    const rawOrderId = isLive
-      ? orderId.slice(LIVE_ID_PREFIX.length)
-      : isTs
-      ? orderId.slice(TS_ID_PREFIX.length)
-      : orderId;
+    // This route serves every row of `GET /client/purchase-history/subscriptions`,
+    // whose `_id` encodes WHICH table the id belongs to (the PK spaces are separate
+    // and overlap numerically). The vocabulary is defined by that list and mirrored
+    // in purchase-history/receipts.controller.ts — keep the two in sync:
+    //   (plain) → package/course ORDER id, falling back to a subscription id
+    //   "lc_"   → live-course subscription id
+    //   "ts_"   → test-series ORDER id
+    //   "pcs_"  → legacy package/course subscription (no order row)
+    //   "tss_"  → legacy test-series subscription (no order row)
+    // Longest prefix first: "tss_" must be tested before "ts_".
+    const BUILDERS: Array<[string, (id: string, uid: string) => Promise<string>]> = [
+      ["pcs_", buildCourseReceiptHtmlBySub],
+      ["tss_", buildTestSeriesReceiptHtmlBySub],
+      ["lc_", buildLiveCourseReceiptHtml],
+      ["ts_", buildTestSeriesReceiptHtml],
+    ];
+    const matched = BUILDERS.find(([prefix]) => orderId.startsWith(prefix));
+    const rawOrderId = matched ? orderId.slice(matched[0].length) : orderId;
+    const build = matched ? matched[1] : buildCourseReceiptHtml;
 
     // Accept a SQL int order id (MySQL id-space) OR a Mongo ObjectId. Each
     // builder does its own ownership (_id + customerId) + paid re-validation.
@@ -294,11 +300,7 @@ export const getOrderInvoiceHandler = async (req: Request, res: Response) => {
     // Build the receipt HTML (shared EJS template — identical across course /
     // live-course / test-series / ebook / book invoices) then rasterise it via
     // the shared Puppeteer renderer.
-    const html = isLive
-      ? await buildLiveCourseReceiptHtml(rawOrderId, userId)
-      : isTs
-      ? await buildTestSeriesReceiptHtml(rawOrderId, userId)
-      : await buildCourseReceiptHtml(rawOrderId, userId);
+    const html = await build(rawOrderId, userId);
     const buffer = await renderPdfFromHtml(html);
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Length", buffer.length);

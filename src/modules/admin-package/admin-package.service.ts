@@ -1,5 +1,5 @@
 import { HttpError } from "../../middlewares/errorHandler";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminPackageRepository as repo } from "./admin-package.repository";
@@ -299,9 +299,8 @@ const catRows = (refs?: Array<{ category: string; order?: number }>) =>
 
 export const createPackage = async (d: PackageWriteInput) => {
   const now = new Date();
-  // No explicit order → TOP slot so the new row lands first in the `order ASC`
-  // list instead of tying with every existing 0. See utils/listOrdering.
-  const pkgOrder = d.order ?? topSlotOrder((await prisma.package.aggregate({ _min: { order_by: true } }))._min.order_by);
+  // No explicit order → previous row + 1 (see utils/listOrdering).
+  const pkgOrder = d.order ?? nextOrder((await prisma.package.findFirst({ orderBy: [{ created_at: "desc" }, { id: "desc" }], select: { order_by: true } }))?.order_by);
   const gf = await resolveGoalFields(d.goalId, d.goalLabelId);
   const pkg = await repo.createPackage({
     data: {

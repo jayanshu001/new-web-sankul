@@ -35,7 +35,8 @@ export const adminEbookRepository = {
   list: (opts: { search?: string; author?: string; publisher?: string; language?: string; status?: boolean; skip: number; take: number }) =>
     prisma.eBook.findMany({
       where: buildEbookWhere(opts),
-      orderBy: [{ orderby: "asc" }, { createdAt: "desc" }, { id: "desc" }],
+      // Recency is the contract on admin lists — see utils/listOrdering.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
     }),

@@ -1,5 +1,5 @@
 import ExcelJS from "exceljs";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { PassThrough } from "node:stream";
 import { buildCsvFromRowBatches } from "../../utils/csvExport";
 import type { ReportSource } from "../../utils/reportStream";
@@ -125,7 +125,8 @@ const toShippingDto = (s: any | null) => {
 // ── books: list / get ──────────────────────────────────────────────────────────
 /**
  * Sortable columns exposed as `?sortBy=`. Anything else (or nothing) falls back
- * to the curated manual order — order_by asc, then newest first.
+ * to recency — `created_at DESC, id DESC`. `orderBy` is listed for the reorder
+ * UI's benefit but is intercepted in listBooks; see utils/listOrdering.
  */
 const BOOK_SORT_COLUMNS: Record<string, keyof Prisma.BookOrderByWithRelationInput> = {
   name: "name",
@@ -148,7 +149,9 @@ export const listBooks = async (q: {
   limit: number;
 }) => {
   const opts = { search: q.search, language: q.language, isMagazine: q.isMagazine, isCombo: q.isCombo, status: q.status };
-  const column = q.sortBy ? BOOK_SORT_COLUMNS[q.sortBy] : undefined;
+  // `sortBy=orderBy` means "the default list view" — recency wins there, so it is
+  // NOT forwarded as a column. See utils/listOrdering (RECENCY IS THE CONTRACT).
+  const column = q.sortBy && q.sortBy !== "orderBy" ? BOOK_SORT_COLUMNS[q.sortBy] : undefined;
   const direction: Prisma.SortOrder = q.sortOrder === "asc" ? "asc" : "desc";
   // `id` breaks ties so paging stays stable when the sort column repeats.
   const orderBy = column ? [{ [column]: direction }, { id: direction }] as Prisma.BookOrderByWithRelationInput[] : undefined;
@@ -202,9 +205,8 @@ const SENTINEL = { name: "", thumbnail: " ", pages: 0, dynamic_link: "", weight:
 
 export const createBook = async (d: BookWriteInput) => {
   const now = new Date();
-  // No explicit order → TOP slot so the new row lands first in the `order ASC`
-  // list instead of tying with every existing 0. See utils/listOrdering.
-  const bookOrder = d.orderBy ?? topSlotOrder((await prisma.book.aggregate({ _min: { order_by: true } }))._min.order_by);
+  // No explicit order → previous row + 1 (see utils/listOrdering).
+  const bookOrder = d.orderBy ?? nextOrder((await prisma.book.findFirst({ orderBy: [{ created_at: "desc" }, { id: "desc" }], select: { order_by: true } }))?.order_by);
   const created = await repo.create({
     name: d.name ?? SENTINEL.name,
     thumbnail: d.thumbnail ?? SENTINEL.thumbnail,

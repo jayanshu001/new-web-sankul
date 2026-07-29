@@ -1,5 +1,5 @@
 import { adminMaterialRepository as repo, ROOT } from "./admin-material.repository";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { prisma } from "../../config/prisma";
 import { buildPagination } from "../../utils/listQuery";
 import { resolveAncestors } from "../../utils/categoryAncestors";
@@ -115,10 +115,10 @@ export const createCategory = async (d: CategoryWriteInput) => {
   const now = new Date();
   // root = parent 0 sentinel (ws_material_category.parent is NOT NULL).
   const parent = d.parent ? parseMaterialId(d.parent) ?? ROOT : ROOT;
-  // No explicit order → TOP slot of the sibling list (scoped to the same parent, which
-  // is exactly how the list is filtered). See utils/listOrdering.
-  const catOrder = d.order ?? topSlotOrder(
-    (await prisma.materialCategory.aggregate({ where: { parent }, _min: { order_by: true } }))._min.order_by,
+  // No explicit order → previous row + 1 within the sibling list (scoped to the same
+  // parent, which is exactly how the list is filtered). See utils/listOrdering.
+  const catOrder = d.order ?? nextOrder(
+    (await prisma.materialCategory.findFirst({ where: { parent }, orderBy: [{ created_at: "desc" }, { id: "desc" }], select: { order_by: true } }))?.order_by,
   );
   const created = await repo.createCategory({
     name: d.title ?? "",
@@ -274,10 +274,10 @@ export const createMaterial = async (d: MaterialWriteInput): Promise<"category" 
   // free material. See docs/client (study-materials-always-paid). The remaining
   // Mongo-only fields (description/thumbnail/fileSize/fileMime/language/isPreview/
   // downloadCount) are still dropped on this admin write path.
-  // No explicit order → TOP slot within its category (the list is filtered by
-  // materialCategoryId). See utils/listOrdering.
-  const matOrder = d.order ?? topSlotOrder(
-    (await prisma.material.aggregate({ where: { materialCategoryId: catId }, _min: { order_by: true } }))._min.order_by,
+  // No explicit order → previous row + 1 within its category (the list is filtered
+  // by materialCategoryId). See utils/listOrdering.
+  const matOrder = d.order ?? nextOrder(
+    (await prisma.material.findFirst({ where: { materialCategoryId: catId }, orderBy: [{ created_at: "desc" }, { id: "desc" }], select: { order_by: true } }))?.order_by,
   );
   const created = await repo.createMaterial({
     materialCategoryId: catId,

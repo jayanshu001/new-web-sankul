@@ -3,7 +3,7 @@ import type {
   DepartmentCreateInput,
   DepartmentUpdateInput,
 } from "./department.types";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import {
   toPrismaContactData,
   toPrismaDepartmentScalars,
@@ -20,10 +20,14 @@ export const departmentRepository = {
    * List departments (+ contacts), sorted by `order`. Optional `active` filter
    * (true/false; omit for all) and optional `skip`/`take` for pagination.
    */
-  findMany: (opts?: { active?: boolean; skip?: number; take?: number }) =>
+  findMany: (opts?: { active?: boolean; skip?: number; take?: number; recency?: boolean }) =>
     prisma.department.findMany({
       where: opts?.active !== undefined ? { active: opts.active } : undefined,
-      orderBy: [{ order: "asc" }, { id: "asc" }],
+      // `recency` is set only by the ADMIN list (utils/listOrdering). The client
+      // contact-us reader shares this query and keeps its curated `order ASC`.
+      // ws_department has NO created_at column, so `id DESC` stands in — it is
+      // exactly equivalent here, the id being autoincrement.
+      orderBy: opts?.recency ? [{ id: "desc" }] : [{ order: "asc" }, { id: "asc" }],
       include: withContacts,
       skip: opts?.skip,
       take: opts?.take,
@@ -40,8 +44,8 @@ export const departmentRepository = {
 
   /** Create department + its contacts in one transaction. */
   create: async (input: DepartmentCreateInput) => {
-    // No explicit order → TOP slot (see utils/listOrdering).
-    const order = input.order ?? topSlotOrder((await prisma.department.aggregate({ _min: { order: true } }))._min.order);
+    // No explicit order → previous row + 1 (see utils/listOrdering).
+    const order = input.order ?? nextOrder((await prisma.department.findFirst({ orderBy: { id: "desc" }, select: { order: true } }))?.order);
     const dept = await prisma.department.create({
       data: {
         name: input.name,

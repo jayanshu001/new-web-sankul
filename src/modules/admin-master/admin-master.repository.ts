@@ -67,8 +67,15 @@ export const adminMasterRepository = {
     if (search) Object.assign(where, search);
     if (opts.status !== undefined) where.status = opts.status;
     if (opts.educatorId !== undefined) where.educatorId = opts.educatorId;
-    const col = opts.sortBy === "name" || opts.sortBy === "title" ? "title" : opts.sortBy === "order" ? "order_by" : opts.sortBy === "updatedAt" ? "updated_at" : "created_at";
-    return prisma.videoCategory.findMany({ where, orderBy: { [col]: opts.sortDir }, skip: opts.skip, take: opts.take });
+    // RECENCY IS THE CONTRACT (utils/listOrdering): "order" and the no-sort default
+    // both mean newest-first; sortDir is ignored for them on purpose.
+    const orderBy =
+      opts.sortBy === "name" || opts.sortBy === "title"
+        ? [{ title: opts.sortDir }, { id: "desc" as const }]
+        : opts.sortBy === "updatedAt"
+          ? [{ updated_at: opts.sortDir }, { id: "desc" as const }]
+          : [{ created_at: "desc" as const }, { id: "desc" as const }];
+    return prisma.videoCategory.findMany({ where, orderBy, skip: opts.skip, take: opts.take });
   },
   vcCountFiltered: (opts: { search?: string; status?: boolean; educatorId?: number }) => {
     const where: any = {};
@@ -344,7 +351,10 @@ function subjWhere(opts?: { search?: string; status?: boolean }) {
   return where;
 }
 
+// RECENCY IS THE CONTRACT (utils/listOrdering): "order" and the no-sort default
+// both mean newest-first; `dir` is ignored for them on purpose.
 function subjOrderBy(sortBy: string | undefined, dir: "asc" | "desc"): any[] {
-  const col = sortBy === "title" ? "title" : sortBy === "createdAt" ? "createdAt" : "order";
-  return [{ [col]: dir }, { id: "asc" }];
+  if (sortBy === "title") return [{ title: dir }, { id: "desc" }];
+  if (sortBy === "createdAt") return [{ createdAt: dir }, { id: "desc" }];
+  return [{ createdAt: "desc" }, { id: "desc" }];
 }

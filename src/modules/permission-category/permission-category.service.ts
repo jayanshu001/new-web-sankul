@@ -1,5 +1,5 @@
 import { prisma } from "../../config/prisma";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { buildPrismaSearch } from "../../utils/searchFilter";
 
 export const PERMISSION_CATEGORY_MODULE = "permission-category";
@@ -78,13 +78,20 @@ export const listCategories = async (
   const titleSearch = buildPrismaSearch(search, ["title"]);
   if (titleSearch) where.AND = titleSearch.AND;
 
-  const orderField = SORT_FIELD_MAP[sortBy] ?? "orderBy";
+  // RECENCY IS THE CONTRACT on admin lists (utils/listOrdering): an "order" sort
+  // and the no-sort default both fall through to createdAt DESC, with sortDir
+  // deliberately ignored — honouring the `asc` the UI sends would invert it.
+  const mapped = SORT_FIELD_MAP[sortBy];
+  const recency = !mapped || mapped === "orderBy";
+  const listOrderBy = recency
+    ? [{ createdAt: "desc" as const }, { id: "desc" as const }]
+    : [{ [mapped]: sortDir }, { id: "desc" as const }];
   const skip = (page - 1) * per_page;
 
   const [rows, total] = await Promise.all([
     prisma.permissionCategoryRow.findMany({
       where,
-      orderBy: [{ [orderField]: sortDir }, { id: "desc" }],
+      orderBy: listOrderBy,
       skip,
       take: per_page,
     }),
@@ -141,8 +148,8 @@ export const createCategory = async (
   if (exists) return { ok: false, code: "slug_exists" };
 
   const now = new Date();
-  // No explicit order → TOP slot (see utils/listOrdering).
-  const orderBy = input.order ?? topSlotOrder((await prisma.permissionCategoryRow.aggregate({ _min: { orderBy: true } }))._min.orderBy);
+  // No explicit order → previous row + 1 (see utils/listOrdering).
+  const orderBy = input.order ?? nextOrder((await prisma.permissionCategoryRow.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
   const row = await prisma.permissionCategoryRow.create({
     data: {
       title: input.title,

@@ -18,9 +18,9 @@ export const adminBookRepository = {
   list: (opts: { search?: string; language?: string; isMagazine?: boolean; isCombo?: boolean; status?: boolean; skip: number; take: number; orderBy?: Prisma.BookOrderByWithRelationInput[] }) =>
     prisma.book.findMany({
       where: buildWhere(opts),
-      // Default is the curated manual order; `orderBy` overrides it when the
+      // Default is recency (utils/listOrdering); `orderBy` overrides it when the
       // caller passed an explicit sortBy (e.g. ?sortBy=updatedAt&sortOrder=desc).
-      orderBy: opts.orderBy ?? [{ order_by: "asc" }, { created_at: "desc" }, { id: "desc" }],
+      orderBy: opts.orderBy ?? [{ created_at: "desc" }, { id: "desc" }],
       skip: opts.skip,
       take: opts.take,
     }),

@@ -10,7 +10,7 @@
  */
 import { prisma } from "../../config/prisma";
 import { buildPrismaSearch } from "../../utils/searchFilter";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 
 export const CMS_EXTRA_MODULE = "cms-extra";
 export const isCmsExtraMysql = (): boolean => true;
@@ -89,8 +89,10 @@ const hydrateTypes = async (rows: any[]) => {
   return rows.map((r) => ({ ...r, type: byId.get(r.typeId) ?? null }));
 };
 
+// Admin read: recency is the contract (utils/listOrdering). The client readers
+// below still sort by `orderBy`.
 export const listSocialLinks = async () => {
-  const rows = await prisma.socialLink.findMany({ orderBy: { orderBy: "asc" } });
+  const rows = await prisma.socialLink.findMany({ orderBy: [{ createdAt: "desc" }, { id: "desc" }] });
   return (await hydrateTypes(rows)).map(slDto);
 };
 
@@ -135,8 +137,8 @@ export const createSocialLink = async (input: {
   typeId: number; title: string; icon?: string; link: string; order?: number; status?: boolean;
 }) => {
   const now = new Date();
-  // No explicit order → TOP slot (see utils/listOrdering).
-  const orderBy = input.order ?? topSlotOrder((await prisma.socialLink.aggregate({ _min: { orderBy: true } }))._min.orderBy);
+  // No explicit order → previous row + 1 (see utils/listOrdering).
+  const orderBy = input.order ?? nextOrder((await prisma.socialLink.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
   const r = await prisma.socialLink.create({
     data: {
       typeId: input.typeId, title: input.title, icon: input.icon ?? null, link: input.link,
@@ -272,8 +274,9 @@ const lbDto = (r: any) => ({
   createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
 });
 
+// Admin read: recency is the contract (utils/listOrdering).
 export const listLiveBanners = async () =>
-  (await prisma.liveBannerSlider.findMany({ orderBy: { orderBy: "asc" } })).map(lbDto);
+  (await prisma.liveBannerSlider.findMany({ orderBy: [{ createdAt: "desc" }, { id: "desc" }] })).map(lbDto);
 
 const LB_SORT_COLUMNS: Record<string, string> = { orderBy: "orderBy", createdAt: "createdAt" };
 
@@ -288,7 +291,11 @@ export const listLiveBannersPaged = async (q: {
   const [rows, total] = await Promise.all([
     prisma.liveBannerSlider.findMany({
       where,
-      orderBy: { [LB_SORT_COLUMNS[q.sortBy ?? ""] ?? "orderBy"]: q.sortDir ?? "asc" },
+      // "orderBy" / no sort → recency; any other column sorts as requested.
+      orderBy:
+        LB_SORT_COLUMNS[q.sortBy ?? ""] === "createdAt"
+          ? [{ createdAt: q.sortDir ?? "asc" }, { id: "desc" as const }]
+          : [{ createdAt: "desc" as const }, { id: "desc" as const }],
       ...(q.skip != null ? { skip: q.skip } : {}),
       ...(q.take != null ? { take: q.take } : {}),
     }),
@@ -322,12 +329,12 @@ export const getLiveBanner = async (id: number) => {
 
 export const createLiveBanner = async (input: { image: string; liveCourseId: number; orderBy?: number }) => {
   const now = new Date();
-  // No explicit orderBy → land on TOP (utils/listOrdering), matching
+  // No explicit orderBy → previous row + 1 (utils/listOrdering), matching
   // POST /admin/cms/banners so both banner lists behave identically. Single
-  // list, so the minimum is global.
+  // list, so the lookup is global.
   const orderBy =
     input.orderBy ??
-    topSlotOrder((await prisma.liveBannerSlider.aggregate({ _min: { orderBy: true } }))._min.orderBy);
+    nextOrder((await prisma.liveBannerSlider.findFirst({ orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { orderBy: true } }))?.orderBy);
   return lbDto(await prisma.liveBannerSlider.create({
     data: { image: input.image, liveCourseId: input.liveCourseId, orderBy, createdAt: now, updatedAt: now },
   }));

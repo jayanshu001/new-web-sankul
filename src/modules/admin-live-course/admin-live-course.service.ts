@@ -12,7 +12,7 @@ import type { LiveCourse, LiveCoursePlan, LiveCourseSubscription, LiveSession, P
 import { getVodStreamMeta } from "../../admin/live/streamos.service";
 import { redisClient } from "../../config/redis";
 import { buildPagination } from "../../utils/listQuery";
-import { topSlotOrder } from "../../utils/listOrdering";
+import { nextOrder } from "../../utils/listOrdering";
 import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
 
 export const LIVE_COURSE_MODULE = "live-course";
@@ -116,10 +116,9 @@ export const getLiveCourseById = async (id: number): Promise<"not_found" | { liv
 export const createLiveCourse = async (v: any, createdById?: string) => {
   const now = new Date();
   // Root-folder automation (VideoCategory{liveCourseId}) is Mongo-only — skipped.
-  // No explicit `ordered` → land on TOP of the list (utils/listOrdering). Both
-  // the admin and client lists sort [{ ordered: asc }, { createdAt: desc }], so
-  // this is what makes a new live course visible without a drag.
-  const ordered = v.ordered ?? topSlotOrder(await repo.minOrdered());
+  // No explicit `ordered` → previous row + 1 (utils/listOrdering). The admin list
+  // sorts by recency and is unaffected.
+  const ordered = v.ordered ?? nextOrder(await repo.prevOrdered());
   const created = await repo.create({
     name: v.name, subtitle: v.subtitle ?? null, description: v.description ?? null, image: v.image ?? null,
     ordered, shareableLink: v.shareableLink ?? null, withMaterial: v.withMaterial ?? null,

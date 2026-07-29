@@ -164,7 +164,9 @@ export const offlineBatchRepository = {
     prisma.offlineBatch.update({ where: { id }, data: { deletedAt: new Date() } }),
 
   // ── offline banner (OfflineBannerSlider) ────────────────────────────────────
-  listBanners: () => prisma.offlineBannerSlider.findMany({ orderBy: [{ orderBy: "asc" }, { createdAt: "asc" }] }),
+  // Admin-only list (GET /admin/offline/banners) → recency is the contract; see
+  // utils/listOrdering. `orderBy` is still written by create/reorder.
+  listBanners: () => prisma.offlineBannerSlider.findMany({ orderBy: [{ createdAt: "desc" }, { id: "desc" }] }),
   findBannerById: (id: number) => prisma.offlineBannerSlider.findUnique({ where: { id }, select: { id: true } }),
   createBanner: (data: { image: string; key: string | null; keyId: number | null; orderBy: number }) => {
     const now = new Date();

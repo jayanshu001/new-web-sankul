@@ -398,14 +398,81 @@ interface CourseReceiptData {
   amount: number;
 }
 
-async function loadCourseReceiptFromMysql(
-  orderId: string,
-  customerId: string,
-): Promise<CourseReceiptData> {
-  const subId = Number(orderId);
-  const custId = Number(customerId);
-  if (!Number.isInteger(subId) || subId <= 0) throw new Error("Invalid order id.");
+// Resolves the receipt when the url id is a ws_package_course_order.id. The
+// purchase-history list (`GET /client/purchase-history/subscriptions`) emits the
+// ORDER id as each course/package row's `_id`, and the app reuses that id on this
+// route — see the fallback in loadCourseReceiptFromMysql. Reading the order
+// directly also covers orders that never produced a subscription row.
+async function loadCourseReceiptFromOrderMysql(
+  ordId: number,
+  custId: number,
+): Promise<CourseReceiptData | null> {
+  const ord = await prisma.packageCourseOrder.findFirst({
+    where: { id: ordId, userId: custId },
+    select: {
+      id: true,
+      uniqueId: true,
+      status: true,
+      amount: true,
+      paymentMethod: true,
+      gatewayPaymentId: true,
+      gatewayOrderId: true,
+      createdAt: true,
+      planId: true,
+    },
+  });
+  if (!ord) return null;
+  if (ord.status !== "complete") throw new Error("Order has not been paid yet.");
 
+  // The order carries only the plan id; the plan points at the course or package
+  // it sells, which is where the printable product name lives.
+  const plan = ord.planId
+    ? await prisma.packageCourseEbookPrice.findFirst({
+        where: { id: ord.planId },
+        select: { name: true, duration: true, withMaterial: true, courseId: true, packageId: true },
+      })
+    : null;
+
+  const courseId = plan?.courseId && plan.courseId > 0 ? plan.courseId : null;
+  const packageId = plan?.packageId && plan.packageId > 0 ? plan.packageId : null;
+  const [course, pkg, customer] = await Promise.all([
+    courseId
+      ? prisma.course.findFirst({ where: { id: courseId }, select: { name: true } })
+      : Promise.resolve(null),
+    packageId
+      ? prisma.package.findFirst({ where: { id: packageId }, select: { name: true } })
+      : Promise.resolve(null),
+    prisma.customer.findFirst({
+      where: { id: custId },
+      select: { fullName: true, phoneNumber: true, emailAddress: true },
+    }),
+  ]);
+
+  const rawAmount = ord.amount != null ? Number(ord.amount) : 0;
+
+  return {
+    paymentMethod: String(ord.paymentMethod || "Online"),
+    razorpayPaymentId: ord.gatewayPaymentId || "-",
+    receipt: ord.gatewayOrderId || ord.uniqueId || String(ord.id),
+    createdDate: formatDate(ord.createdAt ?? undefined),
+    userName: (customer?.fullName || "").trim() || "-",
+    userPhone: customer?.phoneNumber || "-",
+    userEmailAddress: customer?.emailAddress || "-",
+    productName: course?.name || pkg?.name || plan?.name || "Course",
+    withMaterial: !!plan?.withMaterial,
+    duration: plan?.duration ?? null,
+    amount: Number.isFinite(rawAmount) ? rawAmount : 0,
+  };
+}
+
+// Resolves the receipt from ws_package_course_subscription.id. This is what the
+// list's legacy "pcs_" rows carry (subs with no order row at all), and it is also
+// the first hop of loadCourseReceiptFromMysql. Returns null when the id matches no
+// subscription owned by this customer, so callers can decide whether to fall back.
+async function loadCourseReceiptFromSubMysql(
+  subId: number,
+  custId: number,
+): Promise<CourseReceiptData | null> {
   // The subscription holds the product (course/package) + plan; payment fields live
   // on the parent PackageCourseOrder (paymentMethod / razorpay ids). SQL Customer has
   // a single `fullName`, not the Mongo first/middle/last split.
@@ -430,12 +497,15 @@ async function loadCourseReceiptFromMysql(
       },
     },
   });
-  if (!sub) throw new Error("Order not found.");
+  if (!sub) return null;
+
   const ord = sub.packageCourseOrder;
-  // Offline / free course & package orders have no gatewayPaymentId; a settled
-  // order is marked `complete`. Gate on status so manual/free purchases can
-  // download their invoice.
-  if (ord?.status !== "complete") throw new Error("Order has not been paid yet.");
+  // Legacy / offline / manually-granted subs carry NO order row at all (order_id
+  // NULL) — the purchase-history list surfaces them as "pcs_" rows with a receipt
+  // link, so they must render from the subscription alone (no razorpay ids). An
+  // order that exists but isn't settled is a genuinely unpaid purchase and stays
+  // blocked; a settled one is marked `complete`.
+  if (ord && ord.status !== "complete") throw new Error("Order has not been paid yet.");
 
   const plan = sub.packageCourseEbookPrice;
   const productName =
@@ -443,14 +513,14 @@ async function loadCourseReceiptFromMysql(
 
   // Prefer the subscription's recorded amount; fall back to the order's discount_price.
   const rawAmount =
-    sub.amount != null ? Number(sub.amount) : ord.amount != null ? Number(ord.amount) : 0;
+    sub.amount != null ? Number(sub.amount) : ord?.amount != null ? Number(ord.amount) : 0;
   const amount = Number.isFinite(rawAmount) ? rawAmount : 0;
 
   return {
-    paymentMethod: String(ord.paymentMethod || "Online"),
-    razorpayPaymentId: ord.gatewayPaymentId || "-",
-    receipt: ord.gatewayOrderId || String(subId),
-    createdDate: formatDate(ord.createdAt ?? sub.createdAt ?? undefined),
+    paymentMethod: String(ord?.paymentMethod || "Online"),
+    razorpayPaymentId: ord?.gatewayPaymentId || "-",
+    receipt: ord?.gatewayOrderId || String(subId),
+    createdDate: formatDate(ord?.createdAt ?? sub.createdAt ?? undefined),
     userName: (sub.customer?.fullName || "").trim() || "-",
     userPhone: sub.customer?.phoneNumber || "-",
     userEmailAddress: sub.customer?.emailAddress || "-",
@@ -459,6 +529,27 @@ async function loadCourseReceiptFromMysql(
     duration: plan?.duration ?? null,
     amount,
   };
+}
+
+// Unprefixed ids. ws_package_course_subscription.id and ws_package_course_order.id
+// are separate, numerically-overlapping PK spaces, and the purchase-history list
+// hands the app the ORDER id as each course/package row's `_id` — so try the
+// subscription first (back-compat, wins on a tie) and the order second.
+async function loadCourseReceiptFromMysql(
+  orderId: string,
+  customerId: string,
+): Promise<CourseReceiptData> {
+  const id = Number(orderId);
+  const custId = Number(customerId);
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Invalid order id.");
+
+  const bySub = await loadCourseReceiptFromSubMysql(id, custId);
+  if (bySub) return bySub;
+
+  const byOrder = await loadCourseReceiptFromOrderMysql(id, custId);
+  if (byOrder) return byOrder;
+
+  throw new Error("Order not found.");
 }
 
 // Shared EJS render for a loaded receipt — course / live-course / test-series
@@ -502,6 +593,18 @@ function renderReceiptHtml(loaded: CourseReceiptData): Promise<string> {
 
 export async function buildCourseReceiptHtml(orderId: string, customerId: string): Promise<string> {
   return renderReceiptHtml(await loadCourseReceiptFromMysql(orderId, customerId));
+}
+
+// "pcs_" ids — legacy package/course subscription with no order row. Strict
+// subscription lookup: no order fallback, so the id space stays unambiguous.
+export async function buildCourseReceiptHtmlBySub(subId: string, customerId: string): Promise<string> {
+  const id = Number(subId);
+  const custId = Number(customerId);
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Invalid order id.");
+
+  const loaded = await loadCourseReceiptFromSubMysql(id, custId);
+  if (!loaded) throw new Error("Order not found.");
+  return renderReceiptHtml(loaded);
 }
 
 // ── live-course invoice (ws_live_course_subscription — single table) ────────────
@@ -556,19 +659,15 @@ export async function buildLiveCourseReceiptHtml(orderId: string, customerId: st
 // ── test-series invoice (ws_test_series_subscription — single table) ────────────
 // Razorpay ids + method come from the parent ws_test_series_order (via order_id);
 // the subscription row carries only price/plan. Duration is DAYS (duration_days).
-async function loadTestSeriesReceiptFromMysql(
-  orderId: string,
-  customerId: string,
-): Promise<CourseReceiptData> {
-  const subId = Number(orderId);
-  const custId = Number(customerId);
-  if (!Number.isInteger(subId) || subId <= 0) throw new Error("Invalid order id.");
-
+async function loadTestSeriesReceiptFromSubMysql(
+  subId: number,
+  custId: number,
+): Promise<CourseReceiptData | null> {
   const sub = await prisma.testSeriesSubscription.findFirst({
     where: { id: subId, customerId: custId },
     select: { price: true, createdAt: true, testSeriesId: true, planId: true, orderId: true, paymentType: true },
   });
-  if (!sub) throw new Error("Order not found.");
+  if (!sub) return null;
 
   const [ts, plan, order, customer] = await Promise.all([
     prisma.testSeries.findFirst({ where: { id: sub.testSeriesId }, select: { title: true } }),
@@ -594,8 +693,85 @@ async function loadTestSeriesReceiptFromMysql(
   };
 }
 
+// "ts_" ids are test-series ORDER ids (client-purchase-history.service.ts:183), a
+// different PK space from ws_test_series_subscription — resolve the order directly.
+async function loadTestSeriesReceiptFromOrderMysql(
+  ordId: number,
+  custId: number,
+): Promise<CourseReceiptData | null> {
+  const ord = await prisma.testSeriesOrder.findFirst({
+    where: { id: ordId, customerId: custId },
+    select: {
+      id: true,
+      orderPrice: true,
+      createdAt: true,
+      testSeriesId: true,
+      planId: true,
+      paymentMethod: true,
+      razorpayOrderId: true,
+      razorpayPaymentId: true,
+      status: true,
+    },
+  });
+  if (!ord) return null;
+  // Settled state is "complete" — written by test-series-order.service.ts:95 on
+  // verify, and the same value the purchase-history list filters on
+  // (client-purchase-history.repository.ts:104). Free/manual orders settle with no
+  // razorpay payment id, so gate on status alone.
+  if (ord.status !== "complete") throw new Error("Order has not been paid yet.");
+
+  const [ts, plan, customer] = await Promise.all([
+    prisma.testSeries.findFirst({ where: { id: ord.testSeriesId }, select: { title: true } }),
+    ord.planId
+      ? prisma.testSeriesPrice.findFirst({ where: { id: ord.planId }, select: { durationDays: true } })
+      : Promise.resolve(null),
+    prisma.customer.findFirst({
+      where: { id: custId },
+      select: { fullName: true, phoneNumber: true, emailAddress: true },
+    }),
+  ]);
+
+  const rawAmount = ord.orderPrice != null ? Number(ord.orderPrice) : 0;
+
+  return {
+    paymentMethod: String(ord.paymentMethod || "Online"),
+    razorpayPaymentId: ord.razorpayPaymentId || "-",
+    receipt: ord.razorpayOrderId || String(ord.id),
+    createdDate: formatDate(ord.createdAt ?? undefined),
+    userName: (customer?.fullName || "").trim() || "-",
+    userPhone: customer?.phoneNumber || "-",
+    userEmailAddress: customer?.emailAddress || "-",
+    productName: ts?.title || "Test Series",
+    withMaterial: false,
+    duration: plan?.durationDays ?? null,
+    amount: Number.isFinite(rawAmount) ? rawAmount : 0,
+  };
+}
+
+// "ts_" ids — order first (what the list emits), subscription second for safety.
 export async function buildTestSeriesReceiptHtml(orderId: string, customerId: string): Promise<string> {
-  return renderReceiptHtml(await loadTestSeriesReceiptFromMysql(orderId, customerId));
+  const id = Number(orderId);
+  const custId = Number(customerId);
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Invalid order id.");
+
+  const byOrder = await loadTestSeriesReceiptFromOrderMysql(id, custId);
+  if (byOrder) return renderReceiptHtml(byOrder);
+
+  const bySub = await loadTestSeriesReceiptFromSubMysql(id, custId);
+  if (bySub) return renderReceiptHtml(bySub);
+
+  throw new Error("Order not found.");
+}
+
+// "tss_" ids — legacy test-series subscription with no order row. Strict lookup.
+export async function buildTestSeriesReceiptHtmlBySub(subId: string, customerId: string): Promise<string> {
+  const id = Number(subId);
+  const custId = Number(customerId);
+  if (!Number.isInteger(id) || id <= 0) throw new Error("Invalid order id.");
+
+  const loaded = await loadTestSeriesReceiptFromSubMysql(id, custId);
+  if (!loaded) throw new Error("Order not found.");
+  return renderReceiptHtml(loaded);
 }
 
 // Course/package order receipt — same EJS template + Puppeteer pipeline as the
