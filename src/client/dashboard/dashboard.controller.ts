@@ -39,12 +39,16 @@ export const getDashboard = async (req: Request, res: Response) => {
 
 // GET /api/v1/client/dashboard/resume
 //
-// Powers the home-screen "Resume" UI: one most-recent live lecture (purple
-// card) plus the most-recent package and most-recent recorded course the
-// user has touched (My Courses/Subject row). All three derive from
-// LectureProgress.lastWatchedAt — the same signal that drives /learning
+// Powers the home-screen "Resume" UI: the most-recent package and most-recent
+// recorded course the user has touched (My Courses/Subject row). Both derive
+// from LectureProgress.lastWatchedAt — the same signal that drives /learning
 // progress rollups, so a card here cannot disagree with the rollup the
 // frontend gets after the user taps in.
+//
+// `resumeLecture` was the live-lecture (purple card) slot. LIVE COURSES ARE NOW
+// EXCLUDED (2026-07-30, FE request) — a live session is not a resumable lecture
+// — so that key is ALWAYS null. It is kept in the payload so the response shape
+// is unchanged. See client-lecture-progress.service.buildResumeDashboard.
 export const getResumeDashboard = async (req: Request, res: Response) => {
   const traceId = req.traceId;
   const userId = req.user?.id;

@@ -15,6 +15,550 @@
 
 ---
 
+## 2026-07-30 — Profile dashboard: `pastExams` now counts DAILY + SUBJECT attempts
+
+**Files:** `src/modules/customer-profile/profile-dashboard.sql.ts`
+(`pastDailyExamsCount` → renamed `pastExamsCount`), `src/client/profile/dashboard.controller.ts`
+
+**Endpoint:** `GET /api/v1/client/profile/dashboard` → `pastExams`
+
+**Change (product decision):** the badge is the customer's total of **past daily +
+past subject** attempts, not daily-only. `ExamType` is exactly `{ daily, subject }`.
+The type filter is written `in [daily, subject]` rather than dropped so that result rows
+whose exam was deleted don't count as un-nameable "past exams", and so a future third
+type forces a conscious decision.
+
+"Past" = finished attempt: `status = true AND inProgress = false AND submittedAt IS NOT NULL`.
+
+**Verified** (staging, over HTTP): customer 472366 `pastExams` 0 → **4** (daily 0 +
+subject 4); customer 472367 → 2 (daily 0 + subject 2).
+
+**⚠ Badge no longer matches `/client/quizzes/my/past-daily`,** which is daily-only and
+returns 0. Neither existing list endpoint matches the new badge: `/client/exams/my/attempts`
+(`myResults`) spans both types but has **no** completed-attempt gate, so it also counts
+in-progress rows. A list matching this badge needs `my/attempts` + the
+`inProgress:false, submittedAt IS NOT NULL` gate, or `past-daily` widened to both types.
+Not done here — pick one before the FE links the badge to a list.
+
+### Superseded note from the earlier entry this replaces
+
+The original predicate also *omitted* `inProgress`/`submittedAt`, justified by a header
+comment claiming `ws_exam_result` lacks those columns. That was false (`ExamResult` maps
+`qresult_in_progress` / `qresult_submitted_at`; 2 rows have `submittedAt = NULL`). Both
+the gate and the corrected comment are in place.
+
+**Why it was 0:** `ws_exam.type` has a single value across the whole DB (`subject`,
+6 exams) and **zero** `daily` exams, so a daily-only badge was structurally 0 for every
+customer. Customer 472366 had 4 completed `subject` attempts the badge ignored.
+
+### Audit of the other three counts on this endpoint (all verified correct, unchanged)
+
+`GET /client/profile/dashboard` has **no `cacheRoute`** (`customer.routes.ts`) — it is
+uncached and recomputed per request, so none of these can be stale.
+
+- `savedAddresses: 0` — correct. Customer has 1 address row with `status = false`;
+  `repo.create` defaults `status: true`, so it is a genuine soft-delete.
+- `downloads: 7` — correct: 2 saved materials + 1 saved video + 4 active ebook downloads.
+  A 5th ebook-download row is excluded because its `ws_ebook` row no longer exists
+  (orphaned data; the guard is behaving correctly).
+- `activePlans: 20` — correct and matches the My Subscriptions list exactly
+  (9 course/package + 3 live + 7 ebook + 1 test series).
+
+**⚠ Performance, NOT changed:** `countActiveSubscriptions` uses `findMany` (not `count`)
+across 4 subscription tables to dedup by target id in memory. Customer 472366 has 19,561
+`ws_package_course_subscription` rows — 1,687 currently active — that collapse to **9**
+distinct targets; the call takes ~140ms and the endpoint is uncached. The dedup result is
+correct, but cost scales with raw row count, not with the answer.
+
+---
+
+## 2026-07-30 — Client promocode list: `discountValue` resolved from plan links (was always 0)
+
+**Files:** `src/modules/promo-code/promo-code.service.ts`
+(`toPublicPromoDto`, new `resolveEffectiveDiscounts`, `listPublicPromocodes`)
+
+**Endpoint:** `GET /api/v1/client/promocodes` (optionally `?type=&id=`)
+
+**Problem:** the DTO read `ws_promocode.discount_value` straight off the row. For any
+code whose discount is configured per-plan — the authoritative model since the TASK 2
+checkout work — that column is `0`, so the list advertised `discountValue: 0` for every
+such code while checkout correctly charged the real percentage. On staging **both**
+active public codes were affected (`POLICE607` id=2, 26 link rows; `GFFG` id=4, 4 link
+rows), i.e. the field was 0 for 100% of live rows.
+
+**Change:** the list now mirrors the resolution rule already used by `applyPromocode`:
+
+- Per-plan rows in `ws_promoted_package_course_ebook.customer_percentage` are the
+  discount source; `ws_promocode.discount_value` is a **fallback only** for codes with
+  no link rows at all (legacy codes keep working unchanged).
+- A code with ANY link row is treated as link-driven — the legacy column is never mixed
+  in for it.
+- `discountType` is reported as `"percentage"` whenever links drive the value.
+- When the request filters to one entity (`?type=&id=`), only that entity's own active
+  plans contribute, so a code covering many packages can't advertise a different
+  package's percentage. Links are matched on `plan_kind` **and** `plan_id`, because plan
+  ids are per-table and would otherwise collide across
+  `ws_package_course_ebook_price` / `ws_live_course_plan` / `ws_test_series_price`.
+- Where an entity's plans carry different percentages the **highest** is reported
+  ("up to X% off"); checkout still prices each plan individually.
+
+**Queries added:** one `ws_promoted_package_course_ebook` lookup scoped to the page's
+promocode ids, plus (filtered requests only) one plan lookup via the existing
+`loadPlansForEntitiesSql`. Both are per-request, page-bounded — not per-row.
+
+**No schema change. No backfill.** Response shape is unchanged; only the *value* of
+`discountValue` / `discountType` changes.
+
+**⚠ Deploy note — flush the route cache.** `GET /client/promocodes` is `cacheRoute`d for
+24h (`entity: "promo-code"`, shared scope). Existing keys keep serving `discountValue: 0`
+until they expire or are flushed — `autoFlush` only fires on admin promocode *writes*, so
+a pure read-logic change like this one leaves stale entries behind. Either:
+
+- `await flushEntity(...resolveFlushGroup("promo-code"))` — sweeps `promo-code` +
+  `catalog-package` (done on the 192.168.0.15 dev box: 4 keys cleared, verified over HTTP
+  returning `discountValue: 20` on both the MISS and the re-cached HIT); or
+- bump `CACHE_KEY_VERSION` (default `v1`, part of `ROUTE_CACHE_PREFIX`) to invalidate
+  **every** route cache at once — the safer option for staging/prod, where any read-logic
+  change has the same staleness problem.
+
+**⚠ Data issue, not fixed here:** `POLICE607` has `title = "60% off"` but its link rows
+are all `20`. The title is free text and was never derived from the discount; the list
+now shows the true `20`. The title needs correcting in admin.
+
+---
+
+## 2026-07-30 — Resume feeds: live-course cards excluded (drops 5 queries per request)
+
+**Files:** `src/modules/client-lecture-progress/client-lecture-progress.service.ts`
+(`listMyLearningProgress`, `buildResumeDashboard`),
+`src/client/dashboard/dashboard.controller.ts`, `src/client/learning/progress.controller.ts`
+(doc comments)
+**FE doc:** `docs/client/DASHBOARD_RESUME_PROGRESS.md` (new — was referenced from the
+service in two places but had never been written)
+**DDL:** none. **Prisma:** unchanged. **No backfill.**
+
+**Requirement (FE, 2026-07-30).** No `type: "live"` entry may appear in
+`GET /client/dashboard/resume` or `GET /client/learning/progress/my`. A live session is not
+a resumable lecture — the cards were surfacing with `positionSec: 0` / `durationSec: 9`.
+
+**Query-level change.** Both endpoints funnel through `listMyLearningProgress`
+(`buildResumeDashboard` is built on top of it, which is the documented invariant that the
+dashboard cannot disagree with the resume feed), so the exclusion is applied **once** there:
+the `resumePointers(customerId, "liveCourse")` read is dropped and `livePtrs` is a typed
+empty array.
+
+**This REMOVES queries rather than adding a filter.** Every live query was already guarded
+by `liveIds.length`, so an empty pointer set short-circuits all of them. Per request, these
+no longer run:
+
+1. `enrollmentResume` findMany for `scopeKind = "liveCourse"` (the dropped pointer read)
+2. `liveCourse.findMany` hydration
+3. `liveCourseSubscription.findMany` (active + `paymentStatus: "verified"`)
+4. `completedCounts(... "liveCourseId")` groupBy
+5. `sessionPositions` findMany + `resolveSessions` (session→lecture titles)
+
+`containerTotals` also stops counting live totals. The `perLive` card loop iterates zero
+times. Net effect on two hot client endpoints is **fewer** round-trips, not more.
+
+**Response contract.** `/dashboard/resume` keeps all three keys — `resumeLecture` is now
+hardcoded `null` (written as an explicit null, not a `.find()` guaranteed to miss) so the
+shape the app parses is unchanged. `/learning/progress/my` returns only course/package
+cards; `resumeNext` can no longer be live, and `pagination.total` counts only the remaining
+cards — a user whose only started item was a live course now legitimately gets
+`total: 0` + `cards: []`.
+
+**Not cached — no flush needed.** Verified neither route has `cacheRoute` applied
+(`dashboard.routes.ts:19`, `learning.routes.ts:13`), unlike the sibling `/dashboard` and
+`/free-dashboard` which do. The change is live on the next request after deploy.
+
+**Writes are untouched:** the heartbeat still records `ws_lecture_progress` /
+`ws_enrollment_resume` rows for live sessions. This is a read-side exclusion only, so
+re-enabling is a one-line revert with no data loss.
+
+**Deliberately NOT changed:** `buildResumeNextCardSql` (used only by
+`src/client/learning/resumeCard.ts`) still returns a live card when the FE asks about a
+specific live session — it answers "which container owns THIS lecture", a different
+question, and is not one of the two endpoints in the request.
+
+---
+
+## 2026-07-30 — `validate({ query })` was a hard 500 on Express 5 (blocked all 3 live-preview routes)
+
+**Files:** `src/middlewares/validate.ts`
+**DDL:** none. **Prisma:** unchanged. **No query shape changed** — logged because it made
+the new live-preview endpoints unreachable, i.e. none of their queries ever ran.
+
+**Symptom.** `GET /api/v1/client/live-sessions/20?liveCourseId=4` → **500**
+`{"message":"Cannot set property query of #<IncomingMessage> which has only a getter"}`.
+
+**Cause.** In Express 5 (`express@5.2.1` installed), `req.query` is a **getter-only accessor
+on the request prototype**. `validate.ts:22` did `req.query = schemas.query.parse(req.query)`,
+which throws a `TypeError` at request time. `req.body` and `req.params` are plain own
+properties, so those two assignments were always fine — **only `query` was affected.**
+
+Not caught by `yarn typecheck`: the Express type declarations still type `query` as
+writable, so this is invisible to `tsc` and only appears on a live request.
+
+**Blast radius: the 3 routes added for live-preview watch-time metering** —
+`GET /client/live-sessions/:id`, `POST …/:id/preview/heartbeat`, `POST …/:id/preview/stop`
+(`src/client/live/live.routes.ts:19,27,32`) — were the codebase's **only**
+`validate({ query })` call sites, and every one of them 500'd before reaching its handler.
+The trial-metering endpoints could not be exercised at all.
+
+**This was a known trap that got re-introduced.** `src/client/app-version/` had already hit
+it and worked around it by parsing the query *inside the controller*, with the reason
+written down in both its `.routes.ts:12` and `.controller.ts:12`. The live routes used the
+middleware anyway.
+
+**Fix — repair the middleware once rather than copy the per-controller workaround**, so the
+trap is gone for every future route and the documented contract ("replaces the request slice
+with the parsed value") becomes true again:
+
+```ts
+Object.defineProperty(req, "query", {
+  value: schemas.query.parse(req.query),
+  writable: true, enumerable: true,
+  configurable: true, // so a second validate() on the same route can redefine
+});
+```
+
+Defining an **own** property shadows the prototype getter — the supported replacement path.
+
+**Verified at runtime** (not just typecheck) against the installed Express 5.2.1: assignment
+reproduces the 500 with the exact message above; `defineProperty` returns 200 and the
+downstream handler sees `{ liveCourseId: 4 }` with `typeof === "number"`, confirming Zod's
+coercion survives into the handler.
+
+Behaviour is otherwise unchanged: the live controllers re-derive
+`Number(req.query.liveCourseId)` themselves (`live.controller.ts:42,180`), so they never
+depended on the middleware's coercion. `app-version`'s local parse still works and was left
+alone; it can be simplified onto the middleware later.
+
+---
+
+## 2026-07-30 — `POST /admin/courses`: `ordered` made optional so `nextOrder` is reachable
+
+**Files:** `src/admin/course/course.validation.ts` (`createCourseSqlSchema`)
+**DDL:** none. **Prisma:** unchanged. **No column, index, or query shape changed** — this
+is logged because it changes which *value* lands in `ws_course.ordered` on insert.
+
+**Problem.** Creating a course without an Order returned **500** with a raw stringified
+`ZodError` as `message`:
+
+```
+{"success":false,"message":"[{\"code\":\"invalid_type\",\"expected\":\"number\",
+  \"received\":\"nan\",\"path\":[\"ordered\"], ...}]"}
+```
+
+`ordered` was declared `z.coerce.number().int()`. Zod's `coerce` runs `Number(v)` **before**
+the type check and does so even for an **absent key** — `Number(undefined)` → `NaN` — so an
+omitted field could not report "Required"; it reported the misleading `received: "nan"`.
+
+**Why it surfaced now.** The 2026-07-29 ordering refactor made
+`adminCourse.createCourse` self-assign the order:
+`d.ordered ?? nextOrder(findFirst({ orderBy: [{createdAt:"desc"},{id:"desc"}] }))`
+(`src/modules/admin-course/admin-course.service.ts:159`, rule in `src/utils/listOrdering.ts:46`).
+The service was ready for an absent `ordered`, but the edge validator still required it, so
+`createCourseSqlSchema.parse()` at `course.controller.ts:205` threw first — **the `??`
+fallback was dead code on this endpoint.** Every create either carried an explicit order or
+500'd. The admin UI stopped sending the field (correct, per the refactor) and hit the wall.
+
+**Change.** `ordered` is now `preprocess + optional`, matching the `courseEducatorId`
+pattern already in this file (added earlier for the identical `coerce` trap):
+
+```ts
+ordered: z.preprocess(
+  (v) => (v === "" || v === null || v === undefined ? undefined : Number(v)),
+  z.number().int("Ordered must be an integer")
+).optional(),
+```
+
+**Insert-value effect:** omitted / `""` / `null` → `undefined` → `ws_course.ordered` gets
+**previous row + 1**. A numeric string still coerces and is honoured verbatim. Junk
+(`"abc"`) now fails with the honest `"Ordered must be an integer"`.
+
+`PUT /admin/courses/:id` is unaffected — `.partial()` already made the field optional and
+update only writes `ordered` when explicitly present (`admin-course.service.ts:198`); it
+never calls `nextOrder`. Client catalog reads still sort `ordered ASC` — unchanged.
+
+**Known, pre-existing, NOT fixed here:** `createCourse`/`updateCourse` call `.parse()`
+directly instead of going through the `validate` middleware, so **any** Zod failure on
+these routes is a `500` with a JSON-blob `message` rather than the standard `422` +
+flat `messages` map. Fixing it changes an error shape the admin FE parses, so it needs a
+decision + an FE doc. Other `.parse()` sites in `src/admin/course/` have the same
+behaviour and should be swept together.
+
+---
+
+## 2026-07-30 — Live-session preview: wall-clock → WATCH-TIME metering
+
+**Files:** `src/modules/admin-live-course/admin-live-course.service.ts`,
+`src/client/live/live.controller.ts`, `src/client/live/live.routes.ts`,
+`src/client/live/live.validation.ts`, `src/utils/previewTracking.ts` (new)
+**DDL:** `docs/migration/schema-changes/2026-07-30_live_session_preview_watch_time.sql`
+**Prisma:** `LiveSessionPreview` gained `consumedSeconds` + `lastHeartbeatAt` (hand-edited
+model, not `db:pull`) — **requires `yarn prisma:generate` AND an app restart.**
+
+**Problem.** The trial expired 180 s after `started_at`, i.e. on wall clock. Opening the
+player and walking away burnt the whole allowance, and a student who watched 70 s then
+left came back to 0 s instead of 110 s.
+
+**New model.** Two columns on `ws_live_session_preview`:
+`consumed_seconds INT NOT NULL DEFAULT 0` (committed watch time) and
+`last_heartbeat_at DATETIME NULL` (the charging **cursor** and the "window open" flag —
+NULL means nobody is watching and nothing accrues). `started_at` is kept and still
+written, but is no longer the expiry basis; it is now the "trial first began" audit value
+and the backfill source.
+
+**Query-level changes:**
+
+1. **`resolveLivePreviewStateSql` is read-only w.r.t. consumption.** It still creates the
+   row on first open (so the trial exists) but charges nothing; remaining time is
+   `180 − (consumed_seconds + pending)`. Full access short-circuits *before* any row is
+   touched, so a paying student never gets a tracking record.
+2. **New `previewHeartbeatSql` / `previewStopSql`** — the only writers that advance
+   `consumed_seconds`. Charge is `now − last_heartbeat_at`, **capped at
+   `PREVIEW_STALE_SECONDS` (20)**: an abandoned window (app killed, no `stop`) costs one
+   missed interval plus slack instead of the whole absence, which satisfies the
+   "auto-close stale tracking windows" requirement with **no sweeper job**.
+3. **The commit is a compare-and-swap, not a read-modify-write.**
+   `updateMany({ where: { id, lastHeartbeatAt: <value read> }, data: {...} })` — two
+   devices (or a heartbeat racing a dropped one's retry) read the same cursor and compute
+   the same charge; guarding the UPDATE on that cursor means exactly one writer wins and
+   the loser observes `count === 0` and re-reads **without** charging. Total consumption
+   is therefore bounded by wall-clock time in which at least one device was playing and
+   cannot be multiplied by opening more devices. Verified: 6 concurrent heartbeats over
+   the same 10 s charged 10 s, not 60 s.
+   Deliberately a single conditional UPDATE rather than raw SQL — the IST `$use`
+   middleware shifts `where` and `data` args alike, so the cursor round-trips
+   consistently; hand-written SQL would bypass the shift and mis-compare by 5.5 h.
+4. **Reads include uncommitted open-window time** (`pendingPreviewCharge`, same 20 s cap)
+   so a client that heartbeats and immediately re-joins doesn't see its remaining time
+   snap back up, and a list card never advertises "preview" for a trial the player would
+   instantly end. Still strictly read-only — `previewLevelMapSql` writes nothing.
+5. **Exhaustion clears the cursor** (`nextCursor = null` once `consumed >= 180`) so the
+   next read cannot compute a phantom pending charge against an already-empty trial.
+
+**Backfill (in the DDL).** Carries over what each existing trial had already burnt under
+the old wall-clock rule, so the migration never hands preview time back to a student
+whose trial had ended: `consumed_seconds = LEAST(180, GREATEST(0, TIMESTAMPDIFF(SECOND,
+started_at, @ist_now)))`. ⚠ `@ist_now = UTC_TIMESTAMP() + INTERVAL 330 MINUTE`, **not**
+`NOW()` — `started_at` holds IST wall clock written through the Prisma middleware, and
+raw SQL bypasses that shift; on a UTC-session server a bare `NOW()` would make every diff
+5.5 h too small and reset every trial started in the last 5.5 hours to a full free 180 s.
+`last_heartbeat_at` stays NULL for all legacy rows, so no backfilled trial is treated as
+currently-being-watched. **Apply `2026-07-30_live_session_preview_unique.sql` first** —
+the CAS relies on one row per (customer, session).
+
+**API surface.** `GET /client/live-sessions/:id` gained `previewTrackingId` (HMAC over
+customer+session, derived not stored — see `src/utils/previewTracking.ts`) and
+`previewHeartbeatSeconds` (10, server-owned so the cadence is retunable without an app
+release). New routes `POST /client/live-sessions/:id/preview/heartbeat` and
+`.../preview/stop`, both taking the same `?liveCourseId` entry point as the join so a
+heartbeat from an unpurchased course isn't judged against every linked course (which
+would report `full` and silently stop metering a trial genuinely being consumed). No
+client-supplied "seconds watched" is accepted anywhere. A `previewTrackingId` mismatch is
+**422**, not 403 — it is a correlation check; access is always re-derived from the bearer
+token.
+
+**Behaviour change for the app:** the trial is now consumed by heartbeat/stop and by
+NOTHING else. A client that never heartbeats never consumes it. FE doc updated
+(`docs/client/SHARED_LIVE_SESSION_ACCESS.md` §3).
+
+**Env:** `PREVIEW_TRACKING_SECRET` added to `.env.example` — **optional**, falls back to
+`MEDIA_TOKEN_SECRET` then `JWT_ACCESS_SECRET`, so no `config/env.ts` boot validation is
+needed and no environment breaks without it. Rotating it invalidates in-flight
+`previewTrackingId`s (clients re-join and get a new one) but does **not** reset anyone's
+`consumed_seconds`.
+
+**Verification.** 29/29 assertions against real MySQL on a temporary fixture (removed
+afterwards), driving the service layer directly: join-twice consumes nothing; 2×10 s
+watched → 160 s; stop commits and re-join resumes at 155 s; stop idempotent; abandoned
+1 h costs 20 s; 6 concurrent heartbeats charge once; consumption caps at 180; exhausted
+trial not resettable and hands out no tracking id; the shared-session rule still holds on
+the metering endpoints (heartbeat from the purchased course → `full` and meters nothing,
+from the unpurchased one → stays `preview_ended`); list feed reflects watch time and
+writes nothing.
+
+---
+
+## 2026-07-30 — Live preview: wall-clock trial → WATCH-TIME trial
+
+**Files:** `src/modules/admin-live-course/admin-live-course.service.ts`,
+`src/client/live/live.controller.ts`, `src/client/live/live.routes.ts`,
+`src/client/live/live.validation.ts`, `src/utils/previewTracking.ts` (new),
+`prisma/schema.prisma` (`LiveSessionPreview`)
+**DDL:** `docs/migration/schema-changes/2026-07-30_live_session_preview_watch_time.sql` (pending deploy —
+apply AFTER `2026-07-30_live_session_preview_unique.sql`)
+**FE doc:** `docs/client/LIVE_PREVIEW_WATCH_TIME.md`
+
+**Problem.** The 3-minute preview expired 180s after `started_at` — wall clock.
+Opening the player and walking away burnt the entire trial, and a student who
+watched 70s then left returned to 0s instead of 110s. The trial must represent 180
+seconds of *actual watch time*.
+
+**Schema changes** (`ws_live_session_preview`):
+
+- `+ consumed_seconds INT NOT NULL DEFAULT 0` — committed watch time. Only a
+  heartbeat/stop advances it.
+- `+ last_heartbeat_at DATETIME NULL` — the charging **cursor** and the
+  open-window flag. `NULL` ⇒ nobody is watching ⇒ nothing is accruing.
+- `started_at` is retained and still written, but is **no longer the expiry
+  basis** — it is now just the "trial first began" audit value.
+
+**Backfill.** `consumed_seconds = LEAST(180, TIMESTAMPDIFF(SECOND, started_at, @ist_now))`
+so no already-expired trial is handed time back. ⚠ `@ist_now` is
+`UTC_TIMESTAMP() + INTERVAL 330 MINUTE`, **not `NOW()`**: `started_at` holds IST
+wall clock (the Prisma `$use` shift), raw SQL bypasses that middleware, and the
+staging/prod MySQL session tz is UTC — a bare `NOW()` would under-count every diff
+by 5.5h and reset to 0 every trial started in the last 5.5 hours.
+
+**Query-level changes:**
+
+1. **`resolveLivePreviewStateSql`** — no longer computes expiry from `started_at`.
+   Returns `180 − min(180, consumed_seconds + pending)`, where `pending` is the
+   uncommitted time of an open window, capped at `PREVIEW_STALE_SECONDS`.
+   **Reads never charge** — this is the property that makes "leaving the stream
+   stops the clock" true. `previewExpiresAt` dropped from `LivePreviewStateSql`
+   (internal only; never appeared in any response). `track=false` is now a pure
+   read of the existing row instead of always reporting a full 180.
+2. **New `previewHeartbeatSql` / `previewStopSql`** → `POST
+   /client/live-sessions/:id/preview/{heartbeat,stop}`. Both re-derive entitlement
+   through `firstEntitledLiveCourseId` against the **same `?liveCourseId` entry
+   point** as the join endpoint — judging a heartbeat against every linked course
+   would report `full` for someone previewing an unpurchased shared course and
+   stop metering them.
+3. **New `commitPreviewTick` — conditional UPDATE (compare-and-swap).**
+   `updateMany({ where: { id, lastHeartbeatAt: <value read> }, … })`. A plain
+   read-modify-write lets two devices read the same cursor and both add the same
+   charge, draining the trial at 2× — the "concurrent heartbeats must not multiply
+   consumption" failure. The CAS makes exactly one writer win; the loser sees
+   `count === 0` and re-reads without charging. Because every writer advances the
+   one shared cursor, total consumption is bounded by the wall-clock time in which
+   *at least one* device was playing, for any number of devices.
+   Deliberately **not** raw SQL: `$executeRaw` bypasses the IST middleware, which
+   shifts `where` and `data` args alike, so a hand-written `NOW()` comparison would
+   be 5.5h out.
+4. **Stale-window handling needs no sweeper job.** Each charge is capped at
+   `PREVIEW_STALE_SECONDS` (20s), so an app that dies without calling
+   `/preview/stop` costs ≤20s total however long it stays gone. The window
+   self-limits rather than being closed on a timer.
+5. **`previewLevelMapSql`** — now selects `consumed_seconds, last_heartbeat_at`
+   (was `started_at`) and applies the same watch-time rule, so list cards and the
+   detail endpoint cannot disagree. Still strictly read-only.
+6. **Full-access short-circuits before any row is touched** on all three paths, so
+   a paying student never gets a tracking record.
+
+**`previewTrackingId` is derived, not stored** (`utils/previewTracking.ts`): an
+HMAC over `(customerId, liveSessionId)`. No column, no lazy write, no backfill —
+and it is stable across devices/reinstalls, which a per-open random id could not
+be without invalidating the id a second device is still heartbeating with. It is a
+correlation check (mismatch ⇒ 422), never an authorisation one.
+
+**Verified** against local staging MySQL (24/24): starts at 180 · reads/re-joins
+cost nothing · 3s watched ⇒ ~177 · stop is idempotent · rejoin resumes the saved
+value · 3 simultaneous heartbeats charge one interval, not three · a 10-minute
+abandoned window charges 20s not 600s · exhaustion ⇒ `preview_ended` + cursor
+cleared + list feed agrees · `isPlaying:false` behaves as stop · full-access users
+create no row.
+
+---
+
+## 2026-07-30 — Shared live sessions: per-entry-point entitlement (`?liveCourseId`)
+
+**Files:** `src/client/live/live.controller.ts`, `src/client/live/live.validation.ts` (new),
+`src/client/live/live.routes.ts`, `src/client/live-course/live-course.controller.ts`,
+`src/modules/admin-live-course/admin-live-course.service.ts`,
+`src/modules/client-media/client-media.service.ts`, `src/utils/mediaToken.ts`
+**DDL:** `docs/migration/schema-changes/2026-07-30_live_session_preview_unique.sql` (pending deploy)
+**FE doc:** `docs/client/SHARED_LIVE_SESSION_ACCESS.md`
+
+**Problem.** A live session may be linked to several live courses
+(`ws_live_session_course` is a true N:N). `GET /client/live-sessions/:id` always
+evaluated **every** linked course, so a student who owned `C1` got a full stream when
+opening the shared session from **unpurchased** `C2` — a paid course leaking into an
+unpaid one. Access has to depend on the entry point, which the API had no way to express.
+
+**Query-level changes:**
+
+1. **`resolveLivePreviewStateSql(customerId, sessionId, liveCourseIds, track)`** — the
+   `liveCourseIds` argument is now explicitly the *entitlement scope*; callers pass
+   `[selectedCourseId]` for a course entry point and all linked ids for Live Now. Same
+   query (`activeSubsForCourses`: `status=1 AND payment_status='verified' AND (end_at IS
+   NULL OR end_at >= now)`), narrower `IN` list. Return type gained
+   `accessGrantedByLiveCourseId`.
+2. **New `firstEntitledLiveCourseId()`** — same single `ws_live_course_subscription`
+   query as `hasAccessToAnyLiveCourse`, but returns *which* course granted access
+   (resolved in the caller's id order) instead of a boolean.
+3. **`ws_live_session_preview` reads are now `orderBy: { id: "asc" }`** (was unordered
+   `findFirst`). The preview window is keyed on `(customer_id, live_session_id)` — never
+   the course — so the **earliest** row must always win; an unordered read could return
+   a duplicate row from a concurrent first-open and effectively hand back trial time.
+3b. **The preview INSERT is now `createMany({ skipDuplicates: true })`** (was
+   `create` in a try/catch) → MySQL `INSERT IGNORE`. Losing the race against the new
+   unique index is a silent no-op rather than a thrown P2002, which Prisma's
+   `log: ["warn","error"]` would otherwise print on *every* concurrent open. It relies
+   on the DB constraint, not a `schema.prisma` `@@unique`, so no client regeneration is
+   required and an environment without the index applied still behaves correctly (it
+   inserts a duplicate, which oldest-row-wins renders harmless). Verified: 8 concurrent
+   first-opens wrote 7 duplicate rows before the index, 1 row after.
+3c. **`previewSecondsRemaining` is clamped to `LIVE_PREVIEW_SECONDS`.** `started_at`
+   is a second-precision `DATETIME` and MySQL **rounds** the fractional part, so a row
+   written at `:00.6` reads back as `:01` — half a second in the *future* — and the raw
+   `Math.ceil` answered **181s** for a 3-minute trial (measured, not theoretical).
+4. **New `previewLevelMapSql(customerId, sessionIds[])`** — one batched
+   `ws_live_session_preview` read for list endpoints. **Read-only by design:** only the
+   detail endpoint (`track=true`) may create a preview row, so rendering Live Now can
+   never start someone's clock.
+5. **Session feeds de-N+1'd.** `sessionFeed()` (backing `/live-courses/live-now-sessions`,
+   `/upcoming-sessions`, `/my/upcoming-sessions`) took one
+   `hasAccessToAnyLiveCourse` query **per row** from the controllers. It now takes
+   `customerId` and resolves the whole page in 3 batched queries (`ws_live_course` by
+   linked ids, `ownedCourseIds`, `previewLevelMapSql`). Rows already de-duplicated per
+   physical session by `sessionsForCourses`; now they also carry
+   `liveCourses[{_id,name,image,isPurchased}]`, `sessionId`, and `accessLevel`.
+6. **`liveSessionCourse` link reads ordered** (`orderBy: { id: "asc" }`) in
+   `client-media.service.ts` so the Live Now "which course granted access" answer is
+   stable across calls.
+
+**Media-token contract.** `MediaClaims` gained optional `lc` (the selected live course).
+`/client/media/resolve` re-applies the course-scoped gate instead of re-checking all
+linked courses — otherwise a preview token minted under `C2` would be upgraded to full
+on resolve because `C1` is owned. It is deliberately **not** a `scope` claim: `scope` is
+checked before the per-kind switch and would 403 the legitimate preview caller.
+Linkage is re-verified at resolve time, so unlinking a course revokes in-flight tokens.
+`signMediaToken` gained an optional TTL that can only *shorten* the default 5 min;
+preview tokens are clamped to `previewSecondsRemaining`.
+
+**Response-shape changes** (all additive except one, detailed in the FE doc):
+`GET /client/live-sessions/:id` gained `_id` + `accessGrantedByLiveCourseId` and now
+accepts `?liveCourseId=`; an unlinked value → **404** (never a silent fallback to the
+Live Now rule). `previewSecondsRemaining` for a **SCHEDULED** session now reports `180`
+instead of `0` — the trial is untouched, `0` previously read as "consumed".
+
+**Not changed:** the preview length (180s), the `ws_live_session_preview` write path's
+keying, and `hasAccessToAnyLiveCourse`'s signature (still used by 8 other call sites).
+
+**Index:** `uq_live_session_preview_customer_session` UNIQUE on
+`ws_live_session_preview (customer_id, live_session_id)`, with a keep-earliest dedupe
+step ahead of it (never keep-newest — that would hand back trial time). No
+`schema.prisma` edit: nothing reads the index by name and no Prisma query shape depends
+on it, so there is no client to regenerate and no drift to introduce.
+**Applied to the local dev DB (`websankul_staging_1`) — STILL PENDING on staging/prod.**
+Behaviour is correct either way; the index removes the duplicate rows a race would leave.
+
+**Verification.** Exercised against real MySQL on a temporary fixture (shared session
+linked to 2 active courses, synthetic customer owning only one; all rows removed
+afterwards) — 60/60 assertions across the service layer and the controller +
+`/media/resolve` layer. Covered: the core leak (owning `C1` must not unlock `C2`),
+expired / unverified / `status=0` subscriptions not granting, `purchaseOptions` scoping,
+preview non-resettability across courses and re-opens, 8-way concurrent opens sharing one
+window, `preview_ended` then purchasing → `full`, unlinking a course revoking an
+in-flight token, and an exhausted `C2` token being refused at resolve while `C1` stays
+`full`.
+
+---
+
 ## 2026-07-29 — Package-category `packageCount` served stale (cache flush-group gap)
 
 **Files:** `src/middlewares/flushGroups.ts`

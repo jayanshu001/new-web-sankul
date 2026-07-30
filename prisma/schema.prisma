@@ -1979,13 +1979,25 @@ model LiveSessionReminder {
   @@map("ws_live_session_reminder")
 }
 
+/// The 3-minute live-session trial, keyed on (customer, session) ONLY — never the
+/// course — so re-entering a shared session through another unpurchased course, a
+/// second device, or a reinstall continues the SAME window instead of minting a
+/// fresh one. Backed by uq_live_session_preview_customer_session.
+///
+/// Consumption is WATCH TIME, not wall clock (2026-07-30):
+///   consumedSeconds  committed watch time; only a heartbeat advances it.
+///   lastHeartbeatAt  the charging cursor AND the open-window flag — NULL means
+///                    nobody is watching and nothing is being consumed.
+///   startedAt        retained as the "trial first began" audit value.
 model LiveSessionPreview {
-  id            Int       @id @default(autoincrement())
-  liveSessionId Int?      @map("live_session_id")
-  customerId    Int?      @map("customer_id")
-  startedAt     DateTime? @map("started_at")
-  createdAt     DateTime? @map("created_at")
-  updatedAt     DateTime? @map("updated_at")
+  id              Int       @id @default(autoincrement())
+  liveSessionId   Int?      @map("live_session_id")
+  customerId      Int?      @map("customer_id")
+  startedAt       DateTime? @map("started_at")
+  consumedSeconds Int       @default(0) @map("consumed_seconds")
+  lastHeartbeatAt DateTime? @map("last_heartbeat_at")
+  createdAt       DateTime? @map("created_at")
+  updatedAt       DateTime? @map("updated_at")
 
   @@map("ws_live_session_preview")
 }

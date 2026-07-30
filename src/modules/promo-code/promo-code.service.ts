@@ -466,16 +466,77 @@ export const bulkDelete = async (ids: number[]) => {
  * promo_expire_at asc, projected to the same fields the Mongo `.select(...)`
  * exposes. Returns `{ data, pagination }` byte-identical to the Mongo path.
  */
-const toPublicPromoDto = (r: any) => ({
+const toPublicPromoDto = (
+  r: any,
+  /** Effective discount resolved from plan links; falls back to the row's own columns. */
+  effective?: { discountType: string; discountValue: number }
+) => ({
   _id: String(r.id),
   promocode: r.promocode,
   title: r.title ?? "",
   description: r.description ?? "",
-  discountType: r.discountType,
-  discountValue: Number(r.discountValue ?? 0),
+  discountType: effective?.discountType ?? r.discountType,
+  discountValue: effective ? effective.discountValue : Number(r.discountValue ?? 0),
   promo_start_at: r.promo_start_at ?? null,
   promo_expire_at: r.promo_expire_at ?? null,
 });
+
+/**
+ * Resolve each code's EFFECTIVE discount, mirroring the authoritative rule used
+ * by applyPromocode: per-plan link rows (ws_promoted_package_course_ebook
+ * .customer_percentage) are the real discount source, and the top-level
+ * `ws_promocode.discount_value` column is only a legacy fallback for codes that
+ * have no link rows at all. Reading the column alone reports 0 for every
+ * link-driven code — which is what this list used to do.
+ *
+ * When the caller filtered to one entity (`appliesTo`), only THAT entity's own
+ * plans may contribute, so a code covering many packages can't advertise a
+ * different package's percentage here. Plan ids are per-table, so links are
+ * matched on `planKind` as well as `planId`.
+ *
+ * Where an entity's plans carry different percentages the highest is reported
+ * ("up to X% off") — the listing is a teaser; checkout still prices per plan.
+ */
+const resolveEffectiveDiscounts = async (
+  rows: any[],
+  appliesTo?: { type: AppliesToType; id: number }
+): Promise<Map<number, { discountType: string; discountValue: number }>> => {
+  const out = new Map<number, { discountType: string; discountValue: number }>();
+  if (!rows.length) return out;
+
+  const links = await prisma.promotedPackageCourseEbook.findMany({
+    where: { promocodeId: { in: rows.map((r) => Number(r.id)) } },
+    select: { promocodeId: true, planId: true, planKind: true, customerPercentage: true },
+  });
+  if (!links.length) return out; // all legacy codes → callers keep the column value
+
+  // Entity-scoped: restrict contributing links to this entity's active plans.
+  let scopedPlanIds: Set<number> | null = null;
+  let scopedKind: PlanKind | null = null;
+  if (appliesTo) {
+    const plans = await loadPlansForEntitiesSql(appliesTo.type, [appliesTo.id]);
+    scopedPlanIds = new Set(plans.map((p) => p.id));
+    scopedKind = PLAN_KIND_BY_TYPE[appliesTo.type];
+  }
+
+  const best = new Map<number, number>();
+  const linked = new Set<number>();
+  for (const l of links) {
+    const pid = l.promocodeId == null ? null : Number(l.promocodeId);
+    if (pid == null || l.planId == null) continue;
+    // A code with ANY link row is link-driven — the legacy column no longer
+    // applies to it, even if none of its links match this entity.
+    linked.add(pid);
+    if (scopedPlanIds && !(l.planKind === scopedKind && scopedPlanIds.has(l.planId))) continue;
+    const pct = Number(l.customerPercentage ?? 0);
+    best.set(pid, Math.max(best.get(pid) ?? 0, pct));
+  }
+
+  for (const id of linked) {
+    out.set(id, { discountType: "percentage", discountValue: best.get(id) ?? 0 });
+  }
+  return out;
+};
 
 export const listPublicPromocodes = async (opts: {
   skip: number;
@@ -510,8 +571,9 @@ export const listPublicPromocodes = async (opts: {
     );
     const total = covered.length;
     const pageRows = covered.slice(opts.skip, opts.skip + opts.limitNum);
+    const effective = await resolveEffectiveDiscounts(pageRows, opts.appliesTo);
     return {
-      data: pageRows.map(toPublicPromoDto),
+      data: pageRows.map((r) => toPublicPromoDto(r, effective.get(Number(r.id)))),
       pagination: { total, page: opts.pageNum, limit: opts.limitNum, totalPages: Math.ceil(total / opts.limitNum) },
     };
   }
@@ -526,8 +588,9 @@ export const listPublicPromocodes = async (opts: {
     prisma.promocode.count({ where: baseWhere }),
   ]);
 
+  const effective = await resolveEffectiveDiscounts(rows);
   return {
-    data: rows.map(toPublicPromoDto),
+    data: rows.map((r) => toPublicPromoDto(r, effective.get(Number(r.id)))),
     pagination: {
       total,
       page: opts.pageNum,

@@ -554,11 +554,21 @@ export const listMyLearningProgress = async (
   // Container set + last-watched pointer come from the enrollment-scoped Layer-2
   // table (NOT LectureProgress, which is global-per-video and would leak one
   // product's last video onto another's card for a shared lecture).
-  const [coursePtrs, packagePtrs, livePtrs] = await Promise.all([
+  // LIVE COURSES ARE DELIBERATELY EXCLUDED from this feed (2026-07-30, FE request).
+  // A live session is not a resumable lecture — there is nothing to seek back to —
+  // so no `type: "live"` card may appear in GET /client/learning/progress/my or in
+  // GET /client/dashboard/resume (which is built on this function).
+  //
+  // Implemented by leaving the live pointer set EMPTY rather than by deleting the
+  // live branches below: every live query is already guarded by `liveIds.length`,
+  // so an empty set short-circuits all of them (no liveCourse/liveSub/liveDone/
+  // sessionPositions/resolveSessions round-trips) and the `perLive` card loop
+  // iterates zero times. To re-enable, restore the third `resumePointers` call.
+  const [coursePtrs, packagePtrs] = await Promise.all([
     resumePointers(customerId, "course"),
     resumePointers(customerId, "package"),
-    resumePointers(customerId, "liveCourse"),
   ]);
+  const livePtrs: ResumePtr[] = [];
 
   const courseIds = coursePtrs.map((r) => r.scopeId);
   const packageIds = packagePtrs.map((r) => r.scopeId);
@@ -879,10 +889,17 @@ export const buildResumeNextCardSql = async (input:
 };
 
 /**
- * getResumeDashboard on SQL: { resumeLecture (live), recentCourse, recentPackage }
+ * getResumeDashboard on SQL: { resumeLecture, recentCourse, recentPackage }
  * — the most-recent card of each container type. Built ON TOP of
  * listMyLearningProgress so the dashboard never disagrees with the resume feed
  * (the explicit invariant in dashboard.controller). Adds `minutesLeft` per card.
+ *
+ * `resumeLecture` was the LIVE-course slot and is therefore now ALWAYS `null`:
+ * live cards are excluded at the source (see listMyLearningProgress). The key is
+ * kept — never dropped — so the response shape the app parses is unchanged; the
+ * FE already renders this slot as absent when null. If the home screen wants that
+ * slot to show the most-recent card of ANY type instead of staying empty, that is
+ * a separate product decision, not this exclusion.
  */
 export const buildResumeDashboard = async (customerId: number): Promise<{ resumeLecture: any; recentCourse: any; recentPackage: any }> => {
   const { cards } = await listMyLearningProgress(customerId);
@@ -903,7 +920,10 @@ export const buildResumeDashboard = async (customerId: number): Promise<{ resume
     };
   };
   return {
-    resumeLecture: withVideoProgress(cards.find((c: any) => c.type === "live")),
+    // Always null — `cards` can no longer contain a live entry. Written as an
+    // explicit null (not a `.find()` that is guaranteed to miss) so this reads as
+    // intentional rather than as a lookup that quietly stopped matching.
+    resumeLecture: null,
     recentCourse: withVideoProgress(cards.find((c: any) => c.type === "course")),
     recentPackage: withVideoProgress(cards.find((c: any) => c.type === "package")),
   };

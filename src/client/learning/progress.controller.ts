@@ -57,10 +57,15 @@ export const reportLiveSessionProgress = async (req: Request, res: Response) => 
 // ---------------------------------------------------------------------------
 // GET /api/v1/client/learning/progress/my
 // Unified "Resume Learning" feed. Returns one flat list of cards covering
-// Course, Package and Live Course entries the user has actually started
-// (i.e. has at least one LectureProgress row for). The list is sorted by
-// most-recent activity across all three types so the FE renders them as one
-// vertical stream — matching the UI in the design.
+// Course and Package entries the user has actually started (i.e. has at least
+// one LectureProgress row for). The list is sorted by most-recent activity
+// across both types so the FE renders them as one vertical stream — matching
+// the UI in the design.
+//
+// LIVE COURSES ARE EXCLUDED (2026-07-30, FE request): a live session is not a
+// resumable lecture, so no `type: "live"` card is ever emitted here, and
+// `resumeNext` can never be a live card. Enforced at the source in
+// client-lecture-progress.service.listMyLearningProgress.
 // ---------------------------------------------------------------------------
 export const listMyLearningProgress = async (req: Request, res: Response) => {
   const traceId = req.traceId;

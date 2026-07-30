@@ -47,6 +47,17 @@ export interface MediaClaims {
   scope?: MediaScope | null;  // entitlement scope; omit/null for free media
   free?: boolean;             // free content — resolve skips entitlement (still short-lived + customer-bound)
   cust: number;               // issuing customer id — resolve must match req.user.id
+  /**
+   * `liveSession` ONLY — the live course the session was opened FROM (the entry
+   * point). A shared session can hang off several courses, so entitlement must be
+   * judged against THIS one, not "any linked course". Absent = the Live Now entry
+   * point (no course selected → any linked course may grant access).
+   *
+   * Deliberately NOT a `scope`: `scope` is checked by `entitled()` before the
+   * per-kind switch and would reject the legitimate 3-minute PREVIEW caller. The
+   * liveSession branch re-runs the full-OR-preview gate itself.
+   */
+  lc?: number;
 }
 
 const MEDIA_TTL_SECONDS = Number(process.env.MEDIA_TOKEN_TTL_SECONDS) || 5 * 60;
@@ -60,10 +71,19 @@ const MEDIA_SECRET =
   process.env.MEDIA_TOKEN_SECRET ||
   `${process.env.JWT_ACCESS_SECRET ?? "ws"}::media-v1`;
 
-/** Mint a short-lived media token. Returns the compact JWT string. */
-export const signMediaToken = (claims: MediaClaims): string =>
+/**
+ * Mint a short-lived media token. Returns the compact JWT string.
+ *
+ * `ttlSeconds` shortens (never lengthens) the default TTL — used to make a
+ * PREVIEW token expire no later than the caller's remaining preview window, so
+ * an issued token can't outlive the entitlement that justified it.
+ */
+export const signMediaToken = (claims: MediaClaims, ttlSeconds?: number): string =>
   jwt.sign({ typ: "media", ...claims }, MEDIA_SECRET, {
-    expiresIn: MEDIA_TTL_SECONDS,
+    expiresIn:
+      typeof ttlSeconds === "number" && Number.isFinite(ttlSeconds)
+        ? Math.max(1, Math.min(MEDIA_TTL_SECONDS, Math.floor(ttlSeconds)))
+        : MEDIA_TTL_SECONDS,
     audience: MEDIA_AUDIENCE,
   });
 
