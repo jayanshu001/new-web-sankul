@@ -4,9 +4,12 @@
  * with the `customer-profile` flag (already ON). folder/ebook/notification counts
  * are already SQL-branched in the controller; this completes the remaining ones.
  *
- * Drift: ws_exam_result has no inProgress/submittedAt columns (a result row IS a
- * completed attempt) → pastExams = result rows (status=true) joined to DAILY exams.
  * ws_package_course_subscription has no payment_status col → status=true gate.
+ *
+ * NOTE: an earlier version of this header claimed ws_exam_result has no
+ * inProgress/submittedAt columns and that a result row IS a completed attempt.
+ * That is wrong — the model maps `qresult_in_progress` / `qresult_submitted_at`,
+ * and `pastExamsCount` now gates on them.
  */
 import { prisma } from "../../config/prisma";
 
@@ -67,9 +70,28 @@ export const countActiveSubscriptions = async (customerId: number, now: Date) =>
   return { total: course + test_series + ebook, course, test_series, ebook };
 };
 
-/** Past DAILY exams attempted (a result row = a completed attempt). */
-export const pastDailyExamsCount = async (customerId: number): Promise<number> => {
+/**
+ * Past exams attempted by this customer — DAILY **and** SUBJECT combined.
+ *
+ * "Past" means a finished attempt: `inProgress = false` AND `submittedAt` set.
+ * A result row is NOT automatically a completed attempt (rows exist with
+ * `submittedAt = NULL`), contrary to the stale note this file used to carry —
+ * `ExamResult` does map `qresult_in_progress` / `qresult_submitted_at`.
+ *
+ * The type filter is spelled out as `in [daily, subject]` rather than dropped
+ * entirely, so that (a) result rows whose exam was deleted don't silently count
+ * as "past exams" the UI can't name, and (b) if a third ExamType is ever added
+ * someone has to consciously decide whether it belongs in this badge.
+ * `ExamType` is currently exactly { daily, subject }.
+ */
+export const pastExamsCount = async (customerId: number): Promise<number> => {
   return prisma.examResult.count({
-    where: { customerId, status: true, Exam: { is: { type: "daily" as any } } },
+    where: {
+      customerId,
+      status: true,
+      inProgress: false,
+      submittedAt: { not: null },
+      Exam: { is: { type: { in: ["daily", "subject"] as any } } },
+    },
   });
 };

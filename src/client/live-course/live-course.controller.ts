@@ -357,10 +357,11 @@ export const listAllUpcomingSessions = async (req: Request, res: Response) => {
   try {
     const { search, page, limit } = parseListQuery(req.query);
 
+    // `subscribed` / `liveCourses[].isPurchased` / `accessLevel` come batched out
+    // of the feed itself (one pair of queries per page, not per row).
     const cid = liveSql.parseLiveId(String(customerId ?? ""));
-    const r = await liveSql.listAllUpcomingSessions({ search, page, limit });
-    const sessions = await Promise.all(r.sessions.map(async (s: any) => ({ ...s, subscribed: cid ? await liveSql.hasAccessToAnyLiveCourse(cid, (s.liveCourseIds ?? []).map(Number)) : false })));
-    return success(res, { sessions, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) }, "Upcoming sessions fetched.");
+    const r = await liveSql.listAllUpcomingSessions(cid, { search, page, limit });
+    return success(res, { sessions: r.sessions, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) }, "Upcoming sessions fetched.");
   } catch (err) {
     logger.error("listAllUpcomingSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to fetch upcoming sessions.", 500);
@@ -383,8 +384,11 @@ export const listLiveNowSessions = async (req: Request, res: Response) => {
     const { search, page, limit } = parseListQuery(req.query);
 
     const cid = liveSql.parseLiveId(String(customerId ?? ""));
-    const r = await liveSql.listLiveNowSessions({ search, page, limit });
-    const sessions = await Promise.all(r.sessions.map(async (s: any) => omit({ ...s, subscribed: cid ? await liveSql.hasAccessToAnyLiveCourse(cid, (s.liveCourseIds ?? []).map(Number)) : false }, ["hlsUrl", "recordings", "createdAt", "updatedAt"])));
+    const r = await liveSql.listLiveNowSessions(cid, { search, page, limit });
+    // A session shared by several courses is ONE row here, listing every linked
+    // course. Tapping it calls /client/live-sessions/:id WITHOUT liveCourseId, so
+    // the detail endpoint evaluates all of them (own any → full stream).
+    const sessions = omitList(r.sessions, ["hlsUrl", "recordings", "createdAt", "updatedAt"]);
     return success(res, { sessions, total: r.total, page: r.page, limit: r.limit, pagination: buildPagination(r.total, r.page, r.limit) }, "Live-now sessions fetched.");
   } catch (err) {
     logger.error("listLiveNowSessions failed", { traceId, customerId, error: getErrorMessage(err), stack: (err as Error).stack });

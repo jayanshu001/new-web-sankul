@@ -39,7 +39,7 @@ export const getProfileDashboardCounts = async (req: Request, res: Response) => 
         ? profileSql.countActiveSubscriptions(sqlUid, now)
         : Promise.resolve({ total: 0, course: 0, test_series: 0, ebook: 0 });
     const pastExamsP =
-      sqlUid != null ? profileSql.pastDailyExamsCount(sqlUid) : Promise.resolve(0);
+      sqlUid != null ? profileSql.pastExamsCount(sqlUid) : Promise.resolve(0);
 
     const [
       savedAddresses,

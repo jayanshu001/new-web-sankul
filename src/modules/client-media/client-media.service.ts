@@ -177,10 +177,22 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
         const s = await prisma.liveSession.findFirst({ where: { id: claims.id }, select: { id: true, streamId: true, hlsUrl: true, hlsUrls: true } });
         if (!s) return { ok: false, status: 404, message: "Live session not found." };
         // Live sessions gate on full-OR-preview access, not pure entitlement —
-        // re-run the same preview-state check the list endpoint used. `preview`
+        // re-run the same preview-state check the detail endpoint used. `preview`
         // (trial) is allowed; `preview_ended`/no-access is rejected.
-        const links = await prisma.liveSessionCourse.findMany({ where: { liveSessionId: s.id }, select: { liveCourseId: true } });
-        const liveCourseIds = links.map((l) => l.liveCourseId).filter((n): n is number => n != null);
+        const links = await prisma.liveSessionCourse.findMany({ where: { liveSessionId: s.id }, select: { liveCourseId: true }, orderBy: { id: "asc" } });
+        const linkedCourseIds = links.map((l) => l.liveCourseId).filter((n): n is number => n != null);
+        // Honour the entry point the token was minted for (`lc`), so a token issued
+        // while browsing an UNPURCHASED course stays a preview here instead of
+        // being re-judged against every linked course and upgraded to full because
+        // some other linked course is owned. Absent `lc` = Live Now (any course).
+        // Re-verify linkage: a course unlinked since issue-time must stop granting.
+        let liveCourseIds = linkedCourseIds;
+        if (claims.lc != null) {
+          if (!linkedCourseIds.includes(claims.lc)) {
+            return { ok: false, status: 404, message: "This live course is not linked to this live session." };
+          }
+          liveCourseIds = [claims.lc];
+        }
         const state = await resolveLivePreviewStateSql(customerId, s.id, liveCourseIds, true);
         if (state.accessLevel !== "full" && state.accessLevel !== "preview") {
           return { ok: false, status: 403, message: "Active subscription required to access this live session." };

@@ -19,7 +19,19 @@ export const validate = (schemas: {
   return (req: Request, res: Response, next: NextFunction) => {
     try {
       if (schemas.body) req.body = schemas.body.parse(req.body);
-      if (schemas.query) req.query = schemas.query.parse(req.query) as any;
+      // `req.query` CANNOT be assigned in Express 5 — it is a getter-only accessor
+      // on the request prototype, so `req.query = parsed` throws
+      // "Cannot set property query of #<IncomingMessage> which has only a getter"
+      // (a 500 at request time, invisible to typecheck). Defining an own property
+      // shadows the prototype getter, which is the supported way to replace it.
+      if (schemas.query) {
+        Object.defineProperty(req, "query", {
+          value: schemas.query.parse(req.query),
+          writable: true,
+          enumerable: true,
+          configurable: true, // so a second validate() on the same route can redefine
+        });
+      }
       if (schemas.params) req.params = schemas.params.parse(req.params) as any;
       return next();
     } catch (err) {

@@ -41,7 +41,18 @@ export const createCourseSqlSchema = z.object({
   // (e.g. "twitter-image.png") that edit round-trips — strict .url() rejected
   // legacy course images and blocked editing. New uploads are still full URLs.
   image: z.string().min(1, "Image is required"),
-  ordered: z.coerce.number().int("Ordered must be an integer"),
+  // Optional: omitting Order is the normal case now — createCourse assigns
+  // `previous row + 1` via nextOrder (see utils/listOrdering). A preprocess
+  // (not z.coerce) is what makes omission actually reachable: z.coerce.number
+  // runs Number(undefined) → NaN even for an absent key, so a body with no
+  // `ordered` failed with the misleading "expected number, received nan"
+  // instead of falling through to nextOrder. Same trap as courseEducatorId below.
+  ordered: z
+    .preprocess(
+      (v) => (v === "" || v === null || v === undefined ? undefined : Number(v)),
+      z.number().int("Ordered must be an integer")
+    )
+    .optional(),
   shareableLink: z.string().optional(),
   withMaterial: z.string().optional(),
   withoutMaterial: z.string().optional(),

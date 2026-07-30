@@ -14,6 +14,7 @@ import { redisClient } from "../../config/redis";
 import { buildPagination } from "../../utils/listQuery";
 import { nextOrder } from "../../utils/listOrdering";
 import { buildPrismaSearch, matchesAllTokens } from "../../utils/searchFilter";
+import { buildPreviewTrackingId } from "../../utils/previewTracking";
 
 export const LIVE_COURSE_MODULE = "live-course";
 export const isLiveCourseMysql = (): boolean => true;
@@ -1082,6 +1083,24 @@ export const hasAccessToAnyLiveCourse = async (customerId: number | null, liveCo
   return subs.length > 0;
 };
 
+/**
+ * Which of `liveCourseIds` actually grants access — the same active+verified
+ * check as hasAccessToAnyLiveCourse, but it reports the WINNER so the client can
+ * be told `accessGrantedByLiveCourseId`. Resolves in the caller's id order so a
+ * course-scoped call (single id) and a Live Now call (all linked ids, in link
+ * order) both give a stable, explainable answer. `null` = no entitlement.
+ */
+export const firstEntitledLiveCourseId = async (
+  customerId: number | null,
+  liveCourseIds: number[]
+): Promise<number | null> => {
+  if (!customerId || !liveCourseIds.length) return null;
+  const subs = await repo.activeSubsForCourses(customerId, liveCourseIds, new Date());
+  if (!subs.length) return null;
+  const entitled = new Set(subs.map((s) => s.liveCourseId));
+  return liveCourseIds.find((id) => entitled.has(id)) ?? null;
+};
+
 export const getDaysLeftMap = async (customerId: number | null, liveCourseIds: number[]): Promise<Map<string, number | null>> => {
   const out = new Map<string, number | null>();
   if (!customerId || !liveCourseIds.length) return out;
@@ -1515,26 +1534,294 @@ export const listSessionRecordingsForClient = async (
 // retired Mongo client/live-course/entitlement.ts (was `PREVIEW_SECONDS`).
 export const PREVIEW_SECONDS = 180;
 const LIVE_PREVIEW_SECONDS = PREVIEW_SECONDS;
-export type LivePreviewStateSql = { accessLevel: "full" | "preview" | "preview_ended"; previewExpiresAt: Date | null; previewSecondsRemaining: number };
+
+/**
+ * How often the app is asked to heartbeat while playback is active. Published to
+ * the client in the join response so the interval is a server decision, not a
+ * hardcoded app constant that would need a release to change.
+ */
+export const PREVIEW_HEARTBEAT_SECONDS = 10;
+
+/**
+ * The staleness ceiling, and the single most important number here: **the most
+ * watch time one heartbeat may ever charge.**
+ *
+ * Consumption is charged as (now − last_heartbeat_at) whenever a heartbeat lands,
+ * so if the app dies mid-window and never calls /preview/stop, the cursor sits
+ * frozen at the last heartbeat. Without a cap, coming back an hour later would
+ * bill the entire hour. Capping the charge at one missed interval plus slack
+ * means an abandoned window costs at most this many seconds — which is exactly
+ * the "BE must automatically stop an active tracking window when heartbeats
+ * become stale" requirement, implemented without needing a sweeper job: the
+ * window self-limits instead of being closed on a timer.
+ *
+ * Must stay > PREVIEW_HEARTBEAT_SECONDS or ordinary jitter would under-charge
+ * every single tick.
+ */
+export const PREVIEW_STALE_SECONDS = 20;
+
+export type LivePreviewStateSql = {
+  accessLevel: "full" | "preview" | "preview_ended";
+  previewSecondsRemaining: number;
+  /** The linked course that granted `full` (null on preview/preview_ended). */
+  accessGrantedByLiveCourseId: number | null;
+};
+
+/**
+ * Watch time owed by a still-open window but not yet committed to
+ * `consumed_seconds`.
+ *
+ * A read (join, /media/resolve, the list feed) must include this or a client that
+ * heartbeats and immediately re-joins would see its remaining time snap back up
+ * by up to one interval. It is capped by PREVIEW_STALE_SECONDS exactly as the
+ * heartbeat's own charge is, so a read and the heartbeat that follows it agree,
+ * and an abandoned window stops growing rather than draining the trial.
+ *
+ * Reads stay READ-ONLY — this is computed, never persisted. Only a heartbeat or a
+ * stop may advance `consumed_seconds`.
+ */
+const pendingPreviewCharge = (lastHeartbeatAt: Date | null | undefined, now: Date): number => {
+  if (!lastHeartbeatAt) return 0; // window closed → nothing accruing
+  const elapsed = Math.floor((now.getTime() - lastHeartbeatAt.getTime()) / 1000);
+  return Math.max(0, Math.min(PREVIEW_STALE_SECONDS, elapsed));
+};
+
+/** Remaining trial for a row, including any uncommitted open-window time. */
+const previewRemainingFrom = (
+  consumedSeconds: number,
+  lastHeartbeatAt: Date | null | undefined,
+  now: Date
+): number => {
+  const consumed = Math.max(0, consumedSeconds) + pendingPreviewCharge(lastHeartbeatAt, now);
+  return Math.max(0, LIVE_PREVIEW_SECONDS - Math.min(LIVE_PREVIEW_SECONDS, consumed));
+};
+
+/** The trial row for one (customer, session), oldest-wins. See the note in resolveLivePreviewStateSql. */
+const oldestPreviewRow = (customerId: number, liveSessionId: number) =>
+  prisma.liveSessionPreview.findFirst({ where: { customerId, liveSessionId }, orderBy: { id: "asc" } });
+
+/**
+ * Access decision for one live session, for one caller.
+ *
+ * `liveCourseIds` IS the entitlement scope and the caller owns that choice:
+ *   - opened FROM a course → pass just `[thatCourseId]`, so owning a *different*
+ *     course linked to the same shared session does NOT unlock it;
+ *   - opened from Live Now (no course selected) → pass every linked course, and
+ *     any active one grants full access.
+ *
+ * The preview (trial) row is keyed on `(customer, session)` — NOT on the course —
+ * so re-entering the same shared session through another unpurchased course, a
+ * new device, or a reinstall continues the SAME 180s window instead of minting a
+ * fresh one.
+ *
+ * `track` means "the student can actually watch right now" (the session is not
+ * SCHEDULED). It gates ROW CREATION only, and creation is now cheap: a new row
+ * starts at `consumed_seconds = 0` with no open window, so it reserves the trial
+ * without spending any of it. Consumption begins at the first heartbeat, never
+ * here — READS NEVER CHARGE. That is what makes "time does not continue
+ * decreasing after leaving the stream" true: with no heartbeats arriving, no
+ * amount of re-joining moves the number.
+ */
 export const resolveLivePreviewStateSql = async (
   customerId: number | null,
   liveSessionId: number,
   liveCourseIds: number[],
   track: boolean
 ): Promise<LivePreviewStateSql> => {
-  if (!liveCourseIds.length) return { accessLevel: "full", previewExpiresAt: null, previewSecondsRemaining: 0 };
-  if (await hasAccessToAnyLiveCourse(customerId, liveCourseIds)) return { accessLevel: "full", previewExpiresAt: null, previewSecondsRemaining: 0 };
-  if (!track || !customerId) return { accessLevel: "preview", previewExpiresAt: null, previewSecondsRemaining: 0 };
+  // A session linked to no course is gated by nothing — nothing to purchase.
+  if (!liveCourseIds.length) return { accessLevel: "full", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: null };
+  const grantedBy = await firstEntitledLiveCourseId(customerId, liveCourseIds);
+  // Full access short-circuits BEFORE any preview row is touched, so a paying
+  // student never gets a tracking record.
+  if (grantedBy != null) return { accessLevel: "full", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: grantedBy };
+  if (!customerId) return { accessLevel: "preview", previewSecondsRemaining: LIVE_PREVIEW_SECONDS, accessGrantedByLiveCourseId: null };
+
   const now = new Date();
-  let preview = await prisma.liveSessionPreview.findFirst({ where: { customerId, liveSessionId } });
+  // Always the EARLIEST row: should a race (or a pre-unique-index duplicate) have
+  // written two, the first one still bounds the window — a second concurrent
+  // request can never restart the clock.
+  let preview = await oldestPreviewRow(customerId, liveSessionId);
+
   if (!preview) {
-    try { preview = await prisma.liveSessionPreview.create({ data: { customerId, liveSessionId, startedAt: now, createdAt: now } }); }
-    catch { preview = await prisma.liveSessionPreview.findFirst({ where: { customerId, liveSessionId } }); }
+    // Nothing watched yet. Don't create a row for a session that cannot be played
+    // (SCHEDULED): report the untouched allowance read-only.
+    if (!track) return { accessLevel: "preview", previewSecondsRemaining: LIVE_PREVIEW_SECONDS, accessGrantedByLiveCourseId: null };
+    // createMany({ skipDuplicates }) → `INSERT IGNORE`, so losing the race against
+    // uq_live_session_preview_customer_session is a no-op instead of a thrown
+    // P2002 that Prisma's `log: ["warn","error"]` would print on every concurrent
+    // open. It leans on the DB constraint rather than a schema.prisma @@unique, so
+    // no Prisma client regeneration is needed and an environment where the index
+    // is not applied yet still behaves correctly — it just inserts a duplicate,
+    // which the oldest-row-wins read below renders harmless.
+    await prisma.liveSessionPreview.createMany({
+      data: [{ customerId, liveSessionId, startedAt: now, consumedSeconds: 0, lastHeartbeatAt: null, createdAt: now }],
+      skipDuplicates: true,
+    });
+    preview = await oldestPreviewRow(customerId, liveSessionId);
+    if (!preview) return { accessLevel: "preview", previewSecondsRemaining: LIVE_PREVIEW_SECONDS, accessGrantedByLiveCourseId: null };
   }
-  if (!preview?.startedAt) return { accessLevel: "preview", previewExpiresAt: null, previewSecondsRemaining: 0 };
-  const expires = new Date(preview.startedAt.getTime() + LIVE_PREVIEW_SECONDS * 1000);
-  if (now.getTime() >= expires.getTime()) return { accessLevel: "preview_ended", previewExpiresAt: expires, previewSecondsRemaining: 0 };
-  return { accessLevel: "preview", previewExpiresAt: expires, previewSecondsRemaining: Math.ceil((expires.getTime() - now.getTime()) / 1000) };
+
+  const remaining = previewRemainingFrom(preview.consumedSeconds, preview.lastHeartbeatAt, now);
+  return remaining > 0
+    ? { accessLevel: "preview", previewSecondsRemaining: remaining, accessGrantedByLiveCourseId: null }
+    : { accessLevel: "preview_ended", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: null };
+};
+
+// ── preview heartbeat / stop (watch-time accounting) ──────────────────────────
+
+export type LivePreviewTickSql = LivePreviewStateSql & { previewTrackingId: string | null };
+
+/**
+ * Commit the watch time owed by an open window, then leave the window open
+ * (`keepOpen`, a heartbeat) or closed (a stop / pause).
+ *
+ * **Why a compare-and-swap rather than a read-modify-write.** Two devices — or a
+ * heartbeat racing the retry of a dropped one — can read the same cursor, both
+ * compute the same charge, and both add it: the trial would drain at 2× on two
+ * devices, which is precisely the "multiple concurrent heartbeats must not
+ * multiply preview consumption" failure. Guarding the UPDATE on the cursor value
+ * we read makes the pair atomic: exactly one writer wins, the loser observes
+ * `count === 0` and re-reads WITHOUT charging. Since every writer advances the
+ * one shared cursor, total consumption can never exceed the wall-clock time in
+ * which at least one device was playing, no matter how many devices there are.
+ *
+ * A single conditional UPDATE also keeps this correct under the IST middleware —
+ * it shifts `where` args and `data` args alike, so the cursor round-trips
+ * consistently. Hand-written raw SQL would bypass that shift and mis-compare by
+ * 5.5 hours.
+ */
+const commitPreviewTick = async (
+  customerId: number,
+  liveSessionId: number,
+  keepOpen: boolean
+): Promise<LivePreviewStateSql> => {
+  const now = new Date();
+  let preview = await oldestPreviewRow(customerId, liveSessionId);
+
+  if (!preview) {
+    // First heartbeat with no prior join (or a SCHEDULED session that never made
+    // a row). Open the window charging NOTHING — there is no cursor to measure
+    // from, and inventing one would bill time we never observed.
+    if (!keepOpen) return { accessLevel: "preview", previewSecondsRemaining: LIVE_PREVIEW_SECONDS, accessGrantedByLiveCourseId: null };
+    await prisma.liveSessionPreview.createMany({
+      data: [{ customerId, liveSessionId, startedAt: now, consumedSeconds: 0, lastHeartbeatAt: now, createdAt: now }],
+      skipDuplicates: true,
+    });
+    preview = await oldestPreviewRow(customerId, liveSessionId);
+    if (!preview) return { accessLevel: "preview", previewSecondsRemaining: LIVE_PREVIEW_SECONDS, accessGrantedByLiveCourseId: null };
+    // Lost the insert race: fall through and treat the winner's row as ours.
+  }
+
+  const charge = pendingPreviewCharge(preview.lastHeartbeatAt, now);
+  const consumed = Math.min(LIVE_PREVIEW_SECONDS, Math.max(0, preview.consumedSeconds) + charge);
+  // Once the allowance is gone the window is closed regardless of `keepOpen`:
+  // there is nothing left to meter, and leaving a cursor behind would make the
+  // next read compute a phantom pending charge against an already-empty trial.
+  const exhausted = consumed >= LIVE_PREVIEW_SECONDS;
+  const nextCursor = keepOpen && !exhausted ? now : null;
+
+  const written = await prisma.liveSessionPreview.updateMany({
+    // CAS: `lastHeartbeatAt: <value read>` compiles to `= ?` or `IS NULL`, so a
+    // concurrent writer that already moved the cursor makes this match 0 rows.
+    where: { id: preview.id, lastHeartbeatAt: preview.lastHeartbeatAt ?? null },
+    data: { consumedSeconds: consumed, lastHeartbeatAt: nextCursor },
+  });
+
+  if (written.count === 0) {
+    // Someone else committed first. Their charge covers this same interval — the
+    // cursor is shared — so report their result instead of double-billing.
+    const fresh = await oldestPreviewRow(customerId, liveSessionId);
+    const remaining = fresh
+      ? previewRemainingFrom(fresh.consumedSeconds, fresh.lastHeartbeatAt, now)
+      : LIVE_PREVIEW_SECONDS;
+    return remaining > 0
+      ? { accessLevel: "preview", previewSecondsRemaining: remaining, accessGrantedByLiveCourseId: null }
+      : { accessLevel: "preview_ended", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: null };
+  }
+
+  const remaining = Math.max(0, LIVE_PREVIEW_SECONDS - consumed);
+  return remaining > 0
+    ? { accessLevel: "preview", previewSecondsRemaining: remaining, accessGrantedByLiveCourseId: null }
+    : { accessLevel: "preview_ended", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: null };
+};
+
+/**
+ * POST /client/live-sessions/:id/preview/heartbeat — "still watching".
+ *
+ * `isPlaying: false` is treated as a stop: the app telling us playback paused is
+ * the same fact as the app telling us it left, and honouring it here means a
+ * pause is metered correctly even when the app never gets to send /preview/stop.
+ *
+ * `liveCourseIds` is the entitlement scope, exactly as on the join endpoint — a
+ * heartbeat from an unpurchased course entry point must NOT be judged against
+ * every linked course, or owning one linked course would silently report `full`
+ * and stop metering a trial the student is genuinely consuming.
+ */
+export const previewHeartbeatSql = async (
+  customerId: number,
+  liveSessionId: number,
+  liveCourseIds: number[],
+  isPlaying: boolean
+): Promise<LivePreviewTickSql> => {
+  const trackingId = buildPreviewTrackingId(customerId, liveSessionId);
+  // Ungated session, or a genuine purchase → no trial to meter, no row created.
+  if (!liveCourseIds.length) return { accessLevel: "full", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: null, previewTrackingId: null };
+  const grantedBy = await firstEntitledLiveCourseId(customerId, liveCourseIds);
+  if (grantedBy != null) return { accessLevel: "full", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: grantedBy, previewTrackingId: null };
+
+  const state = await commitPreviewTick(customerId, liveSessionId, isPlaying);
+  return { ...state, previewTrackingId: state.accessLevel === "preview" ? trackingId : null };
+};
+
+/**
+ * POST /client/live-sessions/:id/preview/stop — pause, background, navigate away.
+ *
+ * Idempotent by construction: it commits whatever the open window owes and clears
+ * the cursor. A second call finds `last_heartbeat_at` already NULL, so
+ * `pendingPreviewCharge` returns 0 and the CAS rewrites the same values — the
+ * remaining time it reports is identical. Stopping a trial that was never started
+ * is likewise a no-op.
+ */
+export const previewStopSql = async (
+  customerId: number,
+  liveSessionId: number,
+  liveCourseIds: number[]
+): Promise<LivePreviewTickSql> => {
+  const trackingId = buildPreviewTrackingId(customerId, liveSessionId);
+  if (!liveCourseIds.length) return { accessLevel: "full", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: null, previewTrackingId: null };
+  const grantedBy = await firstEntitledLiveCourseId(customerId, liveCourseIds);
+  if (grantedBy != null) return { accessLevel: "full", previewSecondsRemaining: 0, accessGrantedByLiveCourseId: grantedBy, previewTrackingId: null };
+
+  const state = await commitPreviewTick(customerId, liveSessionId, false);
+  return { ...state, previewTrackingId: state.accessLevel === "preview" ? trackingId : null };
+};
+
+/**
+ * Read-only batch preview lookup for LIST endpoints (Live Now): the accessLevel
+ * a non-owner would get, WITHOUT starting anyone's clock. Only
+ * resolveLivePreviewStateSql(track=true) — i.e. actually opening the player —
+ * may create a preview row.
+ */
+export const previewLevelMapSql = async (
+  customerId: number | null,
+  liveSessionIds: number[]
+): Promise<Map<number, "preview" | "preview_ended">> => {
+  const out = new Map<number, "preview" | "preview_ended">();
+  if (!customerId || !liveSessionIds.length) return out;
+  const rows = await prisma.liveSessionPreview.findMany({
+    where: { customerId, liveSessionId: { in: liveSessionIds } },
+    select: { liveSessionId: true, consumedSeconds: true, lastHeartbeatAt: true },
+    orderBy: { id: "asc" },
+  });
+  const now = new Date();
+  for (const r of rows) {
+    if (r.liveSessionId == null || out.has(r.liveSessionId)) continue; // first (oldest) row wins
+    // Same watch-time rule as the detail endpoint, including any open window's
+    // uncommitted time — a card must not advertise "preview" for a trial the
+    // player would immediately end. Still strictly read-only: nothing is charged.
+    out.set(r.liveSessionId, previewRemainingFrom(r.consumedSeconds, r.lastHeartbeatAt, now) > 0 ? "preview" : "preview_ended");
+  }
+  return out;
 };
 
 // ── recording auto-promote (ported from recording.promote.maybeAutoPromoteRecording; SQL) ──
@@ -1670,27 +1957,72 @@ export const listMyCourses = async (customerId: number | null) => {
 };
 
 // ── cross-course session feeds (all-upcoming / live-now / my-upcoming) ────────
-const sessionFeed = async (courseIds: number[], mode: "upcoming" | "liveNow", search: string | undefined, page: number, limit: number) => {
+/**
+ * One row per PHYSICAL session — a session shared by several courses appears
+ * exactly once (repo dedupes on session id), carrying ALL of its linked courses.
+ *
+ * Per-row entitlement fields (`liveCourses[].isPurchased`, `subscribed`,
+ * `accessLevel`) are resolved in two batched queries for the whole page, not one
+ * pair per row. They are UI HINTS ONLY — tapping through re-runs the real gate in
+ * GET /client/live-sessions/:id, which is the sole authority.
+ */
+const sessionFeed = async (
+  courseIds: number[],
+  customerId: number | null,
+  mode: "upcoming" | "liveNow",
+  search: string | undefined,
+  page: number,
+  limit: number
+) => {
   const { rows, total, courseBySession } = await repo.sessionsForCourses(courseIds, { upcoming: mode === "upcoming", liveNow: mode === "liveNow", search, now: new Date(), skip: (page - 1) * limit, take: limit });
-  const sessions = rows.map((s) => ({ ...toSessionDto(s), liveCourseIds: (courseBySession.get(s.id) ?? []).map(String) }));
+  if (!rows.length) return { sessions: [], total, page, limit };
+
+  const linkedIds = [...new Set(rows.flatMap((s) => courseBySession.get(s.id) ?? []))];
+  const [courses, owned, previewLevels] = await Promise.all([
+    linkedIds.length
+      ? prisma.liveCourse.findMany({ where: { id: { in: linkedIds } }, select: { id: true, name: true, image: true } })
+      : Promise.resolve([] as { id: number; name: string; image: string | null }[]),
+    getOwnedCourseIds(customerId),
+    previewLevelMapSql(customerId, rows.map((s) => s.id)),
+  ]);
+  const courseById = new Map(courses.map((c) => [c.id, c]));
+
+  const sessions = rows.map((s) => {
+    const ids = courseBySession.get(s.id) ?? [];
+    const liveCourses = ids
+      .map((id) => courseById.get(id))
+      .filter((c): c is NonNullable<typeof c> => Boolean(c))
+      .map((c) => ({ _id: String(c.id), name: c.name, image: c.image ?? null, isPurchased: owned.has(String(c.id)) }));
+    // Live Now semantics: owning ANY linked course is full access. A session with
+    // no linked course is ungated (nothing to buy), matching the detail endpoint.
+    const subscribed = ids.length === 0 || liveCourses.some((c) => c.isPurchased);
+    return {
+      ...toSessionDto(s),
+      sessionId: String(s.id),
+      liveCourseIds: ids.map(String),
+      liveCourses,
+      subscribed,
+      accessLevel: subscribed ? "full" : previewLevels.get(s.id) ?? "preview",
+    };
+  });
   return { sessions, total, page, limit };
 };
 
-export const listAllUpcomingSessions = async (q: { search?: string; page: number; limit: number }) => {
+export const listAllUpcomingSessions = async (customerId: number | null, q: { search?: string; page: number; limit: number }) => {
   // All visible courses' upcoming sessions (discovery feed) — every active course.
   const all = await repo.listClientCourses({ now: new Date(), sort: "ordered", skip: 0, take: 1000 });
-  return sessionFeed(all.map((c) => c.id), "upcoming", q.search, q.page, q.limit);
+  return sessionFeed(all.map((c) => c.id), customerId, "upcoming", q.search, q.page, q.limit);
 };
 
-export const listLiveNowSessions = async (q: { search?: string; page: number; limit: number }) => {
+export const listLiveNowSessions = async (customerId: number | null, q: { search?: string; page: number; limit: number }) => {
   const all = await repo.listClientCourses({ now: new Date(), sort: "ordered", skip: 0, take: 1000 });
-  return sessionFeed(all.map((c) => c.id), "liveNow", q.search, q.page, q.limit);
+  return sessionFeed(all.map((c) => c.id), customerId, "liveNow", q.search, q.page, q.limit);
 };
 
 export const listMyUpcomingSessions = async (customerId: number | null, q: { search?: string; page: number; limit: number }) => {
   if (!customerId) return { sessions: [], total: 0, page: q.page, limit: q.limit };
   const owned = await repo.ownedCourseIds(customerId, new Date());
-  return sessionFeed(owned, "upcoming", q.search, q.page, q.limit);
+  return sessionFeed(owned, customerId, "upcoming", q.search, q.page, q.limit);
 };
 
 // ── sessions for one course (client) ──────────────────────────────────────────
