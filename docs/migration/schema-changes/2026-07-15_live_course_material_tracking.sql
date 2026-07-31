@@ -10,9 +10,20 @@
 -- INITIAL_Number threshold → generic/Mahavir trackingUrl), mirroring how SQL book
 -- AWBs work today. NULL until the sub is a paid with-material order.
 --
--- Idempotent apply on staging:
---   npx prisma db execute --file docs/migration/schema-changes/2026-07-15_live_course_material_tracking.sql
+-- IDEMPOTENT / re-runnable: MySQL 8 has no `ADD COLUMN IF NOT EXISTS`, so each add
+-- is guarded on information_schema and becomes a no-op if already applied (fixes
+-- "Duplicate column name" on a re-run).
 
-ALTER TABLE ws_live_course_subscription
-  ADD COLUMN tracking_id BIGINT NULL,
-  ADD COLUMN tracking_status VARCHAR(20) NULL;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_live_course_subscription' AND COLUMN_NAME = 'tracking_id');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_live_course_subscription` ADD COLUMN `tracking_id` BIGINT NULL',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_live_course_subscription' AND COLUMN_NAME = 'tracking_status');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_live_course_subscription` ADD COLUMN `tracking_status` VARCHAR(20) NULL',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;

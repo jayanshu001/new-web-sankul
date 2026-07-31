@@ -17,9 +17,20 @@
 --   parent -> child  (descendantsOf / descendantsByRoot, catalog listing counts)
 --   child  -> parent (ancestorsOf, resolveVideoScope media-token gating)
 --
--- Index-only additive DDL; safe to run online. Re-runnable guards omitted (MySQL 8
--- has no CREATE INDEX IF NOT EXISTS) — check SHOW INDEX first if re-applying.
+-- IDEMPOTENT / re-runnable: MySQL 8 has no `CREATE INDEX IF NOT EXISTS`, so each add
+-- is guarded on information_schema.STATISTICS and becomes a no-op if already applied
+-- (fixes "Duplicate key name" on a re-run). Index-only additive DDL; safe online.
 
-ALTER TABLE ws_video_category_relation
-  ADD INDEX idx_vcr_parent (parent),
-  ADD INDEX idx_vcr_child  (child);
+SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_video_category_relation' AND INDEX_NAME = 'idx_vcr_parent');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_video_category_relation` ADD INDEX `idx_vcr_parent` (`parent`)',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_video_category_relation' AND INDEX_NAME = 'idx_vcr_child');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_video_category_relation` ADD INDEX `idx_vcr_child` (`child`)',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;

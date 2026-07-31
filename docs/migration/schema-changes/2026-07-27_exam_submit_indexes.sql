@@ -24,25 +24,43 @@
 --   pt-online-schema-change if the box is already saturated.
 --
 -- These are pure additions: no column, data, or API-shape change.
+--
+-- IDEMPOTENT / re-runnable: MySQL 8 has no `CREATE INDEX IF NOT EXISTS`, so each add
+-- is guarded on information_schema.STATISTICS and becomes a no-op if already applied
+-- (fixes "Duplicate key name" on a re-run).
 
 -- 1. Attempt-scoped detail lookups + the (attempt, question) upsert probe.
 --    The 2-column index also serves the 1-column lookup (leftmost prefix), so
 --    only one index is needed.
-ALTER TABLE `ws_exam_result_detail`
-  ADD INDEX `idx_exam_result_detail_attempt_question`
-    (`qresult_detail_qresult_id`, `qresult_detail_question_id`);
+SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_exam_result_detail' AND INDEX_NAME = 'idx_exam_result_detail_attempt_question');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_exam_result_detail` ADD INDEX `idx_exam_result_detail_attempt_question` (`qresult_detail_qresult_id`, `qresult_detail_question_id`)',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- 2. Question bank per exam: `WHERE exam_id=? AND status=1`.
-ALTER TABLE `ws_exam_question`
-  ADD INDEX `idx_exam_question_exam_status` (`exam_id`, `status`);
+SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_exam_question' AND INDEX_NAME = 'idx_exam_question_exam_status');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_exam_question` ADD INDEX `idx_exam_question_exam_status` (`exam_id`, `status`)',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- 3. Rank counters: `WHERE qresult_qtest_id=? AND qresult_status=1`
 --    GROUP BY qresult_customer_id. Customer is included as a trailing column so
 --    the GROUP BY / COUNT(DISTINCT) can be served index-only.
-ALTER TABLE `ws_exam_result`
-  ADD INDEX `idx_exam_result_exam_status`
-    (`qresult_qtest_id`, `qresult_status`, `qresult_customer_id`);
+SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_exam_result' AND INDEX_NAME = 'idx_exam_result_exam_status');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_exam_result` ADD INDEX `idx_exam_result_exam_status` (`qresult_qtest_id`, `qresult_status`, `qresult_customer_id`)',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- 4. Per-customer analytics rollup row.
-ALTER TABLE `ws_exam_result_detail_analytics`
-  ADD INDEX `idx_exam_result_analytics_user` (`userId`);
+SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_exam_result_detail_analytics' AND INDEX_NAME = 'idx_exam_result_analytics_user');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_exam_result_detail_analytics` ADD INDEX `idx_exam_result_analytics_user` (`userId`)',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;

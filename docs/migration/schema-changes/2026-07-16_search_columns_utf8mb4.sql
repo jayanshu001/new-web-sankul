@@ -14,10 +14,8 @@
 -- utf8mb3 -> utf8mb4 is a strict superset. Per-column MODIFY (not table-wide CONVERT TO)
 -- to avoid rewriting non-searched columns and to sidestep index key-length surprises.
 --
--- SCOPE: this is the set of *searched* columns still on latin1/utf8mb3 in the current
--- app DB (audited against websankul_staging_1). Most searched columns — every `name`,
--- and course/book/ebook/package/exam text — are ALREADY utf8mb4 (from the 2026-07-09
--- change and earlier). Before deploy to another environment, re-run the audit and add
+-- SCOPE: the set of *searched* columns still on latin1/utf8mb3, audited against
+-- websankul_staging_1. Before deploy to another environment, re-run the audit and add
 -- any columns that are still non-utf8mb4 there:
 --   SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, CHARACTER_SET_NAME
 --   FROM information_schema.COLUMNS
@@ -25,48 +23,96 @@
 --     AND COLUMN_NAME IN ('name','title','description','discription','author','topic',
 --       'question','answer','slug','key','order_items','email','email_address','phone',
 --       'mobile','promocode','link','image','publisher','state_code','referral_code');
--- Re-running THIS file on an already-converted column is a harmless no-op.
 --
 -- Collation is NOT tracked in schema.prisma — no db:pull / prisma:generate / code change
--- results from this DDL. Apply on deploy via `yarn db:migrate` (or
--- `npx prisma db execute --file docs/migration/schema-changes/2026-07-16_search_columns_utf8mb4.sql`).
+-- results from this DDL.
+--
+-- IDEMPOTENT / environment-safe: each MODIFY is guarded on information_schema.COLUMNS
+-- (table + column must exist), so re-running is a harmless no-op AND environments that
+-- lack a table/column (e.g. no ws_user_inquiry) are skipped instead of erroring P1014.
+
+-- Helper convention per column:
+--   check the (table, column) exists → MODIFY only then, else DO 0.
 
 -- ── ws_material ──────────────────────────────────────────────────────────────
-ALTER TABLE `ws_material`
-  MODIFY COLUMN `description` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL;
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_material' AND COLUMN_NAME='description');
+SET @q := IF(@e>0,'ALTER TABLE `ws_material` MODIFY COLUMN `description` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- ── ws_popup_notification ────────────────────────────────────────────────────
-ALTER TABLE `ws_popup_notification`
-  MODIFY COLUMN `title` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  MODIFY COLUMN `description` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  MODIFY COLUMN `promocode` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  MODIFY COLUMN `image` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL;
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_popup_notification' AND COLUMN_NAME='title');
+SET @q := IF(@e>0,'ALTER TABLE `ws_popup_notification` MODIFY COLUMN `title` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_popup_notification' AND COLUMN_NAME='description');
+SET @q := IF(@e>0,'ALTER TABLE `ws_popup_notification` MODIFY COLUMN `description` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_popup_notification' AND COLUMN_NAME='promocode');
+SET @q := IF(@e>0,'ALTER TABLE `ws_popup_notification` MODIFY COLUMN `promocode` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_popup_notification' AND COLUMN_NAME='image');
+SET @q := IF(@e>0,'ALTER TABLE `ws_popup_notification` MODIFY COLUMN `image` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- ── ws_promocode ─────────────────────────────────────────────────────────────
-ALTER TABLE `ws_promocode`
-  MODIFY COLUMN `promocode` VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL,
-  MODIFY COLUMN `description` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL;
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_promocode' AND COLUMN_NAME='promocode');
+SET @q := IF(@e>0,'ALTER TABLE `ws_promocode` MODIFY COLUMN `promocode` VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_promocode' AND COLUMN_NAME='description');
+SET @q := IF(@e>0,'ALTER TABLE `ws_promocode` MODIFY COLUMN `description` TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- ── ws_promoter ──────────────────────────────────────────────────────────────
-ALTER TABLE `ws_promoter`
-  MODIFY COLUMN `full_name` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL,
-  MODIFY COLUMN `email` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL,
-  MODIFY COLUMN `phone` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL,
-  MODIFY COLUMN `image` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL;
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_promoter' AND COLUMN_NAME='full_name');
+SET @q := IF(@e>0,'ALTER TABLE `ws_promoter` MODIFY COLUMN `full_name` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 
--- ── ws_user_inquiry ──────────────────────────────────────────────────────────
-ALTER TABLE `ws_user_inquiry`
-  MODIFY COLUMN `name` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  MODIFY COLUMN `email` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL;
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_promoter' AND COLUMN_NAME='email');
+SET @q := IF(@e>0,'ALTER TABLE `ws_promoter` MODIFY COLUMN `email` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_promoter' AND COLUMN_NAME='phone');
+SET @q := IF(@e>0,'ALTER TABLE `ws_promoter` MODIFY COLUMN `phone` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_promoter' AND COLUMN_NAME='image');
+SET @q := IF(@e>0,'ALTER TABLE `ws_promoter` MODIFY COLUMN `image` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- ── ws_user_inquiry (absent in some environments — guard skips it) ────────────
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_user_inquiry' AND COLUMN_NAME='name');
+SET @q := IF(@e>0,'ALTER TABLE `ws_user_inquiry` MODIFY COLUMN `name` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_user_inquiry' AND COLUMN_NAME='email');
+SET @q := IF(@e>0,'ALTER TABLE `ws_user_inquiry` MODIFY COLUMN `email` VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- ── ws_video ─────────────────────────────────────────────────────────────────
-ALTER TABLE `ws_video`
-  MODIFY COLUMN `title` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  MODIFY COLUMN `topic` VARCHAR(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  MODIFY COLUMN `slug` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL;
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_video' AND COLUMN_NAME='title');
+SET @q := IF(@e>0,'ALTER TABLE `ws_video` MODIFY COLUMN `title` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_video' AND COLUMN_NAME='topic');
+SET @q := IF(@e>0,'ALTER TABLE `ws_video` MODIFY COLUMN `topic` VARCHAR(25) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_video' AND COLUMN_NAME='slug');
+SET @q := IF(@e>0,'ALTER TABLE `ws_video` MODIFY COLUMN `slug` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- ── ws_video_category ────────────────────────────────────────────────────────
-ALTER TABLE `ws_video_category`
-  MODIFY COLUMN `title` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  MODIFY COLUMN `slug` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL,
-  MODIFY COLUMN `image` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL;
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_video_category' AND COLUMN_NAME='title');
+SET @q := IF(@e>0,'ALTER TABLE `ws_video_category` MODIFY COLUMN `title` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_video_category' AND COLUMN_NAME='slug');
+SET @q := IF(@e>0,'ALTER TABLE `ws_video_category` MODIFY COLUMN `slug` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @e := (SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ws_video_category' AND COLUMN_NAME='image');
+SET @q := IF(@e>0,'ALTER TABLE `ws_video_category` MODIFY COLUMN `image` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci NOT NULL','DO 0');
+PREPARE s FROM @q; EXECUTE s; DEALLOCATE PREPARE s;

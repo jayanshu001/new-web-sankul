@@ -27,14 +27,35 @@
 -- Then:  yarn prisma:generate  AND RESTART the app (a regenerated client does not
 --        trip `tsx watch`, so a running dev server keeps the stale one and 500s).
 
--- 1. columns
-ALTER TABLE ws_live_session_preview
-  ADD COLUMN consumed_seconds INT NOT NULL DEFAULT 0 AFTER started_at,
-  ADD COLUMN last_heartbeat_at DATETIME NULL AFTER consumed_seconds;
+-- IDEMPOTENT / re-runnable: MySQL 8 has no `ADD COLUMN IF NOT EXISTS`. Each add is
+-- guarded on information_schema, AND the one-time backfill (step 2) is gated on
+-- whether `consumed_seconds` was ABSENT before this run. This is critical: on a
+-- re-run the column already exists and has REAL accumulated watch time — blindly
+-- re-running the wall-clock backfill would OVERWRITE that live data. So the backfill
+-- fires only on the first application (when the columns are freshly created).
 
--- 2. backfill: carry over what each existing trial had already burnt under the
---    OLD wall-clock rule, so this migration never hands preview time back to a
---    student whose trial had already ended.
+-- 0. capture pre-state: was consumed_seconds absent before we (maybe) add it?
+SET @was_absent := (SELECT COUNT(*) = 0 FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_live_session_preview' AND COLUMN_NAME = 'consumed_seconds');
+
+-- 1. columns (each guarded)
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_live_session_preview' AND COLUMN_NAME = 'consumed_seconds');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_live_session_preview` ADD COLUMN `consumed_seconds` INT NOT NULL DEFAULT 0 AFTER `started_at`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_live_session_preview' AND COLUMN_NAME = 'last_heartbeat_at');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_live_session_preview` ADD COLUMN `last_heartbeat_at` DATETIME NULL AFTER `consumed_seconds`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- 2. backfill — ONLY on first application (see header). Carry over what each existing
+--    trial had already burnt under the OLD wall-clock rule, so this migration never
+--    hands preview time back to a student whose trial had already ended.
 --
 --    ⚠ TIMEZONE: `started_at` holds IST wall clock (the app's Prisma middleware
 --    shifts every write +05:30 — see src/config/prisma.ts). Raw SQL bypasses that
@@ -43,11 +64,10 @@ ALTER TABLE ws_live_session_preview
 --    too small, and every trial started within the last 5.5 hours would backfill
 --    to 0 — i.e. a full free reset. UTC_TIMESTAMP() + 330 minutes reproduces the
 --    exact value the app would have written, independent of @@session.time_zone.
-SET @ist_now = UTC_TIMESTAMP() + INTERVAL 330 MINUTE;
-
-UPDATE ws_live_session_preview
-SET consumed_seconds = LEAST(180, GREATEST(0, TIMESTAMPDIFF(SECOND, started_at, @ist_now)))
-WHERE started_at IS NOT NULL;
+SET @bf := IF(@was_absent,
+  'UPDATE ws_live_session_preview SET consumed_seconds = LEAST(180, GREATEST(0, TIMESTAMPDIFF(SECOND, started_at, UTC_TIMESTAMP() + INTERVAL 330 MINUTE))) WHERE started_at IS NOT NULL',
+  'DO 0');
+PREPARE s FROM @bf; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- 3. no open windows exist yet — last_heartbeat_at stays NULL for every legacy
 --    row, so no backfilled trial is treated as "currently being watched".

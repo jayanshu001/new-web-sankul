@@ -19,26 +19,52 @@
 --    logical only), so nothing needs to be dropped — order_id is now polymorphic
 --    across the 5 order tables, discriminated by `source`.
 --
--- Idempotent / re-runnable: guarded so a second apply is a no-op.
+-- IDEMPOTENT / re-runnable: MySQL 8 has no ADD COLUMN / ADD INDEX "IF NOT
+-- EXISTS", so each add is guarded on information_schema and becomes a no-op if
+-- already applied (fixes "Duplicate column name" on a re-run).
 
 -- ── 1. referrer_id on the 5 referral-eligible order tables ──────────────────
 -- course + package share ws_package_course_order (one id space).
-ALTER TABLE `ws_package_course_order`
-  ADD COLUMN `referrer_id` INT NULL AFTER `refferalcode`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_package_course_order' AND COLUMN_NAME = 'referrer_id');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_package_course_order` ADD COLUMN `referrer_id` INT NULL AFTER `refferalcode`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
-ALTER TABLE `ws_ebook_order`
-  ADD COLUMN `referrer_id` INT NULL AFTER `promocode`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_ebook_order' AND COLUMN_NAME = 'referrer_id');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_ebook_order` ADD COLUMN `referrer_id` INT NULL AFTER `promocode`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
-ALTER TABLE `ws_live_course_subscription`
-  ADD COLUMN `referrer_id` INT NULL AFTER `promocode_id`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_live_course_subscription' AND COLUMN_NAME = 'referrer_id');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_live_course_subscription` ADD COLUMN `referrer_id` INT NULL AFTER `promocode_id`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
-ALTER TABLE `ws_test_series_order`
-  ADD COLUMN `referrer_id` INT NULL AFTER `promocode_id`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_test_series_order' AND COLUMN_NAME = 'referrer_id');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_test_series_order` ADD COLUMN `referrer_id` INT NULL AFTER `promocode_id`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- ── 2. source discriminator on the reward ledger ────────────────────────────
-ALTER TABLE `ws_refferal_transaction`
-  ADD COLUMN `source` VARCHAR(20) NULL AFTER `order_id`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_refferal_transaction' AND COLUMN_NAME = 'source');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_refferal_transaction` ADD COLUMN `source` VARCHAR(20) NULL AFTER `order_id`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- Helps the (source, order_id, customer) idempotency probe on credit writes.
-ALTER TABLE `ws_refferal_transaction`
-  ADD INDEX `idx_refferal_txn_credit_dedupe` (`customer_id`, `source`, `order_id`, `type`);
+SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_refferal_transaction' AND INDEX_NAME = 'idx_refferal_txn_credit_dedupe');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_refferal_transaction` ADD INDEX `idx_refferal_txn_credit_dedupe` (`customer_id`, `source`, `order_id`, `type`)',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;

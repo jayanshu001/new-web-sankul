@@ -10,6 +10,25 @@
 -- claims it with a conditional UPDATE ... WHERE notified_stream_id <> stream_id
 -- (Prisma `not` also matches NULL), so only the first start of a given stream run
 -- sends. A genuinely NEW StreamOS stream (different stream_id) re-notifies.
+--
+-- IDEMPOTENT: MySQL 8 has no `ADD COLUMN IF NOT EXISTS`, so guard on
+-- information_schema. If the column already exists (this DDL ran before) it
+-- becomes a no-op instead of erroring "Duplicate column name".
 
-ALTER TABLE `ws_live_session`
-  ADD COLUMN `notified_stream_id` VARCHAR(191) NULL DEFAULT NULL AFTER `stream_id`;
+SET @col_exists := (
+  SELECT COUNT(*)
+  FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'ws_live_session'
+    AND COLUMN_NAME = 'notified_stream_id'
+);
+
+SET @ddl := IF(
+  @col_exists = 0,
+  'ALTER TABLE `ws_live_session` ADD COLUMN `notified_stream_id` VARCHAR(191) NULL DEFAULT NULL AFTER `stream_id`',
+  'DO 0'  -- column already present; no-op
+);
+
+PREPARE stmt FROM @ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;

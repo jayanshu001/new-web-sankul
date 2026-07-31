@@ -20,6 +20,14 @@
 --
 -- Apply:  npx prisma db execute --file docs/migration/schema-changes/2026-07-24_pcs_created_at_index.sql --schema prisma/schema.prisma
 -- Mirrored in prisma/schema.prisma as @@index([createdAt, courseId, amount], name: "idx_pcs_created_course_amount").
+--
+-- IDEMPOTENT / re-runnable: MySQL 8 has no `CREATE INDEX IF NOT EXISTS`, so the add is
+-- guarded on information_schema.STATISTICS and becomes a no-op if already applied
+-- (fixes "Duplicate key name" on a re-run).
 
-CREATE INDEX idx_pcs_created_course_amount
-  ON ws_package_course_subscription (created_at, course_id, amount);
+SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_package_course_subscription' AND INDEX_NAME = 'idx_pcs_created_course_amount');
+SET @ddl := IF(@exists = 0,
+  'CREATE INDEX `idx_pcs_created_course_amount` ON `ws_package_course_subscription` (`created_at`, `course_id`, `amount`)',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;

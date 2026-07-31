@@ -13,7 +13,21 @@
 --
 -- Rollback:
 --   ALTER TABLE `ws_notification` DROP COLUMN `title_html`, DROP COLUMN `body_html`;
+--
+-- IDEMPOTENT / re-runnable: MySQL 8 has no `ADD COLUMN IF NOT EXISTS`, so each add is
+-- guarded on information_schema and becomes a no-op if already applied (fixes
+-- "Duplicate column name" on a re-run).
 
-ALTER TABLE `ws_notification`
-  ADD COLUMN `title_html` TEXT NULL AFTER `title`,
-  ADD COLUMN `body_html`  TEXT NULL AFTER `body`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_notification' AND COLUMN_NAME = 'title_html');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_notification` ADD COLUMN `title_html` TEXT NULL AFTER `title`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_notification' AND COLUMN_NAME = 'body_html');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_notification` ADD COLUMN `body_html` TEXT NULL AFTER `body`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;

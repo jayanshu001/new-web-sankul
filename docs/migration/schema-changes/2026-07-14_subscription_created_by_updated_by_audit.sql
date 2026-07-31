@@ -5,18 +5,51 @@
 -- columns; the other three need them added. Nullable Int (admin user id), no default
 -- — existing rows stay NULL (system/online purchases were never admin-attributed).
 --
--- NOTE: this MySQL build does NOT support `ADD COLUMN IF NOT EXISTS`, so these are
--- plain ALTERs. The three columns were verified absent before writing. Apply once:
---   npx prisma db execute --file docs/migration/schema-changes/2026-07-14_subscription_created_by_updated_by_audit.sql --schema prisma/schema.prisma
+-- IDEMPOTENT / re-runnable: MySQL 8 has no `ADD COLUMN IF NOT EXISTS`, so each add
+-- is guarded on information_schema and becomes a no-op if already applied (fixes
+-- "Duplicate column name" on a re-run).
 
-ALTER TABLE `ws_live_course_subscription`
-  ADD COLUMN `created_by` INT NULL AFTER `updated_at`,
-  ADD COLUMN `updated_by` INT NULL AFTER `created_by`;
+-- ws_live_course_subscription -------------------------------------------------
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_live_course_subscription' AND COLUMN_NAME = 'created_by');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_live_course_subscription` ADD COLUMN `created_by` INT NULL AFTER `updated_at`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
-ALTER TABLE `ws_test_series_subscription`
-  ADD COLUMN `created_by` INT NULL AFTER `updated_at`,
-  ADD COLUMN `updated_by` INT NULL AFTER `created_by`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_live_course_subscription' AND COLUMN_NAME = 'updated_by');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_live_course_subscription` ADD COLUMN `updated_by` INT NULL AFTER `created_by`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
-ALTER TABLE `ws_ebook_subscription`
-  ADD COLUMN `created_by` INT NULL AFTER `updated_at`,
-  ADD COLUMN `updated_by` INT NULL AFTER `created_by`;
+-- ws_test_series_subscription -------------------------------------------------
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_test_series_subscription' AND COLUMN_NAME = 'created_by');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_test_series_subscription` ADD COLUMN `created_by` INT NULL AFTER `updated_at`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_test_series_subscription' AND COLUMN_NAME = 'updated_by');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_test_series_subscription` ADD COLUMN `updated_by` INT NULL AFTER `created_by`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+-- ws_ebook_subscription -------------------------------------------------------
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_ebook_subscription' AND COLUMN_NAME = 'created_by');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_ebook_subscription` ADD COLUMN `created_by` INT NULL AFTER `updated_at`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
+
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_ebook_subscription' AND COLUMN_NAME = 'updated_by');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_ebook_subscription` ADD COLUMN `updated_by` INT NULL AFTER `created_by`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
