@@ -37,5 +37,13 @@ JOIN (
  AND p.id <> d.keep_id;
 
 -- 2. enforce it going forward
-CREATE UNIQUE INDEX uq_live_session_preview_customer_session
-  ON ws_live_session_preview (customer_id, live_session_id);
+-- IDEMPOTENT / re-runnable: MySQL 8 has no `CREATE UNIQUE INDEX IF NOT EXISTS`, so
+-- the add is guarded on information_schema.STATISTICS and becomes a no-op if already
+-- applied (fixes "Duplicate key name" on a re-run). The DELETE above is already
+-- idempotent (a second run finds no duplicates to collapse).
+SET @exists := (SELECT COUNT(*) FROM information_schema.STATISTICS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_live_session_preview' AND INDEX_NAME = 'uq_live_session_preview_customer_session');
+SET @ddl := IF(@exists = 0,
+  'CREATE UNIQUE INDEX `uq_live_session_preview_customer_session` ON `ws_live_session_preview` (`customer_id`, `live_session_id`)',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;

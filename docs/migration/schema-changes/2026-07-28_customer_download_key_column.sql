@@ -23,9 +23,17 @@
 -- No backfill: every column starts NULL by design and the app PUTs on first 404.
 --
 -- Rollback: ALTER TABLE `ws_customer` DROP COLUMN `download_key_hex`;
+--
+-- IDEMPOTENT / re-runnable: MySQL 8 has no `ADD COLUMN IF NOT EXISTS`, so the add is
+-- guarded on information_schema and becomes a no-op if already applied (fixes
+-- "Duplicate column name" on a re-run).
 
-ALTER TABLE `ws_customer`
-  ADD COLUMN `download_key_hex` VARCHAR(64) NULL DEFAULT NULL AFTER `device`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_customer' AND COLUMN_NAME = 'download_key_hex');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_customer` ADD COLUMN `download_key_hex` VARCHAR(64) NULL DEFAULT NULL AFTER `device`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
 -- Supersedes an earlier local-only iteration that used a separate
 -- `ws_customer_download_key` table. Never deployed beyond local dev; dropped

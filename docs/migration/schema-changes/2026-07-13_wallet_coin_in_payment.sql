@@ -11,13 +11,27 @@
 --   * course + package → REUSE the existing ws_package_course_order.ws_coin column.
 --   * ebook / live-course / test-series → NEW wallet_coin column below.
 --
--- Idempotent / re-runnable.
+-- IDEMPOTENT / re-runnable: MySQL 8 has no `ADD COLUMN IF NOT EXISTS`, so each
+-- add is guarded on information_schema and becomes a no-op if already applied
+-- (fixes "Duplicate column name" on a re-run).
 
-ALTER TABLE `ws_ebook_order`
-  ADD COLUMN `wallet_coin` INT NULL AFTER `referrer_id`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_ebook_order' AND COLUMN_NAME = 'wallet_coin');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_ebook_order` ADD COLUMN `wallet_coin` INT NULL AFTER `referrer_id`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
-ALTER TABLE `ws_live_course_subscription`
-  ADD COLUMN `wallet_coin` INT NULL AFTER `referrer_id`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_live_course_subscription' AND COLUMN_NAME = 'wallet_coin');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_live_course_subscription` ADD COLUMN `wallet_coin` INT NULL AFTER `referrer_id`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
 
-ALTER TABLE `ws_test_series_order`
-  ADD COLUMN `wallet_coin` INT NULL AFTER `referrer_id`;
+SET @exists := (SELECT COUNT(*) FROM information_schema.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ws_test_series_order' AND COLUMN_NAME = 'wallet_coin');
+SET @ddl := IF(@exists = 0,
+  'ALTER TABLE `ws_test_series_order` ADD COLUMN `wallet_coin` INT NULL AFTER `referrer_id`',
+  'DO 0');
+PREPARE s FROM @ddl; EXECUTE s; DEALLOCATE PREPARE s;
