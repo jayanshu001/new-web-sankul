@@ -7,6 +7,7 @@ import {
   listVideoCategories,
   getVideoCategoryPreRequisites,
   getVideoCategory,
+  listVideoCategorySubCategories,
   listVideoCategoryCourses,
   listVideoCategoryVideos,
   createVideoCategory,
@@ -26,6 +27,7 @@ router.get("/pre-requisites", getVideoCategoryPreRequisites);
 router.get("/", cacheRoute({ ttl: 86400, entity: "video-category" }), listVideoCategories);
 router.post("/", uploadS3.single("image"), autoFlushGroup("video-category"), createVideoCategory);
 router.get("/:id", cacheRoute({ ttl: 86400, entity: "video-category" }), getVideoCategory);
+router.get("/:id/sub-categories", listVideoCategorySubCategories);
 router.get("/:id/courses", listVideoCategoryCourses);
 router.get("/:id/videos", listVideoCategoryVideos);
 router.put("/:id", uploadS3.single("image"), autoFlushGroup("video-category"), updateVideoCategory);

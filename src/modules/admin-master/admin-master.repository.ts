@@ -165,6 +165,33 @@ export const adminMasterRepository = {
   listAllCategoriesBrief: () => prisma.videoCategory.findMany({ select: { id: true, title: true }, orderBy: { title: "asc" } }),
 
   // relation lists
+  // Sub-categories = the children of this category in the ws_video_category_relation
+  // DAG, paginated. `order_by` alone is not unique, so `id` breaks ties — without a
+  // stable tiebreaker rows can repeat or vanish between pages.
+  subCategoriesForCategory: async (categoryId: number, opts: { search?: string; status?: boolean; skip: number; take: number }) => {
+    const childIds = await childIdsOf(categoryId);
+    if (!childIds.length) return [];
+    const where: any = { id: { in: childIds } };
+    const search = buildPrismaSearch(opts.search, ["title", "slug"]);
+    if (search) Object.assign(where, search);
+    if (opts.status !== undefined) where.status = opts.status;
+    return prisma.videoCategory.findMany({
+      where,
+      select: { id: true, title: true, slug: true, status: true, order_by: true },
+      orderBy: [{ order_by: "asc" }, { id: "asc" }],
+      skip: opts.skip,
+      take: opts.take,
+    });
+  },
+  countSubCategoriesForCategory: async (categoryId: number, opts: { search?: string; status?: boolean }) => {
+    const childIds = await childIdsOf(categoryId);
+    if (!childIds.length) return 0;
+    const where: any = { id: { in: childIds } };
+    const search = buildPrismaSearch(opts.search, ["title", "slug"]);
+    if (search) Object.assign(where, search);
+    if (opts.status !== undefined) where.status = opts.status;
+    return prisma.videoCategory.count({ where });
+  },
   coursesForCategory: (categoryId: number, opts: { search?: string; status?: boolean; skip: number; take: number }) => {
     const where: any = { videoCategoryId: categoryId };
     const search = buildPrismaSearch(opts.search, ["name"]);

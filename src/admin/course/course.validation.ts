@@ -130,3 +130,16 @@ export const reorderCourseBooksSchema = z.object({
     )
     .min(1, "order must not be empty"),
 });
+
+// Reorder the per-course display order of already-linked exam / material categories
+// (Course-Detail category tabs). Same shape as the book reorder above.
+export const reorderCourseCategoriesSchema = z.object({
+  order: z
+    .array(
+      z.object({
+        categoryId: z.coerce.number().int().positive(),
+        order: z.coerce.number().int().nonnegative(),
+      })
+    )
+    .min(1, "order must not be empty"),
+});

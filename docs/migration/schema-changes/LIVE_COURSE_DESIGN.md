@@ -49,6 +49,16 @@ modules: `materialCategories[]`/`examCategories[]` → **pivot tables** (reuse t
 `ws_exam_category_*` pattern, scoped by a `live_course_id`); `scheduleEntries[]`/`scheduleFolders[]` → **JSON
 columns** (free-form, admin-authored, never queried relationally).
 
+> ⚠ **As built, both category arrays landed as JSON columns, not pivots** —
+> `material_categories` / `exam_categories` on `ws_live_course`. For materials that broke
+> entitlement outright: `client-material.getPurchasedMaterialIds` joins category → container
+> pivot → subscription, so a live-course buyer got `isPurchased:false` on every material.
+> **Corrected 2026-07-31** by `ws_material_category_live_course`
+> (`2026-07-31_material_category_live_course.sql`): the JSON column stays the admin
+> read/write shape and is mirrored onto the pivot, which is what entitlement reads.
+> `exam_categories` is still JSON-only — check it before anything gates exam access on a
+> live-course purchase.
+
 | column | type | from Mongo | notes |
 |---|---|---|---|
 | `id` | INT PK AI | `_id` | |

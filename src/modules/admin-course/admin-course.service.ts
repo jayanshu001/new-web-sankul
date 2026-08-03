@@ -386,6 +386,24 @@ export const reorderCourseBooks = async (
   return { updated: items.length };
 };
 
+export const reorderCourseExamCategories = async (
+  courseId: number,
+  items: { categoryId: number; order: number }[]
+): Promise<"not_found" | { updated: number }> => {
+  if (!(await repo.exists(courseId))) return "not_found";
+  await repo.reorderExamCategoryLinks(courseId, items, new Date());
+  return { updated: items.length };
+};
+
+export const reorderCourseMaterialCategories = async (
+  courseId: number,
+  items: { categoryId: number; order: number }[]
+): Promise<"not_found" | { updated: number }> => {
+  if (!(await repo.exists(courseId))) return "not_found";
+  await repo.reorderMaterialCategoryLinks(courseId, items, new Date());
+  return { updated: items.length };
+};
+
 export const unlinkCourseBook = async (
   courseId: number,
   bookId: number

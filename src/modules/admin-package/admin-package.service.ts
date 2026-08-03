@@ -420,13 +420,14 @@ export const reorderEmbedded = async (
   const values = new Set(orders.map((o) => o.order));
   if (values.size !== orders.length) return "dup";
   if (!(await repo.exists(pkgId))) return "not_found";
-  await Promise.all(orders.map(({ category, order }) => {
-    const catId = parsePackageId(category);
-    if (!catId) return Promise.resolve();
-    if (field === "specificSubjects") return repo.reorderSpecificSubject(pkgId, catId, order);
-    if (field === "materialCategories") return repo.reorderMaterialCategory(pkgId, catId, order);
-    return repo.reorderExamCategory(pkgId, catId, order);
-  }));
+  const rows = orders
+    .map(({ category, order }) => ({ categoryId: parsePackageId(category), order }))
+    .filter((r): r is { categoryId: number; order: number } => r.categoryId != null);
+  if (rows.length) {
+    if (field === "specificSubjects") await repo.reorderSpecificSubjects(pkgId, rows);
+    else if (field === "materialCategories") await repo.reorderMaterialCategories(pkgId, rows);
+    else await repo.reorderExamCategories(pkgId, rows);
+  }
   const embeds = await loadEmbeds(pkgId);
   return embeds[field];
 };
@@ -440,8 +441,12 @@ export const listPackagePlans = async (packageId: number, q: { page?: string; li
     repo.listPlans(packageId, (pageNum - 1) * limitNum, limitNum),
     repo.countPlans(packageId),
   ]);
+  // `subscriberCount` drives the admin UI's edit lock: a plan customers already bought
+  // must not have its terms rewritten (the PUT /plans/:id guard enforces the same rule).
+  const counts = rows.length ? await repo.subscriptionCountsByPlan(rows.map((r) => r.id)) : [];
+  const countByPlan = new Map(counts.map((c: any) => [c.planId, c._count?._all ?? 0]));
   return {
-    data: rows.map(toPlanDto),
+    data: rows.map((r) => ({ ...toPlanDto(r), subscriberCount: countByPlan.get(r.id) ?? 0 })),
     pagination: { total, page: pageNum, limit: limitNum, totalPages: Math.ceil(total / limitNum) },
   };
 };

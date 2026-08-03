@@ -80,6 +80,7 @@ R("GET", "/guards", ...view("guards"));
 // Collapsed 2026-07-20: the legacy `video-categories` catalog module was dropped
 // (keep-list keeps `videos.categories`); these routes now gate on that key.
 R("GET", "/video-categories/pre-requisites", ...view("videos.categories"));
+R("GET", "/video-categories/:id/sub-categories", ...view("videos.categories"));
 R("GET", "/video-categories/:id/courses", ...view("videos.categories"));
 R("GET", "/video-categories/:id/videos", ...view("videos.categories"));
 R("POST", "/video-categories/:id/duplicate", "videos.categories.create"); // was .duplicate
@@ -121,7 +122,10 @@ R("GET", "/courses/:id/plans", ...view("courses"));
 R("POST", "/courses/:id/plans", "courses.create");
 R("GET", "/courses/:id/promocodes", ...view("courses"));
 R("GET", "/courses/:id/exam-categories", ...view("courses"));
+R("PUT", "/courses/:id/exam-categories/reorder", "courses.edit");
 R("GET", "/courses/:id/material-categories", ...view("courses"));
+R("PUT", "/courses/:id/material-categories/reorder", "courses.edit");
+R("PUT", "/courses/:id/books/reorder", "courses.edit");
 R("PATCH", "/courses/:id/popular", "courses.edit");
 crud("/courses", "courses");
 
@@ -144,6 +148,7 @@ R("DELETE", "/master/materials/:id", "materials.delete");
 // ── /pc-materials → pc-materials (Master Data) ─────────────────────────────
 crud("/pc-materials", "pc-materials");
 R("GET", "/master/video-categories", ...view("videos.categories"));
+R("GET", "/master/video-categories/:id", ...view("videos.categories"));
 R("POST", "/master/video-categories", "videos.categories.create");
 R("PUT", "/master/video-categories/:id", "videos.categories.edit");
 R("DELETE", "/master/video-categories/:id", "videos.categories.delete");

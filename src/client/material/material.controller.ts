@@ -25,7 +25,11 @@ export const getCategoryContents = async (req: Request, res: Response) => {
     if (catId == null) return res.status(400).json({ success: false, message: "Invalid category id." });
     const userNum = matSql.parseMatId(String(req.user?.id ?? ""));
     const { search, page, limit, skip } = parseListQuery(req.query);
-    const result = await matSql.getCategoryContents(catId, userNum, { skip, take: limit, search });
+    // Optional entry-point scope: inside container X, only X may unlock.
+    const scope = matSql.parseEntitlementScope(req.query as Record<string, unknown>);
+    if (scope === "invalid") return res.status(400).json({ success: false, message: "Invalid entitlement scope id." });
+    if (scope === "multiple") return res.status(400).json({ success: false, message: "Pass only one of courseId, packageId, liveCourseId." });
+    const result = await matSql.getCategoryContents(catId, userNum, { skip, take: limit, search, scope });
     if (!result) return res.status(404).json({ success: false, message: "Category not found." });
     const { materialsTotal, ...data } = result;
     return res.status(200).json({ success: true, data, pagination: buildPagination(materialsTotal, page, limit) });
@@ -48,7 +52,12 @@ export const getMaterialDetail = async (req: Request, res: Response) => {
     const mid = matSql.parseMatId(id);
     if (mid == null) return res.status(400).json({ success: false, message: "Invalid material id." });
     const userNum = matSql.parseMatId(String(req.user?.id ?? ""));
-    const data = await matSql.getMaterialDetail(mid, userNum);
+    // Same scope as the list — this is the mediaToken-refresh path, so an unscoped
+    // call here would re-mint a token the scoped list deliberately withheld.
+    const scope = matSql.parseEntitlementScope(req.query as Record<string, unknown>);
+    if (scope === "invalid") return res.status(400).json({ success: false, message: "Invalid entitlement scope id." });
+    if (scope === "multiple") return res.status(400).json({ success: false, message: "Pass only one of courseId, packageId, liveCourseId." });
+    const data = await matSql.getMaterialDetail(mid, userNum, scope);
     if (!data) return res.status(404).json({ success: false, message: "Material not found." });
     // This endpoint is the mediaToken-refresh path (410/401 re-fetch). RN reads
     // only mediaToken (+ _id / isDirectLink). See docs/api-optimization Phase 3.

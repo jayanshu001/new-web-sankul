@@ -33,6 +33,9 @@ function courseBookNameSearch(term?: string): Prisma.CourseBookWhereInput {
  * user-approved). course_category_id / educator_id are NOT NULL → 0 sentinel.
  * with_material/without_material/level are varchar in SQL (not bool).
  */
+const sortByCategoryId = <T extends { categoryId: number }>(items: T[]): T[] =>
+  [...items].sort((a, b) => a.categoryId - b.categoryId);
+
 const include = {
   educator: { select: { id: true, name: true } },
   subject: { select: { id: true, title: true } },
@@ -143,6 +146,24 @@ export const adminCourseRepository = {
     ),
   unlinkBook: (courseId: number, bookId: number) =>
     prisma.courseBook.deleteMany({ where: { courseId, bookId } }),
+
+  // Category-pivot reorder for the Course-Detail tabs. One drag rewrites every visible
+  // row, so the batch runs as a single sequential transaction — firing the updates
+  // concurrently makes them contend for the same course_id rows and InnoDB aborts the
+  // request with a deadlock. Sorted by category id so concurrent requests take the row
+  // locks in the same order.
+  reorderExamCategoryLinks: (courseId: number, items: { categoryId: number; order: number }[], now: Date) =>
+    prisma.$transaction(
+      sortByCategoryId(items).map((it) =>
+        prisma.examCategoryCourse.updateMany({ where: { courseId, examCategoryId: it.categoryId }, data: { order: it.order, updated_at: now } })
+      )
+    ),
+  reorderMaterialCategoryLinks: (courseId: number, items: { categoryId: number; order: number }[], now: Date) =>
+    prisma.$transaction(
+      sortByCategoryId(items).map((it) =>
+        prisma.materialCategoryCourse.updateMany({ where: { courseId, materialCategoryId: it.categoryId }, data: { order: it.order, updated_at: now } })
+      )
+    ),
 
   // ── courses: write ──────────────────────────────────────────────────────────
   /** Create course + its material/exam-category pivot rows in one txn. */

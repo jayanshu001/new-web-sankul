@@ -90,6 +90,14 @@ export const sortFieldMap: Record<string, string> = {
   updated_at: "updatedAt",
 };
 
+// Query schema for the category-scoped Sub-Categories tab list.
+export const categorySubCategoriesQuerySchema = z.object({
+  search: z.string().trim().optional(),
+  status: statusFilter,
+  page: z.coerce.number().int().min(1).optional().default(1),
+  per_page: z.coerce.number().int().min(1).max(500).optional().default(20),
+});
+
 // Query schema for the category-scoped Courses tab list.
 export const categoryCoursesQuerySchema = z.object({
   search: z.string().trim().optional(),

@@ -98,6 +98,7 @@ export const vcList = async (opts: { search?: string; limit?: number } = {}) => 
   if (opts.limit && opts.limit > 0) rows = rows.slice(0, opts.limit);
   return rows;
 };
+export const vcGet = async (id: number) => { const c = await repo.vcFind(id); return c ? toVcDto(c) : null; };
 export const vcCreate = async (d: any) => {
   const parent = d.parent !== undefined ? toInt(d.parent) : 0;
   // No explicit order → previous row + 1 among its siblings (see utils/listOrdering).
@@ -318,6 +319,15 @@ export const fullVcDuplicate = async (
     createdAt: new Date(),
     itemsCloned: { subCategories: result.subCategories, videos: result.videos },
   };
+};
+
+export const listCategorySubCategories = async (categoryId: number, q: { search?: string; status?: string; page: number; per_page: number }) => {
+  const opts = { search: q.search, status: q.status === "active" ? true : q.status === "inactive" ? false : undefined };
+  const [rows, total] = await Promise.all([
+    repo.subCategoriesForCategory(categoryId, { ...opts, skip: (q.page - 1) * q.per_page, take: q.per_page }),
+    repo.countSubCategoriesForCategory(categoryId, opts),
+  ]);
+  return { items: rows.map((c) => ({ id: String(c.id), name: c.title, slug: c.slug, status: c.status, orderBy: c.order_by ?? 0 })), total };
 };
 
 export const listCategoryCourses = async (categoryId: number, q: { search?: string; status?: string; page: number; per_page: number }) => {

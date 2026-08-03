@@ -5,6 +5,7 @@ import type { ReportSource } from "../../utils/reportStream";
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
 import { splitFullName } from "../customer-profile/customer-profile.name";
 import { adminLiveCourseRepository as repo } from "./admin-live-course.repository";
+import { parseMaterialCategoryRefs } from "./admin-live-course.refs";
 import { andWhere, statusWhere, normalizeStatus, reportRow } from "../../utils/reportFilters";
 import { adminAuthRepository } from "../admin-auth/admin-auth.repository";
 import { deriveRole } from "../admin-auth/admin-auth.transformer";
@@ -26,6 +27,7 @@ export const parseLiveId = (id: string): number | null => {
 
 const idStrOrNull = (v: number | null | undefined): string | null => (v != null && v > 0 ? String(v) : null);
 const jArr = (v: any): any[] => (Array.isArray(v) ? v : []);
+
 
 // Synthetic ids for JSON schedule folders/entries (Mongo addresses subdoc _id).
 let _seq = 0;
@@ -137,6 +139,10 @@ export const createLiveCourse = async (v: any, createdById?: string) => {
     materialCategories: v.materialCategories ?? undefined, examCategories: v.examCategories ?? undefined,
     createdAt: now, updatedAt: now,
   });
+  // Mirror the attachments onto the entitlement pivot (see repository).
+  if (v.materialCategories !== undefined) {
+    await repo.syncMaterialCategoryPivot(created.id, parseMaterialCategoryRefs(v.materialCategories));
+  }
   // rootFolder is Mongo-only (no live_course_id on ws_video_category) → null.
   return { liveCourse: toCourseDto(created), rootFolder: null };
 };
@@ -186,6 +192,10 @@ export const updateLiveCourse = async (id: number, v: any): Promise<"not_found" 
   if (v.materialCategories !== undefined) data.materialCategories = v.materialCategories;
   if (v.examCategories !== undefined) data.examCategories = v.examCategories;
   const updated = await repo.update(id, data);
+  // Keep the entitlement pivot in step with the JSON column on every re-save.
+  if (v.materialCategories !== undefined) {
+    await repo.syncMaterialCategoryPivot(id, parseMaterialCategoryRefs(v.materialCategories));
+  }
   return { liveCourse: toCourseDto(updated) };
 };
 

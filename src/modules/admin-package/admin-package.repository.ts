@@ -24,6 +24,9 @@ import { buildPrismaSearch } from "../../utils/searchFilter";
  */
 const pkgInclude = { packageType: { select: { id: true, name: true } } };
 
+const sortByCategoryId = <T extends { categoryId: number }>(orders: T[]): T[] =>
+  [...orders].sort((a, b) => a.categoryId - b.categoryId);
+
 export const adminPackageRepository = {
   // ── package types ─────────────────────────────────────────────────────────
   listTypes: () => prisma.packageType.findMany({ orderBy: [{ name: "asc" }] }),
@@ -136,16 +139,40 @@ export const adminPackageRepository = {
   subscriberCount: (packageId: number) => prisma.packageCourseSubscription.count({ where: { packageId } }),
 
   // ── embedded reorder (in place) ─────────────────────────────────────────────
-  reorderSpecificSubject: (packageId: number, subjectId: number, order: number) =>
-    prisma.packageSpecificSubject.updateMany({ where: { packageId, subjectId }, data: { order_by: order } }),
-  reorderMaterialCategory: (packageId: number, materialCategoryId: number, order: number) =>
-    prisma.materialCategoryPackage.updateMany({ where: { packageId, materialCategoryId }, data: { order } }),
-  reorderExamCategory: (packageId: number, examCategoryId: number, order: number) =>
-    prisma.examCategoryPackage.updateMany({ where: { packageId, examCategoryId }, data: { order } }),
+  // One drag writes every visible row's position, so the whole batch runs as a single
+  // sequential transaction: firing the updates concurrently makes them contend for the
+  // same package_id rows and InnoDB kills the request with a write conflict/deadlock.
+  // Sorted by category id so concurrent requests take the row locks in the same order.
+  reorderSpecificSubjects: (packageId: number, orders: Array<{ categoryId: number; order: number }>) =>
+    prisma.$transaction(
+      sortByCategoryId(orders).map(({ categoryId, order }) =>
+        prisma.packageSpecificSubject.updateMany({ where: { packageId, subjectId: categoryId }, data: { order_by: order } })
+      )
+    ),
+  reorderMaterialCategories: (packageId: number, orders: Array<{ categoryId: number; order: number }>) =>
+    prisma.$transaction(
+      sortByCategoryId(orders).map(({ categoryId, order }) =>
+        prisma.materialCategoryPackage.updateMany({ where: { packageId, materialCategoryId: categoryId }, data: { order } })
+      )
+    ),
+  reorderExamCategories: (packageId: number, orders: Array<{ categoryId: number; order: number }>) =>
+    prisma.$transaction(
+      sortByCategoryId(orders).map(({ categoryId, order }) =>
+        prisma.examCategoryPackage.updateMany({ where: { packageId, examCategoryId: categoryId }, data: { order } })
+      )
+    ),
 
   // ── plans ────────────────────────────────────────────────────────────────────
   listPlans: (packageId: number, skip?: number, take?: number) => prisma.packageCourseEbookPrice.findMany({ where: { packageId, status: true }, orderBy: { duration: "asc" }, skip, take }),
   countPlans: (packageId: number) => prisma.packageCourseEbookPrice.count({ where: { packageId, status: true } }),
+  // Subscriptions per plan for one page of plans, batched so the list stays a single
+  // query rather than one count per row.
+  subscriptionCountsByPlan: (planIds: number[]) =>
+    prisma.packageCourseSubscription.groupBy({
+      by: ["planId"],
+      where: { planId: { in: planIds } },
+      _count: { _all: true },
+    }),
   attachPlans: (packageId: number, planIds: number[]) =>
     prisma.packageCourseEbookPrice.updateMany({ where: { id: { in: planIds } }, data: { packageId, courseId: 0, ebookId: 0 } }),
   detachPlan: (packageId: number, planId: number) =>

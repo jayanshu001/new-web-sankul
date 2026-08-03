@@ -3,6 +3,7 @@ import {
   createVideoCategorySchema,
   updateVideoCategorySchema,
   listQuerySchema,
+  categorySubCategoriesQuerySchema,
   categoryCoursesQuerySchema,
   categoryVideosQuerySchema,
 } from "./videoCategory.validation";
@@ -61,6 +62,24 @@ export const getVideoCategory = async (req: Request, res: Response) => {
     const data = await vcat.fullVcGet(numId);
     if (!data) return res.status(404).json({ success: false, message: "Video Category not found" });
     return res.status(200).json({ success: true, data });
+  } catch (error: any) {
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /:id/sub-categories — paginated, searchable child categories of this category.
+export const listVideoCategorySubCategories = async (req: Request, res: Response) => {
+  try {
+    const id = req.params.id as string;
+
+    const numId = vcat.parseMasterId(id);
+    if (!numId) return res.status(400).json({ success: false, message: "Invalid Video Category ID" });
+    if (!(await vcat.fullVcCategoryExists(numId))) return res.status(404).json({ success: false, message: "Video Category not found" });
+    const parsed = categorySubCategoriesQuerySchema.safeParse(req.query);
+    if (!parsed.success) return res.status(422).json({ success: false, message: "Validation failed", errors: formatZodErrors(parsed.error.issues) });
+    const { search, status, page, per_page } = parsed.data;
+    const { items, total } = await vcat.listCategorySubCategories(numId, { search, status, page, per_page });
+    return res.status(200).json({ success: true, data: { items, meta: buildMeta(page, per_page, total) } });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

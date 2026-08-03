@@ -176,7 +176,11 @@ export const listMaterialsByCategory = async (req: Request, res: Response) => {
     const typeQ = String(req.query.type ?? "").toLowerCase();
     const type = typeQ === "free" || typeQ === "paid" ? (typeQ as "free" | "paid") : null;
     const userNum = clientMatSql.parseMatId(String(req.user?.id ?? ""));
-    const r = await clientMatSql.listMaterialsByCategoryPaged(catId, userNum, { skip, take: limitNum, search, type });
+    // Optional entry-point scope: inside container X, only X may unlock.
+    const scope = clientMatSql.parseEntitlementScope(req.query as Record<string, unknown>);
+    if (scope === "invalid") return res.status(400).json({ success: false, message: "Invalid entitlement scope id." });
+    if (scope === "multiple") return res.status(400).json({ success: false, message: "Pass only one of courseId, packageId, liveCourseId." });
+    const r = await clientMatSql.listMaterialsByCategoryPaged(catId, userNum, { skip, take: limitNum, search, type, scope });
     if (!r) return res.status(404).json({ success: false, message: "Material category not found." });
     logger.info("listMaterialsByCategory success (sql)", { traceId, categoryId: id, total: r.total, returned: r.list.length });
     return res.status(200).json({

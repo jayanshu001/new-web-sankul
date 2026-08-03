@@ -93,9 +93,13 @@ export const createPlan = async (input: PlanWriteInput) => {
   return toDto(await repo.findById(created.id));
 };
 
-export const updatePlan = async (id: number, input: PlanWriteInput): Promise<any | null> => {
+export const updatePlan = async (id: number, input: PlanWriteInput): Promise<any | null | "has_subscribers"> => {
   const existing = await repo.findBare(id);
   if (!existing) return null;
+  // Customers have already bought on these terms — changing price/duration retroactively
+  // would misrepresent what they paid for. Status stays editable via PATCH /:id/status so
+  // a plan can still be retired from sale without touching live subscriptions.
+  if ((await repo.subscriberCount(id)) > 0) return "has_subscribers";
   const data: any = { updated_at: new Date() };
   if (input.name !== undefined) data.name = input.name;
   if (input.duration !== undefined) data.duration = input.duration;

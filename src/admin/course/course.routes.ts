@@ -29,6 +29,8 @@ import {
   getCourseBooks,
   linkCourseBooks,
   reorderCourseBooks,
+  reorderCourseExamCategories,
+  reorderCourseMaterialCategories,
   unlinkCourseBook,
   createCoursePlan,
   getCoursePlanById,
@@ -95,7 +97,9 @@ router.patch("/:id/status", autoFlushGroup("course"), toggleCourseStatus);
 router.get("/:id/plans", getCoursePlans);
 router.get("/:id/promocodes", getCoursePromocodes);
 router.get("/:id/exam-categories", getCourseExamCategories);
+router.put("/:id/exam-categories/reorder", autoFlushGroup("course"), reorderCourseExamCategories);
 router.get("/:id/material-categories", getCourseMaterialCategories);
+router.put("/:id/material-categories/reorder", autoFlushGroup("course"), reorderCourseMaterialCategories);
 router.get("/:id/books", getCourseBooks);
 router.post("/:id/books", autoFlushGroup("course"), linkCourseBooks);
 router.put("/:id/books/reorder", autoFlushGroup("course"), reorderCourseBooks);

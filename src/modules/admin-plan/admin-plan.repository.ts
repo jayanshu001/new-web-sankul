@@ -33,7 +33,10 @@ export const adminPlanRepository = {
   findBare: (id: number) => prisma.packageCourseEbookPrice.findUnique({ where: { id } }),
 
   promotedCount: (planId: number) => prisma.promotedPackageCourseEbook.count({ where: { planId } }),
-  subscriberCount: (planId: number) => prisma.packageCourseSubscription.count({ where: { packageId: planId } }),
+  // Subscriptions reference the PLAN via `planId` (ws_package_course_subscription.pcb_id).
+  // This used to filter on `packageId`, which compared a plan id against a package id and
+  // so reported 0 for plans that really did have subscribers.
+  subscriberCount: (planId: number) => prisma.packageCourseSubscription.count({ where: { planId } }),
 
   create: (data: Prisma.PackageCourseEbookPriceUncheckedCreateInput) =>
     prisma.packageCourseEbookPrice.create({ data }),
@@ -48,7 +51,7 @@ export const adminPlanRepository = {
   setStatusMany: (ids: number[], status: boolean) =>
     prisma.packageCourseEbookPrice.updateMany({ where: { id: { in: ids } }, data: { status, updated_at: new Date() } }),
   deleteMany: (ids: number[]) => prisma.packageCourseEbookPrice.deleteMany({ where: { id: { in: ids } } }),
-  subscriberCountForPlans: (ids: number[]) => prisma.packageCourseSubscription.count({ where: { packageId: { in: ids } } }),
+  subscriberCountForPlans: (ids: number[]) => prisma.packageCourseSubscription.count({ where: { planId: { in: ids } } }),
 
   /** Flip all OTHER plans of the same owner to isDefault=false. owner = {key,id}. */
   clearSiblingDefaults: (key: "courseId" | "packageId" | "ebookId", ownerId: number, exceptId: number) =>

@@ -372,9 +372,19 @@ export const catalogMaterials = async (opts: { type: "course" | "package" | "liv
       directByCat.set(cat.id, mats);
       allDirect.push(...mats);
     }));
+    // Entitlement is scoped to THIS container — the entry point is the URL itself
+    // (/client/catalog/:type/:id/materials), so unlike the generic material
+    // endpoints there is nothing for the client to pass. Unscoped, a student who
+    // owned any other product carrying the same category read as `isPurchased:true`
+    // while standing inside a product they never bought.
     ownedIds = await getPurchasedMaterialIds(
       opts.customerId ?? null,
-      allDirect.map((m) => ({ _id: m.id, materialCategoryId: m.materialCategoryId, isPaid: !!m.isPaid }))
+      allDirect.map((m) => ({ _id: m.id, materialCategoryId: m.materialCategoryId, isPaid: !!m.isPaid })),
+      opts.type === "course"
+        ? { kind: "course", id: opts.id }
+        : opts.type === "package"
+          ? { kind: "package", id: opts.id }
+          : { kind: "liveCourse", id: opts.id }
     );
   }
 

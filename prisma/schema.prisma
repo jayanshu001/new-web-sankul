@@ -956,6 +956,28 @@ model MaterialCategoryCourse {
   @@map("ws_material_category_course")
 }
 
+// Live-course twin of the two pivots above (DDL:
+// docs/migration/schema-changes/2026-07-31_material_category_live_course.sql).
+// LiveCourse used to attach material categories ONLY through the
+// ws_live_course.material_categories JSON column, which entitlement cannot join
+// — live-course buyers therefore saw isPurchased:false on every material. The
+// JSON column stays the admin read/write shape and is kept in sync; THIS table
+// is what client-material.getPurchasedMaterialIds reads.
+// Standalone (no Prisma relations), matching the rest of the ws_live_course_*
+// block — those tables carry no FKs.
+model MaterialCategoryLiveCourse {
+  id                 Int       @id @default(autoincrement())
+  liveCourseId       Int       @map("live_course_id")
+  materialCategoryId Int       @map("mcategory_id")
+  order              Int       @default(0)
+  created_at         DateTime?
+  updated_at         DateTime?
+
+  @@unique([liveCourseId, materialCategoryId], name: "uniq_mclc_course_cat")
+  @@index([materialCategoryId], name: "idx_mclc_cat")
+  @@map("ws_material_category_live_course")
+}
+
 // ****************************E-BOOK MODULE******************************
 
 model EBook {

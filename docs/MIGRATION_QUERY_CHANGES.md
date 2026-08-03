@@ -15,6 +15,358 @@
 
 ---
 
+## 2026-08-03 — `/client/catalog/:type/:id/materials` scopes entitlement to its own path
+
+**Files:** `src/modules/client-catalog/client-catalog.service.ts` (`catalogMaterials`)
+**DDL:** none. **Prisma:** unchanged. **Query shape: changed** (two fewer pivot reads, third
+narrowed). **Response shape: unchanged.** **No FE change required** — see why below.
+
+Follow-up to the `?courseId`/`?packageId`/`?liveCourseId` scope added the same day. That
+param exists because `/client/material-categories/:id/materials` cannot know the entry
+point. **This** endpoint always could — the container is literally in its own URL — yet it
+called `getPurchasedMaterialIds(customerId, allDirect)` with no scope, so it inherited the
+same global-OR leak in the one place it was avoidable for free.
+
+Concretely: `GET /client/catalog/live-course/3/materials` for a student who owns Course 1
+but not Live Course 3 reported `isPurchased: true` + a live `mediaToken`, while the path
+said live-course 3.
+
+**Change.** The scope is derived from `opts.type` / `opts.id`:
+
+```ts
+opts.type === "course"  ? { kind: "course",  id: opts.id }
+: opts.type === "package" ? { kind: "package", id: opts.id }
+:                           { kind: "liveCourse", id: opts.id }
+```
+
+**Blast radius is `type=course` only.** Just the course branch sets `inlineMaterials` and
+therefore computes `ownedIds`; `package` and `live-course` return the stripped shape
+(category node + count, no `materials[]`, no `isPurchased`), so nothing there changed.
+
+**Verified on staging** (customer 472366 / `9999999999`, owns courses 114 + 990115):
+
+| request | materials | isPurchased | tokens |
+| --- | --- | --- | --- |
+| `catalog/course/114/materials` (owned) | 6 | 6/6 | 6/6 |
+| `catalog/course/990115/materials` (owned) | 13 | 13/13 | 13/13 |
+| `catalog/live-course/3/materials` (not owned) | 0 (stripped shape) | — | — |
+| `catalog/course/114/materials`, owns-nothing control | 6 | **0/6** | 0/6 |
+
+**Why the two-hop flow still needs the query param.** For `package` / `live-course` this
+endpoint hands back category nodes only — e.g. live-course 3 → category 1867, `count: 4`,
+no materials. To list them the client must call
+`/client/material-categories/1867/materials`, which has no container in its path. That is
+exactly the hop where `?liveCourseId=3` (or `?packageId=`) must be passed, and the client
+has the id because it is the screen it is already on.
+
+## 2026-08-03 — Material entitlement: per-entry-point scope (`?courseId` / `?packageId` / `?liveCourseId`)
+
+**Files:** `src/modules/client-material/client-material.service.ts`,
+`src/client/categories/categories.controller.ts`, `src/client/material/material.controller.ts`
+**DDL:** none. **Prisma:** unchanged. **Query shape: changed** (scoped requests skip two
+pivot reads and narrow a third). **Response shape: unchanged** — only the *value* of
+`isPurchased` / `mediaToken` differs, and only when the new param is sent.
+**FE doc:** `docs/client/MATERIAL_ENTITLEMENT_SCOPE.md`
+
+**Problem.** A material category attaches to many containers, and
+`getPurchasedMaterialIds` answered "does the customer own *anything* that grants this?".
+Inside a specific live course that is the wrong question: a student who owned live course
+1 got `isPurchased: true` **and a working `mediaToken`** on materials opened from
+**unpurchased** live course 3. Identical defect and identical fix to the shared-live-session
+entry-point work (2026-07-30) — a paid container leaking into an unpaid one because access
+did not depend on where the user was standing.
+
+Note this only became reachable on 2026-07-31, when live courses got a material pivot at
+all; before that live courses granted nothing, so there was nothing to leak.
+
+**Change.** `getPurchasedMaterialIds(customerId, materials, scope?)` takes an optional
+`MaterialEntitlementScope`, a discriminated union over **all three** container kinds:
+
+```ts
+{ kind: "course" | "package" | "liveCourse"; id: number } | null
+```
+
+When set, the two non-matching pivots are **not queried at all** (two fewer round-trips)
+and the matching pivot is narrowed to that single id. Inside product N the only question
+is whether the customer owns N.
+
+All three kinds are scopeable on purpose: scoping only live courses would leave the
+identical leak between two courses, or between a course and a package, since one category
+is attachable to all three.
+
+Everything downstream is unchanged, so scoping can only ever **withhold** access, never
+widen it — verified against staging with an owns-nothing control.
+
+Threaded through `listMaterialsByCategoryPaged`, `getCategoryContents`, and
+`getMaterialDetail`. `getRecentMaterials` deliberately does **not** take it (cross-container
+feed, no entry point). `getMaterialDetail` is included because it is the mediaToken-refresh
+path — scoping only the list would let the refresh re-mint the withheld token.
+
+**Validation.** New `parseEntitlementScope(query)` returns `null` (none present ⇒
+unscoped), a scope object, `"invalid"`, or `"multiple"`. Controllers **400** with
+`"Invalid entitlement scope id."` / `"Pass only one of courseId, packageId, liveCourseId."`.
+Rejects `0`, negatives, non-integers, repeated params, and any two scope params together —
+the student came from ONE place and guessing which would be inventing an answer.
+Deliberate: silently treating a malformed value as "no scope" would widen access on a
+typo, which is the exact failure being fixed. Absent/empty stays unscoped, which is what
+keeps this backward compatible.
+
+**Caching.** No change needed — `cacheRoute.buildKey` hashes the full normalized query
+string plus caller identity, so scoped and unscoped responses land in separate entries.
+
+**Verified on `websankul_staging_1`** (customer 472367, owns live courses 1/2/4, not 3;
+category 1867 attaches LC 3 + courses 114/990115 + a package on parent 270). Test inserted
+2 pivot rows and removed exactly those:
+
+| request | isPurchased | tokens |
+| --- | --- | --- |
+| no param | true ×4 | 4/4 |
+| `?courseId=114` (Course 1 — owned, attached) | true ×4 | 4/4 |
+| `?courseId=990115` (owned, attached) | true ×4 | 4/4 |
+| `?courseId=999999` (not attached) | false ×4 | 0/4 |
+| `?packageId=990096` (attached, NOT owned) | false ×4 | 0/4 |
+| `?liveCourseId=3` (attached, NOT owned) | false ×4 | 0/4 |
+| `?liveCourseId=1` (owned, not attached) | false ×4 | 0/4 |
+| owns-nothing control, scoped or not | false ×4 | 0/4 |
+
+Identical results for both 472366 (`9999999999`) and 472367 (`7777777777`) — two distinct
+accounts that share the name "Yug Chetan Gotecha", which is what made the original report
+look like a bug. Detail endpoint: unscoped → token issued; live-course scope 3 →
+`isPurchased:false`, `mediaToken:null`.
+
+**Not a bug, for the record.** The reported "`true` but he didn't buy it" case was correct:
+customer 472366 holds completed Razorpay orders for course 114 (₹699, `pay_TAeGthW7kEtYMM`)
+and course 990115 (₹2999, `pay_TBMOxZVuWZlSzt`), and category 1867 is attached to both. The
+unscoped answer was right; what was missing was the ability to ask the *scoped* question.
+
+**Pre-existing, NOT changed:** `POST /client/media/resolve` re-verifies entitlement
+**unscoped**. That is safe today because a scoped request mints no token to resolve, but a
+token obtained from an unscoped browse remains resolvable for its short TTL regardless of
+scope. Closing that would require carrying the scope inside the token — flagged, not done.
+
+---
+
+## 2026-08-03 — Material entitlement: ancestor walk stops at `parent > 0` (root sentinel)
+
+**Files:** `src/modules/client-material/client-material.service.ts` (`ancestorsInclusive`)
+**DDL:** none. **Prisma:** unchanged. **Query shape: changed** (one extra predicate in the
+recursive CTE). **Response shape: unchanged** — verified no `isPurchased` flips, see below.
+
+**Context.** Raised as "if a material is attached to 2 live courses, buying one should
+unlock it, the other shouldn't matter." Verified against staging: the read path *already*
+does exactly that. `getPurchasedMaterialIds` builds `unlocked` only from pivot rows whose
+container the customer owns, so ownership is a pure OR across course/package/live-course,
+and a non-owned container contributes nothing. Proven with the real function on
+`websankul_staging_1` (customer 472367, who owns live courses 1/2/4 but not 3):
+
+| scenario | result |
+| --- | --- |
+| category attached to no live course | locked |
+| attached to LC 3 only (**not** owned) | locked — un-owned container grants nothing |
+| attached to LC 3 (not owned) **+** LC 1 (owned) | unlocked — owning any one is enough |
+
+The write side is also in sync: only `createLiveCourse` / `updateLiveCourse` write
+`materialCategories`, both call `syncMaterialCategoryPivot`, and `delete` cascades the
+pivot. No other code path mutates that JSON column.
+
+**The real find (latent, not the reported symptom).** Material-category roots are marked
+`parent = 0`, **not** `NULL` — confirmed on staging: 6 rows at `parent = 0`, **0** rows at
+`parent IS NULL`, and no category with `id = 0`. The CTE terminated only on
+`c.parent IS NOT NULL`, so the sentinel `0` was pulled into the ancestor chain: every
+root-level material carried a phantom ancestor `0` in `universeIds`.
+
+Harmless *today* — all three pivots currently have zero rows at `mcategory_id = 0`, and
+both admin entry points (`parseMaterialCategoryRefs`, `course.controller.parseRefs`) reject
+`categoryId <= 0`. But the guard is entirely upstream: **one** `mcategory_id = 0` row
+arriving via legacy data, a direct DB write, or a future backfill would have unlocked every
+root-level material for every owner of that container. That is an entitlement leak one bad
+row away.
+
+**Change.** `WHERE c.parent IS NOT NULL` → `WHERE c.parent IS NOT NULL AND c.parent > 0`.
+
+Behavior-neutral now (re-ran the entitlement trace before/after: category 1867 for customer
+472367 stays `true` on all 4 materials via courses 114/990115 + packages on parent 270; the
+owns-nothing control stays 0). It closes the hole by construction instead of depending on
+the pivots staying clean.
+
+**Not changed / still open:** `ws_live_course.exam_categories` remains JSON-only with no
+pivot — exams have the same class of gap materials had before 2026-07-31. Also note the
+live-course entitlement predicate requires `paymentStatus: "verified"` while course/package
+require only `status: true`; that asymmetry is pre-existing and deliberate, not touched here.
+
+---
+
+## 2026-08-03 — Plan subscriber counts read `pcb_id` (were counting `package_id`) + edit lock
+
+**Files:** `src/modules/admin-plan/admin-plan.repository.ts`, `src/modules/admin-plan/admin-plan.service.ts`,
+`src/modules/admin-package/admin-package.repository.ts`, `src/modules/admin-package/admin-package.service.ts`,
+`src/admin/plan/plan.controller.ts`
+**DDL:** none. **Prisma schema:** unchanged. **Query shape: changed** (wrong column → right column,
+plus one new batched `groupBy`). **Response shape: changed** (`subscriberCount` added to the
+package-plans list).
+
+**Bug (query-level).** `adminPlanRepository.subscriberCount` counted:
+
+```ts
+prisma.packageCourseSubscription.count({ where: { packageId: planId } })
+```
+
+`packageId` maps to `ws_package_course_subscription.package_id`; the **plan** FK on that table is
+`planId` → `@map("pcb_id")` (verified in `prisma/schema.prisma`, model `PackageCourseSubscription`).
+So this compared a *plan* id against a *package* id column — two unrelated id spaces. It returned
+0 for plans that genuinely had subscribers, and could return a nonzero count by coincidence when a
+plan id happened to collide with a package id. `subscriberCountForPlans` had the identical defect
+on the bulk path.
+
+**Fix.** Both now filter `{ planId }` / `{ planId: { in: ids } }`. No other call site of these two
+functions changed semantics — they were simply reporting the wrong number before.
+
+**New guard — `PUT /admin/plans/:id` returns 400 when the plan has subscribers.**
+`updatePlan` now short-circuits with the sentinel `"has_subscribers"` before building the update
+payload; the controller maps that to:
+
+```json
+{ "success": false, "message": "Plan has subscribers; it can no longer be edited. Deactivate it and add a new plan instead." }
+```
+
+Rationale: customers bought on those terms, so price/duration must not be rewritten retroactively.
+`PATCH /admin/plans/:id/status` is deliberately **not** gated — a plan can still be retired from
+sale without touching live subscriptions. Note this guard only became reachable *because* of the
+count fix above: with the old `packageId` filter the count was ~always 0, so the lock would never
+have fired.
+
+**Signature change:** `updatePlan` returns `any | null | "has_subscribers"` — `null` still means
+404 (not found). Any future caller must distinguish the two.
+
+**New query — `GET /admin/packages/:id/plans` now returns `subscriberCount` per plan.**
+Batched to keep the list at one extra query instead of one count per row:
+
+```ts
+prisma.packageCourseSubscription.groupBy({
+  by: ["planId"],
+  where: { planId: { in: planIds } },
+  _count: { _all: true },
+})
+```
+
+Fired only when the page is non-empty; missing keys default to `0`. This drives the admin UI's
+edit lock so the FE can disable the control before the user submits and eats the 400.
+
+**Counting semantics to be aware of:** both the guard and `subscriberCount` count **all** matching
+subscription rows — no `status` / `paymentStatus` / `endAt` filter. Expired and unverified
+subscriptions therefore still lock a plan. That is the intended conservative reading (someone paid
+on these terms at some point), but it is deliberately *stricter* than the entitlement predicate used
+on client reads — do not copy this filter into an access check.
+
+**Index note (follow-up, not done here):** `ws_package_course_subscription` has no declared index on
+`pcb_id` (`@@index` list covers `promoterId+createdAt`, `createdAt+courseId+amount`,
+`customerId+status+endAt`). The new `groupBy` and the per-edit count scan on that column. Verify
+whether InnoDB has an FK-backed index on `pcb_id` on staging/prod; if not, add one before this gets
+hot — the table is in the hundreds of thousands of rows.
+
+---
+
+## 2026-07-31 — Live-course material entitlement: new `ws_material_category_live_course` pivot
+
+**Bug:** a customer with an active, verified **live-course** subscription saw
+`isPurchased: false` on every study material — and `mediaToken: null`, so the PDF
+would not open either. Reported on
+`GET /api/v1/client/material-categories/69/materials`.
+
+**Cause:** `getPurchasedMaterialIds` (`src/modules/client-material/client-material.service.ts`)
+resolves ownership by joining category → container pivot → subscription. Only two
+containers had a pivot:
+
+- `ws_material_category_course` → `ws_package_course_subscription`
+- `ws_material_category_package` → `ws_package_course_subscription`
+
+LiveCourse never got one in Wave 6 — its attachments live in the JSON column
+`ws_live_course.material_categories`, which no join can read — and
+`ws_live_course_subscription` was never queried. So a live-course purchase could
+not unlock a material by construction. The file header documented this as an
+accepted gap; it is not (materials are the point of the with-material plans).
+
+**Schema (DDL):** `docs/migration/schema-changes/2026-07-31_material_category_live_course.sql`
+
+```
+ws_material_category_live_course (id, live_course_id, mcategory_id, `order`,
+                                  created_at, updated_at)
+  UNIQUE uniq_mclc_course_cat (live_course_id, mcategory_id)
+  KEY    idx_mclc_cat (mcategory_id)
+```
+
+Column names mirror `ws_material_category_course` exactly so the three pivots are
+interchangeable. Additive, `CREATE TABLE IF NOT EXISTS`, no FKs (consistent with
+the rest of the `ws_live_course_*` block). Prisma model
+`MaterialCategoryLiveCourse` added by hand (no `db:pull`).
+
+**Query change** — `getPurchasedMaterialIds` now resolves a third container:
+
+```ts
+prisma.materialCategoryLiveCourse.findMany({ where: { materialCategoryId: { in: universeIds } } })
+prisma.liveCourseSubscription.findMany({
+  where: { customerId, liveCourseId: { in: liveCourseIds }, status: true,
+           paymentStatus: "verified", OR: [{ endAt: null }, { endAt: { gte: now } }] },
+})
+```
+
+The live-course predicate is the one already used in `client-search`,
+`exam-countdown.client`, and `client-lecture-progress` (active + verified, null
+`endAt` = lifetime). Ancestor rollup is unchanged: a pivot on any ancestor
+category still unlocks the leaf.
+
+This helper is shared, so the fix lands on every material surface at once:
+`/client/material-categories/:id/materials`, material detail, recent materials,
+`client-folder`, `client-catalog`, and the `k:"material"` re-check inside
+`POST /client/media/resolve`.
+
+**Write path:** `admin-live-course` mirrors the JSON onto the pivot
+(`repo.syncMaterialCategoryPivot`, replace-in-place in one transaction) on
+create/update, and deletes pivot rows with the course. The JSON column remains
+the admin read/write contract — same "column still written, relation table read"
+split as `ws_video_category_relation`. `parseMaterialCategoryRefs`
+(`admin-live-course.refs.ts` — its own file, like `customer-profile.name`, so the
+backfill script can import it without pulling in the service's exceljs/redis/
+streamos deps) tolerates every shape the dashboard has sent (`[{category,order}]`,
+bare ids, `{_id}`/`{categoryId}`, JSON-stringified multipart), since the SQL
+validator passes the field through as `z.any()`.
+
+**Verified** (local MySQL, staging dump) on category 1869 — chosen because no
+course/package pivot touches its ancestor chain, so the live course is the only
+possible unlock path:
+
+```
+no live pivot   owner: isPurchased=false, mediaToken=null   ← the reported bug
+live pivot      owner: isPurchased=true,  mediaToken=set
+                non-owner: false     anonymous: false
+                owner, endAt backdated:      false
+                owner, paymentStatus pending: false
+```
+
+Write path: create-sync → 2 rows; re-save with 1 → replaced; duplicate refs
+collapse; empty array → cleared; course delete → rows gone. Backfill inserted 4
+rows from 3 live courses (dry-run first).
+
+**Backfill:** `scripts/backfill-material-category-live-course.ts` (`--dry`
+supported, idempotent — inserts only missing edges, skips + reports refs whose
+category row is gone).
+
+**API contract:** unchanged. Same fields, same envelope — `isPurchased` merely
+becomes `true` where it was always wrong before. Read-only for course/package
+buyers.
+
+**Deploy order:** apply DDL → `yarn prisma:generate` → **restart** (a stale
+in-memory client 500s on a healthy DB) → run the backfill.
+
+**Route cache:** no change needed. `/client/material-categories/:id/materials` is
+`cacheRoute({ ttl: 86400, entity: "material", scope: "user" })`, and every
+entitlement grant already calls `flushUserRouteCache(customerId)` — including the
+live-course branch of `client/payment/verify.controller.ts` and the admin manual
+grant. Existing keys cached *before* this deploy still carry the old
+`isPurchased:false`, so flush the route cache once on release.
+
+---
+
 ## 2026-07-30 — Profile dashboard: `pastExams` now counts DAILY + SUBJECT attempts
 
 **Files:** `src/modules/customer-profile/profile-dashboard.sql.ts`

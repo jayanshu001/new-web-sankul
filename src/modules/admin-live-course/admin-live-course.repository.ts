@@ -64,7 +64,28 @@ export const adminLiveCourseRepository = {
   delete: (id: number) =>
     prisma.$transaction(async (tx) => {
       await tx.liveCoursePlan.deleteMany({ where: { liveCourseId: id } });
+      await tx.materialCategoryLiveCourse.deleteMany({ where: { liveCourseId: id } });
       await tx.liveCourse.delete({ where: { id } });
+    }),
+
+  /**
+   * Mirror the material_categories JSON onto ws_material_category_live_course —
+   * the pivot client-material entitlement joins (course/package have the same
+   * shape). Replace-in-place, one transaction, so a re-save can never leave a
+   * half-written attachment set.
+   *
+   * The JSON column stays the admin read/write contract; this is the read model
+   * for entitlement only (same split as ws_video_category_relation).
+   */
+  syncMaterialCategoryPivot: (liveCourseId: number, refs: Array<{ categoryId: number; order: number }>) =>
+    prisma.$transaction(async (tx) => {
+      await tx.materialCategoryLiveCourse.deleteMany({ where: { liveCourseId } });
+      if (!refs.length) return;
+      const now = new Date();
+      await tx.materialCategoryLiveCourse.createMany({
+        data: refs.map((r) => ({ liveCourseId, materialCategoryId: r.categoryId, order: r.order, created_at: now, updated_at: now })),
+        skipDuplicates: true,
+      });
     }),
   setSchedule: (id: number, field: "scheduleFolders", value: any) =>
     prisma.liveCourse.update({ where: { id }, data: { [field]: value, updatedAt: new Date() } as any }),

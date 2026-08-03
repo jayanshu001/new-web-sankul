@@ -215,6 +215,18 @@ export const reorderCourseBooks = async (courseId: string, items: { bookId: numb
   return res;
 };
 
+export const reorderCourseExamCategories = async (courseId: string, items: { categoryId: number; order: number }[]) => {
+  const res = await adminCourse.reorderCourseExamCategories(assertCourseSqlId(courseId, "Course"), items);
+  if (res === "not_found") throw new HttpError(404, "Course not found");
+  return res;
+};
+
+export const reorderCourseMaterialCategories = async (courseId: string, items: { categoryId: number; order: number }[]) => {
+  const res = await adminCourse.reorderCourseMaterialCategories(assertCourseSqlId(courseId, "Course"), items);
+  if (res === "not_found") throw new HttpError(404, "Course not found");
+  return res;
+};
+
 export const unlinkCourseBook = async (courseId: string, bookId: string) => {
   const res = await adminCourse.unlinkCourseBook(assertCourseSqlId(courseId, "Course"), assertCourseSqlId(bookId, "Book"));
   if (res === "not_found") throw new HttpError(404, "Course not found");

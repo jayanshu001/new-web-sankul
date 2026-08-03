@@ -22,6 +22,7 @@ import {
   updateCoursePlanSchema,
   linkCourseBooksSchema,
   reorderCourseBooksSchema,
+  reorderCourseCategoriesSchema,
 } from "./course.validation";
 import {
   createMaterialSchema,
@@ -323,6 +324,20 @@ export const reorderCourseBooks = asyncHandler(async (req: Request, res: Respons
   const { order } = reorderCourseBooksSchema.parse(req.body);
   const data = await courseService.reorderCourseBooks(req.params.id as string, order);
   return res.status(200).json({ success: true, message: "Book order updated.", data });
+});
+
+// PUT /admin/courses/:id/exam-categories/reorder — set the per-course display order.
+export const reorderCourseExamCategories = asyncHandler(async (req: Request, res: Response) => {
+  const { order } = reorderCourseCategoriesSchema.parse(req.body);
+  const data = await courseService.reorderCourseExamCategories(req.params.id as string, order);
+  return res.status(200).json({ success: true, message: "Exam category order updated.", data });
+});
+
+// PUT /admin/courses/:id/material-categories/reorder — set the per-course display order.
+export const reorderCourseMaterialCategories = asyncHandler(async (req: Request, res: Response) => {
+  const { order } = reorderCourseCategoriesSchema.parse(req.body);
+  const data = await courseService.reorderCourseMaterialCategories(req.params.id as string, order);
+  return res.status(200).json({ success: true, message: "Material category order updated.", data });
 });
 
 // DELETE /admin/courses/:id/books/:bookId — unlink a book from the course.

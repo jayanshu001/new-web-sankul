@@ -10,7 +10,7 @@ import {
 } from "./educator.controller";
 import { getSubjectCategories, getSubjectCategoryById, createSubjectCategory, updateSubjectCategory, deleteSubjectCategory } from "./subjectCategory.controller";
 import { getMaterials, createMaterial, updateMaterial, deleteMaterial } from "./material.controller";
-import { getVideoCategories, createVideoCategory, updateVideoCategory, deleteVideoCategory } from "./videoCategory.controller";
+import { getVideoCategories, getVideoCategoryById, createVideoCategory, updateVideoCategory, deleteVideoCategory } from "./videoCategory.controller";
 import { getPackageCategories, createPackageCategory, updatePackageCategory, deletePackageCategory } from "./packageCategory.controller";
 
 const router = Router();
@@ -50,6 +50,7 @@ router.delete("/materials/:id", autoFlushGroup("material"), deleteMaterial);
 
 // Video Category Master
 router.get("/video-categories", cacheRoute({ ttl: 86400, entity: "video-category" }), getVideoCategories);
+router.get("/video-categories/:id", cacheRoute({ ttl: 86400, entity: "video-category" }), getVideoCategoryById);
 router.post("/video-categories", uploadS3.single("image"), autoFlushGroup("video-category"), createVideoCategory);
 router.put("/video-categories/:id", uploadS3.single("image"), autoFlushGroup("video-category"), updateVideoCategory);
 router.delete("/video-categories/:id", autoFlushGroup("video-category"), deleteVideoCategory);
