@@ -15,6 +15,101 @@
 
 ---
 
+## 2026-08-04 (later) — Demo media tokens no longer expire; `ebookDemo` resolve now checks `active`
+
+**Files:** `src/utils/mediaToken.ts` (`signMediaToken`, `NON_EXPIRING_KINDS`),
+`src/modules/client-media/client-media.service.ts` (`ebookDemo` branch)
+**DDL:** none. **Prisma:** unchanged. **Query shape: changed** — the `ebookDemo` resolve now
+filters `ws_ebook.status = 1`. **Response shape: unchanged.** **No FE change required.**
+
+Follow-up to the cache entry below. That fix stopped the 24h route cache from replaying a
+dead token, but the 5-minute TTL on a **demo** token was never protecting anything to begin
+with: an ebook demo is free sample content that any authenticated user can mint a token for
+on demand. The expiry only created failure modes — a token replayed from a cached body, an
+app-side cached detail payload, or a device with a skewed clock.
+
+**Change.** `ebookDemo` and `bookDemo` are now minted with **no `exp` claim**
+(`NON_EXPIRING_KINDS`). Everything still holding: the signature + `ws-media` audience prove we
+issued it, `typ: "media"` still blocks cross-use with an auth Bearer, `/client/media/resolve`
+still requires a Bearer token, and the URL handed back is still a Spaces presign that expires
+in `MEDIA_SIGNED_URL_TTL_SECONDS` (5 min). An explicitly passed `ttlSeconds` still wins, so
+the liveSession preview clamp is untouched.
+
+**Every other kind keeps the 5-minute TTL** — including `free: true` tokens on videos and
+materials. This is scoped to the two sample-PDF kinds only.
+
+**The non-obvious dependency.** The `ebook`/`ebookDemo` resolve branch deliberately had *no*
+`active` filter, justified in a comment by "the demo token is short-lived + issued while
+active". So the TTL *was* load-bearing for exactly one thing: bounding how long a demo could
+outlive the ebook being deactivated. Removing expiry without replacing that would have let a
+demo token open a pulled ebook forever. The branch now splits:
+
+```ts
+where: isDemo ? { id: claims.id, active: true } : { id: claims.id }
+```
+
+`ebook` (purchased) keeps the unfiltered lookup — an owner can still open a deactivated ebook
+they paid for. `bookDemo` already filtered `active: true`, so the two demo kinds are now
+consistent.
+
+**In-flight tokens self-heal.** An older demo token that still carries an expired `exp` is
+repaired by the cache-refresh path below into a non-expiring one on the next hit.
+
+---
+
+## 2026-08-04 — Route cache replayed EXPIRED media tokens (`demoMediaToken` dead on arrival)
+
+**Files:** `src/utils/mediaToken.ts` (+`refreshMediaTokensInPlace`), `src/middlewares/cacheRoute.ts` (hit path)
+**DDL:** none. **Prisma:** unchanged. **Query shape:** unchanged. **Response shape: unchanged**
+(same fields, same types — the token *value* is now freshly signed). **No FE change required.**
+
+**Reported as:** ebook details → "Read Demo Copy" → `POST /client/media/resolve` returns
+410 *"Media token expired."* The app's refetch-detail-and-retry-once fallback did not help.
+
+**Root cause — not the issuance, the cache.** A media token lives 5 minutes
+(`MEDIA_TOKEN_TTL_SECONDS`, default 300). `GET /client/ebooks/:id` and `GET /client/ebooks`
+are wrapped in `cacheRoute({ ttl: 86400, entity: "catalog-ebook", scope: "user" })`, which
+stores the **serialized response body** — token included — for 24 hours. So the token is
+minted once, when that user's cache entry is warmed, and every hit after the first 5 minutes
+replays a token that is already expired when the app receives it. The FE retry re-read the
+same cached body and got the same dead token, which is why the fallback never recovered.
+
+`ebookDemo` issuance itself was correct: right `k`, right `cust`, right signature, `free:true`.
+
+**Blast radius.** Every cached route whose body carries a `signMediaToken(...)` value had the
+same defect, not just ebooks: `/client/books` + `/:id` (`demoMediaToken`, bookDemo),
+`/client/courses` + `/:id`, `/client/categories/*` video lists, `/client/material/*`
+(`/:id`, `/recent`, `/categories/:id/contents`), `/client/catalog/:type/:id/materials`,
+`/client/free-*`, `/client/recently-added`, and `bookMediaToken` on the same ebook payloads.
+Live-session tokens were never affected (those routes are not cached).
+
+**Fix — re-mint on the way *out* of the cache**, in `cacheRoute`'s hit path, rather than
+un-caching the catalog's hottest reads. `refreshMediaTokensInPlace(body, custId)` walks the
+just-parsed body and re-signs each token for the caller. Tokens are detected by **JWT shape +
+signature/audience verification** (`ignoreExpiration: true` to recover the claims), *not* by
+field name, so it covers `mediaToken` / `demoMediaToken` / `bookMediaToken` and any future
+emitter with no keep-list to maintain. Failures are swallowed — a cache hit is never broken by
+refresh, and an unrecognized string is left untouched.
+
+**Why this grants nothing new.** A media token is only a pointer; `/client/media/resolve`
+re-verifies it, binds it to the caller, and re-checks entitlement **live** on every kind —
+`entitled()` for course/package/liveCourse/ebook, an ownership re-query for paid material,
+the preview-state gate for liveSession. A refreshed token therefore resolves to exactly what
+a fresh request would have resolved to. Two deliberate exclusions:
+
+- **`liveSession` is never re-minted.** A preview token is clamped to the remaining trial
+  (`ttlSeconds`), which is not recoverable from the claims; re-minting would silently restore
+  a full 5 minutes. Live routes are not cached today — this keeps that safe if one ever is.
+- **A non-`free` token issued to a different `cust` is left as-is** (only reachable from a
+  `scope:"shared"` entry) so it still 403s. `free`/`bookDemo` tokens *are* re-bound to the
+  reader — ungated content, and it repairs a pre-existing 403 on shared-scope cached bodies
+  (e.g. `/client/free-materials`) where one user replayed another user's token.
+
+**Deploy note.** Code-only; no flush strictly required (existing entries self-heal on next
+hit). Nothing to backfill.
+
+---
+
 ## 2026-08-03 — `/client/catalog/:type/:id/materials` scopes entitlement to its own path
 
 **Files:** `src/modules/client-catalog/client-catalog.service.ts` (`catalogMaterials`)

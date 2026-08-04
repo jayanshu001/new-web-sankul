@@ -217,10 +217,19 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
       }
       case "ebook":
       case "ebookDemo": {
-        // No `active` filter: an owner (entitlement re-checked at `entitled()` above for the
-        // `ebook` kind) can still open a DEACTIVATED ebook they bought. The demo token is
-        // short-lived + issued while active, so bypassing here is safe.
-        const e = await prisma.eBook.findFirst({ where: { id: claims.id }, select: { bookUrl: true, bookDemoUrl: true } });
+        // `ebook` (purchased): no `active` filter — an owner (entitlement re-checked at
+        // `entitled()` above) can still open a DEACTIVATED ebook they paid for.
+        //
+        // `ebookDemo`: MUST be active. This filter is what the demo token's old 5-minute
+        // TTL was really buying — it bounded how long a demo could outlive the ebook being
+        // pulled. Demo tokens no longer expire (see NON_EXPIRING_KINDS in utils/mediaToken),
+        // so the liveness check has to be made explicitly here instead of being an implicit
+        // side effect of expiry.
+        const isDemo = claims.k === "ebookDemo";
+        const e = await prisma.eBook.findFirst({
+          where: isDemo ? { id: claims.id, active: true } : { id: claims.id },
+          select: { bookUrl: true, bookDemoUrl: true },
+        });
         if (!e) return { ok: false, status: 404, message: "Ebook not found." };
         const src = claims.k === "ebook" ? e.bookUrl : e.bookDemoUrl;
         if (!src) return { ok: false, status: 404, message: "This ebook has no downloadable PDF." };

@@ -27,6 +27,7 @@ import { redisClient, isRedisReady } from "../config/redis";
 import type { CacheEntity } from "./flushGroups";
 import logger from "../utils/logger";
 import { cacheHitsTotal, cacheMissesTotal } from "../utils/metrics";
+import { refreshMediaTokensInPlace } from "../utils/mediaToken";
 import crypto from "crypto";
 
 const ENV = (process.env.NODE_ENV || "dev").toLowerCase();
@@ -180,6 +181,23 @@ export const cacheRoute = (opts: number | CacheRouteOptions) => {
     const serveHit = (h: { status: number; body: unknown }) => {
       cacheHitsTotal.inc({ domain });
       if (CACHE_DEBUG) logger.info(`[routecache] HIT ${req.method} ${req.originalUrl}`);
+      // Media tokens live ~5 min but these entries live up to 24h, so a replayed
+      // body would hand the app a token that is already expired on arrival (and
+      // its refetch-and-retry would re-read this same body). Re-mint them for the
+      // caller. The body was just JSON.parse'd here, so mutating it is safe.
+      // Resolve still re-verifies + re-checks entitlement live for every kind.
+      const custId = Number((req as any).user?.id);
+      if (Number.isInteger(custId)) {
+        try {
+          refreshMediaTokensInPlace(h.body, custId);
+        } catch (err) {
+          // Never let token refresh break a cache hit — serve what we have.
+          logger.warn("cacheRoute media-token refresh failed", {
+            url: req.originalUrl,
+            err: (err as Error).message,
+          });
+        }
+      }
       res.status(h.status).json(h.body);
     };
 
