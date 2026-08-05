@@ -160,7 +160,12 @@ export const resolveMediaToken = async (token: string, customerId: number): Prom
         });
         if (!v || !v.status) return { ok: false, status: 404, message: "Media not found." };
         const src = await resolveVideoSource(v as any);
-        return { ok: true, kind: claims.k, media: { platform: v.platform, hlsUrl: src.hlsUrl, progressive: src.progressive, allow720: src.allow720 } };
+        // `hlsVariants` are the master's real per-quality playlist URLs, absolute and
+        // ready to GET. Offline download MUST use these verbatim — a URL built from
+        // the quality label alone (e.g. "…VOD480p.m3u8" instead of the real
+        // "…VOD480p30.m3u8") is a nonexistent key, and the upstream CDN answers a
+        // missing key with 403 AccessDenied rather than 404.
+        return { ok: true, kind: claims.k, media: { platform: v.platform, hlsUrl: src.hlsUrl, hlsVariants: src.hlsVariants, progressive: src.progressive, allow720: src.allow720 } };
       }
       case "liveRecording": {
         // Promoted live-course recording. Playable URLs live on the source

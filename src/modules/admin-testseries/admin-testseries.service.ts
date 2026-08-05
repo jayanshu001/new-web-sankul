@@ -148,6 +148,10 @@ const priceDto = (p: any) => ({
   originalPrice: p.originalPrice != null ? num(p.originalPrice) : null,
   isDefault: p.isDefault,
   status: p.status,
+  // "Most Popular" badge — computed, read-only. Parity with the course/package/
+  // ebook/live-course plan DTOs. No manual override exists (removed 2026-08-05 —
+  // see docs/admin/MOST_POPULAR_PLAN_PIN.md).
+  isMostPopular: p.isMostPopular ?? false,
   createdAt: p.createdAt ?? null,
   updatedAt: p.updatedAt ?? null,
 });

@@ -138,8 +138,7 @@ const toPlanDto = (p: any) => ({
   materialPrice: p.materialPrice ?? 0,
   isDefault: p.isDefault,
   status: p.status,
-  isMostPopular: p.isMostPopular ?? false,
-  mostPopularPinned: p.mostPopularPinned ?? false,
+  isMostPopular: p.isMostPopular ?? false, // computed, read-only (plan-popularity)
   createdAt: p.created_at ?? null,
   updatedAt: p.updated_at ?? null,
 });
@@ -479,6 +478,10 @@ export const listSubscribers = async (packageId: number, q: { page?: string; lim
       _id: String(s.id),
       customerId: c ? { _id: String(c.id), firstName, lastName, phoneNumber: c.phoneNumber, emailAddress: c.emailAddress ?? null } : null,
       packageId: s.package ? { _id: String(s.package.id), name: s.package.name } : idStrOrNull(s.packageId),
+      // `amount` is the canonical paid value on ws_package_course_subscription. The
+      // later `paid_amount` column is promoter-only and stays NULL for everyone else,
+      // so sourcing from it would blank the column — see admin-customer-details.transformer.
+      paidAmount: s.amount != null ? Number(s.amount) : null,
       startAt: s.startAt ?? null,
       endAt: s.endAt ?? null,
       status: s.status ?? null,

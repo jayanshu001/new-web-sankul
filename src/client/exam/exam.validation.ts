@@ -10,7 +10,9 @@ export const saveAnswersSchema = z.object({
     .array(
       z.object({
         questionId: objectIdSchema,
-        answerId: objectIdSchema,
+        // null / omitted = skipped. Matches saveSingleAnswerSchema below; the legacy
+        // "Skip" option id is still accepted for older app builds.
+        answerId: objectIdSchema.nullable().optional(),
       })
     )
     .min(1),

@@ -15,6 +15,537 @@
 
 ---
 
+## 2026-08-05 — "Most Popular" override REMOVED (badge is now pure-auto by construction) + 4 cache-invalidation bugs fixed
+
+**Files:** `src/modules/plan-popularity/plan-popularity.service.ts` (`PlanRow`, `pickWinner`,
+3 `select`s; **`setPinned` + `scopeTable` deleted**),
+`src/admin/plan-popularity/plan-popularity.controller.ts` (**`pinMostPopular` deleted**),
+`src/admin/plan-popularity/plan-popularity.routes.ts` (**`POST /pin` deleted**),
+`src/middlewares/rbacRouteMap.ts` (pin rule deleted),
+`src/modules/plan-popularity/plan-popularity.scheduler.ts` (`runOnce`),
+`src/middlewares/flushGroups.ts` (`plan`, `price` groups),
+`src/modules/{admin-course,admin-package,admin-ebook,admin-live-course,admin-plan,admin-testseries}/*.service.ts` (plan DTOs),
+`src/client/ebook/ebook.controller.ts` (`listEbooks` omit list),
+`prisma/schema.prisma` (3 models).
+**DDL:** ⚠ **PENDING DEPLOY** — `docs/migration/schema-changes/2026-08-05_drop_most_popular_pinned.sql`
+drops `most_popular_pinned` from `ws_package_course_ebook_price`, `ws_live_course_plan`,
+`ws_test_series_price`. **Prisma:** hand-edited (3 models), client regenerated.
+**Response shape: BREAKING but inert** — `mostPopularPinned` removed from 4 admin DTOs;
+`POST /admin/plan-popularity/pin` now 404s. See the safety argument below.
+
+**Context.** The plan-popularity subsystem (recompute service + 24h scheduler + pin
+endpoint + `plans.edit` RBAC rule) shipped complete on 2026-06-30, but the admin panel
+never got a UI for it. `setPinned()` was the **only writer** of `most_popular_pinned`
+anywhere in the codebase and was reachable only through that UI-less endpoint — so every
+row was `0`, `pickWinner()` never once took its pin branch, and the badge has been purely
+sales-driven since day one.
+
+**Decision (user, 2026-08-05): remove the override entirely rather than leave it dormant.**
+An earlier call in the same session was to keep it as an escape hatch; the user reversed
+it on the grounds that an unused column with no UI is not worth carrying. The manual
+override is gone at every layer — column, Prisma field, service logic, endpoint, RBAC rule,
+DTO fields.
+
+**Why the breaking shape change is safe.** `mostPopularPinned` was always `false` for every
+row on every environment (no writer was ever reachable), and no admin screen read it — the
+UI it was built for doesn't exist. Removing an always-false field that nothing consumes
+cannot change behaviour. Any FE code holding a `plan.mostPopularPinned` read should delete
+it, **not** repoint it at `isMostPopular`, which means something different (computed badge,
+not admin intent).
+
+**Deploy order is unconstrained.** The code stopped selecting the column in the same
+release, and Prisma ignores DB columns absent from `schema.prisma`, so the `DROP COLUMN`
+may be applied before or after the code deploy. No backfill; no value is being destroyed.
+
+**Also decided:** the **zero-sales case keeps showing no badge at all** (no fallback to the
+default or longest plan) — a product gets a badge only once it has actually sold something.
+
+**Known limitation, documented not fixed.** Order counting is **all-time**, so an
+established plan is hard to unseat and a newly added plan may never win one; the badge can
+freeze on whichever plan sold first. The correct fix if that bites is to window the
+paid-order query (e.g. last 90 days) in `plan-popularity.service.ts` — noted in the file
+header and in `docs/admin/MOST_POPULAR_PLAN_PIN.md`, deliberately not a manual lever.
+
+Removing the override leaves the nightly sweep as the *sole* mechanism that moves the
+badge, which promotes defect 1 below from cosmetic to the one that actually mattered.
+Four cache-invalidation defects, all found while auditing this and all fixed:
+
+**1. The scheduler never invalidated anything — the badge was up to 48h stale.**
+`runOnce()` writes `is_most_popular` straight to MySQL on a timer. There is no HTTP write,
+so no `autoFlush` route middleware fires, so no cached client catalog was ever swept. A
+badge that moved at 03:00 stayed invisible until the *cached body* aged out on its own 24h
+TTL — on top of the sweep's own 24h period. Now `runOnce` sweeps
+`resolveFlushGroup("plan") ∪ resolveFlushGroup("live-course")` after a recompute, **only
+when at least one row actually flipped** (steady state is 0 changes; flushing nightly
+regardless would cold-start the entire catalog cache for nothing).
+
+**2. `autoFlush("plan")` was the wrong helper on the admin routes.**
+`autoFlush(...entities)` clears only the literal entity tags passed; **`autoFlushGroup`** is
+what expands a `FLUSH_GROUPS` entry. The routes used `autoFlush("plan")` while their own
+comment claimed a fan-out to `catalog-package` / `catalog-course` / `catalog-ebook` /
+`client-dashboard` / `free`. Net effect: a manual recompute flipped `is_most_popular` in
+MySQL, but every cached client catalog read kept serving the old badge for up to the 24h
+TTL. Now `autoFlushGroup("plan", "live-course")` on the surviving `/recompute` route — the
+second group covers scope `liveCourse` (plans in `ws_live_course_plan`, surfaced through
+the live-course/package-category listings). Scope `testSeries` needs nothing: no
+test-series read is cached.
+
+**3. `FLUSH_GROUPS.plan` / `.price` were missing the ADMIN product caches.** Three cached
+admin reads embed plan rows and were never listed as derived-from:
+
+| Cached read | `cacheRoute` entity | Embeds |
+|---|---|---|
+| `GET /admin/courses/:id` | `course` | `plans[]` |
+| `GET /admin/packages` (list) | `package` | `plans.withMaterial[]` / `.withoutMaterial[]` |
+| `GET /admin/ebooks/:id` | `ebook` | `plans[]` |
+
+So *any* plan edit stayed invisible in the admin panel for the full 24h TTL. Added
+`"course"`, `"package"`, `"ebook"` to both the `plan` and `price` groups.
+
+**4. Two plan DTOs omitted `isMostPopular`**, so those admin screens couldn't show which
+plan carries the badge:
+
+- `admin-plan.service.toDto` → `GET /admin/plans`, `GET /admin/plans/:id`
+- `admin-testseries.service.priceDto` → `GET /admin/test-series/:id` `prices[]`
+
+Both now return it, so all six admin plan DTOs are consistent: `isMostPopular` present and
+read-only, `mostPopularPinned` present nowhere. Both read rows fetched with `include` (full
+row), so **no `select` and no query changed**.
+
+**5. `GET /client/ebooks` stopped stripping `isMostPopular`.** The list controller's
+payload-slimming `omitList(e.plans, ["ebookId", "status", "isMostPopular"])` meant the
+badge never reached the app for ebook **listings**, while ebook detail, packages, courses,
+live courses and test series all shipped it. Now `omitList(e.plans, ["ebookId", "status"])`.
+
+**Contract note.** `isMostPopular` is now the only "Most Popular" field anywhere, on both
+surfaces, and is read-only everywhere (computed by `recomputeScope`, never accepted on a
+write). Frontend docs: `docs/admin/MOST_POPULAR_PLAN_PIN.md` (display-only chip + the
+`mostPopularPinned` removal notice) and `docs/client/MOST_POPULAR_PLAN_BADGE.md`.
+
+**QA.** Record a paid order that makes a non-badged plan the new sales leader, run
+`npx tsx scripts/backfill-most-popular-plans.ts` (same entry point as the scheduler), and
+the badge must move on the *next* fetch of `/client/packages`, `/client/courses`,
+`/client/ebooks`, `/admin/plans` and the admin product detail — with no manual cache
+flush. A product with zero paid orders must show the badge on **no** plan. Second run
+should report `0` rows changed and skip the flush entirely. Also confirm
+`POST /admin/plan-popularity/pin` now 404s, and that no admin plan response contains
+`mostPopularPinned`. Re-run the QA after applying the DDL to confirm nothing regressed.
+
+---
+
+## 2026-08-05 — `most_popular_pinned` DROPPED on the local DB (DDL applied, not just written)
+
+**Files:** none — no code change. **DDL:**
+`docs/migration/schema-changes/2026-08-05_drop_most_popular_pinned.sql` (already authored;
+this entry records that it was **executed**). **Prisma:** already had the column removed.
+**Response shape: unchanged** — `mostPopularPinned` had already been dropped from the DTOs.
+
+**Context.** The code-side removal (schema.prisma models, `admin-plan` DTO,
+`plan-popularity` pin endpoint) landed earlier the same day, leaving the DB and the schema
+out of sync: schema.prisma asserted "dropped 2026-08-05" while all three tables still
+carried the column. Prisma tolerates unmodelled columns, so nothing was broken — but the
+assertion was false.
+
+**Pre-drop audit (why it was safe):**
+
+| Table | rows | `most_popular_pinned = 1` | NULL | `is_most_popular = 1` |
+|---|---|---|---|---|
+| `ws_live_course_plan` | 4 | **0** | 0 | 3 |
+| `ws_package_course_ebook_price` | 1366 | **0** | 0 | 6 |
+| `ws_test_series_price` | 1 | **0** | 0 | 1 |
+
+No index on the column, no generated column referencing it, and no live code reference
+(only explanatory comments). Nothing was pinned, so no admin intent was destroyed.
+
+**Applied to:** `websankul_staging_1` on `127.0.0.1:3307` — the **local docker** DB only, via
+`npx prisma db execute`. Verified after: 0 occurrences of `most_popular_pinned` remain in
+`information_schema`; `is_most_popular` is untouched on all three tables and still reads
+through Prisma on all three plan models.
+
+⚠️ **Still pending on staging + production.** The same DDL file must be executed there. Run
+the same pre-drop audit first — a real environment may have pinned rows this one did not.
+
+---
+
+## 2026-08-05 — `media/resolve`: drop `hlsUrl` when the HLS master is provably absent
+
+**Files:** `src/utils/videoResolver.ts` (`fetchHlsVariants` now reports reachability;
+`resolveAws` drops an unreachable `hlsUrl`).
+**DDL:** none. **Prisma:** unchanged. **Response shape: unchanged** — `media.hlsUrl` can now
+be `null` on an AWS video, which was already its type (YouTube/Vimeo return null today).
+
+**Why.** FE reported that HLS offline download still 403s on device after adopting
+`hlsVariants[]`. The gap: `resolveAws` fetches the master to build the variants, but when
+that fetch failed it returned `hlsVariants: []` **and still advertised `hlsUrl`** — handing
+the client a URL the server had just proved unreachable. The app then fails on device and
+cannot distinguish "object missing" from "permission denied", because this origin answers a
+missing key with `403 AccessDenied`.
+
+**Change.** The master probe now classifies the outcome:
+
+| probe | meaning | effect |
+|---|---|---|
+| 2xx + `#EXTM3U` | HLS is real | `hlsUrl` kept, `hlsVariants` populated |
+| **4xx**, or 2xx without `#EXTM3U` | object is not there | **`hlsUrl` → null**, `hlsVariants: []` — client falls back to `progressive[]` |
+| timeout / 5xx / network | inconclusive | `hlsUrl` kept, `hlsVariants: []` (unchanged behaviour — a blip must not suppress HLS) |
+
+`validateStatus: (s) => s < 500` so a 4xx is a usable answer rather than a thrown error,
+while 5xx still throws and is retried by `callOutbound`. Verdict is cached with the rest of
+the resolve for 24h, so this adds no per-request cost beyond the existing one master GET.
+
+**Investigation (no reproduction).** Probed the two video ids FE named: **29277 does not
+exist in this database at all**; **33091** resolves and its whole chain is healthy — master
+200, all three variants 200, first `.ts` of each 200 `video/MP2T`, all three progressive MP4s
+200, all on the same `dx3rv97t4h9w0.cloudfront.net` the payload returns. A 25-title sweep
+found **21 with working HLS, 0 unreachable, 4 where VideoCrypt has no file at all** (those
+throw `Data Not Found` and surface as a 502, not a 403) — and exactly one distinct CDN host.
+So the 403 is not reproducible on this tenant; the guard above is what makes it
+self-correcting on any tenant where those keys really are missing.
+
+---
+
+## 2026-08-05 — Exam skip: legacy "Skip" option row and new `answerId: null` unified
+
+**Files:** `src/modules/client-exam/client-exam.service.ts` (new `isLegacySkipOptionName`
++ `selectedOptionId`; `getExamQuestions`, `getSolution`, `getInProgressAttempt`,
+`saveAnswers`, `saveSingleAnswer`), `src/modules/client-exam/client-exam.repository.ts`
+(new `optionsByIds`; `createResult` details type), `src/client/exam/exam.validation.ts`
+(`saveAnswersSchema.test[].answerId`), `src/client/exam/exam.controller.ts` (`saveAnswers`
+payload parse).
+**DDL:** none — `ws_exam_result_detail.qresult_detail_answer_id` is already nullable.
+**Prisma:** unchanged. **No data deleted.**
+
+**Background.** Skipping used to be a real row in `ws_exam_question_option` with
+`title = 'Skip'`: the client selected it like any other choice, so the stored
+`qresult_detail_answer_id` points at an option. The new client sends `answerId: null` and no
+option is involved. Both representations now exist in the data at once, and the reads that
+touch OPTIONS (rather than the `result` enum) rendered them differently.
+
+**Audit — where the two forms diverged.** Anything reading the `result` enum was already
+correct for both and is untouched: `recomputeAnalytics` (sums `ws_exam_result.qresult_skip`),
+the admin submissions report (`SUM(d.qresult_detail_result='skip')`), `submitAttempt`
+scoring, and every result DTO. Four option-touching surfaces needed work:
+
+| Surface | Was | Now |
+|---|---|---|
+| `getExamQuestions` | emitted the legacy Skip row as a normal `answers[]` choice | filtered out — never offered as an answer |
+| `getSolution` | Skip row listed in `answers[]`, and `isSelect: true` on it for a legacy skip | Skip filtered out; a legacy skip reads back as **nothing selected**, identical to a new skip |
+| `getInProgressAttempt` | `savedAnswers[].answerId` returned the Skip option id, which the app can no longer match | legacy skip id normalised to `null` |
+| `saveAnswers` (bulk) | required a non-null `answerId` for every question → 400 on a null | accepts `answerId: null` = skip |
+
+**Write compatibility kept.** `saveAnswers` and `saveSingleAnswer` both still accept a legacy
+Skip option id and score it as a skip, so an older app build keeps working unchanged. Such a
+submission is now **persisted in the new form** (`answer_id` NULL), so newly-written rows are
+uniform while historical rows stay exactly as they are.
+
+**New query.** `optionsByIds(ids)` — `select: { id, name }` on `ws_exam_question_option`, used
+by `getInProgressAttempt` to classify the answer ids saved on an open attempt. Only runs for
+attempts that actually have saved answers.
+
+**Deliberately NOT done:** legacy Skip option rows are **not** deleted. Historical
+`ws_exam_result_detail` rows reference them by FK, and they are now invisible to clients
+anyway. `saveAnswers` also still requires one `test[]` entry per question
+(`numberOfQuestions === test.length`) — skips must be sent explicitly as `answerId: null`,
+not omitted.
+
+**Verified on staging:** the question carrying the one remaining legacy Skip row no longer
+offers it (`answers` = the 4 real choices); the same result row read through `getSolution`
+produces a byte-identical payload whether the skip is stored as the legacy option id or as
+NULL (`result: "skip"`, `selected: []` both ways); normal answered questions still report
+`isSelect`/`isCorrect` correctly. Test rows were restored to their original values.
+`yarn typecheck` passes.
+
+---
+
+## 2026-08-05 — Course-subscription detail: gateway/order refs + resolved package ref
+
+> ⚠️ **Provenance:** these edits were made outside the session that wrote this entry (they
+> were already in the working tree). Logged from the diff to keep the changelog complete —
+> the author should correct this entry if the intent is described wrongly.
+
+**Files:** `src/modules/admin-subscription/admin-subscription.repository.ts` (`ordersByIds`
+select), `src/modules/admin-subscription/admin-subscription.service.ts`
+(`getCourseSubscriptionById`).
+**DDL:** none. **Prisma:** unchanged. **Response shape: CHANGED — see below.**
+
+**Query change.** `ordersByIds` now also selects `orderType` from `ws_package_course_order`.
+`getCourseSubscriptionById` gains two lookups it did not previously make:
+`repo.packagesByIds([r.packageId])` and `repo.ordersByIds([r.orderId])` — the gateway refs
+and order type live on the ORDER row, not on the subscription.
+
+**Response change on `GET /admin/subscriptions/course/:id`:**
+
+- **New fields:** `orderType`, `orderPaymentMethod`, `razorpayOrderId`, `razorpayPaymentId`,
+  `bankTransactionId` — all `null` when the subscription has no `order_id`. Per the code
+  comment, admin-granted subscriptions carry no order (~12k of package 91's 48k rows), and
+  these deliberately stay null rather than being synthesised.
+- **⚠️ `packageId` changed type**, from a bare id string to a resolved ref
+  `{ _id, name, image }`, falling back to the id string when the package doesn't resolve.
+  `courseId` and `planId` already behaved this way, so this makes the three consistent — but
+  it is a breaking change for any consumer reading `packageId` as a string. **Verify the
+  admin panel before deploying.**
+- `paymentMethod` still carries `payment_type` (activation channel: backend / app / web);
+  the gateway's own method is the separate new `orderPaymentMethod`.
+
+`yarn typecheck` passes.
+
+---
+
+## 2026-08-05 — `media/resolve`: per-quality `hlsVariants[]` (offline-download 403 fix)
+
+**Files:** `src/utils/videoResolver.ts` (new `ResolvedHlsVariant`, `parseHlsMaster`,
+`fetchHlsVariants`, `stripUrlArtifacts`; `hlsVariants` added to `ResolvedSource`),
+`src/modules/client-media/client-media.service.ts` (`case "video"` payload).
+**DDL:** none. **Prisma:** unchanged. **Response shape: additive only** — new
+`media.hlsVariants[]` on `POST /client/media/resolve` for `kind: "video"`; no existing
+field renamed, retyped or revalued.
+
+**Diagnosis (measured, not inferred).** The app's offline HLS download failed with
+`403 <Code>AccessDenied</Code>` + `x-cache: Error from cloudfront`, reported as a CDN
+permission problem. Probing the real VideoCrypt distribution with an unauthenticated GET:
+master playlist, media playlists, `.ts` segments and the progressive MP4 all return **200**
+— including under AppleCoreMedia / okhttp / NSURLSession user agents and with a `Range`
+header. But **any nonexistent key on that distribution returns `403 AccessDenied`**, because
+the origin has no `s3:ListBucket` (S3 substitutes AccessDenied for NoSuchKey). So the error
+meant "wrong URL", not "no permission".
+
+The wrong URL comes from a label↔filename mismatch: VideoCrypt names variants
+`…_video_VOD480p30.m3u8` (frame rate attached) while `resolveAws` normalises the picker
+label to `480p`, so a URL built from the label (`…_video_VOD480p.m3u8`) is a missing key.
+Confirmed: `…VOD480p.m3u8` → 403, `…VOD480p30.m3u8` → 200.
+
+**New query/outbound.** `resolveAws` now GETs the master playlist once and parses its
+`#EXT-X-STREAM-INF` entries into absolute per-quality URLs:
+
+```ts
+hlsVariants: [{ qualityLabel: "480p", quality, height, bandwidth, url /* absolute */ }]
+```
+
+Resolved against the master's own URL, sorted by height desc, filtered by
+`VIDEOCRYPT_ALLOW_720` exactly like `progressive[]`. Wrapped in `callOutbound`
+(`label: "hls.master"`, 8s, 2 attempts) and **failure-isolated** — any error yields `[]` and
+the resolve still succeeds with `hlsUrl`. Cost is bounded by the existing 24h Redis
+`video-resolve:aws:*` cache: one extra upstream GET per video per day. YouTube and Vimeo
+paths return `hlsVariants: []` (no master playlist exists).
+
+`hlsUrl` now also runs through `stripUrlArtifacts` (trailing `"` / `%22` / `%2522`), the same
+strip already applied to StreamOS recording paths — an unstripped one is likewise a
+nonexistent key.
+
+**Not changed, deliberately:** no bucket policy, signed URL, signed cookie or WAF work — the
+objects are public and nothing is signed, so there was nothing to sign or expire.
+`kind: "liveRecording"` is untouched; it already ships explicit `hlsRecordings[].path`.
+
+**Verified on staging:** all three variants returned 200 and the first `.ts` segment of each
+returned 200 `video/MP2T`; variants survive the Redis cache round-trip.
+
+**FE doc:** `docs/client/HLS_OFFLINE_DOWNLOAD.md`.
+
+---
+
+## 2026-08-05 — Live-course recordings: folder summary mode + per-folder detail
+
+**Files:** `src/modules/admin-live-course/admin-live-course.service.ts`
+(new `shapeRecordingLectures` / `loadRecordingsContext` helpers,
+new `getRecordingFolderSummaryForClient` / `getRecordingFolderDetailForClient`,
+`getRecordingsForClient` refactored onto them),
+`src/client/live-course/live-course.controller.ts` (`?summary=` branch,
+new `getLiveCourseRecordingFolder`, shared `slimRecordingLecture`),
+`src/client/live-course/live-course.routes.ts` (one new route).
+**DDL:** none. **Prisma:** unchanged. **Response shape of the existing
+`GET /:id/recordings`: unchanged** — byte-identical when `summary` is absent.
+
+**Why.** The Downloads and Live-Course hub screens only render *folder name + count*, but
+`GET /client/live-courses/:id/recordings` embeds every folder's full `lectures[]`, and the
+folder screen re-fetched that same response and filtered by `folderId` in JS. So opening one
+folder resolved StreamOS VOD metadata and signed media tokens for **every** lecture in the
+course.
+
+**New queries.**
+
+1. **Summary** — `GET /:id/recordings?summary=1` (also `summary=true`). Folder counts come
+   from a `groupBy` instead of loading the rows:
+   ```ts
+   prisma.video.groupBy({
+     by: ["videoCategoryId"],
+     where: { videoCategoryId: { in: folderIds }, status: true, ...(buildPrismaSearch(search, ["title"]) ?? {}) },
+     _count: { _all: true },
+   })
+   ```
+   No `video.findMany`, no `liveSession.findMany`, no `resolveVodMeta`, no
+   `lectureProgress.findMany`, no token signing. Pagination stays over **folders**.
+   `?search=` keeps the full response's semantics: `lectureCount` counts matching lectures
+   and zero-match folders drop out; with no search term every folder is kept, `lectureCount: 0`
+   included.
+
+2. **Folder detail** — `GET /:id/recordings/:folderId`. Lecture-level pagination against a
+   single folder, plus an ownership predicate so a folder id from another course cannot be
+   read through this course:
+   ```ts
+   prisma.videoCategory.findFirst({ where: { id: folderId, liveCourseId: courseId, status: true } })  // else "folder_not_found" → 404
+   prisma.video.findMany({ where: { videoCategoryId, status: true, ...search }, skip, take })
+   prisma.video.count({ where })   // → lectureCount / pagination.total
+   ```
+
+**Contract safety.** All three reads now share one `shapeRecordingLectures()` builder and one
+`slimRecordingLecture()` controller slimmer, so the lecture DTO cannot fork per endpoint —
+verified against staging that the full response's and the detail response's lecture key sets
+are identical. Entitlement is unchanged and shared via `loadRecordingsContext`: the list is
+always returned, `locked` + a null `mediaToken` are the paywall, and a deactivated course
+still serves its recordings to active subscribers while 404ing for everyone else.
+
+**Incidental cleanup.** `mp4BySession` was built on every recordings request
+(`shapeRecs(s.mp4Recordings)` per session) and never read — removed, along with
+`mp4Recordings` from the session `select`. No response field changes.
+
+**Downloads (`GET /client/{video,material}-folders`): no change, verified.**
+`ensureDefaultFolders` runs before the list query so default folders always exist, and
+`byFolder.get(f.id) ?? 0` gives empty folders `itemCount: 0`. Known caveat, unchanged:
+`itemCount` counts saved rows, so an item whose content row was deleted still counts and
+hydrates as `ref: null` on the detail screen.
+
+**FE doc:** `docs/client/FOLDER_SUMMARY_LISTING.md`.
+
+---
+
+## 2026-08-05 — Plan-edit "has subscribers" guard narrowed to *changed paid terms* × *active* subscribers
+
+**Files:** `src/modules/admin-plan/admin-plan.repository.ts` (new `activeSubscriberCount`),
+`src/modules/admin-plan/admin-plan.service.ts` (`updatePlan`, new `changesPaidTerms`),
+`src/admin/plan/plan.controller.ts` (error copy).
+**DDL:** none. **Prisma:** unchanged. **Response shape: unchanged** — same 400 envelope,
+only the `message` string is more specific.
+
+**The bug.** The guard added 2026-08-03 (`501c7cb`) rejected *every* `PUT /admin/plans/:id`
+whenever `ws_package_course_subscription` had **any** row with `pcb_id = <plan>`, counted
+with no `status` / `end_at` filter and with no comparison against the existing row. Three
+consequences, all hit in production on plan 1443:
+
+1. One long-**expired or cancelled** subscription locked the plan permanently — there was no
+   state it could ever return to in which editing became possible again.
+2. The guard fired **before** any diff, so a no-op re-save, or a change to a field with no
+   commercial meaning (`name`, `isDefault`, `status`, owner re-link), was rejected too.
+3. The admin package/course edit form re-`PUT`s every plan on save, so the whole form broke
+   for any product that had ever sold a single subscription.
+
+**New query.** Guard is now two independent conditions, both required:
+
+```ts
+// service: does the payload actually change what a buyer paid for?
+changesPaidTerms = duration | price | withMaterial | materialPrice differs from existing row
+// repository: are there subscribers whose access is still live?
+prisma.packageCourseSubscription.count({
+  where: { planId, status: true, OR: [{ endAt: null }, { endAt: { gte: new Date() } }] },
+})
+```
+
+`endAt: null` counts as active (no expiry) — same convention as `admin-live-course.repository.ts`.
+`materialPrice` is normalised `?? 0` on both sides so the nullable-column → DTO-`0` mismatch
+does not read as a change. **Count semantics changed:** `activeSubscriberCount` is a *new*
+query and does not replace `subscriberCount`, which still backs the delete/bulk-delete guards
+unfiltered (deleting a plan with expired subscriptions would orphan `pcb_id` FKs, so the strict
+count is correct there).
+
+**Still open (deliberately not changed, needs a product call):**
+- Owner **re-link** (`courseId`/`packageId`/`ebookId`) stays editable on a plan with active
+  subscribers — moving a sold plan to a different product also rewrites what buyers bought.
+- Ebook plans bypass the guard entirely: `subscriberCount` only counts
+  `PackageCourseSubscription`, never `EBookSubscription`.
+
+---
+
+## 2026-08-05 — Share-link origin moved to `https://websankul.com`; `ORIGIN` now validated at boot
+
+**Files:** `src/config/env.ts` (`validateEnv`), `.env` (deploy config, git-ignored).
+**DDL:** none. **Prisma:** unchanged. **Query shape: unchanged** — no repository or
+service touched. **Response shape: unchanged in structure**, but the *value* of
+`shareableLink` changes host on every endpoint that returns it.
+
+**What changed.** `ORIGIN` only — from `https://websankul-api.4tysixapplabs.com` to
+`https://websankul.com`, so links now read `https://websankul.com/share/packages/145`. The
+path structure is untouched: `buildShareUrl` still emits `/share/<resource>/<id>`, so the URL
+is byte-identical to before apart from the host.
+
+**Deliberately NOT changed** (per explicit instruction — host swap only): `APP_SCHEME`,
+`APP_WEB_HOST` (still `https://com.gpscvideo.com`), `PLAY_STORE_URL`, `APP_STORE_URL`,
+`SHARE_FALLBACK_URL` (still `https://www.gpscvideo.com/`). An earlier revision of this entry
+claimed `APP_WEB_HOST` and `SHARE_FALLBACK_URL` moved to websankul.com; they were reverted
+and remain on their original values.
+
+**Blast radius.** `ORIGIN` is read raw from `process.env` in exactly 8 client controllers,
+each via a local `resolveBase(req)` (`ebook` 18, `testSeries` 18, `free` 14, `educator` 13,
+`live-course` 11, `book` 43, `package` 27, and `course` 151 which inlines it instead of
+declaring the helper). That base only ever feeds `buildShareUrl()` →
+`<ORIGIN>/share/<resource>/<id>`. Nothing else reads it — not CORS (`ALLOWED_ORIGINS` is
+separate), not redirects, not the share page itself.
+
+**Why the new boot guard.** `buildShareUrl` only strips trailing slashes; it does not
+validate the scheme. `ORIGIN=websankul.com` would have silently produced the relative,
+broken `websankul.com/share/packages/145` on every catalog response, with no error anywhere
+near the mistake. `validateEnv` now **fails boot** on a scheme-less or unparseable `ORIGIN`,
+and warns when it carries a path (doubled `/share`), when it is `http://` in production
+(iOS Universal Links require https), or when it is unset in production (the silent fallback
+to the request `Host` header is wrong behind a proxy/CDN).
+
+**Deploy order matters — this is not env-only.** The host in `ORIGIN` must serve three paths
+(`src/app.ts:70-92`): `/share/*`, `/.well-known/apple-app-site-association`, and
+`/.well-known/assetlinks.json`. It must also appear in the iOS Associated Domains
+entitlement and the Android intent-filter host, **which needs an app-store release**. Ship
+the app build carrying *both* hosts first, then deploy this `.env`. Keep
+`websankul-api.4tysixapplabs.com` serving `/share/*` for links already circulating, and do
+**not** 301 it — iOS ignores redirects when matching Universal Links.
+
+**Verified 2026-08-05 (live check).** All three paths return **404 on `websankul.com`** and
+**200 on `websankul-api.4tysixapplabs.com`**. Root cause confirmed: the association files are
+served **by this Express app**, not by a static host — `src/app.ts:73-87` `sendFile`s them from
+`public/.well-known/` on both the `/.well-known/…` and bare-root paths. `websankul.com` is a
+different machine (`139.59.36.14`, marketing nginx) from the API (`143.110.187.121`, port
+`4001`), so it has no route for them. **No repo change can fix this** — the fix is two
+`location ^~` proxy blocks (`/share/` and `/.well-known/`) on the marketing nginx, spelled out
+in `docs/client/SHARE_LINK_ORIGIN_MIGRATION.md` §6. Proxy rather than copying the JSON files
+statically: `/share/*` is dynamic (per-request CSP nonce), and static copies of the AASA go
+stale when a fingerprint or share path is added. Two ways to get it wrong: a plain
+`location /share/` loses to an SPA catch-all (hence `^~`), and dropping `X-Forwarded-For`
+collapses every share tap onto the proxy IP, so `shareLimiter` (120/min, IP-keyed, behind
+`trust proxy`) 429s the whole surface.
+
+**`.env` does not ship with a deploy** — it is git-ignored, so `ORIGIN` must be edited by hand
+on the API host and PM2 restarted. The association files themselves need **no edit**: because
+nginx proxies them, one file serves both hosts, and the AASA already claims `/share/*`
+(appID `4RYQ6JBR5B.com.websankul.ios`) while assetlinks already carries both SHA-256
+fingerprints for `com.gpscvideo.gpsc`.
+
+**Alternative considered and rejected 2026-08-05: URL shortener / deep-link vendor.** Asked
+whether `websankul.com` could front the existing `ORIGIN` via a shortener instead of an nginx
+change. It cannot, and the reason is a platform rule rather than a preference: **the host in the
+link must itself serve the association file with no redirect** — iOS does not follow redirects
+when matching Universal Links, and neither does the Android App Links verifier. A shortener is
+a redirect by definition, so it converts app-opens into browser-opens. It is also circular: for
+`websankul.com/<short>` to open the app, iOS fetches
+`websankul.com/.well-known/apple-app-site-association`, so that host must serve the file
+regardless. Managed vendors (Branch, AppsFlyer) do host AASA for a custom domain, but cannot
+take the **apex** without taking down the marketing site, so they force a subdomain — not the
+specified URL — while still requiring the same app release, plus SDK work in both apps and a
+third-party dependency in the share path. (Firebase Dynamic Links, the obvious candidate, was
+shut down by Google in Aug 2025; dead `gpsconline.page.link` URLs from it are still present in
+stored `shareable_link` data.) **Three delivery options**, only `ORIGIN`'s value differing
+between them: **(A)** nginx `location ^~` on the marketing box → apex URL; **(B)** Next.js
+`rewrites()` in `next.config.js` → same apex URL, shipped by the frontend team (the marketing
+site was confirmed 2026-08-05 to be **Next.js** behind nginx: `X-Powered-By: Next.js`, `_next/`
+assets, `Vary: rsc, next-router-state-tree`) — must be `rewrites()`, **never** `redirects()`,
+which emits a 301 and breaks app-opens; **(C)** dedicated subdomain (`links.websankul.com`) A-record
+→ `143.110.187.121` + certbot, served directly by the API — zero proxy hops, no marketing-server
+access, but not the apex URL. All three need the same app release.
+
+**Known pre-existing gap (not fixed here).** `WEB_LINK` is built as
+`APP_WEB_HOST/<deepPath>/<id>` (`shareRedirect.ts:65`) → `https://com.gpscvideo.com/course/145`
+— a host that does not appear to resolve, and a path the AASA does not claim (it covers only
+`/share/*`), so the iOS in-page fallback cannot trigger the app. Untouched by this change
+since `APP_WEB_HOST` was left as-is. Fix needs either a `/course/*` component in the AASA or
+`WEB_LINK` repointed at the `/share/` URL.
+
+---
+
 ## 2026-08-04 (later) — Demo media tokens no longer expire; `ebookDemo` resolve now checks `active`
 
 **Files:** `src/utils/mediaToken.ts` (`signMediaToken`, `NON_EXPIRING_KINDS`),

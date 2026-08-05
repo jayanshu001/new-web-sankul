@@ -59,11 +59,33 @@ function estimateBitrateForHeight(height: number): number {
   return 300_000;
 }
 
+// One variant (media playlist) listed inside an HLS master. `url` is ABSOLUTE and
+// ready to GET as-is.
+//
+// This exists because the per-quality playlist filename CANNOT be derived from the
+// quality label. VideoCrypt names its variants with the frame rate attached
+// (`…_video_VOD480p30.m3u8`) while we normalise the label to "480p" for the picker,
+// so anything built from the label — e.g. `…_video_VOD480p.m3u8` — is a key that
+// does not exist. Their CloudFront origin has no s3:ListBucket, so a missing key
+// comes back as `403 AccessDenied`, not `404 NoSuchKey`, which reads like a
+// permissions problem but is not one. Clients must use these URLs verbatim.
+export interface ResolvedHlsVariant {
+  qualityLabel: string; // "480p" — normalised, matches progressive[].qualityLabel
+  quality: string;      // duplicate, for parity with ResolvedQuality
+  height: number;       // 480, 360, ...
+  bandwidth: number;    // bits/sec, straight from the master's BANDWIDTH attribute
+  url: string;          // absolute media-playlist URL — use as-is, never rebuild
+}
+
 // What the resolver hands back to encryptLecture. The HLS URL is optional
 // because YouTube (via ytdl-core) doesn't ship a true HLS master — only muxed
 // progressive formats are usable as a single playable URL.
 export interface ResolvedSource {
   hlsUrl: string | null;
+  // Variants parsed out of `hlsUrl`'s master playlist. Empty when there is no
+  // master, or when the master couldn't be fetched/parsed (best-effort — a failure
+  // here never blocks playback, the client can still use `hlsUrl` directly).
+  hlsVariants: ResolvedHlsVariant[];
   progressive: ResolvedQuality[];
   // Hint the FE/player can use: when false, the player should not offer 720p
   // even if it appears in the list (AWS-specific concern, kept here so the
@@ -82,6 +104,92 @@ const VIDEOCRYPT_ALLOW_720 = String(process.env.VIDEOCRYPT_ALLOW_720).toLowerCas
 const CACHE_TTL_SECONDS = {
   youtube: 4 * 60 * 60, // 4h
   aws: 24 * 60 * 60,    // 24h
+};
+
+// Some upstream rows/responses carry a stray trailing quote artifact on the path
+// (`…m3u8"` / `…m3u8%22`). The same strip already guards StreamOS recording paths;
+// an unstripped one is a nonexistent key → 403 AccessDenied on the CDN.
+const stripUrlArtifacts = (u: string): string => u.trim().replace(/(?:"|%22|%2522)+$/i, "");
+
+/**
+ * Pull the variant list out of an HLS master playlist. Each `#EXT-X-STREAM-INF`
+ * line is followed by the variant's URI, which is usually RELATIVE — resolved
+ * against the master's own URL so what we hand out is absolute.
+ */
+const parseHlsMaster = (masterUrl: string, body: string): ResolvedHlsVariant[] => {
+  const lines = body.split(/\r?\n/);
+  const out: ResolvedHlsVariant[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line.startsWith("#EXT-X-STREAM-INF:")) continue;
+    const uri = (lines[i + 1] ?? "").trim();
+    if (!uri || uri.startsWith("#")) continue;
+    const height = Number(/RESOLUTION=\d+x(\d+)/i.exec(line)?.[1] ?? 0);
+    const bandwidth = Number(/[^-]BANDWIDTH=(\d+)/i.exec(`,${line}`)?.[1] ?? 0);
+    let url: string;
+    try {
+      url = new URL(uri, masterUrl).toString();
+    } catch {
+      continue; // unparseable URI — skip rather than emit something unfetchable
+    }
+    const label = height ? `${height}p` : "auto";
+    out.push({ qualityLabel: label, quality: label, height, bandwidth, url });
+  }
+  return out.sort((a, b) => b.height - a.height);
+};
+
+const HLS_MASTER_TIMEOUT_MS = 8_000;
+
+/**
+ * Fetch+parse the master playlist, and report whether it is actually THERE.
+ *
+ * `reachable`:
+ *   true    — master fetched and parsed; `variants` is usable
+ *   false   — the CDN gave a definitive "this object does not exist" (4xx). On the
+ *             VideoCrypt origin a missing key answers `403 AccessDenied` rather than
+ *             404, so any 4xx is treated as missing.
+ *   null    — could not tell (timeout / 5xx / network). Do NOT punish a transient
+ *             blip: keep serving `hlsUrl` and let the client parse the master itself.
+ *
+ * Never throws.
+ */
+const fetchHlsVariants = async (
+  masterUrl: string
+): Promise<{ variants: ResolvedHlsVariant[]; reachable: boolean | null }> => {
+  try {
+    const res = await callOutbound(
+      () =>
+        axios.get(masterUrl, {
+          timeout: HLS_MASTER_TIMEOUT_MS,
+          responseType: "text",
+          headers: { Accept: "*/*" },
+          // 4xx must NOT throw — it is a real answer we need to act on. 5xx still
+          // throws so callOutbound retries it as the transient failure it is.
+          validateStatus: (s) => s < 500,
+        }),
+      { label: "hls.master", timeoutMs: HLS_MASTER_TIMEOUT_MS, attempts: 2 }
+    );
+    if (res.status >= 400) {
+      logger.warn("HLS master is unreachable on the CDN; dropping hlsUrl for this video", {
+        masterUrl,
+        status: res.status,
+      });
+      return { variants: [], reachable: false };
+    }
+    const body = typeof res.data === "string" ? res.data : "";
+    // 2xx but not a playlist (error page, empty object) — also not usable HLS.
+    if (!body.includes("#EXTM3U")) {
+      logger.warn("HLS master did not contain #EXTM3U; dropping hlsUrl for this video", { masterUrl, status: res.status });
+      return { variants: [], reachable: false };
+    }
+    return { variants: parseHlsMaster(masterUrl, body), reachable: true };
+  } catch (err) {
+    logger.warn("HLS master probe inconclusive; serving hlsUrl without variants", {
+      masterUrl,
+      error: (err as Error).message,
+    });
+    return { variants: [], reachable: null };
+  }
 };
 
 async function readCache(key: string): Promise<ResolvedSource | null> {
@@ -168,6 +276,9 @@ async function resolveYoutube(youtubeId: string): Promise<ResolvedSource> {
 
   const resolved: ResolvedSource = {
     hlsUrl: progressive[0]?.url ?? null,
+    // YouTube's "hlsUrl" is really a progressive MP4, not a master playlist —
+    // there are no variants to list.
+    hlsVariants: [],
     progressive,
     allow720: true, // YouTube path has no 720p gating
   };
@@ -267,8 +378,24 @@ async function resolveAws(awsId: string): Promise<ResolvedSource> {
     .filter((p) => (VIDEOCRYPT_ALLOW_720 ? true : p.height !== 720))
     .sort((a, b) => b.height - a.height);
 
+  const rawHlsUrl = typeof data.file_url_hls === "string" && data.file_url_hls
+    ? stripUrlArtifacts(data.file_url_hls)
+    : null;
+  // Read the master ONCE here (result cached with the rest for 24h) so every client
+  // gets exact, absolute per-quality playlist URLs instead of guessing filenames.
+  const probe = rawHlsUrl ? await fetchHlsVariants(rawHlsUrl) : { variants: [], reachable: null as boolean | null };
+  // VideoCrypt returns a conventional `file_url_hls` even for files whose HLS
+  // rendition was never produced. Advertising it would hand the client a URL that
+  // 403s on the device — the client cannot tell that apart from a permissions
+  // problem, and the download just fails. If the master is provably absent we drop
+  // the HLS offer entirely so the client falls back to `progressive[]` cleanly.
+  // A merely INCONCLUSIVE probe (reachable === null) keeps the URL.
+  const hlsUrl = probe.reachable === false ? null : rawHlsUrl;
+  const hlsVariants = probe.variants.filter((v) => (VIDEOCRYPT_ALLOW_720 ? true : v.height !== 720));
+
   const resolved: ResolvedSource = {
-    hlsUrl: data.file_url_hls ?? null,
+    hlsUrl,
+    hlsVariants,
     progressive,
     allow720: VIDEOCRYPT_ALLOW_720,
   };
@@ -300,6 +427,7 @@ export async function resolveVideoSource(v: {
     if (!v.vimeo_id) throw new Error("Video is missing vimeo_id.");
     return {
       hlsUrl: null,
+      hlsVariants: [],
       progressive: [{
         qualityLabel: "auto",
         quality: "auto",

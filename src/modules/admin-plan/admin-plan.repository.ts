@@ -37,6 +37,16 @@ export const adminPlanRepository = {
   // This used to filter on `packageId`, which compared a plan id against a package id and
   // so reported 0 for plans that really did have subscribers.
   subscriberCount: (planId: number) => prisma.packageCourseSubscription.count({ where: { planId } }),
+  /**
+   * Subscribers whose access is still LIVE — the only ones whose paid terms a plan
+   * edit could misrepresent. Expired/cancelled rows must not lock a plan forever
+   * (a single years-old subscription otherwise made the plan permanently uneditable).
+   * `endAt: null` = no expiry, so it counts as active.
+   */
+  activeSubscriberCount: (planId: number) =>
+    prisma.packageCourseSubscription.count({
+      where: { planId, status: true, OR: [{ endAt: null }, { endAt: { gte: new Date() } }] },
+    }),
 
   create: (data: Prisma.PackageCourseEbookPriceUncheckedCreateInput) =>
     prisma.packageCourseEbookPrice.create({ data }),

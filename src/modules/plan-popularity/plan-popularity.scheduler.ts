@@ -6,6 +6,8 @@
  * sales-driven flags fresh between pins. Never throws into the boot path.
  */
 import logger from "../../utils/logger";
+import { flushEntity } from "../../middlewares/autoFlush";
+import { resolveFlushGroup } from "../../middlewares/flushGroups";
 import { recomputeAllPopularity } from "./plan-popularity.service";
 
 const REFRESH_HOURS = Number(process.env.PLAN_POPULARITY_REFRESH_HOURS) || 24;
@@ -17,6 +19,18 @@ async function runOnce(): Promise<void> {
   try {
     const changed = await recomputeAllPopularity();
     logger.info("[plan-popularity] recompute done", { changed });
+    // This sweep is the ONLY thing that moves the badge (the pin override has no
+    // admin UI by design), and it writes straight to MySQL — no HTTP write, so no
+    // autoFlush route middleware ever fires. Without this the client catalogs keep
+    // serving yesterday's badge for a further 24h TTL, i.e. up to 48h stale.
+    // Only sweep when a flag actually flipped: the steady state is 0 changes, and
+    // flushing every night would needlessly cold-start the whole catalog cache.
+    const total = Object.values(changed).reduce((a, b) => a + b, 0);
+    if (total > 0) {
+      const entities = [...new Set([...resolveFlushGroup("plan"), ...resolveFlushGroup("live-course")])];
+      const cleared = await flushEntity(...entities);
+      logger.info("[plan-popularity] flushed route cache after recompute", { changedRows: total, cleared });
+    }
   } catch (err) {
     logger.error("[plan-popularity] recompute failed", { error: (err as Error).message });
   }

@@ -201,13 +201,25 @@ export const saveAnswers = async (req: Request, res: Response) => {
     if (!cid || !examId || !test || !/^\d{1,3}:\d{2}(:\d{2})?$/.test(timing)) {
       return res.status(400).json({ success: false, message: "Invalid submission payload." });
     }
-    const parsedTest = test.map((t: any) => ({ questionId: parseExamId(String(t?.questionId ?? "")), answerId: parseExamId(String(t?.answerId ?? "")) }));
-    if (parsedTest.some((t: { questionId: number | null; answerId: number | null }) => !t.questionId || !t.answerId)) {
+    // `answerId` null/omitted = skipped (the app now supplies skip itself instead of
+    // selecting a "Skip" option row). An unparseable NON-empty answerId is still a
+    // bad payload; only a genuinely absent one means skip.
+    type ParsedAnswer = { questionId: number | null; answerId: number | null; answerAbsent: boolean };
+    const parsedTest: ParsedAnswer[] = test.map((t: any) => {
+      const rawAnswer = t?.answerId;
+      const isAbsent = rawAnswer === null || rawAnswer === undefined || rawAnswer === "";
+      return {
+        questionId: parseExamId(String(t?.questionId ?? "")),
+        answerId: isAbsent ? null : parseExamId(String(rawAnswer)),
+        answerAbsent: isAbsent,
+      };
+    });
+    if (parsedTest.some((t) => !t.questionId || (!t.answerAbsent && !t.answerId))) {
       return res.status(400).json({ success: false, message: "Invalid question/answer id in submission." });
     }
     const result = await svcSaveAnswers(cid, {
       examId, timing, ratting: body.ratting ?? null,
-      test: parsedTest as Array<{ questionId: number; answerId: number }>,
+      test: parsedTest.map((t) => ({ questionId: t.questionId as number, answerId: t.answerId })),
     });
     if (!result.ok) return res.status(result.status).json({ success: false, message: result.message });
     logger.info("saveAnswers success (sql)", { traceId, customerId, examId, rank: result.rank });

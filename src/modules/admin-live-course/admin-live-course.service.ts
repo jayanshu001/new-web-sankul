@@ -76,8 +76,7 @@ const toPlanDto = (p: LiveCoursePlan) => ({
   materialPrice: p.materialPrice ?? null,
   isDefault: p.isDefault,
   status: p.status,
-  isMostPopular: (p as any).isMostPopular ?? false,
-  mostPopularPinned: (p as any).mostPopularPinned ?? false,
+  isMostPopular: (p as any).isMostPopular ?? false, // computed, read-only (plan-popularity)
   createdAt: p.createdAt ?? null,
   updatedAt: p.updatedAt ?? null,
 });
@@ -1369,52 +1368,41 @@ const resolveVodMeta = async (streamId: string): Promise<CachedVodMeta | null> =
   }
 };
 
-export const getRecordingsForClient = async (
+type RecordingVideo = Prisma.VideoGetPayload<Record<string, never>>;
+
+const shapeStoredRecs = (raw: unknown): VodRec[] =>
+  (Array.isArray(raw) ? raw : [])
+    .filter((r: any) => typeof r?.path === "string" && r.path.length > 0)
+    .map((r: any) => ({
+      quality: typeof r.quality === "string" ? r.quality : null,
+      file_size: typeof r.file_size === "number" ? r.file_size : null,
+      path: sanitizeRecPath(r.path),
+    }));
+
+/**
+ * Turn a set of recording Videos into client lecture DTOs — per-session VOD
+ * resolution (with the stored-webhook fallback), media token and resume progress.
+ *
+ * Shared by the three recordings reads (full tree / folder summary / folder detail)
+ * so every one of them emits a BYTE-IDENTICAL lecture object. The FE maps them with
+ * the same code, so this must never fork per endpoint.
+ */
+const shapeRecordingLectures = async (
   courseId: number,
   customerId: number | null,
-  q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
-): Promise<"not_found" | any> => {
-  const course = await repo.findById(courseId);
-  if (!course) return "not_found";
-  // Owner-aware: a deactivated live course still serves its recordings to existing active
-  // subscribers, but 404s for everyone else (non-owner / browse).
-  const subscribed = await hasAccessToAnyLiveCourse(customerId, [courseId]);
-  if (!course.status && !subscribed) return "not_found";
-
-  const folders = await prisma.videoCategory.findMany({
-    where: { liveCourseId: courseId, status: true },
-    orderBy: [{ order_by: "asc" }, { created_at: "asc" }],
-    select: { id: true, title: true, image: true, order_by: true },
-  });
-  const folderIds = folders.map((f) => f.id);
-  const videos = folderIds.length
-    ? await prisma.video.findMany({ where: { videoCategoryId: { in: folderIds }, status: true }, orderBy: [{ order: "asc" }, { created_at: "asc" }] })
-    : [];
-
-  const daysLeftMap = await getDaysLeftMap(customerId, [courseId]);
-  const daysLeft = daysLeftMap.has(String(courseId)) ? daysLeftMap.get(String(courseId)) ?? null : null;
+  subscribed: boolean,
+  videos: RecordingVideo[]
+): Promise<any[]> => {
+  if (!videos.length) return [];
 
   // per-quality recordings from the source live session
   const sessionIds = [...new Set(videos.map((v) => v.liveSessionId).filter((n): n is number => n != null))];
-  type RecEntry = { quality: string | null; file_size: number | null; path: string };
-  const recBySession = new Map<number, RecEntry[]>();
-  const mp4BySession = new Map<number, RecEntry[]>();
+  const recBySession = new Map<number, VodRec[]>();
   // VOD-meta-resolved playable URLs per session (get-vod-stream-meta, cached).
   const vodBySession = new Map<number, CachedVodMeta | null>();
-  const shapeRecs = (raw: unknown): RecEntry[] =>
-    (Array.isArray(raw) ? raw : [])
-      .filter((r: any) => typeof r?.path === "string" && r.path.length > 0)
-      .map((r: any) => ({
-        quality: typeof r.quality === "string" ? r.quality : null,
-        file_size: typeof r.file_size === "number" ? r.file_size : null,
-        path: sanitizeRecPath(r.path),
-      }));
   if (sessionIds.length) {
-    const sessions = await prisma.liveSession.findMany({ where: { id: { in: sessionIds } }, select: { id: true, streamId: true, recordings: true, mp4Recordings: true } });
-    for (const s of sessions) {
-      recBySession.set(s.id, shapeRecs(s.recordings));
-      mp4BySession.set(s.id, shapeRecs(s.mp4Recordings));
-    }
+    const sessions = await prisma.liveSession.findMany({ where: { id: { in: sessionIds } }, select: { id: true, streamId: true, recordings: true } });
+    for (const s of sessions) recBySession.set(s.id, shapeStoredRecs(s.recordings));
     // Resolve the actually-playable URLs for each session's recording via
     // StreamOS get-vod-stream-meta (cached). Failure-isolated per session — a
     // session that can't resolve falls back to its stored webhook recordings.
@@ -1429,7 +1417,7 @@ export const getRecordingsForClient = async (
 
   // per-video resume progress
   const progByVideo = new Map<number, any>();
-  if (customerId && videos.length) {
+  if (customerId) {
     const rows = await prisma.lectureProgress.findMany({
       where: { customerId, videoId: { in: videos.map((v) => v.id) } },
       select: { videoId: true, positionSec: true, durationSec: true, completed: true, completedAt: true, lastWatchedAt: true },
@@ -1437,10 +1425,7 @@ export const getRecordingsForClient = async (
     for (const r of rows) if (r.videoId != null) progByVideo.set(r.videoId, r);
   }
 
-  const byFolder = new Map<number, typeof videos>();
-  for (const v of videos) { const a = byFolder.get(v.videoCategoryId as number) ?? []; a.push(v); byFolder.set(v.videoCategoryId as number, a); }
-
-  const shapeLecture = (v: (typeof videos)[number]) => {
+  return videos.map((v) => {
     const canPlay = subscribed || v.priceType === "free";
     const p = progByVideo.get(v.id);
     // Keep only the CLEARTEXT metadata the list screen needs (qualities picker,
@@ -1466,11 +1451,60 @@ export const getRecordingsForClient = async (
       mediaToken,
       progress: p ? { positionSec: p.positionSec ?? 0, durationSec: p.durationSec ?? 0, completed: !!p.completed, completedAt: p.completedAt ?? null, lastWatchedAt: p.lastWatchedAt ?? null } : null,
     };
-  };
+  });
+};
+
+/**
+ * Course + entitlement preamble shared by the recordings reads. Owner-aware: a
+ * deactivated live course still serves its recordings to existing active
+ * subscribers, but 404s for everyone else (non-owner / browse).
+ */
+const loadRecordingsContext = async (
+  courseId: number,
+  customerId: number | null
+): Promise<"not_found" | { course: any; subscribed: boolean; daysLeft: number | null }> => {
+  const course = await repo.findById(courseId);
+  if (!course) return "not_found";
+  const subscribed = await hasAccessToAnyLiveCourse(customerId, [courseId]);
+  if (!course.status && !subscribed) return "not_found";
+  const daysLeftMap = await getDaysLeftMap(customerId, [courseId]);
+  return { course, subscribed, daysLeft: daysLeftMap.has(String(courseId)) ? daysLeftMap.get(String(courseId)) ?? null : null };
+};
+
+const recordingFolderWhere = (courseId: number) => ({ liveCourseId: courseId, status: true });
+const RECORDING_FOLDER_ORDER = [{ order_by: "asc" as const }, { created_at: "asc" as const }];
+const RECORDING_FOLDER_SELECT = { id: true, title: true, image: true, order_by: true };
+
+export const getRecordingsForClient = async (
+  courseId: number,
+  customerId: number | null,
+  q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
+): Promise<"not_found" | any> => {
+  const ctx = await loadRecordingsContext(courseId, customerId);
+  if (ctx === "not_found") return "not_found";
+  const { course, subscribed, daysLeft } = ctx;
+
+  const folders = await prisma.videoCategory.findMany({
+    where: recordingFolderWhere(courseId),
+    orderBy: RECORDING_FOLDER_ORDER,
+    select: RECORDING_FOLDER_SELECT,
+  });
+  const folderIds = folders.map((f) => f.id);
+  const videos = folderIds.length
+    ? await prisma.video.findMany({ where: { videoCategoryId: { in: folderIds }, status: true }, orderBy: [{ order: "asc" }, { created_at: "asc" }] })
+    : [];
+
+  const shaped = await shapeRecordingLectures(courseId, customerId, subscribed, videos);
+  const byFolder = new Map<number, any[]>();
+  videos.forEach((v, i) => {
+    const a = byFolder.get(v.videoCategoryId as number) ?? [];
+    a.push(shaped[i]);
+    byFolder.set(v.videoCategoryId as number, a);
+  });
 
   const allFolders = folders.map((f) => ({
     folderId: String(f.id), title: f.title, image: f.image, order: f.order_by,
-    lectures: (byFolder.get(f.id) ?? []).map(shapeLecture),
+    lectures: byFolder.get(f.id) ?? [],
   }));
 
   // Optional lecture-title search drops non-matching lectures (and now-empty
@@ -1489,6 +1523,95 @@ export const getRecordingsForClient = async (
     liveCourse: { _id: String(course.id), name: course.name, image: course.image },
     subscribed, daysLeft, totalLectures, folders: folderPayload,
     total: totalFolders, page: q.page, limit: q.limit,
+    purchaseOptions: subscribed ? [] : await buildPurchaseOptionsSql([courseId]),
+  };
+};
+
+/**
+ * Hub variant of getRecordingsForClient: folder name + lecture COUNT only.
+ * Counts come from a SQL groupBy, so no Video rows, no StreamOS VOD resolution and
+ * no media-token signing happen for a screen that only renders folder rows.
+ * Pagination is over FOLDERS, same as the full response.
+ */
+export const getRecordingFolderSummaryForClient = async (
+  courseId: number,
+  customerId: number | null,
+  q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
+): Promise<"not_found" | any> => {
+  const ctx = await loadRecordingsContext(courseId, customerId);
+  if (ctx === "not_found") return "not_found";
+  const { course, subscribed, daysLeft } = ctx;
+
+  const folders = await prisma.videoCategory.findMany({
+    where: recordingFolderWhere(courseId),
+    orderBy: RECORDING_FOLDER_ORDER,
+    select: RECORDING_FOLDER_SELECT,
+  });
+  const folderIds = folders.map((f) => f.id);
+  const counts = folderIds.length
+    ? await prisma.video.groupBy({
+        by: ["videoCategoryId"],
+        where: { videoCategoryId: { in: folderIds }, status: true, ...(buildPrismaSearch(q.search, ["title"]) ?? {}) },
+        _count: { _all: true },
+      })
+    : [];
+  const countByFolder = new Map(counts.map((c) => [c.videoCategoryId as number, c._count._all]));
+
+  const allFolders = folders.map((f) => ({
+    folderId: String(f.id), title: f.title, image: f.image, order: f.order_by,
+    lectureCount: countByFolder.get(f.id) ?? 0,
+  }));
+  // Search drops folders with no matching lecture — mirrors the full response, which
+  // filters lectures and then drops the now-empty folders. Without a search term
+  // EVERY folder is kept, including empty ones (lectureCount 0).
+  const filteredFolders = q.search ? allFolders.filter((f) => f.lectureCount > 0) : allFolders;
+  const totalLectures = filteredFolders.reduce((n, f) => n + f.lectureCount, 0);
+
+  return {
+    liveCourse: { _id: String(course.id), name: course.name, image: course.image },
+    subscribed, daysLeft, totalLectures,
+    folders: filteredFolders.slice((q.page - 1) * q.limit, (q.page - 1) * q.limit + q.limit),
+    total: filteredFolders.length, page: q.page, limit: q.limit,
+    purchaseOptions: subscribed ? [] : await buildPurchaseOptionsSql([courseId]),
+  };
+};
+
+/**
+ * One folder's lectures, paginated BY LECTURE — the "open folder" screen. Same
+ * entitlement rules as the full recordings response: the lecture list is always
+ * returned, but a locked lecture carries no media token.
+ */
+export const getRecordingFolderDetailForClient = async (
+  courseId: number,
+  folderId: number,
+  customerId: number | null,
+  q: { search?: string; page: number; limit: number } = { page: 1, limit: 20 }
+): Promise<"not_found" | "folder_not_found" | any> => {
+  const ctx = await loadRecordingsContext(courseId, customerId);
+  if (ctx === "not_found") return "not_found";
+  const { course, subscribed, daysLeft } = ctx;
+
+  // Folder must belong to THIS live course — otherwise any folder id would be
+  // readable through any course id.
+  const folder = await prisma.videoCategory.findFirst({
+    where: { id: folderId, ...recordingFolderWhere(courseId) },
+    select: RECORDING_FOLDER_SELECT,
+  });
+  if (!folder) return "folder_not_found";
+
+  const where = { videoCategoryId: folder.id, status: true, ...(buildPrismaSearch(q.search, ["title"]) ?? {}) };
+  const [videos, total] = await Promise.all([
+    prisma.video.findMany({ where, orderBy: [{ order: "asc" }, { created_at: "asc" }], skip: (q.page - 1) * q.limit, take: q.limit }),
+    prisma.video.count({ where }),
+  ]);
+
+  return {
+    liveCourse: { _id: String(course.id), name: course.name, image: course.image },
+    folderId: String(folder.id), title: folder.title, image: folder.image, order: folder.order_by,
+    lectureCount: total,
+    lectures: await shapeRecordingLectures(courseId, customerId, subscribed, videos),
+    subscribed, daysLeft,
+    total, page: q.page, limit: q.limit,
     purchaseOptions: subscribed ? [] : await buildPurchaseOptionsSql([courseId]),
   };
 };

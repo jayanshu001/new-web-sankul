@@ -1296,8 +1296,9 @@ model PackageCourseEbookPrice {
   materialPrice              Int?                         @map("material_price")
   isDefault                  Boolean                      @map("is_default")
   status                     Boolean
+  // Computed by modules/plan-popularity (all-time paid orders). Read-only to the
+  // API. The `most_popular_pinned` override column was dropped 2026-08-05.
   isMostPopular              Boolean                      @default(false) @map("is_most_popular")
-  mostPopularPinned          Boolean                      @default(false) @map("most_popular_pinned")
   created_at                 DateTime?
   updated_at                 DateTime?
   packageCourseOrder         PackageCourseOrder[]
@@ -1380,6 +1381,8 @@ model PackageCourseSubscription {
   @@index([promoterId, createdAt], name: "idx_pcs_promoter")
   @@index([createdAt, courseId, amount], name: "idx_pcs_created_course_amount")
   @@index([customerId, status, endAt], name: "idx_pcs_customer_status_endat")
+  // Package-detail Subscription tab: filter package_id, sort created_at DESC.
+  @@index([packageId, createdAt], name: "idx_pcs_package_created")
   @@map("ws_package_course_subscription")
 }
 
@@ -1808,8 +1811,7 @@ model LiveCoursePlan {
   materialPrice Int?      @map("material_price")
   isDefault     Boolean   @default(false) @map("is_default")
   status        Boolean   @default(true)
-  isMostPopular     Boolean @default(false) @map("is_most_popular")
-  mostPopularPinned Boolean @default(false) @map("most_popular_pinned")
+  isMostPopular Boolean   @default(false) @map("is_most_popular") // computed; override col dropped 2026-08-05
   createdAt     DateTime? @map("created_at")
   updatedAt     DateTime? @map("updated_at")
 
@@ -2301,8 +2303,7 @@ model TestSeriesPrice {
   originalPrice Decimal?  @map("original_price") @db.Decimal(10, 2)
   isDefault     Boolean   @default(false) @map("is_default")
   status        Boolean   @default(true)
-  isMostPopular     Boolean @default(false) @map("is_most_popular")
-  mostPopularPinned Boolean @default(false) @map("most_popular_pinned")
+  isMostPopular Boolean   @default(false) @map("is_most_popular") // computed; override col dropped 2026-08-05
   createdAt     DateTime? @map("created_at")
   updatedAt     DateTime? @map("updated_at")
 

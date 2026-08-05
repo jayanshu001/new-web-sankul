@@ -407,16 +407,28 @@ export const getCourseSubscriptionById = async (id: number): Promise<"not_found"
   if (!r) return "not_found";
   const [cust] = r.customerId ? await repo.customersByIds([r.customerId]) : [undefined];
   const [course] = r.courseId ? await repo.coursesByIds([r.courseId]) : [undefined];
+  const [pkg] = r.packageId ? await repo.packagesByIds([r.packageId]) : [undefined];
   const [plan] = r.planId ? await repo.plansByIds([r.planId]) : [undefined];
+  // The gateway refs and the order type live on ws_package_course_order, not on the
+  // subscription. Admin-granted subs carry no order_id (12k of package 91's 48k rows),
+  // so these stay null for them rather than being faked.
+  const [order] = r.orderId ? await repo.ordersByIds([r.orderId]) : [undefined];
   return {
     _id: String(r.id),
     customerId: customerRef(cust),
     courseId: course ? { _id: String(course.id), name: course.name, image: course.image ?? null } : idStr(r.courseId),
-    packageId: idStr(r.packageId),
+    packageId: pkg ? { _id: String(pkg.id), name: pkg.name, image: pkg.image ?? null } : idStr(r.packageId),
     planId: plan ? { _id: String(plan.id), name: plan.name ?? null, duration: plan.duration, price: plan.price } : idStr(r.planId),
     paidAmount: r.amount != null ? Number(r.amount) : 0,
     startAt: r.startAt ?? null, endAt: r.endAt ?? null,
+    // payment_type is the activation channel (backend / app / web); order.paymentMethod
+    // is the gateway. Both are surfaced — they answer different questions.
     status: r.status, paymentMethod: r.payment_type ?? null, remark: r.remarks ?? null,
+    orderType: order?.orderType ?? null,
+    orderPaymentMethod: order?.paymentMethod ?? null,
+    razorpayOrderId: order?.gatewayOrderId ?? null,
+    razorpayPaymentId: order?.gatewayPaymentId ?? null,
+    bankTransactionId: order?.bankTransactionId ?? null,
     withMaterial: rowHasMaterial(r),
     createdAt: r.createdAt ?? null, updatedAt: r.updatedAt ?? null,
   };

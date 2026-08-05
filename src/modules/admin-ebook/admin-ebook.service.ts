@@ -112,8 +112,7 @@ const toPlanDto = (p: PackageCourseEbookPrice & { EBook?: { id: number; name: st
   price: p.price,
   isDefault: p.isDefault,
   status: p.status,
-  isMostPopular: (p as any).isMostPopular ?? false,
-  mostPopularPinned: (p as any).mostPopularPinned ?? false,
+  isMostPopular: (p as any).isMostPopular ?? false, // computed, read-only (plan-popularity)
   createdAt: p.created_at ?? null,
   updatedAt: p.updated_at ?? null,
 });

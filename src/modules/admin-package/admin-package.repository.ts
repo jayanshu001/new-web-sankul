@@ -183,7 +183,9 @@ export const adminPackageRepository = {
     prisma.packageCourseSubscription.findMany({
       where: { packageId },
       include: { customer: { select: { id: true, fullName: true, phoneNumber: true, emailAddress: true } }, package: { select: { id: true, name: true } } },
-      orderBy: { id: "desc" },
+      // created_at is nullable and not unique, so `id` is kept as the tiebreaker:
+      // without it, rows sharing a timestamp can repeat or vanish across pages.
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       skip, take,
     }),
   countSubscribers: (packageId: number) => prisma.packageCourseSubscription.count({ where: { packageId } }),

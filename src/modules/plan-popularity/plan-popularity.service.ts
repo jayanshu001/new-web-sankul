@@ -1,14 +1,20 @@
 /**
  * "Most Popular" pricing-plan tag — shared recompute across commerce modules.
  *
- * Per-product, all-time paid orders decide the winner; an admin "pin" overrides.
- * Two columns per plan table (see 2026-06-30_most_popular_plan_flags.sql):
- *   - most_popular_pinned : admin override. When any plan of a product is pinned,
- *                           the pinned plan wins (lowest price→id if several).
- *   - is_most_popular     : EFFECTIVE flag the API reads. Written here.
+ * Fully automatic: per-product, all-time paid orders decide the winner. There is
+ * no admin override — the `most_popular_pinned` column shipped 2026-06-30, was
+ * never given a UI, never wrote a non-zero row, and was dropped 2026-08-05
+ * (see docs/admin/MOST_POPULAR_PLAN_PIN.md). One column per plan table:
+ *   - is_most_popular : EFFECTIVE flag the API reads. Written here, read-only
+ *                       everywhere else — no write endpoint accepts it.
  *
- * Winner per product: pinned plan if any; else the plan with the most all-time
- * PAID orders; tie → lowest price, then lowest id. No sales + no pin → all false.
+ * Winner per product: the plan with the most all-time PAID orders; tie → lowest
+ * price, then lowest id. No sales → no badge on any plan of that product.
+ *
+ * ⚠ Counting is ALL-TIME, so an established plan is very hard to unseat and a
+ * newly added plan may never win one. If the badge ever needs to track *current*
+ * demand, window the paid-order query (e.g. last 90 days) — that is the correct
+ * fix, not a manual override.
  *
  * Scopes (5 logical modules over 3 plan tables — course/package/ebook share one):
  *   course      : ws_package_course_ebook_price (courseId)  ← paid PackageCourseOrder
@@ -23,18 +29,14 @@ export type PopularityScope = "course" | "package" | "ebook" | "liveCourse" | "t
 export const POPULARITY_SCOPES: PopularityScope[] = ["course", "package", "ebook", "liveCourse", "testSeries"];
 
 // One plan as the ranker sees it. price coerced to number (test-series is Decimal).
-interface PlanRow { id: number; productId: number; price: number; pinned: boolean }
+interface PlanRow { id: number; productId: number; price: number }
 
-// Pick the winning plan id for ONE product, or null (no pin + no sales).
+// Pick the winning plan id for ONE product, or null when it has no paid orders.
 function pickWinner(plans: PlanRow[], paidByPlan: Map<number, number>): number | null {
   if (plans.length === 0) return null;
-  const pinned = plans.filter((p) => p.pinned);
-  if (pinned.length) {
-    return [...pinned].sort((a, b) => a.price - b.price || a.id - b.id)[0].id;
-  }
   const withCount = plans.map((p) => ({ ...p, c: paidByPlan.get(p.id) ?? 0 }));
   const max = Math.max(...withCount.map((x) => x.c));
-  if (max <= 0) return null; // no pin, no sales → no badge
+  if (max <= 0) return null; // no sales → no badge
   return withCount.filter((x) => x.c === max).sort((a, b) => a.price - b.price || a.id - b.id)[0].id;
 }
 
@@ -45,9 +47,9 @@ function pickWinner(plans: PlanRow[], paidByPlan: Map<number, number>): number |
 async function loadCpe(field: "courseId" | "packageId" | "ebookId", productId?: number) {
   const where: any = { status: true, [field]: productId != null ? productId : { not: null } };
   const plans = await prisma.packageCourseEbookPrice.findMany({
-    where, select: { id: true, price: true, mostPopularPinned: true, courseId: true, packageId: true, ebookId: true },
+    where, select: { id: true, price: true, courseId: true, packageId: true, ebookId: true },
   });
-  const rows: PlanRow[] = plans.map((p) => ({ id: p.id, productId: Number((p as any)[field]), price: p.price, pinned: p.mostPopularPinned }));
+  const rows: PlanRow[] = plans.map((p) => ({ id: p.id, productId: Number((p as any)[field]), price: p.price }));
   return rows;
 }
 
@@ -73,9 +75,9 @@ export async function recomputeScope(scope: PopularityScope, productId?: number)
   } else if (scope === "liveCourse") {
     const rows = await prisma.liveCoursePlan.findMany({
       where: { status: true, ...(productId != null ? { liveCourseId: productId } : {}) },
-      select: { id: true, price: true, mostPopularPinned: true, liveCourseId: true },
+      select: { id: true, price: true, liveCourseId: true },
     });
-    plans = rows.map((p) => ({ id: p.id, productId: p.liveCourseId, price: p.price, pinned: p.mostPopularPinned }));
+    plans = rows.map((p) => ({ id: p.id, productId: p.liveCourseId, price: p.price }));
     const ids = plans.map((p) => p.id);
     if (ids.length) {
       const grouped = await prisma.liveCourseSubscription.groupBy({
@@ -87,9 +89,9 @@ export async function recomputeScope(scope: PopularityScope, productId?: number)
     // testSeries — price is Decimal; coerce to number for ranking.
     const rows = await prisma.testSeriesPrice.findMany({
       where: { status: true, ...(productId != null ? { testSeriesId: productId } : {}) },
-      select: { id: true, price: true, mostPopularPinned: true, testSeriesId: true },
+      select: { id: true, price: true, testSeriesId: true },
     });
-    plans = rows.map((p) => ({ id: p.id, productId: p.testSeriesId, price: Number(p.price), pinned: p.mostPopularPinned }));
+    plans = rows.map((p) => ({ id: p.id, productId: p.testSeriesId, price: Number(p.price) }));
     const ids = plans.map((p) => p.id);
     if (ids.length) {
       const grouped = await prisma.testSeriesOrder.groupBy({
@@ -140,27 +142,7 @@ export async function recomputeAllPopularity(): Promise<Record<PopularityScope, 
   return out;
 }
 
-// The (model, productId-field) for a scope's plan table.
-function scopeTable(scope: PopularityScope): { model: any; productField: string } {
-  if (scope === "liveCourse") return { model: prisma.liveCoursePlan, productField: "liveCourseId" };
-  if (scope === "testSeries") return { model: prisma.testSeriesPrice, productField: "testSeriesId" };
-  // course/package/ebook share the price table; productField differs by scope.
-  const productField = scope === "course" ? "courseId" : scope === "package" ? "packageId" : "ebookId";
-  return { model: prisma.packageCourseEbookPrice, productField };
-}
-
-/**
- * Admin override: pin/unpin a plan as "most popular". Sets most_popular_pinned on
- * the plan, then immediately recomputes the WHOLE product so the effective
- * is_most_popular flag reflects the change at once (pin wins; unpin → falls back to
- * the most-purchased plan). Returns "not_found" if the plan isn't in the scope.
- */
-export async function setPinned(scope: PopularityScope, planId: number, pinned: boolean): Promise<"ok" | "not_found"> {
-  const { model, productField } = scopeTable(scope);
-  const plan = await model.findFirst({ where: { id: planId, ...(scope === "course" || scope === "package" || scope === "ebook" ? { [productField]: { not: null } } : {}) }, select: { id: true, [productField]: true } });
-  if (!plan) return "not_found";
-  await model.update({ where: { id: planId }, data: { mostPopularPinned: pinned } });
-  const productId = Number((plan as any)[productField]);
-  if (productId > 0) await recomputeScope(scope, productId);
-  return "ok";
-}
+// NOTE: `setPinned()` and its `scopeTable()` helper were removed 2026-08-05 along
+// with the `most_popular_pinned` column. The badge has no manual override — if one
+// is ever wanted again, see the git history of this file, but prefer windowing the
+// paid-order count (see the header note) over reintroducing a human lever.

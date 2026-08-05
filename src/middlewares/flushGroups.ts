@@ -117,8 +117,13 @@ export const FLUSH_GROUPS: Partial<Record<CacheEntity, CacheEntity[]>> = {
   educator: ["educator", "catalog-course"],
 
   // Plans/prices are embedded in EVERY product response + dashboard buckets.
-  plan: ["plan", "catalog-package", "catalog-course", "catalog-ebook", "client-dashboard", "free"],
-  price: ["price", "catalog-package", "catalog-course", "catalog-ebook", "client-dashboard", "free"],
+  // Also the ADMIN product reads: GET /admin/courses/:id and GET /admin/ebooks/:id
+  // return `plans[]`, and the GET /admin/packages list embeds withMaterial/
+  // withoutMaterial plan buckets — all cached. Without "course"/"package"/"ebook"
+  // here, a plan edit (or a Most Popular pin, which routes through autoFlush("plan"))
+  // stays invisible to the admin panel for the full 24h TTL.
+  plan: ["plan", "course", "package", "ebook", "catalog-package", "catalog-course", "catalog-ebook", "client-dashboard", "free"],
+  price: ["price", "course", "package", "ebook", "catalog-package", "catalog-course", "catalog-ebook", "client-dashboard", "free"],
   "promo-code": ["promo-code", "catalog-package"],
 
   // ── Exams / countdowns ────────────────────────────────────────────────────

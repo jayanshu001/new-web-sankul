@@ -48,9 +48,11 @@ export const listEbooks = async (req: Request, res: Response) => {
     // Slim the client list DTO to the fields the RN app actually reads (see
     // docs/api-optimization/GET_client_ebooks.md). Drops unused top-level meta +
     // unused nested plan/detail keys; pagination envelope is untouched.
+    // `isMostPopular` is KEPT — it drives the "Most Popular" plan badge, same as
+    // package/course/live/test-series listings (see plan-popularity module).
     const slimEbooks = (ebooks as any[]).map((e) => ({
       ...omit(e, ["order", "link", "status", "isTrending", "updatedAt", "subscriptionEndAt"]),
-      plans: omitList(e.plans, ["ebookId", "status", "isMostPopular"]),
+      plans: omitList(e.plans, ["ebookId", "status"]),
       details: omitList(e.details, ["id"]),
     }));
     logger.info("listEbooks success", { traceId, customerId, count: ebooks.length, total, source: "mysql" });

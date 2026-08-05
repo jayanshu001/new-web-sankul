@@ -73,7 +73,7 @@ export const updatePlan = async (req: Request, res: Response) => {
     const updated = await planSql.updatePlan(numId, data as any);
     if (!updated) return res.status(404).json({ success: false, message: "Plan not found." });
     if (updated === "has_subscribers")
-      return res.status(400).json({ success: false, message: "Plan has subscribers; it can no longer be edited. Deactivate it and add a new plan instead." });
+      return res.status(400).json({ success: false, message: "Plan has active subscribers; its price, duration and material options can no longer be changed. Deactivate it and add a new plan instead." });
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
     if (error.issues) return res.status(400).json({ success: false, errors: error.issues });

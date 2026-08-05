@@ -329,8 +329,8 @@ R("PATCH", "/plans/:id/default", "plans.edit");
 R("POST", "/plans/:id/clone", "plans.create");
 crud("/plans", "plans");
 
-// ── /plan-popularity → plans (Most Popular pin) ────────────────────────────
-R("POST", "/plan-popularity/pin", "plans.edit");
+// ── /plan-popularity → plans (Most Popular recompute; the /pin override was
+//    removed 2026-08-05 — the badge is fully automatic) ──────────────────────
 R("POST", "/plan-popularity/recompute", "plans.edit");
 
 // ── /promocodes → promocodes ───────────────────────────────────────────────

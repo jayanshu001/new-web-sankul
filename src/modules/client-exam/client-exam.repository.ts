@@ -191,11 +191,22 @@ export const clientExamRepository = {
   findOption: (id: number, questionId: number) =>
     prisma.examQuestionOption.findFirst({ where: { id, question: questionId } }),
 
+  /**
+   * Options by id — used to recognise LEGACY skip rows when reading stored answers
+   * back (a pre-cutover attempt/result points `answer_id` at an option titled
+   * "Skip"). Name only; nothing else is needed to classify it.
+   */
+  optionsByIds: (ids: number[]) =>
+    ids.length
+      ? prisma.examQuestionOption.findMany({ where: { id: { in: ids } }, select: { id: true, name: true } })
+      : Promise.resolve([]),
+
   /** Insert the result + its details in one transaction. Returns the result row. */
   createResult: (input: {
     customerId: number; examId: number; total: number; attempt: number; skip: number;
     success: number; failed: number; score: number; timing: string; ratting: string | null;
-    details: Array<{ questionId: number; answerId: number; result: "true" | "false" | "skip"; point: number }>;
+    // answerId is NULL for a skipped question (no option row involved).
+    details: Array<{ questionId: number; answerId: number | null; result: "true" | "false" | "skip"; point: number }>;
   }) =>
     prisma.$transaction(async (tx) => {
       const now = new Date();

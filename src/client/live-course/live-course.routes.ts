@@ -8,6 +8,7 @@ import {
   getLiveCourseForClient,
   listSessionsForCourseClient,
   listLiveCourseRecordings,
+  getLiveCourseRecordingFolder,
   listLiveCourseSessionRecordings,
   getLiveCourseLecture,
   getLiveCourseSchedule,
@@ -39,7 +40,8 @@ router.get("/upcoming-sessions",    cacheRoute(LC), listAllUpcomingSessions);   
 router.get("/live-now-sessions",    listLiveNowSessions);          // GET /api/v1/client/live-courses/live-now-sessions  (currently-live across all courses)
 router.get("/:id",                  cacheRoute(LC), getLiveCourseForClient);       // GET /api/v1/client/live-courses/:id
 router.get("/:id/sessions",            cacheRoute(LC), listSessionsForCourseClient);       // GET /api/v1/client/live-courses/:id/sessions
-router.get("/:id/recordings",          listLiveCourseRecordings);          // GET /api/v1/client/live-courses/:id/recordings  (folder videos)
+router.get("/:id/recordings",          listLiveCourseRecordings);          // GET /api/v1/client/live-courses/:id/recordings  (folder videos; ?summary=1 → folder rows + lectureCount, no lectures[])
+router.get("/:id/recordings/:folderId", getLiveCourseRecordingFolder);     // GET /api/v1/client/live-courses/:id/recordings/:folderId  (one folder's lectures, paginated by lecture)
 router.get("/:id/session-recordings",  listLiveCourseSessionRecordings);   // GET /api/v1/client/live-courses/:id/session-recordings  (raw Streamos recordings)
 router.get("/:id/schedule",                       getLiveCourseSchedule);   // GET /api/v1/client/live-courses/:id/schedule  (timetable + scheduleFolders)
 router.get("/:id/schedule-folders/:folderId",     getMyScheduleFolder);     // GET /api/v1/client/live-courses/:id/schedule-folders/:folderId  (folder detail screen)

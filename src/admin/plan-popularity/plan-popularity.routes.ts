@@ -1,16 +1,21 @@
 import { Router } from "express";
 import authenticate, { requireRole } from "../../middlewares/authenticate";
-import { autoFlush } from "../../middlewares/autoFlush";
-import { pinMostPopular, recomputeMostPopular } from "./plan-popularity.controller";
+import { autoFlushGroup } from "../../middlewares/autoFlush";
+import { recomputeMostPopular } from "./plan-popularity.controller";
 
 const router = Router();
 
 router.use(authenticate); // authz: catalog RBAC (enforceRbac) + router-level staff gate
 
-// These flip is_most_popular, embedded in plan/catalog product responses — flush
-// "plan" (fans out to catalog-package/course/ebook + dashboard + free) so the
-// pinned-badge change surfaces immediately, not after the cached read's TTL.
-router.post("/pin", autoFlush("plan"), pinMostPopular);            // POST /api/v1/admin/plan-popularity/pin
-router.post("/recompute", autoFlush("plan"), recomputeMostPopular); // POST /api/v1/admin/plan-popularity/recompute
+// The badge is fully automatic — the POST /pin override was removed 2026-08-05
+// with the most_popular_pinned column. Only the manual recompute remains.
+//
+// Recompute flips is_most_popular, which is embedded in plan/catalog product
+// responses — so expand the GROUP (autoFlushGroup, not autoFlush: the latter
+// clears only the "plan" tag itself and would leave every catalog/admin-product
+// read stale). "plan" covers course/package/ebook plan rows + their client
+// catalogs; "live-course" covers ws_live_course_plan, whose rows surface in the
+// live-course and package-category listings. test-series reads aren't cached.
+router.post("/recompute", autoFlushGroup("plan", "live-course"), recomputeMostPopular); // POST /api/v1/admin/plan-popularity/recompute
 
 export default router;

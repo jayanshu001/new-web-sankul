@@ -79,8 +79,7 @@ const toPlanDto = (p: any) => ({
   materialPrice: p.materialPrice ?? 0,
   isDefault: p.isDefault,
   status: p.status,
-  isMostPopular: p.isMostPopular ?? false,
-  mostPopularPinned: p.mostPopularPinned ?? false,
+  isMostPopular: p.isMostPopular ?? false, // computed, read-only (plan-popularity)
   courseId: idStrOrNull(p.courseId),
   createdAt: p.created_at ?? null,
   updatedAt: p.updated_at ?? null,

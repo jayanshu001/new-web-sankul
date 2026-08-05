@@ -32,6 +32,10 @@ const toDto = (p: any) => ({
   materialPrice: p.materialPrice ?? 0,
   isDefault: p.isDefault,
   status: p.status,
+  // "Most Popular" badge — computed, read-only (plan-popularity module ranks by
+  // all-time paid orders). NOT writable here or anywhere else in the admin API;
+  // the manual override was removed 2026-08-05 (docs/admin/MOST_POPULAR_PLAN_PIN.md).
+  isMostPopular: p.isMostPopular ?? false,
   courseId: OWNED(p.courseId) ? (p.Course ? ref(p.Course) : String(p.courseId)) : null,
   packageId: OWNED(p.packageId) ? (p.Package ? ref(p.Package) : String(p.packageId)) : null,
   ebookId: OWNED(p.ebookId) ? (p.EBook ? ref(p.EBook) : String(p.ebookId)) : null,
@@ -93,13 +97,28 @@ export const createPlan = async (input: PlanWriteInput) => {
   return toDto(await repo.findById(created.id));
 };
 
+/**
+ * True when the incoming payload would change what a buyer actually paid for.
+ * `materialPrice` is nullable in the DB but always 0 in the DTO, so both sides are
+ * normalised — otherwise a null→0 no-op would read as a change and block the save.
+ */
+const changesPaidTerms = (existing: any, input: PlanWriteInput): boolean =>
+  (input.duration !== undefined && input.duration !== existing.duration) ||
+  (input.price !== undefined && input.price !== existing.price) ||
+  (input.withMaterial !== undefined && input.withMaterial !== existing.withMaterial) ||
+  (input.materialPrice !== undefined && (input.materialPrice ?? 0) !== (existing.materialPrice ?? 0));
+
 export const updatePlan = async (id: number, input: PlanWriteInput): Promise<any | null | "has_subscribers"> => {
   const existing = await repo.findBare(id);
   if (!existing) return null;
   // Customers have already bought on these terms — changing price/duration retroactively
-  // would misrepresent what they paid for. Status stays editable via PATCH /:id/status so
-  // a plan can still be retired from sale without touching live subscriptions.
-  if ((await repo.subscriberCount(id)) > 0) return "has_subscribers";
+  // would misrepresent what they paid for. Scoped as tightly as possible so the admin
+  // package/course edit form (which re-PUTs every plan on save) is not blocked:
+  //   • only the COMMERCIAL terms below are locked — name/isDefault/status/owner stay editable
+  //   • only when the value actually CHANGES — a no-op re-save always passes
+  //   • only against ACTIVE subscribers — expired rows must not lock a plan forever
+  if (changesPaidTerms(existing, input) && (await repo.activeSubscriberCount(id)) > 0)
+    return "has_subscribers";
   const data: any = { updated_at: new Date() };
   if (input.name !== undefined) data.name = input.name;
   if (input.duration !== undefined) data.duration = input.duration;

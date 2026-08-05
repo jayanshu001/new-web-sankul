@@ -10,6 +10,22 @@ import * as liveSql from "../../modules/admin-live-course/admin-live-course.serv
 const resolveBase = (req: Request) =>
   process.env.ORIGIN || `${req.protocol}://${req.get("host")}`;
 
+/** `?summary=1` and `?summary=true` both mean on — the app sends either. */
+const isTruthyFlag = (v: unknown): boolean => {
+  const s = String(v ?? "").toLowerCase();
+  return s === "1" || s === "true";
+};
+
+/**
+ * Slim a recordings lecture for the wire. Used by BOTH /:id/recordings and
+ * /:id/recordings/:folderId so the two never drift — the app maps them with the
+ * same code. Playback fields (mediaToken/qualities/preferredStream) are kept.
+ */
+const slimRecordingLecture = (l: any) => ({
+  ...omit(l, ["topic", "order", "priceType"]),
+  progress: l.progress ? omit(l.progress, ["completed", "completedAt"]) : l.progress,
+});
+
 // GET /api/v1/client/live-courses
 export const listLiveCoursesForClient = async (req: Request, res: Response) => {
   const traceId = req.traceId;
@@ -180,22 +196,63 @@ export const listLiveCourseRecordings = async (req: Request, res: Response) => {
     if (!lid) { logger.warn("listLiveCourseRecordings invalid id (mysql)", { traceId, id }); return failure(res, "Invalid live course id.", 422); }
     const cid = req.user?.id ? Number(req.user.id) : null;
     const { search, page, limit } = parseListQuery(req.query);
+
+    // ?summary=1 → hub mode: folder rows carry `lectureCount` and NO `lectures[]`.
+    // The folder screens fetch their own lectures from /recordings/:folderId, so the
+    // hub never pays for VOD resolution or media-token signing it won't render.
+    if (isTruthyFlag(req.query.summary)) {
+      const s = await liveSql.getRecordingFolderSummaryForClient(lid, Number.isInteger(cid) ? cid : null, { search, page, limit });
+      if (s === "not_found") { logger.warn("listLiveCourseRecordings not found (mysql)", { traceId, id, summary: true }); return failure(res, "Live course not found.", 404); }
+      logger.info("listLiveCourseRecordings summary success (mysql)", { traceId, id, folderCount: s.folders.length });
+      const folders = (s.folders ?? []).map((f: any) => omit(f, ["image", "order"]));
+      const { liveCourse: _lc, daysLeft: _dl, totalLectures: _tl, purchaseOptions: _po, ...restS } = s;
+      return success(res, { ...restS, folders, pagination: buildPagination(s.total, s.page, s.limit) }, "Recording folders fetched.");
+    }
+
     const r = await liveSql.getRecordingsForClient(lid, Number.isInteger(cid) ? cid : null, { search, page, limit });
     if (r === "not_found") { logger.warn("listLiveCourseRecordings not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
     logger.info("listLiveCourseRecordings success (mysql)", { traceId, id, totalLectures: r.totalLectures, folderCount: r.folders.length });
     // Slim folders/lectures metadata; playback fields (mediaToken/qualities/preferredStream) kept.
     const folders = (r.folders ?? []).map((f: any) => ({
       ...omit(f, ["image", "order"]),
-      lectures: (f.lectures ?? []).map((l: any) => ({
-        ...omit(l, ["topic", "order", "priceType"]),
-        progress: l.progress ? omit(l.progress, ["completed", "completedAt"]) : l.progress,
-      })),
+      lectures: (f.lectures ?? []).map(slimRecordingLecture),
     }));
     const { liveCourse: _lc, daysLeft: _dl, totalLectures: _tl, purchaseOptions: _po, ...restR } = r;
     return success(res, { ...restR, folders, pagination: buildPagination(r.total, r.page, r.limit) }, "Recorded lectures fetched.");
   } catch (err) {
     logger.error("listLiveCourseRecordings failed", { traceId, id, error: getErrorMessage(err), stack: (err as Error).stack });
     return failure(res, "Failed to list recorded lectures.", 500);
+  }
+};
+
+// GET /api/v1/client/live-courses/:id/recordings/:folderId
+// One recording folder's lectures, paginated BY LECTURE — the screen reached by
+// tapping a folder row on the hub. Emits the exact same lecture object as the
+// nested `lectures[]` of GET /:id/recordings, so the FE mapping is unchanged.
+// Same auth/paywall as /recordings: the list is always returned; a locked lecture
+// simply carries no `mediaToken`.
+export const getLiveCourseRecordingFolder = async (req: Request, res: Response) => {
+  const traceId = req.traceId;
+  const id = String(req.params.id ?? "");
+  const folderId = String(req.params.folderId ?? "");
+  logger.info("getLiveCourseRecordingFolder invoked", { traceId, path: req.originalUrl, userId: req.user?.id, id, folderId });
+
+  try {
+    const lid = liveSql.parseLiveId(id);
+    const fid = liveSql.parseLiveId(folderId);
+    if (!lid || !fid) { logger.warn("getLiveCourseRecordingFolder invalid ids (mysql)", { traceId, id, folderId }); return failure(res, "Invalid live course or folder id.", 422); }
+    const cid = req.user?.id ? Number(req.user.id) : null;
+    const { search, page, limit } = parseListQuery(req.query);
+    const r = await liveSql.getRecordingFolderDetailForClient(lid, fid, Number.isInteger(cid) ? cid : null, { search, page, limit });
+    if (r === "not_found") { logger.warn("getLiveCourseRecordingFolder course not found (mysql)", { traceId, id }); return failure(res, "Live course not found.", 404); }
+    if (r === "folder_not_found") { logger.warn("getLiveCourseRecordingFolder folder not found (mysql)", { traceId, id, folderId }); return failure(res, "Folder not found.", 404); }
+    logger.info("getLiveCourseRecordingFolder success (mysql)", { traceId, id, folderId, lectureCount: r.lectureCount });
+    const lectures = (r.lectures ?? []).map(slimRecordingLecture);
+    const { liveCourse: _lc, daysLeft: _dl, purchaseOptions: _po, image: _img, order: _ord, ...restR } = r;
+    return success(res, { ...restR, lectures, pagination: buildPagination(r.total, r.page, r.limit) }, "Folder lectures fetched.");
+  } catch (err) {
+    logger.error("getLiveCourseRecordingFolder failed", { traceId, id, folderId, error: getErrorMessage(err), stack: (err as Error).stack });
+    return failure(res, "Failed to fetch folder lectures.", 500);
   }
 };
 

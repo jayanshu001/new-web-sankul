@@ -140,6 +140,11 @@ export const getExamQuestions = async (examId: number) => {
   const opts = questions.length ? await repo.optionsForQuestions(questions.map((q) => q.id)) : [];
   const byQ: Record<string, any[]> = {};
   for (const o of opts) {
+    // Legacy "Skip" options are NOT choices any more — the client sends
+    // `answerId: null` instead. Emitting them would render a bogus extra answer on
+    // every question that still carries one. The row stays in the DB (historical
+    // results reference it) and is still accepted on submit.
+    if (isLegacySkipOptionName(o.name)) continue;
     (byQ[String(o.question)] ||= []).push({ _id: String(o.id), name: o.name, image: null, isSelect: false });
   }
   const decorated = questions.map((q) => ({
@@ -326,11 +331,41 @@ export const getDailyExams = async (opts: { year?: number; month?: number; week?
 // ─── saveAnswers (scoring WRITE) ──────────────────────────────────────────────
 const norm = (s: string | null | undefined) => (s ?? "").trim().toLowerCase();
 
+/**
+ * ── Skip: two representations, one meaning ───────────────────────────────────
+ *
+ * BEFORE: skipping was a real row in ws_exam_question_option titled "Skip". The
+ * client selected it like any other choice, so the stored answer_id points at an
+ * option and `result` is 'skip'.
+ *
+ * NOW: the client sends `answerId: null` and no option row is involved.
+ *
+ * Both are still accepted on WRITE — an older app build that still selects the
+ * legacy option keeps scoring correctly. On READ the legacy form is normalised to
+ * the new one (see `selectedOptionId`) so results, solutions and resumed attempts
+ * render identically whichever way the answer was recorded. Legacy option rows are
+ * never deleted: historical ws_exam_result_detail rows still reference them.
+ *
+ * `result` ('true' | 'false' | 'skip') is the canonical field and is correct for
+ * both forms — anything counting skips should read it, never the answer id.
+ */
+export const isLegacySkipOptionName = (name: string | null | undefined): boolean => norm(name) === "skip";
+
+/**
+ * The option the customer actually chose, with a legacy "Skip" selection collapsed
+ * to null — i.e. exactly what a new-style skip stores. `skipOptionIds` is the set of
+ * legacy skip option ids in scope.
+ */
+const selectedOptionId = (answerId: number | null | undefined, skipOptionIds: Set<number>): number | null =>
+  answerId == null || skipOptionIds.has(answerId) ? null : answerId;
+
 export interface SaveAnswersInput {
   examId: number;
   timing: string;
   ratting?: string | null;
-  test: Array<{ questionId: number; answerId: number }>;
+  // `answerId: null` = skipped. A legacy "Skip" option id is still accepted and
+  // scores identically, so an older app build keeps working unchanged.
+  test: Array<{ questionId: number; answerId: number | null }>;
 }
 
 export type SaveAnswersResult =
@@ -346,21 +381,31 @@ export const saveAnswers = async (customerId: number, data: SaveAnswersInput): P
 
   const posMarks = num(exam.positiveMarks);
   const negMarks = num(exam.negativeMarks);
-  const details: Array<{ questionId: number; answerId: number; result: "true" | "false" | "skip"; point: number }> = [];
+  const details: Array<{ questionId: number; answerId: number | null; result: "true" | "false" | "skip"; point: number }> = [];
 
   for (const item of data.test) {
     const question = await repo.findQuestion(item.questionId, data.examId);
     if (!question) return { ok: false, status: 400, message: "Sorry, Question are not match with their exam." };
+
+    // Mirrors saveSingleAnswer: no answer id at all = skipped, nothing to look up.
+    if (!item.answerId) {
+      details.push({ questionId: item.questionId, answerId: null, result: "skip", point: 0 });
+      continue;
+    }
+
     const option = await repo.findOption(item.answerId, item.questionId);
     if (!option) return { ok: false, status: 400, message: "Sorry, Answer is not match with their exam and question." };
 
     let result: "true" | "false" | "skip";
-    if (norm(option.name) === "skip") result = "skip";
+    // Back-compat: an older build still selects the legacy "Skip" option row.
+    if (isLegacySkipOptionName(option.name)) result = "skip";
     else if (norm(option.name) === norm(question.answer)) result = "true";
     else result = "false";
 
     const point = result === "skip" ? 0 : result === "true" ? posMarks : -Math.abs(negMarks);
-    details.push({ questionId: item.questionId, answerId: item.answerId, result, point });
+    // A legacy skip is persisted as a NEW-style skip (answer_id NULL) so all
+    // freshly-written rows share one representation from here on.
+    details.push({ questionId: item.questionId, answerId: result === "skip" ? null : item.answerId, result, point });
   }
 
   const total = details.length;
@@ -405,17 +450,25 @@ export const getSolution = async (customerId: number, examId: number, attemptId?
   const qById = new Map(questions.map((q) => [q.id, q]));
   const opts = qIds.length ? await repo.optionsForQuestions(qIds) : [];
   const optsByQ: Record<string, any[]> = {};
-  for (const o of opts) (optsByQ[String(o.question)] ||= []).push(o);
+  // Legacy "Skip" options are hidden from `answers[]` (same as the question list) and
+  // collected here so a pre-cutover attempt that selected one reads back as "nothing
+  // selected" — identical to a new-style skip. `result` already says 'skip' for both.
+  const skipOptionIds = new Set<number>();
+  for (const o of opts) {
+    if (isLegacySkipOptionName(o.name)) { skipOptionIds.add(o.id); continue; }
+    (optsByQ[String(o.question)] ||= []).push(o);
+  }
 
   return details
     .filter((d) => d.questionId != null && qById.has(d.questionId))
     .map((d) => {
       const q = qById.get(d.questionId!)!;
+      const selected = selectedOptionId(d.answerId, skipOptionIds);
       const answers = (optsByQ[String(q.id)] || []).map((o) => ({
         _id: String(o.id),
         name: o.name,
         image: null,
-        isSelect: d.answerId === o.id,
+        isSelect: selected === o.id,
         isCorrect: norm(q.answer) === norm(o.name),
       }));
       // solutionText = ws_exam_question.solution_text (HTML explanation shown on
@@ -510,6 +563,13 @@ export const getActiveAttempt = async (customerId: number, examId: number) => {
   const attempt = await repo.findInProgressAttempt(customerId, examId);
   if (!attempt) return { ok: true as const, data: null };
   const details = await repo.detailsForResult(attempt.id);
+  // An attempt started before the cutover may have stored a legacy "Skip" option id.
+  // Resolve those and hand back `answerId: null`, so the app resumes showing the
+  // question as unanswered instead of an id it can no longer match to any option.
+  const savedIds = [...new Set(details.map((d) => d.answerId).filter((x): x is number => x != null))];
+  const skipOptionIds = new Set(
+    (await repo.optionsByIds(savedIds)).filter((o) => isLegacySkipOptionName(o.name)).map((o) => o.id)
+  );
   return {
     ok: true as const,
     data: {
@@ -519,10 +579,13 @@ export const getActiveAttempt = async (customerId: number, examId: number) => {
       serverNow: new Date(),
       durationMinutes: exam.time,
       expired: attemptExpired(attempt.startedAt, exam.time),
-      savedAnswers: details.map((d) => ({
-        questionId: d.questionId != null ? String(d.questionId) : null,
-        answerId: d.answerId != null ? String(d.answerId) : null,
-      })),
+      savedAnswers: details.map((d) => {
+        const selected = selectedOptionId(d.answerId, skipOptionIds);
+        return {
+          questionId: d.questionId != null ? String(d.questionId) : null,
+          answerId: selected != null ? String(selected) : null,
+        };
+      }),
     },
   };
 };
@@ -554,7 +617,9 @@ export const saveSingleAnswer = async (
     const option = await repo.findOption(input.answerId, input.questionId);
     if (!option) return { ok: false as const, status: 400, message: "Answer does not belong to question." };
     answerId = option.id;
-    if (norm(option.name) === "skip") result = "skip";
+    // Back-compat: an older build still selects the legacy "Skip" option row. Stored
+    // as a new-style skip (answer_id NULL) so writes are uniform from here on.
+    if (isLegacySkipOptionName(option.name)) { result = "skip"; answerId = null; }
     else if (norm(option.name) === norm(question.answer)) { result = "true"; point = num(exam.positiveMarks); }
     else { result = "false"; point = -Math.abs(num(exam.negativeMarks)); }
   }

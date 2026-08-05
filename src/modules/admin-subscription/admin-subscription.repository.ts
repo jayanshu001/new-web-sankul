@@ -161,7 +161,7 @@ export const adminSubscriptionRepository = {
   // Report-column hydration (merged Subscription Report):
   //  order → razorpay/bank ids, ws coin, promocode json snapshot
   ordersByIds: (ids: number[]) =>
-    ids.length ? prisma.packageCourseOrder.findMany({ where: { id: { in: ids } }, select: { id: true, gatewayOrderId: true, gatewayPaymentId: true, bankTransactionId: true, wsCoin: true, promocode: true, paymentMethod: true } }) : Promise.resolve([]),
+    ids.length ? prisma.packageCourseOrder.findMany({ where: { id: { in: ids } }, select: { id: true, orderType: true, gatewayOrderId: true, gatewayPaymentId: true, bankTransactionId: true, wsCoin: true, promocode: true, paymentMethod: true } }) : Promise.resolve([]),
   //  shipping → Address / City / Pincode
   shippingsByIds: (ids: number[]) =>
     ids.length ? prisma.customerShipping.findMany({ where: { id: { in: ids } }, select: { id: true, address: true, address_2: true, city: true, pincode: true, alternate_phone: true } }) : Promise.resolve([]),
