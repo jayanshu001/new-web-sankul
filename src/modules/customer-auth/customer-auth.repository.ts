@@ -127,31 +127,52 @@ export const customerAuthRepository = {
     prisma.customer.update({ where: { id }, data: { isLoggedIn: false } }),
 
   /**
-   * Reconcile stale `is_login` flags.
+   * One page of customers whose `is_login` is stale.
    *
    * `is_login` is derived state, so it drifts: a token simply expiring runs no
    * code, and an uninstall or a crash never reaches the logout route. Without
-   * this sweep the flag would report customers as logged in indefinitely. Clears
-   * it for anyone flagged `true` who no longer holds a live token (active,
-   * not-deleted, unexpired).
+   * the reconcile sweep the flag would report customers as logged in
+   * indefinitely. A row is stale when it is flagged `true` but holds no live
+   * token (active, not-deleted, unexpired).
    *
    * NOTE: customers may hold several concurrent device sessions (the single-device
    * gate in authenticate.ts is disabled for them), so this is "has at least one
    * live session", which is the only thing one boolean can honestly express.
    *
-   * Atomic + idempotent `updateMany` — safe to run concurrently from several
-   * workers. Returns the affected count.
+   * Read-only and keyset-paginated (`id > afterId`, ordered by id) so the sweep
+   * never runs one unbounded statement: the anti-join against
+   * ws_customer_access_token over the whole ws_customer table is the expensive
+   * half, and doing it as a bounded SELECT keeps it off the write path — no long
+   * UPDATE holding row locks and inflating one binlog event. See the batched
+   * loop in otp-unblock.scheduler.ts.
    */
-  reconcileLoggedOut: (now: Date) =>
-    prisma.customer.updateMany({
+  findStaleLoggedInIds: (now: Date, afterId: number, take: number) =>
+    prisma.customer.findMany({
       where: {
         isLoggedIn: true,
+        id: { gt: afterId },
         NOT: {
           customerAccessToken: {
             some: { active: true, deleted: false, expires_at: { gt: now } },
           },
         },
       },
+      select: { id: true },
+      orderBy: { id: "asc" },
+      take,
+    }),
+
+  /**
+   * Clear `is_login` for one page of ids from `findStaleLoggedInIds`.
+   *
+   * The `isLoggedIn: true` guard is kept so the statement stays idempotent and
+   * concurrency-safe: a customer who logged back in between the SELECT and this
+   * UPDATE is simply skipped rather than being logged out under them, and a
+   * second worker running the same page updates 0 rows.
+   */
+  clearLoggedInByIds: (ids: number[]) =>
+    prisma.customer.updateMany({
+      where: { id: { in: ids }, isLoggedIn: true },
       data: { isLoggedIn: false },
     }),
 

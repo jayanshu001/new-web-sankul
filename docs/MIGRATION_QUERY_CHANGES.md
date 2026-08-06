@@ -15,6 +15,106 @@
 
 ---
 
+## 2026-08-06 — DB-unavailable now answers 503, not 401/500
+
+**Files:** `src/utils/dbAvailability.ts` (**new** — detector + `sendServiceUnavailable`),
+`src/middlewares/authenticate.ts` (outer catch),
+`src/middlewares/errorHandler.ts` (status + message normalisation),
+`src/client/auth/auth.service.ts` + `auth.controller.ts` (`refreshCustomerToken`),
+`src/admin/auth/admin.auth.service.ts` + `admin.auth.controller.ts` (`refreshAdminToken`),
+`src/modules/customer-auth/otp-unblock.scheduler.ts` (reuses the shared detector).
+**DDL:** none. **Response-shape change:** status code only — envelope unchanged.
+
+**What it actually did before** (the reported "403" was not a 403): `authenticate()`
+wrapped the revocation lookup *and* the customer account-gate DB read in one blanket
+`catch { failure(res, "Invalid or expired token.", 401) }`. A Prisma connection error
+inside `getCustomerGate` was therefore indistinguishable from a forged token → **401**.
+Mobile clients treat 401 as "session dead → clear tokens → login screen", so a
+sub-minute DB blip could mass-log-out every active customer. Past the auth layer, a
+Prisma connection error reached `errorHandler` with no `statusCode` → **500**, and the
+handler echoed `err.message` to the client verbatim — leaking the Prisma invocation
+snippet and the compiled path (`dist/modules/…/x.repository.js:116`).
+
+Neither 403 path was involved: `requireRole` 403s only on a role mismatch, and
+`requirePermission` explicitly **fails open** (logs + `next()`) when the resolver throws.
+
+**Change:** `isDatabaseUnavailableError()` classifies infra failures by Prisma code
+(P1000/P1001/P1002/P1008/P1017/P2024) then by driver message fragment
+(`ECONNREFUSED`, `ECONNRESET`, "Server has closed the connection", …). Deliberately
+narrow — application-level Prisma errors (missing column, unique violation) must not
+match, or real bugs would hide as fake outages.
+- `authenticate`: DB-unavailable → **503** + `Retry-After: 5`, `data.reason =
+  "SERVICE_UNAVAILABLE"`. Genuine token faults still **401**.
+- `errorHandler`: DB-unavailable **and** no explicit `statusCode` → **503** +
+  `Retry-After`, client message normalised to
+  "Service temporarily unavailable. Please try again in a moment." An intentional
+  `HttpError(...)` status always wins. Logs keep the RAW message + `cause:
+  "DATABASE_UNAVAILABLE"`; the 5xx alert email still fires, debounced to 1/min because
+  every DB outage now collapses to one message string.
+
+**Second 401-on-outage path, same class, also fixed:** `refreshCustomerToken` /
+`refreshAdminToken` each wrap 3–4 DB calls in a `try` whose `catch` returned
+`{ ok: false, message: "Invalid or expired refresh token." }` → controller → **401**.
+So a DB blip during a routine token refresh — the highest-traffic auth call in the app
+— reported the refresh token as invalid and logged the user out, then refused the
+re-login. Both services now rethrow when `isDatabaseUnavailableError(err)`; both
+refresh controllers answer **503** via `sendServiceUnavailable(res)`. Genuine bad /
+revoked / expired refresh tokens still return 401 unchanged.
+
+**FE contract:** clients must treat **503 as retry-with-session-intact** and must NOT
+clear tokens on it. Only 401 means "log in again". No app change is required today —
+the clients log out on 401 only, so removing the spurious 401s is sufficient. See
+`docs/client/SERVICE_UNAVAILABLE_503.md`.
+
+---
+
+## 2026-08-06 — `is_login` reconcile sweep batched (fixes "Server has closed the connection")
+
+**Files:** `src/modules/customer-auth/customer-auth.repository.ts`
+(`reconcileLoggedOut` **removed** → replaced by `findStaleLoggedInIds` + `clearLoggedInByIds`),
+`src/modules/customer-auth/otp-unblock.scheduler.ts` (new `reconcileLoggedOut` loop,
+`withReconnect`, `isDroppedConnection`).
+**DDL:** ⚠ **PENDING DEPLOY** — `docs/migration/schema-changes/2026-08-06_is_login_reconcile_indexes.sql`
+(additive indexes only, no column/shape change).
+
+**Symptom (prod, 2026-08-06 11:04 IST):** `[is-login] reconcile failed` —
+`Invalid prisma.customer.updateMany() invocation … Server has closed the connection.`
+Intermittent; only ever from this scheduler, never from a request handler.
+
+**Cause:** the sweep was ONE table-wide statement —
+
+```sql
+UPDATE ws_customer SET is_login = 0, updated_at = ?
+ WHERE is_login = 1
+   AND id NOT IN (SELECT customer_id FROM ws_customer_access_token
+                   WHERE active = 1 AND deleted = 0 AND expires_at > ?);
+```
+
+Neither side is indexed for it (`ws_customer.is_login` has no index;
+`ws_customer_access_token.customer_id` has none either), so on ~600k customers it is a
+full scan anti-joined against a token table that grows with every login, all inside a
+single write transaction holding row locks. Long enough, and the server kills the
+connection / the socket is gone by the time the engine reads the result — surfaced by
+Prisma as "Server has closed the connection". Same family as the IST backfill that blew
+the binlog on 600k rows (2026-07-16); the fix is the same: batch it.
+A second, smaller contributor: the sweep only fires every 5 min, so its pool connection
+often sits idle past the server's `wait_timeout` and the first query after the idle
+period gets an already-closed socket.
+
+**Change:** read/write split into bounded pages —
+`findStaleLoggedInIds(now, afterId, 500)` (SELECT ids, keyset by `id`, no locks) then
+`clearLoggedInByIds(ids)` (`UPDATE … WHERE id IN (…) AND is_login = 1`), max 20 pages
+(≤10k rows) per tick; the remainder is picked up 5 minutes later. Every query is now
+short and bounded. Dropped-connection errors are retried once (`withReconnect`) and
+logged at `warn`, since the retry gets a fresh pool connection.
+
+**Semantics unchanged:** same predicate, same idempotency, still safe to run from
+several PM2 workers. The `is_login = 1` guard on the UPDATE additionally means a
+customer who logs back in between the SELECT and the UPDATE is skipped instead of being
+logged out under them. No API response shape touched.
+
+---
+
 ## 2026-08-05 — "Most Popular" override REMOVED (badge is now pure-auto by construction) + 4 cache-invalidation bugs fixed
 
 **Files:** `src/modules/plan-popularity/plan-popularity.service.ts` (`PlanRow`, `pickWinner`,

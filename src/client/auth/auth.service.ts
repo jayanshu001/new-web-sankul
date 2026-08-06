@@ -2,6 +2,7 @@ import logger from "../../utils/logger";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { redisClient } from "../../config/redis";
+import { isDatabaseUnavailableError } from "../../utils/dbAvailability";
 import { customerAuthRepository } from "../../modules/customer-auth/customer-auth.repository";
 import {
   toCustomerProfileDto,
@@ -398,6 +399,13 @@ export async function refreshCustomerToken(refreshToken: string, traceId?: strin
     };
   } catch (err) {
     logger.error("refreshCustomerToken service error", { traceId, error: (err as Error).message, stack: (err as Error).stack });
+    // A dead database is NOT a verdict on the token. Four DB reads/writes sit
+    // inside this try; swallowing their failure into `ok: false` made the
+    // controller answer 401, and the app logs out on 401 — so a DB blip during a
+    // routine refresh would sign the customer out and then refuse to let them
+    // back in. Rethrow so the controller can answer 503 and the client retries
+    // with its session intact.
+    if (isDatabaseUnavailableError(err)) throw err;
     return { ok: false, message: "Invalid or expired refresh token." };
   }
 }

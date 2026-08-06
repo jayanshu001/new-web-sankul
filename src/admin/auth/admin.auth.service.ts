@@ -1,6 +1,7 @@
 import logger from "../../utils/logger";
 import bcrypt from "bcryptjs";
 import { redisClient } from "../../config/redis";
+import { isDatabaseUnavailableError } from "../../utils/dbAvailability";
 import { deleteFromS3FileUrl } from "../../middlewares/upload";
 import { adminAuthRepository } from "../../modules/admin-auth/admin-auth.repository";
 import { toAdminDto } from "../../modules/admin-auth/admin-auth.transformer";
@@ -237,6 +238,9 @@ export async function refreshAdminToken(refreshToken: string, traceId?: string) 
     return { ok: true, message: "Token refreshed successfully.", token: newToken, refreshToken: newRefreshToken, admin: dto };
   } catch (err) {
     logger.error("refreshAdminToken service error (sql)", { traceId, error: (err as Error).message });
+    // See refreshCustomerToken: a DB outage inside this try must not be reported
+    // as a bad token (→ 401 → the panel logs the admin out). Rethrow for a 503.
+    if (isDatabaseUnavailableError(err)) throw err;
     return { ok: false, message: "Invalid or expired refresh token." };
   }
 }

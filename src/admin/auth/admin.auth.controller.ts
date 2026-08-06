@@ -9,6 +9,7 @@ import {
   getAdminProfile,
 } from "./admin.auth.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { isDatabaseUnavailableError, sendServiceUnavailable } from "../../utils/dbAvailability";
 import logger from "../../utils/logger";
 
 /**
@@ -180,6 +181,8 @@ export const adminRefreshHandler = async (req: Request, res: Response) => {
     );
   } catch (err) {
     logger.error("adminRefreshHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    // DB unreachable → 503 so the panel retries instead of bouncing to login.
+    if (isDatabaseUnavailableError(err)) return sendServiceUnavailable(res);
     return failure(res, getErrorMessage(err), 500);
   }
 };

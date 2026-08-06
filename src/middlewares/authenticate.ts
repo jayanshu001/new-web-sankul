@@ -6,6 +6,8 @@ import { verifyAccessToken } from "../utils/jwtSigner";
 import { isRevoked, UserType } from "../libs/tokenRevocation";
 import { updateContext } from "../utils/requestContext";
 import { customerAuthRepository } from "../modules/customer-auth/customer-auth.repository";
+import logger from "../utils/logger";
+import { isDatabaseUnavailableError, sendServiceUnavailable } from "../utils/dbAvailability";
 
 // Per-request customer gate state, cached briefly in Redis so the live DB read
 // doesn't fire on every authenticated request. Busted on block/delete; the
@@ -191,7 +193,23 @@ const authenticate = async (req: Request, res: Response, next: NextFunction) => 
     updateContext({ userId: decoded.id, userRole: role });
 
     return next();
-  } catch {
+  } catch (err) {
+    // An unreachable database must NOT look like a bad token. Everything above
+    // (the revocation lookup and the customer account-gate read) touches the DB,
+    // and this catch used to flatten ALL of it into 401 "Invalid or expired
+    // token." — which every mobile client reads as "session dead, log out". A
+    // brief DB outage would sign out every active customer, and none of them
+    // could log back in until it recovered. 503 + Retry-After tells the client
+    // to back off and retry with the session intact.
+    if (isDatabaseUnavailableError(err)) {
+      logger.error("[auth] database unavailable during authentication", {
+        method: req.method,
+        url: req.originalUrl,
+        error: (err as Error).message,
+      });
+      return sendServiceUnavailable(res);
+    }
+    // Genuine token faults (malformed, expired, bad signature) stay 401.
     return failure(res, "Invalid or expired token.", 401);
   }
 };

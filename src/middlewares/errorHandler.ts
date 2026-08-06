@@ -4,6 +4,11 @@ import { sendEmail } from "../utils/emailService";
 import logger from "../utils/logger";
 import { scrub } from "../utils/scrub";
 import { redisClient, isRedisReady } from "../config/redis";
+import {
+  isDatabaseUnavailableError,
+  SERVICE_UNAVAILABLE_MESSAGE,
+  SERVICE_UNAVAILABLE_RETRY_SECONDS,
+} from "../utils/dbAvailability";
 
 /** Shape of errors you throw from your code */
 export interface AppError extends Error {
@@ -64,18 +69,41 @@ const acquireEmailCooldown = async (
 const errorHandler: ErrorRequestHandler = async (err, req, res, _next) => {
   const appErr = err as AppError;
 
-  const statusCode = Number.isInteger(appErr.statusCode)
-    ? (appErr.statusCode as number)
-    : 500;
+  // A database outage is not an application bug: answer 503 + Retry-After so
+  // clients back off and retry, instead of the bare 500 ("we're broken") this
+  // used to send. Only applies when the thrown error carried no explicit status
+  // — an intentional `new HttpError(...)` always wins.
+  //
+  // This ALSO closes a leak: the raw message is echoed to the client below, and
+  // a Prisma connection error's message embeds the failing invocation and its
+  // compiled file path (`dist/modules/.../x.repository.js:116`). Normalising it
+  // keeps that out of the response.
+  const dbUnavailable =
+    !Number.isInteger(appErr.statusCode) && isDatabaseUnavailableError(appErr);
 
-  const message = appErr.message ?? "Internal Server Error";
+  const statusCode = dbUnavailable
+    ? 503
+    : Number.isInteger(appErr.statusCode)
+      ? (appErr.statusCode as number)
+      : 500;
+
+  const message = dbUnavailable
+    ? SERVICE_UNAVAILABLE_MESSAGE
+    : appErr.message ?? "Internal Server Error";
   const errorObject = appErr.errorObject ?? null;
+
+  if (dbUnavailable && !res.headersSent) {
+    res.setHeader("Retry-After", String(SERVICE_UNAVAILABLE_RETRY_SECONDS));
+  }
 
   // Structured error logging
   try {
     logger.error("API Error", {
       traceId: (req as any).traceId,
-      message,
+      // The RAW message — `message` above may have been normalised to the
+      // generic 503 text for the client, which must never blind the logs.
+      message: appErr.message ?? "Internal Server Error",
+      ...(dbUnavailable ? { cause: "DATABASE_UNAVAILABLE" } : {}),
       statusCode,
       method: req.method,
       url: req.originalUrl,

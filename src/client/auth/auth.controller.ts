@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import logger from "../../utils/logger";
 import { generateOtp, validateOtp, refreshCustomerToken, resendOtp, logoutCustomer } from "./auth.service";
 import { success, failure, getErrorMessage } from "../../utils/httpResponse";
+import { isDatabaseUnavailableError, sendServiceUnavailable } from "../../utils/dbAvailability";
 
 /**
  * POST /api/v1/auth/otp/generate
@@ -110,6 +111,10 @@ export const refreshTokenHandler = async (req: Request, res: Response) => {
     );
   } catch (err) {
     logger.error("refreshTokenHandler failed", { traceId, error: getErrorMessage(err), stack: (err as Error).stack });
+    // 503 (not 401, not 500) when the DB is unreachable: the refresh token is
+    // presumed fine, we simply cannot check it right now. The client must keep
+    // the session and retry — see docs/client/SERVICE_UNAVAILABLE_503.md.
+    if (isDatabaseUnavailableError(err)) return sendServiceUnavailable(res);
     return failure(res, "Something went wrong. Please try again later.", 500);
   }
 };
