@@ -15,6 +15,71 @@
 
 ---
 
+## 2026-08-06 — Folder attach + CRUD routes DISABLED; `ws_folder_item` now has NO writer
+
+**Files:** `src/client/folder/folder.routes.ts` (route registrations commented out).
+**DDL:** none. **Query change:** none — no query was edited; the routes that *issue*
+these queries are unregistered. **Response-shape change:** the six routes below now
+**404** (no route matches). Controller + service code left fully intact; re-enable by
+uncommenting the lines.
+
+**Disabled** (per the mobile handoff `UNUSED_ATTACH_FOLDER_APIS.md`), on both
+`/client/video-folders/*` and `/client/material-folders/*`:
+`GET /` (list), `POST /` (create), `PATCH /:id`, `DELETE /:id`,
+`POST /:id/items` (addItem), `DELETE /:id/items/:itemId` (removeItem).
+
+**Still active:** `GET /:id` (detail — the handoff keeps it for legacy cloud folder
+ids) and `GET /all-items` (not named in the handoff; mints per-item `mediaToken`).
+
+⚠ **Two known-risk consequences, accepted by explicit instruction after being raised:**
+
+1. **`ws_folder_item` now has zero writers.** `addItem` was the only
+   `prisma.folderItem.create` in the codebase
+   (`src/modules/client-folder/client-folder.service.ts:146`). No new Saved Material /
+   Saved Video can be created while this is off. Existing rows are untouched and still
+   read fine via `all-items` / detail.
+2. **Profile dashboard `downloads` count decays silently.** `countSavedItems`
+   (`client-folder.service.ts:185-190`) counts only rows whose `refId` still hydrates
+   to a live `ws_video` / `ws_material`. Rows survive content deletion, so the count
+   drifts **downward over time** rather than failing loudly. Cross-ref: `downloads` =
+   savedMaterials + savedVideos + activeEbookDownloads.
+
+**Unresolved doc conflict:** `docs/client/FOLDER_SUMMARY_LISTING.md:51-52` directs FE
+to use `GET client/{video,material}-folders` for the Downloads hub — the same endpoint
+this change disables. That doc and the mobile handoff contradict each other; settle it
+with mobile before this ships, and confirm web/admin have no callers.
+
+A mobile handoff (`UNUSED_ATTACH_FOLDER_APIS.md`) declared the `/client/video-folders`
+and `/client/material-folders` attach + CRUD surface dead: offline downloads went
+device-local (Redux `foldersByUser` / `downloads` slice), so the app no longer POSTs a
+finished download onto a backend folder. That is true **of the mobile Downloads hub
+only**. The same tables back a second, still-live feature — Saved Materials / Saved
+Videos on the profile dashboard — so the routes are not dead server-side.
+
+**The load-bearing fact:** `POST /client/{video,material}-folders/:id/items` (`addItem`)
+is the **only** `prisma.folderItem.create` in the codebase
+(`src/modules/client-folder/client-folder.service.ts:146`). Every other `folderItem.*`
+call is a read, a `deleteMany`, or a `groupBy`. Dropping that route freezes
+`ws_folder_item` — no new saves — and the profile dashboard `downloads` count then
+**decays toward 0** rather than breaking loudly, because `countSavedItems`
+(`client-folder.service.ts:185-190`) counts only rows whose `refId` still hydrates to a
+live `ws_video` / `ws_material`. Rows survive content deletion; the count silently
+shrinks. Cross-ref: `downloads` = savedMaterials + savedVideos + activeEbookDownloads.
+
+Audited per route — LIVE: `GET /` (list; `docs/client/FOLDER_SUMMARY_LISTING.md:51-52`
+actively directs FE *onto* it for the hub), `GET /all-items` (mints per-item
+`mediaToken` — `MATERIAL_MEDIA_TOKEN_FRONTEND.md:74`, `CLIENT_MEDIA_ACCESS.md:74`),
+`GET /:id` (detail, incl. legacy cloud folder ids). Mobile-dead but server-meaningful:
+`POST /` (only way to mint a folder), `PATCH /:id`, `DELETE /:id`, `addItem`,
+`removeItem`.
+
+**Doc conflict to resolve with mobile:** `FOLDER_SUMMARY_LISTING.md` tells FE to use
+`GET client/{video,material}-folders`; the handoff lists those same endpoints as
+unused. One of the two is stale. Nothing should be deprecated server-side until that
+is settled and web/admin callers are confirmed.
+
+---
+
 ## 2026-08-06 — DB-unavailable now answers 503, not 401/500
 
 **Files:** `src/utils/dbAvailability.ts` (**new** — detector + `sendServiceUnavailable`),
