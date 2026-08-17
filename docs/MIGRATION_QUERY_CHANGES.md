@@ -15,6 +15,176 @@
 
 ---
 
+## 2026-08-17 — Address contact fields (`phone` / `alternate_phone` / `email`) are required on write and returned on read
+
+**Files:** `src/client/address/address.validation.ts`,
+`src/client/address/address.controller.ts` (`ADDRESS_CLIENT_FIELDS`),
+`src/modules/customer-address/customer-address.transformer.ts`.
+**DDL: none.** `ws_customer_address` already has `phone BIGINT NOT NULL`,
+`alternate_phone BIGINT NULL`, `email VARCHAR(100) NOT NULL`, and the repository
+already wrote all three. **Backfill: none.**
+
+**The defect.** Two halves of the same contract were broken in opposite directions:
+
+1. **Write side** — `createAddressSchemaMysql` declared `phone` / `email` as
+   `.optional().nullable()`, so a client that omitted them got a row silently written
+   with the `phone = 0` / `email = ''` sentinels (`toPhoneBig(null) ?? BigInt(0)` and
+   `input.email ?? ""` in the repository). Nothing rejected the request, so a saved
+   address could never be used for shipping (`attachShipping` returns
+   `reason: "phone"` on a falsy phone) and the failure only surfaced at checkout.
+2. **Read side** — `GET /client/address` projected each row through
+   `pickList(addresses, ADDRESS_CLIENT_FIELDS)`, and that keep-list **deliberately
+   dropped** `phone` / `alternatePhone` / `email`. The columns were persisted but
+   unreadable, so the Edit Address screen had no saved value to prefill and re-saving
+   an address overwrote its contact details with whatever the form defaulted to.
+
+**Validation change (write).** `phone` and `email` are now **required** on
+`POST /client/address`; `PUT /client/address/:id` stays a partial update — the keys are
+optional, but each is validated when present. Rules:
+
+| Field | Rule |
+|-------|------|
+| `phone` | required on create, `^[1-9][0-9]{9}$` (10-digit Indian mobile, no `+91`), trimmed |
+| `alternatePhone` | optional; `""` / `null` normalize to SQL `NULL`; any other value must match the same regex |
+| `email` | required on create, valid email, `max(100)`, trimmed and **lowercased before persist** |
+
+`alternatePhone` uses `z.preprocess(...).optional()` rather than
+`.optional().transform(...)` on purpose: the transform variant turns an **absent** key
+into `null`, which would make every partial `PUT` clear the stored alternate phone.
+With `.optional()` outermost, absent stays `undefined` (key omitted from the update
+data) while an explicit `""` becomes `null` (column cleared). Failures return **400**
+with the existing `{ success:false, errors:[zod issues] }` body — unchanged envelope.
+
+**Query/read change.** `ADDRESS_CLIENT_FIELDS` gains `phone`, `alternatePhone`,
+`email`. This is **additive** — `GET /client/address` list rows carry three more keys;
+no key was removed or renamed. `GET /client/address/:id` was never projected and is
+untouched.
+
+**Sentinel normalization (`toAddressDto`).** Both columns are `NOT NULL`, so rows
+written before this change carry `phone = 0` and `email = ''`. The transformer now maps
+`phone`/`alternate_phone` of `0` → `null` and an empty `email` → `null`, so the client
+sees "no value on file" and prefills from Personal Information instead of rendering the
+literal `"0"`. This affects the DTO only — **no rows are rewritten**; a `PUT` from the
+edit screen fills them in.
+
+**Not changed.** `POST /client/cart/shipping` already returned
+`shipping.phone` (`String(phone)` in `attachShipping`) and already preferred the
+address's own `phone`/`email` over the profile fallback, and it never copies profile
+`phone2` into `alternate_phone` — it reads `address.alternate_phone`. No edit was
+needed there.
+
+---
+
+## 2026-08-17 — `ws_package_course_order` money + code columns write the real breakdown
+
+**Files:** `src/modules/commerce-order/commerce-order.repository.ts` (`createPendingOrder`),
+`src/modules/commerce-order/commerce-order.service.ts` (`createCourseOrderMysql`,
+`createPackageOrderMysql`), `src/client/payment/course-payment.controller.ts`,
+`src/client/payment/package-payment.controller.ts`,
+`scripts/backfill-order-code-columns.ts` (new).
+**DDL: none.** No column added, dropped, or retyped — only the values written into four
+columns that already exist. **Response-shape change: none** (no endpoint reads `price` /
+`code_discount`; `promocode` is read only through `promoCodeOf`, which already accepted
+both shapes).
+
+**The defect.** `createPendingOrder` took a single `price` and wrote it to **both**
+`price` and `discount_price`, and never wrote `code_discount`, `promocode`, or
+`refferalcode`. Both payment controllers already computed `originalAmount`,
+`discountAmount` and the resolved code — and dropped all three on the floor (only
+`referrerId` and `coin` survived). Net effect on every SQL-era order row: list price ==
+paid amount, `code_discount` permanently `0` (the DB column default, not a computed
+zero), and no record of which code was redeemed. On a referral purchase the code was
+*structurally* unrecoverable — `resolvePromoForPlanSql` returns `promo._id === ""` for
+referrals, so only `referrer_id` was stamped.
+
+**The contract now enforced at write time:**
+
+```
+price (list) − code_discount (promo/referral) − ws_coin (wallet) = discount_price (paid)
+```
+
+- `price` — plan LIST price, pre-discount, pre-wallet.
+- `code_discount` — rupees from the promo/referral code **only**. Wallet coins stay in
+  `ws_coin` so the two discount sources remain individually attributable in the
+  Subscription Report.
+- `discount_price` — unchanged semantics: what was actually charged to Razorpay.
+- `promocode` / `refferalcode` — the bare code **string**, and exactly one of the two is
+  set. `referrerId != null` is the discriminator (referral → `refferalcode`, else
+  `promocode`).
+
+**Legacy shape.** V1 serialized the entire promocode record into `promocode` (nested
+promoter with email/phone, expanded `promotedPackageCourseEbook[]` plan rows) — that is
+the "Object" the table renders. These are `json` columns, so the code string is written
+JSON-quoted (`"PIYUSH50"`, `JSON_TYPE` = `STRING`). No DDL needed and no reader changes:
+`promoCodeOf` (`admin-subscription.service.ts:42`) and `orderIdsByPromocode`
+(`admin-subscription.repository.ts:188`) already handle bare-string and object shapes.
+
+**Backfill** — `scripts/backfill-order-code-columns.ts`, PK-batched (2000/batch) +
+resumable via `--from=`, dry-run by default, idempotent, pins `updated_at = updated_at`
+so a repair never reads as a business event:
+
+1. **FLATTEN** (lossless) — legacy `promocode`/`refferalcode` object → bare code string;
+   an object with no readable code is nulled rather than left as a blob.
+2. **RECOVER** (lossless) — for rows whose code the create path dropped, the persisted
+   Razorpay payload in `razorpay_order` carries `notes.promocodeId`, so the code is
+   recovered exactly and classified against `ws_customer.referral_code`.
+3. **WALLET** (lossless) — a **third** defect class, found while verifying staging: orders
+   that redeemed wallet coins with **no** code lost the coin component out of `price` the
+   same way (`price = discount_price = charged` while `ws_coin > 0`). Here the repair is
+   **exact, not inferential** — with no code involved, list price is by construction
+   `discount_price + ws_coin`, so no plan lookup is needed and a plan repriced since the
+   order cannot corrupt it. "No code involved" is proven on all four signals
+   (`promocode`, `refferalcode`, `notes.promocodeId`, `referrer_id`) because a **referral**
+   order writes no `promocodeId` into the Razorpay notes — `referrer_id` is its only
+   fingerprint.
+4. **MONEY** (`--repair-money`, opt-in, **inferential**) — rebuilds `price`/`code_discount`
+   only for rows that provably lost the split (`code_discount = 0 AND price =
+   discount_price`) **and** carry a known code, using the plan's current list price.
+   Skipped when the inference isn't sane (plan repriced since, or implied discount ≤ 0).
+   A row with neither a code nor coins is never touched — there `price == discount_price`
+   is the truth, not a defect.
+
+Run on `websankul_staging_1` (the schema `DATABASE_URL` points at; the sibling
+`websankul_staging` is a stale 89-table snapshot with no `referrer_id`, left untouched):
+3 legacy objects flattened → `STRING`, 0 codes to recover, **2 wallet-only price fixes**
+(6480+20 → 6500 and 150+100 → 250, both independently corroborated by the plan list
+price), 1 money split correctly skipped (plan 1293 lists at 7500 and the buyer paid 7500,
+so the attached promo never actually reduced anything). Final state across all 29 orders:
+0 `OBJECT` values, 0 rows violating the identity. Re-run reports 0 changes.
+
+**`ws_ebook_order` — code column fixed, money split still not representable.**
+Same defect, same table shape problem, split down the middle:
+
+- **Fixed (no DDL):** its `promocode` json column existed and was *never written by any
+  code path* — every ebook order read as "no code redeemed" even when one was.
+  `ebook-order.repository.createPendingOrder` now writes the bare code string, threaded
+  from `ebook-payment.controller.ts` (which already resolved it and discarded it).
+  This table has **no `refferalcode` column**, so a referral code goes into the same
+  `promocode` column; `referrer_id` stays the discriminator (set for referrals, null for
+  promocodes). Only one code is applicable per order, so the single column is unambiguous.
+- **Still not fixed (needs DDL):** `order_price` remains the CHARGED amount. The table has
+  no list-price / discount pair (no `price` + `code_discount` like the course/package
+  order table), so the money breakdown cannot be persisted without a schema change.
+
+**No ebook backfill exists, and none is possible.** Unlike the course table there are no
+legacy objects to flatten (all 17 staging rows are plain NULL), and the RECOVER trick does
+not apply: the ebook create path never persisted the Razorpay payload into its
+`razorpay_order` column, so `notes.promocodeId` isn't there to read back (16 of 17 staging
+rows have an empty payload; the 1 that has one carries no `promocodeId`). Historic ebook
+orders therefore keep a permanently empty `promocode` — the data was never written
+anywhere. Fixed forward only.
+
+**Verified on `websankul_staging_1`** by exercising the repository directly: promocode →
+`"PIYUSH50"` with `referrer_id` null; referral → `"YUG505050"` with `referrer_id` set; no
+code → NULL. Test rows deleted after checking.
+
+**Unchanged and correct by design:** admin manual grants never write a code on either
+table (`admin-subscription.createPaymentOrder`, `admin-ebook` × 2) — those flows take no
+promocode input at all. Both verify-transaction updates touch only `status` /
+`razorpay_payment_id` / `updated_at`, so a code written at create is never clobbered.
+
+---
+
 ## 2026-08-06 — Folder attach + CRUD routes DISABLED; `ws_folder_item` now has NO writer
 
 **Files:** `src/client/folder/folder.routes.ts` (route registrations commented out).

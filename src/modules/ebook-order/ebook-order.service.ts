@@ -59,6 +59,9 @@ export const createEbookOrderMysql = async (input: {
   orderPrice: number;
   razorpayOrderId: string;
   uniqueId: string;
+  // The redeemed code (promo OR referral) → the `promocode` column. This table has
+  // no separate refferalcode column; `referrerId` distinguishes the two kinds.
+  code?: string | null;
   // Referrer to credit at verify when a referral code was applied (else null).
   referrerId?: number | null;
   // Wallet coins redeemed; debited at verify (stored in wallet_coin). 0/null = none.

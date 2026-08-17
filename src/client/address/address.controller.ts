@@ -9,10 +9,12 @@ import { parseListQuery, buildPagination } from "../../utils/listQuery";
 import { matchesAllTokens } from "../../utils/searchFilter";
 import { pickList } from "../../utils/pick";
 
-// Mobile reads identity + display fields only; drop phone/alternatePhone/email/
-// customerId/status/timestamps. City picker rows need id+name only.
+// Mobile reads identity + display + contact fields (Edit Address prefills the
+// saved phone/alternatePhone/email, and Checkout shows the shipping phone);
+// drop customerId/status/timestamps. City picker rows need id+name only.
 const ADDRESS_CLIENT_FIELDS = [
-  "_id", "name", "label", "isDefault", "address", "address2", "city", "stateId", "pincode",
+  "_id", "name", "phone", "alternatePhone", "email",
+  "label", "isDefault", "address", "address2", "city", "stateId", "pincode",
 ] as const;
 const CITY_CLIENT_FIELDS = ["_id", "name"] as const;
 import {

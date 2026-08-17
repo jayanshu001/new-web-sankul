@@ -120,6 +120,12 @@ const createCourseOrderMysqlPath = async (
   let originalAmount: number | null = null;
   let discountAmount: number | null = null;
   let referrerIdNum: number | null = null;
+  // The literal code that earned the discount, routed to exactly ONE order column:
+  // a real promocode → `promocode`, a customer referral code → `refferalcode`.
+  // Without this the order row keeps no record of WHICH code was redeemed (a
+  // referral order previously stored only referrer_id, and never the code itself).
+  let promoCodeStr: string | null = null;
+  let referralCodeStr: string | null = null;
   if (promocode) {
     const { result, error } = await resolvePromoForPlanSql(promocode, plan.price, { type: "course", id: plan.courseId }, packageId, Number(customerId));
     if (error || !result) {
@@ -134,6 +140,10 @@ const createCourseOrderMysqlPath = async (
     discountAmount = result.discountAmount;
     // Referral code (not a promocode) → stamp the referrer so verify can credit.
     referrerIdNum = result.referrerId ?? null;
+    // Referral resolution returns promo._id === "" (no promocode row), so the
+    // referrerId is the authoritative discriminator between the two code kinds.
+    if (referrerIdNum != null) referralCodeStr = result.promo.promocode || null;
+    else promoCodeStr = result.promo.promocode || null;
   }
 
   // Wallet ("coin") redemption — validate vs balance + 50%-of-plan-price cap, then
@@ -164,10 +174,17 @@ const createCourseOrderMysqlPath = async (
   });
 
   // Persist the pending order with its razorpay id so /verify can find it.
+  // `price` is the CHARGED amount (→ discount_price); the plan's list price and the
+  // code discount are passed separately so the order row keeps the full breakdown:
+  //   price − code_discount − ws_coin = discount_price
   const { orderId } = await createCourseOrderMysql({
     customerId,
     planId: packageId,
     price: chargeAmount,
+    originalPrice: plan.price,
+    codeDiscount: discountAmount ?? 0,
+    promoCode: promoCodeStr,
+    referralCode: referralCodeStr,
     razorpayOrderId: rzpOrder.id,
     uniqueId: receiptId,
     razorpayOrderPayload: JSON.stringify(rzpOrder),

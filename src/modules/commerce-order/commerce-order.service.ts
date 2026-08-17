@@ -101,7 +101,16 @@ export const findCoursePlanForOrder = async (
 export const createCourseOrderMysql = async (input: {
   customerId: number;
   planId: number;
+  /** Charged amount (post-promo, post-coin) → `discount_price`. */
   price: number;
+  /** Plan list price → `price`. Omit only when there is no discount at all. */
+  originalPrice?: number | null;
+  /** Promo/referral discount in rupees → `code_discount` (wallet coins excluded). */
+  codeDiscount?: number | null;
+  /** Bare promocode string → `promocode` json column. */
+  promoCode?: string | null;
+  /** Bare referral code string → `refferalcode` json column. */
+  referralCode?: string | null;
   razorpayOrderId: string;
   // Receipt id (unique_id) + full Razorpay order payload (razorpay_order) so the
   // order row is fully populated, matching the ebook/book order create paths.
@@ -269,7 +278,16 @@ export const findPackagePlanForOrder = async (
 export const createPackageOrderMysql = async (input: {
   customerId: number;
   planId: number;
+  /** Charged amount (post-promo, post-coin) → `discount_price`. */
   price: number;
+  /** Plan list price → `price`. Omit only when there is no discount at all. */
+  originalPrice?: number | null;
+  /** Promo/referral discount in rupees → `code_discount` (wallet coins excluded). */
+  codeDiscount?: number | null;
+  /** Bare promocode string → `promocode` json column. */
+  promoCode?: string | null;
+  /** Bare referral code string → `refferalcode` json column. */
+  referralCode?: string | null;
   razorpayOrderId: string;
   // Receipt id (unique_id) + full Razorpay order payload (razorpay_order).
   uniqueId?: string | null;

@@ -47,12 +47,30 @@ export const ebookOrderRepository = {
 
   // ── write: create the pending order row (create-order endpoint) ────────────
 
+  /**
+   * CODE COLUMN: `promocode` is a legacy `json` column that no code ever wrote —
+   * every ebook order read as "no code redeemed" even when one was. We write the
+   * bare code STRING (JSON-quoted by Prisma, matching `ws_package_course_order`
+   * and the shape `promoCodeOf` reads).
+   *
+   * Unlike `ws_package_course_order`, this table has NO `refferalcode` column, so a
+   * referral code goes into the SAME `promocode` column — `referrer_id` remains the
+   * discriminator (set for referrals, null for promocodes). Only one code can be
+   * applied per order, so the single column is unambiguous.
+   *
+   * ⚠ `order_price` stays the CHARGED amount. This table has no list-price /
+   * discount split (no `price` + `code_discount` pair like the course/package order
+   * table), so the breakdown cannot be persisted here without DDL — deliberately
+   * out of scope. The code itself needs no schema change, which is why it's fixed.
+   */
   createPendingOrder: (input: {
     customerId: number;
     planId: number;
     orderPrice: number;
     razorpayOrderId: string;
     uniqueId: string;
+    /** Bare promo OR referral code string → `promocode`. Null when none applied. */
+    code?: string | null;
     referrerId?: number | null;
     coin?: number | null;
   }) =>
@@ -64,6 +82,7 @@ export const ebookOrderRepository = {
         orderType: "purchase",
         paymentMethod: "razorpay",
         orderPrice: Math.round(input.orderPrice),
+        promocode: input.code ?? Prisma.DbNull,
         gatewayOrderId: input.razorpayOrderId,
         referrerId: input.referrerId ?? null,
         walletCoin: input.coin ?? null,

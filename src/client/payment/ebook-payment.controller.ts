@@ -108,6 +108,10 @@ const createEbookOrderMysqlPath = async (
   let originalAmount: number | null = null;
   let discountAmount: number | null = null;
   let referrerIdNum: number | null = null;
+  // The literal redeemed code, persisted on the order row. ws_ebook_order has only
+  // a `promocode` column (no refferalcode), so both code kinds land there and
+  // referrer_id tells them apart.
+  let codeStr: string | null = null;
   if (promocode) {
     const { result, error } = await resolvePromoForPlanSql(promocode, plan.price, { type: "ebook", id: plan.ebookId }, planId, Number(customerId));
     if (error || !result) {
@@ -121,6 +125,7 @@ const createEbookOrderMysqlPath = async (
     originalAmount = result.originalAmount;
     discountAmount = result.discountAmount;
     referrerIdNum = result.referrerId ?? null;
+    codeStr = result.promo.promocode || null;
   }
 
   // Wallet ("coin") redemption — validate + reduce the charged amount (debited at verify).
@@ -154,6 +159,7 @@ const createEbookOrderMysqlPath = async (
     orderPrice: chargeAmount,
     razorpayOrderId: rzpOrder.id,
     uniqueId: receiptId,
+    code: codeStr,
     referrerId: referrerIdNum,
     coin: walletUsage.coin,
   });

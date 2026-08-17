@@ -229,8 +229,27 @@ export const commerceOrderRepository = {
 
   /**
    * Create a pending course order. customerId is an int; cast to string for the
-   * VARCHAR order column. `OrigianalPrice` (SQL `price`) and `amount` (SQL
-   * `discount_price`) both = the plan price (no promocode applied here).
+   * VARCHAR order column.
+   *
+   * MONEY COLUMN CONTRACT (the three columns must always satisfy this identity):
+   *
+   *   price − code_discount − ws_coin  =  discount_price
+   *
+   *  - `OrigianalPrice` (SQL `price`)          = the plan's LIST price, before any
+   *    promo/referral discount and before wallet redemption. Never the charged amount.
+   *  - `codeDiscount` (SQL `code_discount`)    = rupees knocked off by the promo /
+   *    referral code ONLY (0 when no code). Wallet coins are NOT folded in here —
+   *    they are recorded separately in `ws_coin`, so the two discount sources stay
+   *    individually attributable in the Subscription Report.
+   *  - `amount` (SQL `discount_price`)         = what the customer actually paid,
+   *    i.e. what was charged to Razorpay (post-promo AND post-coin).
+   *
+   * CODE COLUMNS: `promocode` / `refferalcode` are legacy `json` columns. Legacy V1
+   * rows dumped the ENTIRE promocode record in there (nested promoter + expanded
+   * plan rows); we write the bare code STRING instead — readers already accept both
+   * shapes (see admin-subscription `promoCodeOf` / `orderIdsByPromocode`), so this
+   * needs no DDL and no reporting change. Exactly one of the two is set: a real
+   * promocode → `promocode`, a customer referral code → `refferalcode`.
    *
    * `shippingId` (the chosen CustomerShipping address) is persisted on the order
    * row for "With Materials" plans so the physical kit has a dispatch address;
@@ -239,7 +258,16 @@ export const commerceOrderRepository = {
   createPendingOrder: (input: {
     customerId: number;
     planId: number;
+    /** Charged amount → `discount_price` (post-promo, post-coin). */
     price: number;
+    /** Plan list price → `price`. Falls back to `price` when the caller omits it. */
+    originalPrice?: number | null;
+    /** Promo/referral discount in rupees → `code_discount`. 0/null when no code. */
+    codeDiscount?: number | null;
+    /** Bare promocode string → `promocode` (null for referral / no code). */
+    promoCode?: string | null;
+    /** Bare referral code string → `refferalcode` (null for promocode / no code). */
+    referralCode?: string | null;
     razorpayOrderId: string;
     // Business key (the receipt id) → unique_id; full Razorpay order response
     // (JSON string) → razorpay_order. Mirrors the ebook/book order create paths.
@@ -256,8 +284,11 @@ export const commerceOrderRepository = {
         planId: input.planId,
         orderType: "purchase",
         paymentMethod: "razorpay",
-        OrigianalPrice: Math.round(input.price),
+        OrigianalPrice: Math.round(input.originalPrice ?? input.price),
+        codeDiscount: Math.round(input.codeDiscount ?? 0),
         amount: Math.round(input.price),
+        promocode: input.promoCode ?? Prisma.DbNull,
+        refferalcode: input.referralCode ?? Prisma.DbNull,
         gatewayOrderId: input.razorpayOrderId,
         gatewayOrder: input.razorpayOrderPayload ?? null,
         shipping: input.shippingId ?? undefined,
