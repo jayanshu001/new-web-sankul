@@ -15,6 +15,74 @@
 
 ---
 
+## 2026-08-18 — `ws_book_order.transaction_id` dropped (duplicate of `gateway_transaction_id`)
+
+**Files:** `prisma/schema.prisma` (model `BookOrder`), `src/modules/book-order/book-order.repository.ts`,
+`docs/migration/schema-changes/2026-08-18_drop_book_order_transaction_id.sql`.
+
+**DDL — this one DOES drop a column.**
+
+### What it held
+
+A duplicate copy of the Razorpay payment id. `verifyBookTx` wrote the same value
+into two columns in one statement:
+
+```ts
+gatewayPaymentId: input.razorpayPaymentId,   // gateway_transaction_id
+transactionId:    input.razorpayPaymentId,   // transaction_id   ← dropped
+```
+
+That write was the column's ONLY consumer in either direction — nothing read
+`BookOrder.transactionId`: no DTO, no report, no export, no receipt.
+
+### What is NOT affected
+
+`gateway_transaction_id` is unchanged and stays. It is the gateway reference the
+application actually reads, surfaced as `razorpayPaymentId` in client purchase
+history (6 sites), admin book detail + exports, and the PDF receipts built in
+`libs/core/generate.ts`. Do not confuse the two.
+
+### Column-name caveat for the other order tables
+
+On OTHER tables `transaction_id` means something else entirely — the bank/manual
+transaction reference for offline (`Backend`/`bank`/`cash`) payments:
+`ws_ebook_order` maps it as `bankTransactionId`, and `ws_test_series_order` uses it
+the same way (`admin-testseries` reads `order?.transactionId` as the bank ref).
+Books never had an offline payment path, so the column was repurposed there as a
+gateway-id duplicate. **Those tables are untouched — this drops the book column only.**
+
+### Safety check run before applying
+
+```sql
+SELECT COUNT(*) FROM ws_book_order
+ WHERE transaction_id IS NOT NULL AND transaction_id <> ''
+   AND (gateway_transaction_id IS NULL OR transaction_id <> gateway_transaction_id);
+```
+
+Returned **0** on `websankul_staging_1` — every populated value was byte-identical
+to the same row's `gateway_transaction_id`, so nothing unique was discarded. Re-run
+this on prod before applying; a non-zero result means STOP.
+
+Note the column was NOT empty when the change was requested: 4 of 12 staging rows
+were populated (the 4 most recent orders, 2026-07-13 onward) because the write had
+only recently been added. The drop is justified by the value being redundant, not
+by the column being unused.
+
+### Deploy order
+
+Code first (or same release), DDL after — writing to a dropped column throws,
+while reads are unaffected because there were none. Prisma ignores DB columns
+absent from `schema.prisma`, so the intermediate window is harmless.
+
+```bash
+npx prisma db execute --file docs/migration/schema-changes/2026-08-18_drop_book_order_transaction_id.sql --schema prisma/schema.prisma
+```
+
+Applied to `websankul_staging_1` on 2026-08-18; `yarn prisma:generate` re-run,
+`yarn typecheck` green. **Still pending on every other environment.**
+
+---
+
 ## 2026-08-18 — Order code columns store the promocode / referral SNAPSHOT OBJECT (promoter attribution restored)
 
 **Files:** `src/modules/order-code-snapshot/*` (new module: types / repository / transformer / service),

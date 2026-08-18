@@ -1,0 +1,43 @@
+-- 2026-08-18 — Drop the redundant `transaction_id` column from ws_book_order.
+--
+-- WHAT IT HELD: a duplicate copy of the Razorpay payment id. The verify path
+-- (book-order.repository.ts verifyBookTx) wrote the SAME `razorpayPaymentId`
+-- into two columns at once:
+--     gatewayPaymentId: input.razorpayPaymentId,   -- gateway_transaction_id
+--     transactionId:    input.razorpayPaymentId,   -- transaction_id   ← dropped
+--
+-- WHY IT'S SAFE: nothing ever read `BookOrder.transactionId` — no DTO, no report,
+-- no export, no receipt. The gateway reference the whole application actually
+-- reads is `gateway_transaction_id` (surfaced as `razorpayPaymentId` in client
+-- purchase history, admin book detail/exports, and the PDF receipts built in
+-- libs/core/generate.ts). That column is UNCHANGED.
+--
+-- NOTE ON THE COLUMN NAME ELSEWHERE: on OTHER order tables `transaction_id` means
+-- something different — the bank/manual transaction reference for offline
+-- (Backend/bank/cash) payments; ws_ebook_order maps it as `bankTransactionId` and
+-- ws_test_series_order uses it the same way. Books had no offline payment path,
+-- so the column was repurposed as a gateway-id duplicate instead. Those OTHER
+-- tables are UNTOUCHED by this migration — this drops the book column only.
+--
+-- DATA LOSS: yes, and it is intentional. The 4 populated rows on staging (and any
+-- equivalent in prod) hold a value that is byte-identical to the same row's
+-- gateway_transaction_id, so nothing unique is discarded. Verify before applying:
+--
+--   SELECT COUNT(*) AS would_lose_data
+--     FROM ws_book_order
+--    WHERE transaction_id IS NOT NULL
+--      AND transaction_id <> ''
+--      AND (gateway_transaction_id IS NULL OR transaction_id <> gateway_transaction_id);
+--   -- expect 0. If non-zero, STOP: those rows hold something the gateway column
+--   -- does not, and this migration must not run until that is understood.
+--
+-- ORDERING: apply AFTER (or with) the code deploy that stops writing the column.
+-- Writing to a dropped column throws, so the code change must land first; reads
+-- are unaffected because there were none. Prisma ignores DB columns absent from
+-- schema.prisma, so a brief window where the column still exists is harmless.
+--
+-- Apply with:
+--   npx prisma db execute --file docs/migration/schema-changes/2026-08-18_drop_book_order_transaction_id.sql --schema prisma/schema.prisma
+
+ALTER TABLE ws_book_order
+  DROP COLUMN transaction_id;

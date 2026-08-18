@@ -658,7 +658,6 @@ model BookOrder {
   gatewayOrderId   String            @map("gateway_order_id")
   gatewayOrder     String            @map("razorpay_order")
   gatewayPaymentId String?           @map("gateway_transaction_id")
-  transactionId    String?           @map("transaction_id")
   orderDate        DateTime?         @map("order_date")
   status           String
   paidAt           DateTime?         @map("paid_at")

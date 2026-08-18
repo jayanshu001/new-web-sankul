@@ -197,11 +197,11 @@ export const bookOrderRepository = {
         data: {
           status: "verified",
           trackingId: tracking.tracking_id,
-          // Razorpay payment id → gateway_transaction_id (gateway ref) AND
-          // transaction_id (generic txn ref, previously left NULL). paid_at marks
-          // when the payment cleared; bump updated_at on this state change.
+          // Razorpay payment id → gateway_transaction_id (the gateway ref).
+          // The `transaction_id` column that used to receive a duplicate copy of
+          // this same id was dropped 2026-08-18 — nothing ever read it. paid_at
+          // marks when the payment cleared; bump updated_at on this state change.
           gatewayPaymentId: input.razorpayPaymentId,
-          transactionId: input.razorpayPaymentId,
           paidAt: new Date(),
           updatedAt: new Date(),
         },
