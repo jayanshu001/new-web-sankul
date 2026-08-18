@@ -17,6 +17,10 @@
  * Flag stays OFF until a separate go-live sign-off.
  */
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import type {
+  PromocodeSnapshot,
+  ReferralSnapshot,
+} from "../order-code-snapshot/order-code-snapshot.types";
 import { creditReferrer } from "../../client/referral/credit-referrer";
 import { debitWallet } from "../../client/referral/debit-wallet";
 import { commerceOrderRepository as repo } from "./commerce-order.repository";
@@ -107,10 +111,10 @@ export const createCourseOrderMysql = async (input: {
   originalPrice?: number | null;
   /** Promo/referral discount in rupees → `code_discount` (wallet coins excluded). */
   codeDiscount?: number | null;
-  /** Bare promocode string → `promocode` json column. */
-  promoCode?: string | null;
-  /** Bare referral code string → `refferalcode` json column. */
-  referralCode?: string | null;
+  /** Purchase-time promocode snapshot object → `promocode` json column. */
+  promoCode?: PromocodeSnapshot | null;
+  /** Purchase-time referral snapshot object → `refferalcode` json column. */
+  referralCode?: ReferralSnapshot | null;
   razorpayOrderId: string;
   // Receipt id (unique_id) + full Razorpay order payload (razorpay_order) so the
   // order row is fully populated, matching the ebook/book order create paths.
@@ -284,10 +288,10 @@ export const createPackageOrderMysql = async (input: {
   originalPrice?: number | null;
   /** Promo/referral discount in rupees → `code_discount` (wallet coins excluded). */
   codeDiscount?: number | null;
-  /** Bare promocode string → `promocode` json column. */
-  promoCode?: string | null;
-  /** Bare referral code string → `refferalcode` json column. */
-  referralCode?: string | null;
+  /** Purchase-time promocode snapshot object → `promocode` json column. */
+  promoCode?: PromocodeSnapshot | null;
+  /** Purchase-time referral snapshot object → `refferalcode` json column. */
+  referralCode?: ReferralSnapshot | null;
   razorpayOrderId: string;
   // Receipt id (unique_id) + full Razorpay order payload (razorpay_order).
   uniqueId?: string | null;

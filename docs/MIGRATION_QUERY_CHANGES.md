@@ -15,6 +15,122 @@
 
 ---
 
+## 2026-08-18 — Order code columns store the promocode / referral SNAPSHOT OBJECT (promoter attribution restored)
+
+**Files:** `src/modules/order-code-snapshot/*` (new module: types / repository / transformer / service),
+`src/modules/commerce-order/commerce-order.repository.ts`, `src/modules/commerce-order/commerce-order.service.ts`,
+`src/modules/ebook-order/ebook-order.repository.ts`, `src/modules/ebook-order/ebook-order.service.ts`,
+`src/client/payment/course-payment.controller.ts`, `src/client/payment/package-payment.controller.ts`,
+`src/client/payment/ebook-payment.controller.ts`, `scripts/backfill-order-code-columns.ts`.
+
+**No DDL.** Columns unchanged (`ws_package_course_order.promocode` / `.refferalcode`,
+`ws_ebook_order.promocode` — all pre-existing `json`). Only the VALUE shape changed.
+
+### Why — the bare string was a silent data-loss bug
+
+The 2026-08-17 entry below wrote the redeemed code into these columns as a bare
+STRING. That fixed the "[Object]" display in the subscription report but broke a
+read contract that is not obvious from the column type: **`modules/promoter-data`
+computes the entire promoter dashboard by JSON-path querying these columns.**
+
+```sql
+WHERE JSON_EXTRACT(o.promocode,'$.promoterId') = ?
+       JSON_EXTRACT(o.promocode,'$.promocode')
+       JSON_EXTRACT(o.promocode,'$.promotedPackageCourseEbook[0].promoterPercentage')
+```
+
+(`listCourseSubs`, `countCourseSubs`, `listEbookSubs`, `countEbookSubs`,
+`courseTotals`, `ebookTotals`.) A bare string is a legal `json` value but matches
+none of these paths, so every order written by the string path was **invisible to
+promoter attribution** — zero attributed subscriptions, zero revenue, zero
+commission — while failing nothing and logging nothing.
+
+The object is therefore the contract; the string was the regression. Reverted.
+
+### What is stored now
+
+A purchase-time SNAPSHOT built by the new `modules/order-code-snapshot`, matching
+the legacy V1 shape byte for byte:
+
+- **`promocode`** — the `ws_promocode` row + its `promoter` (`ws_promoter`) +
+  `promotedPackageCourseEbook[]` with the plan expanded under `planId`.
+- **`refferalcode`** — the `ws_refferal_program` row + the purchased plan under
+  `planId` + the referring CUSTOMER under `promoter`
+  (`{id, fullName, phoneNumber, referralCode}` — the legacy shape overloads the
+  key name; a referral snapshot deliberately carries no `promoterId`, so
+  promoter-commission queries can never match it).
+
+Decimals are serialized as strings (`"50"`, `"30"`) because promoter-data reads
+them back with `CAST(... AS DECIMAL(10,2))`. Timestamps are `toISOString()`, i.e.
+exactly what `res.json()` renders for the same Prisma row.
+
+**Only the PURCHASED plan's link row goes into `promotedPackageCourseEbook`** (0 or
+1 element). promoter-data reads `[0].promoterPercentage` at a FIXED index, so
+embedding the promocode's full link list would make the commission rate depend on
+row order and pay out some other plan's percentage. An empty array is correct for a
+legacy global-discount promocode with no per-plan links → `[0]` is NULL → 0%.
+
+Routing is unchanged: promocode → `promocode`, referral → `refferalcode`; exactly
+one is ever set. `ws_ebook_order` has no `refferalcode` column, so both snapshot
+kinds share `promocode` there with `referrer_id` as the discriminator.
+
+Snapshot failure never blocks checkout — builders return null and the order stores
+null rather than failing a payment.
+
+### Reader compatibility
+
+- `admin-subscription.promoCodeOf` already accepted both shapes (`typeof j.promocode === "string"`).
+- `admin-subscription.orderIdsByPromocode` already matched both (`$.promocode` OR `JSON_UNQUOTE`).
+- `ordersByIds` reads `ws_package_course_order` only, so ebook rows are not exposed to it.
+- `modules/promoter-data` — **restored** (was silently returning nothing for new orders).
+
+### Backfill — `scripts/backfill-order-code-columns.ts` (rewritten, inverted)
+
+Previously flattened object→string; now hydrates string→object using the SAME
+builder as the live path, so backfilled and new rows are identical. Phases:
+
+1. **HYDRATE** (lossless) — bare STRING code → snapshot object; moves the value to
+   the correct column when a referral string was parked in `promocode`. Rows that
+   are ALREADY objects are never rewritten (legacy V1 rows are the reference shape).
+2. **RECOVER** (lossless) — code dropped entirely by the original defect, read back
+   from `razorpay_order.$.notes.promocodeId`; plus referral orders recovered from
+   `referrer_id` (referrals write no `promocodeId` into the Razorpay notes).
+3. **WALLET** (lossless, always on) — wallet-only orders lost the coin component out
+   of `price`; exact repair `price = paid + ws_coin`.
+4. **MONEY** (`--repair-money`, inferential) — rebuild `price`/`code_discount` from
+   the plan list price; skipped when the inference is unsafe (plan repriced since).
+
+Also now covers **`ws_ebook_order`** (code column only — that table has no
+list-price/discount pair, so the money split remains unrepresentable without DDL).
+
+A code that no longer resolves to any promocode or customer is **left as the
+string** rather than half-rebuilt or guessed at. `updated_at = updated_at` pins the
+timestamp so a repair is not a business event. PK-batched (2000), resumable
+(`--from=`), idempotent, dry-run by default.
+
+```bash
+npx tsx scripts/backfill-order-code-columns.ts                        # dry run
+npx tsx scripts/backfill-order-code-columns.ts --apply --repair-money # write
+```
+
+### Staging run (`websankul_staging_1`, 2026-08-18)
+
+`ws_package_course_order` (32 rows): 4 hydrated string→object, 0 recovered, 0 wallet
+fixes, 0 money splits rebuilt / 1 skipped (plan 1293 lists 7500 and the buyer paid
+7500 — no inference possible), 1 code left unresolved (`POLICE60`, since renamed to
+`POLICE607`, so it resolves to nothing — correctly untouched).
+`ws_ebook_order` (18 rows): 1 hydrated.
+
+Verified post-run that promoter-data's exact JSON paths resolve:
+`promoterId=1, promocode="POLICE607", promotedPackageCourseEbook[0].promoterPercentage="30"`.
+Live write path verified end-to-end through `createPendingOrder` for both the promo
+and referral branches (object persisted, `price − code_discount = discount_price`
+intact); test rows deleted.
+
+**Deploy:** code + backfill cut over together. No DDL, no flag.
+
+---
+
 ## 2026-08-17 — Address contact fields (`phone` / `alternate_phone` / `email`) are required on write and returned on read
 
 **Files:** `src/client/address/address.validation.ts`,

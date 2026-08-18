@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { resolvePromoForPlanSql, addressBelongsToCustomerSql } from "../../modules/promo-code/promo-code.service";
+import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
 import { omit } from "../../utils/pick";
@@ -120,12 +121,6 @@ const createCourseOrderMysqlPath = async (
   let originalAmount: number | null = null;
   let discountAmount: number | null = null;
   let referrerIdNum: number | null = null;
-  // The literal code that earned the discount, routed to exactly ONE order column:
-  // a real promocode → `promocode`, a customer referral code → `refferalcode`.
-  // Without this the order row keeps no record of WHICH code was redeemed (a
-  // referral order previously stored only referrer_id, and never the code itself).
-  let promoCodeStr: string | null = null;
-  let referralCodeStr: string | null = null;
   if (promocode) {
     const { result, error } = await resolvePromoForPlanSql(promocode, plan.price, { type: "course", id: plan.courseId }, packageId, Number(customerId));
     if (error || !result) {
@@ -140,11 +135,18 @@ const createCourseOrderMysqlPath = async (
     discountAmount = result.discountAmount;
     // Referral code (not a promocode) → stamp the referrer so verify can credit.
     referrerIdNum = result.referrerId ?? null;
-    // Referral resolution returns promo._id === "" (no promocode row), so the
-    // referrerId is the authoritative discriminator between the two code kinds.
-    if (referrerIdNum != null) referralCodeStr = result.promo.promocode || null;
-    else promoCodeStr = result.promo.promocode || null;
   }
+
+  // Freeze the redeemed code into the order as the legacy snapshot OBJECT, routed
+  // to exactly ONE column: a real promocode → `promocode`, a customer referral code
+  // → `refferalcode`. promoter-data reads these columns by JSON path to attribute
+  // commission, so the object (not the bare code) is what makes the order visible
+  // to the promoter dashboard. Both null when no code was applied.
+  const codeSnapshot = await buildOrderCodeSnapshots({
+    promocodeId: promocodeIdNum,
+    referrerId: referrerIdNum,
+    planId: packageId,
+  });
 
   // Wallet ("coin") redemption — validate vs balance + 50%-of-plan-price cap, then
   // reduce the charged amount. Coins are DEBITED at verify (not here); the amount
@@ -183,8 +185,8 @@ const createCourseOrderMysqlPath = async (
     price: chargeAmount,
     originalPrice: plan.price,
     codeDiscount: discountAmount ?? 0,
-    promoCode: promoCodeStr,
-    referralCode: referralCodeStr,
+    promoCode: codeSnapshot.promocode,
+    referralCode: codeSnapshot.refferalcode,
     razorpayOrderId: rzpOrder.id,
     uniqueId: receiptId,
     razorpayOrderPayload: JSON.stringify(rzpOrder),

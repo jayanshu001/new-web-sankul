@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { resolvePromoForPlanSql } from "../../modules/promo-code/promo-code.service";
+import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
 import { getRazorpay, razorpayResponseFor, createRazorpayOrder, PAYMENT_ORDER_ECHO_KEYS } from "./razorpay";
 import { omit } from "../../utils/pick";
@@ -108,10 +109,6 @@ const createEbookOrderMysqlPath = async (
   let originalAmount: number | null = null;
   let discountAmount: number | null = null;
   let referrerIdNum: number | null = null;
-  // The literal redeemed code, persisted on the order row. ws_ebook_order has only
-  // a `promocode` column (no refferalcode), so both code kinds land there and
-  // referrer_id tells them apart.
-  let codeStr: string | null = null;
   if (promocode) {
     const { result, error } = await resolvePromoForPlanSql(promocode, plan.price, { type: "ebook", id: plan.ebookId }, planId, Number(customerId));
     if (error || !result) {
@@ -125,8 +122,18 @@ const createEbookOrderMysqlPath = async (
     originalAmount = result.originalAmount;
     discountAmount = result.discountAmount;
     referrerIdNum = result.referrerId ?? null;
-    codeStr = result.promo.promocode || null;
   }
+
+  // Freeze the redeemed code into the order as the legacy snapshot OBJECT.
+  // ws_ebook_order has only a `promocode` column (no refferalcode), so whichever
+  // snapshot was built lands there and referrer_id tells the two kinds apart.
+  // promoter-data reads ebook commission off this column by JSON path.
+  const codeSnapshot = await buildOrderCodeSnapshots({
+    promocodeId: promocodeIdNum,
+    referrerId: referrerIdNum,
+    planId,
+  });
+  const codeJson = codeSnapshot.promocode ?? codeSnapshot.refferalcode;
 
   // Wallet ("coin") redemption — validate + reduce the charged amount (debited at verify).
   const walletUsage = await resolveWalletUsage(Number(customerId), coin, plan.price);
@@ -159,7 +166,7 @@ const createEbookOrderMysqlPath = async (
     orderPrice: chargeAmount,
     razorpayOrderId: rzpOrder.id,
     uniqueId: receiptId,
-    code: codeStr,
+    code: codeJson,
     referrerId: referrerIdNum,
     coin: walletUsage.coin,
   });

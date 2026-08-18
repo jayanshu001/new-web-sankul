@@ -1,5 +1,9 @@
 import { prisma } from "../../config/prisma";
 import { Prisma } from "@prisma/client";
+import type {
+  PromocodeSnapshot,
+  ReferralSnapshot,
+} from "../order-code-snapshot/order-code-snapshot.types";
 
 /**
  * Physical-material split written onto a fresh subscription (PC_MATERIAL_SUBSCRIPTION_FLOW).
@@ -244,12 +248,17 @@ export const commerceOrderRepository = {
    *  - `amount` (SQL `discount_price`)         = what the customer actually paid,
    *    i.e. what was charged to Razorpay (post-promo AND post-coin).
    *
-   * CODE COLUMNS: `promocode` / `refferalcode` are legacy `json` columns. Legacy V1
-   * rows dumped the ENTIRE promocode record in there (nested promoter + expanded
-   * plan rows); we write the bare code STRING instead — readers already accept both
-   * shapes (see admin-subscription `promoCodeOf` / `orderIdsByPromocode`), so this
-   * needs no DDL and no reporting change. Exactly one of the two is set: a real
+   * CODE COLUMNS: `promocode` / `refferalcode` are `json` columns holding the
+   * purchase-time SNAPSHOT of the redeemed code — the full legacy object (nested
+   * promoter + the purchased plan's link row), built by
+   * `modules/order-code-snapshot`. Exactly one of the two is ever set: a real
    * promocode → `promocode`, a customer referral code → `refferalcode`.
+   *
+   * ⚠ The object is a READ CONTRACT, not a convenience. `modules/promoter-data`
+   * derives the promoter dashboard straight off these columns via JSON paths
+   * (`$.promoterId`, `$.promotedPackageCourseEbook[0].promoterPercentage`), so a
+   * bare code string — while a perfectly valid json value — matches none of them
+   * and makes the order invisible to promoter attribution. Never flatten these.
    *
    * `shippingId` (the chosen CustomerShipping address) is persisted on the order
    * row for "With Materials" plans so the physical kit has a dispatch address;
@@ -264,10 +273,10 @@ export const commerceOrderRepository = {
     originalPrice?: number | null;
     /** Promo/referral discount in rupees → `code_discount`. 0/null when no code. */
     codeDiscount?: number | null;
-    /** Bare promocode string → `promocode` (null for referral / no code). */
-    promoCode?: string | null;
-    /** Bare referral code string → `refferalcode` (null for promocode / no code). */
-    referralCode?: string | null;
+    /** Promocode snapshot object → `promocode` (null for referral / no code). */
+    promoCode?: PromocodeSnapshot | null;
+    /** Referral snapshot object → `refferalcode` (null for promocode / no code). */
+    referralCode?: ReferralSnapshot | null;
     razorpayOrderId: string;
     // Business key (the receipt id) → unique_id; full Razorpay order response
     // (JSON string) → razorpay_order. Mirrors the ebook/book order create paths.

@@ -1,5 +1,9 @@
 import { prisma } from "../../config/prisma";
 import { Prisma } from "@prisma/client";
+import type {
+  PromocodeSnapshot,
+  ReferralSnapshot,
+} from "../order-code-snapshot/order-code-snapshot.types";
 
 /**
  * Prisma persistence for the ebook · order WRITE branch (Phase 3b). Tables:
@@ -47,16 +51,23 @@ export const ebookOrderRepository = {
 
   // ── write: create the pending order row (create-order endpoint) ────────────
 
-  /**
-   * CODE COLUMN: `promocode` is a legacy `json` column that no code ever wrote —
-   * every ebook order read as "no code redeemed" even when one was. We write the
-   * bare code STRING (JSON-quoted by Prisma, matching `ws_package_course_order`
-   * and the shape `promoCodeOf` reads).
+   /**
+   * CODE COLUMN: `promocode` is a `json` column that no code ever wrote — every
+   * ebook order read as "no code redeemed" even when one was. We write the
+   * purchase-time SNAPSHOT object built by `modules/order-code-snapshot`, the same
+   * shape `ws_package_course_order` carries.
+   *
+   * ⚠ The object is required, not cosmetic: `modules/promoter-data` attributes
+   * ebook commission off THIS column via `JSON_EXTRACT(o.promocode,'$.promoterId')`
+   * and `$.promotedPackageCourseEbook[0].promoterPercentage` (see listEbookSubs /
+   * ebookTotals). A bare code string matches neither path.
    *
    * Unlike `ws_package_course_order`, this table has NO `refferalcode` column, so a
-   * referral code goes into the SAME `promocode` column — `referrer_id` remains the
-   * discriminator (set for referrals, null for promocodes). Only one code can be
-   * applied per order, so the single column is unambiguous.
+   * referral snapshot goes into the SAME `promocode` column — `referrer_id` remains
+   * the discriminator (set for referrals, null for promocodes). Only one code can be
+   * applied per order, so the single column is unambiguous. A referral snapshot
+   * carries no `promoterId` key, so it can never be mistaken for promoter-driven
+   * revenue by the queries above.
    *
    * ⚠ `order_price` stays the CHARGED amount. This table has no list-price /
    * discount split (no `price` + `code_discount` pair like the course/package order
@@ -69,8 +80,8 @@ export const ebookOrderRepository = {
     orderPrice: number;
     razorpayOrderId: string;
     uniqueId: string;
-    /** Bare promo OR referral code string → `promocode`. Null when none applied. */
-    code?: string | null;
+    /** Promo OR referral snapshot object → `promocode`. Null when none applied. */
+    code?: PromocodeSnapshot | ReferralSnapshot | null;
     referrerId?: number | null;
     coin?: number | null;
   }) =>

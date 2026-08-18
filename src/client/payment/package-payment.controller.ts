@@ -10,6 +10,7 @@ import {
   createPackageOrderMysql,
 } from "../../modules/commerce-order/commerce-order.service";
 import { resolvePromoForPlanSql, addressBelongsToCustomerSql } from "../../modules/promo-code/promo-code.service";
+import { buildOrderCodeSnapshots } from "../../modules/order-code-snapshot/order-code-snapshot.service";
 import { resolveWalletUsage } from "../../modules/referral/referral.service";
 
 // SQL planId is numeric (migrated id-space).
@@ -85,9 +86,6 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       let referrerIdNum: number | null = null;
       let originalAmount: number | null = null;
       let discountAmount: number | null = null;
-      // Literal redeemed code → exactly ONE order column (promocode vs refferalcode).
-      let promoCodeStr: string | null = null;
-      let referralCodeStr: string | null = null;
       if (body.promocode) {
         const { result, error } = await resolvePromoForPlanSql(body.promocode, planSql.price, { type: "package", id: planSql.packageId }, body.packageId, Number(customerId));
         if (error || !result) return res.status(400).json({ success: false, message: error ?? "Invalid promo code." });
@@ -98,11 +96,17 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
         originalAmount = result.originalAmount;
         discountAmount = result.discountAmount;
         referrerIdNum = result.referrerId ?? null;
-        // Referral resolution returns promo._id === "", so referrerId is the
-        // authoritative discriminator between a referral code and a promocode.
-        if (referrerIdNum != null) referralCodeStr = result.promo.promocode || null;
-        else promoCodeStr = result.promo.promocode || null;
       }
+
+      // Freeze the redeemed code into the order as the legacy snapshot OBJECT,
+      // routed to exactly ONE column (promocode vs refferalcode). promoter-data
+      // attributes commission by JSON path over these columns, so the object — not
+      // the bare code — is what the promoter dashboard can actually see.
+      const codeSnapshot = await buildOrderCodeSnapshots({
+        promocodeId: promocodeIdNum,
+        referrerId: referrerIdNum,
+        planId: body.packageId,
+      });
 
       // Wallet ("coin") redemption — validate + reduce the charged amount (debited at verify).
       const walletUsage = await resolveWalletUsage(customerIdInt, body.coin, planSql.price);
@@ -122,7 +126,7 @@ export const createPackageOrderPayment = async (req: Request, res: Response) => 
       });
       // The order row keeps the full money breakdown, not just the charged amount:
       //   price (list) − code_discount (promo/referral) − ws_coin = discount_price (paid)
-      const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, originalPrice: planSql.price, codeDiscount: discountAmount ?? 0, promoCode: promoCodeStr, referralCode: referralCodeStr, razorpayOrderId: rzpOrder.id, uniqueId: receiptId, razorpayOrderPayload: JSON.stringify(rzpOrder), customerShippingId: body.customerShippingId ?? null, referrerId: referrerIdNum, coin: walletUsage.coin });
+      const { orderId } = await createPackageOrderMysql({ customerId: customerIdInt, planId: body.packageId, price: chargeAmount, originalPrice: planSql.price, codeDiscount: discountAmount ?? 0, promoCode: codeSnapshot.promocode, referralCode: codeSnapshot.refferalcode, razorpayOrderId: rzpOrder.id, uniqueId: receiptId, razorpayOrderPayload: JSON.stringify(rzpOrder), customerShippingId: body.customerShippingId ?? null, referrerId: referrerIdNum, coin: walletUsage.coin });
       logger.info("createPackageOrderPayment[mysql] success", { traceId, customerId, orderId, razorpayOrderId: rzpOrder.id, amount: chargeAmount });
       return res.status(201).json({
         success: true,

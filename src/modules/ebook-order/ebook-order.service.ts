@@ -15,6 +15,10 @@
  * Flag OFF until go-live sign-off.
  */
 import { computeEndAt, extendEndAt } from "../../utils/planDuration";
+import type {
+  PromocodeSnapshot,
+  ReferralSnapshot,
+} from "../order-code-snapshot/order-code-snapshot.types";
 import { creditReferrer } from "../../client/referral/credit-referrer";
 import { debitWallet } from "../../client/referral/debit-wallet";
 import { ebookOrderRepository as repo } from "./ebook-order.repository";
@@ -59,9 +63,10 @@ export const createEbookOrderMysql = async (input: {
   orderPrice: number;
   razorpayOrderId: string;
   uniqueId: string;
-  // The redeemed code (promo OR referral) → the `promocode` column. This table has
-  // no separate refferalcode column; `referrerId` distinguishes the two kinds.
-  code?: string | null;
+  // The purchase-time snapshot of the redeemed code (promo OR referral) → the
+  // `promocode` column. This table has no separate refferalcode column, so both
+  // snapshot kinds land there; `referrerId` distinguishes them.
+  code?: PromocodeSnapshot | ReferralSnapshot | null;
   // Referrer to credit at verify when a referral code was applied (else null).
   referrerId?: number | null;
   // Wallet coins redeemed; debited at verify (stored in wallet_coin). 0/null = none.
